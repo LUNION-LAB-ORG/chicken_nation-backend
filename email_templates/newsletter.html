@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Newsletter</title>
+    <style>
+      /* Styles de base */
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: Arial, sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
+        color: #333333;
+        background-color: #f5f5f5;
+      }
+
+      table {
+        border-spacing: 0;
+        border-collapse: collapse;
+      }
+
+      td {
+        padding: 0;
+      }
+
+      img {
+        border: 0;
+        height: auto;
+        line-height: 100%;
+        outline: none;
+        text-decoration: none;
+        -ms-interpolation-mode: bicubic;
+      }
+
+      /* Layout principal */
+      .email-wrapper {
+        width: 100%;
+        max-width: 600px;
+        margin: 0 auto;
+        background-color: #ffffff;
+      }
+
+      .email-header {
+        background-color: #0066cc;
+        padding: 20px;
+        text-align: center;
+      }
+
+      .email-logo {
+        color: #ffffff;
+        font-size: 24px;
+        font-weight: bold;
+        text-decoration: none;
+      }
+
+      .email-body {
+        padding: 30px 20px;
+      }
+
+      .email-footer {
+        background-color: #f5f5f5;
+        padding: 20px;
+        text-align: center;
+        font-size: 12px;
+        color: #666666;
+      }
+
+      /* Composants */
+      .headline {
+        font-size: 24px;
+        font-weight: bold;
+        margin-bottom: 20px;
+        color: #0066cc;
+      }
+
+      .subheadline {
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 15px;
+        color: #333333;
+      }
+
+      .content-block {
+        margin-bottom: 30px;
+      }
+
+      .button {
+        display: inline-block;
+        background-color: #0066cc;
+        color: #ffffff;
+        font-weight: bold;
+        text-decoration: none;
+        padding: 12px 30px;
+        border-radius: 4px;
+        margin: 20px 0;
+      }
+
+      .divider {
+        height: 1px;
+        background-color: #eeeeee;
+        margin: 30px 0;
+      }
+
+      .social-links {
+        margin-top: 20px;
+      }
+
+      .social-link {
+        display: inline-block;
+        margin: 0 10px;
+        color: #0066cc;
+        text-decoration: none;
+      }
+
+      /* Responsive */
+      @media screen and (max-width: 600px) {
+        .email-wrapper {
+          width: 100% !important;
+        }
+
+        .headline {
+          font-size: 20px !important;
+        }
+
+        .subheadline {
+          font-size: 16px !important;
+        }
+
+        .email-body {
+          padding: 20px 15px !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <table
+      role="presentation"
+      border="0"
+      cellpadding="0"
+      cellspacing="0"
+      width="100%"
+    >
+      <tr>
+        <td align="center" style="padding: 20px 0">
+          <!-- Début du contenu de l'email -->
+          <table
+            role="presentation"
+            class="email-wrapper"
+            border="0"
+            cellpadding="0"
+            cellspacing="0"
+            width="600"
+          >
+            <!-- En-tête -->
+            <tr>
+              <td class="email-header">
+                <a href="https://www.votresite.com" class="email-logo"
+                  >VOTRE ENTREPRISE</a
+                >
+              </td>
+            </tr>
+
+            <!-- Corps de l'email -->
+            <tr>
+              <td class="email-body">
+                <!-- Bloc principal -->
+                <div class="content-block">
+                  <h1 class="headline">Bienvenue à notre newsletter</h1>
+                  <p>Bonjour [Prénom],</p>
+                
+                  <p>
+                    Nous sommes ravis de vous accueillir dans notre communauté.
+                    Chaque mois, nous vous enverrons les dernières actualités,
+                    conseils et offres spéciales.
+                  </p>
+                  <a href="https://www.votresite.com/offres" class="button"
+                    >Découvrir nos offres</a
+                  >
+                </div>
+
+                <div class="divider"></div>
+
+                <!-- Bloc secondaire -->
+                <div class="content-block">
+                  <h2 class="subheadline">Nos derniers articles</h2>
+                  <p>
+                    <strong>Comment améliorer votre productivité</strong><br />
+                    Découvrez nos 5 conseils pour optimiser votre temps et
+                    accomplir davantage chaque jour.
+                  </p>
+                  <p>
+                    <strong>Les tendances à suivre en 2025</strong><br />
+                    Notre équipe d'experts a analysé les tendances qui
+                    façonneront le marché l'année prochaine.
+                  </p>
+                </div>
+
+                <div class="divider"></div>
+
+                <!-- Promotion -->
+                <div class="content-block" style="text-align: center">
+                  <h2 class="subheadline">Offre spéciale</h2>
+                  <p>
+                    Profitez de <strong>20% de réduction</strong> sur votre
+                    première commande avec le code :
+                  </p>
+                  <p
+                    style="
+                      font-size: 20px;
+                      font-weight: bold;
+                      color: #0066cc;
+                      margin: 15px 0;
+                    "
+                  >
+                    BIENVENUE20
+                  </p>
+                  <a href="https://www.votresite.com/boutique" class="button"
+                    >Visiter la boutique</a
+                  >
+                </div>
+              </td>
+            </tr>
+
+            <!-- Pied de page -->
+            <tr>
+              <td class="email-footer">
+                <p>© 2025 Votre Entreprise. Tous droits réservés.</p>
+                <p>123 Rue Exemple, 75000 Paris, France</p>
+
+                <div class="social-links">
+                  <a
+                    href="https://www.facebook.com/votreentreprise"
+                    class="social-link"
+                    >Facebook</a
+                  >
+                  <a
+                    href="https://www.twitter.com/votreentreprise"
+                    class="social-link"
+                    >Twitter</a
+                  >
+                  <a
+                    href="https://www.instagram.com/votreentreprise"
+                    class="social-link"
+                    >Instagram</a
+                  >
+                  <a
+                    href="https://www.linkedin.com/company/votreentreprise"
+                    class="social-link"
+                    >LinkedIn</a
+                  >
+                </div>
+
+                <p style="margin-top: 20px">
+                  <a
+                    href="https://www.votresite.com/preferences"
+                    style="color: #0066cc; text-decoration: underline"
+                    >Gérer vos préférences</a
+                  >
+                  |
+                  <a
+                    href="https://www.votresite.com/desabonnement"
+                    style="color: #0066cc; text-decoration: underline"
+                    >Se désabonner</a
+                  >
+                </p>
+
+                <p style="margin-top: 15px; font-size: 11px">
+                  Si vous ne visualisez pas correctement cet email,
+                  <a
+                    href="https://www.votresite.com/email/view-online"
+                    style="color: #0066cc; text-decoration: underline"
+                    >cliquez ici</a
+                  >
+                  pour le consulter en ligne.
+                </p>
+              </td>
+            </tr>
+          </table>
+          <!-- Fin du contenu de l'email -->
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

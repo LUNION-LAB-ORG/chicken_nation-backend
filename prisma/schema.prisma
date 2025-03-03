@@ -9,15 +9,16 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum RoleType {
+enum Type {
   ADMINISTRATOR
   USER
 }
 
 model User {
   id              String    @id @default(uuid())
-  role            RoleType
-  telephone       String    @unique @db.VarChar(255)
+  type            Type
+  telephone       String   @unique @db.VarChar(255)
+  email           String?   @unique @db.VarChar(225)
   is_anonymous    Boolean?  @default(true)
   is_super_admin  Boolean?  @default(false)
   last_sign_in_at DateTime? @db.Timestamp(6)
@@ -37,3 +38,9 @@ model Profile {
   @@map("profiles")
 }
 
+/**
+ * ADMIN : (
+ * MANAGER, COMPTABLE
+ * )
+ * USER : (client,...)
+ */

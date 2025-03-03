@@ -6,7 +6,7 @@ export async function userSeed() {
   const datas: Prisma.UserCreateInput[] = [
     {
       telephone: '+2250554020623',
-      role: 'ADMINISTRATOR',
+      type: 'ADMINISTRATOR',
       is_super_admin: true,
     },
   ];
