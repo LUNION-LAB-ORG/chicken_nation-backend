@@ -9,14 +9,13 @@ datasource db {
 }
 
 enum UserType {
-  ADMIN
-  MEMBER
+  BACKOFFICE
+  RESTAURANT
 }
 
 enum UserRole {
   ADMIN
   MANAGER
-  EMPLOYEE
 }
 
 enum CategorySupplement {
@@ -85,6 +84,7 @@ model User {
 model Restaurant {
   id              String           @id @default(uuid())
   name            String
+  manager         String           @default(uuid())
   description     String?
   image           String?
   address         String?

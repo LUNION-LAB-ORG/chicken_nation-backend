@@ -1,10 +1,24 @@
-import { PartialType } from '@nestjs/swagger';
-import { CreateUserDto } from './create-user.dto';
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, MaxLength, Matches } from 'class-validator';
+import { IsNotEmpty, IsOptional, MaxLength, Matches } from 'class-validator';
 import { Transform } from 'class-transformer';
 
-export class UpdateUserDto extends PartialType(CreateUserDto) {
+export class UpdateUserPasswordDto {
+  // PASSWORD
+  @ApiProperty({
+    description: "le mot de passe de l'utilisateur",
+    example: 'Password01@',
+    required: true,
+    maxLength: 100,
+  })
+  @IsNotEmpty()
+  @MaxLength(100)
+  @Transform(({ value }) => value?.trim())
+  @Matches(/^(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/, {
+    message:
+      'Le mot de passe doit contenir au moins 8 caractères, une majuscule, un chiffre et un caractère spécial.',
+  })
+  password: string;
+
   // CONFIRM PASSWORD
   @ApiProperty({
     description: "la confirmation du mot de passe de l'utilisateur",

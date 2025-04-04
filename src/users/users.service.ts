@@ -1,32 +1,93 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
+import { EntityStatus, User, UserType } from '@prisma/client';
+import { Request } from 'express';
+import { PrismaService } from 'src/common/prisma.service';
+import * as bcrypt from 'bcrypt';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { PrismaClient, User } from '@prisma/client';
+import { UpdateUserPasswordDto } from './dto/update-user-password.dto';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaClient) {}
-  create(createUserDto: CreateUserDto) {
-    return 'This action adds a new user';
+  constructor(private readonly prisma: PrismaService) {}
+
+  // CREATE
+  async create(createUserDto: CreateUserDto) {
+    // Vérification de l'existence de l'utilisateur
+    const user = await this.prisma.user.findUnique({
+      where: {
+        email: createUserDto.email,
+      },
+    });
+    if (user) {
+      throw new BadRequestException(
+        "Utilisateur déjà existant, changer d'email",
+      );
+    }
+    const { password, ...rest } = createUserDto;
+
+    // Générer le salt et le hash
+    const salt = await bcrypt.genSalt();
+    const hash = await bcrypt.hash(password, salt);
+
+    // Créer l'utilisateur
+    return this.prisma.user.create({
+      data: {
+        ...rest,
+        password: hash,
+        type: UserType.BACKOFFICE,
+      },
+      omit: { id: true, password: true },
+    });
   }
 
-  findAll() {
-    return `This action returns all users`;
+  // CREATE MEMBER
+  async createMember(createUserDto: CreateUserDto) {
+    // Vérification de l'existence de l'utilisateur
+    const user = await this.prisma.user.findUnique({
+      where: {
+        email: createUserDto.email,
+      },
+    });
+    if (user) {
+      throw new BadRequestException(
+        "Utilisateur déjà existant, changer d'email",
+      );
+    }
+    const { password, ...rest } = createUserDto;
+
+    // Générer le salt et le hash
+    const salt = await bcrypt.genSalt();
+    const hash = await bcrypt.hash(password, salt);
+
+    // Créer l'utilisateur
+    return this.prisma.user.create({
+      data: {
+        ...rest,
+        password: hash,
+        type: UserType.RESTAURANT,
+      },
+      omit: { id: true, password: true },
+    });
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} user`;
+  // FIND_ALL
+  async findAll() {
+    const users = await this.prisma.user.findMany({
+      omit: {
+        password: true,
+      },
+    });
+
+    return users;
   }
 
-  update(id: number, updateUserDto: UpdateUserDto) {
-    return `This action updates a #${id} user`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} user`;
-  }
-
-  async profileUser(req: Request) {
+  // DETAIL
+  async detail(req: Request) {
     const user = req.user as User;
     const profile = await this.prisma.user.findUnique({
       where: {
@@ -35,13 +96,86 @@ export class UsersService {
       include: {
         restaurant: true,
       },
-      omit: {
-        deleted_at: true,
-        deleted_by: true,
-        created_at: true,
-        updated_at: true,
+    });
+
+    if (!profile) {
+      throw new NotFoundException('Utilisateur non trouvé');
+    }
+    const { password, ...rest } = profile;
+
+    return rest;
+  }
+
+  // UPDATE
+  async update(req: Request, updateUserDto: UpdateUserDto) {
+    const user = req.user as User;
+
+    const { password: pass, ...other } = updateUserDto;
+
+    const newUser = await this.prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: other,
+    });
+
+    const { password, ...rest } = newUser;
+
+    return rest;
+  }
+
+  // UPDATE PASSWORD
+  async updatePassword(
+    req: Request,
+    updateUserPasswordDto: UpdateUserPasswordDto,
+  ) {
+    const user = req.user as User;
+
+    const { password: pass, confirmPassword } = updateUserPasswordDto;
+
+    if (pass !== confirmPassword) {
+      throw new BadRequestException('Les mots de passe ne correspondent pas');
+    }
+
+    const salt = await bcrypt.genSalt();
+    const hash = await bcrypt.hash(pass, salt);
+
+    const newUser = await this.prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        password: hash,
       },
     });
-    return { data: profile };
+
+    const { password, ...rest } = newUser;
+
+    return rest;
+  }
+
+  // PARTIAL DELETE
+  async partialRemove(req: Request) {
+    const user = req.user as User;
+
+    return this.prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        entity_status: EntityStatus.DELETED,
+      },
+    });
+  }
+
+  // DELETE
+  async remove(req: Request, id: string) {
+    const user = req.user as User;
+
+    return this.prisma.user.delete({
+      where: {
+        id: id,
+      },
+    });
   }
 }

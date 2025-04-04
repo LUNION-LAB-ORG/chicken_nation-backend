@@ -1,8 +1,8 @@
 -- CreateEnum
-CREATE TYPE "UserType" AS ENUM ('ADMIN', 'MEMBER');
+CREATE TYPE "UserType" AS ENUM ('BACKOFFICE', 'RESTAURANT');
 
 -- CreateEnum
-CREATE TYPE "UserRole" AS ENUM ('ADMIN', 'MANAGER', 'EMPLOYEE');
+CREATE TYPE "UserRole" AS ENUM ('ADMIN', 'MANAGER');
 
 -- CreateEnum
 CREATE TYPE "CategorySupplement" AS ENUM ('FOOD', 'DRINK', 'ACCESSORY');
@@ -45,6 +45,7 @@ CREATE TABLE "users" (
 CREATE TABLE "restaurants" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
+    "manager" TEXT NOT NULL,
     "description" TEXT,
     "image" TEXT,
     "address" TEXT,

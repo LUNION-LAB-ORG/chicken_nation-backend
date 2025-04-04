@@ -1,27 +1,34 @@
 import { Prisma, PrismaClient } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
+import { UserRole, UserType } from '@prisma/client';
 
 const prisma = new PrismaClient({ log: ['query', 'info', 'warn', 'error'] });
 
 export async function userSeed() {
   const datas: Prisma.UserCreateInput[] = [
     {
-      fullname: 'Admin Lunion',
-      email: 'admin@lunion.com',
-      password: 'admin',
-      type: 'ADMIN',
-      role: 'ADMIN',
+      fullname: 'Admin Chicken-Nation',
+      email: 'admin@chicken-nation.com',
+      password: 'Admin@2025',
+      type: UserType.BACKOFFICE,
+      role: UserRole.ADMIN,
     },
   ];
 
   for (const data of datas) {
+    const { password, ...rest } = data;
+    const salt = await bcrypt.genSalt();
+    const hash = await bcrypt.hash(password, salt);
     try {
       await prisma.user.upsert({
         where: { email: data.email },
         update: {
-          ...data,
+          ...rest,
+          password: hash,
         },
         create: {
-          ...data,
+          ...rest,
+          password: hash,
         },
       });
     } catch (error) {
