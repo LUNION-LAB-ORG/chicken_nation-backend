@@ -24,7 +24,6 @@ import { Request } from 'express';
 import { JwtAuthGuard } from 'src/auth/guard/jwt-auth.guard';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateUserPasswordDto } from './dto/update-user-password.dto';
-import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('users')
 export class UsersController {
