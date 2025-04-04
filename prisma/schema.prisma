@@ -1,0 +1,231 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Modèle User - Utilisateur du système
+model User {
+  id              String    @id @default(uuid()) @db.Uuid
+  firstName       String    @map("first_name")
+  lastName        String    @map("last_name")
+  username        String    @unique
+  email           String    @unique
+  password        String
+  phoneNumber     String?   @map("phone_number") @db.VarChar(20)
+  isActive        Boolean   @default(true) @map("is_active")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  roles           Role[]    @relation("RoleUsers")
+  addresses       UserAddress[]
+  favorites       UserFavorite[]
+  orders          Order[]
+  notificationSettings NotificationSetting?
+
+  @@map("users")
+}
+
+// Modèle Role - Rôles utilisateur (admin, manager, client, etc.)
+model Role {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @unique @db.VarChar(50)
+  description String?
+  
+  // Relations
+  users       User[]  @relation("RoleUsers")
+
+  @@map("role")
+}
+
+// Modèle OTP - Codes à usage unique pour l'authentification
+model Otp {
+  id          String    @id @default(uuid()) @db.Uuid
+  phoneNumber String    @map("phone_number") @db.VarChar(20)
+  code        String    @db.VarChar(6)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  expiresAt   DateTime  @default(now()) @map("expires_at")
+  isUsed      Boolean   @default(false) @map("is_used")
+
+  @@map("otp")
+}
+
+// Modèle UserAddress - Adresses des utilisateurs
+model UserAddress {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String    @db.VarChar(255)
+  address     String    @db.VarChar(255)
+  details     String?
+  isDefault   Boolean?  @default(false) @map("is_default")
+  latitude    Decimal?  @db.Decimal(10, 7)
+  longitude   Decimal?  @db.Decimal(10, 7)
+  userId      String    @map("user_id") @db.Uuid
+  
+  // Relations
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_addresses")
+}
+
+// Modèle UserFavorite - Favoris des utilisateurs
+model UserFavorite {
+  id           String  @id @default(uuid()) @db.Uuid
+  restaurantId String? @map("restaurant_id") @db.VarChar
+  productId    String? @map("product_id") @db.VarChar
+  userId       String  @map("user_id") @db.Uuid
+  
+  // Relations
+  user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_favorites")
+}
+
+// Modèle NotificationSetting - Préférences de notification
+model NotificationSetting {
+  id               String  @id @default(uuid()) @db.Uuid
+  emailPreferences Json?   @default("{}") @map("email_preferences") @db.JsonB
+  pushPreferences  Json?   @default("{}") @map("push_preferences") @db.JsonB
+  smsPreferences   Json?   @default("{}") @map("sms_preferences") @db.JsonB
+  userId           String  @unique @map("user_id") @db.Uuid
+  
+  // Relations
+  user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_settings")
+}
+
+// Modèle Category - Catégories de produits
+model Category {
+  id          BigInt    @id @default(autoincrement())
+  name        String    @db.VarChar(100)
+  description String?
+  isActive    Boolean   @default(true) @map("isActive")
+  image       String?
+  createdAt   DateTime  @default(now()) @map("createdAt")
+  updatedAt   DateTime  @updatedAt @map("updatedAt")
+  
+  // Relations
+  menuItems   MenuItem[]
+
+  @@map("categories")
+}
+
+// Modèle MenuItem - Produits du menu
+model MenuItem {
+  id              BigInt    @id @default(autoincrement())
+  name            String
+  description     String
+  price           Decimal   @db.Decimal
+  image           String?
+  categoryId      String    @map("category_id")
+  restaurantId    String?   @map("restaurant_id")
+  isAvailable     Boolean?  @default(true) @map("is_available")
+  isNew           Boolean?  @default(false) @map("is_new")
+  ingredients     String?
+  rating          Decimal?  @default(0) @db.Decimal
+  totalReviews    BigInt?   @default(0) @map("total_reviews")
+  discountedPrice Decimal?  @map("discounted_price") @db.Decimal
+  originalPrice   Decimal?  @map("original_price") @db.Decimal
+  isPromoted      Boolean?  @default(false) @map("is_promoted")
+  promotionPrice  Decimal?  @map("promotion_price") @db.Decimal
+  createdAt       DateTime? @default(now()) @map("created_at")
+  updatedAt       DateTime? @default(now()) @map("updated_at")
+  
+  // Relations
+  options         MenuItemOption[]
+  orderItems      OrderItem[]
+
+  @@map("menu_items")
+}
+
+// Modèle MenuItemOption - Options pour les produits du menu
+model MenuItemOption {
+  id              BigInt    @id @default(autoincrement())
+  menuItemId      BigInt    @map("menuItemId")
+  name            String    @db.VarChar(100)
+  price           Decimal   @default(0) @db.Decimal
+  isRequired      Boolean   @default(false) @map("isRequired")
+  description     String?
+  additionalPrice Decimal?  @default(0) @map("additional_price") @db.Decimal
+  menuItemRef     BigInt?   @map("menu_item_id")
+  isAvailable     Boolean?  @default(true) @map("is_available")
+  createdAt       DateTime  @default(now()) @map("createdAt")
+  updatedAt       DateTime  @default(now()) @map("updatedAt")
+  
+  // Relations
+  menuItem        MenuItem  @relation(fields: [menuItemId], references: [id])
+
+  @@map("menu_item_options")
+}
+
+// Modèle Order - Commandes
+model Order {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  totalAmount     Decimal   @db.Decimal
+  status          String    @db.VarChar(20)
+  date            DateTime? @default(now())
+  deliveryAddress String?   @map("delivery_address") @db.VarChar(255)
+  paymentMethod   String    @map("payment_method") @db.VarChar(20)
+  
+  // Relations
+  user            User      @relation(fields: [userId], references: [id])
+  orderItems      OrderItem[]
+  paymentTransactions PaymentTransaction[]
+
+  @@map("orders")
+}
+
+// Modèle OrderItem - Produits dans une commande
+model OrderItem {
+  id          String    @id @default(uuid()) @db.Uuid
+  orderId     String    @map("order_id") @db.Uuid
+  productId   BigInt    @map("product_id")
+  quantity    BigInt
+  
+  // Relations
+  order       Order     @relation(fields: [orderId], references: [id])
+  product     MenuItem  @relation(fields: [productId], references: [id])
+  supplements OrderItemSupplement[]
+
+  @@map("order_items")
+}
+
+// Modèle OrderItemSupplement - Suppléments pour les produits d'une commande
+model OrderItemSupplement {
+  orderItemId   String @map("order_item_id") @db.Uuid
+  supplementId  String @map("supplement_id") @db.VarChar(255)
+  
+  // Relations
+  orderItem     OrderItem @relation(fields: [orderItemId], references: [id])
+
+  @@id([orderItemId, supplementId])
+  @@map("order_item_supplements")
+}
+
+// Modèle PaymentTransaction - Transactions de paiement
+model PaymentTransaction {
+  id                  String    @id @default(uuid()) @db.Uuid
+  orderId             String    @map("order_id") @db.Uuid
+  paymentMethod       String    @map("payment_method")
+  amount              Decimal   @db.Decimal
+  status              String
+  transactionReference String?   @map("transaction_reference")
+  providerResponse    Json?     @map("provider_response") @db.JsonB
+  phoneNumber         String?   @map("phone_number")
+  operator            String?
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @default(now()) @map("updated_at")
+  
+  // Relations
+  order               Order     @relation(fields: [orderId], references: [id])
+
+  @@map("payment_transactions")
+}
