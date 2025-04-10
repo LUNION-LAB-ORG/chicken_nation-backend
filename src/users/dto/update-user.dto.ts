@@ -1,5 +1,5 @@
 import { PartialType } from '@nestjs/swagger';
-import { CreateUserDto } from './create-user.dto';
+import { CreateUserDto } from 'src/users/dto/create-user.dto';
 import { ApiProperty } from '@nestjs/swagger';
 import { IsOptional, MaxLength, Matches } from 'class-validator';
 import { Transform } from 'class-transformer';

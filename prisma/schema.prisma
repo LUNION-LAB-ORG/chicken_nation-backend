@@ -1,6 +1,6 @@
 generator client {
   provider        = "prisma-client-js"
-  previewFeatures = ["relationJoins", "fullTextSearchPostgres"]
+  previewFeatures = ["fullTextSearchPostgres", "relationJoins"]
 }
 
 datasource db {
@@ -8,320 +8,268 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum UserType {
-  BACKOFFICE
-  RESTAURANT
-}
-
-enum UserRole {
-  ADMIN
-  MANAGER
-}
-
-enum CategorySupplement {
-  FOOD
-  DRINK
-  ACCESSORY
-}
-
-enum EntityStatus {
+enum EntityStatusEnum {
   NEW
-  VALIDATED
-  INVALIDATED
-  UNAVAILABLE
-  AVAILABLE
-  BLOCKED
+  ACTIVE
+  INACTIVE
   DELETED
 }
 
-enum OrderType {
-  DELIVERY
-  PICKUP
-  TABLE
+enum NotificationTypeEnum {
+  ORDER
+  PROMOTION
+  SYSTEM
 }
 
-enum PaymentStatus {
+enum OrderTypeEnum {
+  DELIVERY
+  PICKUP
+}
+
+enum PaiementModeEnum {
+  MOBILE_MONEY
+  CREDIT_CARD
+  CASH
+}
+
+enum PaiementMobileMoneyTypeEnum {
+  ORANGE
+  MTN
+  MOOV
+}
+
+enum PaiementStatusEnum {
   PENDING
-  COMPLETED
+  SUCCESS
   FAILED
 }
 
-enum PaymentType {
-  CASH
-  CREDIT_CARD
-  MOBILE_MONEY
-  PAYPAL
-  STRIPE
-}
-
-enum MobileMoneyType {
-  ORANGE_MONEY
-  MOOV_MONEY
-  MTN_MONEY
-  WAVE
-}
-
-model User {
-  id            String       @id @default(uuid())
-  fullname      String
-  email         String       @unique
-  phone         String?
-  password      String
-  image         String?
-  address       String?
-  type          UserType
-  role          UserRole
-  restaurant    Restaurant?  @relation(fields: [restaurantId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  restaurantId  String?
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now())
-  updated_at    DateTime?    @updatedAt
-
-  @@index([email, type])
-  @@map("users")
-}
-
-model Restaurant {
-  id              String           @id @default(uuid())
-  name            String
-  manager         String           @default(uuid())
-  description     String?
-  image           String?
-  address         String?
-  latitude        Float?
-  longitude       Float?
-  phone           String?
-  email           String?
-  schedule        Json?            @db.Json // Array of day and start_time, end_time
-  users           User[]
-  dishRestaurants DishRestaurant[]
-
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now())
-  updated_at    DateTime?    @updatedAt
-
-  @@map("restaurants")
-}
-
-model DishRestaurant {
-  id           String     @id @default(uuid())
-  dishId       String
-  restaurantId String
-  dish         Dish       @relation(fields: [dishId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-
-  @@map("dish_restaurants")
-}
-
 model Address {
-  id         String    @id @default(uuid())
-  title      String
-  address    String
-  street     String?
-  city       String?
-  longitude  Float
-  latitude   Float
-  orders     Order[]
-  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  customerId String?
-  created_at DateTime  @default(now())
-  updated_at DateTime? @updatedAt
-
-  @@map("addresses")
+  id            String           @id @default(uuid())
+  entityStatus  EntityStatusEnum @default(NEW)
+  createdAt     DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt     DateTime         @default(now()) @db.Timestamp(6)
+  title         String           @db.VarChar
+  address       String           @db.VarChar
+  street        String?          @db.VarChar
+  city          String?          @db.VarChar
+  longitude     Float
+  latitude      Float
+  customerId    String?          @db.Uuid
+  customer      Customer?        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orders        Order[]
 }
 
-model Customer {
-  id        String     @id @default(uuid())
-  phone     String     @unique
-  firstname String?
-  lastname  String?
-  image     String?
-  addresses Address[]
-  favorites Favorite[]
-  otpTokens OtpToken[]
-
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now())
-  updated_at    DateTime?    @updatedAt
-
-  @@map("customers")
-}
-
-model OtpToken {
-  id         String    @id @default(uuid())
-  code       String    @db.VarChar(255)
-  telephone  String?
-  counter    Int?
-  expire     DateTime
-  customerId String?
-  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-
-  @@map("otp_tokens")
+model Category {
+  id            String           @id @default(uuid())
+  entityStatus  EntityStatusEnum @default(NEW)
+  createdAt     DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt     DateTime         @default(now()) @db.Timestamp(6)
+  name          String           @db.VarChar
+  description   String?          @db.VarChar
+  image         String?          @db.VarChar
+  dishes        Dish[]
 }
 
 model CounterOtp {
   id      String @id @default(uuid())
   counter Int
-
-  @@map("counter_otp")
 }
 
-model Favorite {
-  id         String   @id @default(uuid())
-  customerId String
-  dishId     String
-  created_at DateTime @default(now())
-
-  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  dish     Dish     @relation(fields: [dishId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-
-  @@map("favorites")
+model Customer {
+  id                    String                @id @default(uuid())
+  entityStatus          EntityStatusEnum      @default(NEW)
+  createdAt             DateTime              @default(now()) @db.Timestamp(6)
+  updatedAt             DateTime              @default(now()) @db.Timestamp(6)
+  phone                 String                @unique @db.VarChar
+  firstName             String                @db.VarChar(255)
+  lastName              String                @db.VarChar(255)
+  username              String                @unique @db.VarChar(255)
+  image                 String?               @db.VarChar
+  addresses             Address[]
+  favorites             Favorite[]
+  notificationSettings  NotificationSetting?
+  otpTokens             OtpToken[]
 }
 
-model Category {
-  id          String  @id @default(uuid())
-  name        String
-  description String?
-  image       String?
-  dishes      Dish[]
-
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now())
-  updated_at    DateTime?    @updatedAt
-
-  @@map("categories")
-}
-
-model Dish {
-  id                 String             @id @default(uuid())
-  name               String
-  description        String?
-  price              Float
-  image              String?
-  available          Boolean            @default(true)
-  isNew              Boolean            @default(false)
-  categoryId         String
-  category           Category           @relation(fields: [categoryId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  supplements        DishSupplement[]
-  favorites          Favorite[]
-  dishRestaurants    DishRestaurant[]
-  orderItems         OrderItem[]
-  specialOfferDishes SpecialOfferDish[]
-
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now())
-  updated_at    DateTime?    @updatedAt
-
-  @@index([categoryId, available])
-  @@map("dishes")
+model DishRestaurant {
+  id           String     @id @default(uuid())
+  dishId       String     @db.Uuid
+  restaurantId String     @db.Uuid
+  dish         Dish       @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 }
 
 model DishSupplement {
-  id           String     @id @default(uuid())
-  dishId       String
-  supplementId String
-  dish         Dish       @relation(fields: [dishId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  supplement   Supplement @relation(fields: [supplementId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-
-  @@map("dish_supplements")
+  id           String      @id @default(uuid())
+  dishId       String      @db.Uuid
+  supplementId String      @db.Uuid
+  dish         Dish        @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  supplement   Supplement  @relation(fields: [supplementId], references: [id], onDelete: Cascade)
 }
 
-model Supplement {
-  id              String             @id @default(uuid())
-  name            String
-  price           Float
-  image           String?
-  available       Boolean            @default(true)
-  category        CategorySupplement
-  dishSupplements DishSupplement[]
+model Dish {
+  id                 String               @id @default(uuid())
+  entityStatus       EntityStatusEnum    @default(NEW)
+  createdAt          DateTime            @default(now()) @db.Timestamp(6)
+  updatedAt          DateTime            @default(now()) @db.Timestamp(6)
+  name               String              @db.VarChar
+  description        String?             @db.VarChar
+  price              Float
+  image              String?             @db.VarChar
+  available          Boolean             @default(true)
+  isNew              Boolean             @default(false)
+  categoryId         String              @db.Uuid
+  category           Category            @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  dishRestaurants    DishRestaurant[]
+  dishSupplements    DishSupplement[]
+  favorites          Favorite[]
+  orderItems         OrderItem[]
+  specialOfferDishes SpecialOfferDish[]
 
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now())
-  updated_at    DateTime?    @updatedAt
+  @@index([categoryId, available])
+}
 
-  @@map("supplements")
+model Favorite {
+  id          String           @id @default(uuid())
+  entityStatus EntityStatusEnum @default(NEW)
+  createdAt   DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime         @default(now()) @db.Timestamp(6)
+  customerId  String           @db.Uuid
+  dishId      String           @db.Uuid
+  customer    Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  dish        Dish             @relation(fields: [dishId], references: [id], onDelete: Cascade)
+}
+
+model NotificationSetting {
+  customerId        String    @id @db.Uuid
+  orderUpdates      Json
+  promotions         Json
+  newsletter         Json
+  pushNotifications Json
+  customer           Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id           String             @id @default(uuid())
+  entityStatus EntityStatusEnum   @default(NEW)
+  createdAt    DateTime           @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime           @default(now()) @db.Timestamp(6)
+  userId       String             @db.VarChar
+  icon         String             @db.VarChar
+  iconBgColor  String             @db.VarChar
+  title        String             @db.VarChar
+  date         DateTime           @db.Date
+  time         String             @db.VarChar
+  message      String             @db.VarChar
+  type         NotificationTypeEnum
+  isRead       Boolean            @default(false)
+  showChevron  Boolean?           @default(true)
+  notifBanner  String             @db.VarChar
+  notifTitle   String             @db.VarChar
+  data         Json?
+
+  @@index([userId])
+  @@index([type])
+}
+
+model OrderItem {
+  id           String           @id @default(uuid()) 
+  entityStatus EntityStatusEnum @default(NEW)
+  createdAt    DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime         @default(now()) @db.Timestamp(6)
+  quantity     Int              @default(1)
+  amount       Float
+  orderId      String           @db.Uuid
+  dishId       String           @db.Uuid
+  supplements  Json?            @db.Json
+  dish         Dish             @relation(fields: [dishId], references: [id])
+  order        Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
 
 model Order {
-  id          String      @id @default(uuid())
-  type        OrderType
-  addressId   String
-  address     Address     @relation(fields: [addressId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  orderItems  OrderItem[]
-  codePromo   String?
+  id          String           @id @default(uuid())
+  entityStatus EntityStatusEnum @default(NEW)
+  createdAt   DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime         @default(now()) @db.Timestamp(6)
+  type        OrderTypeEnum
+  addressId   String           @db.Uuid
+  codePromo   String?          @db.VarChar
   deliveryFee Float
   tax         Float
   amount      Float
   netAmount   Float
-  date        DateTime?   @db.Date
-  time        DateTime?   @db.Time
-  fullname    String?
-  phone       String?
-  email       String?
-  note        String?
-  payments    Paiement[]
-
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now())
-  updated_at    DateTime?    @updatedAt
+  date        DateTime?        @db.Date
+  time        DateTime?        @db.Time(6)
+  fullname    String?          @db.VarChar
+  phone       String?          @db.VarChar
+  email       String?          @db.VarChar
+  note        String?          @db.VarChar
+  address     Address          @relation(fields: [addressId], references: [id], onDelete: Cascade)
+  orderItems  OrderItem[]
+  paiements   Paiement[]
 
   @@index([addressId])
-  @@map("orders")
 }
 
-model OrderItem {
-  id          String @id @default(uuid())
-  quantity    Int    @default(1)
-  amount      Float
-  orderId     String
-  order       Order  @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  dishId      String
-  dish        Dish   @relation(fields: [dishId], references: [id])
-  supplements Json?  @db.Json // Array of dish supplement ids and price
-
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now())
-  updated_at    DateTime?    @updatedAt
-
-  @@map("order_items")
+model OtpToken {
+  id         String    @id @default(uuid())
+  code       String    @db.VarChar(255)
+  telephone  String?   @db.VarChar
+  counter    Int?
+  expire     DateTime  @db.Timestamp(6)
+  customerId String?   @db.Uuid
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
 }
 
 model Paiement {
-  id              String           @id @default(uuid())
+  id              String                  @id @default(uuid())
+  entityStatus    EntityStatusEnum        @default(NEW)
+  createdAt       DateTime                @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime                @default(now()) @db.Timestamp(6)
   amount          Float
-  orderId         String
-  order           Order            @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  mode            PaymentType
-  mobileMoneyType MobileMoneyType?
-  status          PaymentStatus
-  reference       String
-
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now())
-  updated_at    DateTime?    @updatedAt
-
-  @@map("paiements")
+  orderId         String                  @db.Uuid
+  mode            PaiementModeEnum
+  mobileMoneyType PaiementMobileMoneyTypeEnum?
+  status          PaiementStatusEnum
+  reference       String                  @db.VarChar
+  order           Order                   @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
 
-model SpecialOffer {
-  id                 String             @id @default(uuid())
-  name               String
-  description        String?
-  image              String
-  tax                Float
-  startDate          DateTime
-  endDate            DateTime
-  specialOfferDishes SpecialOfferDish[]
-
-  @@map("special_offers")
+model Restaurant {
+  id              String            @id @default(uuid())
+  entityStatus    EntityStatusEnum @default(NEW)
+  createdAt       DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime         @default(now()) @db.Timestamp(6)
+  name            String           @db.VarChar
+  manager         String           @db.Uuid
+  description     String?          @db.VarChar
+  image           String?          @db.VarChar
+  address         String?          @db.VarChar
+  latitude        Float?
+  longitude       Float?
+  phone           String?          @db.VarChar
+  email           String?          @db.VarChar
+  schedule        Json?            @db.Json
+  dishRestaurants DishRestaurant[]
+  users           User[]
 }
 
 model SpecialOfferDish {
-  id             String       @id @default(uuid())
-  dishId         String
-  specialOfferId String
-  dish           Dish         @relation(fields: [dishId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  specialOffer   SpecialOffer @relation(fields: [specialOfferId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  id             String         @id @default(uuid())
+  dishId         String         @db.Uuid
+  specialOfferId String         @db.Uuid
+  dish           Dish           @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  specialOffer   SpecialOffer   @relation(fields: [specialOfferId], references: [id], onDelete: Cascade)
+}
 
-  @@map("special_offer_dishes")
+model SpecialOffer {
+  id          String         @id @default(uuid())
+  name        String         @db.VarChar
+  description String?        @db.VarChar
+  image       String         @db.VarChar
+  tax         Float
+  startDate   DateTime       @db.Timestamp(6)
+  endDate     DateTime       @db.Timestamp(6)
+  dishes      SpecialOfferDish[]
 }
