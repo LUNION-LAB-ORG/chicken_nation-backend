@@ -1,7 +1,7 @@
 import { Entity, Column, ManyToOne, Index } from 'typeorm';
 import { UserType, UserRole } from 'src/users/enums/user.enum';
 import { Restaurant } from 'src/restaurant/entities/restaurant.entity';
-import { SharedProp } from 'src/common/helpers/sharedProp.helper';
+import { SharedProp } from 'src/_database/helpers/sharedProp.helper';
 
 
 @Entity('users')

@@ -3,7 +3,7 @@ import { Address } from 'src/customer/entities/address.entity';
 import { OrderItem } from 'src/orders/entities/order-item.entity';
 import { Paiement } from 'src/paiements/entities/paiement.entity';
 import { OrderType } from 'src/orders/enums/order-type.enum';
-import { SharedProp } from 'src/common/helpers/sharedProp.helper';
+import { SharedProp } from 'src/_database/helpers/sharedProp.helper';
 
 @Entity('orders')
 @Index(['addressId'])

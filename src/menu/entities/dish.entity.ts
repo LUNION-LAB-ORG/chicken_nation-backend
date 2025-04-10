@@ -1,6 +1,6 @@
 import { Entity, Column, ManyToOne, OneToMany, Index } from 'typeorm';
 import { Category } from 'src/menu/entities/category.entity';
-import { SharedProp } from 'src/common/helpers/sharedProp.helper';
+import { SharedProp } from 'src/_database/helpers/sharedProp.helper';
 import { DishSupplement } from 'src/menu/entities/dish-supplement.entity';
 import { DishRestaurant } from 'src/menu/entities/dish-restaurant.entity';
 import { Favorite } from 'src/customer/entities/favorite.entity';

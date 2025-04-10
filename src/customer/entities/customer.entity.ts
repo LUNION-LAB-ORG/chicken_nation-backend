@@ -2,7 +2,7 @@ import { Entity, Column, OneToMany, OneToOne } from 'typeorm';
 import { Address } from 'src/customer/entities/address.entity';
 import { Favorite } from 'src/customer/entities/favorite.entity';
 import { OtpToken } from 'src/auth/entities/otp-token.entity';
-import { SharedProp } from 'src/common/helpers/sharedProp.helper';
+import { SharedProp } from 'src/_database/helpers/sharedProp.helper';
 import { NotificationPreference } from 'src/notifications/entities/notification-preference.entity';
 
 @Entity('customers')

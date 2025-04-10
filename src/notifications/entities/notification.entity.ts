@@ -4,7 +4,7 @@ import {
   Index,
 } from "typeorm";
 import { NotificationType } from "src/notifications/enums/notification.enum";
-import { SharedProp } from "src/common/helpers/sharedProp.helper";
+import { SharedProp } from "src/_database/helpers/sharedProp.helper";
 
 @Entity("notifications")
 export class Notification extends SharedProp {

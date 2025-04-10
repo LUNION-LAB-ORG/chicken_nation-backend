@@ -1,7 +1,7 @@
 import { Entity, Column, ManyToOne } from 'typeorm';
 import { Customer } from './customer.entity';
 import { Dish } from 'src/menu/entities/dish.entity';
-import { SharedProp } from 'src/common/helpers/sharedProp.helper';
+import { SharedProp } from 'src/_database/helpers/sharedProp.helper';
 
 @Entity('favorites')
 export class Favorite extends SharedProp {

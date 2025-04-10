@@ -1,4 +1,4 @@
-import { SharedProp } from 'src/common/helpers/sharedProp.helper';
+import { SharedProp } from 'src/_database/helpers/sharedProp.helper';
 import { DishRestaurant } from 'src/menu/entities/dish-restaurant.entity';
 import { User } from 'src/users/entities/user.entity';
 import {

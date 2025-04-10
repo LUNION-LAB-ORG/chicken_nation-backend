@@ -1,7 +1,7 @@
 import { Entity, Column, ManyToOne, OneToMany } from 'typeorm';
 import { Customer } from 'src/customer/entities/customer.entity';
 import { Order } from 'src/orders/entities/order.entity';
-import { SharedProp } from 'src/common/helpers/sharedProp.helper';
+import { SharedProp } from 'src/_database/helpers/sharedProp.helper';
 
 @Entity('addresses')
 export class Address extends SharedProp {

@@ -1,7 +1,7 @@
 import { Entity, Column, ManyToOne } from 'typeorm';
 import { Order } from 'src/orders/entities/order.entity';
 import { MobileMoneyType, PaiementStatus, PaiementType } from '../enums/paiement.enum';
-import { SharedProp } from 'src/common/helpers/sharedProp.helper';
+import { SharedProp } from 'src/_database/helpers/sharedProp.helper';
 
 @Entity('paiements')
 export class Paiement extends SharedProp {

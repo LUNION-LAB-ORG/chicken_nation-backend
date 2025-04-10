@@ -1,5 +1,5 @@
 import { Entity, Column, OneToMany } from 'typeorm';
-import { SharedProp } from 'src/common/helpers/sharedProp.helper';
+import { SharedProp } from 'src/_database/helpers/sharedProp.helper';
 import { Dish } from 'src/menu/entities/dish.entity';
 
 @Entity('categories')
