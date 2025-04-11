@@ -4,9 +4,9 @@ import { Repository } from 'typeorm';
 import { Notification } from 'src/notifications/entities/notification.entity';
 import { NotificationPreference } from 'src/notifications/entities/notification-preference.entity';
 import { CreateNotificationDto } from 'src/notifications/dto/create-notification.dto';
-import { UpdateNotificationPreferenceDto } from 'src/notifications/dto/update-notification-preference.dto';
 import { UpdateNotificationStatusDto } from 'src/notifications/dto/update-notification-status.dto';
 import { NotificationType } from 'src/notifications/enums/notification.enum';
+import { UpdateNotificationPreferenceDto } from '../dto/notification-preference.dto';
 
 @Injectable()
 export class NotificationsService {

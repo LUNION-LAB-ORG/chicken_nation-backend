@@ -1,13 +1,12 @@
 import { Module } from '@nestjs/common';
 import { SpecialOfferService } from 'src/special-offer/services/special-offer.service';
+import { SpecialOfferDishService } from 'src/special-offer/services/special-offer-dish.service';
 import { SpecialOfferController } from 'src/special-offer/controllers/special-offer.controller';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { SpecialOffer } from 'src/special-offer/entities/special-offer.entity';
-import { SpecialOfferDish } from 'src/special-offer/entities/special-offer-dish.entity';
+import { SpecialOfferDishController } from 'src/special-offer/controllers/special-offer-dish.controller';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([SpecialOffer, SpecialOfferDish])],
-  controllers: [SpecialOfferController],
-  providers: [SpecialOfferService],
+  imports: [],
+  controllers: [SpecialOfferController, SpecialOfferDishController],
+  providers: [SpecialOfferService, SpecialOfferDishService],
 })
 export class SpecialOfferModule { }

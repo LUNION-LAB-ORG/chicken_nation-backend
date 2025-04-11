@@ -1,9 +1,0 @@
-export enum EntityStatus {
-    NEW = 'NEW',
-    VALIDATED = 'VALIDATED',
-    INVALIDATED = 'INVALIDATED',
-    UNAVAILABLE = 'UNAVAILABLE',
-    AVAILABLE = 'AVAILABLE',
-    BLOCKED = 'BLOCKED',
-    DELETED = 'DELETED'
-}

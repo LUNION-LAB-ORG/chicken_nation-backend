@@ -1,1 +1,5 @@
-export class CreateSpecialOfferDto {}
+import { PartialType } from "@nestjs/swagger";
+
+export class CreateSpecialOfferDto {
+
+}

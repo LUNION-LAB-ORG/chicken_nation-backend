@@ -14,10 +14,10 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { NotificationsService } from '../services/notifications.service';
 import { CreateNotificationDto } from '../dto/create-notification.dto';
-import { UpdateNotificationPreferenceDto } from '../dto/update-notification-preference.dto';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { Notification } from 'src/notifications/entities/notification.entity';
 import { NotificationPreference } from 'src/notifications/entities/notification-preference.entity';
+import { UpdateNotificationPreferenceDto } from '../dto/notification-preference.dto';
 
 @ApiTags('notifications')
 @Controller('notifications')
