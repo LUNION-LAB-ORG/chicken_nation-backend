@@ -13,6 +13,8 @@ import { CustomerModule } from 'src/customer/customer.module';
 import { PaiementsModule } from 'src/paiements/paiements.module';
 import { OrdersModule } from 'src/orders/orders.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
+import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
+import { OtpModule } from 'src/otp/otp.module';
 
 @Module({
   imports: [
@@ -20,6 +22,8 @@ import { NotificationsModule } from 'src/notifications/notifications.module';
     DatabaseModule,
     CommonModule,
     MulterModule.register({ dest: './uploads' }),
+    JsonWebTokenModule,
+    OtpModule,
     EmailModule,
     UsersModule,
     AuthModule,

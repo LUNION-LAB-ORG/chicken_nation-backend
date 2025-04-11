@@ -10,6 +10,7 @@ import {
 } from '@nestjs/swagger';
 import { Request } from 'express';
 import { JwtRefreshAuthGuard } from '../guards/jwt-refresh-auth.guard';
+import { VerifyOtpDto } from '../dto/verify-otp.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -26,6 +27,32 @@ export class AuthController {
   @Post('login')
   async login(@Body() data: LoginUserDto) {
     return this.authService.login(data);
+  }
+
+  // LOGIN CUSTOMER
+  @ApiOperation({ summary: 'Connexion client' })
+  @ApiOkResponse({
+    type: String,
+    description: 'Client, Token et refreshToken envoyé',
+  })
+  @ApiNotFoundResponse({ description: 'Client non trouvé' })
+  @ApiBody({ type: String })
+  @Post('customer/login')
+  async loginCustomer(@Body() phone: string) {
+    return this.authService.loginCustomer(phone);
+  }
+
+  // VERIFY OTP CUSTOMER
+  @ApiOperation({ summary: 'Vérification du code OTP' })
+  @ApiOkResponse({
+    type: String,
+    description: 'Client, Token et refreshToken envoyé',
+  })
+  @ApiNotFoundResponse({ description: 'Client non trouvé' })
+  @ApiBody({ type: VerifyOtpDto })
+  @Post('customer/verify-otp')
+  async verifyOtpCustomer(@Body() data: VerifyOtpDto) {
+    return this.authService.verifyOtp(data);
   }
 
   // REFRESH TOKEN

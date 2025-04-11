@@ -44,31 +44,47 @@ enum PaiementStatusEnum {
   FAILED
 }
 
+enum SupplementCategoryEnum {
+  FOOD
+  DRINK
+  ACCESSORY
+}
+
+enum UserTypeEnum {
+  BACKOFFICE
+  RESTAURANT
+}
+
+enum UserRoleEnum {
+  ADMIN
+  MANAGER
+}
+
 model Address {
-  id            String           @id @default(uuid())
-  entityStatus  EntityStatusEnum @default(NEW)
-  createdAt     DateTime         @default(now()) @db.Timestamp(6)
-  updatedAt     DateTime         @default(now()) @db.Timestamp(6)
-  title         String           @db.VarChar
-  address       String           @db.VarChar
-  street        String?          @db.VarChar
-  city          String?          @db.VarChar
-  longitude     Float
-  latitude      Float
-  customerId    String?          @db.Uuid
-  customer      Customer?        @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  orders        Order[]
+  id           String           @id @default(uuid())
+  entityStatus EntityStatusEnum @default(NEW)
+  createdAt    DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime         @default(now()) @db.Timestamp(6)
+  title        String           @db.VarChar
+  address      String           @db.VarChar
+  street       String?          @db.VarChar
+  city         String?          @db.VarChar
+  longitude    Float
+  latitude     Float
+  customerId   String?          @db.Uuid
+  customer     Customer?        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orders       Order[]
 }
 
 model Category {
-  id            String           @id @default(uuid())
-  entityStatus  EntityStatusEnum @default(NEW)
-  createdAt     DateTime         @default(now()) @db.Timestamp(6)
-  updatedAt     DateTime         @default(now()) @db.Timestamp(6)
-  name          String           @db.VarChar
-  description   String?          @db.VarChar
-  image         String?          @db.VarChar
-  dishes        Dish[]
+  id           String           @id @default(uuid())
+  entityStatus EntityStatusEnum @default(NEW)
+  createdAt    DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime         @default(now()) @db.Timestamp(6)
+  name         String           @db.VarChar
+  description  String?          @db.VarChar
+  image        String?          @db.VarChar
+  dishes       Dish[]
 }
 
 model CounterOtp {
@@ -77,19 +93,18 @@ model CounterOtp {
 }
 
 model Customer {
-  id                    String                @id @default(uuid())
-  entityStatus          EntityStatusEnum      @default(NEW)
-  createdAt             DateTime              @default(now()) @db.Timestamp(6)
-  updatedAt             DateTime              @default(now()) @db.Timestamp(6)
-  phone                 String                @unique @db.VarChar
-  firstName             String                @db.VarChar(255)
-  lastName              String                @db.VarChar(255)
-  username              String                @unique @db.VarChar(255)
-  image                 String?               @db.VarChar
-  addresses             Address[]
-  favorites             Favorite[]
-  notificationSettings  NotificationSetting?
-  otpTokens             OtpToken[]
+  id                   String               @id @default(uuid())
+  entityStatus         EntityStatusEnum     @default(NEW)
+  createdAt            DateTime             @default(now()) @db.Timestamp(6)
+  updatedAt            DateTime             @default(now()) @db.Timestamp(6)
+  phone                String               @unique @db.VarChar
+  firstName            String               @db.VarChar(255)
+  lastName             String               @db.VarChar(255)
+  username             String               @unique @db.VarChar(255)
+  image                String?              @db.VarChar
+  addresses            Address[]
+  favorites            Favorite[]
+  notificationSettings NotificationSetting?
 }
 
 model DishRestaurant {
@@ -101,26 +116,26 @@ model DishRestaurant {
 }
 
 model DishSupplement {
-  id           String      @id @default(uuid())
-  dishId       String      @db.Uuid
-  supplementId String      @db.Uuid
-  dish         Dish        @relation(fields: [dishId], references: [id], onDelete: Cascade)
-  supplement   Supplement  @relation(fields: [supplementId], references: [id], onDelete: Cascade)
+  id           String     @id @default(uuid())
+  dishId       String     @db.Uuid
+  supplementId String     @db.Uuid
+  dish         Dish       @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  supplement   Supplement @relation(fields: [supplementId], references: [id], onDelete: Cascade)
 }
 
 model Dish {
-  id                 String               @id @default(uuid())
-  entityStatus       EntityStatusEnum    @default(NEW)
-  createdAt          DateTime            @default(now()) @db.Timestamp(6)
-  updatedAt          DateTime            @default(now()) @db.Timestamp(6)
-  name               String              @db.VarChar
-  description        String?             @db.VarChar
+  id                 String             @id @default(uuid())
+  entityStatus       EntityStatusEnum   @default(NEW)
+  createdAt          DateTime           @default(now()) @db.Timestamp(6)
+  updatedAt          DateTime           @default(now()) @db.Timestamp(6)
+  name               String             @db.VarChar
+  description        String?            @db.VarChar
   price              Float
-  image              String?             @db.VarChar
-  available          Boolean             @default(true)
-  isNew              Boolean             @default(false)
-  categoryId         String              @db.Uuid
-  category           Category            @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  image              String?            @db.VarChar
+  available          Boolean            @default(true)
+  isNew              Boolean            @default(false)
+  categoryId         String             @db.Uuid
+  category           Category           @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   dishRestaurants    DishRestaurant[]
   dishSupplements    DishSupplement[]
   favorites          Favorite[]
@@ -131,42 +146,42 @@ model Dish {
 }
 
 model Favorite {
-  id          String           @id @default(uuid())
+  id           String           @id @default(uuid())
   entityStatus EntityStatusEnum @default(NEW)
-  createdAt   DateTime         @default(now()) @db.Timestamp(6)
-  updatedAt   DateTime         @default(now()) @db.Timestamp(6)
-  customerId  String           @db.Uuid
-  dishId      String           @db.Uuid
-  customer    Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  dish        Dish             @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  createdAt    DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime         @default(now()) @db.Timestamp(6)
+  customerId   String           @db.Uuid
+  dishId       String           @db.Uuid
+  customer     Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  dish         Dish             @relation(fields: [dishId], references: [id], onDelete: Cascade)
 }
 
 model NotificationSetting {
-  customerId        String    @id @db.Uuid
+  customerId        String   @id @db.Uuid
   orderUpdates      Json
-  promotions         Json
-  newsletter         Json
+  promotions        Json
+  newsletter        Json
   pushNotifications Json
-  customer           Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customer          Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 }
 
 model Notification {
-  id           String             @id @default(uuid())
-  entityStatus EntityStatusEnum   @default(NEW)
-  createdAt    DateTime           @default(now()) @db.Timestamp(6)
-  updatedAt    DateTime           @default(now()) @db.Timestamp(6)
-  userId       String             @db.VarChar
-  icon         String             @db.VarChar
-  iconBgColor  String             @db.VarChar
-  title        String             @db.VarChar
-  date         DateTime           @db.Date
-  time         String             @db.VarChar
-  message      String             @db.VarChar
+  id           String               @id @default(uuid())
+  entityStatus EntityStatusEnum     @default(NEW)
+  createdAt    DateTime             @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime             @default(now()) @db.Timestamp(6)
+  userId       String               @db.VarChar
+  icon         String               @db.VarChar
+  iconBgColor  String               @db.VarChar
+  title        String               @db.VarChar
+  date         DateTime             @db.Date
+  time         String               @db.VarChar
+  message      String               @db.VarChar
   type         NotificationTypeEnum
-  isRead       Boolean            @default(false)
-  showChevron  Boolean?           @default(true)
-  notifBanner  String             @db.VarChar
-  notifTitle   String             @db.VarChar
+  isRead       Boolean              @default(false)
+  showChevron  Boolean?             @default(true)
+  notifBanner  String               @db.VarChar
+  notifTitle   String               @db.VarChar
   data         Json?
 
   @@index([userId])
@@ -174,7 +189,7 @@ model Notification {
 }
 
 model OrderItem {
-  id           String           @id @default(uuid()) 
+  id           String           @id @default(uuid())
   entityStatus EntityStatusEnum @default(NEW)
   createdAt    DateTime         @default(now()) @db.Timestamp(6)
   updatedAt    DateTime         @default(now()) @db.Timestamp(6)
@@ -188,26 +203,26 @@ model OrderItem {
 }
 
 model Order {
-  id          String           @id @default(uuid())
+  id           String           @id @default(uuid())
   entityStatus EntityStatusEnum @default(NEW)
-  createdAt   DateTime         @default(now()) @db.Timestamp(6)
-  updatedAt   DateTime         @default(now()) @db.Timestamp(6)
-  type        OrderTypeEnum
-  addressId   String           @db.Uuid
-  codePromo   String?          @db.VarChar
-  deliveryFee Float
-  tax         Float
-  amount      Float
-  netAmount   Float
-  date        DateTime?        @db.Date
-  time        DateTime?        @db.Time(6)
-  fullname    String?          @db.VarChar
-  phone       String?          @db.VarChar
-  email       String?          @db.VarChar
-  note        String?          @db.VarChar
-  address     Address          @relation(fields: [addressId], references: [id], onDelete: Cascade)
-  orderItems  OrderItem[]
-  paiements   Paiement[]
+  createdAt    DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime         @default(now()) @db.Timestamp(6)
+  type         OrderTypeEnum
+  addressId    String           @db.Uuid
+  codePromo    String?          @db.VarChar
+  deliveryFee  Float
+  tax          Float
+  amount       Float
+  netAmount    Float
+  date         DateTime?        @db.Date
+  time         DateTime?        @db.Time(6)
+  fullname     String?          @db.VarChar
+  phone        String?          @db.VarChar
+  email        String?          @db.VarChar
+  note         String?          @db.VarChar
+  address      Address          @relation(fields: [addressId], references: [id], onDelete: Cascade)
+  orderItems   OrderItem[]
+  paiements    Paiement[]
 
   @@index([addressId])
 }
@@ -215,29 +230,27 @@ model Order {
 model OtpToken {
   id         String    @id @default(uuid())
   code       String    @db.VarChar(255)
-  telephone  String?   @db.VarChar
+  phone  String    @db.VarChar
   counter    Int?
   expire     DateTime  @db.Timestamp(6)
-  customerId String?   @db.Uuid
-  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
 }
 
 model Paiement {
-  id              String                  @id @default(uuid())
-  entityStatus    EntityStatusEnum        @default(NEW)
-  createdAt       DateTime                @default(now()) @db.Timestamp(6)
-  updatedAt       DateTime                @default(now()) @db.Timestamp(6)
+  id              String                       @id @default(uuid())
+  entityStatus    EntityStatusEnum             @default(NEW)
+  createdAt       DateTime                     @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime                     @default(now()) @db.Timestamp(6)
   amount          Float
-  orderId         String                  @db.Uuid
+  orderId         String                       @db.Uuid
   mode            PaiementModeEnum
   mobileMoneyType PaiementMobileMoneyTypeEnum?
   status          PaiementStatusEnum
-  reference       String                  @db.VarChar
-  order           Order                   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  reference       String                       @db.VarChar
+  order           Order                        @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
 
 model Restaurant {
-  id              String            @id @default(uuid())
+  id              String           @id @default(uuid())
   entityStatus    EntityStatusEnum @default(NEW)
   createdAt       DateTime         @default(now()) @db.Timestamp(6)
   updatedAt       DateTime         @default(now()) @db.Timestamp(6)
@@ -256,20 +269,49 @@ model Restaurant {
 }
 
 model SpecialOfferDish {
-  id             String         @id @default(uuid())
-  dishId         String         @db.Uuid
-  specialOfferId String         @db.Uuid
-  dish           Dish           @relation(fields: [dishId], references: [id], onDelete: Cascade)
-  specialOffer   SpecialOffer   @relation(fields: [specialOfferId], references: [id], onDelete: Cascade)
+  id             String       @id @default(uuid())
+  dishId         String       @db.Uuid
+  specialOfferId String       @db.Uuid
+  dish           Dish         @relation(fields: [dishId], references: [id], onDelete: Cascade)
+  specialOffer   SpecialOffer @relation(fields: [specialOfferId], references: [id], onDelete: Cascade)
 }
 
 model SpecialOffer {
-  id          String         @id @default(uuid())
-  name        String         @db.VarChar
-  description String?        @db.VarChar
-  image       String         @db.VarChar
+  id          String             @id @default(uuid())
+  name        String             @db.VarChar
+  description String?            @db.VarChar
+  image       String             @db.VarChar
   tax         Float
-  startDate   DateTime       @db.Timestamp(6)
-  endDate     DateTime       @db.Timestamp(6)
+  startDate   DateTime           @db.Timestamp(6)
+  endDate     DateTime           @db.Timestamp(6)
   dishes      SpecialOfferDish[]
+}
+
+model Supplement {
+  id              String                 @id @default(uuid())
+  name            String                 @db.VarChar
+  price           Float
+  image           String?                @db.VarChar
+  available       Boolean                @default(true)
+  category        SupplementCategoryEnum
+  dishSupplements DishSupplement[]
+}
+
+model User {
+  id           String           @id @default(uuid())
+  entityStatus EntityStatusEnum @default(NEW)
+  createdAt    DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime         @default(now()) @db.Timestamp(6)
+  fullname     String           @db.VarChar
+  email        String           @unique @db.VarChar
+  phone        String?          @db.VarChar
+  password     String           @db.VarChar
+  image        String?          @db.VarChar
+  address      String?          @db.VarChar
+  type         UserTypeEnum
+  role         UserRoleEnum
+  restaurantId String?          @db.Uuid
+  restaurant   Restaurant?      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([email, type])
 }
