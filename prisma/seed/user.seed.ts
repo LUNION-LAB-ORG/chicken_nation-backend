@@ -1,13 +1,12 @@
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient, UserRole, UserType } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { UserRole, UserType } from '@prisma/client';
 
 const prisma = new PrismaClient({ log: ['query', 'info', 'warn', 'error'] });
 
 export async function userSeed() {
   const datas: Prisma.UserCreateInput[] = [
     {
-      fullname: 'Admin Chicken-Nation',
+      fullname: 'Admin',
       email: 'admin@chicken-nation.com',
       password: 'Admin@2025',
       type: UserType.BACKOFFICE,

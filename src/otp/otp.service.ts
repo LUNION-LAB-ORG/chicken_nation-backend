@@ -16,7 +16,7 @@ export class OtpService {
   async generate(phone: string) {
 
     // Récupérer le OTP s'il n'a pas encore expiré
-    const otpToken = await this.prisma.otpToken.findUnique({
+    const otpToken = await this.prisma.otpToken.findFirst({
       where: {
         phone,
         expire: {
