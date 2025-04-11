@@ -1,6 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { Notification } from 'src/notifications/entities/notification.entity';
 
 @Injectable()
 export class SmsNotificationService {

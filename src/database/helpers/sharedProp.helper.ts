@@ -1,10 +1,10 @@
+import { EntityStatus } from '@prisma/client';
 import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { EntityStatus } from '../../_database/enums/entity-status.enum';
 
 export class SharedProp {
   @PrimaryGeneratedColumn('uuid')

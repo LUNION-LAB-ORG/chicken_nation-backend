@@ -1,12 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Notification } from 'src/notifications/entities/notification.entity';
-import { NotificationsService } from 'src/notifications/services/notifications.service';
-import { EmailNotificationService } from 'src/notifications/services/email-notification.service';
-import { PushNotificationService } from 'src/notifications/services/push-notification.service';
-import { AdminNotificationToUsersDto, AdminBroadcastNotificationDto } from 'src/notifications/dto/admin-notification.dto';
-import { CreateNotificationDto } from 'src/notifications/dto/create-notification.dto';
 
 @Injectable()
 export class AdminNotificationService {

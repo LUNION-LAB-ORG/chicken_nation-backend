@@ -1,6 +1,4 @@
 import { Module } from '@nestjs/common';
-import { MenuService } from 'src/menu/services/menu.service';
-import { MenuController } from 'src/menu/controllers/menu.controller';
 import { CategoryController } from 'src/menu/controllers/category.controller';
 import { DishController } from 'src/menu/controllers/dish.controller';
 import { DishRestaurantController } from 'src/menu/controllers/dish-restaurant.controller';
@@ -14,7 +12,7 @@ import { SupplementService } from 'src/menu/services/supplement.service';
 
 @Module({
   imports: [],
-  controllers: [MenuController, CategoryController, DishController, DishRestaurantController, DishSupplementController, SupplementController],
-  providers: [MenuService, CategoryService, DishService, DishRestaurantService, DishSupplementService, SupplementService],
+  controllers: [CategoryController, DishController, DishRestaurantController, DishSupplementController, SupplementController],
+  providers: [CategoryService, DishService, DishRestaurantService, DishSupplementService, SupplementService],
 })
 export class MenuModule { }

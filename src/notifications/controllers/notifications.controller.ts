@@ -1,23 +1,7 @@
 import {
   Controller,
-  Get,
-  Post,
-  Body,
-  Param,
-  Delete,
-  UseGuards,
-  Req,
-  Patch,
-  HttpCode,
-  HttpStatus,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
-import { NotificationsService } from '../services/notifications.service';
-import { CreateNotificationDto } from '../dto/create-notification.dto';
-import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
-import { Notification } from 'src/notifications/entities/notification.entity';
-import { NotificationPreference } from 'src/notifications/entities/notification-preference.entity';
-import { UpdateNotificationPreferenceDto } from '../dto/notification-preference.dto';
+import { ApiTags } from '@nestjs/swagger';
 
 @ApiTags('notifications')
 @Controller('notifications')
