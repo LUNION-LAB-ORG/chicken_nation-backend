@@ -10,7 +10,7 @@ export class OtpService {
   constructor(private readonly configService: ConfigService, private readonly prisma: PrismaService) {
 
     this.secret = this.configService.get<string>("OTP_SECRET") ?? "";
-
+    hotp.options = { digits: 4 };
   }
 
   async generate(phone: string) {

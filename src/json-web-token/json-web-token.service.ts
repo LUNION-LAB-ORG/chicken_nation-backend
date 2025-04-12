@@ -19,8 +19,8 @@ export class JsonWebTokenService {
   }
 
   // GENERATE TOKEN
-  async generateToken(userId: string) {
-    const payload = { sub: userId };
+  async generateToken(userId: string, type: 'USER' | 'CUSTOMER') {
+    const payload = { sub: userId, type };
     const token = await this.jwtService.signAsync(payload, {
       secret: this.secret,
       expiresIn: this.tokenExpiration,
@@ -30,8 +30,8 @@ export class JsonWebTokenService {
   }
 
   // GENERATE REFRESH TOKEN
-  async generateRefreshToken(userId: string) {
-    const payload = { sub: userId };
+  async generateRefreshToken(userId: string, type: 'USER' | 'CUSTOMER') {
+    const payload = { sub: userId, type };
     const refreshToken = await this.jwtService.signAsync(payload, {
       secret: this.refreshSecret,
       expiresIn: this.refreshExpiration,

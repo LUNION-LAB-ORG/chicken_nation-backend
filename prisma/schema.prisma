@@ -63,30 +63,34 @@ enum UserRole {
 }
 
 model Address {
-  id            String       @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid()) @db.Uuid
+
+  title       String    @db.VarChar
+  address     String    @db.VarChar
+  street      String?   @db.VarChar
+  city        String?   @db.VarChar
+  longitude   Float
+  latitude    Float
+  customer_id String?   @db.Uuid
+  customer    Customer? @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  orders      Order[]
+
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
-  title         String       @db.VarChar
-  address       String       @db.VarChar
-  street        String?      @db.VarChar
-  city          String?      @db.VarChar
-  longitude     Float
-  latitude      Float
-  customer_id   String?      @db.Uuid
-  customer      Customer?    @relation(fields: [customer_id], references: [id], onDelete: Cascade)
-  orders        Order[]
 }
 
 model Category {
-  id            String       @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid()) @db.Uuid
+
+  name        String  @db.VarChar
+  description String? @db.VarChar
+  image       String? @db.VarChar
+  dishes      Dish[]
+
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
-  name          String       @db.VarChar
-  description   String?      @db.VarChar
-  image         String?      @db.VarChar
-  dishes        Dish[]
 }
 
 model CounterOtp {
@@ -95,18 +99,21 @@ model CounterOtp {
 }
 
 model Customer {
-  id                    String               @id @default(uuid()) @db.Uuid
-  entity_status         EntityStatus         @default(NEW)
-  created_at            DateTime             @default(now()) @db.Timestamp(6)
-  updated_at            DateTime             @default(now()) @db.Timestamp(6)
+  id String @id @default(uuid()) @db.Uuid
+
   phone                 String               @unique @db.VarChar
   first_name            String?              @db.VarChar(255)
   last_name             String?              @db.VarChar(255)
-  username              String?              @unique @db.VarChar(255)
+  birth_day             DateTime?            @db.Date
+  email                 String?              @unique @db.VarChar
   image                 String?              @db.VarChar
   addresses             Address[]
   favorites             Favorite[]
   notification_settings NotificationSetting?
+
+  entity_status EntityStatus @default(NEW)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
 }
 
 model DishRestaurant {
@@ -126,16 +133,16 @@ model DishSupplement {
 }
 
 model Dish {
-  id                   String             @id @default(uuid()) @db.Uuid
-  entity_status        EntityStatus       @default(NEW)
-  created_at           DateTime           @default(now()) @db.Timestamp(6)
-  updated_at           DateTime           @default(now()) @db.Timestamp(6)
+  id String @id @default(uuid()) @db.Uuid
+
   name                 String             @db.VarChar
   description          String?            @db.VarChar
   price                Float
   image                String?            @db.VarChar
   available            Boolean            @default(true)
   is_new               Boolean            @default(false)
+  is_promotion         Boolean            @default(false)
+  promotion_price      Float?
   category_id          String             @db.Uuid
   category             Category           @relation(fields: [category_id], references: [id], onDelete: Cascade)
   dish_restaurants     DishRestaurant[]
@@ -144,18 +151,24 @@ model Dish {
   order_items          OrderItem[]
   special_offer_dishes SpecialOfferDish[]
 
+  entity_status EntityStatus @default(NEW)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
   @@index([category_id, available])
 }
 
 model Favorite {
-  id            String       @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid()) @db.Uuid
+
+  customer_id String   @db.Uuid
+  dish_id     String   @db.Uuid
+  customer    Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  dish        Dish     @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
-  customer_id   String       @db.Uuid
-  dish_id       String       @db.Uuid
-  customer      Customer     @relation(fields: [customer_id], references: [id], onDelete: Cascade)
-  dish          Dish         @relation(fields: [dish_id], references: [id], onDelete: Cascade)
 }
 
 model NotificationSetting {
@@ -168,10 +181,8 @@ model NotificationSetting {
 }
 
 model Notification {
-  id            String           @id @default(uuid()) @db.Uuid
-  entity_status EntityStatus     @default(NEW)
-  created_at    DateTime         @default(now()) @db.Timestamp(6)
-  updated_at    DateTime         @default(now()) @db.Timestamp(6)
+  id String @id @default(uuid()) @db.Uuid
+
   user_id       String           @db.VarChar
   icon          String           @db.VarChar
   icon_bg_color String           @db.VarChar
@@ -186,45 +197,53 @@ model Notification {
   notif_title   String           @db.VarChar
   data          Json?
 
+  entity_status EntityStatus @default(NEW)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
   @@index([user_id])
   @@index([type])
 }
 
 model OrderItem {
-  id            String       @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid()) @db.Uuid
+
+  quantity    Int    @default(1)
+  amount      Float
+  order_id    String @db.Uuid
+  dish_id     String @db.Uuid
+  supplements Json?  @db.Json
+  dish        Dish   @relation(fields: [dish_id], references: [id])
+  order       Order  @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
-  quantity      Int          @default(1)
-  amount        Float
-  order_id      String       @db.Uuid
-  dish_id       String       @db.Uuid
-  supplements   Json?        @db.Json
-  dish          Dish         @relation(fields: [dish_id], references: [id])
-  order         Order        @relation(fields: [order_id], references: [id], onDelete: Cascade)
 }
 
 model Order {
-  id            String       @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid()) @db.Uuid
+
+  type         OrderType
+  address_id   String      @db.Uuid
+  code_promo   String?     @db.VarChar
+  delivery_fee Float
+  tax          Float
+  amount       Float
+  net_amount   Float
+  date         DateTime?   @db.Date
+  time         DateTime?   @db.Time(6)
+  fullname     String?     @db.VarChar
+  phone        String?     @db.VarChar
+  email        String?     @db.VarChar
+  note         String?     @db.VarChar
+  address      Address     @relation(fields: [address_id], references: [id], onDelete: Cascade)
+  order_items  OrderItem[]
+  paiements    Paiement[]
+
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
-  type          OrderType
-  address_id    String       @db.Uuid
-  code_promo    String?      @db.VarChar
-  delivery_fee  Float
-  tax           Float
-  amount        Float
-  net_amount    Float
-  date          DateTime?    @db.Date
-  time          DateTime?    @db.Time(6)
-  fullname      String?      @db.VarChar
-  phone         String?      @db.VarChar
-  email         String?      @db.VarChar
-  note          String?      @db.VarChar
-  address       Address      @relation(fields: [address_id], references: [id], onDelete: Cascade)
-  order_items   OrderItem[]
-  paiements     Paiement[]
 
   @@index([address_id])
 }
@@ -232,16 +251,13 @@ model Order {
 model OtpToken {
   id      String   @id @default(uuid()) @db.Uuid
   code    String   @db.VarChar(255)
-  phone   String  @db.VarChar
+  phone   String   @db.VarChar
   counter Int?
   expire  DateTime @db.Timestamp(6)
 }
 
 model Paiement {
   id                String                   @id @default(uuid()) @db.Uuid
-  entity_status     EntityStatus             @default(NEW)
-  created_at        DateTime                 @default(now()) @db.Timestamp(6)
-  updated_at        DateTime                 @default(now()) @db.Timestamp(6)
   amount            Float
   order_id          String                   @db.Uuid
   mode              PaiementMode
@@ -249,13 +265,15 @@ model Paiement {
   status            PaiementStatus
   reference         String                   @db.VarChar
   order             Order                    @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  entity_status EntityStatus @default(NEW)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
 }
 
 model Restaurant {
-  id               String           @id @default(uuid()) @db.Uuid
-  entity_status    EntityStatus     @default(NEW)
-  created_at       DateTime         @default(now()) @db.Timestamp(6)
-  updated_at       DateTime         @default(now()) @db.Timestamp(6)
+  id String @id @default(uuid()) @db.Uuid
+
   name             String           @db.VarChar
   manager          String           @db.Uuid
   description      String?          @db.VarChar
@@ -268,6 +286,10 @@ model Restaurant {
   schedule         Json?            @db.Json
   dish_restaurants DishRestaurant[]
   users            User[]
+
+  entity_status EntityStatus @default(NEW)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
 }
 
 model SpecialOfferDish {
@@ -300,20 +322,23 @@ model Supplement {
 }
 
 model User {
-  id            String       @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid()) @db.Uuid
+
+  fullname            String      @db.VarChar
+  email               String      @unique @db.VarChar
+  phone               String?     @db.VarChar
+  password            String      @db.VarChar
+  image               String?     @db.VarChar
+  address             String?     @db.VarChar
+  password_is_updated Boolean     @default(false)
+  type                UserType
+  role                UserRole
+  restaurant_id       String?     @db.Uuid
+  restaurant          Restaurant? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
-  fullname      String       @db.VarChar
-  email         String       @unique @db.VarChar
-  phone         String?      @db.VarChar
-  password      String       @db.VarChar
-  image         String?      @db.VarChar
-  address       String?      @db.VarChar
-  type          UserType
-  role          UserRole
-  restaurant_id String?      @db.Uuid
-  restaurant    Restaurant?  @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 
   @@index([email, type])
 }

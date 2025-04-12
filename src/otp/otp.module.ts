@@ -1,9 +1,8 @@
 import { Module } from "@nestjs/common";
 import { OtpService } from "./otp.service";
-import { DatabaseModule } from "src/database/database.module";
 
 @Module({
-  imports: [DatabaseModule],
+  imports: [],
   providers: [OtpService],
   exports: [OtpService],
 })
