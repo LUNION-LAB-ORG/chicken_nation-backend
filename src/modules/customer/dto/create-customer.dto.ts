@@ -4,7 +4,7 @@ import { Transform } from 'class-transformer';
 
 export class CreateCustomerDto {
     @ApiProperty({ description: 'Numéro de téléphone du client', example: '+225070707070' })
-    @IsPhoneNumber('FR', { message: 'Numéro de téléphone non valide' })
+    @IsPhoneNumber("CI", { message: 'Numéro de téléphone non valide, utilisez le format +225' })
     @IsString()
     @Transform(({ value }) => value.trim())
     phone: string;
