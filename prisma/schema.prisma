@@ -55,6 +55,7 @@ enum SupplementCategory {
 enum UserType {
   BACKOFFICE
   RESTAURANT
+  CUSTOMER
 }
 
 enum UserRole {

@@ -4,6 +4,9 @@ import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto'
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
 import { Request } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { UserTypesGuard } from 'src/modules/auth/guards/user-types.guard';
+import { UserTypes } from 'src/modules/auth/decorators/user-types.decorator';
+import { UserType } from '@prisma/client';
 
 @Controller('customer')
 export class CustomerController {
@@ -26,7 +29,9 @@ export class CustomerController {
     return this.customerService.detail(req);
   }
 
-  @UseGuards(JwtAuthGuard)
+
+  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
+  @UseGuards(JwtAuthGuard, UserTypesGuard)
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.customerService.findOne(id);
