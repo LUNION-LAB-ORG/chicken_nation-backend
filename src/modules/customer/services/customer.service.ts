@@ -9,13 +9,13 @@ import { Customer } from '@prisma/client';
 @Injectable()
 export class CustomerService {
   constructor(private readonly prisma: PrismaService) { }
-  // create(createCustomerDto: CreateCustomerDto) {
-  //   return 'This action adds a new customer';
-  // }
+  create(createCustomerDto: CreateCustomerDto) {
+    return 'This action adds a new customer';
+  }
 
-  // findAll() {
-  //   return `This action returns all customer`;
-  // }
+  findAll() {
+    return `This action returns all customer`;
+  }
 
   async detail(req: Request) {
     const customer = req.user as Customer;
@@ -42,7 +42,8 @@ export class CustomerService {
     });
   }
 
-  // remove(id: number) {
-  //   return `This action removes a #${id} customer`;
-  // }
+  remove(id: number) {
+    return `This action removes a #${id} customer`;
+  }
 }
+

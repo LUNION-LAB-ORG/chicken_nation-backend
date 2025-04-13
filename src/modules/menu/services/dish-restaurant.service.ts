@@ -1,26 +1,76 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishRestaurantDto } from 'src/modules/menu/dto/create-dish-restaurant.dto';
-import { UpdateDishRestaurantDto } from 'src/modules/menu/dto/update-dish-restaurant.dto';
 
 @Injectable()
 export class DishRestaurantService {
-  create(createDishRestaurantDto: CreateDishRestaurantDto) {
-    return 'This action adds a new dishRestaurant';
+  constructor(private prisma: PrismaService) { }
+
+  async create(createDishRestaurantDto: CreateDishRestaurantDto) {
+    return this.prisma.dishRestaurant.create({
+      data: createDishRestaurantDto,
+      include: {
+        dish: true,
+        restaurant: true,
+      },
+    });
   }
 
-  findAll() {
-    return `This action returns all dishRestaurant`;
+  async findAll() {
+    return this.prisma.dishRestaurant.findMany({
+      include: {
+        dish: true,
+        restaurant: true,
+      },
+    });
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} dishRestaurant`;
+  async findByDish(dishId: string) {
+    return this.prisma.dishRestaurant.findMany({
+      where: {
+        dish_id: dishId,
+      },
+      include: {
+        restaurant: true,
+      },
+    });
   }
 
-  update(id: number, updateDishRestaurantDto: UpdateDishRestaurantDto) {
-    return `This action updates a #${id} dishRestaurant`;
+  async findByRestaurant(restaurantId: string) {
+    return this.prisma.dishRestaurant.findMany({
+      where: {
+        restaurant_id: restaurantId,
+      },
+      include: {
+        dish: {
+          include: {
+            category: true,
+          },
+        },
+      },
+    });
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} dishRestaurant`;
+  async remove(id: string) {
+    const dishRestaurant = await this.prisma.dishRestaurant.findUnique({
+      where: { id },
+    });
+
+    if (!dishRestaurant) {
+      throw new NotFoundException(`Dish-Restaurant non trouvé`);
+    }
+
+    return this.prisma.dishRestaurant.delete({
+      where: { id },
+    });
+  }
+
+  async removeByDishAndRestaurant(dishId: string, restaurantId: string) {
+    return this.prisma.dishRestaurant.deleteMany({
+      where: {
+        dish_id: dishId,
+        restaurant_id: restaurantId,
+      },
+    });
   }
 }

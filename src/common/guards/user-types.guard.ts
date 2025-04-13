@@ -1,7 +1,7 @@
 import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserType } from '@prisma/client';
-import { USER_TYPES_KEY } from 'src/modules/auth/decorators/user-types.decorator';
+import { USER_TYPES_KEY } from 'src/common/decorators/user-types.decorator';
 
 @Injectable()
 export class UserTypesGuard implements CanActivate {

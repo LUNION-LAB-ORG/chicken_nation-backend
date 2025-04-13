@@ -1,26 +1,156 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { EntityStatus } from '@prisma/client';
+import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
 import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
 
 @Injectable()
 export class DishService {
-  create(createDishDto: CreateDishDto) {
-    return 'This action adds a new dish';
+  constructor(private prisma: PrismaService) { }
+
+  async create(createDishDto: CreateDishDto) {
+    const { restaurant_ids, supplement_ids, ...dishData } = createDishDto;
+
+    // Créer le plat de base
+    const dish = await this.prisma.dish.create({
+      data: {
+        ...dishData,
+        entity_status: EntityStatus.ACTIVE,
+      },
+    });
+
+    // Ajouter les restaurants si fournis
+    if (restaurant_ids && restaurant_ids.length > 0) {
+      await this.prisma.dishRestaurant.createMany({
+        data: restaurant_ids.map((restaurant_id) => ({
+          dish_id: dish.id,
+          restaurant_id,
+        })),
+      });
+    }
+
+    // Ajouter les suppléments si fournis
+    if (supplement_ids && supplement_ids.length > 0) {
+      await this.prisma.dishSupplement.createMany({
+        data: supplement_ids.map((supplement_id) => ({
+          dish_id: dish.id,
+          supplement_id,
+        })),
+      });
+    }
+
+    return this.findOne(dish.id);
   }
 
-  findAll() {
-    return `This action returns all dish`;
+  async findAll() {
+    return this.prisma.dish.findMany({
+      where: {
+        entity_status: EntityStatus.ACTIVE,
+      },
+      include: {
+        category: true,
+        dish_restaurants: {
+          include: {
+            restaurant: true,
+          },
+        },
+        dish_supplements: {
+          include: {
+            supplement: true,
+          },
+        },
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} dish`;
+  async findOne(id: string) {
+    const dish = await this.prisma.dish.findUnique({
+      where: { id },
+      include: {
+        category: true,
+        dish_restaurants: {
+          include: {
+            restaurant: true,
+          },
+        },
+        dish_supplements: {
+          include: {
+            supplement: true,
+          },
+        },
+      },
+    });
+
+    if (!dish || dish.entity_status !== EntityStatus.ACTIVE) {
+      throw new NotFoundException(`Plat non trouvée`);
+    }
+
+    return dish;
   }
 
-  update(id: number, updateDishDto: UpdateDishDto) {
-    return `This action updates a #${id} dish`;
+  async update(id: string, updateDishDto: UpdateDishDto) {
+    await this.findOne(id);
+
+    return this.prisma.dish.update({
+      where: { id },
+      data: updateDishDto,
+      include: {
+        category: true,
+        dish_restaurants: {
+          include: {
+            restaurant: true,
+          },
+        },
+        dish_supplements: {
+          include: {
+            supplement: true,
+          },
+        },
+      },
+    });
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} dish`;
+  async remove(id: string) {
+    // Vérifier si le plat existe
+    const dish = await this.findOne(id);
+
+    // Vérifier si le plat est lié à des commandes
+    const orderItems = await this.prisma.orderItem.findMany({
+      where: {
+        dish_id: id,
+        entity_status: EntityStatus.ACTIVE,
+      },
+    });
+
+    if (orderItems.length > 0) {
+      throw new BadRequestException(
+        `Vous ne pouvez pas supprimer le plat ${dish.name} car il est lié à ${orderItems.length} commandes`,
+      );
+    }
+
+    // Supprimer les relations avec les restaurants
+    await this.prisma.dishRestaurant.deleteMany({
+      where: {
+        dish_id: id,
+      },
+    });
+
+    // Supprimer les relations avec les suppléments
+    await this.prisma.dishSupplement.deleteMany({
+      where: {
+        dish_id: id,
+      },
+    });
+
+    // Supprimer le plat (soft delete)
+    return this.prisma.dish.update({
+      where: { id },
+      data: {
+        entity_status: EntityStatus.DELETED,
+      },
+    });
   }
 }

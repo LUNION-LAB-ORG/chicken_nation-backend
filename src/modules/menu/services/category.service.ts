@@ -1,26 +1,74 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
 import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
+import { PrismaService } from 'src/database/services/prisma.service';
+import { EntityStatus } from '@prisma/client';
 
 @Injectable()
 export class CategoryService {
-  create(createCategoryDto: CreateCategoryDto) {
-    return 'This action adds a new category';
+  constructor(private prisma: PrismaService) { }
+
+  async create(createCategoryDto: CreateCategoryDto) {
+    return this.prisma.category.create({
+      data: {
+        ...createCategoryDto,
+        entity_status: EntityStatus.ACTIVE,
+      },
+    });
   }
 
-  findAll() {
-    return `This action returns all category`;
+  async findAll() {
+    return this.prisma.category.findMany({
+      where: {
+        entity_status: EntityStatus.ACTIVE,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} category`;
+  async findOne(id: string) {
+    const category = await this.prisma.category.findUnique({
+      where: { id },
+      include: {
+        dishes: {
+          where: { entity_status: EntityStatus.ACTIVE },
+        },
+      },
+    });
+
+    if (!category || category.entity_status !== EntityStatus.ACTIVE) {
+      throw new NotFoundException(`Catégorie non trouvée`);
+    }
+
+    return category;
   }
 
-  update(id: number, updateCategoryDto: UpdateCategoryDto) {
-    return `This action updates a #${id} category`;
+  async update(id: string, updateCategoryDto: UpdateCategoryDto) {
+    await this.findOne(id);
+
+    return this.prisma.category.update({
+      where: { id },
+      data: updateCategoryDto,
+    });
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} category`;
+  async remove(id: string) {
+    const category = await this.findOne(id);
+
+    // Vérifier si la catégorie est liée à des plats
+    if (category.dishes && category.dishes.length > 0) {
+      throw new BadRequestException(
+        `Catégorie ${category.name} non supprimée car liée à ${category.dishes.length} plats`,
+      );
+    }
+
+    return this.prisma.category.update({
+      where: { id },
+      data: {
+        entity_status: EntityStatus.DELETED,
+      },
+    });
   }
 }
