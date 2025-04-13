@@ -4,7 +4,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
+import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 
 @ApiTags('admin-notifications')
 @Controller('admin/notifications')

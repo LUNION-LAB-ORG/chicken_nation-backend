@@ -46,3 +46,4 @@ export class CreateCustomerDto {
     @Transform(({ value }) => value.trim())
     image?: string;
 }
+

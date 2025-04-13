@@ -4,24 +4,26 @@ import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto'
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
 import { Request } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { UserTypesGuard } from 'src/modules/auth/guards/user-types.guard';
-import { UserTypes } from 'src/modules/auth/decorators/user-types.decorator';
+import { UserTypesGuard } from 'src/common/guards/user-types.guard';
+import { UserTypes } from 'src/common/decorators/user-types.decorator';
 import { UserType } from '@prisma/client';
+
 
 @Controller('customer')
 export class CustomerController {
   constructor(private readonly customerService: CustomerService) { }
 
 
-  // @Post()
-  // create(@Body() createCustomerDto: CreateCustomerDto) {
-  //   return this.customerService.create(createCustomerDto);
-  // }
+  // CREATE CUSTOMER
+  @Post()
+  create(@Body() createCustomerDto: CreateCustomerDto) {
+    return this.customerService.create(createCustomerDto);
+  }
 
-  // @Get()
-  // findAll() {
-  //   return this.customerService.findAll();
-  // }
+  @Get()
+  findAll() {
+    return this.customerService.findAll();
+  }
 
   @UseGuards(JwtAuthGuard)
   @Get('/detail')
@@ -43,8 +45,8 @@ export class CustomerController {
     return this.customerService.update(req, updateCustomerDto);
   }
 
-  // @Delete(':id')
-  // remove(@Param('id') id: string) {
-  //   return this.customerService.remove(+id);
-  // }
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.customerService.remove(+id);
+  }
 }

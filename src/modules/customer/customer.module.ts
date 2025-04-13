@@ -8,7 +8,11 @@ import { FavoriteService } from './services/favorite.service';
 
 @Module({
   imports: [],
-  controllers: [CustomerController, AddressController, FavoriteController],
+  controllers: [
+    CustomerController,
+    AddressController,
+    FavoriteController
+  ],
   providers: [CustomerService, AddressService, FavoriteService],
 })
 export class CustomerModule { }

@@ -1,26 +1,61 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishSupplementDto } from 'src/modules/menu/dto/create-dish-supplement.dto';
-import { UpdateDishSupplementDto } from 'src/modules/menu/dto/update-dish-supplement.dto';
 
 @Injectable()
 export class DishSupplementService {
-  create(createDishSupplementDto: CreateDishSupplementDto) {
-    return 'This action adds a new dishSupplement';
+  constructor(private prisma: PrismaService) { }
+
+  async create(createDishSupplementDto: CreateDishSupplementDto) {
+    return this.prisma.dishSupplement.create({
+      data: createDishSupplementDto,
+      include: {
+        dish: true,
+        supplement: true,
+      },
+    });
   }
 
-  findAll() {
-    return `This action returns all dishSupplement`;
+  async findAll() {
+    return this.prisma.dishSupplement.findMany({
+      include: {
+        dish: true,
+        supplement: true,
+      },
+    });
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} dishSupplement`;
+  async findByDish(dishId: string) {
+    return this.prisma.dishSupplement.findMany({
+      where: {
+        dish_id: dishId,
+      },
+      include: {
+        supplement: true,
+      },
+    });
   }
 
-  update(id: number, updateDishSupplementDto: UpdateDishSupplementDto) {
-    return `This action updates a #${id} dishSupplement`;
+  async remove(id: string) {
+    const dishSupplement = await this.prisma.dishSupplement.findUnique({
+      where: { id },
+    });
+
+    if (!dishSupplement) {
+      throw new NotFoundException(`Dish-Supplement non trouvé`);
+    }
+
+    return this.prisma.dishSupplement.delete({
+      where: { id },
+    });
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} dishSupplement`;
+  async removeByDishAndSupplement(dishId: string, supplementId: string) {
+    return this.prisma.dishSupplement.deleteMany({
+      where: {
+        dish_id: dishId,
+        supplement_id: supplementId,
+      },
+    });
   }
 }

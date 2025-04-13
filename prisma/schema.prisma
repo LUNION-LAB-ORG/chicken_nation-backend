@@ -140,8 +140,6 @@ model Dish {
   description          String?            @db.VarChar
   price                Float
   image                String?            @db.VarChar
-  available            Boolean            @default(true)
-  is_new               Boolean            @default(false)
   is_promotion         Boolean            @default(false)
   promotion_price      Float?
   category_id          String             @db.Uuid
@@ -156,7 +154,7 @@ model Dish {
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 
-  @@index([category_id, available])
+  @@index([category_id, entity_status, is_promotion])
 }
 
 model Favorite {

@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Body, Req, UseGuards, Query } from '@nestjs/common';
 import { AuthService } from 'src/modules/auth/services/auth.service';
 import { LoginUserDto } from 'src/modules/auth/dto/login-user.dto';
-import { UserTypesGuard } from 'src/modules/auth/guards/user-types.guard';
+import { UserTypesGuard } from 'src/common/guards/user-types.guard';
 import {
   ApiBody,
   ApiOkResponse,
