@@ -1,6 +1,7 @@
 import { IsString, IsOptional, IsEmail, IsPhoneNumber, IsDateString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
+import { parse, isValid } from 'date-fns';
 
 export class CreateCustomerDto {
     @ApiProperty({ description: 'Numéro de téléphone du client', example: '+225070707070' })
@@ -22,9 +23,15 @@ export class CreateCustomerDto {
     last_name?: string;
 
     @ApiPropertyOptional({ description: 'Date de naissance du client', example: '1990-01-01' })
-    @IsDateString()
+    @IsDateString({}, { message: 'La date de naissance doit être au format JJ/MM/AAAA' })
     @IsOptional()
-    @Transform(({ value }) => value.trim())
+    @Transform(({ value }) => {
+        const parsedDate = parse(value, 'dd/MM/yyyy', new Date());
+        if (isValid(parsedDate)) {
+            return parsedDate.toISOString();
+        }
+        return value;
+    })
     birth_day?: string;
 
     @ApiPropertyOptional({ description: 'Email du client', example: 'john.doe@example.com' })
