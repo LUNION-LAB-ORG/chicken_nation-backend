@@ -1,20 +1,78 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto';
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { NotFoundException } from '@nestjs/common';
 import { Request } from 'express';
-import { Customer } from '@prisma/client';
+import { Customer, EntityStatus } from '@prisma/client';
+import { CustomerQueryDto } from '../dto/customer-query.dto';
 
 @Injectable()
 export class CustomerService {
   constructor(private readonly prisma: PrismaService) { }
-  create(createCustomerDto: CreateCustomerDto) {
-    return 'This action adds a new customer';
+
+  async create(createCustomerDto: CreateCustomerDto) {
+    // Vérifier si le client existe déjà avec ce numéro de téléphone
+    const existingCustomer = await this.prisma.customer.findUnique({
+      where: { phone: createCustomerDto.phone },
+    });
+
+    if (existingCustomer) {
+      throw new ConflictException(`Utilisateur avec le numéro de téléphone ${createCustomerDto.phone} existe déjà`);
+    }
+
+    // Vérifier si l'email existe déjà (s'il est fourni)
+    if (createCustomerDto.email) {
+      const customerWithEmail = await this.prisma.customer.findUnique({
+        where: { email: createCustomerDto.email },
+      });
+
+      if (customerWithEmail) {
+        throw new ConflictException(`Utilisateur avec l'email ${createCustomerDto.email} existe déjà`);
+      }
+    }
+
+    return this.prisma.customer.create({
+      data: {
+        ...createCustomerDto,
+        entity_status: EntityStatus.ACTIVE,
+      },
+    });
   }
 
-  findAll() {
-    return `This action returns all customer`;
+  async findAll(query: CustomerQueryDto = {}) {
+    const { page, limit, status, search } = query;
+    const whereClause: any = { entity_status: EntityStatus.ACTIVE };
+
+    if (search) {
+      whereClause.OR = [
+        { first_name: { contains: search, mode: 'insensitive' } },
+        { last_name: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search } },
+        { email: { contains: search } },
+      ];
+    }
+
+    if (status) {
+      whereClause.entity_status = status;
+    }
+
+    return this.prisma.customer.findMany({
+      where: whereClause,
+      include: {
+        addresses: {
+          where: { entity_status: EntityStatus.ACTIVE },
+          orderBy: {
+            created_at: 'desc',
+          },
+        },
+      },
+      orderBy: {
+        created_at: 'desc',
+      },
+      take: limit ?? 10,
+      skip: (page ?? 1 - 1) * (limit ?? 10),
+    });
   }
 
   async detail(req: Request) {
@@ -24,26 +82,96 @@ export class CustomerService {
 
   async findOne(id: string) {
     const customer = await this.prisma.customer.findUnique({
-      where: { id }
+      where: { id },
+      include: {
+        addresses: {
+          where: { entity_status: EntityStatus.ACTIVE },
+        },
+        favorites: {
+          where: { entity_status: EntityStatus.ACTIVE },
+          include: {
+            dish: {
+              include: {
+                category: true,
+              },
+            },
+          },
+        },
+        notification_settings: true,
+      },
     });
 
-    if (!customer) {
+    if (!customer || customer.entity_status !== EntityStatus.ACTIVE) {
       throw new NotFoundException(`Utilisateur non trouvé`);
     }
+
+    return customer;
+  }
+
+  async findByPhone(phone: string) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { phone },
+      include: {
+        addresses: {
+          where: { entity_status: EntityStatus.ACTIVE },
+        },
+      },
+    });
+
+    if (!customer || customer.entity_status !== EntityStatus.ACTIVE) {
+      throw new NotFoundException(`Utilisateur au téléphone ${phone} est non trouvé`);
+    }
+
     return customer;
   }
 
   async update(req: Request, updateCustomerDto: UpdateCustomerDto) {
     const id = (req.user as Customer).id;
 
+    // Vérifier si le numéro de téléphone est unique
+    if (updateCustomerDto.phone) {
+      const existingCustomer = await this.prisma.customer.findUnique({
+        where: { phone: updateCustomerDto.phone },
+      });
+
+      if (existingCustomer && existingCustomer.id !== id) {
+        throw new ConflictException(`Utilisateur avec le numéro de téléphone ${updateCustomerDto.phone} existe déjà`);
+      }
+    }
+
+    // Vérifier si l'email est unique
+    if (updateCustomerDto.email) {
+      const existingCustomer = await this.prisma.customer.findUnique({
+        where: { email: updateCustomerDto.email },
+      });
+
+      if (existingCustomer && existingCustomer.id !== id) {
+        throw new ConflictException(`Utilisateur avec l'email ${updateCustomerDto.email} existe déjà`);
+      }
+    }
+
     return this.prisma.customer.update({
       where: { id },
       data: updateCustomerDto,
+      include: {
+        addresses: {
+          where: { entity_status: EntityStatus.ACTIVE },
+        },
+      },
     });
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} customer`;
+  async remove(id: string) {
+    // Vérifier si le client existe
+    await this.findOne(id);
+
+    // Soft delete
+    return this.prisma.customer.update({
+      where: { id },
+      data: {
+        entity_status: EntityStatus.DELETED,
+      },
+    });
   }
 }
 
