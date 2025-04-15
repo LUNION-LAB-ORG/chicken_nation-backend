@@ -7,10 +7,11 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import * as bcrypt from 'bcrypt';
 import { UpdateUserDto } from 'src/modules/users/dto/update-user.dto';
 import { UpdateUserPasswordDto } from 'src/modules/users/dto/update-user-password.dto';
+import { GenerateDataService } from 'src/common/services/generate-data.service';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService, private readonly generateDataService: GenerateDataService) { }
 
   // CREATE
   async create(createUserDto: CreateUserDto) {
@@ -25,21 +26,23 @@ export class UsersService {
         "Utilisateur déjà existant, changer d'email",
       );
     }
-    const { password, ...rest } = createUserDto;
 
     // Générer le salt et le hash
+    const pass = this.generateDataService.generateSecurePassword();
     const salt = await bcrypt.genSalt();
-    const hash = await bcrypt.hash(password, salt);
+    const hash = await bcrypt.hash(pass, salt);
 
     // Créer l'utilisateur
-    return this.prisma.user.create({
+    const newUser = await this.prisma.user.create({
       data: {
-        ...rest,
+        ...createUserDto,
         password: hash,
         type: UserType.BACKOFFICE,
       },
       omit: { id: true, password: true },
     });
+
+    return { ...newUser, password: pass };
   }
 
   // CREATE MEMBER
@@ -55,21 +58,23 @@ export class UsersService {
         "Utilisateur déjà existant, changer d'email",
       );
     }
-    const { password, ...rest } = createUserDto;
 
     // Générer le salt et le hash
+    const pass = this.generateDataService.generateSecurePassword();
     const salt = await bcrypt.genSalt();
-    const hash = await bcrypt.hash(password, salt);
+    const hash = await bcrypt.hash(pass, salt);
 
     // Créer l'utilisateur
-    return this.prisma.user.create({
+    const newUser = await this.prisma.user.create({
       data: {
-        ...rest,
+        ...createUserDto,
         password: hash,
         type: UserType.RESTAURANT,
       },
       omit: { id: true, password: true },
     });
+
+    return { ...newUser, password: pass };
   }
 
   // FIND_ALL
@@ -107,13 +112,12 @@ export class UsersService {
   async update(req: Request, updateUserDto: UpdateUserDto) {
     const user = req.user as User;
 
-    const { password: pass, ...other } = updateUserDto;
 
     const newUser = await this.prisma.user.update({
       where: {
         id: user.id,
       },
-      data: other,
+      data: updateUserDto,
     });
 
     const { password, ...rest } = newUser;

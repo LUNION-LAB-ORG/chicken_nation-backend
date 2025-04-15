@@ -36,4 +36,5 @@ import { OtpModule } from 'src/otp/otp.module';
     NotificationsModule,
   ],
 })
+
 export class AppModule { }

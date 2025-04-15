@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, MaxLength } from 'class-validator';
+import { IsNotEmpty, Matches, MaxLength } from 'class-validator';
 
 export class LoginUserDto {
   // EMAIL
@@ -22,8 +22,13 @@ export class LoginUserDto {
     required: true,
     maxLength: 100,
   })
+
   @IsNotEmpty()
-  @MaxLength(100)
-  @Transform(({ value }) => value.trim())
+  @MaxLength(15)
+  @Transform(({ value }) => value?.trim())
+  @Matches(/^(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/, {
+    message:
+      'Le mot de passe doit contenir au moins 8 caractères, une majuscule, un chiffre et un caractère spécial.',
+  })
   password: string;
 }

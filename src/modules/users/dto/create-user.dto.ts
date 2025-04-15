@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, MaxLength, IsOptional, Matches } from 'class-validator';
+import { IsNotEmpty, MaxLength, IsOptional } from 'class-validator';
 
 export class CreateUserDto {
   // FULLNAME
@@ -63,20 +63,4 @@ export class CreateUserDto {
   @MaxLength(100)
   @Transform(({ value }) => value.trim())
   role: UserRole;
-
-  // PASSWORD
-  @ApiProperty({
-    description: "le mot de passe de l'utilisateur",
-    example: 'Password01@',
-    required: true,
-    maxLength: 100,
-  })
-  @IsNotEmpty()
-  @MaxLength(100)
-  @Transform(({ value }) => value?.trim())
-  @Matches(/^(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/, {
-    message:
-      'Le mot de passe doit contenir au moins 8 caractères, une majuscule, un chiffre et un caractère spécial.',
-  })
-  password: string;
 }

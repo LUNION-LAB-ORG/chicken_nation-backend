@@ -8,10 +8,10 @@ export class UpdateUserPasswordDto {
     description: "le mot de passe de l'utilisateur",
     example: 'Password01@',
     required: true,
-    maxLength: 100,
+    maxLength: 15,
   })
   @IsNotEmpty()
-  @MaxLength(100)
+  @MaxLength(15)
   @Transform(({ value }) => value?.trim())
   @Matches(/^(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/, {
     message:
@@ -24,10 +24,10 @@ export class UpdateUserPasswordDto {
     description: "la confirmation du mot de passe de l'utilisateur",
     example: 'Password01@',
     required: false,
-    maxLength: 100,
+    maxLength: 15,
   })
   @IsOptional()
-  @MaxLength(100)
+  @MaxLength(15)
   @Transform(({ value }) => value?.trim())
   @Matches(/^(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/, {
     message:
