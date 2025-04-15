@@ -1,28 +1,21 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { CreateAddressDto } from 'src/modules/customer/dto/create-address.dto';
 import { UpdateAddressDto } from 'src/modules/customer/dto/update-address.dto';
-import { EntityStatus } from '@prisma/client';
+import { Customer, EntityStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { Request } from 'express';
 
 @Injectable()
 export class AddressService {
   constructor(private prisma: PrismaService) { }
 
-  async create(createAddressDto: CreateAddressDto) {
-    // Si un customer_id est fourni, vérifier que le client existe
-    if (createAddressDto.customer_id) {
-      const customer = await this.prisma.customer.findUnique({
-        where: { id: createAddressDto.customer_id },
-      });
-
-      if (!customer || customer.entity_status !== EntityStatus.ACTIVE) {
-        throw new NotFoundException(`Customer with ID ${createAddressDto.customer_id} not found`);
-      }
-    }
+  async create(req: Request, createAddressDto: CreateAddressDto) {
+    const customer = req.user as Customer;
 
     return this.prisma.address.create({
       data: {
         ...createAddressDto,
+        customer_id: customer.id,
         entity_status: EntityStatus.ACTIVE,
       },
     });
@@ -67,20 +60,9 @@ export class AddressService {
     });
   }
 
-  async update(id: string, updateAddressDto: UpdateAddressDto) {
+  async update(req: Request, id: string, updateAddressDto: UpdateAddressDto) {
     // Vérifier si l'adresse existe
     await this.findOne(id);
-
-    // Si un customer_id est fourni, vérifier que le client existe
-    if (updateAddressDto.customer_id) {
-      const customer = await this.prisma.customer.findUnique({
-        where: { id: updateAddressDto.customer_id },
-      });
-
-      if (!customer || customer.entity_status !== EntityStatus.ACTIVE) {
-        throw new NotFoundException(`Customer with ID ${updateAddressDto.customer_id} not found`);
-      }
-    }
 
     return this.prisma.address.update({
       where: { id },

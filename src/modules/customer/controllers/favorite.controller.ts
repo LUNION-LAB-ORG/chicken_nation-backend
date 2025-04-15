@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req } from '@nestjs/common';
 import { FavoriteService } from 'src/modules/customer/services/favorite.service';
 import { CreateFavoriteDto } from 'src/modules/customer/dto/create-favorite.dto';
 import { UpdateFavoriteDto } from 'src/modules/customer/dto/update-favorite.dto';
@@ -6,14 +6,15 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRole } from '@prisma/client';
 import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { Request } from 'express';
 
 @Controller('favorites')
 export class FavoriteController {
   constructor(private readonly favoriteService: FavoriteService) {}
 
   @Post()
-  create(@Body() createFavoriteDto: CreateFavoriteDto) {
-    return this.favoriteService.create(createFavoriteDto);
+  create(@Req() req: Request, @Body() createFavoriteDto: CreateFavoriteDto) {
+    return this.favoriteService.create(req, createFavoriteDto);
   }
 
   @Get()

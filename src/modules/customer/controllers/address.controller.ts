@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req } from '@nestjs/common';
 import { AddressService } from 'src/modules/customer/services/address.service';
 import { CreateAddressDto } from 'src/modules/customer/dto/create-address.dto';
 import { UpdateAddressDto } from 'src/modules/customer/dto/update-address.dto';
@@ -6,14 +6,15 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRole } from '@prisma/client';
 import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { Request } from 'express';
 
 @Controller('addresses')
 export class AddressController {
-  constructor(private readonly addressService: AddressService) {}
+  constructor(private readonly addressService: AddressService) { }
 
   @Post()
-  create(@Body() createAddressDto: CreateAddressDto) {
-    return this.addressService.create(createAddressDto);
+  create(@Req() req: Request, @Body() createAddressDto: CreateAddressDto) {
+    return this.addressService.create(req, createAddressDto);
   }
 
   @Get()
@@ -34,8 +35,8 @@ export class AddressController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateAddressDto: UpdateAddressDto) {
-    return this.addressService.update(id, updateAddressDto);
+  update(@Req() req: Request, @Param('id') id: string, @Body() updateAddressDto: UpdateAddressDto) {
+    return this.addressService.update(req, id, updateAddressDto);
   }
 
   @Delete(':id')

@@ -2,21 +2,15 @@ import { Injectable, NotFoundException, ConflictException } from '@nestjs/common
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateFavoriteDto } from 'src/modules/customer/dto/create-favorite.dto';
 import { UpdateFavoriteDto } from 'src/modules/customer/dto/update-favorite.dto';
-import { EntityStatus } from '@prisma/client';
+import { EntityStatus, Customer } from '@prisma/client';
+import { Request } from 'express';
 
 @Injectable()
 export class FavoriteService {
   constructor(private prisma: PrismaService) { }
 
-  async create(createFavoriteDto: CreateFavoriteDto) {
-    // Vérifier si le client existe
-    const customer = await this.prisma.customer.findUnique({
-      where: { id: createFavoriteDto.customer_id },
-    });
-
-    if (!customer || customer.entity_status !== EntityStatus.ACTIVE) {
-      throw new NotFoundException(`Customer with ID ${createFavoriteDto.customer_id} not found`);
-    }
+  async create(req: Request, createFavoriteDto: CreateFavoriteDto) {
+    const customer = req.user as Customer;
 
     // Vérifier si le plat existe
     const dish = await this.prisma.dish.findUnique({
@@ -30,7 +24,7 @@ export class FavoriteService {
     // Vérifier si le favori existe déjà
     const existingFavorite = await this.prisma.favorite.findFirst({
       where: {
-        customer_id: createFavoriteDto.customer_id,
+        customer_id: customer.id,
         dish_id: createFavoriteDto.dish_id,
         entity_status: EntityStatus.ACTIVE,
       },
@@ -43,6 +37,7 @@ export class FavoriteService {
     return this.prisma.favorite.create({
       data: {
         ...createFavoriteDto,
+        customer_id: customer.id,
         entity_status: EntityStatus.ACTIVE,
       },
       include: {
@@ -114,17 +109,6 @@ export class FavoriteService {
   async update(id: string, updateFavoriteDto: UpdateFavoriteDto) {
     // Vérifier si le favori existe
     await this.findOne(id);
-
-    // Vérifier si le client existe (si fourni)
-    if (updateFavoriteDto.customer_id) {
-      const customer = await this.prisma.customer.findUnique({
-        where: { id: updateFavoriteDto.customer_id },
-      });
-
-      if (!customer || customer.entity_status !== EntityStatus.ACTIVE) {
-        throw new NotFoundException(`Customer with ID ${updateFavoriteDto.customer_id} not found`);
-      }
-    }
 
     // Vérifier si le plat existe (si fourni)
     if (updateFavoriteDto.dish_id) {

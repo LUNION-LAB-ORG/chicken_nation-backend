@@ -1,8 +1,9 @@
 import { Module, Global } from '@nestjs/common';
+import { GenerateDataService } from './services/generate-data.service';
 
 @Global()
 @Module({
-  providers: [],
-  exports: [],
+  providers: [GenerateDataService],
+  exports: [GenerateDataService],
 })
 export class CommonModule { }
