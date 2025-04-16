@@ -31,7 +31,7 @@ export class UsersController {
   })
   @ApiBody({ type: CreateUserDto })
   @UseGuards(JwtAuthGuard)
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar', 'email') }))
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @Post()
   create(@Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
 
