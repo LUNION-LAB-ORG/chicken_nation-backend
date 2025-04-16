@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { DishService } from 'src/modules/menu/services/dish.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
 import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
@@ -8,6 +8,8 @@ import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { UserRole, UserType } from '@prisma/client';
 import { UserTypesGuard } from 'src/common/guards/user-types.guard';
 import { UserTypes } from 'src/common/decorators/user-types.decorator';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { GenerateConfigService } from 'src/common/services/generate-config.service';
 
 @Controller('dishes')
 export class DishController {
@@ -17,8 +19,9 @@ export class DishController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
-  create(@Body() createDishDto: CreateDishDto) {
-    return this.dishService.create(createDishDto);
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/dishes', 'name') }))
+  create(@Body() createDishDto: CreateDishDto, @UploadedFile() image: Express.Multer.File) {
+    return this.dishService.create({ ...createDishDto, image: image.path });
   }
 
   @Get()
@@ -35,8 +38,9 @@ export class DishController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
-  update(@Param('id') id: string, @Body() updateDishDto: UpdateDishDto) {
-    return this.dishService.update(id, updateDishDto);
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/dishes', 'name') }))
+  update(@Param('id') id: string, @Body() updateDishDto: UpdateDishDto, @UploadedFile() image: Express.Multer.File) {
+    return this.dishService.update(id, { ...updateDishDto, image: image.path });
   }
 
   @Delete(':id')

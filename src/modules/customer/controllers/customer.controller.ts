@@ -1,4 +1,4 @@
-import { Controller, Query, Get, Post, Body, Patch, Param, Delete, Req, UseGuards } from '@nestjs/common';
+import { Controller, Query, Get, Post, Body, Patch, Param, Delete, Req, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { CustomerService } from 'src/modules/customer/services/customer.service';
 import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto';
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
@@ -10,6 +10,8 @@ import { UserRole, UserType } from '@prisma/client';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { CustomerQueryDto } from 'src/modules/customer/dto/customer-query.dto';
+import { GenerateConfigService } from 'src/common/services/generate-config.service';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('customer')
 export class CustomerController {
@@ -22,8 +24,9 @@ export class CustomerController {
   @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
-  create(@Body() createCustomerDto: CreateCustomerDto) {
-    return this.customerService.create(createCustomerDto);
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar', 'phone') }))
+  create(@Body() createCustomerDto: CreateCustomerDto, @UploadedFile() image: Express.Multer.File) {
+    return this.customerService.create({ ...createCustomerDto, image: image.path });
   }
 
   @Get()
@@ -34,12 +37,12 @@ export class CustomerController {
     return this.customerService.findAll(query);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard)
+  @UserTypes(UserType.CUSTOMER)
   @Get('/detail')
   detail(@Req() req: Request) {
     return this.customerService.detail(req);
   }
-
 
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UseGuards(JwtAuthGuard, UserTypesGuard)
@@ -50,8 +53,9 @@ export class CustomerController {
 
   @UseGuards(JwtAuthGuard)
   @Patch()
-  update(@Req() req: Request, @Body() updateCustomerDto: UpdateCustomerDto) {
-    return this.customerService.update(req, updateCustomerDto);
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar', 'phone') }))
+  update(@Req() req: Request, @Body() updateCustomerDto: UpdateCustomerDto, @UploadedFile() image: Express.Multer.File) {
+    return this.customerService.update(req, { ...updateCustomerDto, image: image.path });
   }
 
   @Get('phone/:phone')

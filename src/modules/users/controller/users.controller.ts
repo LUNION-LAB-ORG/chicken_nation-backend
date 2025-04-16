@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Req, UseGuards, Patch, Delete, Param } from '@nestjs/common';
+import { Controller, Get, Post, Body, Req, UseGuards, Patch, Delete, Param, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { UsersService } from 'src/modules/users/service/users.service';
 import { CreateUserDto } from 'src/modules/users/dto/create-user.dto';
 import {
@@ -14,6 +14,8 @@ import { Request } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UpdateUserDto } from 'src/modules/users/dto/update-user.dto';
 import { UpdateUserPasswordDto } from 'src/modules/users/dto/update-user-password.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { GenerateConfigService } from 'src/common/services/generate-config.service';
 
 @Controller('users')
 export class UsersController {
@@ -29,9 +31,11 @@ export class UsersController {
   })
   @ApiBody({ type: CreateUserDto })
   @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar', 'email') }))
   @Post()
-  create(@Body() createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+  create(@Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
+
+    return this.usersService.create({ ...createUserDto, image: image.path });
   }
 
   // CREATE MEMBER

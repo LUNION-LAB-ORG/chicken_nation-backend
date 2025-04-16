@@ -4,7 +4,6 @@ import { CommonModule } from 'src/common/common.module';
 import { EmailModule } from 'src/email/email.module';
 import { UsersModule } from 'src/modules/users/users.module';
 import { AuthModule } from 'src/modules/auth/auth.module';
-import { MulterModule } from '@nestjs/platform-express';
 import { DatabaseModule } from 'src/database/database.module';
 import { RestaurantModule } from 'src/modules/restaurant/restaurant.module';
 import { MenuModule } from 'src/modules/menu/menu.module';
@@ -21,7 +20,6 @@ import { OtpModule } from 'src/otp/otp.module';
     ConfigModule.forRoot({ isGlobal: true }),
     DatabaseModule,
     CommonModule,
-    MulterModule.register({ dest: './uploads' }),
     JsonWebTokenModule,
     OtpModule,
     EmailModule,

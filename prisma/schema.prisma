@@ -86,7 +86,7 @@ model Category {
 
   name        String  @db.VarChar
   description String? @db.VarChar
-  image       String? @db.VarChar
+  image       String? @db.Text
   dishes      Dish[]
 
   entity_status EntityStatus @default(NEW)
@@ -107,7 +107,7 @@ model Customer {
   last_name             String?              @db.VarChar(255)
   birth_day             DateTime?            @db.Date
   email                 String?              @unique @db.VarChar
-  image                 String?              @db.VarChar
+  image                 String?              @db.Text
   addresses             Address[]
   favorites             Favorite[]
   notification_settings NotificationSetting?
@@ -139,7 +139,7 @@ model Dish {
   name                 String             @db.VarChar
   description          String?            @db.VarChar
   price                Float
-  image                String?            @db.VarChar
+  image                String?            @db.Text
   is_promotion         Boolean            @default(false)
   promotion_price      Float?
   category_id          String             @db.Uuid
@@ -183,12 +183,12 @@ model Notification {
   id String @id @default(uuid()) @db.Uuid
 
   user_id       String           @db.VarChar
-  icon          String           @db.VarChar
+  icon          String           @db.Text
   icon_bg_color String           @db.VarChar
   title         String           @db.VarChar
   date          DateTime         @db.Date
   time          String           @db.VarChar
-  message       String           @db.VarChar
+  message       String           @db.Text
   type          NotificationType
   is_read       Boolean          @default(false)
   show_chevron  Boolean?         @default(true)
@@ -276,7 +276,7 @@ model Restaurant {
   name             String           @db.VarChar
   manager          String           @db.Uuid
   description      String?          @db.VarChar
-  image            String?          @db.VarChar
+  image            String?          @db.Text
   address          String?          @db.VarChar
   latitude         Float?
   longitude        Float?
@@ -303,7 +303,7 @@ model SpecialOffer {
   id          String             @id @default(uuid()) @db.Uuid
   name        String             @db.VarChar
   description String?            @db.VarChar
-  image       String             @db.VarChar
+  image       String?            @db.Text
   tax         Float
   start_date  DateTime           @db.Timestamp(6)
   end_date    DateTime           @db.Timestamp(6)
@@ -314,7 +314,7 @@ model Supplement {
   id               String             @id @default(uuid()) @db.Uuid
   name             String             @db.VarChar
   price            Float
-  image            String?            @db.VarChar
+  image            String?            @db.Text
   available        Boolean            @default(true)
   category         SupplementCategory
   dish_supplements DishSupplement[]
@@ -327,7 +327,7 @@ model User {
   email               String      @unique @db.VarChar
   phone               String?     @db.VarChar
   password            String      @db.VarChar
-  image               String?     @db.VarChar
+  image               String?     @db.Text
   address             String?     @db.VarChar
   password_is_updated Boolean     @default(false)
   type                UserType

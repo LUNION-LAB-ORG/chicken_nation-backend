@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, MaxLength, IsOptional } from 'class-validator';
+import { IsNotEmpty, MaxLength, IsOptional, IsString, IsPhoneNumber } from 'class-validator';
 
 export class CreateUserDto {
   // FULLNAME
@@ -29,16 +29,20 @@ export class CreateUserDto {
   email: string;
 
   // PHONE
-  @ApiProperty({
-    description: "Téléphone de l'utilisateur",
-    example: '771234567',
-    required: false,
-    maxLength: 20,
-  })
-  @IsOptional()
-  @MaxLength(20)
+  @ApiProperty({ description: 'Numéro de téléphone de l\'utilisateur', example: '+225070707070' })
+  @IsPhoneNumber("CI", { message: 'Numéro de téléphone non valide, utilisez le format +225' })
+  @IsString()
   @Transform(({ value }) => value.trim())
   phone: string;
+
+  // IMAGE
+  @ApiProperty({
+    description: "Image de l'utilisateur",
+    required: false,
+    type: "file" as "string",
+  })
+  @IsOptional()
+  image?: string;
 
   // ADDRESS
   @ApiProperty({

@@ -16,7 +16,7 @@ export class CreateCategoryDto {
     @Transform(({ value }) => value.trim())
     description?: string;
 
-    @ApiProperty({ description: 'Image de la catégorie' })
+    @ApiProperty({ description: 'Image de la catégorie', type: "file" as "string", })
     @IsOptional()
     @IsString()
     image?: string;
