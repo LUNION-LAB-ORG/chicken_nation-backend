@@ -20,7 +20,7 @@ export class CreateDishDto {
     @IsNumber()
     price: number;
 
-    @ApiPropertyOptional({ description: 'Image du plat' })
+    @ApiPropertyOptional({ description: 'Image du plat', type:"file" as "string" })
     @IsOptional()
     @IsString()
     image?: string;

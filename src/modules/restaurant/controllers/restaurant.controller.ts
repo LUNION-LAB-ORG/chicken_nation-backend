@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, Request, HttpStatus, HttpCode } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, UseInterceptors} from '@nestjs/common';
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
 import { CreateRestaurantDto } from 'src/modules/restaurant/dto/create-restaurant.dto';
 import { UpdateRestaurantDto } from 'src/modules/restaurant/dto/update-restaurant.dto';
@@ -9,6 +9,9 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { UserTypesGuard } from 'src/common/guards/user-types.guard';
 import { UserTypes } from 'src/common/decorators/user-types.decorator';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { GenerateConfigService } from 'src/common/services/generate-config.service';
+import { UploadedFile } from '@nestjs/common';
 
 @ApiTags('Restaurants')
 @Controller('restaurants')
@@ -21,8 +24,9 @@ export class RestaurantController {
   @UserRoles(UserRole.ADMIN)
   @UserTypes(UserType.BACKOFFICE)
   @Post()
-  async create(@Body() createRestaurantDto: CreateRestaurantDto) {
-    return this.restaurantService.create(createRestaurantDto);
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants', 'name') }))
+  async create(@Body() createRestaurantDto: CreateRestaurantDto, @UploadedFile() image: Express.Multer.File) {
+    return this.restaurantService.create({ ...createRestaurantDto, image: image.path });
   }
 
   @ApiOperation({ summary: 'Obtenir tous les restaurants' })
@@ -46,32 +50,23 @@ export class RestaurantController {
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @Patch(':id')
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants', 'name') }))
   async update(
     @Param('id') id: string,
     @Body() updateRestaurantDto: UpdateRestaurantDto,
-    @Request() req,
+    @UploadedFile() image: Express.Multer.File,
   ) {
-    return this.restaurantService.update(id, updateRestaurantDto, req.user.id);
+    return this.restaurantService.update(id, { ...updateRestaurantDto, image: image.path });
   }
 
-  @ApiOperation({ summary: 'Activer un restaurant' })
+  @ApiOperation({ summary: 'Activer et Désactiver un restaurant' })
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
-  @Patch(':id/activate')
-  async activate(@Param('id') id: string, @Request() req) {
-    return this.restaurantService.activate(id, req.user.id);
-  }
-
-  @ApiOperation({ summary: 'Désactiver un restaurant' })
-  @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
-  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
-  @Patch(':id/deactivate')
-  async deactivate(@Param('id') id: string, @Request() req) {
-    return this.restaurantService.deactivate(id, req.user.id);
+  @Patch(':id/activateDeactivate')
+  async activateDeactivate(@Param('id') id: string) {
+    return this.restaurantService.activateDeactivate(id);
   }
 
   @ApiOperation({ summary: 'Supprimer un restaurant' })
@@ -80,8 +75,8 @@ export class RestaurantController {
   @UserRoles(UserRole.ADMIN)
   @UserTypes(UserType.BACKOFFICE)
   @Delete(':id')
-  async remove(@Param('id') id: string, @Request() req) {
-    return this.restaurantService.remove(id, req.user.id);
+  async remove(@Param('id') id: string) {
+    return this.restaurantService.remove(id);
   }
 
   @ApiOperation({ summary: 'Obtenir tous les utilisateurs d un restaurant' })
@@ -90,7 +85,17 @@ export class RestaurantController {
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @Get(':id/users')
-  async getRestaurantUsers(@Param('id') id: string, @Request() req) {
-    return this.restaurantService.getRestaurantUsers(id, req.user.id);
+  async getRestaurantUsers(@Param('id') id: string) {
+    return this.restaurantService.getRestaurantUsers(id);
+  }
+
+  @ApiOperation({ summary: 'Obtenir le manager d un restaurant' })
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
+  @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
+  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
+  @Get(':id/manager')
+  async getRestaurantManager(@Param('id') id: string) {
+    return this.restaurantService.getRestaurantManager(id);
   }
 }

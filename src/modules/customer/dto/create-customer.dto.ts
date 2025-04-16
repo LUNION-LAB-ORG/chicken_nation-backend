@@ -40,10 +40,9 @@ export class CreateCustomerDto {
     @Transform(({ value }) => value.trim())
     email?: string;
 
-    @ApiPropertyOptional({ description: 'Image du profil du client', example: 'https://example.com/image.jpg' })
+    @ApiPropertyOptional({ description: 'Image du profil du client', type: "file" as "string" })
     @IsString()
     @IsOptional()
-    @Transform(({ value }) => value.trim())
     image?: string;
 }
 

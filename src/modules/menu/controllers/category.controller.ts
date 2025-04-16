@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { CategoryService } from 'src/modules/menu/services/category.service';
 import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
 import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
@@ -8,6 +8,8 @@ import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { UserRole, UserType } from '@prisma/client';
 import { UserTypesGuard } from 'src/common/guards/user-types.guard';
 import { UserTypes } from 'src/common/decorators/user-types.decorator';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { GenerateConfigService } from 'src/common/services/generate-config.service';
 
 @Controller('categories')
 export class CategoryController {
@@ -17,8 +19,9 @@ export class CategoryController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
-  create(@Body() createCategoryDto: CreateCategoryDto) {
-    return this.categoryService.create(createCategoryDto);
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories', 'name') }))
+  create(@Body() createCategoryDto: CreateCategoryDto, @UploadedFile() image: Express.Multer.File) {
+    return this.categoryService.create({ ...createCategoryDto, image: image.path });
   }
 
   @Get()
@@ -35,8 +38,9 @@ export class CategoryController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
-  update(@Param('id') id: string, @Body() updateCategoryDto: UpdateCategoryDto) {
-    return this.categoryService.update(id, updateCategoryDto);
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories', 'name') }))
+  update(@Param('id') id: string, @Body() updateCategoryDto: UpdateCategoryDto, @UploadedFile() image: Express.Multer.File) {
+    return this.categoryService.update(id, { ...updateCategoryDto, image: image.path });
   }
 
   @Delete(':id')

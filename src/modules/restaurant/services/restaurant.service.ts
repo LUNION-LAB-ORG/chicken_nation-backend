@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { EntityStatus, UserRole, UserType } from '@prisma/client';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
@@ -63,9 +63,6 @@ export class RestaurantService {
             }
           }
         },
-        include: {
-          users: true
-        }
       });
 
       return { restaurant, plainPassword: password };
@@ -126,6 +123,10 @@ export class RestaurantService {
         id,
         entity_status: { not: EntityStatus.DELETED }
       },
+      include: {
+        users: true,
+        dish_restaurants: true
+      }
     });
 
     if (!restaurant) {
@@ -138,48 +139,34 @@ export class RestaurantService {
   /**
    * Mettre à jour un restaurant
    */
-  async update(id: string, updateRestaurantDto: UpdateRestaurantDto, userId: string) {
+  async update(id: string, updateRestaurantDto: UpdateRestaurantDto) {
     // Vérifie si le restaurant existe
+    await this.findOne(id);
+
+    const { managerEmail, managerFullname, managerPhone, ...rest } = updateRestaurantDto;
+
+    return this.prisma.restaurant.update({
+      where: { id },
+      data: rest,
+    });
+  }
+
+  /**
+   * Activer et Désactiver un restaurant
+   */
+  async activateDeactivate(id: string) {
     const restaurant = await this.findOne(id);
 
-    // Vérifie si l'utilisateur est le manager de ce restaurant
-    await this.validateManager(id, userId);
-
     return this.prisma.restaurant.update({
       where: { id },
-      data: updateRestaurantDto,
-    });
-  }
-
-  /**
-   * Activer un restaurant
-   */
-  async activate(id: string, userId: string) {
-    await this.validateManager(id, userId);
-
-    return this.prisma.restaurant.update({
-      where: { id },
-      data: { entity_status: EntityStatus.ACTIVE },
-    });
-  }
-
-  /**
-   * Désactiver un restaurant
-   */
-  async deactivate(id: string, userId: string) {
-    await this.validateManager(id, userId);
-
-    return this.prisma.restaurant.update({
-      where: { id },
-      data: { entity_status: EntityStatus.INACTIVE },
+      data: { entity_status: restaurant.entity_status === EntityStatus.ACTIVE ? EntityStatus.INACTIVE : EntityStatus.ACTIVE },
     });
   }
 
   /**
    * Supprimer un restaurant (soft delete)
    */
-  async remove(id: string, userId: string) {
-    await this.validateManager(id, userId);
+  async remove(id: string) {
 
     return this.prisma.restaurant.update({
       where: { id },
@@ -190,8 +177,7 @@ export class RestaurantService {
   /**
    * Obtenir tous les utilisateurs (staff) d'un restaurant
    */
-  async getRestaurantUsers(id: string, userId: string) {
-    await this.validateManager(id, userId);
+  async getRestaurantUsers(id: string) {
 
     return this.prisma.user.findMany({
       where: {
@@ -202,22 +188,25 @@ export class RestaurantService {
   }
 
   /**
-   * Méthode de validation pour vérifier si un utilisateur est le manager d'un restaurant
+   * Obtenir le manager d'un restaurant
    */
-  private async validateManager(restaurantId: string, userId: string) {
-    const restaurant = await this.prisma.restaurant.findFirst({
-      where: { id: restaurantId },
+  async getRestaurantManager(id: string) {
+    const restaurant = await this.findOne(id);
+
+    return this.prisma.user.findUnique({
+      where: {
+        id: restaurant.manager,
+        entity_status: { not: EntityStatus.DELETED },
+      },
+      select: {
+        fullname: true,
+        email: true,
+        phone: true,
+        image: true,
+        address: true,
+        restaurant_id: true
+      }
     });
-
-    if (!restaurant) {
-      throw new NotFoundException(`Restaurant with ID ${restaurantId} not found`);
-    }
-
-    // Vérifie si l'utilisateur est le manager de ce restaurant
-    if (restaurant.manager !== userId) {
-      throw new UnauthorizedException('Only the restaurant manager can perform this action');
-    }
-
-    return restaurant;
   }
+
 }

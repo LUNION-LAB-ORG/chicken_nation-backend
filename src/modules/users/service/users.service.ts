@@ -144,6 +144,7 @@ export class UsersService {
     const newUser = await this.prisma.user.update({
       where: {
         id: user.id,
+        password_is_updated: true
       },
       data: {
         password: hash,

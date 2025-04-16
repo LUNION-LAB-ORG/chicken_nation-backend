@@ -77,7 +77,26 @@ export class CustomerService {
 
   async detail(req: Request) {
     const customer = req.user as Customer;
-    return customer;
+
+    return await this.prisma.customer.findUnique({
+      where: { id: customer.id },
+      include: {
+        addresses: {
+          where: { entity_status: EntityStatus.ACTIVE },
+        },
+        favorites: {
+          where: { entity_status: EntityStatus.ACTIVE },
+          include: {
+            dish: {
+              include: {
+                category: true,
+              },
+            },
+          },
+        },
+        notification_settings: true,
+      },
+    });
   }
 
   async findOne(id: string) {

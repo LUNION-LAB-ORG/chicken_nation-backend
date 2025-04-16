@@ -12,7 +12,7 @@ export class CreateRestaurantDto {
     @IsString()
     description?: string;
 
-    @ApiPropertyOptional({ description: 'Restaurant image' })
+    @ApiPropertyOptional({ description: 'Restaurant image', type:"file" as "string" })
     @IsOptional()
     @IsString()
     image?: string;
