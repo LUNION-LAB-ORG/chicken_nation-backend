@@ -24,7 +24,7 @@ export class CustomerController {
   @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar', 'phone') }))
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
   create(@Body() createCustomerDto: CreateCustomerDto, @UploadedFile() image: Express.Multer.File) {
     return this.customerService.create({ ...createCustomerDto, image: image.path });
   }
@@ -53,7 +53,7 @@ export class CustomerController {
 
   @UseGuards(JwtAuthGuard)
   @Patch()
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar', 'phone') }))
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
   update(@Req() req: Request, @Body() updateCustomerDto: UpdateCustomerDto, @UploadedFile() image: Express.Multer.File) {
     return this.customerService.update(req, { ...updateCustomerDto, image: image.path });
   }

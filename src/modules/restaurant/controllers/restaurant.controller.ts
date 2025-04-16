@@ -24,7 +24,7 @@ export class RestaurantController {
   @UserRoles(UserRole.ADMIN)
   @UserTypes(UserType.BACKOFFICE)
   @Post()
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants', 'name') }))
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants') }))
   async create(@Body() createRestaurantDto: CreateRestaurantDto, @UploadedFile() image: Express.Multer.File) {
     return this.restaurantService.create({ ...createRestaurantDto, image: image.path });
   }
@@ -50,7 +50,7 @@ export class RestaurantController {
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @Patch(':id')
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants', 'name') }))
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants') }))
   async update(
     @Param('id') id: string,
     @Body() updateRestaurantDto: UpdateRestaurantDto,
