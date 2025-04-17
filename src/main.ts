@@ -2,7 +2,6 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
-import * as express from 'express';
 import { join } from 'path';
 import helmet from 'helmet';
 import * as compression from 'compression';
@@ -10,7 +9,6 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-
   // injecter globalement ValidationPipe
   app.useGlobalPipes(
     new ValidationPipe({
@@ -37,10 +35,11 @@ async function bootstrap() {
   app.setGlobalPrefix('api/v1');
 
   // Configuration du dossier de téléchargement
-  // app.useStaticAssets(join(__dirname, '..', 'uploads'), {
-  //   prefix: '/uploads'
-  // });
-  app.use('/uploads', express.static(join(__dirname, '..', 'uploads')));
+  const uploadsPath = join(__dirname, '..', '..', 'uploads');
+  console.log('Uploads directory path:', uploadsPath);
+  app.useStaticAssets(uploadsPath, {
+    prefix: '/uploads'
+  });
 
   // Liaison du Swagger
   const config = new DocumentBuilder()
