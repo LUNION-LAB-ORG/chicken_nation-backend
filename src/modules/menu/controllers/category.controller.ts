@@ -21,7 +21,7 @@ export class CategoryController {
   @UserRoles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories') }))
   create(@Body() createCategoryDto: CreateCategoryDto, @UploadedFile() image: Express.Multer.File) {
-    return this.categoryService.create({ ...createCategoryDto, image: image.path });
+    return this.categoryService.create({ ...createCategoryDto, image: image?.path });
   }
 
   @Get()
@@ -40,7 +40,7 @@ export class CategoryController {
   @UserRoles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories') }))
   update(@Param('id') id: string, @Body() updateCategoryDto: UpdateCategoryDto, @UploadedFile() image: Express.Multer.File) {
-    return this.categoryService.update(id, { ...updateCategoryDto, image: image.path });
+    return this.categoryService.update(id, { ...updateCategoryDto, image: image?.path });
   }
 
   @Delete(':id')

@@ -26,7 +26,7 @@ export class RestaurantController {
   @Post()
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants') }))
   async create(@Body() createRestaurantDto: CreateRestaurantDto, @UploadedFile() image: Express.Multer.File) {
-    return this.restaurantService.create({ ...createRestaurantDto, image: image.path });
+    return this.restaurantService.create({ ...createRestaurantDto, image: image?.path });
   }
 
   @ApiOperation({ summary: 'Obtenir tous les restaurants' })
@@ -56,7 +56,7 @@ export class RestaurantController {
     @Body() updateRestaurantDto: UpdateRestaurantDto,
     @UploadedFile() image: Express.Multer.File,
   ) {
-    return this.restaurantService.update(id, { ...updateRestaurantDto, image: image.path });
+    return this.restaurantService.update(id, { ...updateRestaurantDto, image: image?.path });
   }
 
   @ApiOperation({ summary: 'Activer et Désactiver un restaurant' })

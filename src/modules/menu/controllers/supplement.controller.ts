@@ -21,7 +21,7 @@ export class SupplementController {
   @UserRoles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/supplements') }))
   create(@Body() createSupplementDto: CreateSupplementDto, @UploadedFile() image: Express.Multer.File) {
-    return this.supplementService.create({ ...createSupplementDto, image: image.path });
+    return this.supplementService.create({ ...createSupplementDto, image: image?.path });
   }
 
   @Get()
@@ -45,7 +45,7 @@ export class SupplementController {
   @UserRoles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/supplements') }))
   update(@Param('id') id: string, @Body() updateSupplementDto: UpdateSupplementDto, @UploadedFile() image: Express.Multer.File) {
-    return this.supplementService.update(id, { ...updateSupplementDto, image: image.path });
+    return this.supplementService.update(id, { ...updateSupplementDto, image: image?.path });
   }
 
   @Delete(':id')

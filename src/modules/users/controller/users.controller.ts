@@ -35,7 +35,7 @@ export class UsersController {
   @Post()
   create(@Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
 
-    return this.usersService.create({ ...createUserDto, image: image.path });
+    return this.usersService.create({ ...createUserDto, image: image?.path });
   }
 
   // CREATE MEMBER
@@ -51,7 +51,7 @@ export class UsersController {
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @Post('member')
   createMember(@Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
-    return this.usersService.createMember({ ...createUserDto, image: image.path });
+    return this.usersService.createMember({ ...createUserDto, image: image?.path });
   }
   // GET DETAIL USER
   @ApiOperation({ summary: "Obtenir les détails d'utilisateur" })

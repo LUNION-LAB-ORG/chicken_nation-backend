@@ -21,7 +21,7 @@ export class DishController {
   @UserRoles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/dishes') }))
   create(@Body() createDishDto: CreateDishDto, @UploadedFile() image: Express.Multer.File) {
-    return this.dishService.create({ ...createDishDto, image: image.path });
+    return this.dishService.create({ ...createDishDto, image: image?.path });
   }
 
   @Get()
@@ -40,7 +40,7 @@ export class DishController {
   @UserRoles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/dishes') }))
   update(@Param('id') id: string, @Body() updateDishDto: UpdateDishDto, @UploadedFile() image: Express.Multer.File) {
-    return this.dishService.update(id, { ...updateDishDto, image: image.path });
+    return this.dishService.update(id, { ...updateDishDto, image: image?.path });
   }
 
   @Delete(':id')

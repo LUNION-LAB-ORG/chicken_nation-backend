@@ -26,7 +26,7 @@ export class CustomerController {
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
   create(@Body() createCustomerDto: CreateCustomerDto, @UploadedFile() image: Express.Multer.File) {
-    return this.customerService.create({ ...createCustomerDto, image: image.path });
+    return this.customerService.create({ ...createCustomerDto, image: image?.path });
   }
 
   @Get()
@@ -55,7 +55,7 @@ export class CustomerController {
   @Patch()
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
   update(@Req() req: Request, @Body() updateCustomerDto: UpdateCustomerDto, @UploadedFile() image: Express.Multer.File) {
-    return this.customerService.update(req, { ...updateCustomerDto, image: image.path });
+    return this.customerService.update(req, { ...updateCustomerDto, image: image?.path });
   }
 
   @Get('phone/:phone')
