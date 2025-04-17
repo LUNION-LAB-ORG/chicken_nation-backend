@@ -48,11 +48,11 @@ export class UsersController {
   })
   @ApiBody({ type: CreateUserDto })
   @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @Post('member')
-  createMember(@Body() createUserDto: CreateUserDto) {
-    return this.usersService.createMember(createUserDto);
+  createMember(@Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
+    return this.usersService.createMember({ ...createUserDto, image: image.path });
   }
-
   // GET DETAIL USER
   @ApiOperation({ summary: "Obtenir les détails d'utilisateur" })
   @ApiOkResponse({
