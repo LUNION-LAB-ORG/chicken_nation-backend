@@ -56,4 +56,8 @@ pids
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 ecosystem.config.js
+<<<<<<< HEAD
 uploads
+=======
+uploads
+>>>>>>> c2c165e16b2d1ca691e28852151337f950b4777f
