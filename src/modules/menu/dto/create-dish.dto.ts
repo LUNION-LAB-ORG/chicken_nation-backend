@@ -18,6 +18,7 @@ export class CreateDishDto {
     @ApiProperty({ description: 'Prix du plat' })
     @IsNotEmpty()
     @IsNumber()
+    @Transform(({ value }) => Number(value))
     price: number;
 
     @ApiPropertyOptional({ description: 'Image du plat', type:"file" as "string" })
@@ -28,16 +29,19 @@ export class CreateDishDto {
     @ApiPropertyOptional({ description: 'Disponibilité du plat' })
     @IsOptional()
     @IsBoolean()
+    @Transform(({ value }) => Boolean(value))
     available?: boolean = true;
 
     @ApiPropertyOptional({ description: 'Promotion du plat' })
     @IsOptional()
     @IsBoolean()
+    @Transform(({ value }) => Boolean(value))
     is_promotion?: boolean = false;
 
     @ApiPropertyOptional({ description: 'Prix de promotion du plat' })
     @IsOptional()
     @IsNumber()
+    @Transform(({ value }) => Number(value))
     promotion_price?: number;
 
     @ApiProperty({ description: 'ID de la catégorie', example: '123' })
