@@ -11,7 +11,7 @@ export class CreateSupplementDto {
 
     @ApiProperty({ description: 'Prix du supplément' })
     @IsNotEmpty()
-    @IsNumber()
+    @Transform(({ value }) => Number(value))    
     price: number;
 
     @ApiPropertyOptional({ description: 'Image du supplément', type:"file" as "string" })
@@ -21,7 +21,7 @@ export class CreateSupplementDto {
 
     @ApiPropertyOptional({ description: 'Disponibilité du supplément' })
     @IsOptional()
-    @IsBoolean()
+    @Transform(({ value }) => Boolean(value))
     available?: boolean = true;
 
     @ApiProperty({ description: 'Catégorie du supplément', example: "FOOD | DRINK | ACCESSORY" })
