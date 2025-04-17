@@ -30,10 +30,12 @@ export class CreateAddressDto {
   @ApiProperty({ description: 'Longitude' })
   @IsNotEmpty()
   @IsNumber()
+  @Transform(({ value }) => Number(value))
   longitude: number;
 
   @ApiProperty({ description: 'Latitude' })
   @IsNotEmpty()
   @IsNumber()
+  @Transform(({ value }) => Number(value))
   latitude: number;
 }

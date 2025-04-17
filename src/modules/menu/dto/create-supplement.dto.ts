@@ -27,6 +27,6 @@ export class CreateSupplementDto {
     @ApiProperty({ description: 'Catégorie du supplément', example: "FOOD | DRINK | ACCESSORY" })
     @IsNotEmpty()
     @IsEnum(SupplementCategory)
-    @Transform(({ value }) => value.trim())
+    @Transform(({ value }) => value.trim().toUpperCase() as SupplementCategory)
     category: SupplementCategory;
 }

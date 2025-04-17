@@ -26,12 +26,6 @@ export class CreateDishDto {
     @IsString()
     image?: string;
 
-    @ApiPropertyOptional({ description: 'Disponibilité du plat' })
-    @IsOptional()
-    @IsBoolean()
-    @Transform(({ value }) => Boolean(value))
-    available?: boolean = true;
-
     @ApiPropertyOptional({ description: 'Promotion du plat' })
     @IsOptional()
     @IsBoolean()

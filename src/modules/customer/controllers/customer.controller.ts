@@ -12,7 +12,10 @@ import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { CustomerQueryDto } from 'src/modules/customer/dto/customer-query.dto';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
+@ApiTags('Customers')
+@ApiBearerAuth()
 @Controller('customer')
 export class CustomerController {
   constructor(private readonly customerService: CustomerService) { }
@@ -20,6 +23,7 @@ export class CustomerController {
 
   // CREATE CUSTOMER
 
+  @ApiOperation({ summary: 'Création d\'un nouveau client' })
   @Post()
   @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
@@ -29,6 +33,7 @@ export class CustomerController {
     return this.customerService.create({ ...createCustomerDto, image: image?.path });
   }
 
+  @ApiOperation({ summary: 'Récupération de tous les clients' })
   @Get()
   @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
@@ -37,6 +42,7 @@ export class CustomerController {
     return this.customerService.findAll(query);
   }
 
+  @ApiOperation({ summary: 'Obtenir le détail d un client' })
   @UseGuards(JwtAuthGuard, UserTypesGuard)
   @UserTypes(UserType.CUSTOMER)
   @Get('/detail')
@@ -44,6 +50,7 @@ export class CustomerController {
     return this.customerService.detail(req);
   }
 
+  @ApiOperation({ summary: 'Obtenir un client par ID' })
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UseGuards(JwtAuthGuard, UserTypesGuard)
   @Get(':id')
@@ -51,21 +58,26 @@ export class CustomerController {
     return this.customerService.findOne(id);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Mettre à jour un client' })
+  @UseGuards(JwtAuthGuard, UserTypesGuard)
+  @UserTypes(UserType.CUSTOMER)
   @Patch()
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
   update(@Req() req: Request, @Body() updateCustomerDto: UpdateCustomerDto, @UploadedFile() image: Express.Multer.File) {
     return this.customerService.update(req, { ...updateCustomerDto, image: image?.path });
   }
 
+  @ApiOperation({ summary: 'Obtenir un client par numéro de téléphone' })
   @Get('phone/:phone')
   findByPhone(@Param('phone') phone: string) {
     return this.customerService.findByPhone(phone);
   }
 
+  @ApiOperation({ summary: 'Supprimer un client' })
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, UserRolesGuard)
+  @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
   @UserRoles(UserRole.ADMIN)
+  @UserTypes(UserType.BACKOFFICE, UserType.CUSTOMER)
   remove(@Param('id') id: string) {
     return this.customerService.remove(id);
   }

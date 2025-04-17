@@ -10,11 +10,16 @@ import { UserTypesGuard } from 'src/common/guards/user-types.guard';
 import { UserTypes } from 'src/common/decorators/user-types.decorator';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
+import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
 
 @Controller('dishes')
+@ApiTags('Dishes')
+@ApiBearerAuth()
 export class DishController {
-  constructor(private readonly dishService: DishService) { }
+  constructor(private readonly dishService: DishService, private readonly dishRestaurantService: DishRestaurantService) { }
 
+  @ApiOperation({ summary: 'Création d\'un plat' })
   @Post()
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
@@ -24,16 +29,19 @@ export class DishController {
     return this.dishService.create({ ...createDishDto, image: image?.path });
   }
 
+  @ApiOperation({ summary: 'Récupération de tous les plats' })
   @Get()
   findAll() {
     return this.dishService.findAll();
   }
 
+  @ApiOperation({ summary: 'Obtenir un plat par ID' })
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.dishService.findOne(id);
   }
 
+  @ApiOperation({ summary: 'Mettre à jour un plat' })
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
@@ -43,6 +51,7 @@ export class DishController {
     return this.dishService.update(id, { ...updateDishDto, image: image?.path });
   }
 
+  @ApiOperation({ summary: 'Supprimer un plat' })
   @Delete(':id')
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
@@ -50,4 +59,15 @@ export class DishController {
   remove(@Param('id') id: string) {
     return this.dishService.remove(id);
   }
+
+
+  @ApiOperation({ summary: 'Récupération de tous les restaurants liés à un plat' })
+  @Get(':dishId/restaurants')
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
+  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
+  @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
+  getAllRestaurantsByDish(@Param('dishId') dishId: string) {
+    return this.dishRestaurantService.findByDish(dishId);
+  }
+
 }

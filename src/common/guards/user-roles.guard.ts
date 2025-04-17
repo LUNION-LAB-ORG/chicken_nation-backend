@@ -18,10 +18,14 @@ export class UserRolesGuard implements CanActivate {
     }
 
     const { user } = context.switchToHttp().getRequest();
-
-    // Vérification des rôles requis
-    return requiredRoles.some(
-      role => user.role === role
-    );
+    if (!user) {
+      return false;
+    }
+    if (user.role) {
+      return requiredRoles.some(
+        role => user.role === role
+      );
+    }
+    return true;
   }
 }
