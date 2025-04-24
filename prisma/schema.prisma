@@ -28,6 +28,18 @@ enum OrderType {
   TABLE
 }
 
+enum OrderStatus {
+  PENDING // EN ATTENTE
+  CANCELLED // ANNULÉ
+  ACCEPTED // ACCEPTÉ
+  IN_PROGRESS // EN COURS
+  READY // PRÊT
+  PICKED_UP // RÉCUPÉRÉ POUR LA LIVRAISON
+  DELIVERED // LIVRÉ
+  COLLECTED // COLLECTÉ PAR LE CLIENT
+  COMPLETED // TERMINÉ
+}
+
 enum PaiementMode {
   MOBILE_MONEY
   CREDIT_CARD
@@ -110,6 +122,7 @@ model Customer {
   image                 String?              @db.Text
   addresses             Address[]
   favorites             Favorite[]
+  orders                Order[]
   notification_settings NotificationSetting?
 
   entity_status EntityStatus @default(NEW)
@@ -221,24 +234,31 @@ model OrderItem {
 }
 
 model Order {
-  id String @id @default(uuid()) @db.Uuid
-
-  type         OrderType
-  address_id   String      @db.Uuid
-  code_promo   String?     @db.VarChar
-  delivery_fee Float
-  tax          Float
-  amount       Float
-  net_amount   Float
-  date         DateTime?   @db.Date
-  time         DateTime?   @db.Time(6)
-  fullname     String?     @db.VarChar
-  phone        String?     @db.VarChar
-  email        String?     @db.VarChar
-  note         String?     @db.VarChar
-  address      Address     @relation(fields: [address_id], references: [id], onDelete: Cascade)
-  order_items  OrderItem[]
-  paiements    Paiement[]
+  id                      String      @id @default(uuid()) @db.Uuid
+  reference               String      @unique @db.VarChar
+  customer_id             String?     @db.Uuid
+  delivery_fee            Float
+  type                    OrderType
+  address_id              String      @db.Uuid
+  code_promo              String?     @db.VarChar
+  tax                     Float
+  amount                  Float
+  net_amount              Float
+  discount                Float       @default(0)
+  date                    DateTime?   @db.Date
+  time                    DateTime?   @db.Time(6)
+  estimated_delivery_time DateTime?
+  fullname                String?     @db.VarChar
+  phone                   String?     @db.VarChar
+  email                   String?     @db.VarChar
+  note                    String?     @db.VarChar
+  status                  OrderStatus
+  restaurant_id           String?     @db.Uuid
+  order_items             OrderItem[]
+  paiements               Paiement[]
+  address                 Address     @relation(fields: [address_id], references: [id], onDelete: Cascade)
+  customer                Customer?   @relation(fields: [customer_id], references: [id])
+  restaurant              Restaurant? @relation(fields: [restaurant_id], references: [id])
 
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -285,6 +305,7 @@ model Restaurant {
   schedule         Json?            @db.Json
   dish_restaurants DishRestaurant[]
   users            User[]
+  orders           Order[]
 
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)

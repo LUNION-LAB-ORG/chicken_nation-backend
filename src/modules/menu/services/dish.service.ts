@@ -20,9 +20,13 @@ export class DishService {
     });
 
     // Ajouter les restaurants si fournis
-    if (restaurant_ids && restaurant_ids.length > 0) {
+    if (restaurant_ids) {
+      let restaurants = restaurant_ids;
+      if(typeof restaurant_ids === 'string') {
+        restaurants = [restaurant_ids];
+      }
       await this.prisma.dishRestaurant.createMany({
-        data: restaurant_ids.map((restaurant_id) => ({
+        data: restaurants.map((restaurant_id) => ({
           dish_id: dish.id,
           restaurant_id,
         })),
@@ -30,9 +34,13 @@ export class DishService {
     }
 
     // Ajouter les suppléments si fournis
-    if (supplement_ids && supplement_ids.length > 0) {
+    if (supplement_ids) {
+      let supplements = supplement_ids;
+      if(typeof supplement_ids === 'string') {
+        supplements = [supplement_ids];
+      }
       await this.prisma.dishSupplement.createMany({
-        data: supplement_ids.map((supplement_id) => ({
+        data: supplements.map((supplement_id) => ({
           dish_id: dish.id,
           supplement_id,
         })),

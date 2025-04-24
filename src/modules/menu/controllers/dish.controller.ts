@@ -67,6 +67,7 @@ export class DishController {
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   getAllRestaurantsByDish(@Param('dishId') dishId: string) {
+   
     return this.dishRestaurantService.findByDish(dishId);
   }
 

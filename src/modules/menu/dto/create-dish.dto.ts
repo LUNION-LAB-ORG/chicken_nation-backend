@@ -45,11 +45,11 @@ export class CreateDishDto {
 
     @ApiPropertyOptional({ description: 'ID des restaurants', example: ['123', '456'] })
     @IsOptional()
-    @IsUUID('4', { each: true })
+    @IsUUID(undefined, { each: true })
     restaurant_ids?: string[];
 
     @ApiPropertyOptional({ description: 'ID des suppléments', example: ['123', '456'] })
     @IsOptional()
-    @IsUUID('4', { each: true })
+    @IsUUID(undefined, { each: true })
     supplement_ids?: string[];
 }

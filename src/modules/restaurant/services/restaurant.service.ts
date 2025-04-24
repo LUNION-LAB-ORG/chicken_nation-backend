@@ -143,11 +143,9 @@ export class RestaurantService {
     // Vérifie si le restaurant existe
     await this.findOne(id);
 
-    const { managerEmail, managerFullname, managerPhone, ...rest } = updateRestaurantDto;
-
     return this.prisma.restaurant.update({
       where: { id },
-      data: rest,
+      data: updateRestaurantDto,
     });
   }
 
