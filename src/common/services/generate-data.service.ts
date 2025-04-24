@@ -53,12 +53,26 @@ export class GenerateDataService {
     }
 
     /**
- * Generates a secure password that meets the required pattern:
- * - At least 8 characters
- * - At least 1 uppercase letter
- * - At least 1 digit
- * - At least 1 special character
- */
+     * Génère un numéro de commande unique
+     * @returns Un numéro de commande au format ORD-YYMMDD-XXXXX
+     */
+    generateOrderReference(): string {
+        const date = new Date();
+        const year = date.getFullYear().toString().slice(-2);
+        const month = (date.getMonth() + 1).toString().padStart(2, '0');
+        const day = date.getDate().toString().padStart(2, '0');
+        const random = Math.floor(10000 + Math.random() * 90000);
+
+        return `ORD-${year}${month}${day}-${random}`;
+    }
+
+    /**
+     * Génère un mot de passe sécurisé qui correspond au pattern requis:
+     * - Au moins 8 caractères
+     * - Au moins 1 lettre majuscule
+     * - Au moins 1 chiffre
+     * - Au moins 1 caractère spécial
+     */
     generateSecurePassword(): string {
         const length = 12;
         const uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -81,5 +95,37 @@ export class GenerateDataService {
 
         // Shuffle the password to make it more random
         return password.split('').sort(() => 0.5 - Math.random()).join('');
+    }
+
+    /**
+     * Convertir degrés en radians
+     * @param degrees - L'angle en degrés
+     * @returns L'angle en radians
+     */
+    toRadians(degrees: number): number {
+        return degrees * (Math.PI / 180)
+    }
+
+    /**
+     * Calculer la distance entre deux points géographiques (en km)
+     * @param lat1 - Latitude du premier point
+     * @param lon1 - Longitude du premier point
+     * @param lat2 - Latitude du second point
+     * @param lon2 - Longitude du second point
+     * @returns La distance entre les deux points en kilomètres
+     */
+    haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+        const R = 6371 // Rayon de la Terre en kilomètres
+        const dLat = this.toRadians(lat2 - lat1)
+        const dLon = this.toRadians(lon2 - lon1)
+
+        const a =
+            Math.sin(dLat / 2) ** 2 +
+            Math.cos(this.toRadians(lat1)) * Math.cos(this.toRadians(lat2)) *
+            Math.sin(dLon / 2) ** 2
+
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+
+        return R * c
     }
 }

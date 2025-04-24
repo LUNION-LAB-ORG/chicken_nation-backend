@@ -10,11 +10,15 @@ import { UserTypesGuard } from 'src/common/guards/user-types.guard';
 import { UserTypes } from 'src/common/decorators/user-types.decorator';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 
+@ApiTags('Supplements')
+@ApiBearerAuth()
 @Controller('supplements')
 export class SupplementController {
   constructor(private readonly supplementService: SupplementService) { }
 
+  @ApiOperation({ summary: 'Création d\'un supplément' })
   @Post()
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
@@ -24,21 +28,25 @@ export class SupplementController {
     return this.supplementService.create({ ...createSupplementDto, image: image?.path });
   }
 
+  @ApiOperation({ summary: 'Récupération de tous les suppléments' })
   @Get()
   findAll() {
     return this.supplementService.findAll();
   }
 
+  @ApiOperation({ summary: 'Récupération de tous les suppléments par catégorie' })
   @Get('category/:category')
   findByCategory(@Param('category') category: SupplementCategory) {
     return this.supplementService.findByCategory(category);
   }
 
+  @ApiOperation({ summary: 'Obtenir un supplément par ID' })
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.supplementService.findOne(id);
   }
 
+  @ApiOperation({ summary: 'Mettre à jour un supplément' })
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
@@ -48,6 +56,7 @@ export class SupplementController {
     return this.supplementService.update(id, { ...updateSupplementDto, image: image?.path });
   }
 
+  @ApiOperation({ summary: 'Supprimer un supplément' })
   @Delete(':id')
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)

@@ -7,11 +7,15 @@ import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { UserRole, UserType } from '@prisma/client';
 import { UserTypesGuard } from 'src/common/guards/user-types.guard';
 import { UserTypes } from 'src/common/decorators/user-types.decorator';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
+@ApiTags('Dish Supplements')
+@ApiBearerAuth()
 @Controller('dish-supplements')
 export class DishSupplementController {
   constructor(private readonly dishSupplementService: DishSupplementService) { }
 
+  @ApiOperation({ summary: 'Création d\'une nouvelle relation entre plat et supplément' })
   @Post()
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
@@ -20,16 +24,13 @@ export class DishSupplementController {
     return this.dishSupplementService.create(createDishSupplementDto);
   }
 
+  @ApiOperation({ summary: 'Récupération de toutes les relations entre plats et suppléments' })
   @Get()
   findAll() {
     return this.dishSupplementService.findAll();
   }
 
-  @Get('dish/:dishId')
-  findByDish(@Param('dishId') dishId: string) {
-    return this.dishSupplementService.findByDish(dishId);
-  }
-
+  @ApiOperation({ summary: 'Suppression d\'une relation entre plat et supplément' })
   @Delete(':id')
   @UseGuards(JwtAuthGuard, UserRolesGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
@@ -37,6 +38,7 @@ export class DishSupplementController {
     return this.dishSupplementService.remove(id);
   }
 
+  @ApiOperation({ summary: 'Suppression d\'une relation entre plat et supplément' })
   @Delete('dish/:dishId/supplement/:supplementId')
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)

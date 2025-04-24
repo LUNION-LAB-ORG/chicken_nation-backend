@@ -65,6 +65,6 @@ export class CreateUserDto {
   })
   @IsNotEmpty()
   @MaxLength(100)
-  @Transform(({ value }) => value.trim())
+  @Transform(({ value }) => value.trim().toUpperCase() as UserRole)
   role: UserRole;
 }

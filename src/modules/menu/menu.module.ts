@@ -14,5 +14,6 @@ import { SupplementService } from 'src/modules/menu/services/supplement.service'
   imports: [],
   controllers: [CategoryController, DishController, DishRestaurantController, DishSupplementController, SupplementController],
   providers: [CategoryService, DishService, DishRestaurantService, DishSupplementService, SupplementService],
+  exports: [DishRestaurantService],
 })
 export class MenuModule { }

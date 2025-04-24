@@ -7,11 +7,15 @@ import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { UserRole, UserType } from '@prisma/client';
 import { UserTypesGuard } from 'src/common/guards/user-types.guard';
 import { UserTypes } from 'src/common/decorators/user-types.decorator';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
+@ApiTags('Dish Restaurants')
+@ApiBearerAuth()
 @Controller('dish-restaurants')
 export class DishRestaurantController {
   constructor(private readonly dishRestaurantService: DishRestaurantService) { }
 
+  @ApiOperation({ summary: 'Création d\'une nouvelle relation entre plat et restaurant' })
   @Post()
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
@@ -20,21 +24,13 @@ export class DishRestaurantController {
     return this.dishRestaurantService.create(createDishRestaurantDto);
   }
 
+  @ApiOperation({ summary: 'Récupération de toutes les relations entre plats et restaurants' })
   @Get()
   findAll() {
     return this.dishRestaurantService.findAll();
   }
 
-  @Get('dish/:dishId')
-  findByDish(@Param('dishId') dishId: string) {
-    return this.dishRestaurantService.findByDish(dishId);
-  }
-
-  @Get('restaurant/:restaurantId')
-  findByRestaurant(@Param('restaurantId') restaurantId: string) {
-    return this.dishRestaurantService.findByRestaurant(restaurantId);
-  }
-
+  @ApiOperation({ summary: 'Suppression d\'une relation entre plat et restaurant' })
   @Delete(':id')
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
@@ -43,6 +39,7 @@ export class DishRestaurantController {
     return this.dishRestaurantService.remove(id);
   }
 
+  @ApiOperation({ summary: 'Suppression d\'une relation entre plat et restaurant' })
   @Delete('dish/:dishId/restaurant/:restaurantId')
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)

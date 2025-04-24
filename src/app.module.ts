@@ -10,7 +10,7 @@ import { MenuModule } from 'src/modules/menu/menu.module';
 import { SpecialOfferModule } from 'src/modules/special-offer/special-offer.module';
 import { CustomerModule } from 'src/modules/customer/customer.module';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
-import { OrdersModule } from 'src/modules/orders/orders.module';
+import { OrderModule } from 'src/modules/order/order.module';
 import { NotificationsModule } from 'src/modules/notifications/notifications.module';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { OtpModule } from 'src/otp/otp.module';
@@ -30,7 +30,7 @@ import { OtpModule } from 'src/otp/otp.module';
     SpecialOfferModule,
     CustomerModule,
     PaiementsModule,
-    OrdersModule,
+    OrderModule,
     NotificationsModule,
   ],
 })

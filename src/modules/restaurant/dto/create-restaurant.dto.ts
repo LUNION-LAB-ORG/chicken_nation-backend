@@ -1,5 +1,6 @@
 import { IsEmail, IsNotEmpty, IsOptional, IsString, IsNumber } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 
 export class CreateRestaurantDto {
     @ApiProperty({ description: 'Restaurant name' })
@@ -25,11 +26,13 @@ export class CreateRestaurantDto {
     @ApiPropertyOptional({ description: 'Restaurant latitude' })
     @IsOptional()
     @IsNumber()
+    @Transform(({ value }) => Number(value))
     latitude?: number;
 
     @ApiPropertyOptional({ description: 'Restaurant longitude' })
     @IsOptional()
     @IsNumber()
+    @Transform(({ value }) => Number(value))
     longitude?: number;
 
     @ApiPropertyOptional({ description: 'Restaurant phone', example: '+225070707070' })

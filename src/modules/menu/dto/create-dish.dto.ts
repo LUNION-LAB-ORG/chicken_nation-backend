@@ -26,12 +26,6 @@ export class CreateDishDto {
     @IsString()
     image?: string;
 
-    @ApiPropertyOptional({ description: 'Disponibilité du plat' })
-    @IsOptional()
-    @IsBoolean()
-    @Transform(({ value }) => Boolean(value))
-    available?: boolean = true;
-
     @ApiPropertyOptional({ description: 'Promotion du plat' })
     @IsOptional()
     @IsBoolean()
@@ -51,11 +45,11 @@ export class CreateDishDto {
 
     @ApiPropertyOptional({ description: 'ID des restaurants', example: ['123', '456'] })
     @IsOptional()
-    @IsUUID('4', { each: true })
+    @IsUUID(undefined, { each: true })
     restaurant_ids?: string[];
 
     @ApiPropertyOptional({ description: 'ID des suppléments', example: ['123', '456'] })
     @IsOptional()
-    @IsUUID('4', { each: true })
+    @IsUUID(undefined, { each: true })
     supplement_ids?: string[];
 }

@@ -25,17 +25,6 @@ export class DishSupplementService {
     });
   }
 
-  async findByDish(dishId: string) {
-    return this.prisma.dishSupplement.findMany({
-      where: {
-        dish_id: dishId,
-      },
-      include: {
-        supplement: true,
-      },
-    });
-  }
-
   async remove(id: string) {
     const dishSupplement = await this.prisma.dishSupplement.findUnique({
       where: { id },

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, UseInterceptors} from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, UseInterceptors } from '@nestjs/common';
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
 import { CreateRestaurantDto } from 'src/modules/restaurant/dto/create-restaurant.dto';
 import { UpdateRestaurantDto } from 'src/modules/restaurant/dto/update-restaurant.dto';
@@ -12,11 +12,13 @@ import { UserTypes } from 'src/common/decorators/user-types.decorator';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { UploadedFile } from '@nestjs/common';
+import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
 
 @ApiTags('Restaurants')
+@ApiBearerAuth()
 @Controller('restaurants')
 export class RestaurantController {
-  constructor(private readonly restaurantService: RestaurantService) { }
+  constructor(private readonly restaurantService: RestaurantService, private readonly dishRestaurantService: DishRestaurantService) { }
 
   @ApiOperation({ summary: 'Création d\'un restaurant avec son gestionnaire' })
   @ApiBearerAuth()
@@ -97,5 +99,14 @@ export class RestaurantController {
   @Get(':id/manager')
   async getRestaurantManager(@Param('id') id: string) {
     return this.restaurantService.getRestaurantManager(id);
+  }
+
+
+
+  @ApiOperation({ summary: 'Récupération de tous les plats liés à un restaurant' })
+  @UseGuards(JwtAuthGuard)
+  @Get(':restaurantId/dishes')
+  async getAllDishesByRestaurant(@Param('restaurantId') restaurantId: string) {
+    return this.dishRestaurantService.findByRestaurant(restaurantId);
   }
 }
