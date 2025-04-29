@@ -25,11 +25,11 @@ async function bootstrap() {
   app.use(compression());
 
   // CORS
-  // app.enableCors({
-  //   origin: process.env.CORS_ORIGIN || '*',
-  //   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-  //   credentials: true,
-  // });
+  app.enableCors({
+    origin: ['https://chicken-nation-dashboard.vercel.app', 'http://localhost:3020', 'http://localhost:3001', 'http://localhost:3000'],
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
+  });
 
   // API prefix
   app.setGlobalPrefix('api/v1');

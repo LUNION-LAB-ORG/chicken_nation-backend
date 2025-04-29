@@ -75,6 +75,12 @@ enum UserRole {
   MANAGER
 }
 
+enum TypeTable {
+  TABLE_SQUARE
+  TABLE_RECTANGLE
+  TABLE_ROUND
+}
+
 model Address {
   id String @id @default(uuid()) @db.Uuid
 
@@ -239,6 +245,8 @@ model Order {
   customer_id             String?     @db.Uuid
   delivery_fee            Float
   type                    OrderType
+  table_type              TypeTable?
+  places                  Int?
   address_id              String      @db.Uuid
   code_promo              String?     @db.VarChar
   tax                     Float
