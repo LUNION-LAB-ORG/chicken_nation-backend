@@ -35,10 +35,8 @@ export class OrderHelper {
             const customer = await this.prisma.customer.findFirst({
                 where: {
                     id: orderData.customer_id,
-                    OR: [{ phone: orderData.phone }],
                 },
             });
-
             if (!customer) {
                 throw new BadRequestException('Client introuvable');
             }
@@ -154,9 +152,10 @@ export class OrderHelper {
 
             if (item.supplements_ids && item.supplements_ids.length > 0) {
                 let supplement_items = item.supplements_ids;
-                if(typeof item.supplements_ids === 'string') {
+                if (typeof item.supplements_ids === 'string') {
                     supplement_items = [item.supplements_ids];
                 }
+               
                 const supplements = await this.prisma.supplement.findMany({
                     where: {
                         id: { in: supplement_items },
@@ -168,7 +167,7 @@ export class OrderHelper {
                         }
                     },
                 });
-
+                
                 if (supplements.length !== item.supplements_ids.length) {
                     throw new BadRequestException('Un ou plusieurs suppléments sont invalides pour ce plat');
                 }

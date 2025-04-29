@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, Req, HttpStatus, HttpCode } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, Req, HttpStatus, HttpCode, UseGuards } from '@nestjs/common';
 import { OrderService } from 'src/modules/order/services/order.service';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
@@ -6,6 +6,7 @@ import { QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
 import { OrderStatus } from '@prisma/client';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
 import { Request } from 'express';
+import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 
 @ApiTags('Commandes')
 @Controller('orders')
@@ -16,6 +17,7 @@ export class OrderController {
   @ApiOperation({ summary: 'Créer une nouvelle commande' })
   @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
   @ApiBody({ type: CreateOrderDto })
+  @UseGuards(JwtAuthGuard)
   async create(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
     return this.orderService.create(req, createOrderDto);
   }
