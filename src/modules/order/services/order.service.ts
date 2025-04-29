@@ -33,7 +33,7 @@ export class OrderService {
     const { items, ...orderData } = createOrderDto;
 
     // Identifier le client ou créer des données anonymes
-    const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: createOrderDto.customer_id || customer.id });
+    const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: createOrderDto.customer_id ?? customer.id });
 
     // Récupérer le restaurant le plus proche
     const restaurant = await this.orderHelper.getClosestRestaurant(createOrderDto);
