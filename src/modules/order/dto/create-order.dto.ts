@@ -1,14 +1,25 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsOptional, IsPhoneNumber, IsString, IsUUID, ValidateNested } from "class-validator";
+import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsPhoneNumber, IsString, IsUUID, ValidateNested } from "class-validator";
 import { Transform, Type } from "class-transformer";
 import { CreateOrderItemDto } from "src/modules/order/dto/create-order-item.dto";
 import { OrderType } from "src/modules/order/enums/order-type.enum";
+import { TypeTable } from "src/modules/order/enums/order-type-table.enum";
 import { parse, isValid } from 'date-fns';
 
 export class CreateOrderDto {
     @ApiProperty({ description: "Type de commande", enum: OrderType })
     @IsEnum(OrderType)
     type: OrderType;
+
+    @ApiProperty({ description: "Type de table", enum: TypeTable })
+    @IsEnum(TypeTable)
+    @IsOptional()
+    table_type?: TypeTable;
+
+    @ApiPropertyOptional({ description: "Nombre de places" })
+    @IsOptional()
+    @IsInt()
+    places?: number;
 
     @ApiProperty({ description: "ID de l'adresse de livraison/retrait" })
     @IsUUID()
