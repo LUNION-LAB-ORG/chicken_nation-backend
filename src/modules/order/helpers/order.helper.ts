@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
-import { OrderStatus, OrderType, PaiementStatus, EntityStatus, Customer, Dish, Address, SupplementCategory } from '@prisma/client';
+import { OrderStatus, OrderType, PaiementStatus, EntityStatus, Customer, Dish, Address, SupplementCategory, Order } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Request } from 'express';
@@ -25,8 +25,8 @@ export class OrderHelper {
         // private loyaltyService: LoyaltyService,
         // private deliveryService: DeliveryService,
     ) {
-        this.taxRate = this.configService.get<number>('ORDER_TAX_RATE', 0.005);
-        this.baseDeliveryFee = this.configService.get<number>('BASE_DELIVERY_FEE', 1000);
+        this.taxRate = Number(this.configService.get<number>('ORDER_TAX_RATE', 0.005));
+        this.baseDeliveryFee = Number(this.configService.get<number>('BASE_DELIVERY_FEE', 1000));
     }
 
     async resolveCustomerData(orderData: CreateOrderDto) {
@@ -155,7 +155,7 @@ export class OrderHelper {
                 if (typeof item.supplements_ids === 'string') {
                     supplement_items = [item.supplements_ids];
                 }
-               
+
                 const supplements = await this.prisma.supplement.findMany({
                     where: {
                         id: { in: supplement_items },
@@ -167,7 +167,7 @@ export class OrderHelper {
                         }
                     },
                 });
-                
+
                 if (supplements.length !== item.supplements_ids.length) {
                     throw new BadRequestException('Un ou plusieurs suppléments sont invalides pour ce plat');
                 }
@@ -213,6 +213,7 @@ export class OrderHelper {
             return 0;
         }
     }
+
     async calculateDeliveryFee(orderType: OrderType, address: Address): Promise<number> {
         if (orderType !== OrderType.DELIVERY) {
             return 0; // Pas de frais de livraison pour les commandes sur place ou à emporter
@@ -299,7 +300,7 @@ export class OrderHelper {
         }
     }
 
-    async handleStatusSpecificActions(orderId: string, oldStatus: OrderStatus, newStatus: OrderStatus, meta?: any) {
+    async handleStatusSpecificActions(orderId: string, order: Order, newStatus: OrderStatus, meta?: any) {
         switch (newStatus) {
             case OrderStatus.ACCEPTED:
                 // Planifier la préparation
