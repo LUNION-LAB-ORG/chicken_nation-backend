@@ -92,7 +92,28 @@ export class OrderService {
             },
           },
           address: true,
-          customer: true,
+          customer: {
+            select: {
+              id: true,
+              first_name: true,
+              last_name: true,
+              phone: true,
+              email: true,
+              image: true,
+            },
+          },
+          restaurant: {
+            select: {
+              id: true,
+              name: true,
+              image: true,
+              address: true,
+              phone: true,
+              email: true,
+              latitude: true,
+              longitude: true,
+            },
+          },
         },
       });
 
@@ -126,7 +147,7 @@ export class OrderService {
     this.orderHelper.validateStatusTransition(order.status, status);
 
     // Actions spécifiques selon le changement d'état
-    await this.orderHelper.handleStatusSpecificActions(id, order.status, status, meta);
+    await this.orderHelper.handleStatusSpecificActions(id, order, status, meta);
 
     // Mettre à jour le statut
     const updatedOrder = await this.prisma.order.update({
@@ -144,7 +165,26 @@ export class OrderService {
         },
         paiements: true,
         address: true,
-        customer: true,
+        customer: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            phone: true,
+            email: true,
+            image: true,
+          },
+        },
+        restaurant: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+            address: true,
+            phone: true,
+            email: true,
+          },
+        },
       },
     });
 
@@ -250,7 +290,28 @@ export class OrderService {
           },
           paiements: true,
           address: true,
-          customer: true,
+          customer: {
+            select: {
+              id: true,
+              first_name: true,
+              last_name: true,
+              phone: true,
+              email: true,
+              image: true,
+            },
+          },
+          restaurant: {
+            select: {
+              id: true,
+              name: true,
+              image: true,
+              address: true,
+              phone: true,
+              email: true,
+              latitude: true,
+              longitude: true,
+            },
+          },
         },
         skip: (page - 1) * limit,
         take: limit,

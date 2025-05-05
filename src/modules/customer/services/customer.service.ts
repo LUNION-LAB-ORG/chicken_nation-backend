@@ -71,7 +71,7 @@ export class CustomerService {
         created_at: 'desc',
       },
       take: limit ?? 10,
-      skip: (page ?? 1 - 1) * (limit ?? 10),
+      skip: (page ? page - 1 : 0) * (limit ?? 10),
     });
   }
 
