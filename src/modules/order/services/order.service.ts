@@ -332,6 +332,105 @@ export class OrderService {
       }
     };
   }
+  /**
+   * Recherche et filtre les commandes d'un client
+   */
+  async findAllByCustomer(req: Request, filters: QueryOrderDto) {
+    const {
+      status,
+      type,
+      restaurantId,
+      startDate,
+      endDate,
+      minAmount,
+      maxAmount,
+      page = 1,
+      limit = 10,
+      sortBy = 'created_at',
+      sortOrder = 'desc'
+    } = filters;
+    const customerId = (req.user as Customer).id;
+    const where = {
+      entity_status: { not: EntityStatus.DELETED },
+      ...(status && { status }),
+      ...(type && { type }),
+      ...(customerId && { customer_id: customerId }),
+      ...(startDate && endDate && {
+        created_at: {
+          gte: new Date(startDate),
+          lte: new Date(endDate)
+        }
+      }),
+      ...(minAmount && { amount: { gte: minAmount } }),
+      ...(maxAmount && { amount: { lte: maxAmount } }),
+      ...(restaurantId && {
+        order_items: {
+          some: {
+            dish: {
+              dish_restaurants: {
+                some: {
+                  restaurant_id: restaurantId
+                }
+              }
+            }
+          }
+        }
+      })
+    };
+
+    const [orders, total] = await Promise.all([
+      this.prisma.order.findMany({
+        where,
+        include: {
+          order_items: {
+            include: {
+              dish: true,
+            },
+          },
+          paiements: true,
+          address: true,
+          customer: {
+            select: {
+              id: true,
+              first_name: true,
+              last_name: true,
+              phone: true,
+              email: true,
+              image: true,
+            },
+          },
+          restaurant: {
+            select: {
+              id: true,
+              name: true,
+              image: true,
+              address: true,
+              phone: true,
+              email: true,
+              latitude: true,
+              longitude: true,
+            },
+          },
+        },
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: {
+          [sortBy]: sortOrder,
+        },
+      }),
+      this.prisma.order.count({ where })
+    ]);
+
+    return {
+      data: orders,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      }
+    };
+  }
 
   /**
    * Met à jour une commande

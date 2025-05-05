@@ -29,6 +29,14 @@ export class OrderController {
     return this.orderService.findAll(queryOrderDto);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Get("/customer")
+  @ApiOperation({ summary: 'Rechercher toutes les commandes avec options de filtrage d\'un client' })
+  @ApiResponse({ status: 200, description: 'Retourne les commandes avec métadonnées de pagination' })
+  findAllByCustomer(@Req() req: Request, @Query() queryOrderDto: QueryOrderDto) {
+    return this.orderService.findAllByCustomer(req, queryOrderDto);
+  }
+
   @Get('statistics')
   @ApiOperation({ summary: 'Obtenir les statistiques des commandes pour le tableau de bord' })
   @ApiResponse({ status: 200, description: 'Retourne les statistiques des commandes' })
