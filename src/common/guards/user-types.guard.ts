@@ -21,14 +21,8 @@ export class UserTypesGuard implements CanActivate {
     if (!user) {
       return false;
     }
-    if (user.type) {
-      return requiredTypes.some(
-        type => user.type === type
-      );
-    }
-    if (requiredTypes.includes(UserType.CUSTOMER)) {
-      return true;
-    }
-    return false;
+    return requiredTypes.some(
+      type => user.type === type
+    );
   }
 }

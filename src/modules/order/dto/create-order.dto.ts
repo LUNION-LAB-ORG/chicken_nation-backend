@@ -21,9 +21,9 @@ export class CreateOrderDto {
     @IsInt()
     places?: number;
 
-    @ApiProperty({ description: "ID de l'adresse de livraison/retrait" })
-    @IsUUID()
-    address_id: string;
+    @ApiProperty({ description: "l'adresse de livraison/retrait" })
+    @IsString()
+    @Transform(({ value }) => typeof value !== "string" ? (typeof value == "object" ? JSON.stringify(value) : String(value)) : value) address: string;
 
     @ApiPropertyOptional({ description: "Code promo" })
     @IsOptional()
@@ -86,4 +86,10 @@ export class CreateOrderDto {
     @IsOptional()
     @IsUUID()
     customer_id?: string;
+
+
+    @ApiPropertyOptional({ description: "ID du restaurant" })
+    @IsOptional()
+    @IsUUID()
+    restaurant_id?: string;
 }

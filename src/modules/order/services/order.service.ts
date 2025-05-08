@@ -42,7 +42,7 @@ export class OrderService {
     const dishesWithDetails = await this.orderHelper.getDishesWithDetails(items.map(item => item.dish_id));
 
     // Vérifier l'adresse
-    const address = await this.orderHelper.validateAddress(orderData.address_id);
+    const address = await this.orderHelper.validateAddress(orderData.address??"");
 
     // Vérifier et appliquer le code promo s'il existe
     const promoDiscount = await this.orderHelper.applyPromoCode(orderData.code_promo);
@@ -77,7 +77,7 @@ export class OrderService {
           net_amount: Number(netAmount),
           amount: Number(totalAmount),
           date: orderData.date || new Date(),
-          time: orderData.time || new Date(),
+          time: orderData.time || "10:00",
           estimated_delivery_time: this.orderHelper.calculateEstimatedDeliveryTime(orderData.type),
           status: OrderStatus.PENDING,
           order_items: {
@@ -91,7 +91,6 @@ export class OrderService {
               dish: true,
             },
           },
-          address: true,
           customer: {
             select: {
               id: true,
@@ -164,7 +163,6 @@ export class OrderService {
           },
         },
         paiements: true,
-        address: true,
         customer: {
           select: {
             id: true,
@@ -210,7 +208,6 @@ export class OrderService {
           },
         },
         paiements: true,
-        address: true,
         customer: true,
         restaurant: {
           select: {
@@ -289,7 +286,6 @@ export class OrderService {
             },
           },
           paiements: true,
-          address: true,
           customer: {
             select: {
               id: true,
@@ -388,7 +384,6 @@ export class OrderService {
             },
           },
           paiements: true,
-          address: true,
           customer: {
             select: {
               id: true,
@@ -457,7 +452,6 @@ export class OrderService {
           },
         },
         paiements: true,
-        address: true,
         customer: true,
       },
     });

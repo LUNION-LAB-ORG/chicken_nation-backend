@@ -52,8 +52,29 @@ export class OrderHelper {
     }
 
     async getClosestRestaurant(orderData: CreateOrderDto) {
+        //  Pour la réservation de table ou à emporter, il faut impérativement fournir un restaurant
+        if (orderData.type === OrderType.TABLE || orderData.type === OrderType.PICKUP) {
+            // Renseigner la forme et le nombre de place pour les réservations de table
+            if (orderData.type == OrderType.TABLE && (!orderData.table_type || !orderData.places)) {
+                throw new BadRequestException('Le type de table et le nombre de place doivent être renseignés');
+            }
+
+            if (!orderData.restaurant_id) {
+                throw new BadRequestException('Aucun restaurant sélectionné');
+            }
+            const restaurant = await this.prisma.restaurant.findFirst({
+                where: {
+                    id: orderData.restaurant_id,
+                },
+            });
+            if (!restaurant) {
+                throw new BadRequestException('Restaurant introuvable');
+            }
+            return restaurant;
+        }
+
         // 1. Récupération de l'adresse
-        const address = await this.validateAddress(orderData.address_id);
+        const address = await this.validateAddress(orderData.address ?? "");
 
         // 2. Récupération des restaurants actifs
         const restaurants = await this.prisma.restaurant.findMany({
@@ -114,15 +135,11 @@ export class OrderHelper {
         return dishes;
     }
 
-    async validateAddress(addressId: string) {
-        const address = await this.prisma.address.findFirst({
-            where: { id: addressId, entity_status: EntityStatus.ACTIVE },
-        });
-
+    async validateAddress(address: string) {
         if (!address) {
             throw new BadRequestException('Adresse de livraison invalide ou introuvable');
         }
-        return address;
+        return JSON.parse(address) as Address;
     }
 
     async applyPromoCode(promoCode?: string): Promise<number> {

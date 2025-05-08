@@ -1,7 +1,6 @@
 import { Controller, Get, Post, Body, Req, UseGuards, Query } from '@nestjs/common';
 import { AuthService } from 'src/modules/auth/services/auth.service';
 import { LoginUserDto } from 'src/modules/auth/dto/login-user.dto';
-import { UserTypesGuard } from 'src/common/guards/user-types.guard';
 import {
   ApiBody,
   ApiOkResponse,
@@ -11,7 +10,6 @@ import {
 import { Request } from 'express';
 import { JwtRefreshAuthGuard } from '../guards/jwt-refresh-auth.guard';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
-import { UserType } from '@prisma/client';
 
 @Controller('auth')
 export class AuthController {
@@ -57,7 +55,7 @@ export class AuthController {
   }
 
   // REFRESH TOKEN
-  @ApiOperation({ summary: 'Rafraichissement du token' })
+  @ApiOperation({ summary: 'Rafraichissement du token utilisateur' })
   @ApiOkResponse({
     type: String,
     description: 'Token envoyé',
@@ -66,9 +64,8 @@ export class AuthController {
     description: 'Utilisateur non trouvé',
   })
   @UseGuards(JwtRefreshAuthGuard)
-  @UseGuards(UserTypesGuard)
   @Get('refresh-token')
-  async refreshToken(@Req() req: Request, @Query('type') type: 'USER' | 'CUSTOMER') {
-    return this.authService.refreshToken(req, type);
+  async refreshToken(@Req() req: Request) {
+    return this.authService.refreshToken(req);
   }
 }

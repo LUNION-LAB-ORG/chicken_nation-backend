@@ -7,6 +7,7 @@ import { OrderStatus } from '@prisma/client';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
 import { Request } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 
 @ApiTags('Commandes')
 @Controller('orders')
@@ -17,54 +18,62 @@ export class OrderController {
   @ApiOperation({ summary: 'Créer une nouvelle commande' })
   @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
   @ApiBody({ type: CreateOrderDto })
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtCustomerAuthGuard)
   async create(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
     return this.orderService.create(req, createOrderDto);
   }
 
-  @Get()
+
   @ApiOperation({ summary: 'Rechercher toutes les commandes avec options de filtrage' })
   @ApiResponse({ status: 200, description: 'Retourne les commandes avec métadonnées de pagination' })
+  @UseGuards(JwtAuthGuard)
+  @Get()
   findAll(@Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.findAll(queryOrderDto);
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Get("/customer")
+
   @ApiOperation({ summary: 'Rechercher toutes les commandes avec options de filtrage d\'un client' })
   @ApiResponse({ status: 200, description: 'Retourne les commandes avec métadonnées de pagination' })
+  @Get("/customer")
+  @UseGuards(JwtAuthGuard, JwtCustomerAuthGuard)
   findAllByCustomer(@Req() req: Request, @Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.findAllByCustomer(req, queryOrderDto);
   }
 
-  @Get('statistics')
+
   @ApiOperation({ summary: 'Obtenir les statistiques des commandes pour le tableau de bord' })
   @ApiResponse({ status: 200, description: 'Retourne les statistiques des commandes' })
+  @UseGuards(JwtAuthGuard)
+  @Get('statistics')
   getOrderStatistics(@Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.getOrderStatistics(queryOrderDto);
   }
 
-  @Get(':id')
   @ApiOperation({ summary: 'Trouver une commande par son ID' })
   @ApiResponse({ status: 200, description: 'Retourne la commande' })
   @ApiResponse({ status: 404, description: 'Commande introuvable' })
   @ApiParam({ name: 'id', description: 'ID de la commande' })
+  @UseGuards(JwtAuthGuard, JwtCustomerAuthGuard)
+  @Get(':id')
   findOne(@Param('id') id: string) {
     return this.orderService.findById(id);
   }
 
-  @Patch(':id')
+
   @ApiOperation({ summary: 'Mettre à jour une commande' })
   @ApiResponse({ status: 200, description: 'Commande mise à jour avec succès' })
   @ApiResponse({ status: 404, description: 'Commande introuvable' })
   @ApiResponse({ status: 409, description: 'Seules les commandes en attente peuvent être modifiées' })
   @ApiParam({ name: 'id', description: 'ID de la commande' })
   @ApiBody({ type: UpdateOrderDto })
+  @UseGuards(JwtAuthGuard, JwtCustomerAuthGuard)
+  @Patch(':id')
   update(@Param('id') id: string, @Body() updateOrderDto: UpdateOrderDto) {
     return this.orderService.update(id, updateOrderDto);
   }
 
-  @Patch(':id/status')
+
   @ApiOperation({ summary: 'Mettre à jour le statut d\'une commande' })
   @ApiResponse({ status: 200, description: 'Statut de la commande mis à jour avec succès' })
   @ApiResponse({ status: 404, description: 'Commande introuvable' })
@@ -88,6 +97,8 @@ export class OrderController {
       required: ['status']
     }
   })
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,
     @Body() body: { status: OrderStatus; meta?: any }
@@ -95,13 +106,14 @@ export class OrderController {
     return this.orderService.updateStatus(id, body.status, body.meta);
   }
 
-  @Delete(':id')
   @ApiOperation({ summary: 'Supprimer une commande (suppression douce)' })
   @ApiResponse({ status: 200, description: 'Commande supprimée avec succès' })
   @ApiResponse({ status: 404, description: 'Commande introuvable' })
   @ApiResponse({ status: 409, description: 'Seules les commandes en attente ou annulées peuvent être supprimées' })
   @ApiParam({ name: 'id', description: 'ID de la commande' })
   @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id')
   remove(@Param('id') id: string) {
     return this.orderService.remove(id);
   }

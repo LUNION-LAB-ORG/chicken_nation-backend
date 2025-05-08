@@ -6,25 +6,25 @@ export class CreateAddressDto {
   @ApiProperty({ description: 'Address title' })
   @IsNotEmpty()
   @IsString()
-  @Transform(({ value }) => value.toString())
+  @Transform(({ value }) => String(value).trim())
   title: string;
 
   @ApiProperty({ description: 'Address' })
   @IsNotEmpty()
   @IsString()
-  @Transform(({ value }) => value.toString())
+  @Transform(({ value }) => String(value).trim())
   address: string;
 
   @ApiPropertyOptional({ description: 'Street' })
   @IsOptional()
   @IsString()
-  @Transform(({ value }) => value.toString())
+  @Transform(({ value }) => String(value).trim())
   street?: string;
 
   @ApiPropertyOptional({ description: 'City' })
   @IsOptional()
   @IsString()
-  @Transform(({ value }) => value.toString())
+  @Transform(({ value }) => String(value).trim())
   city?: string;
 
   @ApiProperty({ description: 'Longitude' })

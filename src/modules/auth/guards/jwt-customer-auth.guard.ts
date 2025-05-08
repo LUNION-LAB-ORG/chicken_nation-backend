@@ -2,14 +2,15 @@ import { Injectable } from '@nestjs/common/decorators';
 import { AuthGuard } from '@nestjs/passport';
 import { ExecutionContext } from '@nestjs/common';
 import { UnauthorizedException } from '@nestjs/common';
-import { EntityStatus, User } from '@prisma/client';
+import { Customer, EntityStatus } from '@prisma/client';
 
 @Injectable()
-export class JwtRefreshAuthGuard extends AuthGuard('jwt-refresh') {
+export class JwtCustomerAuthGuard extends AuthGuard('jwt-customer') {
   constructor() {
     super();
   }
 
+  // Gestion de l'authentification
   async canActivate(context: ExecutionContext) {
     const result = (await super.canActivate(
       context,
@@ -17,14 +18,14 @@ export class JwtRefreshAuthGuard extends AuthGuard('jwt-refresh') {
 
     // Si l'utilisateur est authentifié
     const request = context.switchToHttp().getRequest();
-    const user = request.user as User;
+    const customer = request.user as Customer;
 
     // Si l'utilisateur est bloqué
-    if (user.entity_status === EntityStatus.BLOCKED) {
+    if (customer.entity_status === EntityStatus.BLOCKED) {
       throw new UnauthorizedException('Utilisateur bloqué');
     }
     // Si l'utilisateur est supprimé
-    if (user.entity_status === EntityStatus.DELETED) {
+    if (customer.entity_status === EntityStatus.DELETED) {
       throw new UnauthorizedException('Utilisateur supprimé');
     }
     return result;

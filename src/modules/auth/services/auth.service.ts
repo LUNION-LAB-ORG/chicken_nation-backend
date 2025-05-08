@@ -40,8 +40,8 @@ export class AuthService {
     }
 
     // Génération du token et du refreshToken
-    const token = await this.jsonWebTokenService.generateToken(user.id, 'USER');
-    const refreshToken = await this.jsonWebTokenService.generateRefreshToken(user.id, 'USER');
+    const token = await this.jsonWebTokenService.generateToken(user.id);
+    const refreshToken = await this.jsonWebTokenService.generateRefreshToken(user.id);
 
     // Renvoi de l'utilisateur, le token et le refreshToken
     return { ...rest, token, refreshToken };
@@ -107,17 +107,16 @@ export class AuthService {
     const { entity_status, ...rest } = customer;
 
     // Génération du token et du refreshToken
-    const token = await this.jsonWebTokenService.generateToken(customer.id, 'CUSTOMER');
-    const refreshToken = await this.jsonWebTokenService.generateRefreshToken(customer.id, 'CUSTOMER');
+    const token = await this.jsonWebTokenService.generateCustomerToken(customer.id);
 
     // Renvoi de l'utilisateur, le token et le refreshToken
-    return { ...rest, token, refreshToken };
+    return { ...rest, token };
   }
 
   // REFRESH TOKEN
-  async refreshToken(req: Request, type: 'USER' | 'CUSTOMER') {
+  async refreshToken(req: Request) {
     const user = req.user as User;
-    const token = await this.jsonWebTokenService.generateToken(user.id, type);
+    const token = await this.jsonWebTokenService.generateToken(user.id);
 
     return { token };
   }

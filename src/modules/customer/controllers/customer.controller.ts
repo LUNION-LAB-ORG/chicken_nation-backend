@@ -4,15 +4,14 @@ import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto'
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
 import { Request } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { UserTypesGuard } from 'src/common/guards/user-types.guard';
-import { UserTypes } from 'src/common/decorators/user-types.decorator';
-import { UserRole, UserType } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { CustomerQueryDto } from 'src/modules/customer/dto/customer-query.dto';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 
 @ApiTags('Customers')
 @ApiBearerAuth()
@@ -25,9 +24,7 @@ export class CustomerController {
 
   @ApiOperation({ summary: 'Création d\'un nouveau client' })
   @Post()
-  @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
-  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
+  @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
   create(@Body() createCustomerDto: CreateCustomerDto, @UploadedFile() image: Express.Multer.File) {
     return this.customerService.create({ ...createCustomerDto, image: image?.path });
@@ -35,32 +32,27 @@ export class CustomerController {
 
   @ApiOperation({ summary: 'Récupération de tous les clients' })
   @Get()
-  @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
-  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
+  @UseGuards(JwtAuthGuard)
   findAll(@Query() query: CustomerQueryDto) {
     return this.customerService.findAll(query);
   }
 
   @ApiOperation({ summary: 'Obtenir le détail d un client' })
-  @UseGuards(JwtAuthGuard, UserTypesGuard)
-  @UserTypes(UserType.CUSTOMER)
+  @UseGuards(JwtCustomerAuthGuard)
   @Get('/detail')
   detail(@Req() req: Request) {
     return this.customerService.detail(req);
   }
 
   @ApiOperation({ summary: 'Obtenir un client par ID' })
-  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
-  @UseGuards(JwtAuthGuard, UserTypesGuard)
+  @UseGuards(JwtAuthGuard)
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.customerService.findOne(id);
   }
 
   @ApiOperation({ summary: 'Mettre à jour un client' })
-  @UseGuards(JwtAuthGuard, UserTypesGuard)
-  @UserTypes(UserType.CUSTOMER)
+  @UseGuards(JwtCustomerAuthGuard)
   @Patch()
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
   update(@Req() req: Request, @Body() updateCustomerDto: UpdateCustomerDto, @UploadedFile() image: Express.Multer.File) {
@@ -75,9 +67,8 @@ export class CustomerController {
 
   @ApiOperation({ summary: 'Supprimer un client' })
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
+  @UseGuards(JwtAuthGuard, UserRolesGuard, JwtCustomerAuthGuard)
   @UserRoles(UserRole.ADMIN)
-  @UserTypes(UserType.BACKOFFICE, UserType.CUSTOMER)
   remove(@Param('id') id: string) {
     return this.customerService.remove(id);
   }

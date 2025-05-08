@@ -6,10 +6,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { UnauthorizedException } from '@nestjs/common';
 
 @Injectable()
-export class JwtRefreshStrategy extends PassportStrategy(
-  Strategy,
-  'jwt-refresh',
-) {
+export class JwtCustomerStrategy extends PassportStrategy(Strategy, 'jwt-customer') {
   constructor(
     configService: ConfigService,
     private readonly prisma: PrismaService,
@@ -17,18 +14,19 @@ export class JwtRefreshStrategy extends PassportStrategy(
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('REFRESH_TOKEN_SECRET') ?? '',
+      secretOrKey: configService.get<string>('CUSTOMER_TOKEN_SECRET') ?? '',
     });
   }
   async validate(payload: any) {
     const { sub } = payload;
-    const user = await this.prisma.user.findUnique({
+
+    const customer = await this.prisma.customer.findUnique({
       where: { id: sub },
     });
-    if (!user) {
+    if (!customer) {
       throw new UnauthorizedException('Utilisateur non trouvé');
     }
-    const { password, ...rest } = user;
+    const { ...rest } = customer;
     return rest;
   }
 }

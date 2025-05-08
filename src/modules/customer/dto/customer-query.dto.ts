@@ -21,12 +21,12 @@ export class CustomerQueryDto {
     })
     @IsEnum(EntityStatus)
     @IsOptional()
-    @Transform(({ value }) => value.toString().toUpperCase().trim() as EntityStatus)
+    @Transform(({ value }) => String(value).toUpperCase().trim() as EntityStatus)
     status?: EntityStatus = EntityStatus.ACTIVE;
 
     @ApiPropertyOptional({ description: 'Termes de recherche (nom, email, téléphone)' })
     @IsString()
     @IsOptional()
-    @Transform(({ value }) => value.toString())
+    @Transform(({ value }) => String(value).trim())
     search?: string;
 }

@@ -29,7 +29,7 @@ export class CreateDishDto {
     @ApiPropertyOptional({ description: 'Promotion du plat' })
     @IsOptional()
     @IsBoolean()
-    @Transform(({ value }) => value.toISOString().trim() == "true" ? true : false)
+    @Transform(({ value }) => String(value).trim() == "true" ? true : false)
     is_promotion?: boolean = false;
 
     @ApiPropertyOptional({ description: 'Prix de promotion du plat' })

@@ -8,6 +8,8 @@ export class JsonWebTokenService {
   private readonly refreshSecret: string;
   private readonly tokenExpiration: string;
   private readonly refreshExpiration: string;
+  private readonly customerSecret: string;
+  private readonly customerExpiration: string;
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
@@ -16,11 +18,14 @@ export class JsonWebTokenService {
     this.refreshSecret = this.configService.get<string>('REFRESH_TOKEN_SECRET') ?? "";
     this.tokenExpiration = this.configService.get<string>('TOKEN_EXPIRATION') ?? "";
     this.refreshExpiration = this.configService.get<string>('REFRESH_TOKEN_EXPIRATION') ?? "";
+    this.customerSecret = this.configService.get<string>('CUSTOMER_TOKEN_SECRET') ?? "";
+    this.customerExpiration = this.configService.get<string>('CUSTOMER_TOKEN_EXPIRATION') ?? "";
+
   }
 
   // GENERATE TOKEN
-  async generateToken(userId: string, type: 'USER' | 'CUSTOMER') {
-    const payload = { sub: userId, type };
+  async generateToken(userId: string) {
+    const payload = { sub: userId };
     const token = await this.jwtService.signAsync(payload, {
       secret: this.secret,
       expiresIn: this.tokenExpiration,
@@ -30,13 +35,25 @@ export class JsonWebTokenService {
   }
 
   // GENERATE REFRESH TOKEN
-  async generateRefreshToken(userId: string, type: 'USER' | 'CUSTOMER') {
-    const payload = { sub: userId, type };
+  async generateRefreshToken(userId: string) {
+    const payload = { sub: userId };
     const refreshToken = await this.jwtService.signAsync(payload, {
       secret: this.refreshSecret,
       expiresIn: this.refreshExpiration,
     });
 
     return refreshToken;
+  }
+
+
+  // GENERATE CUSTOMER TOKEN
+  async generateCustomerToken(userId: string) {
+    const payload = { sub: userId };
+    const token = await this.jwtService.signAsync(payload, {
+      secret: this.customerSecret,
+      expiresIn: this.customerExpiration,
+    });
+
+    return token;
   }
 }

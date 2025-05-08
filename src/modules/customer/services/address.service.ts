@@ -74,24 +74,6 @@ export class AddressService {
     // Vérifier si l'adresse existe
     await this.findOne(id);
 
-    // Vérifier si l'adresse est utilisée dans des commandes
-    const ordersWithAddress = await this.prisma.order.findMany({
-      where: {
-        address_id: id,
-        entity_status: EntityStatus.ACTIVE,
-      },
-    });
-
-    if (ordersWithAddress.length > 0) {
-      // Si des commandes utilisent cette adresse, effectuer un soft delete
-      return this.prisma.address.update({
-        where: { id },
-        data: {
-          entity_status: EntityStatus.DELETED,
-        },
-      });
-    }
-
     // Sinon, suppression définitive
     return this.prisma.address.delete({
       where: { id },

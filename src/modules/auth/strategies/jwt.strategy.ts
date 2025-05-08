@@ -18,30 +18,16 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     });
   }
   async validate(payload: any) {
-    const { sub, type } = payload;
+    const { sub } = payload;
 
-    if (type === 'USER') {
-      const user = await this.prisma.user.findUnique({
-        where: { id: sub },
-      });
-      if (!user) {
-        throw new UnauthorizedException('Utilisateur non trouvé');
-      }
-      const { password, ...rest } = user;
-      return rest;
+    const user = await this.prisma.user.findUnique({
+      where: { id: sub },
+    });
+    if (!user) {
+      throw new UnauthorizedException('Utilisateur non trouvé');
     }
+    const { password, ...rest } = user;
+    return rest;
 
-    if (type === 'CUSTOMER') {
-      const customer = await this.prisma.customer.findUnique({
-        where: { id: sub },
-      });
-      if (!customer) {
-        throw new UnauthorizedException('Utilisateur non trouvé');
-      }
-      const { ...rest } = customer;
-      return rest;
-    }
-
-    throw new UnauthorizedException('Type d\'utilisateur non reconnu');
   }
 }

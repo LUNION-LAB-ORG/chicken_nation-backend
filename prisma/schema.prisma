@@ -67,7 +67,6 @@ enum SupplementCategory {
 enum UserType {
   BACKOFFICE
   RESTAURANT
-  CUSTOMER
 }
 
 enum UserRole {
@@ -92,7 +91,6 @@ model Address {
   latitude    Float
   customer_id String?   @db.Uuid
   customer    Customer? @relation(fields: [customer_id], references: [id], onDelete: Cascade)
-  orders      Order[]
 
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -247,14 +245,14 @@ model Order {
   type                    OrderType
   table_type              TypeTable?
   places                  Int?
-  address_id              String      @db.Uuid
+  address                 Json      @db.Json // { title: string, address: string, street?: string, city?: string, longitude: number, latitude: number, note: string }
   code_promo              String?     @db.VarChar
   tax                     Float
   amount                  Float
   net_amount              Float
   discount                Float       @default(0)
   date                    DateTime?   @db.Date
-  time                    DateTime?   @db.Time(6)
+  time                    String?   @db.VarChar
   estimated_delivery_time DateTime?
   fullname                String?     @db.VarChar
   phone                   String?     @db.VarChar
@@ -264,7 +262,6 @@ model Order {
   restaurant_id           String?     @db.Uuid
   order_items             OrderItem[]
   paiements               Paiement[]
-  address                 Address     @relation(fields: [address_id], references: [id], onDelete: Cascade)
   customer                Customer?   @relation(fields: [customer_id], references: [id])
   restaurant              Restaurant? @relation(fields: [restaurant_id], references: [id])
 
@@ -272,7 +269,7 @@ model Order {
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 
-  @@index([address_id])
+  @@index([reference, status, entity_status, customer_id])
 }
 
 model OtpToken {
