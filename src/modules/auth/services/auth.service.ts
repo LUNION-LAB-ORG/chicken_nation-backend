@@ -8,6 +8,7 @@ import { LoginUserDto } from 'src/modules/auth/dto/login-user.dto';
 import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { OtpService } from 'src/otp/otp.service';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
+import { TwilioService } from 'src/twilio/twilio.service';
 
 @Injectable()
 export class AuthService {
@@ -15,6 +16,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jsonWebTokenService: JsonWebTokenService,
     private readonly otpService: OtpService,
+    private readonly twilioService: TwilioService,
   ) { }
 
   // LOGIN USER
@@ -69,8 +71,8 @@ export class AuthService {
     // génération de OTP
     const otp = await this.otpService.generate(customer.phone);
 
-    // Todo: Envoyer l'OTP par SMS
-
+    // Envoyer l'OTP par SMS
+    this.twilioService.sendOtp(customer.phone, otp);
     return { otp };
   }
 

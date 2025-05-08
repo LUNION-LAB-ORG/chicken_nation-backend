@@ -12,6 +12,12 @@ export class LoginCustomerDto {
   })
   @IsNotEmpty()
   @MaxLength(20)
-  @Transform(({ value }) => value.trim())
+  @Transform(({ value }) => {
+    let phoneNumber = value;
+    if (!value.startsWith('+')) {
+      phoneNumber = `+${value}`;
+    }
+    return phoneNumber.replace(/\D/g, '');
+  })// supprime les caractères non numériques
   phone: string;
 }

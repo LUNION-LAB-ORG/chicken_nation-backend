@@ -14,6 +14,7 @@ import { OrderModule } from 'src/modules/order/order.module';
 import { NotificationsModule } from 'src/modules/notifications/notifications.module';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { OtpModule } from 'src/otp/otp.module';
+import { TwilioModule } from 'src/twilio/twilio.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { OtpModule } from 'src/otp/otp.module';
     CommonModule,
     JsonWebTokenModule,
     OtpModule,
+    TwilioModule,
     EmailModule,
     UsersModule,
     AuthModule,
