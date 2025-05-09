@@ -36,7 +36,7 @@ export class OrderController {
   @ApiOperation({ summary: 'Rechercher toutes les commandes avec options de filtrage d\'un client' })
   @ApiResponse({ status: 200, description: 'Retourne les commandes avec métadonnées de pagination' })
   @Get("/customer")
-  @UseGuards(JwtAuthGuard, JwtCustomerAuthGuard)
+  @UseGuards(JwtCustomerAuthGuard)
   findAllByCustomer(@Req() req: Request, @Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.findAllByCustomer(req, queryOrderDto);
   }
@@ -54,7 +54,6 @@ export class OrderController {
   @ApiResponse({ status: 200, description: 'Retourne la commande' })
   @ApiResponse({ status: 404, description: 'Commande introuvable' })
   @ApiParam({ name: 'id', description: 'ID de la commande' })
-  @UseGuards(JwtAuthGuard, JwtCustomerAuthGuard)
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.orderService.findById(id);
@@ -67,7 +66,6 @@ export class OrderController {
   @ApiResponse({ status: 409, description: 'Seules les commandes en attente peuvent être modifiées' })
   @ApiParam({ name: 'id', description: 'ID de la commande' })
   @ApiBody({ type: UpdateOrderDto })
-  @UseGuards(JwtAuthGuard, JwtCustomerAuthGuard)
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateOrderDto: UpdateOrderDto) {
     return this.orderService.update(id, updateOrderDto);

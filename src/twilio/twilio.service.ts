@@ -16,17 +16,12 @@ export class TwilioService {
         this.twilioPhoneNumber = this.configService.get<string>('TWILIO_PHONE_NUMBER') ?? "";
         this.twilioWhatsappNumber = this.configService.get<string>('TWILIO_WHATSAPP_NUMBER') ?? "";
 
-
         this.twilioClient = new Twilio(this.accountSid, this.authToken);
     }
 
     async sendOtp(phoneNumber: string, otp: string) {
-        try {
-            await this.sendMessage(phoneNumber, `Votre code de confirmation est : ${otp}`, "sms");
-        } catch (error: any) {
-            console.error('Error sending OTP:', error);
-            throw error;
-        }
+
+        return await this.sendMessage(phoneNumber, `Votre code de confirmation est : ${otp}`, "sms");
     }
 
     async sendMessage(phoneNumber: string, message: string, type: "sms" | "whatsapp") {
@@ -36,9 +31,10 @@ export class TwilioService {
                 from: type === "sms" ? this.twilioPhoneNumber : `whatsapp:${this.twilioWhatsappNumber}`,
                 to: type === "sms" ? this.formatNumber(phoneNumber) : `whatsapp:${this.formatNumber(phoneNumber)}`,
             });
+            return true;
         } catch (error: any) {
             console.error('Error sending message:', error);
-            throw error;
+            return false;
         }
     }
 
@@ -46,6 +42,6 @@ export class TwilioService {
         let phone = phoneNumber.replace(/\D/g, '');
         if (!phone) return '';
         if (!phone.startsWith('+')) phone = `+${phone}`;
-        return phone;   
+        return phone;
     }
 }
