@@ -34,11 +34,18 @@ export class TwilioService {
             await this.twilioClient.messages.create({
                 body: message,
                 from: type === "sms" ? this.twilioPhoneNumber : `whatsapp:${this.twilioWhatsappNumber}`,
-                to: type === "sms" ? phoneNumber : `whatsapp:${phoneNumber}`,
+                to: type === "sms" ? this.formatNumber(phoneNumber) : `whatsapp:${this.formatNumber(phoneNumber)}`,
             });
         } catch (error: any) {
             console.error('Error sending message:', error);
             throw error;
         }
+    }
+
+    formatNumber(phoneNumber: string) {
+        let phone = phoneNumber.replace(/\D/g, '');
+        if (!phone) return '';
+        if (!phone.startsWith('+')) phone = `+${phone}`;
+        return phone;   
     }
 }

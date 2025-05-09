@@ -8,7 +8,7 @@ export class TwilioController {
     @Post('send-message')
     async sendTest(@Body() body: { phoneNumber: string, message: string }) {
         const { phoneNumber, message } = body;
-        await this.twilioService.sendMessage(phoneNumber, message, "whatsapp");
+        await this.twilioService.sendMessage(phoneNumber, message, "sms");
         return { message: 'Message sent successfully' };
     }
 }
