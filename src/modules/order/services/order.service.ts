@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
 import { OrderStatus, EntityStatus, Customer, } from '@prisma/client';
@@ -42,7 +42,7 @@ export class OrderService {
     const dishesWithDetails = await this.orderHelper.getDishesWithDetails(items.map(item => item.dish_id));
 
     // Vérifier l'adresse
-    const address = await this.orderHelper.validateAddress(orderData.address??"");
+    const address = await this.orderHelper.validateAddress(orderData.address ?? "");
 
     // Vérifier et appliquer le code promo s'il existe
     const promoDiscount = await this.orderHelper.applyPromoCode(orderData.code_promo);
@@ -53,12 +53,18 @@ export class OrderService {
     // Calculer les frais de livraison selon la distance
     const deliveryFee = await this.orderHelper.calculateDeliveryFee(orderData.type, address);
 
+    // Vérifier le paiement
+    const payment = await this.orderHelper.checkPayment(createOrderDto);
+
     // Calculer la taxe et le montant total
     const tax = await this.orderHelper.calculateTax(netAmount);
     const totalBeforeDiscount = netAmount + deliveryFee + tax;
     const discount = totalBeforeDiscount * promoDiscount;
     const totalAmount = totalBeforeDiscount - discount;
 
+    if (payment && payment.amount < totalAmount) {
+      throw new BadRequestException('Le montant du paiement est inférieur au montant de la commande');
+    }
     // Générer un numéro de commande unique
     const orderNumber = this.generateDataService.generateOrderReference();
 
@@ -80,6 +86,8 @@ export class OrderService {
           time: orderData.time || "10:00",
           estimated_delivery_time: this.orderHelper.calculateEstimatedDeliveryTime(orderData.type),
           status: OrderStatus.PENDING,
+          paied_at: payment ? payment.created_at : null,
+          paied: payment ? true : false,
           order_items: {
             create: orderItems,
           },
@@ -146,7 +154,7 @@ export class OrderService {
     this.orderHelper.validateStatusTransition(order.status, status);
 
     // Actions spécifiques selon le changement d'état
-    await this.orderHelper.handleStatusSpecificActions(id, order, status, meta);
+    await this.orderHelper.handleStatusSpecificActions(order, status, meta);
 
     // Mettre à jour le statut
     const updatedOrder = await this.prisma.order.update({
@@ -432,7 +440,7 @@ export class OrderService {
    */
   async update(id: string, updateOrderDto: UpdateOrderDto) {
     const order = await this.findById(id);
-
+    const { paiement_id, ...rest } = updateOrderDto;
     // Vérifier que la commande peut être modifiée (seulement si PENDING)
     if (order.status !== OrderStatus.PENDING) {
       throw new ConflictException('Seules les commandes en attente peuvent être modifiées');
@@ -442,7 +450,7 @@ export class OrderService {
     const updatedOrder = await this.prisma.order.update({
       where: { id },
       data: {
-        ...updateOrderDto,
+        ...rest,
         updated_at: new Date(),
       },
       include: {

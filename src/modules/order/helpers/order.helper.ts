@@ -317,7 +317,7 @@ export class OrderHelper {
         }
     }
 
-    async handleStatusSpecificActions(orderId: string, order: Order, newStatus: OrderStatus, meta?: any) {
+    async handleStatusSpecificActions(order: Order, newStatus: OrderStatus, meta?: any) {
         switch (newStatus) {
             case OrderStatus.ACCEPTED:
                 // Planifier la préparation
@@ -337,44 +337,39 @@ export class OrderHelper {
 
             case OrderStatus.DELIVERED:
             case OrderStatus.COLLECTED:
+
+                break;
+
             case OrderStatus.COMPLETED:
-                // Si un paiement est en attente, le marquer comme réussi
-                await this.handlePaymentCompletion(orderId);
+             
                 break;
 
             case OrderStatus.CANCELLED:
                 // Annuler les paiements en attente
-                await this.cancelPendingPayments(orderId);
-                // Retourner les points de fidélité si applicable
                 break;
         }
     }
 
-    async handlePaymentCompletion(orderId: string) {
-        const pendingPayments = await this.prisma.paiement.findMany({
-            where: {
-                order_id: orderId,
-                status: PaiementStatus.PENDING,
-            },
-        });
+    async checkPayment(orderData: CreateOrderDto) {
 
-        for (const payment of pendingPayments) {
-            await this.prisma.paiement.update({
-                where: { id: payment.id },
-                data: { status: PaiementStatus.SUCCESS },
-            });
+        if (!orderData.paiement_id) {
+            return null;
         }
+        const payment = await this.prisma.paiement.findUnique({
+            where: { id: orderData.paiement_id },
+        });
+
+        if (!payment) {
+            throw new NotFoundException('Paiement non trouvé');
+        }
+
+        if (payment.status !== PaiementStatus.SUCCESS) {
+            throw new BadRequestException('Le paiement n\'est pas encore validé');
+        }
+
+        return payment;
     }
 
-    async cancelPendingPayments(orderId: string) {
-        await this.prisma.paiement.updateMany({
-            where: {
-                order_id: orderId,
-                status: PaiementStatus.PENDING,
-            },
-            data: { status: PaiementStatus.FAILED },
-        });
-    }
 
     buildWhereClause(filters?: QueryOrderDto) {
         if (!filters) return { entity_status: { not: EntityStatus.DELETED } };

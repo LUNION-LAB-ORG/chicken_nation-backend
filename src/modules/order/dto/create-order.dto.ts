@@ -92,4 +92,9 @@ export class CreateOrderDto {
     @IsOptional()
     @IsUUID()
     restaurant_id?: string;
+
+    @ApiPropertyOptional({ description: "ID du paiement" })
+    @IsOptional()
+    @IsUUID()
+    paiement_id?: string;
 }
