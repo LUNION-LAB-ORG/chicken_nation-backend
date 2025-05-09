@@ -5,11 +5,10 @@ import { TwilioService } from './twilio.service';
 export class TwilioController {
     constructor(private readonly twilioService: TwilioService) { }
 
-    @Post('send-otp')
-    async sendOtp(@Body() body: { phoneNumber: string }) {
-        const { phoneNumber } = body;
-        const otp = '0118';
-        await this.twilioService.sendOtp(phoneNumber, otp);
-        return { message: 'OTP sent successfully' };
+    @Post('send-message')
+    async sendTest(@Body() body: { phoneNumber: string, message: string }) {
+        const { phoneNumber, message } = body;
+        await this.twilioService.sendMessage(phoneNumber, message, "whatsapp");
+        return { message: 'Message sent successfully' };
     }
 }
