@@ -133,6 +133,9 @@ export class PaiementsService {
   }
 
   private async verifyOrder(createPaiementDto: CreatePaiementDto) {
+    if (!createPaiementDto.order_id) {
+      return null;
+    }
     const order = await this.prisma.order.findUnique({
       where: {
         id: createPaiementDto.order_id,
