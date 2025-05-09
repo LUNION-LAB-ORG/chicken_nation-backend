@@ -242,7 +242,7 @@ model OrderItem {
 model Order {
   id                      String      @id @default(uuid()) @db.Uuid
   reference               String      @unique @db.VarChar
-  customer_id             String?     @db.Uuid
+  customer_id             String      @db.Uuid
   paied                   Boolean     @default(false)
   delivery_fee            Float
   type                    OrderType
@@ -262,11 +262,11 @@ model Order {
   email                   String?     @db.VarChar
   note                    String?     @db.VarChar
   status                  OrderStatus
-  restaurant_id           String?     @db.Uuid
+  restaurant_id           String      @db.Uuid
   order_items             OrderItem[]
   paiements               Paiement[]
-  customer                Customer?   @relation(fields: [customer_id], references: [id])
-  restaurant              Restaurant? @relation(fields: [restaurant_id], references: [id])
+  customer                Customer    @relation(fields: [customer_id], references: [id])
+  restaurant              Restaurant  @relation(fields: [restaurant_id], references: [id])
 
   entity_status EntityStatus @default(NEW)
   completed_at  DateTime?

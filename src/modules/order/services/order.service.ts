@@ -30,7 +30,7 @@ export class OrderService {
   async create(req: Request, createOrderDto: CreateOrderDto) {
     const customer = req.user as Customer;
 
-    const { items, ...orderData } = createOrderDto;
+    const { items, paiement_id, ...orderData } = createOrderDto;
 
     // Identifier le client ou créer des données anonymes
     const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: createOrderDto.customer_id ?? customer.id });
@@ -74,7 +74,10 @@ export class OrderService {
       const createdOrder = await prisma.order.create({
         data: {
           ...orderData,
-          ...customerData,
+          fullname: customerData.fullname,
+          phone: customerData.phone,
+          email: customerData.email,
+          customer_id: customerData.customer_id,
           restaurant_id: restaurant.id,
           reference: orderNumber,
           delivery_fee: Number(deliveryFee),

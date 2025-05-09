@@ -171,7 +171,10 @@ export class CustomerService {
 
     return this.prisma.customer.update({
       where: { id },
-      data: updateCustomerDto,
+      data: {
+        ...updateCustomerDto,
+        entity_status: EntityStatus.ACTIVE,
+      },
       include: {
         addresses: {
           where: { entity_status: EntityStatus.ACTIVE },
