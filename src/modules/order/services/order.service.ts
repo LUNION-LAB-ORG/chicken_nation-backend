@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
-import { OrderStatus, EntityStatus, Customer, } from '@prisma/client';
+import { OrderStatus, EntityStatus, Customer, PaiementStatus, } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Request } from 'express';
 import { QueryOrderDto } from '../dto/query-order.dto';
@@ -80,6 +80,7 @@ export class OrderService {
           customer_id: customerData.customer_id,
           restaurant_id: restaurant.id,
           reference: orderNumber,
+          ...(payment && { paiements: { connect: { id: payment.id } } }),
           delivery_fee: Number(deliveryFee),
           tax: Number(tax),
           discount: Number(discount),
@@ -124,9 +125,9 @@ export class OrderService {
               longitude: true,
             },
           },
+          paiements: true,
         },
       });
-
 
       // Attribuer des points de fidélité si client identifié
       // if (customerData.customer_id) {
@@ -136,6 +137,13 @@ export class OrderService {
       return createdOrder;
     });
 
+    // Mise à jour du paiement
+    if (payment) {
+      await this.prisma.paiement.update({
+        where: { id: payment.id },
+        data: { order_id: order.id },
+      });
+    }
     // Envoyer les notifications
     await this.orderHelper.sendOrderNotifications(order);
 

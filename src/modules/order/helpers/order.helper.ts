@@ -342,7 +342,7 @@ export class OrderHelper {
                 break;
 
             case OrderStatus.COMPLETED:
-             
+
                 break;
 
             case OrderStatus.CANCELLED:
@@ -357,7 +357,10 @@ export class OrderHelper {
             return null;
         }
         const payment = await this.prisma.paiement.findUnique({
-            where: { id: orderData.paiement_id },
+            where: {
+                id: orderData.paiement_id,
+                order_id: null
+            },
         });
 
         if (!payment) {
