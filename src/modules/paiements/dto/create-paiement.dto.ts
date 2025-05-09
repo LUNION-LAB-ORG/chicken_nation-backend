@@ -11,6 +11,7 @@ export class CreatePaiementDto {
 
     @ApiPropertyOptional({ description: 'Id de la commande' })
     @IsUUID()
+    @IsOptional()
     @Transform(({ value }) => String(value))
     order_id?: string;
 
