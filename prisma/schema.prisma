@@ -288,7 +288,7 @@ model OtpToken {
 model Paiement {
   id                String                   @id @default(uuid()) @db.Uuid
   amount            Float
-  order_id          String                   @db.Uuid
+  order_id          String?                  @db.Uuid
   mode              PaiementMode
   mobile_money_type PaiementMobileMoneyType?
   status            PaiementStatus
