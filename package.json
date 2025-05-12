@@ -25,6 +25,7 @@
     "db:migrate": "npx prisma migrate dev"
   },
   "dependencies": {
+    "@kkiapay-org/nodejs-sdk": "^1.0.7",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.1",

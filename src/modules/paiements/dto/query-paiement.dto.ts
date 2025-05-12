@@ -24,7 +24,7 @@ export class QueryPaiementDto {
     @Transform(({ value }) => String(value).toUpperCase().trim() as EntityStatus)
     status?: EntityStatus = EntityStatus.ACTIVE;
 
-    @ApiPropertyOptional({ description: 'État du paiement', enum: PaiementStatus, default: PaiementStatus.PENDING })
+    @ApiPropertyOptional({ description: 'État du paiement', enum: PaiementStatus, default: PaiementStatus.REVERTED })
     @IsEnum(PaiementStatus)
     @IsOptional()
     @Transform(({ value }) => String(value).toUpperCase().trim() as PaiementStatus)

@@ -15,6 +15,7 @@ import { NotificationsModule } from 'src/modules/notifications/notifications.mod
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { OtpModule } from 'src/otp/otp.module';
 import { TwilioModule } from 'src/twilio/twilio.module';
+import { KkiapayModule } from './kkiapay/kkiapay.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { TwilioModule } from 'src/twilio/twilio.module';
     PaiementsModule,
     OrderModule,
     NotificationsModule,
+    KkiapayModule,
   ],
 })
 

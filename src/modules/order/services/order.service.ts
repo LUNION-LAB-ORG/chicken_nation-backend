@@ -19,9 +19,6 @@ export class OrderService {
     private prisma: PrismaService,
     private generateDataService: GenerateDataService,
     private orderHelper: OrderHelper,
-    // private notificationService: NotificationService,
-    // private loyaltyService: LoyaltyService,
-    // private deliveryService: DeliveryService,
   ) { }
 
   /**
@@ -204,9 +201,6 @@ export class OrderService {
         },
       },
     });
-
-    // Envoyer notifications du changement de statut
-    // await this.notificationService.sendOrderStatusUpdate(updatedOrder);
 
     return updatedOrder;
   }

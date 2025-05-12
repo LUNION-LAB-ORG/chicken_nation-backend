@@ -2,34 +2,117 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { CreatePaiementDto } from 'src/modules/paiements/dto/create-paiement.dto';
 import { UpdatePaiementDto } from 'src/modules/paiements/dto/update-paiement.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { EntityStatus, PaiementMobileMoneyType, PaiementMode, PaiementStatus } from '@prisma/client';
+import { Customer, EntityStatus, PaiementMode, PaiementStatus } from '@prisma/client';
 import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
+import { KkiapayService } from 'src/kkiapay/kkiapay.service';
+import { CreatePaiementKkiapayDto } from 'src/modules/paiements/dto/create-paiement-kkiapay.dto';
+import { Request } from 'express';
 
 @Injectable()
 export class PaiementsService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService, private readonly kkiapay: KkiapayService) { }
 
+  // Payer avec Kkiapay
+  async payWithKkiapay(createPaiementKkiapayDto: CreatePaiementKkiapayDto) {
+    const transaction = await this.kkiapay.verifyTransaction(createPaiementKkiapayDto.transactionId);
+
+    const paiement = await this.create({
+      reference: transaction.transactionId,
+      amount: transaction.amount,
+      fees: transaction.fees,
+      total: transaction.amount + transaction.fees,
+      mode: transaction.source,
+      source: transaction.source_common_name,
+      client: typeof transaction.client === 'object' ? JSON.stringify(transaction.client) : transaction.client,
+      status: transaction.status,
+      failure_code: transaction.failureCode,
+      failure_message: transaction.failureMessage,
+      order_id: createPaiementKkiapayDto?.orderId,
+    });
+
+    return {
+      success: transaction.status === "SUCCESS",
+      message: transaction.status === "SUCCESS" ? 'Paiement effectué avec succès' : 'Paiement echoué',
+      transactionId: transaction.transactionId,
+      paiement: paiement,
+    };
+  }
+
+  // Récupération des paiements succès libres
+  async getFreePaiements(req: Request) {
+    const customer = req.user as Customer;
+    const paiements = await this.prisma.paiement.findMany({
+      where: {
+        status: PaiementStatus.SUCCESS,
+        order_id: null,
+      },
+      orderBy: {
+        created_at: 'desc',
+      },
+    });
+
+    if (paiements.length === 0) {
+      return [];
+    }
+
+    const filteredPaiements = paiements.filter((p) => {
+      const client = JSON.parse(typeof p?.client == "string" ? p.client : "{}");
+      return (client?.email?.trim()?.toLowerCase() === customer.email?.trim()?.toLowerCase() ||
+        client?.phone?.trim()?.toLowerCase().includes(customer.phone?.trim()?.toLowerCase())
+        || customer?.phone?.trim()?.toLowerCase().includes(client?.phone?.trim()?.toLowerCase()));
+    });
+
+
+    return filteredPaiements;
+  }
+
+  // Remboursement d'un paiement par Kkiapay
+  async refundPaiement(paiementId: string) {
+    const paiement = await this.findOne(paiementId);
+
+    if (paiement.status !== PaiementStatus.SUCCESS) {
+      throw new BadRequestException('Le paiement n\'est pas en cours');
+    }
+
+    const transaction = await this.kkiapay.refundTransaction(paiement.reference);
+
+    const updatedPaiement = await this.update(paiementId, {
+      status: PaiementStatus.REVERTED,
+      failure_code: transaction.failureCode,
+      failure_message: transaction.failureMessage,
+    });
+
+    return {
+      success: updatedPaiement.status === "REVERTED",
+      message: updatedPaiement.status === "REVERTED" ? 'Remboursement effectué avec succès' : 'Remboursement echoué',
+      transactionId: updatedPaiement.reference,
+      paiement: updatedPaiement,
+    };
+  }
+
+  // Création de paiement
   async create(createPaiementDto: CreatePaiementDto) {
     // Vérification de la commande
-    const order = await this.verifyOrder(createPaiementDto);
+    const order = await this.verifyOrder(createPaiementDto.amount, createPaiementDto.order_id ?? null);
 
     // Traitement du mode de paiement et du type de mobile money
-    const { mode, mobile_money_type } = await this.verifyPaiementMode(createPaiementDto);
+    const { mode, source } = await this.verifyPaiementMode(createPaiementDto.mode, createPaiementDto.source ?? null);
 
     // Traitement du statut du paiement
-    const status = await this.verifyPaiementStatus(createPaiementDto);
+    const status = await this.verifyPaiementStatus(createPaiementDto.status);
 
     const paiement = await this.prisma.paiement.create({
       data: {
         ...createPaiementDto,
-        order_id: order?.id,
+        order_id: order?.id ?? null,
         mode,
         status,
-        mobile_money_type,
+        source,
         entity_status: EntityStatus.ACTIVE,
       },
     });
 
+    // Mise a jour de la commande à payée
     if (order) {
       await this.prisma.order.update({
         where: { id: order.id },
@@ -43,6 +126,7 @@ export class PaiementsService {
     return paiement;
   }
 
+  // Récupération de tous les paiements
   async findAll(queryDto: QueryPaiementDto) {
     const { page = 1, limit = 10, status = EntityStatus.ACTIVE, state = PaiementStatus.SUCCESS, order_id, search } = queryDto;
     const whereClause: any = { entity_status: EntityStatus.ACTIVE };
@@ -63,7 +147,7 @@ export class PaiementsService {
         { order_id: { contains: search, mode: 'insensitive' } },
         { mode: { contains: search, mode: 'insensitive' } },
         { state: { contains: search, mode: 'insensitive' } },
-        { mobile_money_type: { contains: search, mode: 'insensitive' } },
+        { source: { contains: search, mode: 'insensitive' } },
       ];
     }
 
@@ -77,7 +161,7 @@ export class PaiementsService {
         amount: true,
         order_id: true,
         mode: true,
-        mobile_money_type: true,
+        source: true,
         status: true,
         reference: true,
         order: {
@@ -103,8 +187,9 @@ export class PaiementsService {
     return paiements;
   }
 
-  findOne(paiementId: string) {
-    const paiement = this.prisma.paiement.findUnique({
+  // Récupération d'un paiement
+  async findOne(paiementId: string) {
+    const paiement = await this.prisma.paiement.findUnique({
       where: {
         id: paiementId,
       },
@@ -115,85 +200,93 @@ export class PaiementsService {
     return paiement;
   }
 
-  update(paiementId: string, updatePaiementDto: UpdatePaiementDto) {
+  // Mise à jour d'un paiement
+  async update(paiementId: string, updatePaiementDto: UpdatePaiementDto) {
+    const paiement = await this.findOne(paiementId);
+
+    // Vérification de la commande
+    const order = await this.verifyOrder(updatePaiementDto.amount ?? paiement.amount, updatePaiementDto.order_id ?? paiement.order_id);
+
+    // Traitement du mode de paiement et du type de mobile money
+    const { mode, source } = await this.verifyPaiementMode(updatePaiementDto.mode ?? paiement.mode, updatePaiementDto.source ?? paiement.source);
+
+    // Traitement du statut du paiement
+    const status = await this.verifyPaiementStatus(updatePaiementDto.status ?? paiement.status);
+
     return this.prisma.paiement.update({
       where: {
-        id: paiementId,
+        id: paiement.id,
       },
-      data: updatePaiementDto,
+      data: {
+        ...updatePaiementDto,
+        order_id: order?.id,
+        mode,
+        status,
+        source,
+      },
     });
   }
 
-  remove(paiementId: string) {
+  // Suppression d'un paiement
+  async remove(paiementId: string) {
+    const paiement = await this.findOne(paiementId);
     return this.prisma.paiement.delete({
       where: {
-        id: paiementId,
+        id: paiement.id,
       },
     });
   }
 
-  private async verifyOrder(createPaiementDto: CreatePaiementDto) {
-    if (!createPaiementDto.order_id) {
+  // Vérification de la commande
+  private async verifyOrder(amount: number, order_id: string | null) {
+    if (!order_id) {
       return null;
     }
     const order = await this.prisma.order.findUnique({
       where: {
-        id: createPaiementDto.order_id,
+        id: order_id,
       },
     });
     if (!order) {
       return null;
     }
 
-    if (createPaiementDto.amount < order.amount) {
+    if (amount < order.amount) {
       throw new BadRequestException('Le montant est inférieur au montant de la commande');
     }
     return order;
   }
 
-  private async verifyPaiementMode(createPaiementDto: CreatePaiementDto) {
+  // Vérification du mode de paiement
+  private async verifyPaiementMode(mode: PaiementMode, source: string | null) {
     // Vérification de l'existence du mode de paiement
-    if (!createPaiementDto.mode) {
+    if (!mode) {
       throw new BadRequestException('Mode de paiement non fourni');
     }
     // Vérification de la validité du mode de paiement
     if (![PaiementMode.MOBILE_MONEY,
+    PaiementMode.WALLET,
     PaiementMode.CREDIT_CARD,
-    PaiementMode.CASH,
-    PaiementMode.VIREMENT].includes(createPaiementDto.mode)) {
+    PaiementMode.CASH].includes(mode)) {
       throw new BadRequestException('Mode de paiement non valide');
     }
 
-    // Si mode de paiement Mobile Money, alors vérification du type de mobile money
-    if (createPaiementDto.mode === PaiementMode.MOBILE_MONEY) {
-      // Vérification de l'existence du type de mobile money
-      if (!createPaiementDto.mobile_money_type) {
-        throw new BadRequestException('Type de mobile money non fourni');
-      }
-      // Vérification de la validité du type de mobile money
-      if (![PaiementMobileMoneyType.ORANGE,
-      PaiementMobileMoneyType.MTN,
-      PaiementMobileMoneyType.MOOV,
-      PaiementMobileMoneyType.WAVE].includes(createPaiementDto.mobile_money_type)) {
-        throw new BadRequestException('Type de mobile money non valide');
-      }
-    }
-    return { mode: createPaiementDto.mode, mobile_money_type: createPaiementDto.mobile_money_type ?? null };
+    return { mode, source };
   }
 
-  private async verifyPaiementStatus(createPaiementDto: CreatePaiementDto) {
+  // Vérification du statut du paiement
+  private async verifyPaiementStatus(status: PaiementStatus) {
     // Vérification de l'existence du statut du paiement
-    if (!createPaiementDto.status) {
+    if (!status) {
       throw new BadRequestException('Statut du paiement non fourni');
     }
 
     // Vérification de la validité du statut du paiement
-    if (![PaiementStatus.PENDING,
+    if (![PaiementStatus.REVERTED,
     PaiementStatus.SUCCESS,
-    PaiementStatus.FAILED].includes(createPaiementDto.status)) {
+    PaiementStatus.FAILED].includes(status)) {
       throw new BadRequestException('Statut du paiement non valide');
     }
-    return createPaiementDto.status;
+    return status;
   }
-
 }

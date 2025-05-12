@@ -1,18 +1,39 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Delete, Query, UseGuards, Req } from '@nestjs/common';
 import { PaiementsService } from 'src/modules/paiements/services/paiements.service';
 import { CreatePaiementDto } from 'src/modules/paiements/dto/create-paiement.dto';
-import { UpdatePaiementDto } from 'src/modules/paiements/dto/update-paiement.dto';
 import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
-import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRole } from '@prisma/client';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { CreatePaiementKkiapayDto } from '../dto/create-paiement-kkiapay.dto';
+import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { Request } from 'express';
 
 @ApiTags('Paiements')
 @Controller('paiements')
 export class PaiementsController {
   constructor(private readonly paiementsService: PaiementsService) { }
+
+  @ApiOperation({ summary: 'Payer avec Kkiapay' })
+  @Post('pay')
+  payWithKkiapay(@Body() createPaiementKkiapayDto: CreatePaiementKkiapayDto) {
+    return this.paiementsService.payWithKkiapay(createPaiementKkiapayDto);
+  }
+
+  @ApiOperation({ summary: 'Remboursement d\'un paiement par Kkiapay' })
+  @UseGuards(JwtAuthGuard)
+  @Post('refund/:id')
+  refundPaiement(@Param('id') paiementId: string) {
+    return this.paiementsService.refundPaiement(paiementId);
+  }
+
+  @ApiOperation({ summary: 'Obtenir les paiements libres' })
+  @UseGuards(JwtCustomerAuthGuard)
+  @Get('free')
+  getFreePaiements(@Req() req: Request) {
+    return this.paiementsService.getFreePaiements(req);
+  }
 
   @ApiOperation({ summary: 'Créer un paiement' })
   @Post()

@@ -23,7 +23,8 @@ export class CreateOrderDto {
 
     @ApiProperty({ description: "l'adresse de livraison/retrait" })
     @IsString()
-    @Transform(({ value }) => typeof value !== "string" ? (typeof value == "object" ? JSON.stringify(value) : String(value)) : value) address: string;
+    @Transform(({ value }) => typeof value !== "string" ? (typeof value == "object" ? JSON.stringify(value) : String(value)) : value)
+    address: string;
 
     @ApiPropertyOptional({ description: "Code promo" })
     @IsOptional()

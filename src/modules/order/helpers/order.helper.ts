@@ -7,6 +7,8 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { Request } from 'express';
 import { QueryOrderDto } from '../dto/query-order.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
+import { PaiementsService } from 'src/modules/paiements/services/paiements.service';
+
 // import { NotificationService } from '../notification/notification.service';
 // import { LoyaltyService } from '../loyalty/loyalty.service';
 // import { DeliveryService } from '../delivery/delivery.service';
@@ -21,6 +23,7 @@ export class OrderHelper {
         private prisma: PrismaService,
         private configService: ConfigService,
         private generateDataService: GenerateDataService,
+        private paiementService: PaiementsService,
         // private notificationService: NotificationService,
         // private loyaltyService: LoyaltyService,
         // private deliveryService: DeliveryService,
@@ -296,7 +299,7 @@ export class OrderHelper {
             OrderStatus.PICKED_UP, // Pour livraison
             OrderStatus.DELIVERED, // Pour livraison
             OrderStatus.COLLECTED, // Pour retrait
-            OrderStatus.COMPLETED
+            OrderStatus.COMPLETED // Quand le livreur récupère l'argent
         ];
 
         const currentIndex = stateSequence.indexOf(currentStatus);
@@ -346,7 +349,18 @@ export class OrderHelper {
                 break;
 
             case OrderStatus.CANCELLED:
-                // Annuler les paiements en attente
+
+                const paiement = await this.prisma.paiement.findFirst({
+                    where: {
+                        order_id: order.id,
+                        status: PaiementStatus.SUCCESS,
+                    },
+                })
+                if (paiement) {
+                    // Remboursement du paiement
+                    await this.paiementService.refundPaiement(paiement.id);
+
+                }
                 break;
         }
     }
@@ -364,6 +378,7 @@ export class OrderHelper {
         });
 
         if (!payment) {
+
             throw new NotFoundException('Paiement non trouvé');
         }
 
