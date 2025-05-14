@@ -95,7 +95,6 @@ export class OrderController {
       required: ['status']
     }
   })
-  @UseGuards(JwtAuthGuard)
   @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,
