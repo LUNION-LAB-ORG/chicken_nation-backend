@@ -67,8 +67,7 @@ export class CustomerController {
 
   @ApiOperation({ summary: 'Supprimer un client' })
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, UserRolesGuard, JwtCustomerAuthGuard)
-  @UserRoles(UserRole.ADMIN)
+  @UseGuards(JwtCustomerAuthGuard)
   remove(@Param('id') id: string) {
     return this.customerService.remove(id);
   }
