@@ -18,7 +18,7 @@ export class PaiementsService {
     const transaction = await this.kkiapay.verifyTransaction(createPaiementKkiapayDto.transactionId);
 
     const customer = req.user as Customer;
-
+    console.log(transaction, customer)
     const paiement = await this.create({
       reference: transaction.transactionId,
       amount: transaction.amount,
