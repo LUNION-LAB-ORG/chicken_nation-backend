@@ -15,10 +15,11 @@ import { Request } from 'express';
 export class PaiementsController {
   constructor(private readonly paiementsService: PaiementsService) { }
 
+  @UseGuards(JwtCustomerAuthGuard)
   @ApiOperation({ summary: 'Payer avec Kkiapay' })
   @Post('pay')
-  payWithKkiapay(@Body() createPaiementKkiapayDto: CreatePaiementKkiapayDto) {
-    return this.paiementsService.payWithKkiapay(createPaiementKkiapayDto);
+  payWithKkiapay(@Req() req: Request, @Body() createPaiementKkiapayDto: CreatePaiementKkiapayDto) {
+    return this.paiementsService.payWithKkiapay(req, createPaiementKkiapayDto);
   }
 
   @ApiOperation({ summary: 'Remboursement d\'un paiement par Kkiapay' })

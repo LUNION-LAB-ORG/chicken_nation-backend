@@ -66,5 +66,11 @@ export class CreatePaiementDto {
     @IsOptional()
     @Transform(({ value }) => String(value))
     order_id?: string;
+
+    @ApiPropertyOptional({ description: 'Id du client' })
+    @IsString()
+    @IsOptional()
+    @Transform(({ value }) => String(value))
+    client_id?: string;
 }
 
