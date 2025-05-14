@@ -13,8 +13,11 @@ export class PaiementsService {
   constructor(private readonly prisma: PrismaService, private readonly kkiapay: KkiapayService) { }
 
   // Payer avec Kkiapay
-  async payWithKkiapay(createPaiementKkiapayDto: CreatePaiementKkiapayDto) {
+  async payWithKkiapay(req: Request, createPaiementKkiapayDto: CreatePaiementKkiapayDto) {
+
     const transaction = await this.kkiapay.verifyTransaction(createPaiementKkiapayDto.transactionId);
+
+    const customer = req.user as Customer;
 
     const paiement = await this.create({
       reference: transaction.transactionId,
@@ -28,6 +31,7 @@ export class PaiementsService {
       failure_code: transaction.failureCode,
       failure_message: transaction.failureMessage,
       order_id: createPaiementKkiapayDto?.orderId,
+      client_id: customer.id,
     });
 
     return {
@@ -41,10 +45,11 @@ export class PaiementsService {
   // Récupération des paiements succès libres
   async getFreePaiements(req: Request) {
     const customer = req.user as Customer;
-    const paiements = await this.prisma.paiement.findMany({
+    let paiements = await this.prisma.paiement.findMany({
       where: {
         status: PaiementStatus.SUCCESS,
         order_id: null,
+        client_id: customer.id,
       },
       orderBy: {
         created_at: 'desc',
@@ -52,18 +57,15 @@ export class PaiementsService {
     });
 
     if (paiements.length === 0) {
-      return [];
+      paiements = paiements.filter((p) => {
+        const client = JSON.parse(typeof p?.client == "string" ? p.client : "{}");
+        return (client?.email?.trim()?.toLowerCase() === customer.email?.trim()?.toLowerCase() ||
+          client?.phone?.trim()?.toLowerCase().includes(customer.phone?.trim()?.toLowerCase())
+          || customer?.phone?.trim()?.toLowerCase().includes(client?.phone?.trim()?.toLowerCase()));
+      });
     }
 
-    const filteredPaiements = paiements.filter((p) => {
-      const client = JSON.parse(typeof p?.client == "string" ? p.client : "{}");
-      return (client?.email?.trim()?.toLowerCase() === customer.email?.trim()?.toLowerCase() ||
-        client?.phone?.trim()?.toLowerCase().includes(customer.phone?.trim()?.toLowerCase())
-        || customer?.phone?.trim()?.toLowerCase().includes(client?.phone?.trim()?.toLowerCase()));
-    });
-
-
-    return filteredPaiements;
+    return paiements;
   }
 
   // Remboursement d'un paiement par Kkiapay

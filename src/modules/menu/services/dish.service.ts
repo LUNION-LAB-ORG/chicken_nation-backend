@@ -105,19 +105,6 @@ export class DishService {
     return this.prisma.dish.update({
       where: { id },
       data: updateDishDto,
-      include: {
-        category: true,
-        dish_restaurants: {
-          include: {
-            restaurant: true,
-          },
-        },
-        dish_supplements: {
-          include: {
-            supplement: true,
-          },
-        },
-      },
     });
   }
 
