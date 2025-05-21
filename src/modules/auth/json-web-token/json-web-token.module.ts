@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { JwtModule, JwtService } from '@nestjs/jwt';
-import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
+import { JsonWebTokenService } from './json-web-token.service';
 
 @Module({
   imports: [JwtModule.register({})],

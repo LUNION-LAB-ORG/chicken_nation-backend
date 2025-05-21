@@ -1,16 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
-import { sendEmailDto } from './dto/sendEmailDto';
+import { sendEmailDto } from '../dto/sendEmailDto';
 import * as fs from 'fs';
 import * as path from 'path';
 
 @Injectable()
 export class EmailService {
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService) { }
   getTransport() {
     const options = {
-      host: this.configService.get<string>('EMAILT_HOST'),
+      host: this.configService.get<string>('EMAIL_HOST'),
       port: Number(this.configService.get<number>('EMAIL_PORT')),
       secure: false,
       auth: {
@@ -27,7 +27,7 @@ export class EmailService {
     const { recipients, subject, html, text } = dto;
 
     const transport = this.getTransport();
-    
+
     let htmlContent = '';
     try {
       const projectRoot = path.resolve(__dirname, '../../..');

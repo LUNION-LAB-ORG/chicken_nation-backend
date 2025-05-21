@@ -1,5 +1,5 @@
 import { Controller, Post, Body } from '@nestjs/common';
-import { TwilioService } from './twilio.service';
+import { TwilioService } from '../services/twilio.service';
 
 @Controller('twilio')
 export class TwilioController {

@@ -71,7 +71,6 @@ export class OrderController {
     return this.orderService.update(id, updateOrderDto);
   }
 
-
   @ApiOperation({ summary: 'Mettre à jour le statut d\'une commande' })
   @ApiResponse({ status: 200, description: 'Statut de la commande mis à jour avec succès' })
   @ApiResponse({ status: 404, description: 'Commande introuvable' })

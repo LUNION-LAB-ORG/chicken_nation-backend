@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { CommonModule } from 'src/common/common.module';
-import { EmailModule } from 'src/email/email.module';
 import { UsersModule } from 'src/modules/users/users.module';
 import { AuthModule } from 'src/modules/auth/auth.module';
 import { DatabaseModule } from 'src/database/database.module';
@@ -12,20 +11,16 @@ import { CustomerModule } from 'src/modules/customer/customer.module';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { OrderModule } from 'src/modules/order/order.module';
 import { NotificationsModule } from 'src/modules/notifications/notifications.module';
-import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { OtpModule } from 'src/otp/otp.module';
-import { TwilioModule } from 'src/twilio/twilio.module';
 import { KkiapayModule } from './kkiapay/kkiapay.module';
+import { NotificationRealTimeModule } from './notification-real-time/notification-real-time.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     DatabaseModule,
     CommonModule,
-    JsonWebTokenModule,
     OtpModule,
-    TwilioModule,
-    EmailModule,
     UsersModule,
     AuthModule,
     RestaurantModule,
@@ -36,6 +31,7 @@ import { KkiapayModule } from './kkiapay/kkiapay.module';
     OrderModule,
     NotificationsModule,
     KkiapayModule,
+    NotificationRealTimeModule,
   ],
 })
 
