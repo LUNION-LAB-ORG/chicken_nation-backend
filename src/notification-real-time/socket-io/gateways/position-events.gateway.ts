@@ -1,52 +1,46 @@
-import {
-  ConnectedSocket,
-  MessageBody,
-  SubscribeMessage,
-  WebSocketGateway,
-  WebSocketServer,
-} from "@nestjs/websockets";
-import { Server, Socket } from "socket.io";
+import { ConnectedSocket, MessageBody, SubscribeMessage, WebSocketGateway } from '@nestjs/websockets';
+import { Socket } from 'socket.io';
+import { IPosition } from '../interfaces/position-events.interface';
+import { BaseWebSocketGateway } from './base-websocket.gateway';
+import { PositionEventsService } from '../services/position-events.service';
+import { ConfigService } from '@nestjs/config';
+import { Injectable } from '@nestjs/common';
 
-interface I_Position {
-  id: string;
-  lat: string;
-  long: string;
-}
-
+@Injectable()
 @WebSocketGateway({
-  namespace: "position-socket-event",
+  namespace: 'position-socket-event',
   cors: {
-    origin: "*",
+    origin: '*',
   },
 })
-export class PositionEventsGateway {
-
-  @WebSocketServer()
-  server: Server;
-
-  // Lors de la connexion du client
-  handleConnection(client: Socket) {
-    console.log(`Client connecté : ${client.id}`);
+export class PositionEventsGateway extends BaseWebSocketGateway {
+  constructor(
+    protected readonly configService: ConfigService,
+    private readonly positionService: PositionEventsService
+  ) {
+    super(configService);
   }
 
-  // Lors de la déconnexion du client
-  handleDisconnection(client: Socket) {
-    console.log(`Client déconnecté : ${client.id}`);
+  protected getNamespace(): string {
+    return 'position-socket-event';
   }
 
-  // Gérer les évènements dans le salon "position" avec les données de l'utilisateur connecté qui les envois
-  @SubscribeMessage("position")
-  async handleMessageEvent(
-    @MessageBody() data: I_Position,
+  @SubscribeMessage('position')
+  async handlePositionEvent(
+    @MessageBody() data: IPosition,
     @ConnectedSocket() client: Socket
   ) {
-    console.log(`client ${client.id} a envoyé : ${data}`);
+    const result = await this.positionService.handleEvent(data, client);
 
-    // Envoie une réponse
-    this.server.emit("position-serveur", { client: client.id, data: data });
-    return {
-      status: "success",
-      message: "Position envoyée avec succès",
-    };
+    // Émettre la position mise à jour à tous les clients
+    this.emitToAll('position-serveur', { client: client.id, data });
+
+    return result;
+  }
+
+  // Surcharge de la méthode de la classe de base
+  protected onClientDisconnect(client: Socket): void {
+    // Nettoyer les données du client déconnecté
+    this.positionService.clearPosition(client.id);
   }
 }

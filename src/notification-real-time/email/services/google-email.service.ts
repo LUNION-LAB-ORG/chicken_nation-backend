@@ -22,6 +22,6 @@ export class GoogleEmailService extends BaseEmailService {
   }
 
   protected getFromEmail(): string {
-    return this.configService.get<string>('GOOGLE_EMAIL_USER') ?? "";
+    return this.configService.get<string>('GOOGLE_EMAIL_SENDER') ?? "";
   }
 }

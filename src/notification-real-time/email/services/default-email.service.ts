@@ -22,6 +22,6 @@ export class DefaultEmailService extends BaseEmailService {
   }
 
   protected getFromEmail(): string {
-    return this.configService.get<string>('EMAIL_USER') ?? "";
+    return this.configService.get<string>('EMAIL_SENDER') ?? "";
   }
 }
