@@ -1,12 +1,27 @@
 import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { DefaultEmailService } from './services/default-email.service';
+import { GoogleEmailService } from './services/google-email.service';
 import { EmailController } from './controllers/email.controller';
-import { EmailService } from './services/email.service';
-
 @Module({
     controllers: [EmailController],
     providers: [
-        EmailService,
+        DefaultEmailService,
+        GoogleEmailService,
+        {
+            provide: 'EMAIL_SERVICE',
+            useFactory: (configService: ConfigService) => {
+                const emailProvider = configService.get<string>('EMAIL_PROVIDER', 'default');
+                switch (emailProvider.toLowerCase()) {
+                    case 'google':
+                        return new GoogleEmailService(configService);
+                    default:
+                        return new DefaultEmailService(configService);
+                }
+            },
+            inject: [ConfigService],
+        },
     ],
-    exports: [EmailService],
+    exports: ['EMAIL_SERVICE', DefaultEmailService, GoogleEmailService],
 })
 export class EmailModule { }

@@ -6,7 +6,7 @@ import { Request } from 'express';
 import { User } from '@prisma/client';
 import { LoginUserDto } from 'src/modules/auth/dto/login-user.dto';
 import { JsonWebTokenService } from 'src/modules/auth/json-web-token/json-web-token.service';
-import { OtpService } from 'src/otp/otp.service';
+import { OtpService } from 'src/modules/auth/otp/otp.service';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { TwilioService } from 'src/notification-real-time/twilio/services/twilio.service';
 
@@ -94,6 +94,12 @@ export class AuthService {
     });
 
     if (!otpToken) {
+      throw new UnauthorizedException('Code OTP invalide');
+    }
+
+    // Vérification de l'otp
+    const isVerified = await this.otpService.verify(otpToken.code);
+    if (!isVerified) {
       throw new UnauthorizedException('Code OTP invalide');
     }
 

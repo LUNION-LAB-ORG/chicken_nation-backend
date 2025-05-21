@@ -11,7 +11,6 @@ import { CustomerModule } from 'src/modules/customer/customer.module';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { OrderModule } from 'src/modules/order/order.module';
 import { NotificationsModule } from 'src/modules/notifications/notifications.module';
-import { OtpModule } from 'src/otp/otp.module';
 import { KkiapayModule } from './kkiapay/kkiapay.module';
 import { NotificationRealTimeModule } from './notification-real-time/notification-real-time.module';
 
@@ -20,7 +19,6 @@ import { NotificationRealTimeModule } from './notification-real-time/notificatio
     ConfigModule.forRoot({ isGlobal: true }),
     DatabaseModule,
     CommonModule,
-    OtpModule,
     UsersModule,
     AuthModule,
     RestaurantModule,

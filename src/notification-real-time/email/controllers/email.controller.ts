@@ -1,23 +1,19 @@
-import { Body, Controller, Post } from '@nestjs/common';
-import { EmailService } from '../services/email.service';
+import { Controller, Post, Body, Inject } from '@nestjs/common';
 import { sendEmailDto } from '../dto/sendEmailDto';
+import { IEmailService } from '../interfaces/email-service.interface';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
 
+@ApiTags('Email')
 @Controller('email')
 export class EmailController {
-  constructor(private readonly emailService: EmailService) { }
+  constructor(
+    @Inject('EMAIL_SERVICE') private readonly emailService: IEmailService,
+  ) { }
 
+  @ApiOperation({ summary: 'Envoi un email' })
   @Post('send')
-  async sendEmail(@Body() data: sendEmailDto) {
-    try {
-      await this.emailService.sendEmail(data);
-      return {
-        message: 'Email sent successfully',
-      };
-    } catch (error: any) {
-      return {
-        message: 'Error sending mail',
-        error: error
-      };
-    }
+  async sendEmail(@Body() dto: sendEmailDto): Promise<{ success: boolean }> {
+    await this.emailService.sendEmail(dto);
+    return { success: true };
   }
 }

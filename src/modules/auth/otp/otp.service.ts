@@ -64,7 +64,8 @@ export class OtpService {
     return token;
   }
 
-  verify(token: string, counter: number) {
-    return hotp.verify({ token, counter, secret: this.secret });
+  async verify(token: string) {
+    const counter = await this.prisma.counterOtp.findFirst();
+    return hotp.verify({ token, counter: counter?.counter ?? 1, secret: this.secret });
   }
 }
