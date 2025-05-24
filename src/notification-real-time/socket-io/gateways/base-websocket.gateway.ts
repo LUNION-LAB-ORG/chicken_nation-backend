@@ -11,34 +11,35 @@ export abstract class BaseWebSocketGateway implements IWebSocketGateway {
 
     constructor(protected readonly configService: ConfigService) { }
 
-    // Méthodes communes à tous les gateways
+    // lorsqu'un client se connecte (par defaut sur tous les gateways)
     handleConnection(client: Socket) {
         console.log(`Client connecté sur ${this.getNamespace()}: ${client.id}`);
         this.onClientConnect(client);
     }
 
+    // lorsqu'un client se deconnecte (par defaut sur tous les gateways)
     handleDisconnection(client: Socket) {
         console.log(`Client déconnecté de ${this.getNamespace()}: ${client.id}`);
         this.onClientDisconnect(client);
     }
 
-    // Méthodes abstraites que les implémentations devront définir
+    // Méthode abstraite que les implémentations devront définir
     protected abstract getNamespace(): string;
 
-    // Méthodes avec implémentation par défaut qui peuvent être surchargées
+    // Méthode avec implémentation par défaut qui peuvent être surchargées
     protected onClientConnect(client: Socket): void {
-        // Comportement par défaut - peut être surchargé par les classes dérivées
     }
 
+    // Méthode avec implémentation par défaut qui peuvent être surchargées
     protected onClientDisconnect(client: Socket): void {
-        // Comportement par défaut - peut être surchargé par les classes dérivées
     }
 
-    // Méthode utilitaire pour émettre des événements
+    // Méthode pour émettre des événements à tous les clients
     protected emitToAll(event: string, data: any): void {
         this.server.emit(event, data);
     }
 
+    // Méthode pour émettre des événements à un client spécifique
     protected emitToClient(clientId: string, event: string, data: any): void {
         this.server.to(clientId).emit(event, data);
     }

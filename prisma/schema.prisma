@@ -80,6 +80,48 @@ enum TypeTable {
   TABLE_ROUND
 }
 
+// ================================
+// NOUVEAUX ENUMS POUR LE SYSTÈME DE FIDÉLITÉ
+// ================================
+
+enum LoyaltyLevel {
+  STANDARD
+  PREMIUM
+  GOLD
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  BUY_X_GET_Y
+}
+
+enum TargetType {
+  ALL_PRODUCTS
+  SPECIFIC_PRODUCTS
+  CATEGORIES
+}
+
+enum PromotionStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  PAUSED
+  CANCELLED
+}
+
+enum Visibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum LoyaltyPointType {
+  EARNED    // Points gagnés
+  REDEEMED  // Points utilisés
+  EXPIRED   // Points expirés
+  BONUS     // Points bonus
+}
+
 model Address {
   id String @id @default(uuid()) @db.Uuid
 
@@ -129,6 +171,19 @@ model Customer {
   orders                Order[]
   notification_settings NotificationSetting?
 
+  // ================================
+  // SYSTÈME DE FIDÉLITÉ INTÉGRÉ
+  // ================================
+  loyalty_level         LoyaltyLevel @default(STANDARD)
+  total_points          Int          @default(0) // Points actuels disponibles
+  lifetime_points       Int          @default(0) // Total des points gagnés depuis l'inscription
+  last_level_update     DateTime?    @db.Timestamp(6)
+
+  // Relations fidélité
+  loyalty_points        LoyaltyPoint[]
+  promotion_usages      PromotionUsage[]
+  loyalty_level_history LoyaltyLevelHistory[]
+
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -165,7 +220,10 @@ model Dish {
   dish_supplements     DishSupplement[]
   favorites            Favorite[]
   order_items          OrderItem[]
-  special_offer_dishes SpecialOfferDish[]
+
+  // Relations promotions
+  promotion_dishes          PromotionDish[]
+  promotion_targeted_dishes PromotionTargetedDish[]
 
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -266,6 +324,14 @@ model Order {
   customer                Customer    @relation(fields: [customer_id], references: [id])
   restaurant              Restaurant  @relation(fields: [restaurant_id], references: [id])
 
+  // ================================
+  // INTÉGRATION PROMOTIONS ET FIDÉLITÉ
+  // ================================
+  promotion_id     String?          @db.Uuid
+  promotion        Promotion?       @relation(fields: [promotion_id], references: [id])
+  promotion_usages PromotionUsage[]
+  loyalty_points   LoyaltyPoint[]
+
   entity_status EntityStatus @default(NEW)
   completed_at  DateTime?
   paied_at      DateTime?
@@ -326,25 +392,6 @@ model Restaurant {
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 }
 
-model SpecialOfferDish {
-  id               String       @id @default(uuid()) @db.Uuid
-  dish_id          String       @db.Uuid
-  special_offer_id String       @db.Uuid
-  dish             Dish         @relation(fields: [dish_id], references: [id], onDelete: Cascade)
-  special_offer    SpecialOffer @relation(fields: [special_offer_id], references: [id], onDelete: Cascade)
-}
-
-model SpecialOffer {
-  id          String             @id @default(uuid()) @db.Uuid
-  name        String             @db.VarChar
-  description String?            @db.VarChar
-  image       String?            @db.Text
-  tax         Float
-  start_date  DateTime           @db.Timestamp(6)
-  end_date    DateTime           @db.Timestamp(6)
-  dishes      SpecialOfferDish[]
-}
-
 model Supplement {
   id               String             @id @default(uuid()) @db.Uuid
   name             String             @db.VarChar
@@ -370,9 +417,173 @@ model User {
   restaurant_id       String?     @db.Uuid
   restaurant          Restaurant? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 
+  // Relations promotions
+  created_promotions Promotion[] @relation("CreatedBy")
+
   entity_status EntityStatus @default(NEW)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 
   @@index([email, type])
+}
+
+// ================================
+// NOUVEAUX MODÈLES POUR LE SYSTÈME DE FIDÉLITÉ ET PROMOTIONS
+// ================================
+
+model Promotion {
+  id              String          @id @default(uuid()) @db.Uuid
+  title           String          @db.VarChar
+  description     String?         @db.Text
+  discount_type   DiscountType    // PERCENTAGE, FIXED_AMOUNT, BUY_X_GET_Y
+  discount_value  Float
+  target_type     TargetType      // ALL_PRODUCTS, SPECIFIC_PRODUCTS, CATEGORIES
+  
+  // Contraintes
+  min_order_amount     Float?
+  max_discount_amount  Float?
+  max_usage_per_user   Int?    @default(1)
+  max_total_usage      Int?
+  current_usage        Int     @default(0)
+  
+  // Dates
+  start_date      DateTime @db.Timestamp(6)
+  expiration_date DateTime @db.Timestamp(6)
+  
+  // Statut et visibilité
+  status         PromotionStatus @default(DRAFT)
+  visibility     Visibility      @default(PUBLIC)
+  is_active      Boolean         @default(true)
+  
+  // Ciblage par niveau de fidélité (pour les promotions privées)
+  target_standard Boolean @default(false)
+  target_premium  Boolean @default(false)
+  target_gold     Boolean @default(false)
+  
+  // Personnalisation visuelle
+  coupon_image_url String? @db.Text
+  background_color String? @db.VarChar // Code couleur hex
+  text_color       String? @db.VarChar // Code couleur hex
+  
+  // Métadonnées
+  created_by_id String @db.Uuid
+  created_by    User   @relation("CreatedBy", fields: [created_by_id], references: [id])
+
+  // Relations
+  promotion_dishes          PromotionDish[]
+  promotion_targeted_dishes PromotionTargetedDish[]
+  promotion_usages          PromotionUsage[]
+  orders                    Order[]
+
+  entity_status EntityStatus @default(NEW)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([status, visibility, entity_status])
+  @@index([start_date, expiration_date])
+}
+
+// Table de liaison pour les plats inclus dans une promotion
+model PromotionDish {  
+  id           String    @id @default(uuid()) @db.Uuid
+  promotion_id String    @db.Uuid
+  dish_id      String    @db.Uuid
+  quantity     Int       @default(1) // Pour les offres "Buy X Get Y"
+
+  promotion Promotion @relation(fields: [promotion_id], references: [id], onDelete: Cascade)
+  dish      Dish      @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+
+  @@unique([promotion_id, dish_id])
+}
+
+// Plats ciblés spécifiquement par une promotion
+model PromotionTargetedDish {
+  id           String    @id @default(uuid()) @db.Uuid
+  promotion_id String    @db.Uuid
+  dish_id      String    @db.Uuid
+  
+  promotion Promotion @relation(fields: [promotion_id], references: [id], onDelete: Cascade)
+  dish      Dish      @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+
+  @@unique([promotion_id, dish_id])
+}
+
+// Utilisation des promotions
+model PromotionUsage {
+  id           String @id @default(uuid()) @db.Uuid
+  promotion_id String @db.Uuid
+  customer_id  String @db.Uuid
+  order_id     String? @db.Uuid
+  
+  // Détails de l'utilisation
+  discount_amount Float
+  original_amount Float
+  final_amount    Float
+
+  promotion Promotion @relation(fields: [promotion_id], references: [id])
+  customer  Customer  @relation(fields: [customer_id], references: [id])
+  order     Order?    @relation(fields: [order_id], references: [id])
+
+  entity_status EntityStatus @default(NEW)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([customer_id, promotion_id])
+}
+
+// Système de points de fidélité
+model LoyaltyPoint {
+  id          String            @id @default(uuid()) @db.Uuid
+  customer_id String            @db.Uuid
+  points      Int
+  type        LoyaltyPointType
+  reason      String?           @db.Text // Description de la raison (commande, bonus, etc.)
+  order_id    String?           @db.Uuid
+  expires_at  DateTime?         @db.Timestamp(6)
+
+  customer Customer @relation(fields: [customer_id], references: [id])
+  order    Order?   @relation(fields: [order_id], references: [id])
+
+  entity_status EntityStatus @default(NEW)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([customer_id, type])
+  @@index([expires_at])
+}
+
+// Historique des changements de niveau de fidélité
+model LoyaltyLevelHistory {
+  id             String        @id @default(uuid()) @db.Uuid
+  customer_id    String        @db.Uuid
+  previous_level LoyaltyLevel?
+  new_level      LoyaltyLevel
+  points_at_time Int           // Points au moment du changement
+  reason         String?       @db.Text // Raison du changement (achat, bonus, etc.)
+
+  customer Customer @relation(fields: [customer_id], references: [id])
+
+  entity_status EntityStatus @default(NEW)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([customer_id])
+}
+
+// Configuration du système de fidélité
+model LoyaltyConfig {
+  id                        String @id @default(uuid()) @db.Uuid
+  points_per_xof            Int    @default(1) // 1 point par XOF dépensé
+  points_expiration_days    Int?   @default(365) // Points expirent après X jours
+  minimum_redemption_points Int    @default(100)
+  point_value_in_xof        Float  @default(1) // 1 point = 1 XOF
+  
+  // Seuils pour les niveaux de fidélité
+  standard_threshold        Int    @default(0)    // 0 points pour Standard
+  premium_threshold         Int    @default(300)  // 300 points pour Premium
+  gold_threshold            Int    @default(800)  // 800 points pour Gold
+  
+  entity_status EntityStatus @default(NEW)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
 }
