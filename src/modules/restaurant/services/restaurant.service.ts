@@ -1,10 +1,11 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
-import { EntityStatus, UserRole, UserType } from '@prisma/client';
+import { EntityStatus, Restaurant, UserRole, UserType } from '@prisma/client';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateRestaurantDto } from 'src/modules/restaurant/dto/create-restaurant.dto';
 import { UpdateRestaurantDto } from 'src/modules/restaurant/dto/update-restaurant.dto';
+import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 
 @Injectable()
 export class RestaurantService {
@@ -84,7 +85,7 @@ export class RestaurantService {
   /**
    * Récupérer tous les restaurants
    */
-  async findAll(page = 1, limit = 10) {
+  async findAll(page = 1, limit = 10): Promise<QueryResponseDto<Restaurant>> {
     const skip = (page - 1) * limit;
 
     const [restaurants, total] = await Promise.all([

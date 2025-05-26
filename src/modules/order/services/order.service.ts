@@ -1,12 +1,13 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
-import { OrderStatus, EntityStatus, Customer, PaiementStatus, } from '@prisma/client';
+import { OrderStatus, EntityStatus, Customer, PaiementStatus, Order, } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Request } from 'express';
 import { QueryOrderDto } from '../dto/query-order.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { OrderHelper } from 'src/modules/order/helpers/order.helper';
+import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 // import { NotificationService } from '../notification/notification.service';
 // import { LoyaltyService } from '../loyalty/loyalty.service';
 // import { DeliveryService } from '../delivery/delivery.service';
@@ -245,7 +246,7 @@ export class OrderService {
   /**
    * Recherche et filtre les commandes
    */
-  async findAll(filters: QueryOrderDto) {
+  async findAll(filters: QueryOrderDto): Promise<QueryResponseDto<Order>> {
     const {
       status,
       type,
@@ -344,7 +345,7 @@ export class OrderService {
   /**
    * Recherche et filtre les commandes d'un client
    */
-  async findAllByCustomer(req: Request, filters: QueryOrderDto) {
+  async findAllByCustomer(req: Request, filters: QueryOrderDto): Promise<QueryResponseDto<Order>> {
     const {
       status,
       type,

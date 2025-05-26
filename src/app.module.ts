@@ -13,10 +13,14 @@ import { OrderModule } from 'src/modules/order/order.module';
 import { NotificationsModule } from 'src/modules/notifications/notifications.module';
 import { KkiapayModule } from './kkiapay/kkiapay.module';
 import { NotificationRealTimeModule } from './notification-real-time/notification-real-time.module';
-
+import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
+    EventEmitterModule.forRoot(),
     DatabaseModule,
     CommonModule,
     UsersModule,
@@ -30,6 +34,7 @@ import { NotificationRealTimeModule } from './notification-real-time/notificatio
     NotificationsModule,
     KkiapayModule,
     NotificationRealTimeModule,
+    FidelityModule
   ],
 })
 
