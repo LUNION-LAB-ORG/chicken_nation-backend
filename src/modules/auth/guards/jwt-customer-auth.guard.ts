@@ -20,9 +20,9 @@ export class JwtCustomerAuthGuard extends AuthGuard('jwt-customer') {
     const request = context.switchToHttp().getRequest();
     const customer = request.user as Customer;
 
-    // Si l'utilisateur est bloqué
-    if (customer.entity_status === EntityStatus.BLOCKED) {
-      throw new UnauthorizedException('Utilisateur bloqué');
+    // Si l'utilisateur est inactif
+    if (customer.entity_status === EntityStatus.INACTIVE) {
+      throw new UnauthorizedException('Utilisateur inactif');
     }
     // Si l'utilisateur est supprimé
     if (customer.entity_status === EntityStatus.DELETED) {

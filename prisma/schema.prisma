@@ -12,7 +12,6 @@ enum EntityStatus {
   NEW
   ACTIVE
   INACTIVE
-  BLOCKED
   DELETED
 }
 

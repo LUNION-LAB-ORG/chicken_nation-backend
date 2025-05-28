@@ -33,7 +33,7 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @Post()
-  create(@Req() req: Request,@Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
+  create(@Req() req: Request, @Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
 
     return this.usersService.create(req, { ...createUserDto, image: image?.path });
   }
@@ -128,6 +128,36 @@ export class UsersController {
   async partialDelete(@Req() req: Request) {
     return this.usersService.partialRemove(req);
   }
+
+  // INACTIVE
+  @ApiOperation({ summary: 'Inactiver utilisateur' })
+  @ApiOkResponse({
+    description: 'Utilisateur inactivé avec succès',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Utilisateur non trouvé',
+  })
+  @UseGuards(JwtAuthGuard)
+  @Delete()
+  async inactive(@Req() req: Request) {
+    return this.usersService.inactive(req);
+  }
+
+  // RESTAURATION 
+  @ApiOperation({ summary: 'Restaurer utilisateur' })
+  @ApiOkResponse({
+    description: 'Utilisateur restauré avec succès',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Utilisateur non trouvé',
+  })
+  @UseGuards(JwtAuthGuard)
+  @Delete()
+  async restore(@Req() req: Request) {
+    return this.usersService.restore(req);
+  }
+
+
 
   // DELETE
   @ApiOperation({ summary: 'Supprimer définitivement utilisateur' })

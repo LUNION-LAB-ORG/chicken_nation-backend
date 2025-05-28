@@ -19,9 +19,9 @@ export class JwtRefreshAuthGuard extends AuthGuard('jwt-refresh') {
     const request = context.switchToHttp().getRequest();
     const user = request.user as User;
 
-    // Si l'utilisateur est bloqué
-    if (user.entity_status === EntityStatus.BLOCKED) {
-      throw new UnauthorizedException('Utilisateur bloqué');
+    // Si l'utilisateur est inactif
+    if (user.entity_status === EntityStatus.INACTIVE) {
+      throw new UnauthorizedException('Utilisateur inactif');
     }
     // Si l'utilisateur est supprimé
     if (user.entity_status === EntityStatus.DELETED) {

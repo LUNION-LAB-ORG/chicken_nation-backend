@@ -181,6 +181,32 @@ export class UsersService {
       },
     });
   }
+  // INACTIVE
+  async inactive(req: Request) {
+    const user = req.user as User;
+
+    return this.prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        entity_status: EntityStatus.INACTIVE,
+      },
+    });
+  }
+  // RESTAURATION
+  async restore(req: Request) {
+    const user = req.user as User;
+
+    return this.prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        entity_status: EntityStatus.ACTIVE,
+      },
+    });
+  }
 
   // DELETE
   async remove(req: Request, id: string) {
