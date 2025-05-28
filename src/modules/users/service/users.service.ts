@@ -83,9 +83,9 @@ export class UsersService {
   // FIND_ALL
   async findAll() {
     const users = await this.prisma.user.findMany({
-      where: {
-        entity_status: EntityStatus.ACTIVE,
-      },
+      // where: {
+      //   entity_status: EntityStatus.ACTIVE,
+      // },
       include: {
         restaurant: true,
       },
