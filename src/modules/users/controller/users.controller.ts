@@ -138,9 +138,9 @@ export class UsersController {
     description: 'Utilisateur non trouvé',
   })
   @UseGuards(JwtAuthGuard)
-  @Post('inactive')
-  async inactive(@Req() req: Request) {
-    return this.usersService.inactive(req);
+  @Post('inactive/:id')
+  async inactive(@Req() req: Request, @Param('id') id: string) {
+    return this.usersService.inactive(req, id);
   }
 
   // RESTAURATION 
@@ -152,9 +152,9 @@ export class UsersController {
     description: 'Utilisateur non trouvé',
   })
   @UseGuards(JwtAuthGuard)
-  @Post('restore')
-  async restore(@Req() req: Request) {
-    return this.usersService.restore(req);
+  @Post('restore/:id')
+  async restore(@Req() req: Request, @Param('id') id: string) {
+    return this.usersService.restore(req, id);
   }
 
 

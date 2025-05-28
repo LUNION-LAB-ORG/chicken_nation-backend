@@ -181,26 +181,28 @@ export class UsersService {
       },
     });
   }
+
   // INACTIVE
-  async inactive(req: Request) {
+  async inactive(req: Request, id: string) {
     const user = req.user as User;
 
     return this.prisma.user.update({
       where: {
-        id: user.id,
+        id: id,
       },
       data: {
         entity_status: EntityStatus.INACTIVE,
       },
     });
   }
+
   // RESTAURATION
-  async restore(req: Request) {
+  async restore(req: Request, id: string) {
     const user = req.user as User;
 
     return this.prisma.user.update({
       where: {
-        id: user.id,
+        id: id,
       },
       data: {
         entity_status: EntityStatus.ACTIVE,
