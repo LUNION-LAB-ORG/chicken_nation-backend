@@ -138,7 +138,7 @@ export class UsersController {
     description: 'Utilisateur non trouvé',
   })
   @UseGuards(JwtAuthGuard)
-  @Delete()
+  @Post('inactive')
   async inactive(@Req() req: Request) {
     return this.usersService.inactive(req);
   }
@@ -152,11 +152,10 @@ export class UsersController {
     description: 'Utilisateur non trouvé',
   })
   @UseGuards(JwtAuthGuard)
-  @Delete()
+  @Post('restore')
   async restore(@Req() req: Request) {
     return this.usersService.restore(req);
   }
-
 
 
   // DELETE
