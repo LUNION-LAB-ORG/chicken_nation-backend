@@ -1,6 +1,7 @@
 import { IsString, IsEnum, IsNumber, IsOptional, IsBoolean, IsArray, IsDateString, Min } from 'class-validator';
 import { DiscountType, TargetType, PromotionStatus, Visibility } from '@prisma/client';
 import { ApiProperty } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 
 export class CreatePromotionDto {
   @ApiProperty({
@@ -31,6 +32,7 @@ export class CreatePromotionDto {
   })
   @IsNumber()
   @Min(0)
+  @Transform(({ value }) => Number(value))
   discount_value: number;
 
   @ApiProperty({
@@ -48,6 +50,7 @@ export class CreatePromotionDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Transform(({ value }) => Number(value))
   min_order_amount?: number;
 
   @ApiProperty({
@@ -57,6 +60,7 @@ export class CreatePromotionDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Transform(({ value }) => Number(value))
   max_discount_amount?: number;
 
   @ApiProperty({
@@ -66,6 +70,7 @@ export class CreatePromotionDto {
   @IsOptional()
   @IsNumber()
   @Min(1)
+  @Transform(({ value }) => Number(value))
   max_usage_per_user?: number = 1;
 
   @ApiProperty({
@@ -75,6 +80,7 @@ export class CreatePromotionDto {
   @IsOptional()
   @IsNumber()
   @Min(1)
+  @Transform(({ value }) => Number(value))
   max_total_usage?: number;
 
   @ApiProperty({
@@ -114,6 +120,7 @@ export class CreatePromotionDto {
   })
   @IsOptional()
   @IsBoolean()
+  @Transform(({ value }) => Boolean(value))
   target_standard?: boolean = false;
 
   @ApiProperty({
@@ -122,6 +129,7 @@ export class CreatePromotionDto {
   })
   @IsOptional()
   @IsBoolean()
+  @Transform(({ value }) => Boolean(value))
   target_premium?: boolean = false;
 
   @ApiProperty({
@@ -130,6 +138,7 @@ export class CreatePromotionDto {
   })
   @IsOptional()
   @IsBoolean()
+  @Transform(({ value }) => Boolean(value))
   target_gold?: boolean = false;
 
   @ApiProperty({
@@ -170,6 +179,7 @@ export class CreatePromotionDto {
   })
   @IsOptional()
   @IsArray()
+  @Transform(({ value }) => JSON.parse(value))
   targeted_dish_ids?: string[];
 
   @ApiProperty({
@@ -178,6 +188,7 @@ export class CreatePromotionDto {
   })
   @IsOptional()
   @IsArray()
+  @Transform(({ value }) => JSON.parse(value))
   targeted_category_ids?: string[];
 
   @ApiProperty({
@@ -186,5 +197,6 @@ export class CreatePromotionDto {
   })
   @IsOptional()
   @IsArray()
+  @Transform(({ value }) => JSON.parse(value))
   offered_dishes?: { dish_id: string; quantity: number }[];
 }

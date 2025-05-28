@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, Req, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { PromotionService } from '../services/promotion.service';
 import { CreatePromotionDto } from '../dto/create-promotion.dto';
 import { UpdatePromotionDto } from '../dto/update-promotion.dto';
@@ -13,7 +13,9 @@ import { UserTypes } from 'src/common/decorators/user-types.decorator';
 import { UserType } from '@prisma/client';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { ApplyDiscountPromotionDtoResponse, ApplyItemDto } from '../dto/apply-discount-promotion.dto';
-
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname } from 'path';
 
 @ApiTags('Promotions')
 @Controller('fidelity/promotions')
@@ -24,11 +26,26 @@ export class PromotionController {
   @ApiOperation({ summary: 'Créer une promotion' })
   @ApiOkResponse({ type: PromotionResponseDto })
   @UseGuards(JwtAuthGuard, UserTypesGuard)
+  @UseInterceptors(FileInterceptor('coupon_image_url', {
+    storage: diskStorage({
+      destination: './uploads/promotions',
+      filename: (req, file, callback) => {
+        const filename = `image-${Date.now()}${extname(file.originalname)}`;
+        callback(null, filename);
+      },
+    }),
+    fileFilter: (req, file, callback) => {
+      if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/)) {
+        return callback(new Error('Only image files are allowed!'), false);
+      }
+      callback(null, true);
+    }
+  }))
   @UserTypes(UserType.BACKOFFICE)
   @Post()
-  create(@Req() req: Request, @Body() createPromotionDto: CreatePromotionDto) {
+  create(@Req() req: Request, @Body() createPromotionDto: CreatePromotionDto, @UploadedFile() image: Express.Multer.File) {
     const user = req.user as User;
-    return this.promotionService.create(createPromotionDto, user.id);
+    return this.promotionService.create({ ...createPromotionDto, coupon_image_url: image?.filename }, user.id);
   }
 
   @ApiOperation({ summary: 'Lister les promotions' })
@@ -47,11 +64,26 @@ export class PromotionController {
 
   @ApiOperation({ summary: 'Mettre à jour une promotion' })
   @ApiOkResponse({ type: PromotionResponseDto })
+  @UseInterceptors(FileInterceptor('coupon_image_url', {
+    storage: diskStorage({
+      destination: './uploads/promotions',
+      filename: (req, file, callback) => {
+        const filename = `image-${Date.now()}${extname(file.originalname)}`;
+        callback(null, filename);
+      },
+    }),
+    fileFilter: (req, file, callback) => {
+      if (!file.originalname.match(/\.(jpg|jpeg|png|gif)$/)) {
+        return callback(new Error('Only image files are allowed!'), false);
+      }
+      callback(null, true);
+    }
+  }))
   @UseGuards(JwtAuthGuard, UserTypesGuard)
   @UserTypes(UserType.BACKOFFICE)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updatePromotionDto: UpdatePromotionDto) {
-    return this.promotionService.update(id, updatePromotionDto);
+  update(@Param('id') id: string, @Body() updatePromotionDto: UpdatePromotionDto, @UploadedFile() image: Express.Multer.File) {
+    return this.promotionService.update(id, { ...updatePromotionDto, coupon_image_url: image?.filename });
   }
 
   @ApiOperation({ summary: 'Supprimer une promotion' })
