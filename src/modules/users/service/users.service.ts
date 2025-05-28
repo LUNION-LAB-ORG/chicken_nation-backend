@@ -14,14 +14,15 @@ export class UsersService {
   constructor(private readonly prisma: PrismaService, private readonly generateDataService: GenerateDataService) { }
 
   // CREATE
-  async create(createUserDto: CreateUserDto) {
+  async create(req: Request, createUserDto: CreateUserDto) {
+    const user = req.user as User;
     // Vérification de l'existence de l'utilisateur
-    const user = await this.prisma.user.findUnique({
+    const userExist = await this.prisma.user.findUnique({
       where: {
         email: createUserDto.email,
       },
     });
-    if (user) {
+    if (userExist) {
       throw new BadRequestException(
         "Utilisateur déjà existant, changer d'email",
       );
@@ -46,14 +47,15 @@ export class UsersService {
   }
 
   // CREATE MEMBER
-  async createMember(createUserDto: CreateUserDto) {
+  async createMember(req: Request, createUserDto: CreateUserDto) {
+    const user = req.user as User;
     // Vérification de l'existence de l'utilisateur
-    const user = await this.prisma.user.findUnique({
+    const userExist = await this.prisma.user.findUnique({
       where: {
         email: createUserDto.email,
       },
     });
-    if (user) {
+    if (userExist) {
       throw new BadRequestException(
         "Utilisateur déjà existant, changer d'email",
       );
@@ -69,6 +71,7 @@ export class UsersService {
       data: {
         ...createUserDto,
         password: hash,
+        restaurant_id: user.restaurant_id,
         type: UserType.RESTAURANT,
       },
       omit: { id: true, password: true },

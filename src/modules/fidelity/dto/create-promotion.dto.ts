@@ -36,6 +36,7 @@ export class CreatePromotionDto {
   @ApiProperty({
     description: 'Type de ciblage',
     example: 'ALL_PRODUCTS',
+    enum: TargetType,
   })
   @IsEnum(TargetType)
   target_type: TargetType;
@@ -93,6 +94,7 @@ export class CreatePromotionDto {
   @ApiProperty({
     description: 'Statut de la promotion',
     example: 'DRAFT',
+    enum: PromotionStatus,
   })
   @IsOptional()
   @IsEnum(PromotionStatus)
@@ -138,13 +140,29 @@ export class CreatePromotionDto {
   @IsString()
   coupon_image_url?: string;
 
+  @ApiProperty({
+    description: 'Couleur de fond',
+    example: '#FF0000',
+  })
   @IsOptional()
   @IsString()
   background_color?: string;
 
+  @ApiProperty({
+    description: 'Couleur du texte',
+    example: '#FF0000',
+  })
   @IsOptional()
   @IsString()
   text_color?: string;
+
+  @ApiProperty({
+    description: 'Couleur de fin de promotion',
+    example: '#FF0000',
+  })
+  @IsOptional()
+  @IsString()
+  expiration_color?: string;
 
   @ApiProperty({
     description: 'Plats/catégories ciblés',

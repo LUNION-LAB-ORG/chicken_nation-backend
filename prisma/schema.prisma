@@ -466,6 +466,7 @@ model Promotion {
   coupon_image_url String? @db.Text
   background_color String? @db.VarChar // Code couleur hex
   text_color       String? @db.VarChar // Code couleur hex
+  expiration_color String? @db.VarChar // Code couleur hex
 
   // Métadonnées
   created_by_id String @db.Uuid

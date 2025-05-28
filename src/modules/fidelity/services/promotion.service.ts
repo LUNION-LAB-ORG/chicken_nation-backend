@@ -478,6 +478,7 @@ export class PromotionService {
       coupon_image_url: promotion.coupon_image_url,
       background_color: promotion.background_color,
       text_color: promotion.text_color,
+      expiration_color: promotion.expiration_color,
       created_by_id: promotion.created_by_id,
       created_at: promotion.created_at,
       updated_at: promotion.updated_at,

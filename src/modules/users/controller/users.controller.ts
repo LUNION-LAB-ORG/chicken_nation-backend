@@ -33,9 +33,9 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @Post()
-  create(@Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
+  create(@Req() req: Request,@Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
 
-    return this.usersService.create({ ...createUserDto, image: image?.path });
+    return this.usersService.create(req, { ...createUserDto, image: image?.path });
   }
 
   // CREATE MEMBER
@@ -50,8 +50,8 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @Post('member')
-  createMember(@Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
-    return this.usersService.createMember({ ...createUserDto, image: image?.path });
+  createMember(@Req() req: Request, @Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
+    return this.usersService.createMember(req, { ...createUserDto, image: image?.path });
   }
   // GET DETAIL USER
   @ApiOperation({ summary: "Obtenir les détails d'utilisateur" })
@@ -91,9 +91,10 @@ export class UsersController {
   })
   @ApiBody({ type: UpdateUserDto })
   @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @Patch()
-  update(@Req() req: Request, @Body() updateUserDto: UpdateUserDto) {
-    return this.usersService.update(req, updateUserDto);
+  update(@Req() req: Request, @Body() updateUserDto: UpdateUserDto, @UploadedFile() image: Express.Multer.File) {
+    return this.usersService.update(req, { ...updateUserDto, image: image?.path });
   }
 
   // UPDATE PASSWORD

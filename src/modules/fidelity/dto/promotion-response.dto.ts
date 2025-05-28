@@ -24,6 +24,7 @@ export class PromotionResponseDto {
     coupon_image_url?: string;
     background_color?: string;
     text_color?: string;
+    expiration_color?: string;
     created_by_id: string;
     created_at: Date;
     updated_at: Date;
