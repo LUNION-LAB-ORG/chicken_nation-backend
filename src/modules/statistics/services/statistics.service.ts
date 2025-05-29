@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Inject } from '@nestjs/common';
 import {
   startOfMonth,
   endOfMonth,
@@ -6,7 +6,6 @@ import {
   startOfYear,
   endOfYear,
   format,
-  subMonths,
   startOfDay,
   endOfDay,
   eachHourOfInterval,
@@ -50,9 +49,10 @@ interface PreviousPeriod {
 
 @Injectable()
 export class StatisticsService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService, @Inject("ICON") private readonly icons: any) { }
 
   async getDashboardStats(query: GetStatsQueryDto): Promise<DashboardViewModel> {
+
     // Validation et parsing des dates
     const dateRange = this.parseDateRange(query);
     const restaurantFilter = this.buildRestaurantFilter(query.restaurantId);
@@ -231,29 +231,29 @@ export class StatisticsService {
         value: revenueValue.toLocaleString('fr-FR'),
         unit: 'XOF',
         badgeText: this.calculateTrend(revenueValue, prevRevenueValue),
-        badgeColor: revenueValue >= prevRevenueValue ? 'green' : 'red',
-        iconImage: 'assets/icons/money-bag.svg',
+        badgeColor: revenueValue >= prevRevenueValue ? this.icons.revenue.color : '#FF0000',
+        iconImage: this.icons.revenue.url,
       },
       menusSold: {
         title: 'Menus vendus',
         value: menusSoldValue.toString(),
         badgeText: this.calculateTrend(menusSoldValue, prevMenusSoldValue),
-        badgeColor: menusSoldValue >= prevMenusSoldValue ? 'green' : 'red',
-        iconImage: 'assets/icons/food.svg',
+        badgeColor: menusSoldValue >= prevMenusSoldValue ? this.icons.menusSold.color : '#FF0000',
+        iconImage: this.icons.menusSold.url,
       },
       totalOrders: {
         title: 'Commandes',
         value: totalOrdersValue.toString(),
         badgeText: this.calculateTrend(totalOrdersValue, prevTotalOrdersValue),
-        badgeColor: totalOrdersValue >= prevTotalOrdersValue ? 'green' : 'red',
-        iconImage: 'assets/icons/shopping-cart.svg',
+        badgeColor: totalOrdersValue >= prevTotalOrdersValue ? this.icons.totalOrders.color : '#FF0000',
+        iconImage: this.icons.totalOrders.url,
       },
       totalCustomers: {
         title: 'Clients',
         value: totalCustomers.toString(),
         badgeText: '+8.7%', // Cette valeur pourrait être calculée dynamiquement
-        badgeColor: 'green',
-        iconImage: 'assets/icons/users.svg',
+        badgeColor: this.icons.totalCustomers.color,
+        iconImage: this.icons.totalCustomers.url,
       },
     };
   }
