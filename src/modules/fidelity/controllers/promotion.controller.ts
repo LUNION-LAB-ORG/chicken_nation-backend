@@ -14,8 +14,6 @@ import { UserType } from '@prisma/client';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { ApplyDiscountPromotionDtoResponse, ApplyItemDto } from '../dto/apply-discount-promotion.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 
 @ApiTags('Promotions')
@@ -32,7 +30,7 @@ export class PromotionController {
   @Post()
   create(@Req() req: Request, @Body() createPromotionDto: CreatePromotionDto, @UploadedFile() image: Express.Multer.File) {
     const user = req.user as User;
-    return this.promotionService.create({ ...createPromotionDto, coupon_image_url: image?.filename }, user.id);
+    return this.promotionService.create({ ...createPromotionDto, coupon_image_url: image?.path }, user.id);
   }
 
   @ApiOperation({ summary: 'Lister les promotions' })

@@ -16,6 +16,7 @@ import { NotificationRealTimeModule } from './notification-real-time/notificatio
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { StatisticsModule } from 'src/modules/statistics/statistics.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -35,6 +36,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
     KkiapayModule,
     NotificationRealTimeModule,
     FidelityModule,
+    StatisticsModule,
   ],
 })
 
