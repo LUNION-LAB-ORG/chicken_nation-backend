@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
-import { OrderStatus, EntityStatus, Customer, PaiementStatus, Order, } from '@prisma/client';
+import { OrderStatus, EntityStatus, Customer, PaiementStatus, Order, Prisma, } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Request } from 'express';
 import { QueryOrderDto } from '../dto/query-order.dto';
@@ -262,7 +262,7 @@ export class OrderService {
       sortOrder = 'desc'
     } = filters;
 
-    const where = {
+    const where: Prisma.OrderWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),
       ...(type && { type }),
@@ -360,7 +360,7 @@ export class OrderService {
       sortOrder = 'desc'
     } = filters;
     const customerId = (req.user as Customer).id;
-    const where = {
+    const where: Prisma.OrderWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),
       ...(type && { type }),
@@ -495,7 +495,7 @@ export class OrderService {
    */
   async getOrderStatistics(filters?: QueryOrderDto) {
     // Construire la clause where à partir des filtres
-    const where = this.orderHelper.buildWhereClause(filters);
+    const where: Prisma.OrderWhereInput = this.orderHelper.buildWhereClause(filters);
 
     // Exécuter les requêtes en parallèle pour les performances
     const [

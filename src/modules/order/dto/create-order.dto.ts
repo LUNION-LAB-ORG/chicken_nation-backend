@@ -11,7 +11,7 @@ export class CreateOrderDto {
     @IsEnum(OrderType)
     type: OrderType;
 
-    @ApiProperty({ description: "Type de table", enum: TypeTable })
+    @ApiPropertyOptional({ description: "Type de table", enum: TypeTable })
     @IsEnum(TypeTable)
     @IsOptional()
     table_type?: TypeTable;
@@ -60,7 +60,8 @@ export class CreateOrderDto {
     @IsString()
     fullname?: string;
 
-    @ApiProperty({ description: 'Numéro de téléphone du client', example: '+225070707070' })
+    @ApiPropertyOptional({ description: 'Numéro de téléphone du client', example: '+225070707070' })
+    @IsOptional()
     @IsPhoneNumber("CI", { message: 'Numéro de téléphone non valide, utilisez le format +225' })
     @IsString()
     @Transform(({ value }) => value.trim())

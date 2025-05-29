@@ -4,7 +4,7 @@ import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto'
 import { PrismaService } from 'src/database/services/prisma.service';
 import { NotFoundException } from '@nestjs/common';
 import { Request } from 'express';
-import { Customer, EntityStatus } from '@prisma/client';
+import { Customer, EntityStatus, Prisma } from '@prisma/client';
 import { CustomerQueryDto } from '../dto/customer-query.dto';
 
 @Injectable()
@@ -42,7 +42,7 @@ export class CustomerService {
 
   async findAll(query: CustomerQueryDto = {}) {
     const { page, limit, status, search } = query;
-    const whereClause: any = { entity_status: EntityStatus.ACTIVE };
+    const whereClause: Prisma.CustomerWhereInput = { entity_status: EntityStatus.ACTIVE };
 
     if (search) {
       whereClause.OR = [

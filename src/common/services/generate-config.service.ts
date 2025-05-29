@@ -7,7 +7,7 @@ import { GenerateDataService } from "./generate-data.service";
 export class GenerateConfigService {
 
     static generateConfigSingleImageUpload(destination: string, name?: string) {
-        const avatarConfig = {
+        const imageConfig = {
             storage: diskStorage({
                 destination,
                 filename: async (req, file, cb) => {
@@ -24,6 +24,6 @@ export class GenerateConfigService {
                 cb(null, true);
             },
         };
-        return avatarConfig;
+        return imageConfig;
     }
 }

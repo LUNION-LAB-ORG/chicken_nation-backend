@@ -34,7 +34,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
     NotificationsModule,
     KkiapayModule,
     NotificationRealTimeModule,
-    FidelityModule
+    FidelityModule,
   ],
 })
 

@@ -1,103 +1,71 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsUUID, IsEnum, IsOptional, IsBoolean, IsDate, IsObject } from 'class-validator';
-import { Type } from 'class-transformer';
-import { NotificationType } from 'src/modules/notifications/enums/notification.enum';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsEnum, IsString, IsBoolean, IsOptional, IsUUID, IsObject } from 'class-validator';
+import { NotificationTarget, NotificationType } from '@prisma/client';
 
 export class CreateNotificationDto {
   @ApiProperty({
-    description: 'ID de l\'utilisateur qui recevra la notification',
-    example: '123e4567-e89b-12d3-a456-426614174000',
-  })
-  @IsUUID()
-  userId: string;
-
-  @ApiProperty({
-    description: 'Icône de la notification',
-    example: 'icon',
-  })
-  @IsString()
-  icon: string;
-
-  @ApiProperty({
-    description: 'Couleur de fond de l\'icône de la notification',
-    example: 'bgColor',
-  })
-  @IsString()
-  iconBgColor: string;
-
-  @ApiProperty({
     description: 'Titre de la notification',
-    example: 'Confirmation de paiement',
+    example: 'Nouvelle commande reçue'
   })
   @IsString()
   title: string;
 
   @ApiProperty({
-    description: 'Date de la notification',
-    example: '2022-01-01T00:00:00.000Z',
-  })
-  @Type(() => Date)
-  @IsDate()
-  date: Date;
-
-  @ApiProperty({
-    description: 'Heure de la notification',
-    example: '12:00',
-  })
-  @IsString()
-  time: string;
-
-  @ApiProperty({
     description: 'Message de la notification',
-    example: 'Votre paiement de 50€ a été confirmé',
+    example: 'Votre commande #CMD-001 a été confirmée et sera livrée dans 30 minutes.'
   })
   @IsString()
   message: string;
 
   @ApiProperty({
-    description: 'Type de notification',
     enum: NotificationType,
-    example: NotificationType.PAYMENT,
+    description: 'Type de notification',
+    example: NotificationType.ORDER
   })
   @IsEnum(NotificationType)
   type: NotificationType;
 
   @ApiProperty({
-    description: 'État de lecture de la notification',
-    example: true,
-    required: false,
+    description: 'Identifiant de l\'utilisateur destinataire',
+    example: '550e8400-e29b-41d4-a716-446655440000'
   })
-  @IsOptional()
-  @IsBoolean()
-  isRead?: boolean;
+  @IsUUID()
+  user_id: string;
 
   @ApiProperty({
-    description: 'Affichage du chevron de la notification',
-    example: true,
-    required: false,
+    enum: NotificationTarget,
+    description: 'Cible de la notification (utilisateur ou client)',
+    example: NotificationTarget.CUSTOMER
   })
-  @IsOptional()
-  @IsBoolean()
-  showChevron?: boolean;
+  @IsEnum(NotificationTarget)
+  target: NotificationTarget;
 
   @ApiProperty({
-    description: 'Bannière de notification',
-    example: 'notifBanner',
+    description: 'URL de l\'icône de la notification',
+    example: 'https://example.com/icons/order.svg'
   })
   @IsString()
-  notifBanner: string;
+  icon: string;
 
   @ApiProperty({
-    description: 'Titre de notification',
-    example: 'notifTitle',
+    description: 'Couleur de fond de l\'icône (code hexadécimal)',
+    example: '#4CAF50'
   })
   @IsString()
-  notifTitle: string;
+  icon_bg_color: string;
 
-  @ApiProperty({
-    description: 'Données supplémentaires liées à la notification',
-    example: { orderId: '123', amount: 50 },
-    required: false,
+  @ApiPropertyOptional({
+    description: 'Afficher ou non le chevron (flèche)',
+    example: true,
+    default: false
+  })
+  @IsBoolean()
+  @IsOptional()
+  show_chevron?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Données supplémentaires de la notification (JSON)',
+    example: { order_id: 'CMD-001', amount: 15000 }
   })
   @IsOptional()
   @IsObject()

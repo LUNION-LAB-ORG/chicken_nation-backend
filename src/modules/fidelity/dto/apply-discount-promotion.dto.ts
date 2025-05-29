@@ -1,6 +1,6 @@
 import { IsBoolean, IsNumber, IsString } from "class-validator";
 import { Transform } from "class-transformer";
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 export class ApplyDiscountPromotionDto {
     @ApiProperty({ description: 'ID de la promotion' })
@@ -50,7 +50,7 @@ export class ApplyDiscountPromotionDtoResponse {
     @Transform(({ value }) => Boolean(value))
     applicable: boolean;
 
-    @ApiProperty({ description: 'Motif de non-applicabilité' })
+    @ApiPropertyOptional({ description: 'Motif de non-applicabilité' })
     @IsString()
     reason?: string;
 }

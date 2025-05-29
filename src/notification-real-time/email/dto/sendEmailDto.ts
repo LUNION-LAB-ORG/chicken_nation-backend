@@ -1,5 +1,5 @@
 import { IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class sendEmailDto {
   @ApiProperty({
@@ -27,7 +27,7 @@ export class sendEmailDto {
   @IsString()
   html: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Contenu textuel du mail',
     type: String,
     required: false,

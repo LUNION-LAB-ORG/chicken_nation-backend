@@ -1,294 +1,394 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { NotificationType, NotificationTarget, Prisma } from '@prisma/client';
+import { PrismaService } from 'src/database/services/prisma.service';
+import { CreateNotificationDto } from '../dto/create-notification.dto';
+import { UpdateNotificationDto } from '../dto/update-notification.dto';
+import { NotificationStatsDto } from '../dto/notifications-stats.dto';
+import { QueryNotificationDto } from '../dto/query-notification.dto';
+import { QueryResponseDto } from 'src/common/dto/query-response.dto';
+import { NotificationResponseDto } from '../dto/response-notification.dto';
 
 @Injectable()
 export class NotificationsService {
-  // constructor(
-  //   @InjectRepository(Notification)
-  //   private notificationsRepository: Repository<Notification>,
-  //   @InjectRepository(NotificationPreference)
-  //   private preferencesRepository: Repository<NotificationPreference>,
-  // ) {}
+    constructor(private readonly prisma: PrismaService) { }
 
-  // /**
-  //  * Crée une nouvelle notification
-  //  * @param createNotificationDto Les données de la notification à créer
-  //  * @returns La notification créée
-  //  */
-  // async create(createNotificationDto: CreateNotificationDto): Promise<Notification> {
-  //   const notification = this.notificationsRepository.create(createNotificationDto);
-  //   return this.notificationsRepository.save(notification);
-  // }
+    /**
+     * Créer une nouvelle notification
+     */
+    async create(createNotificationDto: CreateNotificationDto) {
+        const notification = await this.prisma.notification.create({
+            data: createNotificationDto,
+        });
 
-  // /**
-  //  * Récupère toutes les notifications
-  //  * @returns Liste de toutes les notifications
-  //  */
-  // async findAll(): Promise<Notification[]> {
-  //   return this.notificationsRepository.find();
-  // }
+        return notification;
+    }
 
-  // /**
-  //  * Récupère les notifications d'un utilisateur
-  //  * @param userId ID de l'utilisateur
-  //  * @returns Liste des notifications de l'utilisateur
-  //  */
-  // async findByUserId(userId: string): Promise<Notification[]> {
-  //   return this.notificationsRepository.find({
-  //     where: { userId },
-  //     order: { createdAt: 'DESC' },
-  //   });
-  // }
+    /**
+     * Obtenir toutes les notifications avec pagination et filtres
+     */
+    async findAll(query: QueryNotificationDto): Promise<QueryResponseDto<NotificationResponseDto>> {
+        const page = Number(query.page ?? 1);
+        const limit = Number(query.limit ?? 10);
+        const skip = (page - 1) * limit;
 
-  // /**
-  //  * Récupère une notification par son ID
-  //  * @param id ID de la notification
-  //  * @returns La notification trouvée
-  //  */
-  // async findOne(id: string): Promise<Notification> {
-  //   const notification = await this.notificationsRepository.findOne({
-  //     where: { id },
-  //   });
+        const where: Prisma.NotificationWhereInput = {};
 
-  //   if (!notification) {
-  //     throw new NotFoundException(`Notification with ID ${id} not found`);
-  //   }
+        if (query.userId) where.user_id = query.userId;
+        if (query.target) where.target = query.target;
+        if (query.type) where.type = query.type;
+        if (query.isRead !== undefined) where.is_read = query.isRead;
 
-  //   return notification;
-  // }
+        const [notifications, total] = await Promise.all([
+            this.prisma.notification.findMany({
+                where,
+                skip,
+                take: limit,
+                orderBy: { created_at: 'desc' },
+            }),
+            this.prisma.notification.count({ where }),
+        ]);
 
-  // /**
-  //  * Marque une notification comme lue
-  //  * @param id ID de la notification
-  //  * @returns La notification mise à jour
-  //  */
-  // async markAsRead(id: string): Promise<Notification> {
-  //   const notification = await this.findOne(id);
-  //   notification.isRead = true;
-  //   return this.notificationsRepository.save(notification);
-  // }
+        return {
+            data: notifications,
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            },
+        };
+    }
 
-  // /**
-  //  * Marque toutes les notifications d'un utilisateur comme lues
-  //  * @param userId ID de l'utilisateur
-  //  * @returns Nombre de notifications mises à jour
-  //  */
-  // async markAllAsRead(userId: string): Promise<number> {
-  //   const result = await this.notificationsRepository.update(
-  //     { userId, isRead: false },
-  //     { isRead: true },
-  //   );
-  //   return result.affected || 0;
-  // }
+    /**
+     * Obtenir les notifications d'un utilisateur spécifique
+     */
+    async findByUser(query: Omit<QueryNotificationDto, 'userId' | 'target'>, userId: string, target: NotificationTarget): Promise<QueryResponseDto<NotificationResponseDto>> {
+        const page = Number(query.page ?? 1);
+        const limit = Number(query.limit ?? 10);
+        const skip = (page - 1) * limit;
 
-  // /**
-  //  * Supprime une notification
-  //  * @param id ID de la notification
-  //  * @returns true si la suppression a réussi
-  //  */
-  // async remove(id: string): Promise<boolean> {
-  //   const result = await this.notificationsRepository.delete(id);
-  //   // return result.affected > 0;
-  //   return true;
-  // }
+        const where: Prisma.NotificationWhereInput = {
+            user_id: userId,
+            target,
+        };
 
-  // /**
-  //  * Récupère les préférences de notification d'un utilisateur
-  //  * @param userId ID de l'utilisateur
-  //  * @returns Les préférences de notification de l'utilisateur
-  //  */
-  // async getPreferences(userId: string): Promise<NotificationPreference> {
-  //   const preferences = await this.preferencesRepository.findOne({
-  //     // where: { userId },
-  //   });
+        if (query.type) where.type = query.type;
+        if (query.isRead !== undefined) where.is_read = query.isRead;
 
-  //   if (!preferences) {
-  //     // Créer des préférences par défaut si elles n'existent pas
-  //     return this.createDefaultPreferences(userId);
-  //   }
+        const [notifications, total] = await Promise.all([
+            this.prisma.notification.findMany({
+                where,
+                skip,
+                take: limit,
+                orderBy: { created_at: 'desc' },
+            }),
+            this.prisma.notification.count({ where }),
+        ]);
 
-  //   return preferences;
-  // }
+        return {
+            data: notifications,
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            },
+        };
+    }
 
-  // /**
-  //  * Met à jour les préférences de notification d'un utilisateur
-  //  * @param userId ID de l'utilisateur
-  //  * @param updateDto Données de mise à jour des préférences
-  //  * @returns Les préférences mises à jour
-  //  */
-  // async updatePreferences(
-  //   userId: string,
-  //   updateDto: UpdateNotificationPreferenceDto,
-  // ): Promise<NotificationPreference> {
-  //   let preferences = await this.preferencesRepository.findOne({
-  //     // where: { userId },
-  //   });
+    /**
+     * Obtenir une notification par son ID
+     */
+    async findOne(id: string) {
+        const notification = await this.prisma.notification.findUnique({
+            where: { id },
+        });
 
-  //   if (!preferences) {
-  //     preferences = await this.createDefaultPreferences(userId);
-  //   }
+        if (!notification) {
+            throw new NotFoundException('Notification non trouvée');
+        }
 
-  //   // Mettre à jour uniquement les champs fournis
-  //   if (updateDto.orderUpdates !== undefined) {
-  //     preferences.orderUpdates = {
-  //       ...preferences.orderUpdates,
-  //       ...updateDto.orderUpdates,
-  //     };
-  //   }
+        return notification;
+    }
 
-  //   if (updateDto.promotions !== undefined) {
-  //     preferences.promotions = {
-  //       ...preferences.promotions,
-  //       ...updateDto.promotions,
-  //     };
-  //   }
+    /**
+     * Mettre à jour une notification
+     */
+    async update(id: string, updateNotificationDto: UpdateNotificationDto) {
+        try {
+            const notification = await this.prisma.notification.update({
+                where: { id },
+                data: {
+                    ...updateNotificationDto,
+                    updated_at: new Date(),
+                },
+            });
 
-  //   if (updateDto.newsletter !== undefined) {
-  //     preferences.newsletter = {
-  //       ...preferences.newsletter,
-  //       ...updateDto.newsletter,
-  //     };
-  //   }
+            return notification;
+        } catch (error) {
+            if (error.code === 'P2025') {
+                throw new NotFoundException('Notification non trouvée');
+            }
+            throw new BadRequestException('Erreur lors de la mise à jour de la notification');
+        }
+    }
 
-  //   if (updateDto.pushNotifications !== undefined) {
-  //     preferences.pushNotifications = {
-  //       ...preferences.pushNotifications,
-  //       ...updateDto.pushNotifications,
-  //     };
-  //   }
+    /**
+     * Marquer une notification comme lue
+     */
+    async markAsRead(id: string) {
+        return this.update(id, { is_read: true });
+    }
 
-  //   return this.preferencesRepository.save(preferences);
-  // }
+    /**
+     * Marquer une notification comme non lue
+     */
+    async markAsUnread(id: string) {
+        return this.update(id, { is_read: false });
+    }
 
-  // /**
-  //  * Crée des préférences de notification par défaut pour un utilisateur
-  //  * @param userId ID de l'utilisateur
-  //  * @returns Les préférences créées
-  //  */
-  // private async createDefaultPreferences(
-  //   userId: string,
-  // ): Promise<NotificationPreference> {
-  //   const defaultPreferences = this.preferencesRepository.create({
-  //     // userId,
-  //     orderUpdates: {
-  //       email: true,
-  //       push: true,
-  //     },
-  //     promotions: {
-  //       email: true,
-  //       push: false,
-  //     },
-  //     newsletter: {
-  //       email: true,
-  //       push: false,
-  //     },
-  //     pushNotifications: {
-  //       enabled: true,
-  //       quietHours: {
-  //         start: null,
-  //         end: null,
-  //       },
-  //     },
-  //   });
+    /**
+     * Marquer toutes les notifications d'un utilisateur comme lues
+     */
+    async markAllAsReadByUser(userId: string, target: NotificationTarget) {
+        const result = await this.prisma.notification.updateMany({
+            where: {
+                user_id: userId,
+                target,
+                is_read: false,
+            },
+            data: {
+                is_read: true,
+                updated_at: new Date(),
+            },
+        });
 
-  //   return this.preferencesRepository.save(defaultPreferences);
-  // }
+        return {
+            message: `${result.count} notification(s) marquée(s) comme lue(s)`,
+            count: result.count,
+        };
+    }
 
-  // /**
-  //  * Vérifie si un utilisateur doit recevoir une notification
-  //  * @param userId ID de l'utilisateur
-  //  * @param type Type de notification
-  //  * @param channel Canal de notification (email, push, inApp)
-  //  * @returns true si l'utilisateur doit recevoir la notification
-  //  */
-  // async shouldSendNotification(
-  //   userId: string,
-  //   type: NotificationType,
-  //   channel: 'email' | 'push' | 'inApp',
-  // ): Promise<boolean> {
-  //   const preferences = await this.getPreferences(userId);
-    
-  //   // Vérifier si le type de notification correspond à une catégorie spécifique
-  //   let categoryPreferences: Record<string, any> | null = null;
-    
-  //   if (type === NotificationType.ORDER) {
-  //     categoryPreferences = preferences.orderUpdates;
-  //   } else if (type === NotificationType.PAYMENT) {
-  //     // Les notifications de paiement peuvent être considérées comme des mises à jour de commande
-  //     categoryPreferences = preferences.orderUpdates;
-  //   } else if (type === NotificationType.PROMO) {
-  //     categoryPreferences = preferences.promotions;
-  //   }
-    
-  //   // Si nous n'avons pas de préférences spécifiques pour ce type, utiliser les paramètres généraux
-  //   if (!categoryPreferences) {
-  //     // Fallback sur les préférences générales
-  //     if (channel === 'push') {
-  //       return preferences.pushNotifications?.enabled === true;
-  //     }
-  //     // Pour les autres canaux, autoriser par défaut
-  //     return true;
-  //   }
-    
-  //   // Vérifier les préférences spécifiques au canal pour cette catégorie
-  //   return categoryPreferences[channel] === true;
-  // }
+    /**
+     * Supprimer une notification
+     */
+    async remove(id: string) {
+        try {
+            await this.prisma.notification.delete({
+                where: { id },
+            });
 
-  // /**
-  //  * Vérifie si l'heure actuelle est dans les heures de silence pour un utilisateur
-  //  * @param userId ID de l'utilisateur
-  //  * @returns true si l'heure actuelle est dans les heures de silence
-  //  */
-  // async isInQuietHours(userId: string): Promise<boolean> {
-  //   const preferences = await this.getPreferences(userId);
-  //   const quietHours = preferences.pushNotifications?.quietHours;
-    
-  //   if (!quietHours || !quietHours.start || !quietHours.end) {
-  //     return false;
-  //   }
-    
-  //   const now = new Date();
-  //   const currentHour = now.getHours();
-  //   const currentMinute = now.getMinutes();
-    
-  //   // Convertir les heures de silence en nombres pour la comparaison
-  //   const [startHour, startMinute] = quietHours.start.split(':').map(Number);
-  //   const [endHour, endMinute] = quietHours.end.split(':').map(Number);
-    
-  //   const currentTime = currentHour * 60 + currentMinute;
-  //   const startTime = startHour * 60 + startMinute;
-  //   const endTime = endHour * 60 + endMinute;
-    
-  //   // Gérer le cas où les heures de silence s'étendent sur deux jours
-  //   if (startTime > endTime) {
-  //     return currentTime >= startTime || currentTime <= endTime;
-  //   }
-    
-  //   return currentTime >= startTime && currentTime <= endTime;
-  // }
+            return { message: 'Notification supprimée avec succès' };
+        } catch (error) {
+            if (error.code === 'P2025') {
+                throw new NotFoundException('Notification non trouvée');
+            }
+            throw new BadRequestException('Erreur lors de la suppression de la notification');
+        }
+    }
 
-  // /**
-  //  * Compte les notifications non lues d'un utilisateur
-  //  * @param userId ID de l'utilisateur
-  //  * @returns Nombre de notifications non lues
-  //  */
-  // async countUnread(userId: string): Promise<number> {
-  //   return this.notificationsRepository.count({
-  //     where: { userId, isRead: false },
-  //   });
-  // }
+    /**
+     * Supprimer toutes les notifications d'un utilisateur
+     */
+    async removeAllByUser(userId: string, target: NotificationTarget) {
+        const result = await this.prisma.notification.deleteMany({
+            where: {
+                user_id: userId,
+                target,
+            },
+        });
 
-  // /**
-  //  * Met à jour le statut de lecture d'une notification
-  //  * @param id ID de la notification
-  //  * @param updateStatusDto Données de mise à jour du statut
-  //  * @returns La notification mise à jour
-  //  */
-  // async updateStatus(id: string, updateStatusDto: UpdateNotificationStatusDto): Promise<Notification> {
-  //   const notification = await this.findOne(id);
-    
-  //   // Mettre à jour le statut de lecture
-  //   notification.isRead = updateStatusDto.isRead;
-    
-  //   return this.notificationsRepository.save(notification);
-  // }
+        return {
+            message: `${result.count} notification(s) supprimée(s)`,
+            count: result.count,
+        };
+    }
+
+    /**
+     * Obtenir les statistiques des notifications d'un utilisateur
+     */
+    async getStatsByUser(userId: string, target: NotificationTarget): Promise<NotificationStatsDto> {
+        const [total, unread, typeStats] = await Promise.all([
+            this.prisma.notification.count({
+                where: { user_id: userId, target },
+            }),
+            this.prisma.notification.count({
+                where: { user_id: userId, target, is_read: false },
+            }),
+            this.prisma.notification.groupBy({
+                by: ['type'],
+                where: { user_id: userId, target },
+                _count: { type: true },
+            }),
+        ]);
+
+        const byType = typeStats.reduce((acc, stat) => {
+            acc[stat.type] = stat._count.type;
+            return acc;
+        }, {} as Record<string, number>);
+
+        return {
+            total,
+            unread,
+            read: total - unread,
+            by_type: byType,
+        };
+    }
+
+    /**
+     * Nettoyer les anciennes notifications (plus de X jours)
+     */
+    async cleanupOldNotifications(daysOld: number = 30) {
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+
+        const result = await this.prisma.notification.deleteMany({
+            where: {
+                created_at: {
+                    lt: cutoffDate,
+                },
+                is_read: true,
+            },
+        });
+
+        return {
+            message: `${result.count} ancienne(s) notification(s) supprimée(s)`,
+            count: result.count,
+        };
+    }
+
+    /**
+     * Créer une notification de commande
+     */
+    async createOrderNotification(
+        userId: string,
+        target: NotificationTarget,
+        orderReference: string,
+        status: string,
+        additionalData?: any
+    ) {
+        const notificationData = this.getOrderNotificationContent(status, orderReference);
+
+        return this.create({
+            title: notificationData.title,
+            message: notificationData.message,
+            type: NotificationType.ORDER,
+            user_id: userId,
+            target,
+            icon: notificationData.icon,
+            icon_bg_color: notificationData.iconBgColor,
+            show_chevron: true,
+            data: {
+                order_reference: orderReference,
+                status,
+                ...additionalData,
+            },
+        });
+    }
+
+    /**
+     * Créer une notification de promotion
+     */
+    async createPromotionNotification(
+        userId: string,
+        target: NotificationTarget,
+        promotionTitle: string,
+        promotionDescription: string,
+        additionalData?: any
+    ) {
+        return this.create({
+            title: `🎉 Nouvelle promotion: ${promotionTitle}`,
+            message: promotionDescription,
+            type: NotificationType.PROMOTION,
+            user_id: userId,
+            target,
+            icon: 'https://cdn-icons-png.flaticon.com/512/3514/3514491.png',
+            icon_bg_color: '#FF6B35',
+            show_chevron: true,
+            data: {
+                promotion_title: promotionTitle,
+                ...additionalData,
+            },
+        });
+    }
+
+    /**
+     * Créer une notification système
+     */
+    async createSystemNotification(
+        userId: string,
+        target: NotificationTarget,
+        title: string,
+        message: string,
+        additionalData?: any
+    ) {
+        return this.create({
+            title,
+            message,
+            type: NotificationType.SYSTEM,
+            user_id: userId,
+            target,
+            icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524659.png',
+            icon_bg_color: '#6C757D',
+            show_chevron: false,
+            data: additionalData,
+        });
+    }
+
+    /**
+     * Utilitaire pour obtenir le contenu des notifications de commande
+     */
+    private getOrderNotificationContent(status: string, orderReference: string) {
+        const statusConfig = {
+            PENDING: {
+                title: '⏳ Commande en attente',
+                message: `Votre commande ${orderReference} est en attente de confirmation.`,
+                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524335.png',
+                iconBgColor: '#FFC107',
+            },
+            ACCEPTED: {
+                title: '✅ Commande acceptée',
+                message: `Votre commande ${orderReference} a été acceptée et est en préparation.`,
+                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524388.png',
+                iconBgColor: '#28A745',
+            },
+            IN_PROGRESS: {
+                title: '👨‍🍳 Commande en préparation',
+                message: `Votre commande ${orderReference} est actuellement en préparation.`,
+                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524456.png',
+                iconBgColor: '#17A2B8',
+            },
+            READY: {
+                title: '🍽️ Commande prête',
+                message: `Votre commande ${orderReference} est prête pour la livraison/récupération.`,
+                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524567.png',
+                iconBgColor: '#28A745',
+            },
+            PICKED_UP: {
+                title: '🚗 Commande en livraison',
+                message: `Votre commande ${orderReference} est en cours de livraison.`,
+                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524678.png',
+                iconBgColor: '#007BFF',
+            },
+            DELIVERED: {
+                title: '📦 Commande livrée',
+                message: `Votre commande ${orderReference} a été livrée avec succès.`,
+                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524789.png',
+                iconBgColor: '#28A745',
+            },
+            CANCELLED: {
+                title: '❌ Commande annulée',
+                message: `Votre commande ${orderReference} a été annulée.`,
+                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524890.png',
+                iconBgColor: '#DC3545',
+            },
+        };
+
+        return statusConfig[status] || {
+            title: '📋 Mise à jour de commande',
+            message: `Votre commande ${orderReference} a été mise à jour.`,
+            icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524335.png',
+            iconBgColor: '#6C757D',
+        };
+    }
 }

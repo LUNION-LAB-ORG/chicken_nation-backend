@@ -1,6 +1,6 @@
 import { IsString, IsEnum, IsNumber, IsOptional, IsUUID } from 'class-validator';
 import { LoyaltyPointType } from '@prisma/client';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 
 export class AddLoyaltyPointDto {
@@ -22,7 +22,7 @@ export class AddLoyaltyPointDto {
   @IsString()
   reason?: string;
 
-  @ApiProperty({ description: 'ID de la commande', example: '123' })
+  @ApiPropertyOptional({ description: 'ID de la commande', example: '123' })
   @IsOptional()
   @IsUUID()
   order_id?: string

@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { CreatePromotionDto } from '../dto/create-promotion.dto';
 import { UpdatePromotionDto } from '../dto/update-promotion.dto';
 import { PromotionResponseDto } from '../dto/promotion-response.dto';
-import { Promotion, Visibility } from '@prisma/client';
+import { Prisma, Promotion, Visibility } from '@prisma/client';
 import { DiscountType, TargetType, PromotionStatus, LoyaltyLevel, EntityStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryPromotionDto } from '../dto/query-promotion.dto';
@@ -91,109 +91,72 @@ export class PromotionService {
   }
 
   async findAll(filters?: QueryPromotionDto): Promise<QueryResponseDto<PromotionResponseDto>> {
-    const where: any = {};
+    const where: Prisma.PromotionWhereInput = {};
 
-    if (filters?.title) {
-      where.title = { contains: filters.title, mode: 'insensitive' };
-    }
+    if (filters?.title) where.title = { contains: filters.title, mode: 'insensitive' };
 
-    if (filters?.status) {
-      where.status = filters.status;
-    }
+    if (filters?.status) where.status = filters.status;
 
-    if (filters?.visibility) {
-      where.visibility = filters.visibility;
-    }
+    if (filters?.visibility) where.visibility = filters.visibility;
 
-    if (filters?.discount_type) {
-      where.discount_type = filters.discount_type;
-    }
+    if (filters?.discount_type) where.discount_type = filters.discount_type;
 
-    if (filters?.target_type) {
-      where.target_type = filters.target_type;
-    }
+    if (filters?.target_type) where.target_type = filters.target_type;
 
-    if (filters?.min_order_amount !== undefined) {
-      where.min_order_amount = { gte: filters.min_order_amount };
-    }
+    if (filters?.min_order_amount !== undefined) where.min_order_amount = { gte: filters.min_order_amount };
 
-    if (filters?.max_discount_amount !== undefined) {
-      where.max_discount_amount = { lte: filters.max_discount_amount };
-    }
+    if (filters?.max_discount_amount !== undefined) where.max_discount_amount = { lte: filters.max_discount_amount };
 
     if (filters?.start_date_from || filters?.start_date_to) {
       where.start_date = {};
-      if (filters.start_date_from) {
-        where.start_date.gte = filters.start_date_from;
-      }
-      if (filters.start_date_to) {
-        where.start_date.lte = filters.start_date_to;
-      }
+      if (filters.start_date_from) where.start_date.gte = filters.start_date_from;
+      if (filters.start_date_to) where.start_date.lte = filters.start_date_to;
     }
 
     if (filters?.expiration_date_from || filters?.expiration_date_to) {
       where.expiration_date = {};
-      if (filters.expiration_date_from) {
-        where.expiration_date.gte = filters.expiration_date_from;
-      }
-      if (filters.expiration_date_to) {
-        where.expiration_date.lte = filters.expiration_date_to;
-      }
+      if (filters.expiration_date_from) where.expiration_date.gte = filters.expiration_date_from;
+      if (filters.expiration_date_to) where.expiration_date.lte = filters.expiration_date_to;
     }
 
     if (filters?.visibility === 'PRIVATE') {
-      if (filters?.target_standard) {
-        where.target_standard = true;
-      }
-      if (filters?.target_premium) {
-        where.target_premium = true;
-      }
-      if (filters?.target_gold) {
-        where.target_gold = true;
-      }
+      if (filters?.target_standard) where.target_standard = true;
+      if (filters?.target_premium) where.target_premium = true;
+      if (filters?.target_gold) where.target_gold = true;
     }
 
-    if (filters?.targeted_category_ids?.length) {
-      where.promotion_targeted_categories = {
-        some: {
-          category_id: { in: filters.targeted_category_ids },
-        },
-      };
-    }
+    if (filters?.targeted_category_ids?.length) where.promotion_targeted_categories = { some: { category_id: { in: filters.targeted_category_ids } } };
 
-    if (filters?.targeted_dish_ids?.length) {
-      where.promotion_targeted_dishes = {
-        some: {
-          dish_id: { in: filters.targeted_dish_ids },
-        },
-      };
-    }
+    if (filters?.targeted_dish_ids?.length) where.promotion_targeted_dishes = { some: { dish_id: { in: filters.targeted_dish_ids } } };
+
+    if (filters?.targeted_dish_ids?.length) where.promotion_dishes = { some: { dish_id: { in: filters.targeted_dish_ids } } };
 
     const take = filters?.limit ?? 20;
     const skip = filters?.page ? (filters.page - 1) * take : 0;
 
-    const promotions = await this.prisma.promotion.findMany({
-      where,
-      include: {
-        promotion_targeted_dishes: {
-          include: { dish: true },
+    const [promotions, total] = await Promise.all([
+      this.prisma.promotion.findMany({
+        where,
+        include: {
+          promotion_targeted_dishes: {
+            include: { dish: true },
+          },
+          promotion_targeted_categories: {
+            include: { category: true },
+          },
+          promotion_dishes: {
+            include: { dish: true },
+          },
+          created_by: {
+            select: { id: true, fullname: true, email: true },
+          },
         },
-        promotion_targeted_categories: {
-          include: { category: true },
-        },
-        promotion_dishes: {
-          include: { dish: true },
-        },
-        created_by: {
-          select: { id: true, fullname: true, email: true },
-        },
-      },
-      orderBy: { created_at: 'desc' },
-      take,
-      skip,
-    });
-
-    const total = await this.prisma.promotion.count({ where });
+        orderBy: { created_at: 'desc' },
+        take,
+        skip,
+      }),
+      this.prisma.promotion.count({ where }),
+    ]);
 
     return {
       data: promotions.map(this.mapToResponseDto),
@@ -434,7 +397,7 @@ export class PromotionService {
           if (!dish) return total;
           return total + pd.quantity * dish.price;
         }, 0);
-        
+
         discount_amount = buyXGetY || 0;
         break;
     }

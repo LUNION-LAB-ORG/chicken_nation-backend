@@ -6,6 +6,7 @@ import { join } from 'path';
 import helmet from 'helmet';
 import * as compression from 'compression';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { PrismaExceptionFilter } from 'src/database/filters/prisma-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -16,7 +17,9 @@ async function bootstrap() {
       transform: true,
     }),
   );
-  //
+
+  // Appliquer le filtre globalement à toute l'application
+  app.useGlobalFilters(new PrismaExceptionFilter());
 
   // Security middleware
   app.use(helmet());
@@ -26,7 +29,7 @@ async function bootstrap() {
 
   // CORS
   app.enableCors({
-    origin: ['https://chicken-nation-dashboard.vercel.app', 'http://localhost:3020', 'http://localhost:3001','http://localhost:3000'],
+    origin: ['https://chicken-nation-dashboard.vercel.app', 'http://localhost:3020', 'http://localhost:3001', 'http://localhost:3000'],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });

@@ -1,6 +1,6 @@
 import { IsString, IsEnum, IsNumber, IsOptional, IsBoolean, IsArray, IsDateString, Min } from 'class-validator';
 import { DiscountType, TargetType, PromotionStatus, Visibility } from '@prisma/client';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 
 export class CreatePromotionDto {
@@ -11,7 +11,7 @@ export class CreatePromotionDto {
   @IsString()
   title: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Description de la promotion',
     example: 'Promotion d\'été',
   })
@@ -43,7 +43,7 @@ export class CreatePromotionDto {
   @IsEnum(TargetType)
   target_type: TargetType;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Montant minimum de commande',
     example: 10,
   })
@@ -53,7 +53,7 @@ export class CreatePromotionDto {
   @Transform(({ value }) => Number(value))
   min_order_amount?: number;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Montant maximum de remise',
     example: 10,
   })
@@ -63,7 +63,7 @@ export class CreatePromotionDto {
   @Transform(({ value }) => Number(value))
   max_discount_amount?: number;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Nombre maximum d\'utilisations par utilisateur',
     example: 1,
   })
@@ -73,7 +73,7 @@ export class CreatePromotionDto {
   @Transform(({ value }) => Number(value))
   max_usage_per_user?: number = 1;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Nombre maximum d\'utilisations globales',
     example: 1,
   })
@@ -106,7 +106,7 @@ export class CreatePromotionDto {
   @IsEnum(PromotionStatus)
   status?: PromotionStatus = PromotionStatus.DRAFT;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Visibilité de la promotion',
     example: 'PUBLIC',
   })
@@ -114,7 +114,7 @@ export class CreatePromotionDto {
   @IsEnum(Visibility)
   visibility?: Visibility = Visibility.PUBLIC;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Ciblage par niveau de fidélité (pour les promotions privées)',
     example: false,
   })
@@ -123,7 +123,7 @@ export class CreatePromotionDto {
   @Transform(({ value }) => Boolean(value))
   target_standard?: boolean = false;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Ciblage par niveau de fidélité (pour les promotions privées)',
     example: false,
   })
@@ -132,7 +132,7 @@ export class CreatePromotionDto {
   @Transform(({ value }) => Boolean(value))
   target_premium?: boolean = false;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Ciblage par niveau de fidélité (pour les promotions privées)',
     example: false,
   })
@@ -141,7 +141,7 @@ export class CreatePromotionDto {
   @Transform(({ value }) => Boolean(value))
   target_gold?: boolean = false;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Personnalisation visuelle',
     example: false,
   })
@@ -149,7 +149,7 @@ export class CreatePromotionDto {
   @IsString()
   coupon_image_url?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Couleur de fond',
     example: '#FF0000',
   })
@@ -157,7 +157,7 @@ export class CreatePromotionDto {
   @IsString()
   background_color?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Couleur du texte',
     example: '#FF0000',
   })
@@ -165,7 +165,7 @@ export class CreatePromotionDto {
   @IsString()
   text_color?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Couleur de fin de promotion',
     example: '#FF0000',
   })
@@ -173,7 +173,7 @@ export class CreatePromotionDto {
   @IsString()
   expiration_color?: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Plats/catégories ciblés',
     example: [],
   })
@@ -182,7 +182,7 @@ export class CreatePromotionDto {
   @Transform(({ value }) => JSON.parse(value))
   targeted_dish_ids?: string[];
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Plats/catégories ciblés',
     example: [],
   })
@@ -191,7 +191,7 @@ export class CreatePromotionDto {
   @Transform(({ value }) => JSON.parse(value))
   targeted_category_ids?: string[];
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Plats offerts (pour BUY_X_GET_Y)',
     example: [],
   })
