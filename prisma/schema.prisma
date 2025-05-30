@@ -39,7 +39,6 @@ enum OrderStatus {
   IN_PROGRESS // EN COURS
   READY // PRÊT
   PICKED_UP // EN LIVRAISON
-  DELIVERED // LIVRÉ
   COLLECTED // COLLECTÉ PAR LE CLIENT
   COMPLETED // TERMINÉ, LE LIVREUR A L'ARGENT
 }
@@ -303,6 +302,7 @@ model Order {
   customer_id             String      @db.Uuid
   paied                   Boolean     @default(false)
   delivery_fee            Float
+  points                  Int         @default(0)
   type                    OrderType
   table_type              TypeTable?
   places                  Int?

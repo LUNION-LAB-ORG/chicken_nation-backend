@@ -29,8 +29,6 @@ import {
   WeeklyOrdersData,
   BestSellingMenuItem,
   DailySalesData,
-  StatCardData,
-  TrendData,
   DailyRevenueData,
   PeriodicData,
   HourlyValue

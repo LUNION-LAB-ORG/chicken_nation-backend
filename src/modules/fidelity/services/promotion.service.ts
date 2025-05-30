@@ -169,6 +169,14 @@ export class PromotionService {
     };
   }
 
+  async findActivePromotions(filters?: QueryPromotionDto): Promise<PromotionResponseDto[]> {
+    const promotions = await this.findAll({
+      ...filters,
+      status: PromotionStatus.ACTIVE,
+
+    });
+    return promotions.data;
+  }
 
   async findOne(id: string): Promise<PromotionResponseDto> {
     const promotion = await this.prisma.promotion.findUnique({

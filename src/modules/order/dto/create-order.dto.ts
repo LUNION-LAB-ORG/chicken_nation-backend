@@ -99,4 +99,9 @@ export class CreateOrderDto {
     @IsOptional()
     @IsUUID()
     paiement_id?: string;
+
+    @ApiPropertyOptional({ description: "Points de fidélité à utiliser" })
+    @IsOptional()
+    @IsInt()
+    points?: number;
 }
