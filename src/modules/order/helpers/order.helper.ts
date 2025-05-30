@@ -297,7 +297,6 @@ export class OrderHelper {
             OrderStatus.IN_PROGRESS,
             OrderStatus.READY,
             OrderStatus.PICKED_UP, // Pour livraison
-            OrderStatus.DELIVERED, // Pour livraison
             OrderStatus.COLLECTED, // Pour retrait
             OrderStatus.COMPLETED // Quand le livreur récupère l'argent
         ];
@@ -339,7 +338,6 @@ export class OrderHelper {
                 // await this.deliveryService.startDeliveryTracking(orderId);
                 break;
 
-            case OrderStatus.DELIVERED:
             case OrderStatus.COLLECTED:
 
                 break;
