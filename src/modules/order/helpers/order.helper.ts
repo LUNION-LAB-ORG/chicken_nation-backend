@@ -283,8 +283,7 @@ export class OrderHelper {
     validateStatusTransition(currentStatus: OrderStatus, newStatus: OrderStatus) {
         // Cas spécial : annulation
         if (newStatus === OrderStatus.CANCELLED) {
-            if ([OrderStatus.READY as string, OrderStatus.PICKED_UP as string, OrderStatus.DELIVERED as string,
-            OrderStatus.COLLECTED as string, OrderStatus.COMPLETED as string].includes(currentStatus)) {
+            if ([OrderStatus.READY as string, OrderStatus.PICKED_UP as string, OrderStatus.COLLECTED as string, OrderStatus.COMPLETED as string].includes(currentStatus)) {
                 throw new ConflictException('Une commande dans un état ultérieur ne peut pas être annulée');
             }
             return;
