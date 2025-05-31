@@ -381,6 +381,9 @@ export class PromotionService {
     if (!promotion_id) {
       return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion non trouvée' };
     }
+    if (items.length === 0) {
+      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Aucun plat dans la commande' };
+    }
     const promotion = await this.findOne(promotion_id);
 
     // Si la promotion n'est pas trouvée, retourner 0
@@ -448,7 +451,20 @@ export class PromotionService {
 
         break;
     }
+    // Vérifier si le plafond est atteint
+    const usagesAmount = await this.prisma.promotionUsage.aggregate({
+      where: {
+        promotion_id,
+      },
+      _sum: {
+        discount_amount: true,
+      },
+    });
+    const totalDiscountAmount = usagesAmount._sum.discount_amount ?? 0;
 
+    if (promotion.max_discount_amount && totalDiscountAmount >= promotion.max_discount_amount) {
+      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion épuisée' };
+    }
     // Appliquer le plafond de réduction
     if (promotion.max_discount_amount) {
       discount_amount = Math.min(discount_amount, promotion.max_discount_amount);

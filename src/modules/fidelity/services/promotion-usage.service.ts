@@ -49,7 +49,7 @@ export class PromotionUsageService {
           promotion_id,
           customer_id,
           order_id,
-          discount_amount: discount.discount_amount,
+          discount_amount: discount.discount_amount + discount.buyXGetY_amount,
           original_amount: order_amount,
           final_amount: discount.final_amount,
         }
