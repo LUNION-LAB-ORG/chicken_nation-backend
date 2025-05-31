@@ -5,7 +5,7 @@ import { UpdatePromotionDto } from '../dto/update-promotion.dto';
 import { ApiOperation, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { PromotionResponseDto } from '../dto/promotion-response.dto';
 import { Request } from 'express';
-import { User } from '@prisma/client';
+import { LoyaltyLevel, User } from '@prisma/client';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { QueryPromotionDto } from '../dto/query-promotion.dto';
 import { UserTypesGuard } from 'src/common/guards/user-types.guard';
@@ -72,9 +72,10 @@ export class PromotionController {
   calculateDiscount(
     @Param('id') promotion_id: string,
     @Query('order_amount') order_amount: number,
+    @Query('loyalty_level') loyalty_level: LoyaltyLevel,
     @Body() items: ApplyItemDto[]
   ) {
-    return this.promotionService.calculateDiscount(promotion_id, order_amount, items);
+    return this.promotionService.calculateDiscount(promotion_id, order_amount, items, loyalty_level);
   }
 
   @ApiOperation({ summary: 'Vérifier si un plat est dans une promotion' })
