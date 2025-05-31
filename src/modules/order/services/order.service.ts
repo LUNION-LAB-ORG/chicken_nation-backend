@@ -170,7 +170,7 @@ export class OrderService {
       });
     }
 
-    // Mettre à jour les point du client
+    // Ajout des points de fidélité
     if (loyaltyFee) {
       const pts = await this.loyaltyService.calculatePointsForOrder(netAmount);
       await this.loyaltyService.addPoints({
