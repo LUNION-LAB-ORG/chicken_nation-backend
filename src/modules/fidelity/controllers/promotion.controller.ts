@@ -54,7 +54,7 @@ export class PromotionController {
   @UserTypes(UserType.BACKOFFICE)
   @Patch(':id')
   update(@Param('id') id: string, @Body() updatePromotionDto: UpdatePromotionDto, @UploadedFile() image: Express.Multer.File) {
-    return this.promotionService.update(id, { ...updatePromotionDto, coupon_image_url: image?.filename });
+    return this.promotionService.update(id, { ...updatePromotionDto, coupon_image_url: image?.path });
   }
 
   @ApiOperation({ summary: 'Supprimer une promotion' })

@@ -21,7 +21,7 @@ import { StatisticsModule } from 'src/modules/statistics/statistics.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
-    EventEmitterModule.forRoot(),
+    EventEmitterModule.forRoot({}),
     DatabaseModule,
     CommonModule,
     UsersModule,

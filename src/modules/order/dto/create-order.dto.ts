@@ -104,4 +104,9 @@ export class CreateOrderDto {
     @IsOptional()
     @IsInt()
     points?: number;
+
+    @ApiPropertyOptional({ description: "ID de la promotion" })
+    @IsOptional()
+    @IsUUID()
+    promotion_id?: string;
 }

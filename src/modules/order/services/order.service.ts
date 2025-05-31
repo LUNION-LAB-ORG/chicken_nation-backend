@@ -1,17 +1,16 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
-import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
-import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
-import { OrderStatus, EntityStatus, Customer, PaiementStatus, Order, Prisma, } from '@prisma/client';
+import { CreateOrderDto } from '../dto/create-order.dto';
+import { UpdateOrderDto } from '../dto/update-order.dto';
+import { OrderStatus, EntityStatus, Customer, Order, Prisma, LoyaltyLevel, LoyaltyPointType, } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Request } from 'express';
 import { QueryOrderDto } from '../dto/query-order.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
-import { OrderHelper } from 'src/modules/order/helpers/order.helper';
+import { OrderHelper } from '../helpers/order.helper';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
-// import { NotificationService } from '../notification/notification.service';
-// import { LoyaltyService } from '../loyalty/loyalty.service';
-// import { DeliveryService } from '../delivery/delivery.service';
-// import { v4 as uuidv4 } from 'uuid';
+import { OrderEvent } from '../events/order.event';
+import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
+import { PromotionUsageService } from 'src/modules/fidelity/services/promotion-usage.service';
 
 @Injectable()
 export class OrderService {
@@ -20,18 +19,22 @@ export class OrderService {
     private prisma: PrismaService,
     private generateDataService: GenerateDataService,
     private orderHelper: OrderHelper,
+    private orderEvent: OrderEvent,
+    private loyaltyService: LoyaltyService,
+    private promotionUsageService: PromotionUsageService,
   ) { }
 
   /**
    * Crée une nouvelle commande
    */
-  async create(req: Request, createOrderDto: CreateOrderDto) {
+  async create(req: Request, createOrderDto: CreateOrderDto): Promise<any> {
+
     const customer = req.user as Customer;
 
-    const { items, paiement_id, ...orderData } = createOrderDto;
+    const { items, paiement_id, customer_id, restaurant_id, promotion_id, points, ...orderData } = createOrderDto;
 
     // Identifier le client ou créer des données anonymes
-    const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: createOrderDto.customer_id ?? customer.id });
+    const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: customer_id ?? customer.id });
 
     // Récupérer le restaurant le plus proche
     const restaurant = await this.orderHelper.getClosestRestaurant(createOrderDto);
@@ -46,7 +49,10 @@ export class OrderService {
     const promoDiscount = await this.orderHelper.applyPromoCode(orderData.code_promo);
 
     // Calculer les montants et préparer les order items
-    const { orderItems, netAmount } = await this.orderHelper.calculateOrderDetails(items, dishesWithDetails);
+    const { orderItems, netAmount, totalDishes } = await this.orderHelper.calculateOrderDetails(items, dishesWithDetails);
+
+    //Calculer le prix si promotion
+    const discountPromotion = await this.promotionUsageService.usePromotion(promotion_id, customerData.customer_id, undefined, totalDishes, orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice })), customerData.loyalty_level ?? undefined);
 
     // Calculer les frais de livraison selon la distance
     const deliveryFee = await this.orderHelper.calculateDeliveryFee(orderData.type, address);
@@ -54,15 +60,20 @@ export class OrderService {
     // Vérifier le paiement
     const payment = await this.orderHelper.checkPayment(createOrderDto);
 
+    // Calculer le montant de réduction des points de fidélité et utilisation des points de fidélité
+    const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(customerData.customer_id, points ?? 0, `Réduction de commande de ${points} points de fidélité`);
+
     // Calculer la taxe et le montant total
     const tax = await this.orderHelper.calculateTax(netAmount);
+
     const totalBeforeDiscount = netAmount + deliveryFee + tax;
-    const discount = totalBeforeDiscount * promoDiscount;
+    const discount = (totalBeforeDiscount * promoDiscount) + loyaltyFee + discountPromotion.discount_amount;
     const totalAmount = totalBeforeDiscount - discount;
 
     if (payment && payment.amount < totalAmount) {
       throw new BadRequestException('Le montant du paiement est inférieur au montant de la commande');
     }
+
     // Générer un numéro de commande unique
     const orderNumber = this.generateDataService.generateOrderReference();
 
@@ -75,8 +86,17 @@ export class OrderService {
           fullname: customerData.fullname,
           phone: customerData.phone,
           email: customerData.email,
-          customer_id: customerData.customer_id,
-          restaurant_id: restaurant.id,
+          ...(loyaltyFee && { points: points }),
+          customer: {
+            connect: {
+              id: customerData.customer_id
+            }
+          },
+          restaurant: {
+            connect: {
+              id: restaurant.id
+            }
+          },
           reference: orderNumber,
           ...(payment && { paiements: { connect: { id: payment.id } } }),
           delivery_fee: Number(deliveryFee),
@@ -91,7 +111,12 @@ export class OrderService {
           paied_at: payment ? payment.created_at : null,
           paied: payment ? true : false,
           order_items: {
-            create: orderItems,
+            create: orderItems.map(item => ({
+              dish_id: item.dish_id,
+              quantity: item.quantity,
+              amount: item.amount,
+              supplements: item.supplements
+            })),
           },
           entity_status: EntityStatus.ACTIVE,
         },
@@ -127,28 +152,37 @@ export class OrderService {
         },
       });
 
-      // Attribuer des points de fidélité si client identifié
-      // if (customerData.customer_id) {
-      //   await this.loyaltyService.awardPointsForOrder(customerData.customer_id, netAmount);
-      // }
-
       return createdOrder;
     });
 
-    // Mise à jour du paiement
+    //Mise à jour du paiement
     if (payment) {
       await this.prisma.paiement.update({
         where: { id: payment.id },
         data: { order_id: order.id },
       });
     }
-    // Envoyer les notifications
-    await this.orderHelper.sendOrderNotifications(order);
+    // Mise à jour de l'utilisation de la promotion
+    if (discountPromotion.usage) {
+      await this.prisma.promotionUsage.update({
+        where: { id: discountPromotion.usage.id },
+        data: { order_id: order.id },
+      });
+    }
 
-    // Si le type est DELIVERY, informer le service de livraison
-    // if (order.type === OrderType.DELIVERY) {
-    //   await this.deliveryService.scheduleDelivery(order.id);
-    // }
+    // Mettre à jour les point du client
+    if (loyaltyFee) {
+      const pts = await this.loyaltyService.calculatePointsForOrder(netAmount);
+      await this.loyaltyService.addPoints({
+        customer_id: customerData.customer_id,
+        points: pts,
+        type: LoyaltyPointType.EARNED,
+        reason: `Vous avez gagné ${pts} points de fidélité pour votre commande`,
+        order_id: order.id
+      })
+    }
+    // Envoyer l'événement de création de commande
+    this.orderEvent.create(order);
 
     return order;
   }
@@ -202,6 +236,9 @@ export class OrderService {
         },
       },
     });
+
+    // Envoyer l'événement de mise à jour de statut de commande
+    this.orderEvent.updateStatus(updatedOrder, status, meta);
 
     return updatedOrder;
   }
@@ -342,6 +379,7 @@ export class OrderService {
       }
     };
   }
+
   /**
    * Recherche et filtre les commandes d'un client
    */
@@ -470,6 +508,9 @@ export class OrderService {
       },
     });
 
+    // Envoyer l'événement de mise à jour de statut de commande
+    this.orderEvent.update(updatedOrder, updateOrderDto);
+
     return updatedOrder;
   }
 
@@ -484,10 +525,18 @@ export class OrderService {
       throw new ConflictException('Seules les commandes en attente ou annulées peuvent être supprimées');
     }
 
-    return this.prisma.order.update({
+    const orderDeleted = this.prisma.order.update({
       where: { id },
+      include: {
+        customer: true,
+      },
       data: { entity_status: EntityStatus.DELETED },
     });
+
+    // Envoyer l'événement de suppression de commande
+    this.orderEvent.remove(order);
+
+    return orderDeleted;
   }
 
   /**

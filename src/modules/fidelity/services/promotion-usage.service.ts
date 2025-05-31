@@ -1,23 +1,29 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PromotionService } from './promotion.service';
-import { LoyaltyService } from './loyalty.service';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { LoyaltyLevel } from '@prisma/client';
 
 @Injectable()
 export class PromotionUsageService {
   constructor(
     private prisma: PrismaService,
     private promotionService: PromotionService,
-    private loyaltyService: LoyaltyService
   ) { }
 
   // Utiliser une promotion
   async usePromotion(
-    promotion_id: string,
+    promotion_id: string | undefined,
     customer_id: string,
+    order_id: string | undefined,
     order_amount: number,
-    items: { dish_id: string; quantity: number; price: number }[]
+    items: { dish_id: string; quantity: number; price: number }[],
+    loyalty_level?: LoyaltyLevel
   ) {
+    if (!promotion_id) return {
+      usage: null,
+      discount_amount: 0,
+      final_amount: order_amount
+    }
     return await this.prisma.$transaction(async (tx) => {
       // Vérifier si le client peut utiliser cette promotion
       const canUse = await this.canCustomerUsePromotion(promotion_id, customer_id);
@@ -29,7 +35,8 @@ export class PromotionUsageService {
       const discount = await this.promotionService.calculateDiscount(
         promotion_id,
         order_amount,
-        items
+        items,
+        loyalty_level
       );
 
       if (!discount.applicable) {
@@ -41,6 +48,7 @@ export class PromotionUsageService {
         data: {
           promotion_id,
           customer_id,
+          order_id,
           discount_amount: discount.discount_amount,
           original_amount: order_amount,
           final_amount: discount.final_amount,

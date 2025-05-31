@@ -62,6 +62,7 @@ export class LoyaltyService {
         });
     }
 
+    // Calculer les points pour une commande
     async calculatePointsForOrder(order_amount: number): Promise<number> {
         const config = await this.getConfig();
 
@@ -70,6 +71,16 @@ export class LoyaltyService {
         }
 
         return Math.floor(order_amount * config.points_per_xof);
+    }
+    // Calculer le montant pour une commande
+    async calculateAmountForPoints(points: number): Promise<number> {
+        const config = await this.getConfig();
+
+        if (!points) {
+            throw new BadRequestException('Points requis');
+        }
+
+        return Math.floor(points * config.point_value_in_xof);
     }
 
     // Utiliser des points
@@ -222,6 +233,7 @@ export class LoyaltyService {
         });
     }
 
+    // Obtenir les informations de fidélité d'un client
     async getCustomerLoyaltyInfo(customer_id: string) {
         const customer = await this.prisma.customer.findUnique({
             where: { id: customer_id },
@@ -300,6 +312,7 @@ export class LoyaltyService {
         };
     }
 
+    // Mettre à jour le niveau de fidélité d'un client
     private async updateCustomerLoyaltyLevel(customer_id: string, tx: any) {
         const customer = await tx.customer.findUnique({
             where: { id: customer_id }
@@ -342,6 +355,7 @@ export class LoyaltyService {
         }
     }
 
+    // Expirer les points
     async expirePoints() {
         const now = new Date();
 

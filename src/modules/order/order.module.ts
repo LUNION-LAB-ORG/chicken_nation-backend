@@ -6,10 +6,12 @@ import { OrderItemController } from 'src/modules/order/controllers/order-item.co
 import { OrderHelper } from 'src/modules/order/helpers/order.helper';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
+import { OrderListener } from './listeners/order.events';
+import { OrderEvent } from './events/order.event';
 
 @Module({
   imports: [PaiementsModule, FidelityModule],
   controllers: [OrderController, OrderItemController],
-  providers: [OrderService, OrderItemService, OrderHelper],
+  providers: [OrderService, OrderItemService, OrderHelper, OrderEvent, OrderListener],
 })
 export class OrderModule { }

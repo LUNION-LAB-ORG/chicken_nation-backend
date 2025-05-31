@@ -61,6 +61,15 @@ export class LoyaltyController {
     return this.loyaltyService.calculatePointsForOrder(amount);
   }
 
+  @ApiOperation({ summary: 'Calculer les points de fidélité pour un montant' })
+  @ApiOkResponse({
+    description: 'Points de fidélité calculés'
+  })
+  @Get('points/calculate-amount')
+  calculateAmount(@Query('points') points: number) {
+    return this.loyaltyService.calculateAmountForPoints(points);
+  }
+
   @ApiOperation({ summary: 'Expirer les points de fidélité' })
   @ApiOkResponse({
     description: 'Points de fidélité expirés'

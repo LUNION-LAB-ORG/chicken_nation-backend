@@ -1,18 +1,14 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
-import { OrderStatus, OrderType, PaiementStatus, EntityStatus, Customer, Dish, Address, SupplementCategory, Order } from '@prisma/client';
+import { OrderStatus, OrderType, PaiementStatus, EntityStatus, Customer, Dish, Address, SupplementCategory, Order, LoyaltyPointType } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Request } from 'express';
 import { QueryOrderDto } from '../dto/query-order.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PaiementsService } from 'src/modules/paiements/services/paiements.service';
-
-// import { NotificationService } from '../notification/notification.service';
-// import { LoyaltyService } from '../loyalty/loyalty.service';
-// import { DeliveryService } from '../delivery/delivery.service';
-// import { v4 as uuidv4 } from 'uuid';
+import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
 
 @Injectable()
 export class OrderHelper {
@@ -24,14 +20,13 @@ export class OrderHelper {
         private configService: ConfigService,
         private generateDataService: GenerateDataService,
         private paiementService: PaiementsService,
-        // private notificationService: NotificationService,
-        // private loyaltyService: LoyaltyService,
-        // private deliveryService: DeliveryService,
+        private loyaltyService: LoyaltyService,
     ) {
         this.taxRate = Number(this.configService.get<number>('ORDER_TAX_RATE', 0.005));
         this.baseDeliveryFee = Number(this.configService.get<number>('BASE_DELIVERY_FEE', 1000));
     }
 
+    // Récupérer les données du client
     async resolveCustomerData(orderData: CreateOrderDto) {
         // Si un customer_id est fourni, utiliser ce client
         if (orderData.customer_id) {
@@ -47,6 +42,7 @@ export class OrderHelper {
 
             return {
                 customer_id: customer.id,
+                loyalty_level: customer.loyalty_level,
                 fullname: orderData.fullname || `${customer.first_name} ${customer.last_name}`,
                 phone: orderData.phone || customer.phone,
                 email: orderData.email || customer.email,
@@ -55,6 +51,7 @@ export class OrderHelper {
         throw new BadRequestException('Aucun client sélectionné');
     }
 
+    // Récupérer le restaurant le plus proche
     async getClosestRestaurant(orderData: CreateOrderDto) {
         //  Pour la réservation de table ou à emporter, il faut impérativement fournir un restaurant
         if (orderData.type === OrderType.TABLE || orderData.type === OrderType.PICKUP) {
@@ -117,6 +114,7 @@ export class OrderHelper {
         return closest;
     }
 
+    // Récupérer les détails des plats
     async getDishesWithDetails(dishIds: string[]) {
         const dishes = await this.prisma.dish.findMany({
             where: {
@@ -139,6 +137,7 @@ export class OrderHelper {
         return dishes;
     }
 
+    // Valider l'adresse de livraison
     async validateAddress(address: string) {
         if (!address) {
             throw new BadRequestException('Adresse de livraison invalide ou introuvable');
@@ -146,6 +145,7 @@ export class OrderHelper {
         return JSON.parse(address) as Address;
     }
 
+    // Appliquer un code promo
     async applyPromoCode(promoCode?: string): Promise<number> {
         if (!promoCode) return 0;
 
@@ -156,9 +156,17 @@ export class OrderHelper {
         return 0;
     }
 
+    // Calculer les détails de la commande
     async calculateOrderDetails(items: CreateOrderDto['items'], dishes: Dish[]) {
         let netAmount = 0;
-        const orderItems: { dish_id: string; quantity: number; amount: number; supplements: { id: string; name: string; price: number; category: SupplementCategory }[]; }[] = [];
+        const orderItems: {
+            dish_id: string;
+            quantity: number;
+            amount: number;
+            dishPrice: number;
+            supplementsPrice: number;
+            supplements: { id: string; name: string; price: number; category: SupplementCategory }[];
+        }[] = [];
 
         for (const item of items) {
             const dish = dishes.find(d => d.id === item.dish_id);
@@ -169,7 +177,7 @@ export class OrderHelper {
 
             // Récupérer et valider les suppléments
             let supplementsTotal = 0;
-            let supplementsData: { id: string; name: string; price: number; category: SupplementCategory }[] = [];
+            let supplementsData: { id: string; name: string; price: number; quantity: number; category: SupplementCategory }[] = [];
 
             if (item.supplements_ids && item.supplements_ids.length > 0) {
                 let supplement_items = item.supplements_ids;
@@ -197,33 +205,49 @@ export class OrderHelper {
                     id: s.id,
                     name: s.name,
                     price: s.price,
+                    quantity: 1,
                     category: s.category,
                 }));
 
-                supplementsTotal = supplements.reduce((sum, s) => sum + s.price, 0);
+                // Calculer le prix des suppléments avec comme quantité 1 au lieu de la quantité choisie par le client
+                supplementsTotal = supplementsData.reduce((sum, s) => sum + s.price * s.quantity, 0);
             }
 
             // Calculer le prix du plat
             const itemPrice = (dish.is_promotion && dish.promotion_price !== null)
                 ? dish.promotion_price
                 : dish.price;
+            // On calcul le prix du plat sans les suppléments, puis on ajoute le prix des suppléments (QuantitéArticle * PrixArticle + PrixSupplément)
+            // Plus tard on devrait faire (QuantitéArticle * (PrixArticle + PrixSupplément)) ou (QuantitéArticle*PrixArticle + QuantitéSupplément*PrixSupplément)
+            let itemAmount = itemPrice * item.quantity; // prix un item (article+supplement) mais ici c'est le prix du plat sans les suppléments
 
-            const itemAmount = itemPrice + supplementsTotal;
-            const lineTotal = itemAmount * item.quantity;
+            const lineTotal = itemAmount + supplementsTotal; // prix total d'un item
 
             netAmount += lineTotal;
 
             orderItems.push({
                 dish_id: item.dish_id,
                 quantity: item.quantity,
-                amount: itemAmount,
+                amount: itemPrice,
+                dishPrice: itemPrice,
+                supplementsPrice: supplementsTotal,
                 supplements: supplementsData,
             });
         }
 
-        return { orderItems, netAmount };
+        // Montant Total des suppléments
+        // Plus tard nous devons ajouter la quantité de supplément dans la requête pour un calcul fiable
+        // Pour l'instant on calcule le montant total des suppléments sans tenir compte de la quantité de supplément, ni du plat
+        const totalSupplements = orderItems.reduce((sum, item) => sum + item.supplementsPrice, 0);
+
+
+        // Calculer le montant total des plats
+        const totalDishes = orderItems.reduce((sum, item) => sum + item.dishPrice * item.quantity, 0);
+
+        return { orderItems, netAmount, totalDishes, totalSupplements };
     }
 
+    // Calculer les taxes
     async calculateTax(netAmount: number): Promise<number> {
         try {
             // Dans un système réel, on calculerait la distance et appliquerait un tarif
@@ -235,6 +259,7 @@ export class OrderHelper {
         }
     }
 
+    // Calculer les frais de livraison
     async calculateDeliveryFee(orderType: OrderType, address: Address): Promise<number> {
         if (orderType !== OrderType.DELIVERY) {
             return 0; // Pas de frais de livraison pour les commandes sur place ou à emporter
@@ -250,6 +275,7 @@ export class OrderHelper {
         }
     }
 
+    // Calculer le temps de livraison estimé
     calculateEstimatedDeliveryTime(orderType: OrderType): Date {
         const now = new Date();
         let additionalMinutes = 0;
@@ -270,6 +296,7 @@ export class OrderHelper {
         return now;
     }
 
+    // Envoyer les notifications
     async sendOrderNotifications(order: any) {
         // Notification au client
         if (order.customer_id) {
@@ -280,6 +307,7 @@ export class OrderHelper {
         // await this.notificationService.notifyRestaurantNewOrder(order);
     }
 
+    // Vérifier la transition d'état
     validateStatusTransition(currentStatus: OrderStatus, newStatus: OrderStatus) {
         // Cas spécial : annulation
         if (newStatus === OrderStatus.CANCELLED) {
@@ -319,6 +347,7 @@ export class OrderHelper {
         }
     }
 
+    // Gérer les actions spécifiques en fonction de l'état
     async handleStatusSpecificActions(order: Order, newStatus: OrderStatus, meta?: any) {
         switch (newStatus) {
             case OrderStatus.ACCEPTED:
@@ -362,6 +391,7 @@ export class OrderHelper {
         }
     }
 
+    // Vérifier le paiement
     async checkPayment(orderData: CreateOrderDto) {
 
         if (!orderData.paiement_id) {
@@ -428,5 +458,20 @@ export class OrderHelper {
                 }
             })
         };
+    }
+
+    // Calculer le montant à payer avec les points
+    async calculateLoyaltyFee(customer_id: string, points: number, reason: string) {
+        if (points === 0) return 0;
+        const loyaltyFee = await this.loyaltyService.redeemPoints({ customer_id, points, reason });
+
+        const amount = await this.loyaltyService.calculateAmountForPoints(points);
+
+        if (loyaltyFee) {
+            
+            return amount;
+        }
+
+        return 0;
     }
 }

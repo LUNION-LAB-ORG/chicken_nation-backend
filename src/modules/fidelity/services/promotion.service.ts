@@ -7,7 +7,19 @@ import { DiscountType, TargetType, PromotionStatus, LoyaltyLevel, EntityStatus }
 import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryPromotionDto } from '../dto/query-promotion.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
-
+interface Dish {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  image: string | null;
+  is_promotion: boolean;
+  promotion_price: number;
+  category_id: string;
+  entity_status: PromotionStatus;
+  created_at: string;
+  updated_at: string;
+}
 @Injectable()
 export class PromotionService {
   constructor(private prisma: PrismaService) { }
@@ -285,17 +297,17 @@ export class PromotionService {
   }
 
   // Méthode pour vérifier si un plat est en promotion
-  async isDishInPromotion(dish_id: string, customer_loyalty_level?: LoyaltyLevel): Promise<{
+  async isDishInPromotion(dish_id: string, promotion_id?: string, customer_loyalty_level?: LoyaltyLevel): Promise<{
     inPromotion: boolean;
     promotions: PromotionResponseDto[];
   }> {
     const now = new Date();
-
     const promotions = await this.prisma.promotion.findMany({
       where: {
         status: PromotionStatus.ACTIVE,
         start_date: { lte: now },
         expiration_date: { gte: now },
+        id: promotion_id,
         OR: [
           // Promotion sur tous les produits
           { target_type: TargetType.ALL_PRODUCTS },
@@ -346,7 +358,6 @@ export class PromotionService {
           return false;
       }
     });
-
     return {
       inPromotion: validPromotions.length > 0,
       promotions: validPromotions.map(this.mapToResponseDto)
@@ -355,33 +366,57 @@ export class PromotionService {
 
   // Calculer la réduction applicable
   async calculateDiscount(
-    promotion_id: string,
+    promotion_id: string | undefined,
     order_amount: number,
-    items: { dish_id: string; quantity: number; price: number }[]
+    items: { dish_id: string; quantity: number; price: number }[],
+    loyalty_level?: LoyaltyLevel
   ): Promise<{
     discount_amount: number;
+    buyXGetY_amount: number;
     final_amount: number;
     applicable: boolean;
     reason?: string;
   }> {
+
+    if (!promotion_id) {
+      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion non trouvée' };
+    }
     const promotion = await this.findOne(promotion_id);
 
+    // Si la promotion n'est pas trouvée, retourner 0
     if (!promotion) {
-      return { discount_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion non trouvée' };
+      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion non trouvée' };
     }
+    // vérifier si certains plats sont en promotion
+    let dishesInPromotion: { dish_id: string; quantity: number; price: number }[] = [];
 
+    await Promise.all(items.map(async item => {
+      const result = await this.isDishInPromotion(item.dish_id, promotion_id, loyalty_level);
+      if (result.inPromotion) {
+        dishesInPromotion.push(item);
+      }
+    }));
+
+    let someDishesInPromotion: boolean = dishesInPromotion.length > 0;
+
+    const qteSomeDishesInPromotion = dishesInPromotion.reduce((total, item) => total + item.quantity, 0);
+
+    if (!someDishesInPromotion || (promotion.discount_type === DiscountType.BUY_X_GET_Y && qteSomeDishesInPromotion < promotion.discount_value)) {
+      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Vous ne pouvez pas bénéficier de cette promotion' };
+    }
     // Vérifier si la promotion est active
     const now = new Date();
     if (promotion.status !== PromotionStatus.ACTIVE ||
       new Date(promotion.start_date) > now ||
       new Date(promotion.expiration_date) < now) {
-      return { discount_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion inactive ou expirée' };
+      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion inactive ou expirée' };
     }
 
     // Vérifier le montant minimum
     if (promotion.min_order_amount && order_amount < promotion.min_order_amount) {
       return {
         discount_amount: 0,
+        buyXGetY_amount: 0,
         final_amount: order_amount,
         applicable: false,
         reason: `Montant minimum requis: ${promotion.min_order_amount} XOF`
@@ -389,7 +424,7 @@ export class PromotionService {
     }
 
     let discount_amount: number = 0;
-
+    let buyXGetY_amount: number = 0;
     switch (promotion.discount_type) {
       case DiscountType.PERCENTAGE:
         discount_amount = (order_amount * promotion.discount_value) / 100;
@@ -400,13 +435,17 @@ export class PromotionService {
         break;
 
       case DiscountType.BUY_X_GET_Y:
-        const buyXGetY = promotion.offered_dishes?.reduce((total, pd) => {
-          const dish = items.find(i => i.dish_id === pd.dish_id);
-          if (!dish) return total;
-          return total + pd.quantity * dish.price;
-        }, 0);
 
-        discount_amount = buyXGetY || 0;
+        buyXGetY_amount = promotion.offered_dishes?.reduce((total, pd) => {
+          const dish = pd as unknown as Dish & { quantity: number };
+          if (!dish) return total;
+
+          const price = dish.is_promotion ? (dish.promotion_price ?? dish.price) : dish.price;
+          return total + pd.quantity * price;
+        }, 0) ?? 0;
+
+        discount_amount = 0;
+
         break;
     }
 
@@ -420,6 +459,7 @@ export class PromotionService {
 
     return {
       discount_amount,
+      buyXGetY_amount,
       final_amount: order_amount - discount_amount,
       applicable: true
     };

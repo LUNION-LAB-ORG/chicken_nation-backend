@@ -1,11 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
-import { LoyaltyPointType } from '@prisma/client';
+import { LoyaltyPointType, Order } from '@prisma/client';
 
 @Injectable()
 export class OrderListener {
-  constructor(private loyaltyService: LoyaltyService) {}
+  constructor(private loyaltyService: LoyaltyService) { }
+
+  @OnEvent('order.created')
+  async handleOrderCreated(payload: Order) {
+    console.log("handleOrderCreated", payload);
+  }
 
   @OnEvent('order.completed')
   async handleOrderCompleted(payload: {
@@ -13,10 +18,10 @@ export class OrderListener {
     customer_id: string;
     net_amount: number;
     customer_name: string;
-  }) { 
+  }) {
     // Calculer et attribuer les points de fidélité
     const pointsToEarn = await this.loyaltyService.calculatePointsForOrder(payload.net_amount);
-    
+
     if (pointsToEarn > 0) {
       await this.loyaltyService.addPoints({
         customer_id: payload.customer_id,
