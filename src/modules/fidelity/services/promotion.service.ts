@@ -222,8 +222,7 @@ export class PromotionService {
       offered_dishes,
       ...promotionData
     } = updatePromotionDto;
-
-    return await this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       // Mettre à jour la promotion
       await tx.promotion.update({
         where: { id },
@@ -280,9 +279,8 @@ export class PromotionService {
           });
         }
       }
-
-      return this.findOne(id);
     });
+    return this.findOne(id);
   }
 
   async remove(id: string): Promise<PromotionResponseDto> {
