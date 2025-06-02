@@ -2,10 +2,11 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { LoyaltyLevel, LoyaltyPointType, LoyaltyPointIsUsed } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { AddLoyaltyPointDto } from '../dto/add-loyalty-point.dto';
+import { LoyaltyEvent } from '../events/loyalty.event';
 
 @Injectable()
 export class LoyaltyService {
-    constructor(private prisma: PrismaService) { }
+    constructor(private prisma: PrismaService, private loyaltyEvent: LoyaltyEvent) { }
 
     async getConfig() {
         let config = await this.prisma.loyaltyConfig.findFirst({
@@ -54,6 +55,7 @@ export class LoyaltyService {
                     lifetime_points: { increment: points }
                 }
             });
+            
 
             // Vérifier et mettre à jour le niveau de fidélité
             await this.updateCustomerLoyaltyLevel(customer_id, tx);
@@ -77,7 +79,7 @@ export class LoyaltyService {
         const config = await this.getConfig();
 
         if (!points) {
-            throw new BadRequestException('Points requis');
+            return 0;
         }
 
         return Math.floor(points * config.point_value_in_xof);
@@ -330,7 +332,7 @@ export class LoyaltyService {
             newLevel = LoyaltyLevel.STANDARD;
         }
 
-        if (newLevel !== customer.loyalty_level) {
+        if (newLevel && newLevel !== customer.loyalty_level) {
             // Mettre à jour le niveau du client
             await tx.customer.update({
                 where: { id: customer_id },
@@ -351,7 +353,12 @@ export class LoyaltyService {
                 }
             });
 
-            // TODO: Envoyer une notification au client pour le féliciter
+            // Evenement de niveau atteint
+            this.loyaltyEvent.levelUp({
+                customer,
+                previous_level: customer.loyalty_level,
+                new_level: newLevel,
+            });
         }
     }
 

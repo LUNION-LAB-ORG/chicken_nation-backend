@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
-import { OrderService } from 'src/modules/order/services/order.service';
-import { OrderController } from 'src/modules/order/controllers/order.controller';
-import { OrderItemService } from 'src/modules/order/services/order-item.service';
-import { OrderItemController } from 'src/modules/order/controllers/order-item.controller';
-import { OrderHelper } from 'src/modules/order/helpers/order.helper';
+import { OrderService } from './services/order.service';
+import { OrderController } from './controllers/order.controller';
+import { OrderItemService } from './services/order-item.service';
+import { OrderItemController } from './controllers/order-item.controller';
+import { OrderHelper } from './helpers/order.helper';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
-import { OrderListener } from './listeners/order.events';
+import { OrderListener } from './listeners/order.listener';
 import { OrderEvent } from './events/order.event';
 
 @Module({

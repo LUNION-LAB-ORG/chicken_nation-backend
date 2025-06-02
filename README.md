@@ -1,6 +1,4 @@
 ## TODO :PROMOTION ET POINT DE FIDELITE
-- Prendre en compte les promotions dans la commande pour une réduction automatique OK
-- Ajouter des points de fidélité de commande automatiquement OK
 - Ajouter des crons pour les promotions (expiration, activation, )
 - Ajouter des crons pour les points de fidélité (expiration, activation)
 
@@ -24,14 +22,3 @@ Commande à emporter : PENDING -> ACCEPTED -> IN_PROGRESS -> READY -> COLLECTED 
                                                          -> CANCELLED
 
 Commande à table : PENDING -> ACCEPTED -> IN_PROGRESS -> READY -> COLLECTED -> COMPLETED
-
-## CREATION DE COMMANDE
-- Ajouter des points de fidélité de commande automatiquement
-
-## NOTIFICATION
-- Ajouter les icônes de promotions
-
-# Automatisation
-- Utilisation des points de fidélité
-- Ajout des points de fidélité
-- Utilisation d'une promotion

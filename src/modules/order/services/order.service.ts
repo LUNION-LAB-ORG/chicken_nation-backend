@@ -9,9 +9,6 @@ import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { OrderHelper } from '../helpers/order.helper';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { OrderEvent } from '../events/order.event';
-import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
-import { PromotionUsageService } from 'src/modules/fidelity/services/promotion-usage.service';
-
 @Injectable()
 export class OrderService {
 
@@ -20,8 +17,6 @@ export class OrderService {
     private generateDataService: GenerateDataService,
     private orderHelper: OrderHelper,
     private orderEvent: OrderEvent,
-    private loyaltyService: LoyaltyService,
-    private promotionUsageService: PromotionUsageService,
   ) { }
 
   /**
@@ -33,7 +28,7 @@ export class OrderService {
 
     const { items, paiement_id, customer_id, restaurant_id, promotion_id, points, ...orderData } = createOrderDto;
 
-    // Identifier le client ou créer des données anonymes
+    // Identifier le client ou créer à partir des données
     const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: customer_id ?? customer.id });
 
     // Récupérer le restaurant le plus proche
@@ -51,8 +46,13 @@ export class OrderService {
     // Calculer les montants et préparer les order items
     const { orderItems, netAmount, totalDishes } = await this.orderHelper.calculateOrderDetails(items, dishesWithDetails);
 
-    //Calculer le prix si promotion
-    const discountPromotion = await this.promotionUsageService.usePromotion(promotion_id, customerData.customer_id, undefined, totalDishes, orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice })), customerData.loyalty_level ?? undefined);
+    //Calculer la promotion et la création de l'utilisation de la promotion
+    const discountPromotion = await this.orderHelper.calculatePromotionPrice(
+      promotion_id ?? "",
+      { customer_id: customerData.customer_id, loyalty_level: customerData.loyalty_level },
+      totalDishes,
+      orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice }))
+    );
 
     // Calculer les frais de livraison selon la distance
     const deliveryFee = await this.orderHelper.calculateDeliveryFee(orderData.type, address);
@@ -60,14 +60,14 @@ export class OrderService {
     // Vérifier le paiement
     const payment = await this.orderHelper.checkPayment(createOrderDto);
 
-    // Calculer le montant de réduction des points de fidélité et utilisation des points de fidélité
-    const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(customerData.customer_id, points ?? 0, `Réduction de commande de ${points} points de fidélité`);
+    // Calculer le montant de réduction des points de fidélité
+    const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(customerData.total_points, points ?? 0);
 
     // Calculer la taxe et le montant total
     const tax = await this.orderHelper.calculateTax(netAmount);
 
     const totalBeforeDiscount = netAmount + deliveryFee + tax;
-    const discount = (totalBeforeDiscount * promoDiscount) + loyaltyFee + discountPromotion.discount_amount;
+    const discount = (totalBeforeDiscount * promoDiscount) + loyaltyFee + discountPromotion;
     const totalAmount = totalBeforeDiscount - discount;
 
     if (payment && payment.amount < totalAmount) {
@@ -87,6 +87,7 @@ export class OrderService {
           phone: customerData.phone,
           email: customerData.email,
           ...(loyaltyFee && { points: points }),
+          ...(discountPromotion && { promotion: { connect: { id: promotion_id } } }),
           customer: {
             connect: {
               id: customerData.customer_id
@@ -155,35 +156,14 @@ export class OrderService {
       return createdOrder;
     });
 
-    //Mise à jour du paiement
-    if (payment) {
-      await this.prisma.paiement.update({
-        where: { id: payment.id },
-        data: { order_id: order.id },
-      });
-    }
-    // Mise à jour de l'utilisation de la promotion
-    if (discountPromotion.usage) {
-      await this.prisma.promotionUsage.update({
-        where: { id: discountPromotion.usage.id },
-        data: { order_id: order.id },
-      });
-    }
-
-    // Ajout des points de fidélité
-    if (loyaltyFee) {
-      const pts = await this.loyaltyService.calculatePointsForOrder(netAmount);
-      await this.loyaltyService.addPoints({
-        customer_id: customerData.customer_id,
-        points: pts,
-        type: LoyaltyPointType.EARNED,
-        reason: `Vous avez gagné ${pts} points de fidélité pour votre commande`,
-        order_id: order.id
-      })
-    }
     // Envoyer l'événement de création de commande
-    this.orderEvent.create(order);
-
+    this.orderEvent.create({
+      order,
+      payment_id: payment?.id ?? null,
+      loyalty_level: customerData.loyalty_level,
+      totalDishes,
+      orderItems: orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice })),
+    });
     return order;
   }
 
@@ -238,7 +218,7 @@ export class OrderService {
     });
 
     // Envoyer l'événement de mise à jour de statut de commande
-    this.orderEvent.updateStatus(updatedOrder, status, meta);
+    this.orderEvent.updateStatus(updatedOrder);
 
     return updatedOrder;
   }

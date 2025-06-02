@@ -1,14 +1,14 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
-import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
-import { OrderStatus, OrderType, PaiementStatus, EntityStatus, Customer, Dish, Address, SupplementCategory, Order, LoyaltyPointType } from '@prisma/client';
+import { OrderStatus, OrderType, PaiementStatus, EntityStatus, Customer, Dish, Address, SupplementCategory, Order, LoyaltyPointType, LoyaltyLevel } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { Request } from 'express';
 import { QueryOrderDto } from '../dto/query-order.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PaiementsService } from 'src/modules/paiements/services/paiements.service';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
+import { PromotionUsageService } from 'src/modules/fidelity/services/promotion-usage.service';
+import { PromotionService } from 'src/modules/fidelity/services/promotion.service';
 
 @Injectable()
 export class OrderHelper {
@@ -21,6 +21,8 @@ export class OrderHelper {
         private generateDataService: GenerateDataService,
         private paiementService: PaiementsService,
         private loyaltyService: LoyaltyService,
+        private promotionUsageService: PromotionUsageService,
+        private promotionService: PromotionService,
     ) {
         this.taxRate = Number(this.configService.get<number>('ORDER_TAX_RATE', 0.005));
         this.baseDeliveryFee = Number(this.configService.get<number>('BASE_DELIVERY_FEE', 1000));
@@ -42,7 +44,8 @@ export class OrderHelper {
 
             return {
                 customer_id: customer.id,
-                loyalty_level: customer.loyalty_level,
+                loyalty_level: customer.loyalty_level ?? undefined,
+                total_points: customer.total_points ?? 0,
                 fullname: orderData.fullname || `${customer.first_name} ${customer.last_name}`,
                 phone: orderData.phone || customer.phone,
                 email: orderData.email || customer.email,
@@ -405,7 +408,6 @@ export class OrderHelper {
         });
 
         if (!payment) {
-
             throw new NotFoundException('Paiement non trouvé');
         }
 
@@ -461,17 +463,32 @@ export class OrderHelper {
     }
 
     // Calculer le montant à payer avec les points
-    async calculateLoyaltyFee(customer_id: string, points: number, reason: string) {
-        if (points === 0) return 0;
-        const loyaltyFee = await this.loyaltyService.redeemPoints({ customer_id, points, reason });
+    async calculateLoyaltyFee(total_points: number, points: number) {
+        if (total_points < points || total_points < 100) return 0;
 
         const amount = await this.loyaltyService.calculateAmountForPoints(points);
 
-        if (loyaltyFee) {
-            
-            return amount;
-        }
-
-        return 0;
+        return amount;
     }
+
+    //Calculer le prix si promotion et création de l'utilisation de la promotion
+    async calculatePromotionPrice(promotion_id: string, customerData: { customer_id: string; loyalty_level: LoyaltyLevel | undefined }, totalDishes: number, orderItems: { dish_id: string; quantity: number; price: number }[]) {
+        const canUse = await this.promotionUsageService.canCustomerUsePromotion(promotion_id, customerData.customer_id);
+        if (!canUse.allowed) {
+            return 0;
+        }
+        // Calculer la réduction
+        const discount = await this.promotionService.calculateDiscount(
+            promotion_id,
+            totalDishes,
+            orderItems,
+            customerData.loyalty_level
+        );
+
+        if (!discount.applicable) {
+            return 0;
+        }
+        return discount.discount_amount;
+    }
+
 }

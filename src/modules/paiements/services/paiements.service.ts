@@ -7,10 +7,11 @@ import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
 import { KkiapayService } from 'src/kkiapay/kkiapay.service';
 import { CreatePaiementKkiapayDto } from 'src/modules/paiements/dto/create-paiement-kkiapay.dto';
 import { Request } from 'express';
+import { PaiementEvent } from 'src/modules/paiements/events/paiement.event';
 
 @Injectable()
 export class PaiementsService {
-  constructor(private readonly prisma: PrismaService, private readonly kkiapay: KkiapayService) { }
+  constructor(private readonly prisma: PrismaService, private readonly kkiapay: KkiapayService, private readonly paiementEvent: PaiementEvent) { }
 
   // Payer avec Kkiapay
   async payWithKkiapay(req: Request, createPaiementKkiapayDto: CreatePaiementKkiapayDto) {
@@ -18,7 +19,7 @@ export class PaiementsService {
     const transaction = await this.kkiapay.verifyTransaction(createPaiementKkiapayDto.transactionId);
 
     const customer = req.user as Customer;
-    console.log(transaction, customer)
+
     const paiement = await this.create({
       reference: transaction.transactionId,
       amount: transaction.amount,
@@ -84,6 +85,9 @@ export class PaiementsService {
       failure_message: transaction.failureMessage,
     });
 
+    // Émission de l'événement de paiement annulé
+    this.paiementEvent.paiementAnnule(paiement);
+
     return {
       success: updatedPaiement.status === "REVERTED",
       message: updatedPaiement.status === "REVERTED" ? 'Remboursement effectué avec succès' : 'Remboursement echoué',
@@ -124,6 +128,9 @@ export class PaiementsService {
         },
       });
     }
+
+    // Émission de l'événement de paiement effectué
+    this.paiementEvent.paiementEffectue(paiement);
 
     return paiement;
   }

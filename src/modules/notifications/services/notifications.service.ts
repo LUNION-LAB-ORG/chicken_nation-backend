@@ -7,6 +7,7 @@ import { NotificationStatsDto } from '../dto/notifications-stats.dto';
 import { QueryNotificationDto } from '../dto/query-notification.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { NotificationResponseDto } from '../dto/response-notification.dto';
+import { getOrderNotificationContent, notificationIcons } from '../constantes/notifications.constante';
 
 @Injectable()
 export class NotificationsService {
@@ -267,7 +268,7 @@ export class NotificationsService {
         status: string,
         additionalData?: any
     ) {
-        const notificationData = this.getOrderNotificationContent(status, orderReference);
+        const notificationData = getOrderNotificationContent(status, orderReference);
 
         return this.create({
             title: notificationData.title,
@@ -302,8 +303,8 @@ export class NotificationsService {
             type: NotificationType.PROMOTION,
             user_id: userId,
             target,
-            icon: 'https://cdn-icons-png.flaticon.com/512/3514/3514491.png',
-            icon_bg_color: '#FF6B35',
+            icon: notificationIcons.promotion.url,
+            icon_bg_color: notificationIcons.promotion.color,
             show_chevron: true,
             data: {
                 promotion_title: promotionTitle,
@@ -328,67 +329,10 @@ export class NotificationsService {
             type: NotificationType.SYSTEM,
             user_id: userId,
             target,
-            icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524659.png',
-            icon_bg_color: '#6C757D',
+            icon: notificationIcons.setting.url,
+            icon_bg_color: notificationIcons.setting.color,
             show_chevron: false,
             data: additionalData,
         });
-    }
-
-    /**
-     * Utilitaire pour obtenir le contenu des notifications de commande
-     */
-    private getOrderNotificationContent(status: string, orderReference: string) {
-        const statusConfig = {
-            PENDING: {
-                title: '⏳ Commande en attente',
-                message: `Votre commande ${orderReference} est en attente de confirmation.`,
-                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524335.png',
-                iconBgColor: '#FFC107',
-            },
-            ACCEPTED: {
-                title: '✅ Commande acceptée',
-                message: `Votre commande ${orderReference} a été acceptée et est en préparation.`,
-                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524388.png',
-                iconBgColor: '#28A745',
-            },
-            IN_PROGRESS: {
-                title: '👨‍🍳 Commande en préparation',
-                message: `Votre commande ${orderReference} est actuellement en préparation.`,
-                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524456.png',
-                iconBgColor: '#17A2B8',
-            },
-            READY: {
-                title: '🍽️ Commande prête',
-                message: `Votre commande ${orderReference} est prête pour la livraison/récupération.`,
-                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524567.png',
-                iconBgColor: '#28A745',
-            },
-            PICKED_UP: {
-                title: '🚗 Commande en livraison',
-                message: `Votre commande ${orderReference} est en cours de livraison.`,
-                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524678.png',
-                iconBgColor: '#007BFF',
-            },
-            DELIVERED: {
-                title: '📦 Commande livrée',
-                message: `Votre commande ${orderReference} a été livrée avec succès.`,
-                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524789.png',
-                iconBgColor: '#28A745',
-            },
-            CANCELLED: {
-                title: '❌ Commande annulée',
-                message: `Votre commande ${orderReference} a été annulée.`,
-                icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524890.png',
-                iconBgColor: '#DC3545',
-            },
-        };
-
-        return statusConfig[status] || {
-            title: '📋 Mise à jour de commande',
-            message: `Votre commande ${orderReference} a été mise à jour.`,
-            icon: 'https://cdn-icons-png.flaticon.com/512/3524/3524335.png',
-            iconBgColor: '#6C757D',
-        };
     }
 }

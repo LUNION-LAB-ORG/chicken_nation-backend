@@ -1,7 +1,7 @@
 
 import { join } from 'path';
 
-export const icons = {
+export const statisticsIcons = {
     revenue: {
         url: join(process.env.BASE_URL ?? "", 'uploads', 'assets/statistics/icons/money-bag.svg'),
         color: "#FFC107"
