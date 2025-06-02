@@ -8,10 +8,13 @@ import { QueryNotificationDto } from '../dto/query-notification.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { NotificationResponseDto } from '../dto/response-notification.dto';
 import { getOrderNotificationContent, notificationIcons } from '../constantes/notifications.constante';
+import { NotificationsTemplates } from '../templates/notifications.template';
+import { NotificationRecipientsService } from './notifications-recipients.service';
+import { NotificationContext, NotificationRecipient, NotificationTemplate } from '../interfaces/notifications.interface';
 
 @Injectable()
 export class NotificationsService {
-    constructor(private readonly prisma: PrismaService) { }
+    constructor(private readonly prisma: PrismaService, private readonly recipientsService: NotificationRecipientsService) { }
 
     /**
      * Créer une nouvelle notification
@@ -334,5 +337,216 @@ export class NotificationsService {
             show_chevron: false,
             data: additionalData,
         });
+    }
+
+    /**
+   * Envoie une notification à plusieurs destinataires avec un template
+   */
+    async sendNotificationToMultiple(
+        template: NotificationTemplate,
+        context: NotificationContext,
+        notificationType: NotificationType
+    ) {
+        const notifications = context.recipients.map(recipient => {
+            const notificationContext = { ...context, currentRecipient: recipient };
+
+            return this.create({
+                title: template.title(notificationContext),
+                message: template.message(notificationContext),
+                type: notificationType,
+                user_id: recipient.id,
+                target: this.getTargetFromRecipientType(recipient.type),
+                icon: template.icon(notificationContext),
+                icon_bg_color: template.iconBgColor(notificationContext),
+                show_chevron: template.showChevron || false,
+                data: context.data
+            });
+        });
+
+        return Promise.all(notifications);
+    }
+
+    /**
+     * Gère les notifications pour une commande créée
+     */
+    async handleOrderCreated(order: any, customer: any) {
+        const actor: NotificationRecipient = {
+            id: customer.id,
+            type: 'customer',
+            name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim()
+        };
+
+        const [restaurantUsers, backofficeUsers] = await Promise.all([
+            this.recipientsService.getRestaurantUsers(order.restaurant_id),
+            this.recipientsService.getBackofficeUsers()
+        ]);
+
+        const orderData = {
+            reference: order.reference,
+            amount: order.amount,
+            restaurant_name: order.restaurant?.name || 'Restaurant'
+        };
+
+        // Notification au client
+        await this.sendNotificationToMultiple(
+            NotificationsTemplates.ORDER_CREATED_CUSTOMER,
+            { actor, recipients: [actor], data: orderData },
+            NotificationType.ORDER
+        );
+
+        // Notifications au restaurant
+        if (restaurantUsers.length > 0) {
+            await this.sendNotificationToMultiple(
+                NotificationsTemplates.ORDER_CREATED_RESTAURANT,
+                { actor, recipients: restaurantUsers, data: orderData },
+                NotificationType.ORDER
+            );
+        }
+
+        // Notifications au back office
+        if (backofficeUsers.length > 0) {
+            await this.sendNotificationToMultiple(
+                NotificationsTemplates.ORDER_CREATED_BACKOFFICE,
+                { actor, recipients: backofficeUsers, data: orderData },
+                NotificationType.ORDER
+            );
+        }
+    }
+
+    /**
+     * Gère les notifications pour un changement de statut de commande
+     */
+    async handleOrderStatusUpdate(order: any, customer: any, updatedByUser?: any) {
+        const customerRecipient = await this.recipientsService.getCustomer(order.customer_id);
+        if (!customerRecipient) return;
+
+        const actor: NotificationRecipient = updatedByUser ? {
+            id: updatedByUser.id,
+            type: updatedByUser.type === 'BACKOFFICE' ? 'backoffice_user' : 'restaurant_user',
+            name: updatedByUser.fullname
+        } : customerRecipient;
+
+        const orderData = {
+            reference: order.reference,
+            status: order.status,
+            amount: order.amount
+        };
+
+        // Toujours notifier le client du changement de statut
+        await this.sendNotificationToMultiple(
+            NotificationsTemplates.ORDER_STATUS_UPDATED_CUSTOMER,
+            { actor, recipients: [customerRecipient], data: orderData },
+            NotificationType.ORDER
+        );
+
+        // Si c'est une commande terminée, notifier aussi le back office
+        if (order.status === 'COMPLETED') {
+            const backofficeUsers = await this.recipientsService.getBackofficeUsers();
+            if (backofficeUsers.length > 0) {
+                await this.sendNotificationToMultiple(
+                    {
+                        title: (ctx) => `✅ Commande terminée`,
+                        message: (ctx) => `Commande ${ctx.data.reference} terminée avec succès. Montant: ${ctx.data.amount} XOF`,
+                        icon: (ctx) => notificationIcons.collected.url,
+                        iconBgColor: (ctx) => notificationIcons.collected.color,
+                        showChevron: true
+                    },
+                    { actor, recipients: backofficeUsers, data: orderData },
+                    NotificationType.ORDER
+                );
+            }
+        }
+    }
+
+    /**
+     * Gère les notifications de paiement
+     */
+    async handlePaymentCompleted(payment: any, order: any, customer: any) {
+        const customerRecipient = await this.recipientsService.getCustomer(customer.id);
+        if (!customerRecipient) return;
+
+        const restaurantUsers = await this.recipientsService.getRestaurantUsers(order.restaurant_id);
+
+        const paymentData = {
+            reference: order.reference,
+            amount: payment.amount,
+            mode: payment.mode
+        };
+
+        const actor = customerRecipient;
+
+        // Notification au client
+        await this.sendNotificationToMultiple(
+            NotificationsTemplates.PAYMENT_SUCCESS_CUSTOMER,
+            { actor, recipients: [customerRecipient], data: paymentData },
+            NotificationType.ORDER
+        );
+
+        // Notification au restaurant
+        if (restaurantUsers.length > 0) {
+            await this.sendNotificationToMultiple(
+                NotificationsTemplates.PAYMENT_SUCCESS_RESTAURANT,
+                { actor, recipients: restaurantUsers, data: paymentData },
+                NotificationType.ORDER
+            );
+        }
+    }
+
+    /**
+     * Gère les notifications de fidélité
+     */
+    async handleLoyaltyPointsEarned(customer: any, points: number, totalPoints: number, reason?: string) {
+        const customerRecipient = await this.recipientsService.getCustomer(customer.id);
+        if (!customerRecipient) return;
+
+        await this.sendNotificationToMultiple(
+            NotificationsTemplates.LOYALTY_POINTS_EARNED,
+            {
+                actor: customerRecipient,
+                recipients: [customerRecipient],
+                data: { points, total_points: totalPoints, reason }
+            },
+            NotificationType.SYSTEM
+        );
+    }
+
+    async handleLoyaltyLevelUp(customer: any, newLevel: string, bonusPoints: number) {
+        const customerRecipient = await this.recipientsService.getCustomer(customer.id);
+        if (!customerRecipient) return;
+
+        await this.sendNotificationToMultiple(
+            NotificationsTemplates.LOYALTY_LEVEL_UP,
+            {
+                actor: customerRecipient,
+                recipients: [customerRecipient],
+                data: { new_level: newLevel, bonus_points: bonusPoints }
+            },
+            NotificationType.SYSTEM
+        );
+    }
+
+    /**
+     * Gère les notifications de promotions
+     */
+    async handlePromotionUsed(customer: any, promotion: any, discountAmount: number) {
+        const customerRecipient = await this.recipientsService.getCustomer(customer.id);
+        if (!customerRecipient) return;
+
+        await this.sendNotificationToMultiple(
+            NotificationsTemplates.PROMOTION_USED,
+            {
+                actor: customerRecipient,
+                recipients: [customerRecipient],
+                data: {
+                    promotion_title: promotion.title,
+                    discount_amount: discountAmount
+                }
+            },
+            NotificationType.PROMOTION
+        );
+    }
+
+    private getTargetFromRecipientType(type: string): NotificationTarget {
+        return type === 'customer' ? NotificationTarget.CUSTOMER : NotificationTarget.USER;
     }
 }

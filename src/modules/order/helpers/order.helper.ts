@@ -472,7 +472,8 @@ export class OrderHelper {
     }
 
     //Calculer le prix si promotion et création de l'utilisation de la promotion
-    async calculatePromotionPrice(promotion_id: string, customerData: { customer_id: string; loyalty_level: LoyaltyLevel | undefined }, totalDishes: number, orderItems: { dish_id: string; quantity: number; price: number }[]) {
+    async calculatePromotionPrice(promotion_id: string | undefined, customerData: { customer_id: string; loyalty_level: LoyaltyLevel | undefined }, totalDishes: number, orderItems: { dish_id: string; quantity: number; price: number }[]) {
+        if (!promotion_id) return 0;
         const canUse = await this.promotionUsageService.canCustomerUsePromotion(promotion_id, customerData.customer_id);
         if (!canUse.allowed) {
             return 0;
