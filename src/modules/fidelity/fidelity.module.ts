@@ -8,6 +8,7 @@ import { PromotionListener } from './listeners/promotion.listener';
 import { LoyaltyListener } from './listeners/loyalty.listener';
 import { LoyaltyEvent } from './events/loyalty.event';
 import { PromotionEvent } from './events/promotion.event';
+import { LoyaltyTask } from './tasks/loyalty.task';
 @Module({
     controllers: [PromotionController, LoyaltyController],
     providers: [
@@ -17,7 +18,8 @@ import { PromotionEvent } from './events/promotion.event';
         LoyaltyEvent,
         PromotionEvent,
         PromotionListener,
-        LoyaltyListener
+        LoyaltyListener,
+        LoyaltyTask
     ],
     exports: [PromotionService, LoyaltyService, PromotionUsageService, PromotionEvent, LoyaltyEvent],
 })

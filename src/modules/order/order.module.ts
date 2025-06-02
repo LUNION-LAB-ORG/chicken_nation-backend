@@ -8,10 +8,18 @@ import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
 import { OrderListener } from './listeners/order.listener';
 import { OrderEvent } from './events/order.event';
+import { OrderTask } from './tasks/order.task';
 
 @Module({
   imports: [PaiementsModule, FidelityModule],
   controllers: [OrderController, OrderItemController],
-  providers: [OrderService, OrderItemService, OrderHelper, OrderEvent, OrderListener],
+  providers: [
+    OrderService,
+    OrderItemService,
+    OrderHelper,
+    OrderEvent,
+    OrderListener,
+    OrderTask
+  ],
 })
 export class OrderModule { }

@@ -183,7 +183,7 @@ export class OrderService {
     const updatedOrder = await this.prisma.order.update({
       where: { id },
       data: {
-        status,
+        status: status == OrderStatus.ACCEPTED ? OrderStatus.IN_PROGRESS : status,
         updated_at: new Date(),
         ...(status === OrderStatus.COMPLETED && { completed_at: new Date() }),
       },

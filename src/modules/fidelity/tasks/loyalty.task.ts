@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { LoyaltyService } from '../services/loyalty.service';
-import { PromotionService } from '../services/promotion.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { PromotionStatus } from '@prisma/client';
 
@@ -11,7 +10,6 @@ export class LoyaltyTask {
 
   constructor(
     private loyaltyService: LoyaltyService,
-    private promotionService: PromotionService,
     private prisma: PrismaService
   ) {}
 
@@ -28,7 +26,7 @@ export class LoyaltyTask {
     }
   }
 
-  // Vérifie et met à jour le statut des promotions tous les heures
+  // Vérifie et met à jour le statut des promotions toutes les heures
   @Cron(CronExpression.EVERY_HOUR)
   async updatePromotionStatus() {
     this.logger.log('Mise à jour du statut des promotions...');

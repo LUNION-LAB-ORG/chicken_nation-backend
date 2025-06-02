@@ -8,11 +8,11 @@ export class OrderListener {
 
   @OnEvent('order.created')
   async handleOrderCreated(payload: Order) {
-    console.log("handleOrderCreated", payload);
+    // console.log("handleOrderCreated", payload);
   }
 
   @OnEvent('order.statusUpdated')
   async handleOrderCompleted(payload: Order) {
-    console.log("handleOrderCompleted", payload);
+    // console.log("handleOrderCompleted", payload);
   }
 }
