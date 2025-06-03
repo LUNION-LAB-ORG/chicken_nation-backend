@@ -13,7 +13,7 @@ export class GenerateConfigService {
                 filename: async (req, file, cb) => {
                     const ext = extname(file.originalname);
                     const fileNameHash = await GenerateDataService.generateSecureImageName(name ? req.body[name] : file.originalname);
-                    const filename = `${fileNameHash}${ext}`; 
+                    const filename = `${fileNameHash}${ext}`;
                     cb(null, filename);
                 },
             }),
