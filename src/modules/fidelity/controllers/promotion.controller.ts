@@ -68,7 +68,7 @@ export class PromotionController {
 
   @ApiOperation({ summary: 'Calculer le remise d\'une promotion' })
   @ApiOkResponse({ type: ApplyDiscountPromotionDtoResponse })
-  @Get(':id/calculate-discount')
+  @Post(':id/calculate-discount')
   calculateDiscount(
     @Param('id') promotion_id: string,
     @Query('order_amount') order_amount: number,
