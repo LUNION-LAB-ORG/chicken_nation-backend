@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { NotificationType, NotificationTarget } from '@prisma/client';
+import { NotificationType, NotificationTarget, Order } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { NotificationsTemplates } from '../templates/notifications.template';
 import { NotificationRecipientsService } from './notifications-recipients.service';
@@ -21,19 +21,12 @@ export class NotificationsSenderService {
 
         if (!actor) return;
 
-        const [restaurantUsers, backofficeUsers, restaurant] = await Promise.all([
-            this.recipientsService.getRestaurantUsers(payload.order.restaurant_id),
-            this.recipientsService.getBackofficeUsers(),
-            this.prisma.restaurant.findUnique({
-                where: { id: payload.order.restaurant_id },
-                select: { name: true }
-            })
-        ]);
+        const restaurantUsers = await this.recipientsService.getRestaurantUsers(payload.order.restaurant_id);
 
         const orderData = {
             reference: payload.order.reference,
             amount: payload.order.amount,
-            restaurant_name: restaurant?.name || 'Restaurant'
+            restaurant_name: restaurantUsers[0]?.restaurant_name || 'Restaurant'
         };
 
         // Notification au client
@@ -51,60 +44,38 @@ export class NotificationsSenderService {
                 NotificationType.ORDER
             );
         }
-
-        // Notifications au back office
-        if (backofficeUsers.length > 0) {
-            await this.notificationsService.sendNotificationToMultiple(
-                NotificationsTemplates.ORDER_CREATED_BACKOFFICE,
-                { actor, recipients: backofficeUsers, data: orderData },
-                NotificationType.ORDER
-            );
-        }
     }
 
     /**
      * Gère les notifications pour un changement de statut de commande
      */
-    async handleOrderStatusUpdate(order: any, customer: any, updatedByUser?: any) {
-        const customerRecipient = await this.recipientsService.getCustomer(order.customer_id);
-        if (!customerRecipient) return;
+    async handleOrderStatusUpdate(order: Order) {
+        const actor = await this.recipientsService.getCustomer(order.customer_id);
 
-        const actor: NotificationRecipient = updatedByUser ? {
-            id: updatedByUser.id,
-            type: updatedByUser.type === 'BACKOFFICE' ? 'backoffice_user' : 'restaurant_user',
-            name: updatedByUser.fullname
-        } : customerRecipient;
+        if (!actor) return;
+
+        const restaurantUsers = await this.recipientsService.getRestaurantUsers(order.restaurant_id);
 
         const orderData = {
             reference: order.reference,
             status: order.status,
-            amount: order.amount
+            amount: order.amount,
+            restaurant_name: restaurantUsers[0]?.restaurant_name || 'Restaurant',
+            customer_name: actor.name
         };
 
         // Toujours notifier le client du changement de statut
         await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplates.ORDER_STATUS_UPDATED_CUSTOMER,
-            { actor, recipients: [customerRecipient], data: orderData },
+            { actor, recipients: [actor], data: orderData },
             NotificationType.ORDER
         );
-
-        // Si c'est une commande terminée, notifier aussi le back office
-        if (order.status === 'COMPLETED') {
-            const backofficeUsers = await this.recipientsService.getBackofficeUsers();
-            if (backofficeUsers.length > 0) {
-                await this.notificationsService.sendNotificationToMultiple(
-                    {
-                        title: (ctx) => `✅ Commande terminée`,
-                        message: (ctx) => `Commande ${ctx.data.reference} terminée avec succès. Montant: ${ctx.data.amount} XOF`,
-                        icon: (ctx) => notificationIcons.collected.url,
-                        iconBgColor: (ctx) => notificationIcons.collected.color,
-                        showChevron: true
-                    },
-                    { actor, recipients: backofficeUsers, data: orderData },
-                    NotificationType.ORDER
-                );
-            }
-        }
+        // Toujours notifier le restaurant du changement de statut
+        await this.notificationsService.sendNotificationToMultiple(
+            NotificationsTemplates.ORDER_STATUS_UPDATED_RESTAURANT,
+            { actor, recipients: restaurantUsers, data: orderData },
+            NotificationType.ORDER
+        );
     }
 
     /**

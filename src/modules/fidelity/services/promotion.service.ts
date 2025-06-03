@@ -3,10 +3,11 @@ import { CreatePromotionDto } from '../dto/create-promotion.dto';
 import { UpdatePromotionDto } from '../dto/update-promotion.dto';
 import { PromotionResponseDto } from '../dto/promotion-response.dto';
 import { Prisma, Promotion, Visibility } from '@prisma/client';
-import { DiscountType, TargetType, PromotionStatus, LoyaltyLevel, EntityStatus } from '@prisma/client';
+import { DiscountType, TargetType, PromotionStatus, LoyaltyLevel } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryPromotionDto } from '../dto/query-promotion.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
+
 interface Dish {
   id: string;
   name: string;
@@ -426,6 +427,7 @@ export class PromotionService {
 
     let discount_amount: number = 0;
     let buyXGetY_amount: number = 0;
+
     switch (promotion.discount_type) {
       case DiscountType.PERCENTAGE:
         discount_amount = (order_amount * promotion.discount_value) / 100;

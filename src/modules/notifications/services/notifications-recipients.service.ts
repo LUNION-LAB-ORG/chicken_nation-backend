@@ -19,7 +19,12 @@ export class NotificationRecipientsService {
                 id: true,
                 fullname: true,
                 restaurant_id: true,
-                role: true
+                role: true,
+                restaurant: {
+                    select: {
+                        name: true
+                    }
+                }
             }
         });
 
@@ -28,7 +33,8 @@ export class NotificationRecipientsService {
             type: 'restaurant_user',
             role: user.role,
             name: user.fullname,
-            restaurant_id: user.restaurant_id ?? undefined
+            restaurant_id: user.restaurant_id ?? undefined,
+            restaurant_name: user.restaurant?.name ?? undefined
         }));
     }
 

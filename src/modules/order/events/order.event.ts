@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { UpdateOrderDto } from '../dto/update-order.dto';
-import { Order, OrderStatus } from '@prisma/client';
+import { Order, OrderStatus, User } from '@prisma/client';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
 
@@ -25,13 +25,14 @@ export class OrderEvent {
   /**
    * Émet un événement de mise à jour de statut de commande
    */
-  async updateStatus(payload: Order) {
+  async updateStatus(order: Order) {
     this.eventEmitter.emit(
       'order.statusUpdated',
-      payload
+      order
     );
-
   }
+
+
   /**
    * Émet un événement de mise à jour de commande
    */

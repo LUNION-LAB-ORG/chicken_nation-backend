@@ -2,10 +2,21 @@ import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { NotificationsSenderService } from '../services/notifications-sender.service';
 import { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
+import { Order } from '@prisma/client';
 
 @Injectable()
 export class NotificationsListener {
     constructor(private notificationSenderService: NotificationsSenderService) { }
+
+    @OnEvent('order.created')
+    async handleOrderCreated(payload: OrderCreatedEvent) {
+        await this.notificationSenderService.handleOrderCreated(payload);
+    }
+
+    @OnEvent('order.statusUpdated')
+    async handleOrderStatusUpdated(order: Order) {
+        await this.notificationSenderService.handleOrderStatusUpdate(order);
+    }
 
     @OnEvent('paiement.annule')
     async handlePaiementAnnule(payload: any) {
@@ -16,22 +27,6 @@ export class NotificationsListener {
         //   payload.customer.name
         // );
     }
-
-    @OnEvent('order.statusUpdated')
-    async handleOrderStatusUpdated(payload: { order: any; customer: any; updatedBy?: any }) {
-        await this.notificationSenderService.handleOrderStatusUpdate(
-            payload.order,
-            payload.customer,
-            payload.updatedBy
-        );
-    }
-
-    @OnEvent('order.created')
-    async handleOrderCreated(payload: OrderCreatedEvent) {
-        await this.notificationSenderService.handleOrderCreated(payload);
-    }
-
-
 
     @OnEvent('payment.completed')
     async handlePaymentCompleted(payload: { payment: any; order: any; customer: any }) {

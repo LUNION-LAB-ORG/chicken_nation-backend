@@ -20,21 +20,21 @@ export class NotificationsTemplates {
         showChevron: false
     };
 
-    // COMMANDES - Pour le back office
-    static ORDER_CREATED_BACKOFFICE: NotificationTemplate = {
-        title: (ctx) => `📊 Nouvelle commande système`,
-        message: (ctx) => `Commande ${ctx.data.reference} créée au restaurant ${ctx.data.restaurant_name}. ${ctx.data.amount} XOF`,
-        icon: (ctx) => notificationIcons.progress.url,
-        iconBgColor: (ctx) => notificationIcons.progress.color,
+    // STATUT COMMANDE - Pour le client
+    static ORDER_STATUS_UPDATED_CUSTOMER: NotificationTemplate = {
+        title: (ctx) => getOrderNotificationContent(ctx.data, 'customer').title,
+        message: (ctx) => getOrderNotificationContent(ctx.data, 'customer').message,
+        icon: (ctx) => getOrderNotificationContent(ctx.data, 'customer').icon,
+        iconBgColor: (ctx) => getOrderNotificationContent(ctx.data, 'customer').iconBgColor,
         showChevron: false
     };
 
-    // STATUT COMMANDE - Pour le client
-    static ORDER_STATUS_UPDATED_CUSTOMER: NotificationTemplate = {
-        title: (ctx) => getOrderNotificationContent(ctx.data.status, ctx.data.reference).title,
-        message: (ctx) => getOrderNotificationContent(ctx.data.status, ctx.data.reference).message,
-        icon: (ctx) => getOrderNotificationContent(ctx.data.status, ctx.data.reference).icon,
-        iconBgColor: (ctx) => getOrderNotificationContent(ctx.data.status, ctx.data.reference).iconBgColor,
+    // STATUT COMMANDE - Pour le restaurant
+    static ORDER_STATUS_UPDATED_RESTAURANT: NotificationTemplate = {
+        title: (ctx) => getOrderNotificationContent(ctx.data, 'restaurant').title,
+        message: (ctx) => getOrderNotificationContent(ctx.data, 'restaurant').message,
+        icon: (ctx) => getOrderNotificationContent(ctx.data, 'restaurant').icon,
+        iconBgColor: (ctx) => getOrderNotificationContent(ctx.data, 'restaurant').iconBgColor,
         showChevron: false
     };
 

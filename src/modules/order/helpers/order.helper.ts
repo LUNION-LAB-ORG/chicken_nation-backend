@@ -374,7 +374,9 @@ export class OrderHelper {
                 break;
 
             case OrderStatus.COMPLETED:
-
+                if (!order.paied) {
+                    throw new BadRequestException('La commande n\'a pas été payée');
+                }
                 break;
 
             case OrderStatus.CANCELLED:

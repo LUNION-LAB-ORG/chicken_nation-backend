@@ -9,6 +9,7 @@ export interface NotificationRecipient {
     loyalty_level?: LoyaltyLevel | null;
     lifetime_points?: number;
     total_points?: number;
+    restaurant_name?: string;
 }
 
 export interface NotificationContext {
