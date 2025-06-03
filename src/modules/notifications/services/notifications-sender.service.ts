@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { NotificationType, NotificationTarget, Order } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { NotificationsTemplates } from '../templates/notifications.template';
+import { NotificationsTemplate } from '../templates/notifications.template';
 import { NotificationRecipientsService } from './notifications-recipients.service';
 import { NotificationsService } from './notifications.service';
 import { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
@@ -31,7 +31,7 @@ export class NotificationsSenderService {
 
         // Notification au client
         await this.notificationsService.sendNotificationToMultiple(
-            NotificationsTemplates.ORDER_CREATED_CUSTOMER,
+            NotificationsTemplate.ORDER_CREATED_CUSTOMER,
             { actor, recipients: [actor], data: orderData },
             NotificationType.ORDER
         );
@@ -39,7 +39,7 @@ export class NotificationsSenderService {
         // Notifications au restaurant
         if (restaurantUsers.length > 0) {
             await this.notificationsService.sendNotificationToMultiple(
-                NotificationsTemplates.ORDER_CREATED_RESTAURANT,
+                NotificationsTemplate.ORDER_CREATED_RESTAURANT,
                 { actor, recipients: restaurantUsers, data: orderData },
                 NotificationType.ORDER
             );
@@ -66,13 +66,13 @@ export class NotificationsSenderService {
 
         // Toujours notifier le client du changement de statut
         await this.notificationsService.sendNotificationToMultiple(
-            NotificationsTemplates.ORDER_STATUS_UPDATED_CUSTOMER,
+            NotificationsTemplate.ORDER_STATUS_UPDATED_CUSTOMER,
             { actor, recipients: [actor], data: orderData },
             NotificationType.ORDER
         );
         // Toujours notifier le restaurant du changement de statut
         await this.notificationsService.sendNotificationToMultiple(
-            NotificationsTemplates.ORDER_STATUS_UPDATED_RESTAURANT,
+            NotificationsTemplate.ORDER_STATUS_UPDATED_RESTAURANT,
             { actor, recipients: restaurantUsers, data: orderData },
             NotificationType.ORDER
         );
@@ -97,7 +97,7 @@ export class NotificationsSenderService {
 
         // Notification au client
         await this.notificationsService.sendNotificationToMultiple(
-            NotificationsTemplates.PAYMENT_SUCCESS_CUSTOMER,
+            NotificationsTemplate.PAYMENT_SUCCESS_CUSTOMER,
             { actor, recipients: [customerRecipient], data: paymentData },
             NotificationType.ORDER
         );
@@ -105,7 +105,7 @@ export class NotificationsSenderService {
         // Notification au restaurant
         if (restaurantUsers.length > 0) {
             await this.notificationsService.sendNotificationToMultiple(
-                NotificationsTemplates.PAYMENT_SUCCESS_RESTAURANT,
+                NotificationsTemplate.PAYMENT_SUCCESS_RESTAURANT,
                 { actor, recipients: restaurantUsers, data: paymentData },
                 NotificationType.ORDER
             );
@@ -120,7 +120,7 @@ export class NotificationsSenderService {
         if (!customerRecipient) return;
 
         await this.notificationsService.sendNotificationToMultiple(
-            NotificationsTemplates.LOYALTY_POINTS_EARNED,
+            NotificationsTemplate.LOYALTY_POINTS_EARNED,
             {
                 actor: customerRecipient,
                 recipients: [customerRecipient],
@@ -135,7 +135,7 @@ export class NotificationsSenderService {
         if (!customerRecipient) return;
 
         await this.notificationsService.sendNotificationToMultiple(
-            NotificationsTemplates.LOYALTY_LEVEL_UP,
+            NotificationsTemplate.LOYALTY_LEVEL_UP,
             {
                 actor: customerRecipient,
                 recipients: [customerRecipient],
@@ -153,7 +153,7 @@ export class NotificationsSenderService {
         if (!customerRecipient) return;
 
         await this.notificationsService.sendNotificationToMultiple(
-            NotificationsTemplates.PROMOTION_USED,
+            NotificationsTemplate.PROMOTION_USED,
             {
                 actor: customerRecipient,
                 recipients: [customerRecipient],

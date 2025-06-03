@@ -8,7 +8,7 @@ import { LoginUserDto } from 'src/modules/auth/dto/login-user.dto';
 import { JsonWebTokenService } from 'src/modules/auth/json-web-token/json-web-token.service';
 import { OtpService } from 'src/modules/auth/otp/otp.service';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
-import { TwilioService } from 'src/notification-real-time/twilio/services/twilio.service';
+import { TwilioService } from 'src/twilio/services/twilio.service';
 
 @Injectable()
 export class AuthService {

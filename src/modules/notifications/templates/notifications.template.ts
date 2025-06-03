@@ -1,7 +1,7 @@
 import { getOrderNotificationContent, notificationIcons } from "../constantes/notifications.constante";
 import { NotificationTemplate } from "../interfaces/notifications.interface";
 
-export class NotificationsTemplates {
+export class NotificationsTemplate {
     // COMMANDES - Pour le client
     static ORDER_CREATED_CUSTOMER: NotificationTemplate = {
         title: (ctx) => `🛒 Commande créée`,

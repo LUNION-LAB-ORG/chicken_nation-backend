@@ -1,4 +1,4 @@
-import { Global, Module } from '@nestjs/common';
+import { Module, Global } from '@nestjs/common';
 import { TwilioService } from './services/twilio.service';
 import { TwilioController } from './controllers/twilio.controller';
 

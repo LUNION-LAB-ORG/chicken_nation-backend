@@ -7,15 +7,11 @@ import { NotificationStatsDto } from '../dto/notifications-stats.dto';
 import { QueryNotificationDto } from '../dto/query-notification.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { NotificationResponseDto } from '../dto/response-notification.dto';
-import { getOrderNotificationContent, notificationIcons } from '../constantes/notifications.constante';
-import { NotificationsTemplates } from '../templates/notifications.template';
-import { NotificationRecipientsService } from './notifications-recipients.service';
-import { NotificationContext, NotificationRecipient, NotificationTemplate } from '../interfaces/notifications.interface';
-import { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
+import { NotificationContext, NotificationTemplate } from '../interfaces/notifications.interface';
 
 @Injectable()
 export class NotificationsService {
-    constructor(private readonly prisma: PrismaService, private readonly recipientsService: NotificationRecipientsService) { }
+    constructor(private readonly prisma: PrismaService) { }
 
     /**
      * Créer une nouvelle notification

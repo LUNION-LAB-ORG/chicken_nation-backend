@@ -11,12 +11,14 @@ import { CustomerModule } from 'src/modules/customer/customer.module';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { OrderModule } from 'src/modules/order/order.module';
 import { NotificationsModule } from 'src/modules/notifications/notifications.module';
-import { KkiapayModule } from './kkiapay/kkiapay.module';
-import { NotificationRealTimeModule } from './notification-real-time/notification-real-time.module';
+import { KkiapayModule } from 'src/kkiapay/kkiapay.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { StatisticsModule } from 'src/modules/statistics/statistics.module';
+import { SocketIoModule } from 'src/socket-io/socket-io.module';
+import { TwilioModule } from 'src/twilio/twilio.module';
+import { EmailModule } from 'src/email/email.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -34,7 +36,9 @@ import { StatisticsModule } from 'src/modules/statistics/statistics.module';
     OrderModule,
     NotificationsModule,
     KkiapayModule,
-    NotificationRealTimeModule,
+    SocketIoModule,
+    TwilioModule,
+    EmailModule,
     FidelityModule,
     StatisticsModule,
   ],
