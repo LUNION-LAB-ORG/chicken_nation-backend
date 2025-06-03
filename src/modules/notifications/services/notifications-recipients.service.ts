@@ -18,13 +18,15 @@ export class NotificationRecipientsService {
             select: {
                 id: true,
                 fullname: true,
-                restaurant_id: true
+                restaurant_id: true,
+                role: true
             }
         });
 
         return users.map(user => ({
             id: user.id,
             type: 'restaurant_user',
+            role: user.role,
             name: user.fullname,
             restaurant_id: user.restaurant_id ?? undefined
         }));
@@ -41,13 +43,15 @@ export class NotificationRecipientsService {
             },
             select: {
                 id: true,
-                fullname: true
+                fullname: true,
+                role: true
             }
         });
 
         return users.map(user => ({
             id: user.id,
             type: 'backoffice_user',
+            role: user.role,
             name: user.fullname
         }));
     }
@@ -61,7 +65,10 @@ export class NotificationRecipientsService {
             select: {
                 id: true,
                 first_name: true,
-                last_name: true
+                last_name: true,
+                loyalty_level: true,
+                total_points: true,
+                lifetime_points: true,
             }
         });
 
@@ -70,7 +77,32 @@ export class NotificationRecipientsService {
         return {
             id: customer.id,
             type: 'customer',
-            name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim()
+            name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+            loyalty_level: customer.loyalty_level,
+            total_points: customer.total_points,
+            lifetime_points: customer.lifetime_points,
         };
+    }
+
+    async getCustomers(): Promise<NotificationRecipient[]> {
+        const customers = await this.prisma.customer.findMany({
+            select: {
+                id: true,
+                first_name: true,
+                last_name: true,
+                loyalty_level: true,
+                total_points: true,
+                lifetime_points: true,
+            }
+        });
+
+        return customers.map(customer => ({
+            id: customer.id,
+            type: 'customer',
+            name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+            loyalty_level: customer.loyalty_level,
+            total_points: customer.total_points,
+            lifetime_points: customer.lifetime_points,
+        }));
     }
 }

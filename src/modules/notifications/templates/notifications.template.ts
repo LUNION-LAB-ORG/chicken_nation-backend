@@ -8,7 +8,7 @@ export class NotificationsTemplates {
         message: (ctx) => `Votre commande ${ctx.data.reference} a été créée avec succès. Montant: ${ctx.data.amount} XOF`,
         icon: (ctx) => notificationIcons.ok.url,
         iconBgColor: (ctx) => notificationIcons.ok.color,
-        showChevron: true
+        showChevron: false
     };
 
     // COMMANDES - Pour le restaurant
@@ -17,7 +17,7 @@ export class NotificationsTemplates {
         message: (ctx) => `Nouvelle commande ${ctx.data.reference} de ${ctx.actor.name || 'Client'}. Montant: ${ctx.data.amount} XOF`,
         icon: (ctx) => notificationIcons.waiting.url,
         iconBgColor: (ctx) => notificationIcons.waiting.color,
-        showChevron: true
+        showChevron: false
     };
 
     // COMMANDES - Pour le back office
@@ -26,7 +26,7 @@ export class NotificationsTemplates {
         message: (ctx) => `Commande ${ctx.data.reference} créée au restaurant ${ctx.data.restaurant_name}. ${ctx.data.amount} XOF`,
         icon: (ctx) => notificationIcons.progress.url,
         iconBgColor: (ctx) => notificationIcons.progress.color,
-        showChevron: true
+        showChevron: false
     };
 
     // STATUT COMMANDE - Pour le client
@@ -35,7 +35,7 @@ export class NotificationsTemplates {
         message: (ctx) => getOrderNotificationContent(ctx.data.status, ctx.data.reference).message,
         icon: (ctx) => getOrderNotificationContent(ctx.data.status, ctx.data.reference).icon,
         iconBgColor: (ctx) => getOrderNotificationContent(ctx.data.status, ctx.data.reference).iconBgColor,
-        showChevron: true
+        showChevron: false
     };
 
     // PAIEMENT - Pour le client
@@ -44,7 +44,7 @@ export class NotificationsTemplates {
         message: (ctx) => `Votre paiement de ${ctx.data.amount} XOF a été confirmé pour la commande ${ctx.data.reference}`,
         icon: (ctx) => notificationIcons.joice.url,
         iconBgColor: (ctx) => notificationIcons.joice.color,
-        showChevron: true
+        showChevron: false
     };
 
     // PAIEMENT - Pour le restaurant
@@ -53,7 +53,7 @@ export class NotificationsTemplates {
         message: (ctx) => `Paiement de ${ctx.data.amount} XOF reçu pour la commande ${ctx.data.reference}`,
         icon: (ctx) => notificationIcons.good.url,
         iconBgColor: (ctx) => notificationIcons.good.color,
-        showChevron: true
+        showChevron: false
     };
 
     // FIDÉLITÉ - Points gagnés
@@ -97,7 +97,7 @@ export class NotificationsTemplates {
         message: (ctx) => `"${ctx.data.promotion_title}" - ${ctx.data.promotion_description}`,
         icon: (ctx) => notificationIcons.promotion.url,
         iconBgColor: (ctx) => notificationIcons.promotion.color,
-        showChevron: true
+        showChevron: false
     };
 
     // Notification de bienvenue pour nouveau client
@@ -115,7 +115,7 @@ export class NotificationsTemplates {
         message: (ctx) => `${ctx.actor.name} a rejoint votre équipe en tant que ${ctx.data.role}`,
         icon: (ctx) => notificationIcons.ok.url,
         iconBgColor: (ctx) => notificationIcons.ok.color,
-        showChevron: true
+        showChevron: false
     };
 
     // Notification de points expirés
@@ -133,6 +133,6 @@ export class NotificationsTemplates {
         message: (ctx) => `Votre commande ${ctx.data.reference} a été annulée par le restaurant. Raison: ${ctx.data.reason || 'Non spécifiée'}`,
         icon: (ctx) => 'https://cdn-icons-png.flaticon.com/512/3524/3524890.png',
         iconBgColor: (ctx) => '#DC3545',
-        showChevron: true
+        showChevron: false
     };
 }

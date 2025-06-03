@@ -1,8 +1,14 @@
+import { LoyaltyLevel, UserRole } from "@prisma/client";
+
 export interface NotificationRecipient {
     id: string;
     type: 'customer' | 'restaurant_user' | 'backoffice_user';
-    name?: string;
+    role?: UserRole;
+    name: string;
     restaurant_id?: string;
+    loyalty_level?: LoyaltyLevel | null;
+    lifetime_points?: number;
+    total_points?: number;
 }
 
 export interface NotificationContext {
