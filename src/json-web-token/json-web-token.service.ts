@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 
@@ -55,5 +55,16 @@ export class JsonWebTokenService {
     });
 
     return token;
+  }
+
+  async verifyToken(token: string, type: "user" | "customer") {
+    try {
+      const decoded = await this.jwtService.verifyAsync(token, {
+        secret: type === "user" ? this.secret : this.customerSecret,
+      });
+      return decoded;
+    } catch (error) {
+      throw new UnauthorizedException('Token invalide');
+    }
   }
 }

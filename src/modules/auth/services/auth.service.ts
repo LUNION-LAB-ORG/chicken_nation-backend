@@ -5,7 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { Request } from 'express';
 import { User } from '@prisma/client';
 import { LoginUserDto } from 'src/modules/auth/dto/login-user.dto';
-import { JsonWebTokenService } from 'src/modules/auth/json-web-token/json-web-token.service';
+import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { OtpService } from 'src/modules/auth/otp/otp.service';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { TwilioService } from 'src/twilio/services/twilio.service';

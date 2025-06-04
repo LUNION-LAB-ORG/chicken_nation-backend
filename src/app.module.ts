@@ -19,8 +19,10 @@ import { StatisticsModule } from 'src/modules/statistics/statistics.module';
 import { SocketIoModule } from 'src/socket-io/socket-io.module';
 import { TwilioModule } from 'src/twilio/twilio.module';
 import { EmailModule } from 'src/email/email.module';
+import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 @Module({
   imports: [
+    JsonWebTokenModule,
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
     EventEmitterModule.forRoot({}),

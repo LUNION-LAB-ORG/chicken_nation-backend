@@ -113,4 +113,9 @@ export class OrderController {
   remove(@Param('id') id: string) {
     return this.orderService.remove(id);
   }
+
+  @Get("update-statut/:id")
+  updateStatut(@Param('id') id: string) {
+    return this.orderService.updateStatuts(id);
+  }
 }

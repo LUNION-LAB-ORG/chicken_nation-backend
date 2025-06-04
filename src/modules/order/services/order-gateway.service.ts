@@ -4,7 +4,7 @@ import { Order } from '@prisma/client';
 import { IEventHandler } from 'src/socket-io/interfaces/event-handler.interface';
 
 @Injectable()
-export class OrderHandleGatewayService implements IEventHandler<Order> {
+export class OrderGatewayService implements IEventHandler<Order> {
     private ordersByClientId: Map<string, Order> = new Map();
 
     async handleEvent(data: Order, client: Socket): Promise<any> {

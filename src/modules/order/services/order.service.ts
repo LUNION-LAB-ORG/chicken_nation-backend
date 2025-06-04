@@ -9,6 +9,7 @@ import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { OrderHelper } from '../helpers/order.helper';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { OrderEvent } from '../events/order.event';
+import { OrderGateway } from '../gateways/order.gateway';
 @Injectable()
 export class OrderService {
 
@@ -17,6 +18,7 @@ export class OrderService {
     private generateDataService: GenerateDataService,
     private orderHelper: OrderHelper,
     private orderEvent: OrderEvent,
+    private readonly orderGateway: OrderGateway,
   ) { }
 
   /**
@@ -164,6 +166,10 @@ export class OrderService {
       totalDishes,
       orderItems: orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice })),
     });
+
+    // Émettre l'événement de création de commande
+    this.orderGateway.emitOrderCreated(order);
+
     return order;
   }
 
@@ -219,6 +225,12 @@ export class OrderService {
 
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.updateStatus(updatedOrder);
+
+    // Émettre l'événement de mise à jour de statut avec l'ancien statut
+    this.orderGateway.emitStatusUpdate(
+      order,
+      status
+    );
 
     return updatedOrder;
   }
@@ -491,6 +503,9 @@ export class OrderService {
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.update(updatedOrder, updateOrderDto);
 
+
+    // Émettre via WebSocket
+    this.orderGateway.emitOrderUpdated(updatedOrder);
     return updatedOrder;
   }
 
@@ -515,6 +530,9 @@ export class OrderService {
 
     // Envoyer l'événement de suppression de commande
     this.orderEvent.remove(order);
+
+    // Émettre via WebSocket
+    this.orderGateway.emitOrderDeleted(order);
 
     return orderDeleted;
   }
@@ -615,5 +633,17 @@ export class OrderService {
       averageOrderValue: averageOrderValue._avg.amount || 0,
       topDishes,
     };
+  }
+
+
+  async updateStatuts(id: string) {
+    const order = await this.findById(id);
+
+    if (!order) {
+      throw new NotFoundException('Commande non trouvée');
+    }
+
+    // Émettre l'événement de mise à jour de statut
+    this.orderGateway.emitStatusUpdate(order, OrderStatus.ACCEPTED);
   }
 }
