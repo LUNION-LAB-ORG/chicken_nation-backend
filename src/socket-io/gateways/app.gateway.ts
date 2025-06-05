@@ -37,6 +37,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
             const userType = client.handshake.query.type as "user" | "customer"
 
             if (!token || !userType) {
+                console.log('Token ou type d\'utilisateur manquant');
                 client.disconnect();
                 return;
             }
@@ -48,6 +49,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
             const userInfo = await this.identifyUser(decoded, userType);
 
             if (!userInfo) {
+                console.log('Utilisateur non trouvé');
                 client.disconnect();
                 return;
             }
