@@ -9,9 +9,8 @@ import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
 import { OrderListener } from './listeners/order.listener';
 import { OrderEvent } from './events/order.event';
 import { OrderTask } from './tasks/order.task';
-import { OrderGateway } from './gateways/order.gateway';
-import { OrderGatewayService } from './services/order-gateway.service';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
+import { OrderWebSocketService } from './services/order-websocket.service';
 
 @Module({
   imports: [JsonWebTokenModule, PaiementsModule, FidelityModule],
@@ -23,8 +22,7 @@ import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
     OrderEvent,
     OrderListener,
     OrderTask,
-    OrderGateway,
-    OrderGatewayService,
+    OrderWebSocketService,
   ],
 })
 export class OrderModule { }

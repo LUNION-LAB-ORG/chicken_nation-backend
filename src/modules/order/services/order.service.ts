@@ -9,7 +9,7 @@ import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { OrderHelper } from '../helpers/order.helper';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { OrderEvent } from '../events/order.event';
-import { OrderGateway } from '../gateways/order.gateway';
+import { OrderWebSocketService } from './order-websocket.service';
 @Injectable()
 export class OrderService {
 
@@ -18,7 +18,7 @@ export class OrderService {
     private generateDataService: GenerateDataService,
     private orderHelper: OrderHelper,
     private orderEvent: OrderEvent,
-    private readonly orderGateway: OrderGateway,
+    private readonly orderWebSocketService: OrderWebSocketService,
   ) { }
 
   /**
@@ -168,7 +168,7 @@ export class OrderService {
     });
 
     // Émettre l'événement de création de commande
-    this.orderGateway.emitOrderCreated(order);
+    this.orderWebSocketService.emitOrderCreated(order);
 
     return order;
   }
@@ -227,7 +227,7 @@ export class OrderService {
     this.orderEvent.updateStatus(updatedOrder);
 
     // Émettre l'événement de mise à jour de statut avec l'ancien statut
-    this.orderGateway.emitStatusUpdate(
+    this.orderWebSocketService.emitStatusUpdate(
       order,
       status
     );
@@ -505,7 +505,7 @@ export class OrderService {
 
 
     // Émettre via WebSocket
-    this.orderGateway.emitOrderUpdated(updatedOrder);
+    this.orderWebSocketService.emitOrderUpdated(updatedOrder);
     return updatedOrder;
   }
 
@@ -532,7 +532,7 @@ export class OrderService {
     this.orderEvent.remove(order);
 
     // Émettre via WebSocket
-    this.orderGateway.emitOrderDeleted(order);
+    this.orderWebSocketService.emitOrderDeleted(order);
 
     return orderDeleted;
   }
@@ -644,6 +644,6 @@ export class OrderService {
     }
 
     // Émettre l'événement de mise à jour de statut
-    this.orderGateway.emitStatusUpdate(order, OrderStatus.ACCEPTED);
+    this.orderWebSocketService.emitStatusUpdate(order, OrderStatus.ACCEPTED);
   }
 }

@@ -1,27 +1,15 @@
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { PositionEventsGateway } from './gateways/position-events.gateway';
-import { ChatEventsGateway } from './gateways/chat-events.gateway';
-import { PositionEventsService } from './services/position-events.service';
-import { NotificationService } from './services/notification-events.service';
-import { NotificationGateway } from './gateways/notification-events.gateway';
-
+import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
+import { AppGateway } from './gateways/app.gateway';
 @Global()
 @Module({
-  imports: [ConfigModule],
+  imports: [ConfigModule, JsonWebTokenModule],
   providers: [
-    PositionEventsService,
-    PositionEventsGateway,
-    ChatEventsGateway,
-    NotificationService,
-    NotificationGateway
+    AppGateway,
   ],
   exports: [
-    PositionEventsService,
-    PositionEventsGateway,
-    ChatEventsGateway,
-    NotificationService,
-    NotificationGateway
+    AppGateway,
   ],
 })
 export class SocketIoModule { }
