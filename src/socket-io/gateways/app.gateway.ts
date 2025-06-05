@@ -31,7 +31,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     async handleConnection(client: Socket) {
         try {
             // Récupérer le token depuis les headers
-            const token = client.handshake.auth.token?.replace('Bearer ', '') as string;
+            const token = (client.handshake.query.token as string)?.replace('Bearer ', '') || '';
 
             // Récupérer le type d'utilisateur depuis les query params
             const userType = client.handshake.query.type as "user" | "customer"
