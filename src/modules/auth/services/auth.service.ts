@@ -3,7 +3,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { Request } from 'express';
-import { User } from '@prisma/client';
+import { EntityStatus, User } from '@prisma/client';
 import { LoginUserDto } from 'src/modules/auth/dto/login-user.dto';
 import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { OtpService } from 'src/modules/auth/otp/otp.service';
@@ -45,6 +45,16 @@ export class AuthService {
     const token = await this.jsonWebTokenService.generateToken(user.id);
     const refreshToken = await this.jsonWebTokenService.generateRefreshToken(user.id);
 
+    // Mise à jour du statut de l'utilisateur
+    await this.prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        entity_status: EntityStatus.ACTIVE,
+        last_login_at: new Date(),
+      },
+    });
     // Renvoi de l'utilisateur, le token et le refreshToken
     return { ...rest, token, refreshToken };
   }
@@ -120,6 +130,16 @@ export class AuthService {
     // Génération du token et du refreshToken
     const token = await this.jsonWebTokenService.generateCustomerToken(customer.id);
 
+    // Mise à jour du statut de l'utilisateur
+    await this.prisma.customer.update({
+      where: {
+        id: customer.id,
+      },
+      data: {
+        entity_status: EntityStatus.ACTIVE,
+        last_login_at: new Date(),
+      },
+    });
     // Renvoi de l'utilisateur, le token et le refreshToken
     return { ...rest, token };
   }
