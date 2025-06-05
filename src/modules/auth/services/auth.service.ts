@@ -73,9 +73,9 @@ export class AuthService {
 
     // Envoyer l'OTP par SMS
     const isSent = await this.twilioService.sendOtp(customer.phone, otp);
-    // if (!isSent) {
-    //   throw new Error('Failed to send OTP');
-    // }
+    if (!isSent) {
+      throw new Error('Envoi de l\'OTP impossible');
+    }
     return { otp };
   }
 
