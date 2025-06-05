@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { UpdateOrderDto } from '../dto/update-order.dto';
-import { OrderStatus, EntityStatus, Customer, Order, Prisma} from '@prisma/client';
+import { OrderStatus, EntityStatus, Customer, Order, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Request } from 'express';
 import { QueryOrderDto } from '../dto/query-order.dto';
@@ -10,6 +10,7 @@ import { OrderHelper } from '../helpers/order.helper';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { OrderEvent } from '../events/order.event';
 import { OrderWebSocketService } from './order-websocket.service';
+
 @Injectable()
 export class OrderService {
 

@@ -4,7 +4,7 @@ import { Notification } from "@prisma/client";
 import { NotificationRecipient } from "../interfaces/notifications.interface";
 
 @Injectable()
-export class NotificationWebSocketService {
+export class NotificationsWebSocketService {
     constructor(private appGateway: AppGateway) { }
 
     // Envoyer une notification temps réel

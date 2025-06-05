@@ -6,10 +6,13 @@ import { NotificationRecipientsService } from './notifications-recipients.servic
 import { NotificationsService } from './notifications.service';
 import { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
 import { NotificationRecipient } from '../interfaces/notifications.interface';
+import { NotificationsWebSocketService } from './notifications-websocket.service';
 
 @Injectable()
 export class NotificationsSenderService {
-    constructor(private readonly prisma: PrismaService, private readonly recipientsService: NotificationRecipientsService, private readonly notificationsService: NotificationsService) { }
+    constructor(private readonly recipientsService: NotificationRecipientsService,
+        private readonly notificationsService: NotificationsService,
+        private readonly notificationsWebSocketService: NotificationsWebSocketService) { }
 
     /**
      * Gère les notifications pour une commande créée
@@ -29,19 +32,21 @@ export class NotificationsSenderService {
         };
 
         // Notification au client
-       const notification = await this.notificationsService.sendNotificationToMultiple(
+       const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.ORDER_CREATED_CUSTOMER,
             { actor, recipients: [actor], data: orderData },
             NotificationType.ORDER
         );
+        // Émettre l'événement de création de commande
+        this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], actor);
 
-        // Notifications au restaurant
         if (restaurantUsers.length > 0) {
-            const notification = await this.notificationsService.sendNotificationToMultiple(
+            const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
                 NotificationsTemplate.ORDER_CREATED_RESTAURANT,
                 { actor, recipients: restaurantUsers, data: orderData },
                 NotificationType.ORDER
             );
+            this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0], true);
         }
     }
 
@@ -64,17 +69,19 @@ export class NotificationsSenderService {
         };
 
         // Toujours notifier le client du changement de statut
-        await this.notificationsService.sendNotificationToMultiple(
+       const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.ORDER_STATUS_UPDATED_CUSTOMER,
             { actor, recipients: [actor], data: orderData },
             NotificationType.ORDER
         );
+        this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], actor);
         // Toujours notifier le restaurant du changement de statut
-        await this.notificationsService.sendNotificationToMultiple(
+        const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.ORDER_STATUS_UPDATED_RESTAURANT,
             { actor, recipients: restaurantUsers, data: orderData },
             NotificationType.ORDER
         );
+        this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0], true);
     }
 
     /**
@@ -95,19 +102,21 @@ export class NotificationsSenderService {
         const actor = customerRecipient;
 
         // Notification au client
-        await this.notificationsService.sendNotificationToMultiple(
+        const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.PAYMENT_SUCCESS_CUSTOMER,
             { actor, recipients: [customerRecipient], data: paymentData },
             NotificationType.ORDER
         );
+        this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], actor);
 
         // Notification au restaurant
         if (restaurantUsers.length > 0) {
-            await this.notificationsService.sendNotificationToMultiple(
+            const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
                 NotificationsTemplate.PAYMENT_SUCCESS_RESTAURANT,
                 { actor, recipients: restaurantUsers, data: paymentData },
                 NotificationType.ORDER
             );
+            this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0], true);
         }
     }
 
@@ -118,7 +127,7 @@ export class NotificationsSenderService {
         const customerRecipient = await this.recipientsService.getCustomer(customer.id);
         if (!customerRecipient) return;
 
-        await this.notificationsService.sendNotificationToMultiple(
+        const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.LOYALTY_POINTS_EARNED,
             {
                 actor: customerRecipient,
@@ -127,13 +136,14 @@ export class NotificationsSenderService {
             },
             NotificationType.SYSTEM
         );
+        this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
     }
 
     async handleLoyaltyLevelUp(customer: any, newLevel: string, bonusPoints: number) {
         const customerRecipient = await this.recipientsService.getCustomer(customer.id);
         if (!customerRecipient) return;
 
-        await this.notificationsService.sendNotificationToMultiple(
+        const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.LOYALTY_LEVEL_UP,
             {
                 actor: customerRecipient,
@@ -142,6 +152,7 @@ export class NotificationsSenderService {
             },
             NotificationType.SYSTEM
         );
+        this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
     }
 
     /**
@@ -151,7 +162,7 @@ export class NotificationsSenderService {
         const customerRecipient = await this.recipientsService.getCustomer(customer.id);
         if (!customerRecipient) return;
 
-        await this.notificationsService.sendNotificationToMultiple(
+        const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.PROMOTION_USED,
             {
                 actor: customerRecipient,
@@ -163,6 +174,7 @@ export class NotificationsSenderService {
             },
             NotificationType.PROMOTION
         );
+        this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
     }
 
     private getTargetFromRecipientType(type: string): NotificationTarget {
