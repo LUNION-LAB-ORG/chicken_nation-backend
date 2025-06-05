@@ -6,7 +6,6 @@ import { NotificationRecipientsService } from './notifications-recipients.servic
 import { NotificationsService } from './notifications.service';
 import { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
 import { NotificationRecipient } from '../interfaces/notifications.interface';
-import { notificationIcons } from '../constantes/notifications.constante';
 
 @Injectable()
 export class NotificationsSenderService {
@@ -30,7 +29,7 @@ export class NotificationsSenderService {
         };
 
         // Notification au client
-        await this.notificationsService.sendNotificationToMultiple(
+       const notification = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.ORDER_CREATED_CUSTOMER,
             { actor, recipients: [actor], data: orderData },
             NotificationType.ORDER
@@ -38,7 +37,7 @@ export class NotificationsSenderService {
 
         // Notifications au restaurant
         if (restaurantUsers.length > 0) {
-            await this.notificationsService.sendNotificationToMultiple(
+            const notification = await this.notificationsService.sendNotificationToMultiple(
                 NotificationsTemplate.ORDER_CREATED_RESTAURANT,
                 { actor, recipients: restaurantUsers, data: orderData },
                 NotificationType.ORDER

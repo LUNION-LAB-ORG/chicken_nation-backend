@@ -1,47 +1,45 @@
 import { Injectable } from "@nestjs/common";
 import { AppGateway } from "src/socket-io/gateways/app.gateway";
+import { Notification } from "@prisma/client";
+import { NotificationRecipient } from "../interfaces/notifications.interface";
 
 @Injectable()
 export class NotificationWebSocketService {
-  constructor(private appGateway: AppGateway) {}
+    constructor(private appGateway: AppGateway) { }
 
-  // Envoyer une notification temps réel
-  emitNotification(notification: any) {
-    const { recipient_id, recipient_type, type, title, message, data } = notification;
+    // Envoyer une notification temps réel
+    emitNotification(notification: Notification, recipient: NotificationRecipient, group: boolean = false) {
+        const { id: recipient_id, restaurant_id, type: recipient_type } = recipient;
 
-    const notificationData = {
-      id: notification.id,
-      type,
-      title,
-      message,
-      data,
-      createdAt: notification.created_at,
-      isRead: notification.is_read || false
-    };
-
-    // Émettre selon le type de destinataire
-    if (recipient_type === 'CUSTOMER') {
-      this.appGateway.emitToUser(recipient_id, 'customer', 'notification:new', notificationData);
-    } else if (recipient_type === 'USER') {
-      this.appGateway.emitToUser(recipient_id, 'user', 'notification:new', notificationData);
-    } else if (recipient_type === 'RESTAURANT') {
-      this.appGateway.emitToRestaurant(recipient_id, 'notification:new', notificationData);
-    } else if (recipient_type === 'BACKOFFICE') {
-      this.appGateway.emitToBackoffice('notification:new', notificationData);
+        // Émettre selon le type de destinataire
+        if (recipient_type === 'customer') {
+            this.appGateway.emitToUser(recipient_id, 'customer', 'notification:new', notification);
+        } else if (recipient_type === 'restaurant_user') {
+            if (restaurant_id && group) {
+                this.appGateway.emitToRestaurant(restaurant_id, 'notification:new', notification);
+            } else {
+                this.appGateway.emitToUser(recipient_id, "user", 'notification:new', notification);
+            }
+        } else if (recipient_type === 'backoffice_user') {
+            if (group) {
+                this.appGateway.emitToBackoffice('notification:new', notification);
+            } else {
+                this.appGateway.emitToUser(recipient_id, "user", 'notification:new', notification);
+            }
+        }
     }
-  }
 
-  emitNotificationRead(notificationId: string, userId: string, userType: 'customer' | 'user') {
-    this.appGateway.emitToUser(userId, userType, 'notification:read', {
-      notificationId,
-      message: 'Notification marquée comme lue'
-    });
-  }
+    emitNotificationRead(notificationId: string, userId: string, userType: 'customer' | 'user') {
+        this.appGateway.emitToUser(userId, userType, 'notification:read', {
+            notificationId,
+            message: 'Notification marquée comme lue'
+        });
+    }
 
-  emitBulkNotificationRead(userId: string, userType: 'customer' | 'user', count: number) {
-    this.appGateway.emitToUser(userId, userType, 'notification:bulk_read', {
-      count,
-      message: `${count} notifications marquées comme lues`
-    });
-  }
+    emitBulkNotificationRead(userId: string, userType: 'customer' | 'user', count: number) {
+        this.appGateway.emitToUser(userId, userType, 'notification:bulk_read', {
+            count,
+            message: `${count} notifications marquées comme lues`
+        });
+    }
 }

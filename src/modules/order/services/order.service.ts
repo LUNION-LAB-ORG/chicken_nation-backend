@@ -228,8 +228,8 @@ export class OrderService {
 
     // Émettre l'événement de mise à jour de statut avec l'ancien statut
     this.orderWebSocketService.emitStatusUpdate(
-      order,
-      status
+      updatedOrder,
+      order.status
     );
 
     return updatedOrder;
