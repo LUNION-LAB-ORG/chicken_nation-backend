@@ -5,7 +5,6 @@ import { Order, OrderStatus } from '@prisma/client';
 @Injectable()
 export class OrderWebSocketService {
     constructor(private appGateway: AppGateway) { }
-
     emitOrderCreated(order: Order) {
         // Notifier le client qui a passé la commande
         this.appGateway.emitToUser(order.customer_id, 'customer', 'order:created', {

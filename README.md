@@ -37,10 +37,12 @@ import { io } from 'socket.io-client';
 // CONNEXION PERMANENTE AVEC LE SERVEUR
 const socket = io('https://chicken.turbodeliveryapp.com/orders', {
   query: {
-    token: 'your-jwt-token',
     type:"customer"|"user"
+  },
+  extraHeaders: {
+    Authorization: `Bearer ${token}`
   }
-},(data)=>console.log(data));
+});
 
 // Écouter les événements
 socket.on('order:created', (data: OrderWebSocketEvents) => {
@@ -62,4 +64,14 @@ socket.on('order:deleted', (data) => {
   console.log('Commande supprimée:', data.orderId);
   // Retirer de l'interface utilisateur
 });
+
+// lancer une requête de ping pour vérifier la connexion
+socket.emit('ping');
+
+// recevoir la réponse pong
+socket.on('pong', (data) => {
+  console.log('Pong reçu', data);
+});
+
+
 */
