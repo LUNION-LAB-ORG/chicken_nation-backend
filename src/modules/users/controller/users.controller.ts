@@ -33,9 +33,18 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @Post()
-  create(@Req() req: Request, @Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
-
-    return this.usersService.create(req, { ...createUserDto, image: image?.path });
+  async create(@Req() req: Request, @Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+        width: 600,
+        fit: 'inside',
+      },
+      true,
+    );
+    return this.usersService.create(req, { ...createUserDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   // CREATE MEMBER
@@ -50,8 +59,20 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @Post('member')
-  createMember(@Req() req: Request, @Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
-    return this.usersService.createMember(req, { ...createUserDto, image: image?.path });
+  async createMember(@Req() req: Request, @Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
+
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+        width: 600,
+        fit: 'inside',
+      },
+      true,
+    );
+
+    return this.usersService.createMember(req, { ...createUserDto, image: resizedPath!["img_1"] ?? image?.path });
   }
   // GET DETAIL USER
   @ApiOperation({ summary: "Obtenir les détails d'utilisateur" })
@@ -93,8 +114,18 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @Patch()
-  update(@Req() req: Request, @Body() updateUserDto: UpdateUserDto, @UploadedFile() image: Express.Multer.File) {
-    return this.usersService.update(req, { ...updateUserDto, image: image?.path });
+  async update(@Req() req: Request, @Body() updateUserDto: UpdateUserDto, @UploadedFile() image: Express.Multer.File) {
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+        width: 600,
+        fit: 'inside',
+      },
+      true,
+    );
+    return this.usersService.update(req, { ...updateUserDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   // UPDATE PASSWORD
@@ -108,7 +139,7 @@ export class UsersController {
   @ApiBody({ type: UpdateUserPasswordDto })
   @UseGuards(JwtAuthGuard)
   @Patch('password')
-  updatePassword(
+  async updatePassword(
     @Req() req: Request,
     @Body() updateUserPasswordDto: UpdateUserPasswordDto,
   ) {

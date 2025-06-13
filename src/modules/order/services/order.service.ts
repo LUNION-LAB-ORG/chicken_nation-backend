@@ -110,7 +110,6 @@ export class OrderService {
           amount: Number(totalAmount),
           date: orderData.date || new Date(),
           time: orderData.time || "10:00",
-          estimated_delivery_time: this.orderHelper.calculateEstimatedDeliveryTime(orderData.type),
           status: OrderStatus.PENDING,
           paied_at: payment ? payment.created_at : null,
           paied: payment ? true : false,
@@ -177,11 +176,11 @@ export class OrderService {
   /**
    * Met à jour le statut d'une commande
    */
-  async updateStatus(id: string, status: OrderStatus, meta?: any) {
+  async updateStatus(id: string, status: OrderStatus, meta?: Record<string, any>) {
     const order = await this.findById(id);
-
+    //Meta peut contenir estimated_delivery_time, estimated_preparation_time, deliveryDriverId
     // Valider la transition d'état
-    this.orderHelper.validateStatusTransition(order.status, status);
+    this.orderHelper.validateStatusTransition(order.type, order.status, status);
 
     // Actions spécifiques selon le changement d'état
     await this.orderHelper.handleStatusSpecificActions(order, status, meta);
@@ -191,6 +190,8 @@ export class OrderService {
       where: { id },
       data: {
         status: status == OrderStatus.ACCEPTED ? OrderStatus.IN_PROGRESS : status,
+        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(meta?.estimated_delivery_time ?? ""),
+        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(meta?.estimated_preparation_time ?? ""),
         updated_at: new Date(),
         ...(status === OrderStatus.COMPLETED && { completed_at: new Date() }),
       },
@@ -488,6 +489,8 @@ export class OrderService {
       where: { id },
       data: {
         ...rest,
+        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(rest?.estimated_delivery_time ?? ""),
+        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(rest?.estimated_preparation_time ?? ""),
         updated_at: new Date(),
       },
       include: {

@@ -16,14 +16,12 @@ export class AddressService {
       data: {
         ...createAddressDto,
         customer_id: customer.id,
-        entity_status: EntityStatus.ACTIVE,
       },
     });
   }
 
   async findAll() {
     return this.prisma.address.findMany({
-      where: { entity_status: EntityStatus.ACTIVE },
       include: {
         customer: true,
       },
@@ -41,7 +39,7 @@ export class AddressService {
       },
     });
 
-    if (!address || address.entity_status !== EntityStatus.ACTIVE) {
+    if (!address) {
       throw new NotFoundException(`Address with ID ${id} not found`);
     }
 
@@ -52,7 +50,6 @@ export class AddressService {
     return this.prisma.address.findMany({
       where: {
         customer_id: customerId,
-        entity_status: EntityStatus.ACTIVE,
       },
       orderBy: {
         created_at: 'desc',

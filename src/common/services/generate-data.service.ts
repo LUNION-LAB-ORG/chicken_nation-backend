@@ -128,4 +128,5 @@ export class GenerateDataService {
 
         return R * c
     }
+    
 }

@@ -28,9 +28,18 @@ export class PromotionController {
   @UseInterceptors(FileInterceptor('coupon_image_url', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/promotions') }))
   @UserTypes(UserType.BACKOFFICE)
   @Post()
-  create(@Req() req: Request, @Body() createPromotionDto: CreatePromotionDto, @UploadedFile() image: Express.Multer.File) {
+  async create(@Req() req: Request, @Body() createPromotionDto: CreatePromotionDto, @UploadedFile() image: Express.Multer.File) {
     const user = req.user as User;
-    return this.promotionService.create({ ...createPromotionDto, coupon_image_url: image?.path }, user.id);
+
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+      },
+      true,
+    );
+    return this.promotionService.create({ ...createPromotionDto, coupon_image_url: resizedPath!["img_1"] ?? image?.path }, user.id);
   }
 
   @ApiOperation({ summary: 'Lister les promotions' })
@@ -53,8 +62,16 @@ export class PromotionController {
   @UseGuards(JwtAuthGuard, UserTypesGuard)
   @UserTypes(UserType.BACKOFFICE)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updatePromotionDto: UpdatePromotionDto, @UploadedFile() image: Express.Multer.File) {
-    return this.promotionService.update(id, { ...updatePromotionDto, coupon_image_url: image?.path });
+  async update(@Param('id') id: string, @Body() updatePromotionDto: UpdatePromotionDto, @UploadedFile() image: Express.Multer.File) {
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+      },
+      true,
+    );
+    return this.promotionService.update(id, { ...updatePromotionDto, coupon_image_url: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Supprimer une promotion' })

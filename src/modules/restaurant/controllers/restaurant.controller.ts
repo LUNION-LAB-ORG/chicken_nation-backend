@@ -28,7 +28,17 @@ export class RestaurantController {
   @Post()
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants') }))
   async create(@Body() createRestaurantDto: CreateRestaurantDto, @UploadedFile() image: Express.Multer.File) {
-    return this.restaurantService.create({ ...createRestaurantDto, image: image?.path });
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+        width: 600,
+        fit: 'inside',
+      },
+      true,
+    );
+    return this.restaurantService.create({ ...createRestaurantDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Obtenir tous les restaurants' })
@@ -58,7 +68,17 @@ export class RestaurantController {
     @Body() updateRestaurantDto: UpdateRestaurantDto,
     @UploadedFile() image: Express.Multer.File,
   ) {
-    return this.restaurantService.update(id, { ...updateRestaurantDto, image: image?.path });
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+        width: 600,
+        fit: 'inside',
+      },
+      true,
+    );
+    return this.restaurantService.update(id, { ...updateRestaurantDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Activer et Désactiver un restaurant' })
@@ -108,5 +128,13 @@ export class RestaurantController {
   @Get(':restaurantId/dishes')
   async getAllDishesByRestaurant(@Param('restaurantId') restaurantId: string) {
     return this.dishRestaurantService.findByRestaurant(restaurantId);
+  }
+
+  @ApiOperation({ summary: 'Vérifier si un restaurant est ouvert' })
+  @Get(':id/open')
+  async isRestaurantOpen(@Param('id') id: string, @Query('date') date?: string) {
+    const restaurant = await this.restaurantService.findOne(id);
+    const schedule = JSON.parse(restaurant.schedule?.toString() ?? "[]");
+    return this.restaurantService.isRestaurantOpen(schedule, date ? new Date(date) : new Date());
   }
 }

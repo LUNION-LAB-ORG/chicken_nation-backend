@@ -26,7 +26,6 @@ export class FavoriteService {
       where: {
         customer_id: customer.id,
         dish_id: createFavoriteDto.dish_id,
-        entity_status: EntityStatus.ACTIVE,
       },
     });
 
@@ -38,7 +37,6 @@ export class FavoriteService {
       data: {
         ...createFavoriteDto,
         customer_id: customer.id,
-        entity_status: EntityStatus.ACTIVE,
       },
       include: {
         dish: {
@@ -52,7 +50,6 @@ export class FavoriteService {
 
   async findAll() {
     return this.prisma.favorite.findMany({
-      where: { entity_status: EntityStatus.ACTIVE },
       include: {
         customer: true,
         dish: {
@@ -80,7 +77,7 @@ export class FavoriteService {
       },
     });
 
-    if (!favorite || favorite.entity_status !== EntityStatus.ACTIVE) {
+    if (!favorite) {
       throw new NotFoundException(`Favorite with ID ${id} not found`);
     }
 
@@ -91,7 +88,6 @@ export class FavoriteService {
     return this.prisma.favorite.findMany({
       where: {
         customer_id: customerId,
-        entity_status: EntityStatus.ACTIVE,
       },
       include: {
         dish: {
@@ -149,7 +145,6 @@ export class FavoriteService {
       where: {
         customer_id: customerId,
         dish_id: dishId,
-        entity_status: EntityStatus.ACTIVE,
       },
     });
 

@@ -11,9 +11,10 @@ import { OrderEvent } from './events/order.event';
 import { OrderTask } from './tasks/order.task';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { OrderWebSocketService } from './services/order-websocket.service';
+import { RestaurantModule } from '../restaurant/restaurant.module';
 
 @Module({
-  imports: [JsonWebTokenModule, PaiementsModule, FidelityModule],
+  imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule],
   controllers: [OrderController, OrderItemController],
   providers: [
     OrderService,

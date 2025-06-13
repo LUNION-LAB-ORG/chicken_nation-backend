@@ -97,7 +97,7 @@ export class OrderController {
   @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,
-    @Body() body: { status: OrderStatus; meta?: any }
+    @Body() body: { status: OrderStatus; meta?: Record<string, any> }
   ) {
     return this.orderService.updateStatus(id, body.status, body.meta);
   }

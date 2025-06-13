@@ -47,7 +47,7 @@ export class CreateRestaurantDto {
 
     @ApiPropertyOptional({ description: 'Restaurant schedule' })
     @IsOptional()
-    schedule?: Record<string, any>;
+    schedule?: Record<string, string>;
 
     // Manager information
     @ApiProperty({ description: 'Manager fullname' })

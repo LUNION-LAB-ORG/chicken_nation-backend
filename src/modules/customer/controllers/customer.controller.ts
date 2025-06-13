@@ -26,8 +26,18 @@ export class CustomerController {
   @Post()
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
-  create(@Body() createCustomerDto: CreateCustomerDto, @UploadedFile() image: Express.Multer.File) {
-    return this.customerService.create({ ...createCustomerDto, image: image?.path });
+  async create(@Body() createCustomerDto: CreateCustomerDto, @UploadedFile() image: Express.Multer.File) {
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+        width: 600,
+        fit: 'inside',
+      },
+      true,
+    );
+    return this.customerService.create({ ...createCustomerDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Récupération de tous les clients' })
@@ -55,8 +65,18 @@ export class CustomerController {
   @UseGuards(JwtCustomerAuthGuard)
   @Patch()
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
-  update(@Req() req: Request, @Body() updateCustomerDto: UpdateCustomerDto, @UploadedFile() image: Express.Multer.File) {
-    return this.customerService.update(req, { ...updateCustomerDto, image: image?.path });
+  async update(@Req() req: Request, @Body() updateCustomerDto: UpdateCustomerDto, @UploadedFile() image: Express.Multer.File) {
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+        width: 600,
+        fit: 'inside',
+      },
+      true,
+    );
+    return this.customerService.update(req, { ...updateCustomerDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Obtenir un client par numéro de téléphone' })

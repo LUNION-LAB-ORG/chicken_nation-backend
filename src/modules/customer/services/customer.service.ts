@@ -61,7 +61,6 @@ export class CustomerService {
       where: whereClause,
       include: {
         addresses: {
-          where: { entity_status: EntityStatus.ACTIVE },
           orderBy: {
             created_at: 'desc',
           },
@@ -81,11 +80,8 @@ export class CustomerService {
     return await this.prisma.customer.findUnique({
       where: { id: customer.id },
       include: {
-        addresses: {
-          where: { entity_status: EntityStatus.ACTIVE },
-        },
+        addresses: true,
         favorites: {
-          where: { entity_status: EntityStatus.ACTIVE },
           include: {
             dish: {
               include: {
@@ -103,11 +99,8 @@ export class CustomerService {
     const customer = await this.prisma.customer.findUnique({
       where: { id },
       include: {
-        addresses: {
-          where: { entity_status: EntityStatus.ACTIVE },
-        },
+        addresses: true,
         favorites: {
-          where: { entity_status: EntityStatus.ACTIVE },
           include: {
             dish: {
               include: {
@@ -131,9 +124,7 @@ export class CustomerService {
     const customer = await this.prisma.customer.findUnique({
       where: { phone },
       include: {
-        addresses: {
-          where: { entity_status: EntityStatus.ACTIVE },
-        },
+        addresses: true,
       },
     });
 
@@ -176,9 +167,7 @@ export class CustomerService {
         entity_status: EntityStatus.ACTIVE,
       },
       include: {
-        addresses: {
-          where: { entity_status: EntityStatus.ACTIVE },
-        },
+        addresses: true,
       },
     });
   }

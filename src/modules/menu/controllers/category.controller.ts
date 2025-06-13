@@ -24,8 +24,18 @@ export class CategoryController {
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories') }))
-  create(@Body() createCategoryDto: CreateCategoryDto, @UploadedFile() image: Express.Multer.File) {
-    return this.categoryService.create({ ...createCategoryDto, image: image?.path });
+  async create(@Body() createCategoryDto: CreateCategoryDto, @UploadedFile() image: Express.Multer.File) {
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+        width: 600,
+        fit: 'inside',
+      },
+      true,
+    );
+    return this.categoryService.create({ ...createCategoryDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Récupération de toutes les catégories' })
@@ -46,8 +56,18 @@ export class CategoryController {
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories') }))
-  update(@Param('id') id: string, @Body() updateCategoryDto: UpdateCategoryDto, @UploadedFile() image: Express.Multer.File) {
-    return this.categoryService.update(id, { ...updateCategoryDto, image: image?.path });
+    async update(@Param('id') id: string, @Body() updateCategoryDto: UpdateCategoryDto, @UploadedFile() image: Express.Multer.File) {
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+        width: 600,
+        fit: 'inside',
+      },
+      true,
+    );
+    return this.categoryService.update(id, { ...updateCategoryDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Suppression d\'une catégorie par son id' })

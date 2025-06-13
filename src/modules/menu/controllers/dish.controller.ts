@@ -25,8 +25,18 @@ export class DishController {
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/dishes') }))
-  create(@Body() createDishDto: CreateDishDto, @UploadedFile() image: Express.Multer.File) {
-    return this.dishService.create({ ...createDishDto, image: image?.path });
+  async create(@Body() createDishDto: CreateDishDto, @UploadedFile() image: Express.Multer.File) {
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+        width: 600,
+        fit: 'inside',
+      },
+      true,
+    );
+    return this.dishService.create({ ...createDishDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Récupération de tous les plats' })
@@ -47,8 +57,18 @@ export class DishController {
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/dishes') }))
-  update(@Param('id') id: string, @Body() updateDishDto: UpdateDishDto, @UploadedFile() image: Express.Multer.File) {
-    return this.dishService.update(id, { ...updateDishDto, image: image?.path });
+  async update(@Param('id') id: string, @Body() updateDishDto: UpdateDishDto, @UploadedFile() image: Express.Multer.File) {
+    const resizedPath = await GenerateConfigService.compressImages(
+      { "img_1": image?.path },
+      undefined,
+      {
+        quality: 70,
+        width: 600,
+        fit: 'inside',
+      },
+      true,
+    );
+    return this.dishService.update(id, { ...updateDishDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Supprimer un plat' })

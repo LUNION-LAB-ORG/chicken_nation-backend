@@ -139,9 +139,8 @@ model Address {
   customer_id String?   @db.Uuid
   customer    Customer? @relation(fields: [customer_id], references: [id], onDelete: Cascade)
 
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now()) @db.Timestamp(6)
-  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
 }
 
 model Category {
@@ -152,7 +151,7 @@ model Category {
   image       String? @db.Text
   dishes      Dish[]
 
-  entity_status                 EntityStatus                @default(NEW)
+  entity_status                 EntityStatus                @default(ACTIVE)
   created_at                    DateTime                    @default(now()) @db.Timestamp(6)
   updated_at                    DateTime                    @default(now()) @db.Timestamp(6)
   promotion_targeted_categories PromotionTargetedCategory[]
@@ -161,6 +160,27 @@ model Category {
 model CounterOtp {
   id      String @id @default(uuid()) @db.Uuid
   counter Int
+}
+
+model Comment {
+  id String @id @default(uuid()) @db.Uuid
+
+  message String @db.Text
+  rating  Float // Note de 1 à 5
+
+  // Relations
+  customer_id String   @db.Uuid
+  order_id    String   @db.Uuid
+  customer    Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  order       Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([order_id])
+  @@index([customer_id])
+  @@index([rating])
 }
 
 model Customer {
@@ -190,10 +210,11 @@ model Customer {
   promotion_usages      PromotionUsage[]
   loyalty_level_history LoyaltyLevelHistory[]
 
-  entity_status EntityStatus @default(NEW)
+  entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
   last_login_at DateTime?
+  Comment       Comment[]
 }
 
 model DishRestaurant {
@@ -232,7 +253,7 @@ model Dish {
   promotion_dishes          PromotionDish[]
   promotion_targeted_dishes PromotionTargetedDish[]
 
-  entity_status EntityStatus @default(NEW)
+  entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 
@@ -247,9 +268,8 @@ model Favorite {
   customer    Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
   dish        Dish     @relation(fields: [dish_id], references: [id], onDelete: Cascade)
 
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now()) @db.Timestamp(6)
-  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
 }
 
 model NotificationSetting {
@@ -292,40 +312,40 @@ model OrderItem {
   dish        Dish   @relation(fields: [dish_id], references: [id])
   order       Order  @relation(fields: [order_id], references: [id], onDelete: Cascade)
 
-  entity_status EntityStatus @default(NEW)
-  created_at    DateTime     @default(now()) @db.Timestamp(6)
-  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
 }
 
 model Order {
-  id                      String      @id @default(uuid()) @db.Uuid
-  reference               String      @unique @db.VarChar
-  customer_id             String      @db.Uuid
-  paied                   Boolean     @default(false)
-  delivery_fee            Float
-  points                  Int         @default(0)
-  type                    OrderType
-  table_type              TypeTable?
-  places                  Int?
-  address                 Json        @db.Json // { title: string, address: string, street?: string, city?: string, longitude: number, latitude: number, note: string }
-  code_promo              String?     @db.VarChar
-  tax                     Float
-  amount                  Float // Tous frais confondu
-  net_amount              Float
-  discount                Float       @default(0)
-  date                    DateTime?   @db.Date
-  time                    String?     @db.VarChar
-  estimated_delivery_time DateTime?
-  fullname                String?     @db.VarChar
-  phone                   String?     @db.VarChar
-  email                   String?     @db.VarChar
-  note                    String?     @db.VarChar
-  status                  OrderStatus
-  restaurant_id           String      @db.Uuid
-  order_items             OrderItem[]
-  paiements               Paiement[]
-  customer                Customer    @relation(fields: [customer_id], references: [id])
-  restaurant              Restaurant  @relation(fields: [restaurant_id], references: [id])
+  id                         String      @id @default(uuid()) @db.Uuid
+  reference                  String      @unique @db.VarChar
+  customer_id                String      @db.Uuid
+  paied                      Boolean     @default(false)
+  delivery_fee               Float
+  points                     Int         @default(0)
+  type                       OrderType
+  table_type                 TypeTable?
+  places                     Int?
+  address                    Json        @db.Json // { title: string, address: string, street?: string, city?: string, longitude: number, latitude: number, note: string }
+  code_promo                 String?     @db.VarChar
+  tax                        Float
+  amount                     Float // Tous frais confondu
+  net_amount                 Float
+  discount                   Float       @default(0)
+  date                       DateTime?   @db.Date
+  time                       String?     @db.VarChar
+  estimated_delivery_time    DateTime?  
+  estimated_preparation_time DateTime?
+  fullname                   String?     @db.VarChar
+  phone                      String?     @db.VarChar
+  email                      String?     @db.VarChar
+  note                       String?     @db.VarChar
+  status                     OrderStatus
+  restaurant_id              String      @db.Uuid
+  order_items                OrderItem[]
+  paiements                  Paiement[]
+  customer                   Customer    @relation(fields: [customer_id], references: [id])
+  restaurant                 Restaurant  @relation(fields: [restaurant_id], references: [id])
 
   // ================================
   // INTÉGRATION PROMOTIONS ET FIDÉLITÉ
@@ -335,11 +355,12 @@ model Order {
   promotion_usages PromotionUsage[]
   loyalty_points   LoyaltyPoint[]
 
-  entity_status EntityStatus @default(NEW)
+  entity_status EntityStatus @default(ACTIVE)
   completed_at  DateTime?
   paied_at      DateTime?
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
+  Comment       Comment[]
 
   @@index([reference, status, entity_status, customer_id])
 }
@@ -368,7 +389,7 @@ model Paiement {
   order_id        String?        @db.Uuid
   order           Order?         @relation(fields: [order_id], references: [id], onDelete: Cascade)
 
-  entity_status EntityStatus @default(NEW)
+  entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 }
@@ -390,7 +411,7 @@ model Restaurant {
   users            User[]
   orders           Order[]
 
-  entity_status EntityStatus @default(NEW)
+  entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 }
@@ -423,7 +444,7 @@ model User {
   // Relations promotions
   created_promotions Promotion[] @relation("CreatedBy")
 
-  entity_status EntityStatus @default(NEW)
+  entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
   last_login_at DateTime?

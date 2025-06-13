@@ -9,6 +9,13 @@ import { PaiementsService } from 'src/modules/paiements/services/paiements.servi
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
 import { PromotionUsageService } from 'src/modules/fidelity/services/promotion-usage.service';
 import { PromotionService } from 'src/modules/fidelity/services/promotion.service';
+import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
+import {
+    addDays,
+    addHours,
+    addMinutes,
+    addSeconds
+} from 'date-fns';
 
 @Injectable()
 export class OrderHelper {
@@ -23,6 +30,7 @@ export class OrderHelper {
         private loyaltyService: LoyaltyService,
         private promotionUsageService: PromotionUsageService,
         private promotionService: PromotionService,
+        private restaurantService: RestaurantService
     ) {
         this.taxRate = Number(this.configService.get<number>('ORDER_TAX_RATE', 0.005));
         this.baseDeliveryFee = Number(this.configService.get<number>('BASE_DELIVERY_FEE', 1000));
@@ -70,9 +78,21 @@ export class OrderHelper {
                 where: {
                     id: orderData.restaurant_id,
                 },
+                select: {
+                    id: true,
+                    name: true,
+                    latitude: true,
+                    longitude: true,
+                    schedule: true,
+                }
             });
             if (!restaurant) {
                 throw new BadRequestException('Restaurant introuvable');
+            }
+
+            const schedule = JSON.parse(restaurant.schedule?.toString() ?? "[]");
+            if (!this.restaurantService.isRestaurantOpen(schedule)) {
+                throw new BadRequestException('Le restaurant est fermé');
             }
             return restaurant;
         }
@@ -90,6 +110,7 @@ export class OrderHelper {
                 name: true,
                 latitude: true,
                 longitude: true,
+                schedule: true,
             },
         });
 
@@ -113,7 +134,13 @@ export class OrderHelper {
             );
             return currDistance < prevDistance ? curr : prev;
         });
-
+        if (!closest) {
+            throw new BadRequestException('Aucun restaurant disponible');
+        }
+        const schedule = JSON.parse(closest.schedule?.toString() ?? "[]");
+        if (!this.restaurantService.isRestaurantOpen(schedule)) {
+            throw new BadRequestException('Le restaurant est fermé');
+        }
         return closest;
     }
 
@@ -278,25 +305,116 @@ export class OrderHelper {
         }
     }
 
-    // Calculer le temps de livraison estimé
-    calculateEstimatedDeliveryTime(orderType: OrderType): Date {
-        const now = new Date();
-        let additionalMinutes = 0;
-
-        switch (orderType) {
-            case OrderType.DELIVERY:
-                additionalMinutes = 45; // 45 minutes pour la livraison
-                break;
-            case OrderType.PICKUP:
-                additionalMinutes = 20; // 20 minutes pour la récupération
-                break;
-            case OrderType.TABLE:
-                additionalMinutes = 15; // 15 minutes pour servir à table
-                break;
+    /**
+     * Calculer le temps estimé
+     * Formats supportés: "1j", "30m", "45m", "2h30m", "60s", "1h", "2h15m30s", "1j2h30m15s"
+     * Supporte aussi les formats alternatifs: "2 hours 30 minutes", "1 day", etc.
+     * @param estimated_time - Temps estimé au format string
+     * @param referenceDate - Date de référence (optionnel, par défaut maintenant)
+     * @returns Date - Date estimée ou undefined si le format est invalide
+     */
+    calculateEstimatedTime(
+        estimated_time: string,
+        referenceDate: Date = new Date()
+    ): Date | undefined {
+        if (!estimated_time || typeof estimated_time !== 'string') {
+            return undefined;
         }
 
-        now.setMinutes(now.getMinutes() + additionalMinutes);
-        return now;
+        // Nettoyer et normaliser la chaîne d'entrée
+        let timeStr = estimated_time.trim().toLowerCase();
+
+        // Normaliser les formats alternatifs en français/anglais vers le format court
+        timeStr = this.normalizeTimeString(timeStr);
+
+        let resultDate = new Date(referenceDate);
+
+        try {
+            // Pattern unique pour capturer TOUTES les unités de temps
+            // Ordre d'évaluation: jours -> heures -> minutes -> secondes
+            const timeUnits = [
+                { pattern: /(\d+)j(?:ours?)?/g, unit: 'days' },      // 1j, 2j, 1jour, 2jours
+                { pattern: /(\d+)h(?:eures?)?(?!\d)/g, unit: 'hours' }, // 1h, 2h, 1heure, 2heures (pas suivi de chiffres)
+                { pattern: /(\d+)m(?:inutes?)?(?!s)/g, unit: 'minutes' }, // 1m, 30m, 1minute, 30minutes (pas suivi de 's')
+                { pattern: /(\d+)s(?:econdes?)?/g, unit: 'seconds' }  // 1s, 60s, 1seconde, 60secondes
+            ];
+
+            // Traitement spécial pour les formats "2h30m" (heures+minutes collées)
+            const hoursMinutesPattern = /(\d+)h(\d+)m/g;
+            let hoursMinutesMatch;
+
+            while ((hoursMinutesMatch = hoursMinutesPattern.exec(timeStr)) !== null) {
+                const hours = parseInt(hoursMinutesMatch[1], 10);
+                const minutes = parseInt(hoursMinutesMatch[2], 10);
+
+                resultDate = addHours(resultDate, hours);
+                resultDate = addMinutes(resultDate, minutes);
+
+                // Supprimer la partie traitée pour éviter les doublons
+                timeStr = timeStr.replace(hoursMinutesMatch[0], '');
+            }
+
+            // Traiter chaque unité de temps
+            for (const { pattern, unit } of timeUnits) {
+                pattern.lastIndex = 0; // Reset regex global flag
+                let match;
+
+                while ((match = pattern.exec(timeStr)) !== null) {
+                    const value = parseInt(match[1], 10);
+
+                    if (isNaN(value) || value < 0) continue;
+
+                    switch (unit) {
+                        case 'days':
+                            resultDate = addDays(resultDate, value);
+                            break;
+                        case 'hours':
+                            resultDate = addHours(resultDate, value);
+                            break;
+                        case 'minutes':
+                            resultDate = addMinutes(resultDate, value);
+                            break;
+                        case 'seconds':
+                            resultDate = addSeconds(resultDate, value);
+                            break;
+                    }
+                }
+            }
+
+            return resultDate;
+
+        } catch (error) {
+            console.warn('Erreur lors du parsing du temps estimé:', estimated_time, error);
+            return undefined;
+        }
+    }
+
+    /**
+     * Normalise les différents formats de temps vers le format court
+     * @private
+     */
+    private normalizeTimeString(timeStr: string): string {
+        return timeStr
+            // Formats en français
+            .replace(/(\d+)\s*jours?/g, '$1j')
+            .replace(/(\d+)\s*heures?/g, '$1h')
+            .replace(/(\d+)\s*minutes?/g, '$1m')
+            .replace(/(\d+)\s*secondes?/g, '$1s')
+
+            // Formats en anglais
+            .replace(/(\d+)\s*days?/g, '$1j')
+            .replace(/(\d+)\s*hours?/g, '$1h')
+            .replace(/(\d+)\s*mins?/g, '$1m')
+            .replace(/(\d+)\s*minutes?/g, '$1m')
+            .replace(/(\d+)\s*secs?/g, '$1s')
+            .replace(/(\d+)\s*seconds?/g, '$1s')
+
+            // Formats avec 'and' ou 'et'
+            .replace(/\s+(and|et)\s+/g, '')
+
+            // Nettoyer les espaces multiples
+            .replace(/\s+/g, ' ')
+            .trim();
     }
 
     // Envoyer les notifications
@@ -311,7 +429,7 @@ export class OrderHelper {
     }
 
     // Vérifier la transition d'état
-    validateStatusTransition(currentStatus: OrderStatus, newStatus: OrderStatus) {
+    validateStatusTransition(orderType: OrderType, currentStatus: OrderStatus, newStatus: OrderStatus) {
         // Cas spécial : annulation
         if (newStatus === OrderStatus.CANCELLED) {
             if ([OrderStatus.READY as string, OrderStatus.PICKED_UP as string, OrderStatus.COLLECTED as string, OrderStatus.COMPLETED as string].includes(currentStatus)) {
@@ -320,7 +438,7 @@ export class OrderHelper {
             return;
         }
 
-        // Définir la séquence logique des états
+        // Définir la séquence logique des états pour les commanes à livrer
         const stateSequence: OrderStatus[] = [
             OrderStatus.PENDING,
             OrderStatus.ACCEPTED,
@@ -330,9 +448,25 @@ export class OrderHelper {
             OrderStatus.COLLECTED, // Pour retrait
             OrderStatus.COMPLETED // Quand le livreur récupère l'argent
         ];
+        // Définir la séquence logique des états pour les commanes à emporter ou à table
+        const stateSequence2: OrderStatus[] = [
+            OrderStatus.PENDING,
+            OrderStatus.ACCEPTED,
+            OrderStatus.IN_PROGRESS,
+            OrderStatus.READY,
+            OrderStatus.COLLECTED, // Pour retrait
+            OrderStatus.COMPLETED // Quand le livreur récupère l'argent
+        ];
 
-        const currentIndex = stateSequence.indexOf(currentStatus);
-        const newIndex = stateSequence.indexOf(newStatus);
+        let currentIndex: number;
+        let newIndex: number;
+        if (orderType === OrderType.DELIVERY) {
+            currentIndex = stateSequence.indexOf(currentStatus);
+            newIndex = stateSequence.indexOf(newStatus);
+        } else {
+            currentIndex = stateSequence2.indexOf(currentStatus);
+            newIndex = stateSequence2.indexOf(newStatus);
+        }
 
         // Vérifier que le nouvel état est bien dans la séquence
         if (newIndex === -1) {

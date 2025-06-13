@@ -7,5 +7,6 @@ import { MenuModule } from 'src/modules/menu/menu.module';
   imports: [MenuModule],
   controllers: [RestaurantController],
   providers: [RestaurantService],
+  exports: [RestaurantService]
 })
 export class RestaurantModule { }

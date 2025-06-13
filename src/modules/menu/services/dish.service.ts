@@ -116,7 +116,6 @@ export class DishService {
     const orderItems = await this.prisma.orderItem.findMany({
       where: {
         dish_id: id,
-        entity_status: EntityStatus.ACTIVE,
       },
     });
 
