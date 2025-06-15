@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Twilio } from 'twilio';
 import { ConfigService } from '@nestjs/config';
+import { MessageInstance } from 'twilio/lib/rest/api/v2010/account/message';
 
 @Injectable()
 export class TwilioService {
@@ -9,6 +10,20 @@ export class TwilioService {
     private readonly authToken: string;
     private readonly twilioPhoneNumber: string;
     private readonly twilioWhatsappNumber: string;
+    private readonly twilioWhatsappTemplate = {
+        otp_template: {
+            name: "otp_template",
+            sid: "HX81d8446f928903afae7e7fa28b3ca324",
+            language: "fr",
+            variables: [
+                {
+                    name: "1",
+                    type: "string",
+                    description: "OTP"
+                }
+            ]
+        }
+    };
 
     constructor(private readonly configService: ConfigService) {
         this.accountSid = this.configService.get<string>('ACCOUNT_SID') ?? "";
@@ -19,22 +34,44 @@ export class TwilioService {
         this.twilioClient = new Twilio(this.accountSid, this.authToken);
     }
 
-    async sendOtp(phoneNumber: string, otp: string) {
+    async sendOtp({ phoneNumber, otp }: { phoneNumber: string, otp: string }) {
 
-        return await this.sendMessage(phoneNumber, `Votre code de confirmation est : ${otp}`, "sms");
+        return await this.sendWhatsappMessage({
+            phoneNumber,
+            contentSid: this.twilioWhatsappTemplate.otp_template.sid,
+            contentVariables: JSON.stringify({
+                [this.twilioWhatsappTemplate.otp_template.variables[0].name]: otp
+            })
+        });
     }
 
-    async sendMessage(phoneNumber: string, message: string, type: "sms" | "whatsapp") {
+    async sendSmsMessage({ phoneNumber, message }: { phoneNumber: string, message: string }): Promise<MessageInstance | null> {
         try {
-            await this.twilioClient.messages.create({
+            const response = await this.twilioClient.messages.create({
                 body: message,
-                from: type === "sms" ? this.twilioPhoneNumber : `whatsapp:${this.twilioWhatsappNumber}`,
-                to: type === "sms" ? this.formatNumber(phoneNumber) : `whatsapp:${this.formatNumber(phoneNumber)}`,
+                from: this.twilioPhoneNumber,
+                to: this.formatNumber(phoneNumber),
             });
-            return true;
+
+            return response;
         } catch (error: any) {
             console.error('Error sending message:', error);
-            return false;
+            return null;
+        }
+    }
+    async sendWhatsappMessage({ phoneNumber, contentSid, contentVariables }: { phoneNumber: string, contentSid: string, contentVariables: string }): Promise<MessageInstance | null> {
+        try {
+            const response = await this.twilioClient.messages.create({
+                contentSid,
+                contentVariables,
+                from: `whatsapp:${this.twilioWhatsappNumber}`,
+                to: `whatsapp:${this.formatNumber(phoneNumber)}`,
+            });
+            return response;
+
+        } catch (error: any) {
+            console.error('Error sending message:', error);
+            return null;
         }
     }
 
