@@ -4,7 +4,6 @@ import { DefaultEmailService } from './services/default-email.service';
 import { GoogleEmailService } from './services/google-email.service';
 import { EmailController } from './controllers/email.controller';
 
-@Global()
 @Module({
     controllers: [EmailController],
     providers: [

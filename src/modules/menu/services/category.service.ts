@@ -3,18 +3,26 @@ import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
 import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { EntityStatus } from '@prisma/client';
+import { MenuEvent } from 'src/modules/menu/events/menu.event';
 
 @Injectable()
 export class CategoryService {
-  constructor(private prisma: PrismaService) { }
+  constructor(private prisma: PrismaService,
+    private menuEvent: MenuEvent
+  ) { }
 
   async create(createCategoryDto: CreateCategoryDto) {
-    return this.prisma.category.create({
+    const category = await this.prisma.category.create({
       data: {
         ...createCategoryDto,
         entity_status: EntityStatus.ACTIVE,
       },
     });
+
+    // Émettre l'événement de création de catégorie
+    this.menuEvent.createCategory(category);
+
+    return category;
   }
 
   async findAll() {
@@ -48,10 +56,15 @@ export class CategoryService {
   async update(id: string, updateCategoryDto: UpdateCategoryDto) {
     await this.findOne(id);
 
-    return this.prisma.category.update({
+    const category = await this.prisma.category.update({
       where: { id },
       data: updateCategoryDto,
     });
+
+    // Émettre l'événement de mise à jour de catégorie
+    this.menuEvent.updateCategory(category);
+
+    return category;
   }
 
   async remove(id: string) {

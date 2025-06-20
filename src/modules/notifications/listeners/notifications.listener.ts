@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { NotificationsSenderService } from '../services/notifications-sender.service';
 import { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
-import { Order } from '@prisma/client';
+import { Category, Dish, Order } from '@prisma/client';
 
 @Injectable()
 export class NotificationsListener {
@@ -106,6 +106,26 @@ export class NotificationsListener {
         //   payload.bonus_points,
         //   payload.customer.name
         // );
+    }
+
+    @OnEvent('category.created')
+    async handleCategoryCreated(payload: Category) {
+        await this.notificationSenderService.handleCategoryCreatedOrUpdate(payload);
+    }
+
+    @OnEvent('category.updated')
+    async handleCategoryUpdated(payload: Category) {
+        await this.notificationSenderService.handleCategoryCreatedOrUpdate(payload, true);
+    }
+
+    @OnEvent('dish.created')
+    async handleDishCreated(payload: Dish) {
+        await this.notificationSenderService.handleDishCreatedOrUpdate(payload);
+    }
+
+    @OnEvent('dish.updated')
+    async handleDishUpdated(payload: Dish) {
+        await this.notificationSenderService.handleDishCreatedOrUpdate(payload, true);
     }
 
 }

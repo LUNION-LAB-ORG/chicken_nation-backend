@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { NotificationType, NotificationTarget, Order } from '@prisma/client';
-import { PrismaService } from 'src/database/services/prisma.service';
+import { NotificationType, NotificationTarget, Order, Category, Dish } from '@prisma/client';
 import { NotificationsTemplate } from '../templates/notifications.template';
 import { NotificationRecipientsService } from './notifications-recipients.service';
 import { NotificationsService } from './notifications.service';
@@ -12,7 +11,8 @@ import { NotificationsWebSocketService } from './notifications-websocket.service
 export class NotificationsSenderService {
     constructor(private readonly recipientsService: NotificationRecipientsService,
         private readonly notificationsService: NotificationsService,
-        private readonly notificationsWebSocketService: NotificationsWebSocketService) { }
+        private readonly notificationsWebSocketService: NotificationsWebSocketService,
+    ) { }
 
     /**
      * Gère les notifications pour une commande créée
@@ -32,11 +32,12 @@ export class NotificationsSenderService {
         };
 
         // Notification au client
-       const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
+        const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.ORDER_CREATED_CUSTOMER,
             { actor, recipients: [actor], data: orderData },
             NotificationType.ORDER
         );
+
         // Émettre l'événement de création de commande
         this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], actor);
 
@@ -44,7 +45,8 @@ export class NotificationsSenderService {
             const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
                 NotificationsTemplate.ORDER_CREATED_RESTAURANT,
                 { actor, recipients: restaurantUsers, data: orderData },
-                NotificationType.ORDER
+                NotificationType.ORDER,
+                true
             );
             this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0], true);
         }
@@ -69,7 +71,7 @@ export class NotificationsSenderService {
         };
 
         // Toujours notifier le client du changement de statut
-       const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
+        const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.ORDER_STATUS_UPDATED_CUSTOMER,
             { actor, recipients: [actor], data: orderData },
             NotificationType.ORDER
@@ -79,7 +81,8 @@ export class NotificationsSenderService {
         const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.ORDER_STATUS_UPDATED_RESTAURANT,
             { actor, recipients: restaurantUsers, data: orderData },
-            NotificationType.ORDER
+            NotificationType.ORDER,
+            true
         );
         this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0], true);
     }
@@ -114,7 +117,8 @@ export class NotificationsSenderService {
             const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
                 NotificationsTemplate.PAYMENT_SUCCESS_RESTAURANT,
                 { actor, recipients: restaurantUsers, data: paymentData },
-                NotificationType.ORDER
+                NotificationType.ORDER,
+                true
             );
             this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0], true);
         }
@@ -134,7 +138,8 @@ export class NotificationsSenderService {
                 recipients: [customerRecipient],
                 data: { points, total_points: totalPoints, reason }
             },
-            NotificationType.SYSTEM
+            NotificationType.SYSTEM,
+            true
         );
         this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
     }
@@ -150,7 +155,8 @@ export class NotificationsSenderService {
                 recipients: [customerRecipient],
                 data: { new_level: newLevel, bonus_points: bonusPoints }
             },
-            NotificationType.SYSTEM
+            NotificationType.SYSTEM,
+            true
         );
         this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
     }
@@ -172,12 +178,50 @@ export class NotificationsSenderService {
                     discount_amount: discountAmount
                 }
             },
-            NotificationType.PROMOTION
+            NotificationType.PROMOTION,
+            true
         );
         this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
     }
 
-    private getTargetFromRecipientType(type: string): NotificationTarget {
-        return type === 'customer' ? NotificationTarget.CUSTOMER : NotificationTarget.USER;
+    /**
+     * Gère les notifications de catégories
+     */
+    async handleCategoryCreatedOrUpdate(category: Category, update?: boolean) {
+        const allRestaurantUsers = await this.recipientsService.getAllRestaurantUsers();
+        if (!allRestaurantUsers) return;
+
+        const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
+            update ? NotificationsTemplate.CATEGORY_UPDATED : NotificationsTemplate.CATEGORY_CREATED,
+            {
+                actor: allRestaurantUsers[0],
+                recipients: allRestaurantUsers,
+                data: { category_name: category.name }
+            },
+            NotificationType.SYSTEM,
+            true
+        );
+        this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], allRestaurantUsers[0], true);
     }
+
+    /**
+     * Gère les notifications de plats
+     */
+    async handleDishCreatedOrUpdate(dish: Dish, update?: boolean) {
+        const allRestaurantUsers = await this.recipientsService.getAllRestaurantUsers();
+        if (!allRestaurantUsers) return;
+
+        const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
+            update ? NotificationsTemplate.DISH_UPDATED : NotificationsTemplate.DISH_CREATED,
+            {
+                actor: allRestaurantUsers[0],
+                recipients: allRestaurantUsers,
+                data: { dish_name: dish.name }
+            },
+            NotificationType.SYSTEM,
+            true
+        );
+        this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], allRestaurantUsers[0], true);
+    }
+
 }

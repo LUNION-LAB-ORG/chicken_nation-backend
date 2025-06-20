@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "src/database/services/prisma.service";
 import { NotificationRecipient } from "../interfaces/notifications.interface";
+import { UserRole, UserType } from "@prisma/client";
 
 @Injectable()
 export class NotificationRecipientsService {
@@ -20,6 +21,8 @@ export class NotificationRecipientsService {
                 fullname: true,
                 restaurant_id: true,
                 role: true,
+                email: true,
+                phone: true,
                 restaurant: {
                     select: {
                         name: true
@@ -33,6 +36,114 @@ export class NotificationRecipientsService {
             type: 'restaurant_user',
             role: user.role,
             name: user.fullname,
+            email: user?.email ?? undefined,
+            phone: user?.phone ?? undefined,
+            restaurant_id: user.restaurant_id ?? undefined,
+            restaurant_name: user.restaurant?.name ?? undefined
+        }));
+    }
+    async getRestaurantManager(restaurantId: string): Promise<NotificationRecipient[]> {
+        const users = await this.prisma.user.findMany({
+            where: {
+                role: UserRole.MANAGER,
+                restaurant_id: restaurantId,
+                entity_status: 'ACTIVE'
+            },
+            select: {
+                id: true,
+                fullname: true,
+                restaurant_id: true,
+                role: true,
+                email: true,
+                phone: true,
+                restaurant: {
+                    select: {
+                        name: true
+                    }
+                }
+            }
+        });
+
+        return users.map(user => ({
+            id: user.id,
+            type: 'restaurant_user',
+            role: user.role,
+            name: user.fullname,
+            email: user?.email ?? undefined,
+            phone: user?.phone ?? undefined,
+            restaurant_id: user.restaurant_id ?? undefined,
+            restaurant_name: user.restaurant?.name ?? undefined
+        }));
+    }
+
+    /**
+     * Récupère tous les managers d'un restaurant
+     */
+    async getAllRestaurantManagers(): Promise<NotificationRecipient[]> {
+        const users = await this.prisma.user.findMany({
+            where: {
+                role: UserRole.MANAGER,
+                type: "RESTAURANT",
+                entity_status: 'ACTIVE',
+            },
+            select: {
+                id: true,
+                fullname: true,
+                restaurant_id: true,
+                role: true,
+                email: true,
+                phone: true,
+                restaurant: {
+                    select: {
+                        name: true
+                    }
+                }
+            }
+        });
+
+        return users.map(user => ({
+            id: user.id,
+            type: 'restaurant_user',
+            role: user.role,
+            name: user.fullname,
+            email: user?.email ?? undefined,
+            phone: user?.phone ?? undefined,
+            restaurant_id: user.restaurant_id ?? undefined,
+            restaurant_name: user.restaurant?.name ?? undefined
+        }));
+    }
+
+    /**
+     * Récupère tous les utilisateurs des restaurants
+     */
+    async getAllRestaurantUsers(): Promise<NotificationRecipient[]> {
+        const users = await this.prisma.user.findMany({
+            where: {
+                type: "RESTAURANT",
+                entity_status: 'ACTIVE'
+            },
+            select: {
+                id: true,
+                fullname: true,
+                restaurant_id: true,
+                role: true,
+                email: true,
+                phone: true,
+                restaurant: {
+                    select: {
+                        name: true
+                    }
+                }
+            }
+        });
+
+        return users.map(user => ({
+            id: user.id,
+            type: 'restaurant_user',
+            role: user.role,
+            name: user.fullname,
+            email: user?.email ?? undefined,
+            phone: user?.phone ?? undefined,
             restaurant_id: user.restaurant_id ?? undefined,
             restaurant_name: user.restaurant?.name ?? undefined
         }));
@@ -50,7 +161,9 @@ export class NotificationRecipientsService {
             select: {
                 id: true,
                 fullname: true,
-                role: true
+                role: true,
+                email: true,
+                phone: true
             }
         });
 
@@ -58,8 +171,37 @@ export class NotificationRecipientsService {
             id: user.id,
             type: 'backoffice_user',
             role: user.role,
-            name: user.fullname
+            name: user.fullname,
+            email: user?.email ?? undefined,
+            phone: user?.phone ?? undefined
         }));
+    }
+    /**
+     * Récupère un utilisateur qui est soit backoffice_user soit restaurant_user
+     */
+    async getUser(userId: string, userType: 'backoffice_user' | 'restaurant_user'): Promise<NotificationRecipient | null> {
+        const user = await this.prisma.user.findUnique({
+            where: {
+                id: userId,
+                type: userType == "backoffice_user" ? UserType.BACKOFFICE : UserType.RESTAURANT
+            },
+            select: {
+                id: true,
+                fullname: true,
+                email: true,
+                phone: true
+            }
+        });
+
+        if (!user) return null;
+
+        return {
+            id: user.id,
+            type: userType,
+            name: user.fullname,
+            email: user?.email ?? undefined,
+            phone: user?.phone ?? undefined
+        };
     }
 
     /**
@@ -75,6 +217,8 @@ export class NotificationRecipientsService {
                 loyalty_level: true,
                 total_points: true,
                 lifetime_points: true,
+                email: true,
+                phone: true
             }
         });
 
@@ -87,6 +231,8 @@ export class NotificationRecipientsService {
             loyalty_level: customer.loyalty_level,
             total_points: customer.total_points,
             lifetime_points: customer.lifetime_points,
+            email: customer?.email ?? undefined,
+            phone: customer?.phone ?? undefined
         };
     }
 
@@ -99,6 +245,8 @@ export class NotificationRecipientsService {
                 loyalty_level: true,
                 total_points: true,
                 lifetime_points: true,
+                email: true,
+                phone: true
             }
         });
 
@@ -109,6 +257,8 @@ export class NotificationRecipientsService {
             loyalty_level: customer.loyalty_level,
             total_points: customer.total_points,
             lifetime_points: customer.lifetime_points,
+            email: customer?.email ?? undefined,
+            phone: customer?.phone ?? undefined
         }));
     }
 }

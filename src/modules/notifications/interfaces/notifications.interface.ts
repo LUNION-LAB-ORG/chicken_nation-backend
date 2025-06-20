@@ -2,9 +2,11 @@ import { LoyaltyLevel, UserRole } from "@prisma/client";
 
 export interface NotificationRecipient {
     id: string;
-    type: 'customer' | 'restaurant_user' | 'backoffice_user';
+    type: 'customer' | "user" | 'restaurant_user' | 'backoffice_user';
     role?: UserRole;
     name: string;
+    email?: string;
+    phone?: string;
     restaurant_id?: string;
     loyalty_level?: LoyaltyLevel | null;
     lifetime_points?: number;
@@ -25,3 +27,9 @@ export interface NotificationTemplate {
     iconBgColor: (context: NotificationContext) => string;
     showChevron?: boolean;
 }
+
+export interface EmailTemplate {
+    subject: (context: NotificationContext) => string;
+    content: (context: NotificationContext) => string;
+}
+

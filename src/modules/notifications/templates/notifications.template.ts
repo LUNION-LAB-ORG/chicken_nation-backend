@@ -112,7 +112,7 @@ export class NotificationsTemplate {
     // Notification pour les managers quand un nouvel utilisateur rejoint leur restaurant
     static NEW_USER_RESTAURANT: NotificationTemplate = {
         title: (ctx) => `👥 Nouvel utilisateur`,
-        message: (ctx) => `${ctx.actor.name} a rejoint votre équipe en tant que ${ctx.data.role}`,
+        message: (ctx) => `${ctx.actor.name} a rejoint votre équipe en tant que agent ${ctx.data.role}`,
         icon: (ctx) => notificationIcons.ok.url,
         iconBgColor: (ctx) => notificationIcons.ok.color,
         showChevron: false
@@ -133,6 +133,42 @@ export class NotificationsTemplate {
         message: (ctx) => `Votre commande ${ctx.data.reference} a été annulée par le restaurant. Raison: ${ctx.data.reason || 'Non spécifiée'}`,
         icon: (ctx) => 'https://cdn-icons-png.flaticon.com/512/3524/3524890.png',
         iconBgColor: (ctx) => '#DC3545',
+        showChevron: false
+    };
+
+    // Notifications catégorie cr&e
+    static CATEGORY_CREATED: NotificationTemplate = {
+        title: (ctx) => `🎉 Nouvelle catégorie`,
+        message: (ctx) => `Nouvelle catégorie "${ctx.data.category_name}"`,
+        icon: (ctx) => notificationIcons.ok.url,
+        iconBgColor: (ctx) => notificationIcons.ok.color,
+        showChevron: false
+    };
+
+    // Notifications catégorie mise à jour
+    static CATEGORY_UPDATED: NotificationTemplate = {
+        title: (ctx) => `Catégorie mise à jour`,
+        message: (ctx) => `Catégorie "${ctx.data.category_name}" mise à jour`,
+        icon: (ctx) => notificationIcons.ok.url,
+        iconBgColor: (ctx) => notificationIcons.ok.color,
+        showChevron: false
+    };
+
+    // Notifications plat cr&e
+    static DISH_CREATED: NotificationTemplate = {
+        title: (ctx) => `🎉 Nouveau plat`,
+        message: (ctx) => `Nouveau plat "${ctx.data.dish_name}"`,
+        icon: (ctx) => notificationIcons.ok.url,
+        iconBgColor: (ctx) => notificationIcons.ok.color,
+        showChevron: false
+    };
+
+    // Notifications plat mis à jour
+    static DISH_UPDATED: NotificationTemplate = {
+        title: (ctx) => `Plat mis à jour`,
+        message: (ctx) => `Plat "${ctx.data.dish_name}" mis à jour`,
+        icon: (ctx) => notificationIcons.ok.url,
+        iconBgColor: (ctx) => notificationIcons.ok.color,
         showChevron: false
     };
 }

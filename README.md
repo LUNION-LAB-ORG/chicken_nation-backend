@@ -1,3 +1,12 @@
 ## Tâches à faire
-- OTP via WhatsApp (Partiel)
 - Calcul Prix (À revoir)
+- Ajout les restaurants concernés dans la promotion
+- Pouvoir récupérer le dernier restaurant qui n'est pas fermé
+- Plan de fidélité : 6 commandes, plats offerts
+- Module Messagerie
+- Notification par email:
+    - creation et mise à jour catégorie
+    - creation et mise à jour plat
+    - creation et mise à jour promotion
+    - creation et mise à jour commande
+    - creation et mise à jour restaurant

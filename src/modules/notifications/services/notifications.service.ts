@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Inject } from '@nestjs/common';
 import { NotificationType, NotificationTarget, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateNotificationDto } from '../dto/create-notification.dto';
@@ -8,10 +8,14 @@ import { QueryNotificationDto } from '../dto/query-notification.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { NotificationResponseDto } from '../dto/response-notification.dto';
 import { NotificationContext, NotificationTemplate } from '../interfaces/notifications.interface';
+import { IEmailService } from 'src/email/interfaces/email-service.interface';
 
 @Injectable()
 export class NotificationsService {
-    constructor(private readonly prisma: PrismaService) { }
+    constructor(private readonly prisma: PrismaService,
+        @Inject('EMAIL_SERVICE') private readonly emailService: IEmailService,
+
+    ) { }
 
     /**
      * Créer une nouvelle notification
@@ -264,12 +268,13 @@ export class NotificationsService {
     async sendNotificationToMultiple(
         template: NotificationTemplate,
         context: NotificationContext,
-        notificationType: NotificationType
+        notificationType: NotificationType,
+        email: boolean = false
     ) {
-        const notifications = context.recipients.map(recipient => {
+        const notifications = context.recipients.map(async recipient => {
             const notificationContext = { ...context, currentRecipient: recipient };
 
-            return this.create({
+            const notification = this.create({
                 title: template.title(notificationContext),
                 message: template.message(notificationContext),
                 type: notificationType,
@@ -280,6 +285,16 @@ export class NotificationsService {
                 show_chevron: template.showChevron || false,
                 data: context.data
             });
+
+            // SEND BY EMAIL
+            if (recipient.email && email) {
+                await this.emailService.sendEmail({
+                    recipients: recipient.email,
+                    subject: template.title(notificationContext),
+                    html: template.message(notificationContext),
+                });
+            }
+            return notification;
         });
 
         return Promise.all(notifications);

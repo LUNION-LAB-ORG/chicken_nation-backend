@@ -3,10 +3,13 @@ import { EntityStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
 import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
+import { MenuEvent } from 'src/modules/menu/events/menu.event';
 
 @Injectable()
 export class DishService {
-  constructor(private prisma: PrismaService) { }
+  constructor(private prisma: PrismaService,
+    private menuEvent: MenuEvent
+  ) { }
 
   async create(createDishDto: CreateDishDto) {
     const { restaurant_ids, supplement_ids, ...dishData } = createDishDto;
@@ -46,6 +49,9 @@ export class DishService {
         })),
       });
     }
+
+    // Émettre l'événement de création de plat
+    this.menuEvent.createDish(dish);
 
     return this.findOne(dish.id);
   }
@@ -102,10 +108,15 @@ export class DishService {
   async update(id: string, updateDishDto: UpdateDishDto) {
     await this.findOne(id);
 
-    return this.prisma.dish.update({
+    const dish = await this.prisma.dish.update({
       where: { id },
       data: updateDishDto,
     });
+
+    // Émettre l'événement de mise à jour de plat
+    this.menuEvent.updateDish(dish);
+
+    return dish;
   }
 
   async remove(id: string) {
