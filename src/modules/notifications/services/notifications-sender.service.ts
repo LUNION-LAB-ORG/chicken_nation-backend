@@ -69,19 +69,19 @@ export class NotificationsSenderService {
     //     this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
     // }
 
-    async handleLoyaltyLevelUp(customer: any, newLevel: string, bonusPoints: number) {
-        const customerRecipient = await this.notificationRecipientService.getCustomer(customer.id);
-        if (!customerRecipient) return;
+    // async handleLoyaltyLevelUp(customer: any, newLevel: string, bonusPoints: number) {
+    //     const customerRecipient = await this.notificationRecipientService.getCustomer(customer.id);
+    //     if (!customerRecipient) return;
 
-        const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
-            NotificationsTemplate.LOYALTY_LEVEL_UP,
-            {
-                actor: customerRecipient,
-                recipients: [customerRecipient],
-                data: { new_level: newLevel, bonus_points: bonusPoints }
-            },
-            NotificationType.SYSTEM
-        );
-        this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
-    }
+    //     const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
+    //         NotificationsTemplate.LOYALTY_LEVEL_UP,
+    //         {
+    //             actor: customerRecipient,
+    //             recipients: [customerRecipient],
+    //             data: { new_level: newLevel, bonus_points: bonusPoints }
+    //         },
+    //         NotificationType.SYSTEM
+    //     );
+    //     this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
+    // }
 }
