@@ -5,17 +5,17 @@ export const userGetRole = (role: UserRole) => {
         case UserRole.ADMIN:
             return 'Administrateur';
         case UserRole.MARKETING:
-            return 'Marketing';
+            return 'Agent Marketing';
         case UserRole.COMPTABLE:
-            return 'Comptable';
+            return 'Agent Comptable';
         case UserRole.MANAGER:
             return 'Manager';
         case UserRole.CAISSIER:
-            return 'Caissier';
+            return 'Agent Caissier';
         case UserRole.CALL_CENTER:
-            return 'Call Center';
+            return 'Agent Call Center';
         case UserRole.CUISINE:
-            return 'Cuisinier';
+            return 'Agent Cuisinier';
         default:
             return 'Inconnu';
     }

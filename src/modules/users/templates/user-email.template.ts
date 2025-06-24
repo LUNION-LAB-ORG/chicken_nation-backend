@@ -43,7 +43,7 @@ export class UserEmailTemplates {
                         { label: 'Nom du restaurant', value: ctx.data.user.restaurant?.name ?? "Non renseigné" },
                         { label: 'Adresse', value: ctx.data.user.restaurant?.address ?? "Non renseigné" },
                     ]) : '',
-                    this.emailComponentsService.CtaButton('Accéder au tableau de bord', this.configService.get<string>('FRONTEND_URL') ?? "", 'primary'),
+                    this.emailComponentsService.CtaButton('Accéder au tableau de bord', this.configService.get<string>('FRONTEND_URL') ?? ""),
                     this.emailComponentsService.Alert('Assurez-vous que le nouvel utilisateur dispose des accès nécessaires.', 'info'),
                 ].filter(Boolean).join('\n');
 
@@ -79,7 +79,7 @@ export class UserEmailTemplates {
                         `Ce nouvel agent fait désormais partie de votre équipe. Vous pouvez gérer ses permissions et son profil depuis votre tableau de bord restaurant.`,
                         '💡'
                     ),
-                    this.emailComponentsService.CtaButton('Accéder au tableau de bord', this.configService.get<string>('FRONTEND_URL') ?? "", 'primary'),
+                    this.emailComponentsService.CtaButton('Accéder au tableau de bord', this.configService.get<string>('FRONTEND_URL') ?? ""),
                 ].join('\n');
 
                 return emailContent;
@@ -115,13 +115,13 @@ export class UserEmailTemplates {
                         `Votre rôle est : ${userRole}. Si vous avez des questions, n'hésitez pas à nous contacter.`,
                         'info'
                     ),
-                    this.emailComponentsService.CtaButton('Se connecter maintenant', frontendUrl, 'primary'),
+                    this.emailComponentsService.CtaButton('Se connecter maintenant', frontendUrl),
                     this.emailComponentsService.Divider(),
                     this.emailComponentsService.Message(
                         `Si vous rencontrez des difficultés pour vous connecter ou avez des questions, notre équipe de support est là pour vous aider.`,
                     ),
-                    this.emailComponentsService.CtaButton('Contacter le support', this.configService.get<string>('SUPPORT_URL') ? `mailto:${this.configService.get<string>('SUPPORT_EMAIL')}` : frontendUrl, 'outline'),
-                ].filter(Boolean).join('\n');
+                    this.emailComponentsService.Button('Contacter le support', this.configService.get<string>('CHICKEN_NATION_SUPPORT') ? `mailto:${this.configService.get<string>('CHICKEN_NATION_SUPPORT')}` : frontendUrl),
+                ].join('\n');
 
                 return emailContent;
             }

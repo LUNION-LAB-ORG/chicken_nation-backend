@@ -38,7 +38,7 @@ export class RestaurantEmailTemplates {
                         { label: "Téléphone de contact", value: ctx.data.restaurant.phone ?? "Non renseigné" },
                         { label: "Créé par", value: ctx.data.actor.fullname ?? "Non renseigné" } // Added creator
                     ]),
-                    this.emailComponentsService.CtaButton('Accéder au tableau de bord Admin', adminDashboardUrl, 'primary'),
+                    this.emailComponentsService.CtaButton('Accéder au tableau de bord Admin', adminDashboardUrl),
                     this.emailComponentsService.Alert(
                         'Assurez-vous que toutes les informations sont correctes et que le restaurant est prêt à prendre des commandes.',
                         'info'
@@ -61,7 +61,7 @@ export class RestaurantEmailTemplates {
             subject: (ctx) => `🎉 Bienvenue à ${ctx.data.restaurant.name} dans la famille Chicken Nation !`,
             content: (ctx) => {
                 const restaurantDashboardUrl = this.configService.get<string>('FRONTEND_URL') || "";
-                const supportUrl = this.configService.get<string>('SUPPORT_URL') || `mailto:${this.configService.get<string>('SUPPORT_EMAIL')}` || "";
+                const supportUrl = this.configService.get<string>('SUPPORT_URL') || `mailto:${this.configService.get<string>('CHICKEN_NATION_SUPPORT')}` || "";
 
                 const emailContent = [
                     this.emailComponentsService.HeroSection(
@@ -81,12 +81,12 @@ export class RestaurantEmailTemplates {
                         `Commencez par configurer votre menu et vos heures d'ouverture pour apparaître sur la plateforme.`,
                         'info'
                     ),
-                    this.emailComponentsService.CtaButton('Accéder à votre tableau de bord restaurant', restaurantDashboardUrl, 'primary'),
+                    this.emailComponentsService.CtaButton('Accéder à votre tableau de bord restaurant', restaurantDashboardUrl),
                     this.emailComponentsService.Divider(),
                     this.emailComponentsService.Message(
                         `Pour toute question ou assistance, n'hésitez pas à contacter notre équipe de support dédiée. Nous sommes là pour vous aider à réussir !`
                     ),
-                    this.emailComponentsService.CtaButton('Contacter le support', supportUrl, 'outline'),
+                    this.emailComponentsService.CtaButton('Contacter le support', supportUrl),
                 ].join('\n');
 
                 return emailContent;
