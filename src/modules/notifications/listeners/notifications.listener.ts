@@ -25,65 +25,13 @@ export class NotificationsListener {
             payload.customer
         );
     }
+
     @OnEvent('paiement.effectue')
     async handlePaiementEffectue(payload: any) {
         // TODO: Envoyer notification au client paiement effectué
         // await this.notificationSenderService.sendPaiementEffectueNotification(
         //   payload.customer.id,
         //   payload.paiement_id,
-        //   payload.customer.name
-        // );
-    }
-
-    // POINT DE FIDELITE
-    @OnEvent('loyalty.pointsEarned')
-    async handlePointsEarned(payload: { customer: any; points: number; totalPoints: number; reason?: string }) {
-        // await this.notificationSenderService.handleLoyaltyPointsEarned(
-        //     payload.customer,
-        //     payload.points,
-        //     payload.totalPoints,
-        //     payload.reason
-        // );
-    }
-
-    @OnEvent('loyalty.levelUp')
-    async handleLevelUp(payload: { customer: any; newLevel: string; bonusPoints: number }) {
-        await this.notificationSenderService.handleLoyaltyLevelUp(
-            payload.customer,
-            payload.newLevel,
-            payload.bonusPoints
-        );
-    }
-
-    @OnEvent('loyalty.redeemPoints')
-    async handleRedeemPoints(payload: any) {
-
-        // TODO: Envoyer notification au client points utilisés
-        // await this.notificationSenderService.sendPointsRedeemedNotification(
-        //   payload.customer_id,
-        //   payload.points,
-        //   payload.customer_name
-        // );
-    }
-
-    @OnEvent('loyalty.addPoints')
-    async handleAddPoints(payload: any) {
-        // TODO: Envoyer notification au client points gagnés
-        // await this.notificationSenderService.sendPointsEarnedNotification(
-        //   payload.customer_id,
-        //   payload.points,
-        //   payload.customer_name
-        // );
-    }
-
-    @OnEvent('loyalty.awardBonusPoints')
-    async handleAwardBonusPoints(payload: any) {
-
-        // TODO: Envoyer notification de félicitations au client points bonus niveau atteint
-        // await this.notificationSenderService.sendLevelUpNotification(
-        //   payload.customer.id,
-        //   payload.new_level,
-        //   payload.bonus_points,
         //   payload.customer.name
         // );
     }
