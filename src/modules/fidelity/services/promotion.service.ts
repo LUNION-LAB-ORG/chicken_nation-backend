@@ -128,8 +128,9 @@ export class PromotionService {
     }
 
     // Evenement de promotion créée
-    this.promotionEvent.promotionCreatedEvent({ actor: { ...user, restaurant: null }, promotion, targetedNames: targeted });
-
+    if (promotion.status === PromotionStatus.ACTIVE) {
+      this.promotionEvent.promotionCreatedEvent({ actor: { ...user, restaurant: null }, promotion, targetedNames: targeted });
+    }
     return this.mapToResponseDto(promotion);
   }
 

@@ -10,6 +10,7 @@ import { PromotionEvent } from './events/promotion.event';
 import { LoyaltyTask } from './tasks/loyalty.task';
 import { PromotionEmailTemplates } from './templates/promotion-email.template';
 import { PromotionNotificationsTemplate } from './templates/promotion-notifications.template';
+
 @Module({
     controllers: [PromotionController, LoyaltyController],
     providers: [
