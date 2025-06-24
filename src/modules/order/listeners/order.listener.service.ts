@@ -30,7 +30,7 @@ export class OrderListenerService {
         const usersRestaurant = (await this.notificationRecipientService.getAllUsersByRestaurantAndRole(payload.order.restaurant_id));
         const usersRestaurantEmail: string[] = usersRestaurant.map((user) => user.email!);
         const customer = await this.notificationRecipientService.getCustomer(payload.order.customer_id);
-        const customerEmail: string[] = [customer.email!];
+        const customerEmail: string[] = customer.email ? [customer.email] : [];
 
         // ENVOIE DES EMAILS
         // 1- EMAIL AU RESTAURANT
@@ -103,7 +103,6 @@ export class OrderListenerService {
         );
         // Notifier en temps réel
         this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
-
 
         // PROMOTION USAGE
         if (payload.order.promotion_id && payload.totalDishes && payload.orderItems && payload.loyalty_level) {

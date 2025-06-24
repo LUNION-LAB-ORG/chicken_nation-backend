@@ -1,19 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Customer, Promotion } from '@prisma/client';
-
+import { PromotionManagementEventPayload, PromotionUsedEventPayload } from '../interfaces/promotion.interface';
 
 @Injectable()
 export class PromotionEvent {
-
     constructor(
         private eventEmitter: EventEmitter2,
     ) { }
 
     /**
-     * Emet un évènement de la création d'une promotion
+     * Emits a promotion creation event
      */
-    async promotionCreatedEvent(payload: Promotion) {
+    async promotionCreatedEvent(payload: PromotionManagementEventPayload) {
         this.eventEmitter.emit(
             'promotion.created',
             payload
@@ -21,9 +19,9 @@ export class PromotionEvent {
     }
 
     /**
-     * Emet un évènement de la mise à jour d'une promotion
+     * Emits a promotion update event
      */
-    async promotionUpdatedEvent(payload: Promotion) {
+    async promotionUpdatedEvent(payload: PromotionManagementEventPayload) {
         this.eventEmitter.emit(
             'promotion.updated',
             payload
@@ -31,9 +29,19 @@ export class PromotionEvent {
     }
 
     /**
-     * Émet un événement de promotion utilisée
+     * Emits a promotion deletion event
      */
-    async promotionUsedEvent(payload: { customer: Customer; promotion: Promotion; discountAmount: number }) {
+    async promotionDeletedEvent(payload: PromotionManagementEventPayload) {
+        this.eventEmitter.emit(
+            'promotion.deleted',
+            payload
+        );
+    }
+
+    /**
+     * Emits a promotion used event
+     */
+    async promotionUsedEvent(payload: PromotionUsedEventPayload) {
         this.eventEmitter.emit(
             'promotion.used',
             payload

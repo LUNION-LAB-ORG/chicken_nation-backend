@@ -2,12 +2,13 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { CreatePromotionDto } from '../dto/create-promotion.dto';
 import { UpdatePromotionDto } from '../dto/update-promotion.dto';
 import { PromotionResponseDto } from '../dto/promotion-response.dto';
-import { Prisma, Promotion, Visibility } from '@prisma/client';
+import { Prisma, Promotion, User, Visibility } from '@prisma/client';
 import { DiscountType, TargetType, PromotionStatus, LoyaltyLevel } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryPromotionDto } from '../dto/query-promotion.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PromotionEvent } from '../events/promotion.event';
+import { Request } from 'express';
 
 interface Dish {
   id: string;
@@ -27,13 +28,15 @@ interface Dish {
 export class PromotionService {
   constructor(private prisma: PrismaService, private promotionEvent: PromotionEvent) { }
 
-  async create(createPromotionDto: CreatePromotionDto, created_by_id: string): Promise<Promotion> {
+  async create(req: Request, createPromotionDto: CreatePromotionDto, created_by_id: string): Promise<PromotionResponseDto> {
     const {
       targeted_dish_ids = [],
       targeted_category_ids = [],
       offered_dishes = [],
       ...promotionData
     } = createPromotionDto;
+
+    const user = req.user as User;
 
     // Validation des dates
     const startDate = new Date(promotionData.start_date);
@@ -61,7 +64,7 @@ export class PromotionService {
       throw new BadRequestException('Vous devez sélectionner au moins un plat pour ce type de promotion');
     }
 
-    return await this.prisma.$transaction(async (tx) => {
+    const promotion = await this.prisma.$transaction(async (tx) => {
       // Créer la promotion
       const promotion = await tx.promotion.create({
         data: {
@@ -102,11 +105,33 @@ export class PromotionService {
         });
       }
 
-      // Evenement de promotion créée
-      this.promotionEvent.promotionCreatedEvent(promotion);
-
       return promotion;
     });
+
+    // Récupérer les noms des plats/catégories ciblés
+    const targeted: string[] = [];
+
+    if (targeted_dish_ids.length > 0) {
+      const targetedDishes = await this.prisma.promotionTargetedDish.findMany({
+        where: { promotion_id: promotion.id },
+        include: { dish: true },
+      });
+      targeted.push(...targetedDishes.map(td => td.dish.name));
+    }
+
+    if (targeted_category_ids.length > 0) {
+      const targetedCategories = await this.prisma.promotionTargetedCategory.findMany({
+        where: { promotion_id: promotion.id },
+        include: { category: true },
+      });
+      targeted.push(...targetedCategories.map(tc => tc.category.name));
+    }
+
+    // Evenement de promotion créée
+    if (promotion.status === PromotionStatus.ACTIVE) {
+      this.promotionEvent.promotionCreatedEvent({ actor: { ...user, restaurant: null }, promotion, targetedNames: targeted });
+    }
+    return this.mapToResponseDto(promotion);
   }
 
   async findAll(filters?: QueryPromotionDto): Promise<QueryResponseDto<PromotionResponseDto>> {
@@ -222,13 +247,15 @@ export class PromotionService {
     return this.mapToResponseDto(promotion);
   }
 
-  async update(id: string, updatePromotionDto: UpdatePromotionDto): Promise<PromotionResponseDto> {
+  async update(req: Request, id: string, updatePromotionDto: UpdatePromotionDto): Promise<PromotionResponseDto> {
     const {
       targeted_dish_ids,
       targeted_category_ids,
       offered_dishes,
       ...promotionData
     } = updatePromotionDto;
+
+    const user = req.user as User;
 
     const promotion = await this.prisma.$transaction(async (tx) => {
       // Mettre à jour la promotion
@@ -291,12 +318,13 @@ export class PromotionService {
     });
 
     // Envoyer l'événement de promotion mise à jour
-    this.promotionEvent.promotionUpdatedEvent(promotion);
+    this.promotionEvent.promotionUpdatedEvent({ actor: { ...user, restaurant: null }, promotion });
 
     return this.mapToResponseDto(promotion);
   }
 
-  async remove(id: string): Promise<PromotionResponseDto> {
+  async remove(req: Request, id: string): Promise<PromotionResponseDto> {
+    const user = req.user as User;
     const promotion = await this.prisma.promotion.update({
       where: { id },
       data: { status: PromotionStatus.EXPIRED }
@@ -304,6 +332,10 @@ export class PromotionService {
     if (!promotion) {
       throw new NotFoundException('Promotion non trouvée');
     }
+
+    // Envoyer l'événement de promotion supprimée
+    this.promotionEvent.promotionDeletedEvent({ actor: { ...user, restaurant: null }, promotion });
+
     return this.mapToResponseDto(promotion);
   }
 
@@ -571,7 +603,7 @@ export class PromotionService {
       this.promotionEvent.promotionUsedEvent({
         customer: usage?.customer,
         promotion: usage?.promotion,
-        discountAmount: discount_amount
+        discountAmount: discount_amount,
       });
     }
 
