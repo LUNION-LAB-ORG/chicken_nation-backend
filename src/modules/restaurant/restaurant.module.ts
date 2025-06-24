@@ -10,7 +10,11 @@ import { RestaurantListenerService } from './listeners/restaurant-listener.servi
 @Module({
   imports: [MenuModule],
   controllers: [RestaurantController],
-  providers: [RestaurantService, RestaurantListenerService, RestaurantEvent, RestaurantNotificationsTemplate, RestaurantEmailTemplates],
+  providers: [RestaurantService,
+    RestaurantListenerService,
+    RestaurantEvent,
+    RestaurantNotificationsTemplate,
+    RestaurantEmailTemplates],
   exports: [RestaurantService]
 })
 export class RestaurantModule { }
