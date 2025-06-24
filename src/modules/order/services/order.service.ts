@@ -9,7 +9,7 @@ import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { OrderHelper } from '../helpers/order.helper';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { OrderEvent } from '../events/order.event';
-import { OrderWebSocketService } from './order-websocket.service';
+import { OrderWebSocketService } from '../websockets/order-websocket.service';
 
 @Injectable()
 export class OrderService {
@@ -139,18 +139,7 @@ export class OrderService {
               image: true,
             },
           },
-          restaurant: {
-            select: {
-              id: true,
-              name: true,
-              image: true,
-              address: true,
-              phone: true,
-              email: true,
-              latitude: true,
-              longitude: true,
-            },
-          },
+          restaurant: true,
           paiements: true,
         },
       });
@@ -161,7 +150,7 @@ export class OrderService {
     // Envoyer l'événement de création de commande
     this.orderEvent.orderCreatedEvent({
       order,
-      payment_id: payment?.id ?? null,
+      payment_id: payment?.id,
       loyalty_level: customerData.loyalty_level,
       totalDishes,
       orderItems: orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice })),
@@ -212,21 +201,14 @@ export class OrderService {
             image: true,
           },
         },
-        restaurant: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-            address: true,
-            phone: true,
-            email: true,
-          },
-        },
+        restaurant: true,
       },
     });
 
     // Envoyer l'événement de mise à jour de statut de commande
-    this.orderEvent.orderStatusUpdatedEvent(updatedOrder);
+    this.orderEvent.orderStatusUpdatedEvent({
+      order: updatedOrder
+    });
 
     // Émettre l'événement de mise à jour de statut avec l'ancien statut
     this.orderWebSocketService.emitStatusUpdate(

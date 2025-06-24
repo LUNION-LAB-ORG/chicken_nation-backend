@@ -7,7 +7,7 @@ import { LoyaltyLevelUpEvent } from '../interfaces/loyalty-event.interface';
 import { LoyaltyEvent } from '../events/loyalty.event';
 
 @Injectable()
-export class LoyaltyListener {
+export class LoyaltyListenerService {
     constructor(private loyaltyService: LoyaltyService, private loyaltyEvent: LoyaltyEvent) { }
 
     @OnEvent('order.created')
@@ -69,7 +69,5 @@ export class LoyaltyListener {
             // Evenement d'ajout de points bonus
             this.loyaltyEvent.awardBonusPoints({});
         }
-
-
     }
 }

@@ -6,12 +6,14 @@ import { OrderItemController } from './controllers/order-item.controller';
 import { OrderHelper } from './helpers/order.helper';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
-import { OrderListener } from './listeners/order.listener';
+import { OrderListenerService } from './listeners/order.listener.service';
 import { OrderEvent } from './events/order.event';
 import { OrderTask } from './tasks/order.task';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
-import { OrderWebSocketService } from './services/order-websocket.service';
+import { OrderWebSocketService } from './websockets/order-websocket.service';
 import { RestaurantModule } from '../restaurant/restaurant.module';
+import { OrderEmailTemplates } from './templates/order-email.template';
+import { OrderNotificationsTemplate } from './templates/order-notifications.template';
 
 @Module({
   imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule],
@@ -21,9 +23,11 @@ import { RestaurantModule } from '../restaurant/restaurant.module';
     OrderItemService,
     OrderHelper,
     OrderEvent,
-    OrderListener,
+    OrderListenerService,
     OrderTask,
     OrderWebSocketService,
+    OrderEmailTemplates,
+    OrderNotificationsTemplate,
   ],
 })
 export class OrderModule { }

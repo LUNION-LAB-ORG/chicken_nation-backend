@@ -3,9 +3,8 @@ import { PromotionService } from './services/promotion.service';
 import { PromotionController } from './controllers/promotion.controller';
 import { LoyaltyService } from './services/loyalty.service';
 import { LoyaltyController } from './controllers/loyalty.controller';
-import { PromotionUsageService } from './services/promotion-usage.service';
-import { PromotionListener } from './listeners/promotion.listener';
-import { LoyaltyListener } from './listeners/loyalty.listener';
+import { PromotionListenerService } from './listeners/promotion-listener.service';
+import { LoyaltyListenerService } from './listeners/loyalty-listener.service';
 import { LoyaltyEvent } from './events/loyalty.event';
 import { PromotionEvent } from './events/promotion.event';
 import { LoyaltyTask } from './tasks/loyalty.task';
@@ -14,13 +13,12 @@ import { LoyaltyTask } from './tasks/loyalty.task';
     providers: [
         PromotionService,
         LoyaltyService,
-        PromotionUsageService,
         LoyaltyEvent,
         PromotionEvent,
-        PromotionListener,
-        LoyaltyListener,
+        PromotionListenerService,
+        LoyaltyListenerService,
         LoyaltyTask
     ],
-    exports: [PromotionService, LoyaltyService, PromotionUsageService, PromotionEvent, LoyaltyEvent],
+    exports: [PromotionService, LoyaltyService, PromotionEvent, LoyaltyEvent],
 })
 export class FidelityModule { }

@@ -25,7 +25,7 @@ export class OrderEvent {
   /**
    * Émet un événement de mise à jour de statut de commande
    */
-  async orderStatusUpdatedEvent(order: Order) {
+  async orderStatusUpdatedEvent(order: OrderCreatedEvent) {
     this.eventEmitter.emit(
       'order.statusUpdated',
       order
