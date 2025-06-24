@@ -6,6 +6,7 @@ import { NotFoundException } from '@nestjs/common';
 import { Request } from 'express';
 import { Customer, EntityStatus, Prisma } from '@prisma/client';
 import { CustomerQueryDto } from '../dto/customer-query.dto';
+import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 
 @Injectable()
 export class CustomerService {
@@ -35,13 +36,13 @@ export class CustomerService {
     return this.prisma.customer.create({
       data: {
         ...createCustomerDto,
-        entity_status: EntityStatus.ACTIVE,
+        entity_status: EntityStatus.NEW,
       },
     });
   }
 
-  async findAll(query: CustomerQueryDto = {}) {
-    const { page, limit, status, search } = query;
+  async findAll(query: CustomerQueryDto = {}): Promise<QueryResponseDto<Customer>> {
+    const { page = 1, limit = 10, status, search } = query;
     const whereClause: Prisma.CustomerWhereInput = { entity_status: EntityStatus.ACTIVE };
 
     if (search) {
@@ -57,21 +58,33 @@ export class CustomerService {
       whereClause.entity_status = status;
     }
 
-    return this.prisma.customer.findMany({
-      where: whereClause,
-      include: {
-        addresses: {
-          orderBy: {
-            created_at: 'desc',
+    const [count, customers] = await Promise.all([
+      this.prisma.customer.count({ where: whereClause }),
+      this.prisma.customer.findMany({
+        where: whereClause,
+        include: {
+          addresses: {
+            orderBy: {
+              created_at: 'desc',
+            },
           },
         },
+        orderBy: {
+          created_at: 'desc',
+        },
+        take: limit,
+        skip: (page - 1) * limit,
+      })]);
+
+    return {
+      data: customers,
+      meta: {
+        total: count,
+        page: page,
+        limit: limit,
+        totalPages: Math.ceil(count / limit),
       },
-      orderBy: {
-        created_at: 'desc',
-      },
-      take: limit ?? 10,
-      skip: (page ? page - 1 : 0) * (limit ?? 10),
-    });
+    }
   }
 
   async detail(req: Request) {

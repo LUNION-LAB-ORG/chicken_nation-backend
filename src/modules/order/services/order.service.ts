@@ -159,7 +159,7 @@ export class OrderService {
     });
 
     // Envoyer l'événement de création de commande
-    this.orderEvent.create({
+    this.orderEvent.orderCreatedEvent({
       order,
       payment_id: payment?.id ?? null,
       loyalty_level: customerData.loyalty_level,
@@ -226,7 +226,7 @@ export class OrderService {
     });
 
     // Envoyer l'événement de mise à jour de statut de commande
-    this.orderEvent.updateStatus(updatedOrder);
+    this.orderEvent.orderStatusUpdatedEvent(updatedOrder);
 
     // Émettre l'événement de mise à jour de statut avec l'ancien statut
     this.orderWebSocketService.emitStatusUpdate(
@@ -505,7 +505,7 @@ export class OrderService {
     });
 
     // Envoyer l'événement de mise à jour de statut de commande
-    this.orderEvent.update(updatedOrder, updateOrderDto);
+    this.orderEvent.orderUpdatedEvent(updatedOrder, updateOrderDto);
 
 
     // Émettre via WebSocket
@@ -533,7 +533,7 @@ export class OrderService {
     });
 
     // Envoyer l'événement de suppression de commande
-    this.orderEvent.remove(order);
+    this.orderEvent.orderDeletedEvent(order);
 
     // Émettre via WebSocket
     this.orderWebSocketService.emitOrderDeleted(order);

@@ -52,6 +52,10 @@ export class PromotionUsageService {
           discount_amount: discount.discount_amount + discount.buyXGetY_amount,
           original_amount: order_amount,
           final_amount: discount.final_amount,
+        },
+        include: {
+          customer: true,
+          promotion: true,
         }
       });
 

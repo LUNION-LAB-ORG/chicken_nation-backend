@@ -9,6 +9,7 @@ export class NotificationsWebSocketService {
 
     // Envoyer une notification temps réel
     emitNotification(notification: Notification, recipient: NotificationRecipient, group: boolean = false) {
+
         const { id: recipient_id, restaurant_id, type: recipient_type } = recipient;
 
         // Émettre selon le type de destinataire

@@ -1,11 +1,54 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "src/database/services/prisma.service";
 import { NotificationRecipient } from "../interfaces/notifications.interface";
-import { UserRole, UserType } from "@prisma/client";
+import { User, UserRole, UserType, Customer } from "@prisma/client";
 
 @Injectable()
 export class NotificationRecipientsService {
     constructor(private readonly prisma: PrismaService) { }
+
+    /**
+     * Mapping User, Customer with NotificationRecipient
+     * @param users (User & { restaurant?: { name: string } })[]
+     * @param type "restaurant_user" | "backoffice_user"
+     * @returns NotificationRecipient[]
+     */
+
+    async mapUserToNotificationRecipient(users: (User & { restaurant?: { name: string } })[], type: "restaurant_user" | "backoffice_user"): Promise<NotificationRecipient[]> {
+
+        return users.map(user => {
+            return {
+                id: user.id,
+                type,
+                name: user.fullname,
+                email: user?.email ?? undefined,
+                phone: user?.phone ?? undefined,
+                restaurant_id: user.restaurant_id ?? undefined,
+                restaurant_name: user.restaurant?.name ?? undefined
+            };
+        });
+    }
+
+    /**
+     * Mapping Customer with NotificationRecipient
+     * @param customers Customer[]
+     * @returns NotificationRecipient[]
+     */
+
+    async mapCustomerToNotificationRecipient(customers: Customer[]): Promise<NotificationRecipient[]> {
+        return customers.map(customer => {
+            return {
+                id: customer.id,
+                type: "customer",
+                name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+                loyalty_level: customer.loyalty_level,
+                total_points: customer.total_points,
+                lifetime_points: customer.lifetime_points,
+                email: customer?.email ?? undefined,
+                phone: customer?.phone ?? undefined
+            };
+        });
+    }
 
     /**
      * Récupère tous les utilisateurs d'un restaurant

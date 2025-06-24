@@ -5,11 +5,9 @@ import { NotificationRecipientsService } from './services/notifications-recipien
 import { NotificationsSenderService } from './services/notifications-sender.service';
 import { NotificationsListener } from './listeners/notifications.listener';
 import { NotificationsWebSocketService } from './services/notifications-websocket.service';
-import { EmailModule } from 'src/email/email.module';
 
 @Global()
 @Module({
-  imports: [EmailModule],
   controllers: [NotificationsController],
   providers: [NotificationsService,
     NotificationRecipientsService,

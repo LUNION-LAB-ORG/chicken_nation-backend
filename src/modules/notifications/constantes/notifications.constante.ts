@@ -2,6 +2,7 @@
 import { OrderStatus } from '@prisma/client';
 import { join } from 'path';
 
+
 export const notificationIcons = {
     collected: {
         url: join(process.env.BASE_URL ?? "", 'uploads', 'assets/notifications/icons/collected.png'),

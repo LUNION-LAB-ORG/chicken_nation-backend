@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Body, Req, UseGuards, Patch, Delete, Param, UseInterceptors, UploadedFile } from '@nestjs/common';
-import { UsersService } from 'src/modules/users/service/users.service';
+import { UsersService } from 'src/modules/users/services/users.service';
 import { CreateUserDto } from 'src/modules/users/dto/create-user.dto';
 import {
   ApiBadRequestResponse,

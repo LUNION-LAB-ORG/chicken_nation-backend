@@ -7,29 +7,24 @@ export interface NotificationRecipient {
     name: string;
     email?: string;
     phone?: string;
-    restaurant_id?: string;
     loyalty_level?: LoyaltyLevel | null;
     lifetime_points?: number;
     total_points?: number;
+    restaurant_id?: string;
     restaurant_name?: string;
 }
 
-export interface NotificationContext {
-    actor: NotificationRecipient; // Celui qui fait l'action
-    recipients: NotificationRecipient[]; // Ceux qui doivent recevoir la notification
-    data: any; // Données spécifiques à l'événement
+export interface NotificationContext<T> {
+    actor: NotificationRecipient;
+    recipients: NotificationRecipient[];
+    data: T;
+    meta?: any;
 }
 
-export interface NotificationTemplate {
-    title: (context: NotificationContext) => string;
-    message: (context: NotificationContext) => string;
-    icon: (context: NotificationContext) => string;
-    iconBgColor: (context: NotificationContext) => string;
+export interface NotificationTemplate<T> {
+    title: (context: NotificationContext<T>) => string;
+    message: (context: NotificationContext<T>) => string;
+    icon: (context: NotificationContext<T>) => string;
+    iconBgColor: (context: NotificationContext<T>) => string;
     showChevron?: boolean;
 }
-
-export interface EmailTemplate {
-    subject: (context: NotificationContext) => string;
-    content: (context: NotificationContext) => string;
-}
-

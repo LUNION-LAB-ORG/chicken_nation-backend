@@ -1,17 +1,21 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 
-import { CreateUserDto } from 'src/modules/users/dto/create-user.dto';
+import { CreateUserDto } from '../dto/create-user.dto';
 import { EntityStatus, User, UserType } from '@prisma/client';
 import { Request } from 'express';
 import { PrismaService } from 'src/database/services/prisma.service';
 import * as bcrypt from 'bcrypt';
-import { UpdateUserDto } from 'src/modules/users/dto/update-user.dto';
-import { UpdateUserPasswordDto } from 'src/modules/users/dto/update-user-password.dto';
+import { UpdateUserDto } from '../dto/update-user.dto';
+import { UpdateUserPasswordDto } from '../dto/update-user-password.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
+import { UserEvent } from '../events/user.event';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService, private readonly generateDataService: GenerateDataService) { }
+  constructor(private readonly prisma: PrismaService,
+    private readonly generateDataService: GenerateDataService,
+    private readonly userEvent: UserEvent,
+  ) { }
 
   // CREATE
   async create(req: Request, createUserDto: CreateUserDto) {
@@ -42,6 +46,9 @@ export class UsersService {
       },
       omit: { id: true, password: true },
     });
+
+    // Emettre l'événement de création d'utilisateur
+    this.userEvent.userCreatedEvent({actor : user, user : newUser});
 
     return { ...newUser, password: pass };
   }
@@ -76,6 +83,9 @@ export class UsersService {
       },
       omit: { id: true, password: true },
     });
+
+    // Emettre l'événement de création d'utilisateur
+    this.userEvent.memberCreatedEvent({actor : user, data : newUser});
 
     return { ...newUser, password: pass };
   }
@@ -172,7 +182,7 @@ export class UsersService {
   async partialRemove(req: Request) {
     const user = req.user as User;
 
-    return this.prisma.user.update({
+    const newUser = await this.prisma.user.update({
       where: {
         id: user.id,
       },
@@ -180,13 +190,16 @@ export class UsersService {
         entity_status: EntityStatus.DELETED,
       },
     });
+    // Emettre l'événement de suppression d'utilisateur
+    this.userEvent.userDeletedEvent({actor : user, data : newUser});
+    return newUser;
   }
 
   // INACTIVE
   async inactive(req: Request, id: string) {
     const user = req.user as User;
 
-    return this.prisma.user.update({
+    const newUser = await this.prisma.user.update({
       where: {
         id: id,
       },
@@ -194,13 +207,17 @@ export class UsersService {
         entity_status: EntityStatus.INACTIVE,
       },
     });
+
+    // Emettre l'événement de désactivation d'utilisateur
+    this.userEvent.userDeactivatedEvent({actor : user, data : newUser});
+    return newUser;
   }
 
   // RESTAURATION
   async restore(req: Request, id: string) {
     const user = req.user as User;
 
-    return this.prisma.user.update({
+    const newUser = await this.prisma.user.update({
       where: {
         id: id,
       },
@@ -208,16 +225,25 @@ export class UsersService {
         entity_status: EntityStatus.ACTIVE,
       },
     });
+
+    // Emettre l'événement de restauration d'utilisateur
+    this.userEvent.userActivatedEvent({actor : user, data : newUser});
+    return newUser;
   }
 
   // DELETE
   async remove(req: Request, id: string) {
     const user = req.user as User;
 
-    return this.prisma.user.delete({
+    const deletedUser = await this.prisma.user.delete({
       where: {
         id: id,
       },
     });
+    // Emettre l'événement de suppression d'utilisateur
+    this.userEvent.userDeletedEvent({actor : user, data : deletedUser});
+    
+    const { password, ...rest } = deletedUser;
+    return rest;
   }
 }

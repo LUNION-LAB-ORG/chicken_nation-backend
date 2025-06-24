@@ -7,6 +7,7 @@ import { DiscountType, TargetType, PromotionStatus, LoyaltyLevel } from '@prisma
 import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryPromotionDto } from '../dto/query-promotion.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
+import { PromotionEvent } from '../events/promotion.event';
 
 interface Dish {
   id: string;
@@ -21,9 +22,10 @@ interface Dish {
   created_at: string;
   updated_at: string;
 }
+
 @Injectable()
 export class PromotionService {
-  constructor(private prisma: PrismaService) { }
+  constructor(private prisma: PrismaService, private promotionEvent: PromotionEvent) { }
 
   async create(createPromotionDto: CreatePromotionDto, created_by_id: string): Promise<Promotion> {
     const {
@@ -99,6 +101,10 @@ export class PromotionService {
           })),
         });
       }
+
+      // Evenement de promotion créée
+      this.promotionEvent.promotionCreatedEvent(promotion);
+
       return promotion;
     });
   }
@@ -223,9 +229,10 @@ export class PromotionService {
       offered_dishes,
       ...promotionData
     } = updatePromotionDto;
-    await this.prisma.$transaction(async (tx) => {
+
+    const promotion = await this.prisma.$transaction(async (tx) => {
       // Mettre à jour la promotion
-      await tx.promotion.update({
+      const promotion = await tx.promotion.update({
         where: { id },
         data: {
           ...promotionData,
@@ -280,8 +287,13 @@ export class PromotionService {
           });
         }
       }
+      return promotion;
     });
-    return this.findOne(id);
+
+    // Envoyer l'événement de promotion mise à jour
+    this.promotionEvent.promotionUpdatedEvent(promotion);
+
+    return this.mapToResponseDto(promotion);
   }
 
   async remove(id: string): Promise<PromotionResponseDto> {
