@@ -2,22 +2,24 @@ import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { NotificationsSenderService } from '../services/notifications-sender.service';
 import { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
-import { Category, Dish, Order } from '@prisma/client';
+import { Category, Customer, Dish, Order, Promotion } from '@prisma/client';
 
 @Injectable()
 export class NotificationsListener {
     constructor(private notificationSenderService: NotificationsSenderService) { }
 
-    @OnEvent('order.created')
-    async handleOrderCreated(payload: OrderCreatedEvent) {
-        await this.notificationSenderService.handleOrderCreated(payload);
-    }
+    // COMMANDE
+    // @OnEvent('order.created')
+    // async handleOrderCreated(payload: OrderCreatedEvent) {
+    //     await this.notificationSenderService.handleOrderCreated(payload);
+    // }
 
     @OnEvent('order.statusUpdated')
     async handleOrderStatusUpdated(order: Order) {
         await this.notificationSenderService.handleOrderStatusUpdate(order);
     }
 
+    // PAIEMENT
     @OnEvent('paiement.annule')
     async handlePaiementAnnule(payload: any) {
         // TODO: Envoyer notification au client paiement annulé
@@ -36,15 +38,25 @@ export class NotificationsListener {
             payload.customer
         );
     }
+    @OnEvent('paiement.effectue')
+    async handlePaiementEffectue(payload: any) {
+        // TODO: Envoyer notification au client paiement effectué
+        // await this.notificationSenderService.sendPaiementEffectueNotification(
+        //   payload.customer.id,
+        //   payload.paiement_id,
+        //   payload.customer.name
+        // );
+    }
 
+    // POINT DE FIDELITE
     @OnEvent('loyalty.pointsEarned')
     async handlePointsEarned(payload: { customer: any; points: number; totalPoints: number; reason?: string }) {
-        await this.notificationSenderService.handleLoyaltyPointsEarned(
-            payload.customer,
-            payload.points,
-            payload.totalPoints,
-            payload.reason
-        );
+        // await this.notificationSenderService.handleLoyaltyPointsEarned(
+        //     payload.customer,
+        //     payload.points,
+        //     payload.totalPoints,
+        //     payload.reason
+        // );
     }
 
     @OnEvent('loyalty.levelUp')
@@ -54,25 +66,6 @@ export class NotificationsListener {
             payload.newLevel,
             payload.bonusPoints
         );
-    }
-
-    @OnEvent('promotion.used')
-    async handlePromotionUsed(payload: { customer: any; promotion: any; discountAmount: number }) {
-        await this.notificationSenderService.handlePromotionUsed(
-            payload.customer,
-            payload.promotion,
-            payload.discountAmount
-        );
-    }
-
-    @OnEvent('paiement.effectue')
-    async handlePaiementEffectue(payload: any) {
-        // TODO: Envoyer notification au client paiement effectué
-        // await this.notificationSenderService.sendPaiementEffectueNotification(
-        //   payload.customer.id,
-        //   payload.paiement_id,
-        //   payload.customer.name
-        // );
     }
 
     @OnEvent('loyalty.redeemPoints')
@@ -108,6 +101,17 @@ export class NotificationsListener {
         // );
     }
 
+    // PROMOTION
+    @OnEvent('promotion.used')
+    async handlePromotionUsed(payload: { customer: Customer; promotion: Promotion; discountAmount: number }) {
+        await this.notificationSenderService.handlePromotionUsed(
+            payload.customer,
+            payload.promotion,
+            payload.discountAmount
+        );
+    }
+
+    // CATEGORIE
     @OnEvent('category.created')
     async handleCategoryCreated(payload: Category) {
         await this.notificationSenderService.handleCategoryCreatedOrUpdate(payload);
@@ -118,6 +122,7 @@ export class NotificationsListener {
         await this.notificationSenderService.handleCategoryCreatedOrUpdate(payload, true);
     }
 
+    // PLAT
     @OnEvent('dish.created')
     async handleDishCreated(payload: Dish) {
         await this.notificationSenderService.handleDishCreatedOrUpdate(payload);

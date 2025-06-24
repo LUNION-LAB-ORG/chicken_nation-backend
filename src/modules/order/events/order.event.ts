@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { UpdateOrderDto } from '../dto/update-order.dto';
-import { Order, OrderStatus, User } from '@prisma/client';
+import { Order} from '@prisma/client';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
 
@@ -15,7 +15,7 @@ export class OrderEvent {
   /**
    * Émet un événement de création de commande
    */
-  async create(payload: OrderCreatedEvent) {
+  async orderCreatedEvent(payload: OrderCreatedEvent) {
     this.eventEmitter.emit(
       'order.created',
       payload
@@ -25,7 +25,7 @@ export class OrderEvent {
   /**
    * Émet un événement de mise à jour de statut de commande
    */
-  async updateStatus(order: Order) {
+  async orderStatusUpdatedEvent(order: Order) {
     this.eventEmitter.emit(
       'order.statusUpdated',
       order
@@ -36,7 +36,7 @@ export class OrderEvent {
   /**
    * Émet un événement de mise à jour de commande
    */
-  async update(order: Order, updateOrderDto: UpdateOrderDto) {
+  async orderUpdatedEvent(order: Order, updateOrderDto: UpdateOrderDto) {
     this.eventEmitter.emit(
       'order.updated',
       order
@@ -48,7 +48,7 @@ export class OrderEvent {
    * Émet un événement de suppression de commande
    */
 
-  async remove(order: Order) {
+  async orderDeletedEvent(order: Order) {
     this.eventEmitter.emit(
       'order.deleted',
       order

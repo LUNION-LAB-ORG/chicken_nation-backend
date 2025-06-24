@@ -9,11 +9,16 @@ export class NotificationsWebSocketService {
 
     // Envoyer une notification temps réel
     emitNotification(notification: Notification, recipient: NotificationRecipient, group: boolean = false) {
+
         const { id: recipient_id, restaurant_id, type: recipient_type } = recipient;
 
         // Émettre selon le type de destinataire
         if (recipient_type === 'customer') {
-            this.appGateway.emitToUser(recipient_id, 'customer', 'notification:new', notification);
+            if (group) {
+                this.appGateway.emitToUserType('customers', 'notification:new', notification);
+            } else {
+                this.appGateway.emitToUser(recipient_id, 'customer', 'notification:new', notification);
+            }
         } else if (recipient_type === 'restaurant_user') {
             if (restaurant_id && group) {
                 this.appGateway.emitToRestaurant(restaurant_id, 'notification:new', notification);
@@ -27,6 +32,16 @@ export class NotificationsWebSocketService {
                 this.appGateway.emitToUser(recipient_id, "user", 'notification:new', notification);
             }
         }
+    }
+
+    // Envoyer une notification temps réel à un type d'utilisateur
+    emitToUserType(notification: Notification, userType: 'customers' | 'users') {
+        this.appGateway.emitToUserType(userType, 'notification:new', notification);
+    }
+
+    // Envoyer une broadcast à tous les connectés
+    broadcast(event: string, notification: Notification) {
+        this.appGateway.broadcast(event, notification);
     }
 
     emitNotificationRead(notificationId: string, userId: string, userType: 'customer' | 'user') {

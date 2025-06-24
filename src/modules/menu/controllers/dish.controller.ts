@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, UseInterceptors, UploadedFile, Req } from '@nestjs/common';
 import { DishService } from 'src/modules/menu/services/dish.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
 import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
@@ -12,6 +12,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
+import { Request } from 'express';
 
 @Controller('dishes')
 @ApiTags('Dishes')
@@ -23,9 +24,9 @@ export class DishController {
   @Post()
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
-  @UserRoles(UserRole.ADMIN)
+  @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/dishes') }))
-  async create(@Body() createDishDto: CreateDishDto, @UploadedFile() image: Express.Multer.File) {
+  async create(@Req() req: Request, @Body() createDishDto: CreateDishDto, @UploadedFile() image: Express.Multer.File) {
     const resizedPath = await GenerateConfigService.compressImages(
       { "img_1": image?.path },
       undefined,
@@ -36,7 +37,7 @@ export class DishController {
       },
       true,
     );
-    return this.dishService.create({ ...createDishDto, image: resizedPath!["img_1"] ?? image?.path });
+    return this.dishService.create(req, { ...createDishDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Récupération de tous les plats' })
@@ -55,9 +56,9 @@ export class DishController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
-  @UserRoles(UserRole.ADMIN)
+  @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/dishes') }))
-  async update(@Param('id') id: string, @Body() updateDishDto: UpdateDishDto, @UploadedFile() image: Express.Multer.File) {
+  async update(@Req() req: Request, @Param('id') id: string, @Body() updateDishDto: UpdateDishDto, @UploadedFile() image: Express.Multer.File) {
     const resizedPath = await GenerateConfigService.compressImages(
       { "img_1": image?.path },
       undefined,
@@ -68,7 +69,7 @@ export class DishController {
       },
       true,
     );
-    return this.dishService.update(id, { ...updateDishDto, image: resizedPath!["img_1"] ?? image?.path });
+    return this.dishService.update(req, id, { ...updateDishDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Supprimer un plat' })

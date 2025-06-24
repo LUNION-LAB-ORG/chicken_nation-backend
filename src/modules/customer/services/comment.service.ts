@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { CreateCommentDto, UpdateCommentDto, CommentResponseDto, DishCommentsResponseDto, GetCommentsQueryDto } from '../dto/comment.dto';
 import { EntityStatus, OrderStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 
 @Injectable()
 export class CommentService {
@@ -123,7 +124,7 @@ export class CommentService {
     }
 
     // Supprimer un commentaire
-    async deleteComment(commentId: string){
+    async deleteComment(commentId: string) {
         // Vérifier que le commentaire existe et appartient au client
         const existingComment = await this.prisma.comment.findFirst({
             where: {
@@ -376,6 +377,59 @@ export class CommentService {
         }
 
         return this.mapToResponseDto(comment);
+    }
+
+    async getAllComments(query: GetCommentsQueryDto): Promise<QueryResponseDto<CommentResponseDto>> {
+        const { page = 1, limit = 10, min_rating = 1, max_rating = 5 } = query;
+        const skip = (page - 1) * limit;
+
+        const whereClause: any = {
+            entity_status: EntityStatus.ACTIVE,
+        };
+
+        if (min_rating || max_rating) {
+            whereClause.rating = {};
+            if (min_rating) whereClause.rating.gte = min_rating;
+            if (max_rating) whereClause.rating.lte = max_rating;
+        }
+
+        const [comments, total] = await Promise.all([
+            this.prisma.comment.findMany({
+                where: whereClause,
+                include: {
+                    customer: {
+                        select: {
+                            id: true,
+                            first_name: true,
+                            last_name: true,
+                            phone: true,
+                            image: true,
+                        },
+                    },
+                    order: {
+                        select: {
+                            id: true,
+                            reference: true,
+                            created_at: true,
+                        },
+                    },
+                },
+                orderBy: { created_at: 'desc' },
+                skip,
+                take: limit,
+            }),
+            this.prisma.comment.count({ where: whereClause }),
+        ]);
+
+        return {
+            data: comments.map(comment => this.mapToResponseDto(comment)),
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            },
+        };
     }
 
     // Mapper vers DTO de réponse

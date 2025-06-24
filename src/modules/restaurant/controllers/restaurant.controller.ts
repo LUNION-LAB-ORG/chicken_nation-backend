@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, UseInterceptors } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Query, UseInterceptors, Req } from '@nestjs/common';
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
 import { CreateRestaurantDto } from 'src/modules/restaurant/dto/create-restaurant.dto';
 import { UpdateRestaurantDto } from 'src/modules/restaurant/dto/update-restaurant.dto';
@@ -13,6 +13,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { UploadedFile } from '@nestjs/common';
 import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
+import { Request } from 'express';
 
 @ApiTags('Restaurants')
 @ApiBearerAuth()
@@ -27,7 +28,7 @@ export class RestaurantController {
   @UserTypes(UserType.BACKOFFICE)
   @Post()
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants') }))
-  async create(@Body() createRestaurantDto: CreateRestaurantDto, @UploadedFile() image: Express.Multer.File) {
+  async create(@Req() req: Request, @Body() createRestaurantDto: CreateRestaurantDto, @UploadedFile() image: Express.Multer.File) {
     const resizedPath = await GenerateConfigService.compressImages(
       { "img_1": image?.path },
       undefined,
@@ -38,7 +39,7 @@ export class RestaurantController {
       },
       true,
     );
-    return this.restaurantService.create({ ...createRestaurantDto, image: resizedPath!["img_1"] ?? image?.path });
+    return this.restaurantService.create(req, { ...createRestaurantDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Obtenir tous les restaurants' })

@@ -11,11 +11,17 @@ export class PromotionListener {
     @OnEvent('order.created')
     async handleOrderCreated(payload: OrderCreatedEvent) {
         if (payload.order.promotion_id) {
-            await this.promotionUsageService.usePromotion(payload.order.promotion_id, payload.order.customer_id, payload.order.id, payload.totalDishes, payload.orderItems, payload.loyalty_level);
+            const { usage, discount_amount, final_amount } = await this.promotionUsageService.usePromotion(payload.order.promotion_id, payload.order.customer_id, payload.order.id, payload.totalDishes, payload.orderItems, payload.loyalty_level);
             console.log('Promotion used');
 
             // Evenement de promotion utilisée
-            this.promotionEvent.promotionUsed({});
+            if (usage?.customer && usage?.promotion) {
+                this.promotionEvent.promotionUsedEvent({
+                    customer: usage?.customer,
+                    promotion: usage?.promotion,
+                    discountAmount: discount_amount
+                });
+            }
         }
     }
 }

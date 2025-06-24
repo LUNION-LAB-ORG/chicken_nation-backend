@@ -8,14 +8,10 @@ import { QueryNotificationDto } from '../dto/query-notification.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { NotificationResponseDto } from '../dto/response-notification.dto';
 import { NotificationContext, NotificationTemplate } from '../interfaces/notifications.interface';
-import { IEmailService } from 'src/email/interfaces/email-service.interface';
 
 @Injectable()
 export class NotificationsService {
-    constructor(private readonly prisma: PrismaService,
-        @Inject('EMAIL_SERVICE') private readonly emailService: IEmailService,
-
-    ) { }
+    constructor(private readonly prisma: PrismaService) { }
 
     /**
      * Créer une nouvelle notification
@@ -263,13 +259,12 @@ export class NotificationsService {
     }
 
     /**
-   * Envoie une notification à plusieurs destinataires avec un template
-   */
-    async sendNotificationToMultiple(
-        template: NotificationTemplate,
-        context: NotificationContext,
+       * Envoie une notification à plusieurs destinataires avec un template
+       */
+    async sendNotificationToMultiple<T>(
+        template: NotificationTemplate<T>,
+        context: NotificationContext<T>,
         notificationType: NotificationType,
-        email: boolean = false
     ) {
         const notifications = context.recipients.map(async recipient => {
             const notificationContext = { ...context, currentRecipient: recipient };
@@ -283,17 +278,8 @@ export class NotificationsService {
                 icon: template.icon(notificationContext),
                 icon_bg_color: template.iconBgColor(notificationContext),
                 show_chevron: template.showChevron || false,
-                data: context.data
+                data: context.meta
             });
-
-            // SEND BY EMAIL
-            if (recipient.email && email) {
-                await this.emailService.sendEmail({
-                    recipients: recipient.email,
-                    subject: template.title(notificationContext),
-                    html: template.message(notificationContext),
-                });
-            }
             return notification;
         });
 

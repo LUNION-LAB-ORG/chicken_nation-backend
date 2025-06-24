@@ -1,11 +1,12 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
-import { EntityStatus, Restaurant, UserRole, UserType } from '@prisma/client';
+import { EntityStatus, Restaurant, User, UserRole, UserType } from '@prisma/client';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateRestaurantDto } from 'src/modules/restaurant/dto/create-restaurant.dto';
 import { UpdateRestaurantDto } from 'src/modules/restaurant/dto/update-restaurant.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
+import { RestaurantEvent } from '../events/restaurant.event';
 import {
   format,
   getDay,
@@ -15,16 +16,20 @@ import {
   parse,
   isValid
 } from 'date-fns';
-import { fr } from 'date-fns/locale';
+import { Request } from 'express';
 
 @Injectable()
 export class RestaurantService {
-  constructor(private readonly prisma: PrismaService, private readonly generateDataService: GenerateDataService) { }
+  constructor(private readonly prisma: PrismaService,
+    private readonly generateDataService: GenerateDataService,
+    private readonly restaurantEvent: RestaurantEvent,
+  ) { }
 
   /**
    * Création d'un nouveau restaurant et de son gestionnaire
    */
-  async create(createRestaurantDto: CreateRestaurantDto) {
+  async create(req: Request, createRestaurantDto: CreateRestaurantDto) {
+    const user = req.user as User;
     // Vérifie si un utilisateur avec l'email du gestionnaire existe déjà
     const existingUser = await this.prisma.user.findUnique({
       where: { email: createRestaurantDto.managerEmail }
@@ -82,6 +87,12 @@ export class RestaurantService {
     // Supprimer les données sensibles avant de retourner
     const { plainPassword } = result;
     const { restaurant } = result;
+
+    // Emettre l'événement de création de restaurant
+    this.restaurantEvent.restaurantCreatedEvent({
+      actor: { ...user, restaurant: null },
+      restaurant: restaurant
+    });
 
     return {
       restaurant,
@@ -154,10 +165,15 @@ export class RestaurantService {
     // Vérifie si le restaurant existe
     await this.findOne(id);
 
-    return this.prisma.restaurant.update({
+    const updatedRestaurant = await this.prisma.restaurant.update({
       where: { id },
       data: updateRestaurantDto,
     });
+
+    // Emettre l'événement de mise à jour de restaurant
+    this.restaurantEvent.restaurantUpdatedEvent(updatedRestaurant);
+
+    return updatedRestaurant;
   }
 
   /**
@@ -166,10 +182,17 @@ export class RestaurantService {
   async activateDeactivate(id: string) {
     const restaurant = await this.findOne(id);
 
-    return this.prisma.restaurant.update({
+    const updatedRestaurant = await this.prisma.restaurant.update({
       where: { id },
       data: { entity_status: restaurant.entity_status === EntityStatus.ACTIVE ? EntityStatus.INACTIVE : EntityStatus.ACTIVE },
     });
+
+    // Emettre l'événement de activation/désactivation de restaurant
+    restaurant.entity_status === EntityStatus.ACTIVE
+      ? this.restaurantEvent.restaurantDeactivatedEvent(updatedRestaurant)
+      : this.restaurantEvent.restaurantReactivatedEvent(updatedRestaurant);
+
+    return updatedRestaurant;
   }
 
   /**
@@ -177,10 +200,15 @@ export class RestaurantService {
    */
   async remove(id: string) {
 
-    return this.prisma.restaurant.update({
+    const deletedRestaurant = await this.prisma.restaurant.update({
       where: { id },
       data: { entity_status: EntityStatus.DELETED },
     });
+
+    // Emettre l'événement de suppression de restaurant
+    this.restaurantEvent.restaurantDeletedEvent(deletedRestaurant);
+
+    return deletedRestaurant;
   }
 
   /**

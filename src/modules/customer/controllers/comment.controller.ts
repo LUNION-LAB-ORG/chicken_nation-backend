@@ -182,4 +182,29 @@ export class CommentController {
     ) {
         return this.commentService.getCustomerComments(customerId, query);
     }
+    @Get()
+    @UseGuards(JwtAuthGuard)
+    @ApiOperation({ summary: 'Récupérer tous les commentaires (admin)' })
+    @ApiQuery({ name: 'page', required: false, description: 'Numéro de page' })
+    @ApiQuery({ name: 'limit', required: false, description: 'Nombre d\'éléments par page' })
+    @ApiQuery({ name: 'min_rating', required: false, description: 'Note minimum' })
+    @ApiQuery({ name: 'max_rating', required: false, description: 'Note maximum' })
+    @ApiResponse({
+        status: 200,
+        description: 'Commentaires récupérés avec succès',
+        schema: {
+            type: 'object',
+            properties: {
+                comments: { type: 'array', items: { $ref: '#/components/schemas/CommentResponseDto' } },
+                total: { type: 'number' },
+                page: { type: 'number' },
+                limit: { type: 'number' },
+            },
+        },
+    })
+    async getAllComments(
+        @Query() query: GetCommentsQueryDto,
+    ) {
+        return this.commentService.getAllComments(query);
+    }
 }
