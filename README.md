@@ -53,10 +53,10 @@ ROADMAP POUR AJOUTER UN NOUVEL EVENEMENT D'ACTION (NOTIFICATION ou EMAIL)
 - Suppression plat (Backoffice et lui-même) : En cours
 
 # PROMOTION NOTIFICATION ET EMAIL
-- Creation promotion (Backoffice et lui-même) : En cours
-- Activation promotion (Backoffice et lui-même) : En cours
-- Desactivation promotion (Backoffice et lui-même) : En cours
-- Suppression promotion (Backoffice et lui-même) : En cours
+- Utilisation promotion (Client) : OK
+- Creation promotion (Backoffice, Restaurant, Client) : OK
+- Mise à jour promotion (Backoffice, Restaurant) : OK
+- Suppression promotion (Backoffice, Restaurant, Client) : OK
 
 # COMMANDE NOTIFICATION ET EMAIL
 - Creation commande (Restaurant et lui-même) : OK
@@ -65,4 +65,6 @@ ROADMAP POUR AJOUTER UN NOUVEL EVENEMENT D'ACTION (NOTIFICATION ou EMAIL)
 - Suppression commande (Restaurant et lui-même) : En cours
 
 # POINTS DE FIDELITE NOTIFICATION ET EMAIL
+- Ajout points (Client) : En cours
+- Gain points (Client) : En cours
 - 
