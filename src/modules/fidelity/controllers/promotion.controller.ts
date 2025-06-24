@@ -51,6 +51,13 @@ export class PromotionController {
   findAll(@Query() filters: QueryPromotionDto) {
     return this.promotionService.findAll(filters);
   }
+  @ApiOperation({ summary: 'Lister les promotions' })
+  @ApiOkResponse({ type: QueryResponseDto })
+  @UseGuards(JwtCustomerAuthGuard)
+  @Get('customer')
+  findAllForCustomer(@Req() req: Request, @Query() filters: QueryPromotionDto) {
+    return this.promotionService.findAllForCustomer(req, filters);
+  }
 
   @ApiOperation({ summary: 'Obtenir une promotion par ID' })
   @ApiOkResponse({ type: PromotionResponseDto })

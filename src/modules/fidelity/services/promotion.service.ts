@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { CreatePromotionDto } from '../dto/create-promotion.dto';
 import { UpdatePromotionDto } from '../dto/update-promotion.dto';
 import { PromotionResponseDto } from '../dto/promotion-response.dto';
-import { Prisma, Promotion, User, Visibility } from '@prisma/client';
+import { Customer, Prisma, User, Visibility } from '@prisma/client';
 import { DiscountType, TargetType, PromotionStatus, LoyaltyLevel } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryPromotionDto } from '../dto/query-promotion.dto';
@@ -63,6 +63,15 @@ export class PromotionService {
     if (promotionData.discount_type === DiscountType.BUY_X_GET_Y && offered_dishes.length === 0) {
       throw new BadRequestException('Vous devez sélectionner au moins un plat pour ce type de promotion');
     }
+
+    if (promotionData.discount_type == DiscountType.PERCENTAGE && promotionData.discount_value > 70) {
+      throw new BadRequestException('La remise ne peut pas être supérieure à 70%');
+    }
+
+    if (promotionData.discount_type == DiscountType.FIXED_AMOUNT && !promotionData.min_order_amount) {
+      throw new BadRequestException('Le montant minimum de commande doit être renseigné');
+    }
+
 
     const promotion = await this.prisma.$transaction(async (tx) => {
       // Créer la promotion
@@ -212,7 +221,98 @@ export class PromotionService {
       },
     };
   }
+  async findAllForCustomer(req: Request, filters?: QueryPromotionDto): Promise<QueryResponseDto<PromotionResponseDto>> {
+    const customer = req.user as Customer;
 
+    const where: Prisma.PromotionWhereInput = {};
+
+    if (filters?.title) where.title = { contains: filters.title, mode: 'insensitive' };
+
+    if (filters?.status) where.status = filters.status;
+
+    if (filters?.visibility) where.visibility = filters.visibility;
+
+    if (filters?.discount_type) where.discount_type = filters.discount_type;
+
+    if (filters?.target_type) where.target_type = filters.target_type;
+
+    if (filters?.min_order_amount !== undefined) where.min_order_amount = { gte: filters.min_order_amount };
+
+    if (filters?.max_discount_amount !== undefined) where.max_discount_amount = { lte: filters.max_discount_amount };
+
+    if (filters?.start_date_from || filters?.start_date_to) {
+      where.start_date = {};
+      if (filters.start_date_from) where.start_date.gte = filters.start_date_from;
+      if (filters.start_date_to) where.start_date.lte = filters.start_date_to;
+    }
+
+    if (filters?.expiration_date_from || filters?.expiration_date_to) {
+      where.expiration_date = {};
+      if (filters.expiration_date_from) where.expiration_date.gte = filters.expiration_date_from;
+      if (filters.expiration_date_to) where.expiration_date.lte = filters.expiration_date_to;
+    }
+
+    if (filters?.visibility === 'PRIVATE') {
+      if (filters?.target_standard) where.target_standard = true;
+      if (filters?.target_premium) where.target_premium = true;
+      if (filters?.target_gold) where.target_gold = true;
+    }
+
+    if (filters?.targeted_category_ids?.length) where.promotion_targeted_categories = { some: { category_id: { in: filters.targeted_category_ids } } };
+
+    if (filters?.targeted_dish_ids?.length) where.promotion_targeted_dishes = { some: { dish_id: { in: filters.targeted_dish_ids } } };
+
+    if (filters?.targeted_dish_ids?.length) where.promotion_dishes = { some: { dish_id: { in: filters.targeted_dish_ids } } };
+
+    const take = filters?.limit ?? 20;
+    const skip = filters?.page ? (filters.page - 1) * take : 0;
+
+    const [promotions, total] = await Promise.all([
+      this.prisma.promotion.findMany({
+        where,
+        include: {
+          promotion_targeted_dishes: {
+            include: { dish: true },
+          },
+          promotion_targeted_categories: {
+            include: { category: true },
+          },
+          promotion_dishes: {
+            include: { dish: true },
+          },
+          created_by: {
+            select: { id: true, fullname: true, email: true },
+          },
+        },
+        orderBy: { created_at: 'desc' },
+        take,
+        skip,
+      }),
+      this.prisma.promotion.count({ where }),
+    ]);
+
+    return {
+      data: promotions.filter((promotion) => {
+        //Si la promotion est publique, on la garde
+        if (promotion.visibility == Visibility.PUBLIC) return true;
+
+        //Si la promotion est privée, on vérifie si le client est ciblé
+        if (promotion.visibility === Visibility.PRIVATE) {
+          if (promotion.target_standard) return customer.loyalty_level === LoyaltyLevel.STANDARD;
+          if (promotion.target_premium) return customer.loyalty_level === LoyaltyLevel.PREMIUM;
+          if (promotion.target_gold) return customer.loyalty_level === LoyaltyLevel.GOLD;
+        }
+
+        return true;
+      }).map((promotion) => this.mapToResponseDto(promotion)),
+      meta: {
+        total,
+        page: filters?.page ?? 1,
+        limit: take,
+        totalPages: Math.ceil(total / take),
+      },
+    };
+  }
   async findActivePromotions(filters?: QueryPromotionDto): Promise<PromotionResponseDto[]> {
     const promotions = await this.findAll({
       ...filters,
@@ -339,6 +439,88 @@ export class PromotionService {
     return this.mapToResponseDto(promotion);
   }
 
+  // Utiliser une promotion
+  async usePromotion(
+    promotion_id: string | undefined,
+    customer_id: string,
+    order_id: string | undefined,
+    order_amount: number,
+    items: { dish_id: string; quantity: number; price: number }[],
+    loyalty_level?: LoyaltyLevel
+  ) {
+    if (!promotion_id) return {
+      usage: null,
+      discount_amount: 0,
+      final_amount: order_amount
+    }
+    const data = await this.prisma.$transaction(async (tx) => {
+      // Vérifier si le client peut utiliser cette promotion
+      const canUse = await this.canCustomerUsePromotion(promotion_id, customer_id);
+      if (!canUse.allowed) {
+        throw new BadRequestException(canUse.reason);
+      }
+
+      // Calculer la réduction
+      const discount = await this.calculateDiscount(
+        promotion_id,
+        order_amount,
+        customer_id,
+        items,
+        loyalty_level
+      );
+
+      if (!discount.applicable) {
+        throw new BadRequestException(discount.reason || 'Promotion non applicable');
+      }
+
+      // Enregistrer l'utilisation
+      const usage = await tx.promotionUsage.create({
+        data: {
+          promotion_id,
+          customer_id,
+          order_id,
+          discount_amount: discount.discount_amount + discount.buyXGetY_amount,
+          original_amount: order_amount,
+          final_amount: discount.final_amount,
+        },
+        include: {
+          customer: true,
+          promotion: true,
+        }
+      });
+
+      // Incrémenter le compteur d'utilisation de la promotion
+      await tx.promotion.update({
+        where: { id: promotion_id },
+        data: { current_usage: { increment: 1 } }
+      });
+
+
+      return {
+        usage,
+        discount_amount: discount.discount_amount,
+        final_amount: discount.final_amount
+      };
+    });
+
+    const { usage, discount_amount, final_amount } = data;
+
+    // Evenement de promotion utilisée
+    if (usage?.customer && usage?.promotion) {
+      this.promotionEvent.promotionUsedEvent({
+        customer: usage?.customer,
+        promotion: usage?.promotion,
+        discountAmount: discount_amount,
+      });
+    }
+
+    return {
+      usage,
+      discount_amount,
+      final_amount
+    }
+  }
+
   // Méthode pour vérifier si un plat est en promotion
   async isDishInPromotion(dish_id: string, promotion_id?: string, customer_loyalty_level?: LoyaltyLevel): Promise<{
     inPromotion: boolean;
@@ -431,15 +613,18 @@ export class PromotionService {
       return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: canUsePromotion.reason };
     }
 
+
     if (items.length === 0) {
       return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Aucun plat dans la commande' };
     }
+
     const promotion = await this.findOne(promotion_id);
 
     // Si la promotion n'est pas trouvée, retourner 0
     if (!promotion) {
       return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion non trouvée' };
     }
+
     // vérifier si certains plats sont en promotion
     let dishesInPromotion: { dish_id: string; quantity: number; price: number }[] = [];
 
@@ -452,11 +637,14 @@ export class PromotionService {
 
     let someDishesInPromotion: boolean = dishesInPromotion.length > 0;
 
+
     const qteSomeDishesInPromotion = dishesInPromotion.reduce((total, item) => total + item.quantity, 0);
+
 
     if (!someDishesInPromotion || (promotion.discount_type === DiscountType.BUY_X_GET_Y && qteSomeDishesInPromotion < promotion.discount_value)) {
       return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Vous ne pouvez pas bénéficier de cette promotion' };
     }
+
     // Vérifier si la promotion est active
     const now = new Date();
     if (promotion.status !== PromotionStatus.ACTIVE ||
@@ -464,6 +652,7 @@ export class PromotionService {
       new Date(promotion.expiration_date) < now) {
       return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion inactive ou expirée' };
     }
+
 
     // Vérifier le montant minimum
     if (promotion.min_order_amount && order_amount < promotion.min_order_amount) {
@@ -502,6 +691,7 @@ export class PromotionService {
 
         break;
     }
+
     // Vérifier si le plafond est atteint
     const usagesAmount = await this.prisma.promotionUsage.aggregate({
       where: {
@@ -516,6 +706,7 @@ export class PromotionService {
     if (promotion.max_discount_amount && totalDiscountAmount >= promotion.max_discount_amount) {
       return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion épuisée' };
     }
+
     // Appliquer le plafond de réduction
     if (promotion.max_discount_amount) {
       discount_amount = Math.min(discount_amount, promotion.max_discount_amount);
@@ -528,90 +719,8 @@ export class PromotionService {
       discount_amount,
       buyXGetY_amount,
       final_amount: order_amount - discount_amount,
-      applicable: true
+      applicable: true,
     };
-  }
-
-  // Utiliser une promotion
-  async usePromotion(
-    promotion_id: string | undefined,
-    customer_id: string,
-    order_id: string | undefined,
-    order_amount: number,
-    items: { dish_id: string; quantity: number; price: number }[],
-    loyalty_level?: LoyaltyLevel
-  ) {
-    if (!promotion_id) return {
-      usage: null,
-      discount_amount: 0,
-      final_amount: order_amount
-    }
-    const data = await this.prisma.$transaction(async (tx) => {
-      // Vérifier si le client peut utiliser cette promotion
-      const canUse = await this.canCustomerUsePromotion(promotion_id, customer_id);
-      if (!canUse.allowed) {
-        throw new BadRequestException(canUse.reason);
-      }
-
-      // Calculer la réduction
-      const discount = await this.calculateDiscount(
-        promotion_id,
-        order_amount,
-        customer_id,
-        items,
-        loyalty_level
-      );
-
-      if (!discount.applicable) {
-        throw new BadRequestException(discount.reason || 'Promotion non applicable');
-      }
-
-      // Enregistrer l'utilisation
-      const usage = await tx.promotionUsage.create({
-        data: {
-          promotion_id,
-          customer_id,
-          order_id,
-          discount_amount: discount.discount_amount + discount.buyXGetY_amount,
-          original_amount: order_amount,
-          final_amount: discount.final_amount,
-        },
-        include: {
-          customer: true,
-          promotion: true,
-        }
-      });
-
-      // Incrémenter le compteur d'utilisation de la promotion
-      await tx.promotion.update({
-        where: { id: promotion_id },
-        data: { current_usage: { increment: 1 } }
-      });
-
-
-      return {
-        usage,
-        discount_amount: discount.discount_amount,
-        final_amount: discount.final_amount
-      };
-    });
-
-    const { usage, discount_amount, final_amount } = data;
-
-    // Evenement de promotion utilisée
-    if (usage?.customer && usage?.promotion) {
-      this.promotionEvent.promotionUsedEvent({
-        customer: usage?.customer,
-        promotion: usage?.promotion,
-        discountAmount: discount_amount,
-      });
-    }
-
-    return {
-      usage,
-      discount_amount,
-      final_amount
-    }
   }
 
   // Vérifier si le client peut utiliser cette promotion
@@ -697,6 +806,7 @@ export class PromotionService {
       take: limit
     });
   }
+
   private mapToResponseDto(promotion: any): PromotionResponseDto {
     return {
       id: promotion.id,

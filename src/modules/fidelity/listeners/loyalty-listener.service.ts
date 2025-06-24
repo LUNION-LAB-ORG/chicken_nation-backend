@@ -67,7 +67,7 @@ export class LoyaltyListenerService {
             console.log(`Points bonus added ${bonusPoints}`);
 
             // Evenement d'ajout de points bonus
-            // this.loyaltyEvent.awardBonusPoints({});
+            // this.loyaltyEvent.addPoints({});
         }
     }
 }
