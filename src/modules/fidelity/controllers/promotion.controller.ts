@@ -101,6 +101,18 @@ export class PromotionController {
     return this.promotionService.calculateDiscount(promotion_id, order_amount, customer.id, items, loyalty_level);
   }
 
+  @ApiOperation({ summary: 'Vérifier si un client peut utiliser une promotion' })
+  @ApiOkResponse({ type: ApplyDiscountPromotionDtoResponse })
+  @Post(':id/can-use')
+  @UseGuards(JwtCustomerAuthGuard)
+  canCustomerUsePromotion(
+    @Req() req: Request,
+    @Param('id') promotion_id: string,
+  ) {
+    const customer = req.user as Customer;
+    return this.promotionService.canCustomerUsePromotion(promotion_id, customer.id);
+  }
+
   @ApiOperation({ summary: 'Vérifier si un plat est dans une promotion' })
   @ApiOkResponse({ type: PromotionResponseDto })
   @Get('dish/:dishId/check')

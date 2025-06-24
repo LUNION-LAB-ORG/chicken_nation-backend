@@ -3,6 +3,15 @@ import { NotificationTemplate } from "src/modules/notifications/interfaces/notif
 
 export class LoyaltyNotificationsTemplate {
 
+    // FIDÉLITÉ - Points gagnés
+    LOYALTY_POINTS_EARNED: NotificationTemplate<{ points: number; total_points: number; }> = {
+        title: (ctx) => `🎉 Points gagnés !`,
+        message: (ctx) => `Félicitations ! Vous avez gagné ${ctx.data.points} points. Total: ${ctx.data.total_points} points`,
+        icon: (ctx) => notificationIcons.joice.url,
+        iconBgColor: (ctx) => notificationIcons.joice.color,
+        showChevron: false
+    };
+
     // FIDÉLITÉ - Points utilisés
     LOYALTY_POINTS_REDEEMED: NotificationTemplate<{ points: number; remaining_points: number; }> = {
         title: (ctx) => `💎 Points utilisés`,
