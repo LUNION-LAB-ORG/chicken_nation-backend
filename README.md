@@ -65,6 +65,7 @@ ROADMAP POUR AJOUTER UN NOUVEL EVENEMENT D'ACTION (NOTIFICATION ou EMAIL)
 - Suppression commande (Restaurant et lui-même) : En cours
 
 # POINTS DE FIDELITE NOTIFICATION ET EMAIL
-- Gagnez des points (Par bonus, commande) (Client) : En cours
-- Utilisez des points (Client) : En cours
-- Niveau atteint (Client) : En cours
+- Gagnez des points (Par bonus, commande) (Client) : OK (revu)
+- Utilisez des points (Client) : OK (revu)
+- Niveau atteint (Client) : OK (revu)
+- Points expirés (Client) : En cours

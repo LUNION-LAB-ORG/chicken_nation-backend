@@ -20,26 +20,15 @@ export class LoyaltyEvent {
         );
     }
 
-     /**
-     * Émet un événement d'ajout de points
-     */
-     async addPoints(payload: any) {
+    /**
+    * Émet un événement d'ajout de points
+    */
+    async addPoints(payload: any) {
         this.eventEmitter.emit(
             'loyalty.addPoints',
             payload
         );
     }
-
-     /**
-     * Émet un événement d'ajout de points bonus
-     */
-     async awardBonusPoints(payload: any) {
-        this.eventEmitter.emit(
-            'loyalty.awardBonusPoints',
-            payload
-        );
-    }
-
 
     /**
      * Émet un événement de niveau atteint

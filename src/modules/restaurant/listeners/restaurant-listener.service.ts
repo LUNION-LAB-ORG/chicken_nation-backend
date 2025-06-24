@@ -30,8 +30,10 @@ export class RestaurantListenerService {
         // RECUPERATION DES RECEPTEURS
         const usersBackoffice = (await this.notificationRecipientService.getAllUsersByBackofficeAndRole());
         const usersBackofficeEmail: string[] = usersBackoffice.map((user) => user.email!);
+
         const manager = (await this.notificationRecipientService.getManagerByRestaurant(payload.restaurant.id))[0];
         const managerEmail: string[] = [manager.email!];
+        
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
         // ENVOIE DES EMAILS

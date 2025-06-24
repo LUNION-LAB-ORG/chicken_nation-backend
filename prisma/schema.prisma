@@ -334,7 +334,7 @@ model Order {
   discount                   Float       @default(0)
   date                       DateTime?   @db.Date
   time                       String?     @db.VarChar
-  estimated_delivery_time    DateTime?  
+  estimated_delivery_time    DateTime?
   estimated_preparation_time DateTime?
   fullname                   String?     @db.VarChar
   phone                      String?     @db.VarChar
@@ -411,9 +411,10 @@ model Restaurant {
   users            User[]
   orders           Order[]
 
-  entity_status EntityStatus @default(ACTIVE)
-  created_at    DateTime     @default(now()) @db.Timestamp(6)
-  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+  entity_status       EntityStatus          @default(ACTIVE)
+  created_at          DateTime              @default(now()) @db.Timestamp(6)
+  updated_at          DateTime              @default(now()) @db.Timestamp(6)
+  RestaurantPromotion RestaurantPromotion[]
 }
 
 model Supplement {
@@ -503,9 +504,22 @@ model Promotion {
   created_at                    DateTime                    @default(now()) @db.Timestamp(6)
   updated_at                    DateTime                    @default(now()) @db.Timestamp(6)
   promotion_targeted_categories PromotionTargetedCategory[]
+  RestaurantPromotion           RestaurantPromotion[]
 
   @@index([status, visibility])
   @@index([start_date, expiration_date])
+}
+
+model RestaurantPromotion {
+  id String @id @default(uuid()) @db.Uuid
+
+  promotion_id  String @db.Uuid
+  restaurant_id String @db.Uuid
+
+  promotion  Promotion  @relation(fields: [promotion_id], references: [id], onDelete: Cascade)
+  restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@unique([promotion_id, restaurant_id])
 }
 
 // Table de liaison pour les plats inclus dans une promotion

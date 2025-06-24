@@ -22,7 +22,11 @@ import { DishEmailTemplates } from './templates/dish-email.template';
   imports: [],
   controllers: [CategoryController, DishController, DishRestaurantController, DishSupplementController, SupplementController],
   providers: [
-    CategoryService, DishService, DishRestaurantService, DishSupplementService, SupplementService,
+    CategoryService,
+    DishService,
+    DishRestaurantService,
+    DishSupplementService,
+    SupplementService,
     DishEvent,
     CategoryEvent,
     CategoryListenerService,
