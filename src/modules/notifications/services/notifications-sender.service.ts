@@ -48,40 +48,4 @@ export class NotificationsSenderService {
             this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0]);
         }
     }
-
-    /**
-     * Gère les notifications de fidélité
-     */
-    // async handleLoyaltyPointsEarned(customer: any, points: number, totalPoints: number, reason?: string) {
-    //     const customerRecipient = await this.recipientsService.getCustomer(customer.id);
-    //     if (!customerRecipient) return;
-
-    //     const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
-    //         NotificationsTemplate.LOYALTY_POINTS_EARNED,
-    //         {
-    //             actor: customerRecipient,
-    //             recipients: [customerRecipient],
-    //             data: { points, total_points: totalPoints, reason }
-    //         },
-    //         NotificationType.SYSTEM,
-    //         true
-    //     );
-    //     this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
-    // }
-
-    // async handleLoyaltyLevelUp(customer: any, newLevel: string, bonusPoints: number) {
-    //     const customerRecipient = await this.notificationRecipientService.getCustomer(customer.id);
-    //     if (!customerRecipient) return;
-
-    //     const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
-    //         NotificationsTemplate.LOYALTY_LEVEL_UP,
-    //         {
-    //             actor: customerRecipient,
-    //             recipients: [customerRecipient],
-    //             data: { new_level: newLevel, bonus_points: bonusPoints }
-    //         },
-    //         NotificationType.SYSTEM
-    //     );
-    //     this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
-    // }
 }
