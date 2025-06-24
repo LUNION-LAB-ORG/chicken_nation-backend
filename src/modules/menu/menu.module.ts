@@ -9,12 +9,29 @@ import { DishService } from 'src/modules/menu/services/dish.service';
 import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
 import { DishSupplementService } from 'src/modules/menu/services/dish-supplement.service';
 import { SupplementService } from 'src/modules/menu/services/supplement.service';
-import { MenuEvent } from 'src/modules/menu/events/menu.event';
+import { CategoryListenerService } from 'src/modules/menu/listeners/category-listener.service';
+import { DishListenerService } from 'src/modules/menu/listeners/dish-listener.service';
+import { DishEvent } from './events/dish.event';
+import { CategoryEvent } from './events/category.event';
+import { CategoryNotificationsTemplate } from './templates/category-notifications.template';
+import { DishNotificationsTemplate } from './templates/dish-notifications.template';
+import { CategoryEmailTemplates } from './templates/category-email.template';
+import { DishEmailTemplates } from './templates/dish-email.template';
 
 @Module({
   imports: [],
   controllers: [CategoryController, DishController, DishRestaurantController, DishSupplementController, SupplementController],
-  providers: [CategoryService, DishService, DishRestaurantService, DishSupplementService, SupplementService, MenuEvent],
+  providers: [
+    CategoryService, DishService, DishRestaurantService, DishSupplementService, SupplementService,
+    DishEvent,
+    CategoryEvent,
+    CategoryListenerService,
+    DishListenerService,
+    CategoryNotificationsTemplate,
+    DishNotificationsTemplate,
+    CategoryEmailTemplates,
+    DishEmailTemplates,
+  ],
   exports: [DishRestaurantService],
 })
 export class MenuModule { }

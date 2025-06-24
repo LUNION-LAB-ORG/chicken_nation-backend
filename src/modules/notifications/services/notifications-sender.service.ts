@@ -1,17 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { NotificationType, Order, Category, Dish, Promotion, EntityStatus } from '@prisma/client';
 import { NotificationsTemplate } from '../templates/notifications.template';
-import { NotificationRecipientsService } from './notifications-recipients.service';
 import { NotificationsService } from './notifications.service';
 import { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
 import { NotificationRecipient } from '../interfaces/notifications.interface';
 import { NotificationsWebSocketService } from './notifications-websocket.service';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { NotificationRecipientService } from '../recipients/notification-recipient.service';
 
 @Injectable()
 export class NotificationsSenderService {
     constructor(
-        private readonly recipientsService: NotificationRecipientsService,
+        private readonly notificationRecipientService: NotificationRecipientService,
         private readonly notificationsService: NotificationsService,
         private readonly notificationsWebSocketService: NotificationsWebSocketService,
         private readonly prisma: PrismaService
@@ -59,11 +59,11 @@ export class NotificationsSenderService {
      * Gère les notifications pour un changement de statut de commande
      */
     async handleOrderStatusUpdate(order: Order) {
-        const actor = await this.recipientsService.getCustomer(order.customer_id);
+        const actor = await this.notificationRecipientService.getCustomer(order.customer_id);
 
         if (!actor) return;
 
-        const restaurantUsers = await this.recipientsService.getRestaurantUsers(order.restaurant_id);
+        const restaurantUsers = await this.notificationRecipientService.getAllUsersByRestaurantAndRole(order.restaurant_id);
 
         const orderData = {
             reference: order.reference,
@@ -80,24 +80,24 @@ export class NotificationsSenderService {
             NotificationType.ORDER
         );
         this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], actor);
+
         // Toujours notifier le restaurant du changement de statut
         const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
             NotificationsTemplate.ORDER_STATUS_UPDATED_RESTAURANT,
             { actor, recipients: restaurantUsers, data: orderData },
-            NotificationType.ORDER,
-            true
+            NotificationType.ORDER
         );
-        this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0], true);
+        this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0]);
     }
 
     /**
      * Gère les notifications de paiement
      */
     async handlePaymentCompleted(payment: any, order: any, customer: any) {
-        const customerRecipient = await this.recipientsService.getCustomer(customer.id);
+        const customerRecipient = await this.notificationRecipientService.getCustomer(customer.id);
         if (!customerRecipient) return;
 
-        const restaurantUsers = await this.recipientsService.getRestaurantUsers(order.restaurant_id);
+        const restaurantUsers = await this.notificationRecipientService.getAllUsersByRestaurantAndRole(order.restaurant_id);
 
         const paymentData = {
             reference: order.reference,
@@ -120,10 +120,9 @@ export class NotificationsSenderService {
             const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
                 NotificationsTemplate.PAYMENT_SUCCESS_RESTAURANT,
                 { actor, recipients: restaurantUsers, data: paymentData },
-                NotificationType.ORDER,
-                true
+                NotificationType.ORDER
             );
-            this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0], true);
+            this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0]);
         }
     }
 
@@ -148,7 +147,7 @@ export class NotificationsSenderService {
     // }
 
     async handleLoyaltyLevelUp(customer: any, newLevel: string, bonusPoints: number) {
-        const customerRecipient = await this.recipientsService.getCustomer(customer.id);
+        const customerRecipient = await this.notificationRecipientService.getCustomer(customer.id);
         if (!customerRecipient) return;
 
         const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
@@ -158,8 +157,7 @@ export class NotificationsSenderService {
                 recipients: [customerRecipient],
                 data: { new_level: newLevel, bonus_points: bonusPoints }
             },
-            NotificationType.SYSTEM,
-            true
+            NotificationType.SYSTEM
         );
         this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
     }
@@ -168,7 +166,7 @@ export class NotificationsSenderService {
      * Gère les notifications de promotions
      */
     async handlePromotionUsed(customer: any, promotion: any, discountAmount: number) {
-        const customerRecipient = await this.recipientsService.getCustomer(customer.id);
+        const customerRecipient = await this.notificationRecipientService.getCustomer(customer.id);
         if (!customerRecipient) return;
 
         const notificationsCustomer = await this.notificationsService.sendNotificationToMultiple(
@@ -181,8 +179,7 @@ export class NotificationsSenderService {
                     discount_amount: discountAmount
                 }
             },
-            NotificationType.PROMOTION,
-            true
+            NotificationType.PROMOTION
         );
         this.notificationsWebSocketService.emitNotification(notificationsCustomer[0], customerRecipient);
     }
@@ -238,14 +235,14 @@ export class NotificationsSenderService {
         //     true
         // );
         // this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], restaurantUsers[0], true);
-    
+
     }
 
     /**
      * Gère les notifications de catégories
      */
     async handleCategoryCreatedOrUpdate(category: Category, update?: boolean) {
-        const allRestaurantUsers = await this.recipientsService.getAllRestaurantUsers();
+        const allRestaurantUsers = await this.notificationRecipientService.getAllManagers();
         if (!allRestaurantUsers) return;
 
         const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
@@ -255,17 +252,16 @@ export class NotificationsSenderService {
                 recipients: allRestaurantUsers,
                 data: { category_name: category.name }
             },
-            NotificationType.SYSTEM,
-            true
+            NotificationType.SYSTEM
         );
-        this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], allRestaurantUsers[0], true);
+        this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], allRestaurantUsers[0]);
     }
 
     /**
      * Gère les notifications de plats
      */
     async handleDishCreatedOrUpdate(dish: Dish, update?: boolean) {
-        const allRestaurantUsers = await this.recipientsService.getAllRestaurantUsers();
+        const allRestaurantUsers = await this.notificationRecipientService.getAllManagers();
         if (!allRestaurantUsers) return;
 
         const notificationsRestaurant = await this.notificationsService.sendNotificationToMultiple(
@@ -275,10 +271,9 @@ export class NotificationsSenderService {
                 recipients: allRestaurantUsers,
                 data: { dish_name: dish.name }
             },
-            NotificationType.SYSTEM,
-            true
+            NotificationType.SYSTEM
         );
-        this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], allRestaurantUsers[0], true);
+        this.notificationsWebSocketService.emitNotification(notificationsRestaurant[0], allRestaurantUsers[0]);
     }
 
 }

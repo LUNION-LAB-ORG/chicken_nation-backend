@@ -1,17 +1,19 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { EntityStatus } from '@prisma/client';
+import { EntityStatus, User } from '@prisma/client';
+import { Request } from 'express';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
 import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
-import { MenuEvent } from 'src/modules/menu/events/menu.event';
+import { DishEvent } from 'src/modules/menu/events/dish.event';
 
 @Injectable()
 export class DishService {
   constructor(private prisma: PrismaService,
-    private menuEvent: MenuEvent
+    private dishEvent: DishEvent
   ) { }
 
-  async create(createDishDto: CreateDishDto) {
+  async create(req: Request, createDishDto: CreateDishDto) {
+    const user = req.user as User;
     const { restaurant_ids, supplement_ids, ...dishData } = createDishDto;
 
     // Créer le plat de base
@@ -25,7 +27,7 @@ export class DishService {
     // Ajouter les restaurants si fournis
     if (restaurant_ids) {
       let restaurants = restaurant_ids;
-      if(typeof restaurant_ids === 'string') {
+      if (typeof restaurant_ids === 'string') {
         restaurants = [restaurant_ids];
       }
       await this.prisma.dishRestaurant.createMany({
@@ -39,7 +41,7 @@ export class DishService {
     // Ajouter les suppléments si fournis
     if (supplement_ids) {
       let supplements = supplement_ids;
-      if(typeof supplement_ids === 'string') {
+      if (typeof supplement_ids === 'string') {
         supplements = [supplement_ids];
       }
       await this.prisma.dishSupplement.createMany({
@@ -51,7 +53,13 @@ export class DishService {
     }
 
     // Émettre l'événement de création de plat
-    this.menuEvent.createDish(dish);
+    this.dishEvent.createDish({
+      actor: {
+        ...user,
+        restaurant: null,
+      },
+      dish,
+    });
 
     return this.findOne(dish.id);
   }
@@ -105,7 +113,8 @@ export class DishService {
     return dish;
   }
 
-  async update(id: string, updateDishDto: UpdateDishDto) {
+  async update(req: Request, id: string, updateDishDto: UpdateDishDto) {
+    const user = req.user as User;
     await this.findOne(id);
 
     const dish = await this.prisma.dish.update({
@@ -114,7 +123,7 @@ export class DishService {
     });
 
     // Émettre l'événement de mise à jour de plat
-    this.menuEvent.updateDish(dish);
+    this.dishEvent.updateDish(dish);
 
     return dish;
   }

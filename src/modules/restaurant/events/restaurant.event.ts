@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Restaurant } from '@prisma/client';
+import { Prisma, Restaurant } from '@prisma/client';
 
 
 @Injectable()
@@ -13,7 +13,10 @@ export class RestaurantEvent {
     /**
      * Emet un évènement de la création d'un restaurant
      */
-    async restaurantCreatedEvent(payload: Restaurant) {
+    async restaurantCreatedEvent(payload: {
+        actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>,
+        restaurant: Restaurant
+    }) {
         this.eventEmitter.emit(
             'restaurant.created',
             payload

@@ -16,7 +16,7 @@ export class EmailComponentsService {
   Header(logoUrl: string, title: string, subtitle: string): string {
     return `
     <div style="background: ${this.theme.colors.surface}; padding: ${this.theme.spacing['xl']} ${this.theme.spacing.lg}; text-align: center; position: relative; overflow: hidden;">
-      <div style="display: flex; flex-direction: column; align-items: center;">
+      <div style="position: relative;">
         <img src="${logoUrl}" alt="Logo" style="width: 100px; height: 100px;">
         <h3 style="color: ${this.theme.colors.primary}; font-size: ${this.theme.typography.fontSize['2xl']}; font-weight: ${this.theme.typography.fontWeight.bold}; margin-bottom: ${this.theme.spacing.sm}; font-family: ${this.theme.typography.fontFamily};">${title}</h3>
         <p style="color: ${this.theme.colors.text.secondary}; font-size: ${this.theme.typography.fontSize.sm}; font-family: ${this.theme.typography.fontFamily};">${subtitle}</p>
@@ -59,7 +59,7 @@ export class EmailComponentsService {
   Summary(items: Array<{ label: string; value: string; isTotal?: boolean }>): string {
     const itemsHtml = items.map(item =>
       `<div style="display: flex; justify-content: space-between; padding: ${this.theme.spacing.sm} 0; border-bottom: 1px solid ${this.theme.colors.primary}30; ${item.isTotal ? `font-weight: ${this.theme.typography.fontWeight.bold}; color: ${this.theme.colors.primary}; padding-top: ${this.theme.spacing.md}; margin-top: ${this.theme.spacing.sm};` : ''} font-family: ${this.theme.typography.fontFamily};">
-      <span>${item.label}</span>
+      <span>${item.label} : </span>
       <span>${item.value}</span>
     </div>`
     ).join('');

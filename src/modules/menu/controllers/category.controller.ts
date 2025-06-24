@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, UseInterceptors, UploadedFile, Req } from '@nestjs/common';
 import { CategoryService } from 'src/modules/menu/services/category.service';
 import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
 import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
@@ -11,6 +11,7 @@ import { UserTypes } from 'src/common/decorators/user-types.decorator';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Request } from 'express';
 
 @ApiTags('Categories')
 @ApiBearerAuth()
@@ -22,9 +23,9 @@ export class CategoryController {
   @Post()
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
-  @UserRoles(UserRole.ADMIN)
+  @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories') }))
-  async create(@Body() createCategoryDto: CreateCategoryDto, @UploadedFile() image: Express.Multer.File) {
+  async create(@Req() req: Request, @Body() createCategoryDto: CreateCategoryDto, @UploadedFile() image: Express.Multer.File) {
     const resizedPath = await GenerateConfigService.compressImages(
       { "img_1": image?.path },
       undefined,
@@ -35,7 +36,7 @@ export class CategoryController {
       },
       true,
     );
-    return this.categoryService.create({ ...createCategoryDto, image: resizedPath!["img_1"] ?? image?.path });
+    return this.categoryService.create(req, { ...createCategoryDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Récupération de toutes les catégories' })
@@ -54,9 +55,9 @@ export class CategoryController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
   @UserTypes(UserType.BACKOFFICE)
-  @UserRoles(UserRole.ADMIN)
+  @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories') }))
-    async update(@Param('id') id: string, @Body() updateCategoryDto: UpdateCategoryDto, @UploadedFile() image: Express.Multer.File) {
+  async update(@Req() req: Request, @Param('id') id: string, @Body() updateCategoryDto: UpdateCategoryDto, @UploadedFile() image: Express.Multer.File) {
     const resizedPath = await GenerateConfigService.compressImages(
       { "img_1": image?.path },
       undefined,
@@ -67,7 +68,7 @@ export class CategoryController {
       },
       true,
     );
-    return this.categoryService.update(id, { ...updateCategoryDto, image: resizedPath!["img_1"] ?? image?.path });
+    return this.categoryService.update(req, id, { ...updateCategoryDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
   @ApiOperation({ summary: 'Suppression d\'une catégorie par son id' })

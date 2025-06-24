@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { User } from '@prisma/client';
+import { Prisma, User } from '@prisma/client';
 
 
 @Injectable()
@@ -13,7 +13,12 @@ export class UserEvent {
     /**
      * Emet un évènement de la création d'un utilisateur
      */
-    async userCreatedEvent(payload: { actor: User, user: Omit<User, 'password' | 'id'> }) {
+    async userCreatedEvent(payload:
+        {
+            actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>,
+            user: Prisma.UserGetPayload<{ include: { restaurant: true } }>
+        }
+    ) {
         this.eventEmitter.emit(
             'user.created',
             payload
@@ -23,7 +28,10 @@ export class UserEvent {
     /**
     * Emet un évènement de la création d'un membre
     */
-    async memberCreatedEvent(payload: { actor: User, data: Omit<User, 'password' | 'id'> }) {
+    async memberCreatedEvent(payload: {
+        actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>,
+        user: Prisma.UserGetPayload<{ include: { restaurant: true } }>
+    }) {
         this.eventEmitter.emit(
             'member.created',
             payload

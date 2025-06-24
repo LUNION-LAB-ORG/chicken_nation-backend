@@ -44,13 +44,16 @@ export class UsersService {
         password: hash,
         type: UserType.BACKOFFICE,
       },
-      omit: { id: true, password: true },
+      include: {
+        restaurant: true,
+      },
     });
 
     // Emettre l'événement de création d'utilisateur
-    this.userEvent.userCreatedEvent({actor : user, user : newUser});
+    this.userEvent.userCreatedEvent({ actor: { ...user, restaurant: null }, user: newUser });
 
-    return { ...newUser, password: pass };
+    const { password, ...rest } = newUser;
+    return { ...rest, password: pass };
   }
 
   // CREATE MEMBER
@@ -81,13 +84,16 @@ export class UsersService {
         restaurant_id: user.restaurant_id,
         type: UserType.RESTAURANT,
       },
-      omit: { id: true, password: true },
+      include: {
+        restaurant: true,
+      },
     });
 
     // Emettre l'événement de création d'utilisateur
-    this.userEvent.memberCreatedEvent({actor : user, data : newUser});
+    this.userEvent.memberCreatedEvent({ actor: { ...user, restaurant: null }, user: newUser });
 
-    return { ...newUser, password: pass };
+    const { password, ...rest } = newUser;
+    return { ...rest, password: pass };
   }
 
   // FIND_ALL
@@ -191,7 +197,7 @@ export class UsersService {
       },
     });
     // Emettre l'événement de suppression d'utilisateur
-    this.userEvent.userDeletedEvent({actor : user, data : newUser});
+    this.userEvent.userDeletedEvent({ actor: user, data: newUser });
     return newUser;
   }
 
@@ -209,7 +215,7 @@ export class UsersService {
     });
 
     // Emettre l'événement de désactivation d'utilisateur
-    this.userEvent.userDeactivatedEvent({actor : user, data : newUser});
+    this.userEvent.userDeactivatedEvent({ actor: user, data: newUser });
     return newUser;
   }
 
@@ -227,7 +233,7 @@ export class UsersService {
     });
 
     // Emettre l'événement de restauration d'utilisateur
-    this.userEvent.userActivatedEvent({actor : user, data : newUser});
+    this.userEvent.userActivatedEvent({ actor: user, data: newUser });
     return newUser;
   }
 
@@ -241,8 +247,8 @@ export class UsersService {
       },
     });
     // Emettre l'événement de suppression d'utilisateur
-    this.userEvent.userDeletedEvent({actor : user, data : deletedUser});
-    
+    this.userEvent.userDeletedEvent({ actor: user, data: deletedUser });
+
     const { password, ...rest } = deletedUser;
     return rest;
   }

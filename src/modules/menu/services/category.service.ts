@@ -2,16 +2,18 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
 import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { EntityStatus } from '@prisma/client';
-import { MenuEvent } from 'src/modules/menu/events/menu.event';
+import { EntityStatus, User } from '@prisma/client';
+import { CategoryEvent } from 'src/modules/menu/events/category.event';
+import { Request } from 'express';
 
 @Injectable()
 export class CategoryService {
   constructor(private prisma: PrismaService,
-    private menuEvent: MenuEvent
+    private categoryEvent: CategoryEvent
   ) { }
 
-  async create(createCategoryDto: CreateCategoryDto) {
+  async create(req: Request, createCategoryDto: CreateCategoryDto) {
+    const user = req.user as User;
     const category = await this.prisma.category.create({
       data: {
         ...createCategoryDto,
@@ -20,7 +22,13 @@ export class CategoryService {
     });
 
     // Émettre l'événement de création de catégorie
-    this.menuEvent.createCategory(category);
+    this.categoryEvent.createCategory({
+      actor: {
+        ...user,
+        restaurant: null,
+      },
+      category,
+    });
 
     return category;
   }
@@ -53,7 +61,8 @@ export class CategoryService {
     return category;
   }
 
-  async update(id: string, updateCategoryDto: UpdateCategoryDto) {
+  async update(req: Request, id: string, updateCategoryDto: UpdateCategoryDto) {
+    const user = req.user as User;
     await this.findOne(id);
 
     const category = await this.prisma.category.update({
@@ -62,7 +71,7 @@ export class CategoryService {
     });
 
     // Émettre l'événement de mise à jour de catégorie
-    this.menuEvent.updateCategory(category);
+    this.categoryEvent.updateCategory(category);
 
     return category;
   }

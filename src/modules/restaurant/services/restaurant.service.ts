@@ -1,6 +1,6 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
-import { EntityStatus, Restaurant, UserRole, UserType } from '@prisma/client';
+import { EntityStatus, Restaurant, User, UserRole, UserType } from '@prisma/client';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateRestaurantDto } from 'src/modules/restaurant/dto/create-restaurant.dto';
@@ -16,6 +16,7 @@ import {
   parse,
   isValid
 } from 'date-fns';
+import { Request } from 'express';
 
 @Injectable()
 export class RestaurantService {
@@ -27,7 +28,8 @@ export class RestaurantService {
   /**
    * Création d'un nouveau restaurant et de son gestionnaire
    */
-  async create(createRestaurantDto: CreateRestaurantDto) {
+  async create(req: Request, createRestaurantDto: CreateRestaurantDto) {
+    const user = req.user as User;
     // Vérifie si un utilisateur avec l'email du gestionnaire existe déjà
     const existingUser = await this.prisma.user.findUnique({
       where: { email: createRestaurantDto.managerEmail }
@@ -87,7 +89,10 @@ export class RestaurantService {
     const { restaurant } = result;
 
     // Emettre l'événement de création de restaurant
-    this.restaurantEvent.restaurantCreatedEvent(restaurant);
+    this.restaurantEvent.restaurantCreatedEvent({
+      actor: { ...user, restaurant: null },
+      restaurant: restaurant
+    });
 
     return {
       restaurant,
