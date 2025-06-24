@@ -6,7 +6,7 @@ import { IEmailService } from 'src/modules/email/interfaces/email-service.interf
 import { RestaurantEmailTemplates } from '../templates/restaurant-email.template';
 import { RestaurantNotificationsTemplate } from '../templates/restaurant-notifications.template';
 import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
-import { NotificationsWebSocketService } from 'src/modules/notifications/services/notifications-websocket.service';
+import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
 import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
 
 @Injectable()

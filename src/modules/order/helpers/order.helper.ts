@@ -1,13 +1,12 @@
 import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
-import { OrderStatus, OrderType, PaiementStatus, EntityStatus, Customer, Dish, Address, SupplementCategory, Order, LoyaltyPointType, LoyaltyLevel } from '@prisma/client';
+import { OrderStatus, OrderType, PaiementStatus, EntityStatus, Dish, Address, SupplementCategory, Order, LoyaltyLevel } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryOrderDto } from '../dto/query-order.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PaiementsService } from 'src/modules/paiements/services/paiements.service';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
-import { PromotionUsageService } from 'src/modules/fidelity/services/promotion-usage.service';
 import { PromotionService } from 'src/modules/fidelity/services/promotion.service';
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
 import {
@@ -28,7 +27,6 @@ export class OrderHelper {
         private generateDataService: GenerateDataService,
         private paiementService: PaiementsService,
         private loyaltyService: LoyaltyService,
-        private promotionUsageService: PromotionUsageService,
         private promotionService: PromotionService,
         private restaurantService: RestaurantService
     ) {
@@ -610,7 +608,7 @@ export class OrderHelper {
     //Calculer le prix si promotion et création de l'utilisation de la promotion
     async calculatePromotionPrice(promotion_id: string | undefined, customerData: { customer_id: string; loyalty_level: LoyaltyLevel | undefined }, totalDishes: number, orderItems: { dish_id: string; quantity: number; price: number }[]) {
         if (!promotion_id) return 0;
-        const canUse = await this.promotionUsageService.canCustomerUsePromotion(promotion_id, customerData.customer_id);
+        const canUse = await this.promotionService.canCustomerUsePromotion(promotion_id, customerData.customer_id);
         if (!canUse.allowed) {
             return 0;
         }
@@ -618,6 +616,7 @@ export class OrderHelper {
         const discount = await this.promotionService.calculateDiscount(
             promotion_id,
             totalDishes,
+            customerData.customer_id,
             orderItems,
             customerData.loyalty_level
         );

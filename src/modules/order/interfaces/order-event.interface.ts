@@ -1,9 +1,9 @@
-import { LoyaltyLevel, Order } from "@prisma/client";
+import { LoyaltyLevel, Prisma } from "@prisma/client";
 
 export interface OrderCreatedEvent {
-  order: Order;
-  payment_id: string | null;
-  loyalty_level: LoyaltyLevel | undefined;
-  totalDishes: number;
-  orderItems: { dish_id: string, quantity: number, price: number }[];
+  order: Prisma.OrderGetPayload<{ include: { restaurant: true } }>;
+  payment_id?: string;
+  loyalty_level?: LoyaltyLevel;
+  totalDishes?: number;
+  orderItems?: { dish_id: string, quantity: number, price: number }[];
 }

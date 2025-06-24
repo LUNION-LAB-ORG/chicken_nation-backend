@@ -3,7 +3,7 @@ import { NotificationsService } from './services/notifications.service';
 import { NotificationsController } from './controllers/notifications.controller';
 import { NotificationsSenderService } from './services/notifications-sender.service';
 import { NotificationsListener } from './listeners/notifications.listener';
-import { NotificationsWebSocketService } from './services/notifications-websocket.service';
+import { NotificationsWebSocketService } from './websockets/notifications-websocket.service';
 import { NotificationRecipientService } from './recipients/notification-recipient.service';
 @Global()
 @Module({

@@ -1,50 +1,7 @@
-import { Order, OrderStatus } from "@prisma/client";
-import { getOrderNotificationContent, notificationIcons } from "../constantes/notifications.constante";
+import { notificationIcons } from "../constantes/notifications.constante";
 import { NotificationTemplate } from "../interfaces/notifications.interface";
 
 export class NotificationsTemplate {
-
-    // COMMANDES - Pour le client
-    static ORDER_CREATED_CUSTOMER: NotificationTemplate<Order> = {
-        title: (ctx) => `🛒 Commande créée`,
-        message: (ctx) => `Votre commande ${ctx.data.reference} a été créée avec succès. Montant: ${ctx.data.amount} XOF`,
-        icon: (ctx) => notificationIcons.ok.url,
-        iconBgColor: (ctx) => notificationIcons.ok.color,
-        showChevron: false
-    };
-
-    // COMMANDES - Pour le restaurant
-    static ORDER_CREATED_RESTAURANT: NotificationTemplate<Order> = {
-        title: (ctx) => `📋 Nouvelle commande`,
-        message: (ctx) => `Nouvelle commande ${ctx.data.reference} de ${ctx.actor.name || 'Client'}. Montant: ${ctx.data.amount} XOF`,
-        icon: (ctx) => notificationIcons.waiting.url,
-        iconBgColor: (ctx) => notificationIcons.waiting.color,
-        showChevron: false
-    };
-
-    // STATUT COMMANDE - Pour le client
-    static ORDER_STATUS_UPDATED_CUSTOMER: NotificationTemplate<{
-        reference: string;
-        status: OrderStatus;
-        amount: number;
-        restaurant_name: string;
-        customer_name: string;
-    }> = {
-            title: (ctx) => getOrderNotificationContent(ctx.data, 'customer').title,
-            message: (ctx) => getOrderNotificationContent(ctx.data, 'customer').message,
-            icon: (ctx) => getOrderNotificationContent(ctx.data, 'customer').icon,
-            iconBgColor: (ctx) => getOrderNotificationContent(ctx.data, 'customer').iconBgColor,
-            showChevron: false
-        };
-
-    // STATUT COMMANDE - Pour le restaurant
-    static ORDER_STATUS_UPDATED_RESTAURANT: NotificationTemplate<{ reference: string; status: OrderStatus; amount: number; restaurant_name: string; customer_name: string; }> = {
-        title: (ctx) => getOrderNotificationContent(ctx.data, 'restaurant').title,
-        message: (ctx) => getOrderNotificationContent(ctx.data, 'restaurant').message,
-        icon: (ctx) => getOrderNotificationContent(ctx.data, 'restaurant').icon,
-        iconBgColor: (ctx) => getOrderNotificationContent(ctx.data, 'restaurant').iconBgColor,
-        showChevron: false
-    };
 
     // PAIEMENT - Pour le client
     static PAYMENT_SUCCESS_CUSTOMER: NotificationTemplate<{ reference: string; amount: number; }> = {
@@ -90,24 +47,8 @@ export class NotificationsTemplate {
         iconBgColor: (ctx) => '#FFD700', // Or
         showChevron: false
     };
-
-    // PROMOTIONS
-    static PROMOTION_USED: NotificationTemplate<{ promotion_title: string; discount_amount: number; }> = {
-        title: (ctx) => `🎊 Promotion utilisée`,
-        message: (ctx) => `Vous avez utilisé la promotion "${ctx.data.promotion_title}". Économie: ${ctx.data.discount_amount} XOF`,
-        icon: (ctx) => notificationIcons.promotion.url,
-        iconBgColor: (ctx) => notificationIcons.promotion.color,
-        showChevron: false
-    };
-
-    static PROMOTION_AVAILABLE: NotificationTemplate<{ promotion_title: string; promotion_description: string; }> = {
-        title: (ctx) => `🎉 Nouvelle promotion`,
-        message: (ctx) => `"${ctx.data.promotion_title}" - ${ctx.data.promotion_description}`,
-        icon: (ctx) => notificationIcons.promotion.url,
-        iconBgColor: (ctx) => notificationIcons.promotion.color,
-        showChevron: false
-    };
-
+    
+    // CUSTOMER
     // Notification de bienvenue pour nouveau client
     static WELCOME_NEW_CUSTOMER: NotificationTemplate<{ welcome_points: number; }> = {
         title: (ctx) => `🎉 Bienvenue ${ctx.actor.name} !`,
@@ -117,66 +58,12 @@ export class NotificationsTemplate {
         showChevron: false
     };
 
-    // Notification pour les managers quand un nouvel utilisateur rejoint leur restaurant
-    static NEW_USER_RESTAURANT: NotificationTemplate<{ role: string; }> = {
-        title: (ctx) => `👥 Nouvel utilisateur`,
-        message: (ctx) => `${ctx.actor.name} a rejoint votre équipe en tant que agent ${ctx.data.role}`,
-        icon: (ctx) => notificationIcons.ok.url,
-        iconBgColor: (ctx) => notificationIcons.ok.color,
-        showChevron: false
-    };
-
     // Notification de points expirés
     static POINTS_EXPIRING_SOON: NotificationTemplate<{ expiring_points: number; days_remaining: number; }> = {
         title: (ctx) => `⏰ Points bientôt expirés`,
         message: (ctx) => `${ctx.data.expiring_points} points vont expirer dans ${ctx.data.days_remaining} jours. Utilisez-les vite !`,
         icon: (ctx) => notificationIcons.waiting.url,
         iconBgColor: (ctx) => notificationIcons.waiting.color,
-        showChevron: false
-    };
-
-    // Notification de commande annulée par le restaurant
-    static ORDER_CANCELLED_BY_RESTAURANT: NotificationTemplate<{ reference: string; reason: string; }> = {
-        title: (ctx) => `❌ Commande annulée`,
-        message: (ctx) => `Votre commande ${ctx.data.reference} a été annulée par le restaurant. Raison: ${ctx.data.reason || 'Non spécifiée'}`,
-        icon: (ctx) => 'https://cdn-icons-png.flaticon.com/512/3524/3524890.png',
-        iconBgColor: (ctx) => '#DC3545',
-        showChevron: false
-    };
-
-    // Notifications catégorie cr&e
-    static CATEGORY_CREATED: NotificationTemplate<{ category_name: string; }> = {
-        title: (ctx) => `🎉 Nouvelle catégorie`,
-        message: (ctx) => `Nouvelle catégorie "${ctx.data.category_name}"`,
-        icon: (ctx) => notificationIcons.ok.url,
-        iconBgColor: (ctx) => notificationIcons.ok.color,
-        showChevron: false
-    };
-
-    // Notifications catégorie mise à jour
-    static CATEGORY_UPDATED: NotificationTemplate<{ category_name: string; }> = {
-        title: (ctx) => `Catégorie mise à jour`,
-        message: (ctx) => `Catégorie "${ctx.data.category_name}" mise à jour`,
-        icon: (ctx) => notificationIcons.ok.url,
-        iconBgColor: (ctx) => notificationIcons.ok.color,
-        showChevron: false
-    };
-
-    // Notifications plat cr&e
-    static DISH_CREATED: NotificationTemplate<{ dish_name: string; }> = {
-        title: (ctx) => `🎉 Nouveau plat`,
-        message: (ctx) => `Nouveau plat "${ctx.data.dish_name}"`,
-        icon: (ctx) => notificationIcons.ok.url,
-        iconBgColor: (ctx) => notificationIcons.ok.color,
-        showChevron: false
-    };
-
-    // Notifications plat mis à jour
-    static DISH_UPDATED: NotificationTemplate<{ dish_name: string; }> = {
-        title: (ctx) => `Plat mis à jour`,
-        message: (ctx) => `Plat "${ctx.data.dish_name}" mis à jour`,
-        icon: (ctx) => notificationIcons.ok.url,
-        iconBgColor: (ctx) => notificationIcons.ok.color,
         showChevron: false
     };
 }
