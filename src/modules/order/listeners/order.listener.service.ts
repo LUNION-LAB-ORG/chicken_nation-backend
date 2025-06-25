@@ -1,6 +1,6 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { NotificationType } from '@prisma/client';
+import { LoyaltyPointType, NotificationType, OrderStatus } from '@prisma/client';
 import { IEmailService } from 'src/modules/email/interfaces/email-service.interface';
 import { OrderEmailTemplates } from '../templates/order-email.template';
 import { OrderNotificationsTemplate } from '../templates/order-notifications.template';
@@ -9,6 +9,7 @@ import { NotificationsWebSocketService } from 'src/modules/notifications/websock
 import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
 import { PromotionService } from 'src/modules/fidelity/services/promotion.service';
+import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
 
 @Injectable()
 export class OrderListenerService {
@@ -18,6 +19,7 @@ export class OrderListenerService {
         private readonly notificationsWebSocketService: NotificationsWebSocketService,
         private readonly notificationsService: NotificationsService,
         private promotionService: PromotionService,
+        private loyaltyService: LoyaltyService,
 
         private readonly orderEmailTemplates: OrderEmailTemplates,
         private readonly orderNotificationsTemplate: OrderNotificationsTemplate,
@@ -105,16 +107,46 @@ export class OrderListenerService {
         this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
 
         // PROMOTION USAGE
-        if (payload.order.promotion_id && payload.totalDishes && payload.orderItems && payload.loyalty_level) {
+        if (payload.order.promotion_id) {
+            if (payload.order.status === OrderStatus.PENDING && payload.order.promotion_id && payload.totalDishes && payload.orderItems && payload.loyalty_level) {
+                await this.promotionService.usePromotion(
+                    payload.order.promotion_id,
+                    payload.order.customer_id,
+                    payload.order.id,
+                    payload.totalDishes,
+                    payload.orderItems,
+                    payload.loyalty_level
+                );
+            }
+        }
 
-            await this.promotionService.usePromotion(
-                payload.order.promotion_id,
-                payload.order.customer_id,
-                payload.order.id,
-                payload.totalDishes,
-                payload.orderItems,
-                payload.loyalty_level
-            );
+
+        // LOYALTY POINTS
+        if (payload.order.points > 0) {
+
+            //Utilisation des points
+            if (payload.order.status === OrderStatus.PENDING) {
+                await this.loyaltyService.redeemPoints({
+                    customer_id: payload.order.customer_id,
+                    points: payload.order.points,
+                    reason: `Utilisation de ${payload.order.points} points de fidélité pour la commande #${payload.order.reference}` // Add order reference for clarity
+                });
+            }
+
+            // Attribution des points
+
+            if (payload.order.status === OrderStatus.COMPLETED) {
+                const pts = await this.loyaltyService.calculatePointsForOrder(payload.order.net_amount);
+                if (pts > 0) {
+                    await this.loyaltyService.addPoints({
+                        customer_id: payload.order.customer_id,
+                        points: pts,
+                        type: LoyaltyPointType.EARNED,
+                        reason: `Vous avez gagné ${pts} points de fidélité pour votre commande`,
+                        order_id: payload.order.id
+                    })
+                }
+            }
         }
     }
 }

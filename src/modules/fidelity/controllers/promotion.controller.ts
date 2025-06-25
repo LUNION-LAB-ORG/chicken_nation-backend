@@ -8,9 +8,6 @@ import { Request } from 'express';
 import { Customer, LoyaltyLevel, User, UserRole } from '@prisma/client';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { QueryPromotionDto } from '../dto/query-promotion.dto';
-import { UserTypesGuard } from 'src/common/guards/user-types.guard';
-import { UserTypes } from 'src/common/decorators/user-types.decorator';
-import { UserType } from '@prisma/client';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { ApplyDiscountPromotionDtoResponse, ApplyItemDto } from '../dto/apply-discount-promotion.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -51,7 +48,7 @@ export class PromotionController {
   findAll(@Query() filters: QueryPromotionDto) {
     return this.promotionService.findAll(filters);
   }
-  @ApiOperation({ summary: 'Lister les promotions' })
+  @ApiOperation({ summary: 'Lister les promotions pour un client' })
   @ApiOkResponse({ type: QueryResponseDto })
   @UseGuards(JwtCustomerAuthGuard)
   @Get('customer')
@@ -129,4 +126,7 @@ export class PromotionController {
   ) {
     return this.promotionService.isDishInPromotion(dishId, loyaltyLevel as any);
   }
+
+
+  
 }

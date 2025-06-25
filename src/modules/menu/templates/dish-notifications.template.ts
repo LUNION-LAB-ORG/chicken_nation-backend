@@ -34,4 +34,34 @@ export class DishNotificationsTemplate {
             iconBgColor: (ctx) => notificationIcons.joice.color,
             showChevron: true // Clicking this should take them to their menu management
         };
+
+    /**
+     * Notification pour les membres du back-office (Admins/Managers)
+     * Informe le personnel du back-office lorsqu'un plat a été mis à jour.
+     */
+    DISH_UPDATED_BACKOFFICE: NotificationTemplate<{
+        actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>,
+        dish: Dish
+    }> = {
+            title: (ctx) => `📝 Plat mis à jour : ${ctx.data.dish.name}`,
+            message: (ctx) => `Le plat ${ctx.data.dish.name} a été modifié par ${ctx.data.actor.fullname} (${userGetRole(ctx.data.actor.role)}).`,
+            icon: (ctx) => notificationIcons.setting.url, // Using 'setting' for an update action
+            iconBgColor: (ctx) => notificationIcons.setting.color,
+            showChevron: true // Clicking should lead to updated dish details
+        };
+
+    /**
+     * Notification pour les utilisateurs de restaurant
+     * Informe les managers de restaurant lorsqu'un plat (global ou propre) a été mis à jour.
+     */
+    DISH_UPDATED_RESTAURANT: NotificationTemplate<{
+        actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>,
+        dish: Dish
+    }> = {
+            title: (ctx) => `✏️ Plat mis à jour : ${ctx.data.dish.name}`,
+            message: (ctx) => `Le plat ${ctx.data.dish.name} a été mis à jour. Vérifiez les modifications apportées à votre menu.`,
+            icon: (ctx) => notificationIcons.setting.url,
+            iconBgColor: (ctx) => notificationIcons.setting.color,
+            showChevron: true // Clicking should lead to menu management to review changes
+        };
 }

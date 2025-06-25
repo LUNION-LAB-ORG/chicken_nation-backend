@@ -10,6 +10,8 @@ import { PromotionEvent } from './events/promotion.event';
 import { LoyaltyTask } from './tasks/loyalty.task';
 import { PromotionEmailTemplates } from './templates/promotion-email.template';
 import { PromotionNotificationsTemplate } from './templates/promotion-notifications.template';
+import { LoyaltyEmailTemplates } from './templates/loyalty-email.template';
+import { LoyaltyNotificationsTemplate } from './templates/loyalty-notifications.template';
 
 @Module({
     controllers: [PromotionController, LoyaltyController],
@@ -22,6 +24,8 @@ import { PromotionNotificationsTemplate } from './templates/promotion-notificati
         LoyaltyListenerService,
         PromotionEmailTemplates,
         PromotionNotificationsTemplate,
+        LoyaltyEmailTemplates,
+        LoyaltyNotificationsTemplate,
         LoyaltyTask
     ],
     exports: [PromotionService, LoyaltyService, PromotionEvent, LoyaltyEvent],

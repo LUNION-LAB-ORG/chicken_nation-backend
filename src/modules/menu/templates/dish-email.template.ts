@@ -12,7 +12,6 @@ export class DishEmailTemplates {
         private readonly configService: ConfigService // Inject ConfigService
     ) { }
 
-
     /**
      * Notification aux membres du back-office lorsqu'un nouveau plat est créé.
      */
@@ -25,6 +24,7 @@ export class DishEmailTemplates {
             content: (ctx) => {
                 const actorRole = userGetRole(ctx.data.actor.role);
                 const dishCreatedAt = new Date(ctx.data.dish.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }); // Localized date
+                const adminDishUrl = this.configService.get<string>('ADMIN_DISH_URL') ?? this.configService.get<string>('FRONTEND_URL') ?? "";
 
                 const emailContent = [
                     this.emailComponentsService.HeroSection(
@@ -36,18 +36,18 @@ export class DishEmailTemplates {
                     ),
                     this.emailComponentsService.Summary([
                         { label: 'Nom du plat', value: ctx.data.dish.name },
-                        { label: 'Description', value: ctx.data.dish.description ?? "Non renseigné" }, // Include description
-                        { label: 'Prix', value: `${ctx.data.dish.price} XOF` }, // Include price
+                        { label: 'Description', value: ctx.data.dish.description ?? "Non renseigné" },
+                        { label: 'Prix', value: `${ctx.data.dish.price} XOF` },
                         { label: 'Créé par', value: `${ctx.data.actor.fullname ?? "Non renseigné"} (${actorRole})` },
                         { label: 'Date de création', value: dishCreatedAt },
                     ]),
-                    this.emailComponentsService.Alert('Vérifiez les détails du plat et assurez-vous qu\'il est correctement configuré.', 'info'), // Helpful reminder
+                    this.emailComponentsService.CtaButton('Voir le plat dans l\'administration', adminDishUrl, 'primary'),
+                    this.emailComponentsService.Alert('Vérifiez les détails du plat et assurez-vous qu\'il est correctement configuré.', 'info'),
                 ].join('\n');
 
                 return emailContent;
             }
         };
-
 
     /**
      * Notification aux restaurants lorsqu'un nouveau plat est disponible (créé par l'admin).
@@ -60,6 +60,7 @@ export class DishEmailTemplates {
             subject: (ctx) => `✨ Nouveau plat à la carte : ${ctx.data.dish.name} !`,
             content: (ctx) => {
                 const actorName = ctx.data.actor.fullname ?? 'L\'équipe Chicken Nation';
+                const restaurantMenuUrl = this.configService.get<string>('RESTAURANT_MENU_URL') ?? this.configService.get<string>('FRONTEND_URL') ?? "";
 
                 const emailContent = [
                     this.emailComponentsService.Greeting(`Bonjour !`, '🍽️'),
@@ -70,6 +71,78 @@ export class DishEmailTemplates {
                         `Ce plat a été ajouté par ${actorName}. Il est maintenant disponible pour être inclus dans votre menu.`,
                         'ℹ️'
                     ),
+                    this.emailComponentsService.CtaButton('Gérer mon menu', restaurantMenuUrl, 'primary'),
+                ].join('\n');
+
+                return emailContent;
+            }
+        };
+
+    /**
+     * Notification aux membres du back-office lorsqu'un plat est mis à jour.
+     */
+    DISH_UPDATED_BACKOFFICE: EmailTemplate<
+        {
+            actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>,
+            dish: Dish
+        }> = {
+            subject: (ctx) => `📝 Plat mis à jour : ${ctx.data.dish.name}`,
+            content: (ctx) => {
+                const actorRole = userGetRole(ctx.data.actor.role);
+                const dishUpdatedAt = new Date(ctx.data.dish.updated_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                const adminDishUrl = this.configService.get<string>('FRONTEND_URL') ?? "";
+
+                const emailContent = [
+                    this.emailComponentsService.HeroSection(
+                        `Plat mis à jour : ${ctx.data.dish.name}`,
+                        `Les informations d'un plat ont été modifiées.`
+                    ),
+                    this.emailComponentsService.Message(
+                        `Le plat ${ctx.data.dish.name} a été mis à jour par ${ctx.data.actor.fullname} (${actorRole}).`
+                    ),
+                    this.emailComponentsService.Summary([
+                        { label: 'Nom du plat', value: ctx.data.dish.name },
+                        { label: 'Description', value: ctx.data.dish.description ?? "Non renseigné" },
+                        { label: 'Prix', value: `${ctx.data.dish.price} XOF` },
+                        { label: 'Modifié par', value: `${ctx.data.actor.fullname ?? "Non renseigné"} (${actorRole})` },
+                        { label: 'Dernière modification le', value: dishUpdatedAt },
+                    ]),
+                    this.emailComponentsService.CtaButton('Voir le plat dans l\'administration', adminDishUrl, 'primary'),
+                    this.emailComponentsService.InfoBox('Vérifiez les changements apportés pour assurer la cohérence du menu.', 'ℹ️'),
+                ].join('\n');
+
+                return emailContent;
+            }
+        };
+
+    /**
+     * Notification aux restaurants lorsqu'un plat est mis à jour (global ou propre).
+     */
+    DISH_UPDATED_RESTAURANT: EmailTemplate<
+        {
+            actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>,
+            dish: Dish
+        }> = {
+            subject: (ctx) => `✏️ Plat mis à jour : ${ctx.data.dish.name}`,
+            content: (ctx) => {
+                const actorName = ctx.data.actor.fullname ?? 'L\'équipe Chicken Nation';
+                const restaurantMenuUrl = this.configService.get<string>('FRONTEND_URL') ?? "";
+
+                const emailContent = [
+                    this.emailComponentsService.Greeting(`Bonjour !`, '📝'),
+                    this.emailComponentsService.Message(
+                        `Le plat ${ctx.data.dish.name} a été mis à jour par ${actorName}.`
+                    ),
+                    this.emailComponentsService.Summary([
+                        { label: 'Nom du plat', value: ctx.data.dish.name },
+                        { label: 'Nouveau prix', value: `${ctx.data.dish.price} XOF` }, // Highlight new price if updated
+                        { label: 'Description', value: ctx.data.dish.description ?? "Non renseigné" },
+                    ]),
+                    this.emailComponentsService.InfoBox(
+                        `Ces modifications peuvent avoir un impact sur l'affichage de ce plat dans votre menu.`,
+                        '💡'
+                    ),
+                    this.emailComponentsService.CtaButton('Gérer mon menu', restaurantMenuUrl, 'primary'),
                 ].join('\n');
 
                 return emailContent;

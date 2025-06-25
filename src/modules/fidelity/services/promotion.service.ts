@@ -224,7 +224,10 @@ export class PromotionService {
   async findAllForCustomer(req: Request, filters?: QueryPromotionDto): Promise<QueryResponseDto<PromotionResponseDto>> {
     const customer = req.user as Customer;
 
-    const where: Prisma.PromotionWhereInput = {};
+    const where: Prisma.PromotionWhereInput = {
+      status: PromotionStatus.ACTIVE,
+      expiration_date: { gte: new Date() },
+    };
 
     if (filters?.title) where.title = { contains: filters.title, mode: 'insensitive' };
 
