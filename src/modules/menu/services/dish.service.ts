@@ -1,10 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { EntityStatus, User } from '@prisma/client';
+import { Dish, EntityStatus, Prisma, User } from '@prisma/client';
 import { Request } from 'express';
+import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
 import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
 import { DishEvent } from 'src/modules/menu/events/dish.event';
+import { QueryDishDto } from '../dto/query-dish.dto';
 
 @Injectable()
 export class DishService {
@@ -86,6 +88,78 @@ export class DishService {
         name: 'asc',
       },
     });
+  }
+
+  async findMany(filter: QueryDishDto): Promise<QueryResponseDto<Dish>> {
+    const { search, status, categoryId, minPrice, maxPrice, page = 1, limit = 10, sortBy = "created_at", sortOrder = "desc" } = filter;
+
+    const where: Prisma.DishWhereInput = {
+      entity_status: EntityStatus.ACTIVE,
+    };
+    //  name ou description
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+    if (status) {
+      where.entity_status = status;
+    }
+    if (categoryId) {
+      where.category_id = categoryId;
+    }
+    if (minPrice) {
+      where.price = {
+        gte: minPrice,
+      };
+    }
+    if (maxPrice) {
+      where.price = {
+        lte: maxPrice,
+      };
+    }
+
+    const [count, dishes] = await Promise.all([
+      this.prisma.dish.count({
+        where: {
+          entity_status: EntityStatus.ACTIVE,
+        },
+      }),
+      this.prisma.dish.findMany({
+        where: {
+          entity_status: EntityStatus.ACTIVE,
+        },
+        include: {
+          category: true,
+          dish_restaurants: {
+            include: {
+              restaurant: true,
+            },
+          },
+          dish_supplements: {
+            include: {
+              supplement: true,
+            },
+          },
+        },
+        orderBy: {
+          [sortBy]: sortOrder,
+        },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      data: dishes,
+      meta: {
+        total: count,
+        page,
+        limit,
+        totalPages: Math.ceil(count / limit),
+      },
+    };
   }
 
   async findOne(id: string) {
