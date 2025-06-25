@@ -13,7 +13,7 @@ export class UpdateUserPasswordDto {
   @IsNotEmpty()
   @MaxLength(15)
   @Transform(({ value }) => value?.trim())
-  @Matches(/^(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/, {
+  @Matches(/^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{}|;':\".,<>?/\\])[A-Za-z\d!@#$%^&*()_+\-=\[\]{}|;':\".,<>?/\\]{8,}$/, {
     message:
       'Le mot de passe doit contenir au moins 8 caractères, une majuscule, un chiffre et un caractère spécial.',
   })
@@ -29,7 +29,7 @@ export class UpdateUserPasswordDto {
   @IsOptional()
   @MaxLength(15)
   @Transform(({ value }) => value?.trim())
-  @Matches(/^(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/, {
+  @Matches(/^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{}|;':\".,<>?/\\])[A-Za-z\d!@#$%^&*()_+\-=\[\]{}|;':\".,<>?/\\]{8,}$/, {
     message:
       'La confirmation du mot de passe doit contenir au moins 8 caractères, une majuscule, un chiffre et un caractère spécial.',
   })
