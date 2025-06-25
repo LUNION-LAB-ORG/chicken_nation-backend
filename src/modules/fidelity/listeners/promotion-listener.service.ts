@@ -154,7 +154,7 @@ export class PromotionListenerService {
         backofficeNotifications.forEach(notif => {
             const recipientUser = backofficeUsers.find(u => u.id === notif.user_id);
             if (recipientUser) {
-                this.notificationsWebSocketService.emitNotification(notif, recipientUser, true);
+                this.notificationsWebSocketService.emitNotification(notif, recipientUser);
             }
         });
 
@@ -172,7 +172,7 @@ export class PromotionListenerService {
         managerNotifications.forEach(notif => {
             const recipientUser = restaurantManagers.find(u => u.id === notif.user_id);
             if (recipientUser) {
-                this.notificationsWebSocketService.emitNotification(notif, recipientUser, true);
+                this.notificationsWebSocketService.emitNotification(notif, recipientUser);
             }
         });
 
@@ -260,7 +260,7 @@ export class PromotionListenerService {
         internalNotifications.forEach(notif => {
             const recipientUser = [...backofficeUsers, ...restaurantManagers].find(u => u.id === notif.user_id);
             if (recipientUser) {
-                this.notificationsWebSocketService.emitNotification(notif, recipientUser, true);
+                this.notificationsWebSocketService.emitNotification(notif, recipientUser);
             }
         });
     }
@@ -309,7 +309,7 @@ export class PromotionListenerService {
         internalNotifications.forEach(notif => {
             const recipientUser = [...backofficeUsers, ...restaurantManagers].find(u => u.id === notif.user_id);
             if (recipientUser) {
-                this.notificationsWebSocketService.emitNotification(notif, recipientUser, true);
+                this.notificationsWebSocketService.emitNotification(notif, recipientUser);
             }
         });
     }
