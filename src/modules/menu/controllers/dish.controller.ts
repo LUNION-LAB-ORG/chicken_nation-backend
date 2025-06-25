@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, UseInterceptors, UploadedFile, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, UseInterceptors, UploadedFile, Req, Query } from '@nestjs/common';
 import { DishService } from 'src/modules/menu/services/dish.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
 import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
@@ -13,6 +13,7 @@ import { GenerateConfigService } from 'src/common/services/generate-config.servi
 import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
 import { Request } from 'express';
+import { QueryDishDto } from '../dto/query-dish.dto';
 
 @Controller('dishes')
 @ApiTags('Dishes')
@@ -44,6 +45,11 @@ export class DishController {
   @Get()
   findAll() {
     return this.dishService.findAll();
+  }
+  @ApiOperation({ summary: 'Recherche de plats' })
+  @Get('search')
+  findMany(@Query() filter: QueryDishDto) {
+    return this.dishService.findMany(filter);
   }
 
   @ApiOperation({ summary: 'Obtenir un plat par ID' })
