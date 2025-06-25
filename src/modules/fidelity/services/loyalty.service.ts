@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { LoyaltyLevel, LoyaltyPointType, LoyaltyPointIsUsed } from '@prisma/client';
+import { LoyaltyLevel, LoyaltyPointType, LoyaltyPointIsUsed, Customer } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { AddLoyaltyPointDto } from '../dto/add-loyalty-point.dto';
 import { LoyaltyEvent } from '../events/loyalty.event';
@@ -33,6 +33,14 @@ export class LoyaltyService {
             throw new BadRequestException('Type de point requis');
         }
 
+        const customer = await this.prisma.customer.findUnique({
+            where: { id: customer_id }
+        });
+
+        if (!customer) {
+            throw new NotFoundException('Client non trouvé');
+        }
+
         return await this.prisma.$transaction(async (tx) => {
             // Ajouter les points
             const loyaltyPoint = await tx.loyaltyPoint.create({
@@ -55,10 +63,16 @@ export class LoyaltyService {
                     lifetime_points: { increment: points }
                 }
             });
-            
+
 
             // Vérifier et mettre à jour le niveau de fidélité
-            await this.updateCustomerLoyaltyLevel(customer_id, tx);
+            await this.updateCustomerLoyaltyLevel(customer, tx);
+
+            // Evenement d'ajout de points
+            this.loyaltyEvent.addPointsEvent({
+                customer,
+                points,
+            });
 
             return loyaltyPoint;
         });
@@ -74,6 +88,7 @@ export class LoyaltyService {
 
         return Math.floor(order_amount * config.points_per_xof);
     }
+
     // Calculer le montant pour une commande
     async calculateAmountForPoints(points: number): Promise<number> {
         const config = await this.getConfig();
@@ -101,7 +116,7 @@ export class LoyaltyService {
             throw new BadRequestException('Points insuffisants');
         }
 
-        return await this.prisma.$transaction(async (tx) => {
+        const payload = await this.prisma.$transaction(async (tx) => {
             let remainingPointsToUse = points;
             const usedPointsDetails: any[] = [];
 
@@ -225,14 +240,22 @@ export class LoyaltyService {
             });
 
             // Vérifier et mettre à jour le niveau de fidélité
-            await this.updateCustomerLoyaltyLevel(customer_id, tx);
+            await this.updateCustomerLoyaltyLevel(customer, tx);
 
             return {
                 redemption_record: redemptionRecord,
                 used_points_details: usedPointsDetails,
-                total_points_used: points
+                total_points_used: points,
             };
         });
+
+        // Evenement de rachat de points
+        this.loyaltyEvent.redeemPointsEvent({
+            customer,
+            points,
+        });
+
+        return payload;
     }
 
     // Obtenir les informations de fidélité d'un client
@@ -315,11 +338,7 @@ export class LoyaltyService {
     }
 
     // Mettre à jour le niveau de fidélité d'un client
-    private async updateCustomerLoyaltyLevel(customer_id: string, tx: any) {
-        const customer = await tx.customer.findUnique({
-            where: { id: customer_id }
-        });
-
+    private async updateCustomerLoyaltyLevel(customer: Customer, tx: any) {
         const config = await this.getConfig();
 
         let newLevel: LoyaltyLevel | null = null;
@@ -335,7 +354,7 @@ export class LoyaltyService {
         if (newLevel && newLevel !== customer.loyalty_level) {
             // Mettre à jour le niveau du client
             await tx.customer.update({
-                where: { id: customer_id },
+                where: { id: customer.id },
                 data: {
                     loyalty_level: newLevel,
                     last_level_update: new Date()
@@ -345,19 +364,32 @@ export class LoyaltyService {
             // Enregistrer l'historique
             await tx.loyaltyLevelHistory.create({
                 data: {
-                    customer_id,
+                    customer_id: customer.id,
                     previous_level: customer.loyalty_level,
                     new_level: newLevel,
                     points_at_time: customer.lifetime_points,
                     reason: 'Mise à jour automatique basée sur les points accumulés'
                 }
             });
+            // Attribuer des points bonus pour le nouveau niveau
+            let bonusPoints = 0;
+            switch (newLevel) {
+                case LoyaltyLevel.STANDARD:
+                    bonusPoints = 100;
+                    break;
+                case LoyaltyLevel.PREMIUM:
+                    bonusPoints = 150;
+                    break;
+                case LoyaltyLevel.GOLD:
+                    bonusPoints = 200;
+                    break;
+            }
 
             // Evenement de niveau atteint
-            this.loyaltyEvent.levelUp({
+            this.loyaltyEvent.levelUpEvent({
                 customer,
-                previous_level: customer.loyalty_level,
                 new_level: newLevel,
+                bonus_points: bonusPoints
             });
         }
     }
@@ -374,6 +406,9 @@ export class LoyaltyService {
                 },
                 expires_at: { lt: now },
                 is_used: { in: [LoyaltyPointIsUsed.NO, LoyaltyPointIsUsed.PARTIAL] } // Seulement les points non totalement utilisés
+            },
+            include: {
+                customer: true
             }
         });
 
@@ -402,9 +437,6 @@ export class LoyaltyService {
                     });
 
                     totalExpiredPoints += remainingPoints;
-
-                    // Vérifier et ajuster le niveau de fidélité si nécessaire
-                    await this.updateCustomerLoyaltyLevel(point.customer_id, tx);
                 }
             });
         }

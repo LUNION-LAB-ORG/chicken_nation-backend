@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { LoyaltyLevelUpEvent } from '../interfaces/loyalty-event.interface';
+import { LoyaltyLevelUpEvent, LoyaltyPointsAddedEvent, LoyaltyPointsExpiredEvent, LoyaltyPointsExpiringSoonEvent, LoyaltyPointsRedeemedEvent } from '../interfaces/loyalty-event.interface';
 
 
 @Injectable()
@@ -13,9 +13,9 @@ export class LoyaltyEvent {
     /**
      * Émet un événement de rachat de points
      */
-    async redeemPoints(payload: any) {
+    async redeemPointsEvent(payload: LoyaltyPointsRedeemedEvent) {
         this.eventEmitter.emit(
-            'loyalty.redeemPoints',
+            'loyalty.pointsRedeemed',
             payload
         );
     }
@@ -23,9 +23,9 @@ export class LoyaltyEvent {
     /**
     * Émet un événement d'ajout de points
     */
-    async addPoints(payload: any) {
+    async addPointsEvent(payload: LoyaltyPointsAddedEvent) {
         this.eventEmitter.emit(
-            'loyalty.addPoints',
+            'loyalty.pointsAdded',
             payload
         );
     }
@@ -33,10 +33,31 @@ export class LoyaltyEvent {
     /**
      * Émet un événement de niveau atteint
      */
-    async levelUp(payload: LoyaltyLevelUpEvent) {
+    async levelUpEvent(payload: LoyaltyLevelUpEvent) {
         this.eventEmitter.emit(
             'loyalty.levelUp',
             payload
         );
     }
+
+    /**
+     * Émet un événement d'expiration de points
+     */
+    async pointsExpiringSoonEvent(payload: LoyaltyPointsExpiringSoonEvent) {
+        this.eventEmitter.emit(
+            'loyalty.pointsExpiringSoon',
+            payload
+        );
+    }
+
+    /**
+     * Émet un événement d'expiration de points
+     */
+    async pointsExpireEvent(payload: LoyaltyPointsExpiredEvent) {
+        this.eventEmitter.emit(
+            'loyalty.pointsExpired',
+            payload
+        );
+    }
+
 }

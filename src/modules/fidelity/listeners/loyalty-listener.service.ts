@@ -1,73 +1,261 @@
-import { Injectable } from '@nestjs/common';
-import { OnEvent } from '@nestjs/event-emitter';
-import { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
-import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
-import { LoyaltyPointType, Order, OrderStatus } from '@prisma/client';
-import { LoyaltyLevelUpEvent } from '../interfaces/loyalty-event.interface';
-import { LoyaltyEvent } from '../events/loyalty.event';
+import { Injectable, Inject } from "@nestjs/common";
+import { OnEvent } from "@nestjs/event-emitter";
+import { NotificationType } from "@prisma/client";
+import { IEmailService } from "src/modules/email/interfaces/email-service.interface";
+import { NotificationRecipientService } from "src/modules/notifications/recipients/notification-recipient.service";
+import { NotificationsService } from "src/modules/notifications/services/notifications.service";
+import { NotificationsWebSocketService } from "src/modules/notifications/websockets/notifications-websocket.service";
+import { LoyaltyEmailTemplates } from "../templates/loyalty-email.template";
+import { LoyaltyNotificationsTemplate } from "../templates/loyalty-notifications.template";
+import { LoyaltyLevelUpEvent, LoyaltyPointsAddedEvent, LoyaltyPointsExpiredEvent, LoyaltyPointsExpiringSoonEvent, LoyaltyPointsRedeemedEvent } from "../interfaces/loyalty-event.interface";
 
 @Injectable()
 export class LoyaltyListenerService {
-    constructor(private loyaltyService: LoyaltyService, private loyaltyEvent: LoyaltyEvent) { }
+    constructor(
+        @Inject('EMAIL_SERVICE') private readonly emailService: IEmailService,
+        private readonly notificationRecipientService: NotificationRecipientService,
+        private readonly notificationsWebSocketService: NotificationsWebSocketService,
+        private readonly notificationsService: NotificationsService,
 
-    @OnEvent('order.created')
-    async handleOrderCreated(payload: OrderCreatedEvent) {
-        if (payload.order.points !== 0) {
-            //Utilisation des points
-            await this.loyaltyService.redeemPoints({ customer_id: payload.order.customer_id, points: payload.order.points, reason: `Utilisation de ${payload.order.points} points de fidélité pour votre commande` });
-            console.log(`Points redeemed ${payload.order.points}`);
+        private readonly loyaltyEmailTemplates: LoyaltyEmailTemplates,
+        private readonly loyaltyNotificationsTemplate: LoyaltyNotificationsTemplate,
+    ) { }
 
-            // Evenement de rachat de points
-            this.loyaltyEvent.redeemPoints(payload);
+    /**
+     * Handles the 'loyalty.pointsAdded' event.
+     * Notifies the customer about new points earned.
+     */
+    @OnEvent('loyalty.pointsAdded')
+    async handleLoyaltyPointsAdded(payload: LoyaltyPointsAddedEvent) {
+        // --- Recipients ---
+        const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
+        const customerEmail: string[] = customer.email ? [customer.email] : [];
+
+        // --- Emails ---
+        if (customerEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.loyaltyEmailTemplates.LOYALTY_POINTS_ADDED,
+                {
+                    recipients: customerEmail,
+                    data: {
+                        actor: payload.customer,
+                        points: payload.points,
+                        orderReference: payload.orderReference,
+                    },
+                },
+            );
+        }
+
+        // --- Notifications ---
+        const notificationDataCustomer = {
+            actor: customer,  
+            recipients: [customer],
+            data: {
+                actor: payload.customer,
+                points: payload.points,
+                orderReference: payload.orderReference,
+            },
+        };
+
+        const notificationCustomer = await this.notificationsService.sendNotificationToMultiple(
+            this.loyaltyNotificationsTemplate.LOYALTY_POINTS_ADDED,
+            notificationDataCustomer,
+            NotificationType.SYSTEM
+        );
+
+        // Notify in real-time
+        if (notificationCustomer.length > 0) {
+            this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
         }
     }
 
-    @OnEvent('order.statusUpdated')
-    async handleOrderStatusUpdated(order: Order) {
-        //Attribuer des points de fidélité si client identifié
-        const pts = await this.loyaltyService.calculatePointsForOrder(order.net_amount);
-        if (pts > 0 && order.status === OrderStatus.COMPLETED) {
-            await this.loyaltyService.addPoints({
-                customer_id: order.customer_id,
-                points: pts,
-                type: LoyaltyPointType.EARNED,
-                reason: `Vous avez gagné ${pts} points de fidélité pour votre commande`,
-                order_id: order.id
-            })
-            console.log(`Points added ${pts}`);
+    /**
+     * Handles the 'loyalty.pointsRedeemed' event.
+     * Notifies the customer about points used.
+     */
+    @OnEvent('loyalty.pointsRedeemed')
+    async handleLoyaltyPointsRedeemed(payload: LoyaltyPointsRedeemedEvent) {
+        // --- Recipients ---
+        const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
+        const customerEmail: string[] = customer.email ? [customer.email] : [];
 
-            // Evenement d'ajout de points
-            this.loyaltyEvent.addPoints({});
+        // --- Emails ---
+        if (customerEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.loyaltyEmailTemplates.LOYALTY_POINTS_REDEEMED,
+                {
+                    recipients: customerEmail,
+                    data: {
+                        actor: payload.customer,
+                        points: payload.points,
+                        orderReference: payload.orderReference,
+                    },
+                },
+            );
+        }
+
+        // --- Notifications ---
+        const notificationDataCustomer = {
+            actor: customer,
+            recipients: [customer],
+            data: {
+                actor: payload.customer,
+                points: payload.points,
+                orderReference: payload.orderReference,
+            },
+        };
+
+        const notificationCustomer = await this.notificationsService.sendNotificationToMultiple(
+            this.loyaltyNotificationsTemplate.LOYALTY_POINTS_REDEEMED,
+            notificationDataCustomer,
+            NotificationType.SYSTEM
+        );
+
+        // Notify in real-time
+        if (notificationCustomer.length > 0) {
+            this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
         }
     }
 
+    /**
+     * Handles the 'loyalty.levelUp' event.
+     * Notifies the customer about reaching a new loyalty level.
+     */
     @OnEvent('loyalty.levelUp')
     async handleLoyaltyLevelUp(payload: LoyaltyLevelUpEvent) {
-        // Attribuer des points bonus pour le nouveau niveau
-        let bonusPoints = 0;
-        switch (payload.new_level) {
-            case 'STANDARD':
-                bonusPoints = 100;
-                break;
-            case 'PREMIUM':
-                bonusPoints = 150;
-                break;
-            case 'GOLD':
-                bonusPoints = 200;
-                break;
+        // --- Recipients ---
+        const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
+        const customerEmail: string[] = customer.email ? [customer.email] : [];
+
+        // --- Emails ---
+        if (customerEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.loyaltyEmailTemplates.LOYALTY_LEVEL_UP,
+                {
+                    recipients: customerEmail,
+                    data: {
+                        actor: payload.customer,
+                        new_level: payload.new_level,
+                        bonus_points: payload.bonus_points,
+                    },
+                },
+            );
         }
 
-        if (bonusPoints > 0) {
-            await this.loyaltyService.addPoints({
-                customer_id: payload.customer.id,
-                points: bonusPoints,
-                type: LoyaltyPointType.BONUS,
-                reason: `Bonus de bienvenue niveau ${payload.new_level}`
-            });
-            console.log(`Points bonus added ${bonusPoints}`);
+        // --- Notifications ---
+        const notificationDataCustomer = {
+            actor: customer,
+            recipients: [customer],
+            data: {
+                actor: payload.customer,
+                new_level: payload.new_level,
+                bonus_points: payload.bonus_points,
+            },
+        };
 
-            // Evenement d'ajout de points bonus
-            // this.loyaltyEvent.addPoints({});
+        const notificationCustomer = await this.notificationsService.sendNotificationToMultiple(
+            this.loyaltyNotificationsTemplate.LOYALTY_LEVEL_UP,
+            notificationDataCustomer,
+            NotificationType.SYSTEM
+        );
+
+        // Notify in real-time
+        if (notificationCustomer.length > 0) {
+            this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
+        }
+    }
+
+    /**
+     * Handles the 'loyalty.pointsExpiringSoon' event.
+     * Notifies the customer about points nearing expiration.
+     */
+    @OnEvent('loyalty.pointsExpiringSoon')
+    async handleLoyaltyPointsExpiringSoon(payload: LoyaltyPointsExpiringSoonEvent) {
+        // --- Recipients ---
+        const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
+        const customerEmail: string[] = customer.email ? [customer.email] : [];
+
+        // --- Emails ---
+        if (customerEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.loyaltyEmailTemplates.POINTS_EXPIRING_SOON,
+                {
+                    recipients: customerEmail,
+                    data: {
+                        actor: payload.customer,
+                        expiring_points: payload.expiring_points,
+                        days_remaining: payload.days_remaining,
+                    },
+                },
+            );
+        }
+
+        // --- Notifications ---
+        const notificationDataCustomer = {
+            actor: customer,
+            recipients: [customer],
+            data: {
+                actor: payload.customer,
+                expiring_points: payload.expiring_points,
+                days_remaining: payload.days_remaining,
+            },
+        };
+
+        const notificationCustomer = await this.notificationsService.sendNotificationToMultiple(
+            this.loyaltyNotificationsTemplate.POINTS_EXPIRING_SOON,
+            notificationDataCustomer,
+            NotificationType.SYSTEM
+        );
+
+        // Notify in real-time
+        if (notificationCustomer.length > 0) {
+            this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
+        }
+    }
+
+    /**
+     * Handles the 'loyalty.pointsExpired' event.
+     * Notifies the customer about points that have expired.
+     */
+    @OnEvent('loyalty.pointsExpired')
+    async handleLoyaltyPointsExpired(payload: LoyaltyPointsExpiredEvent) {
+        // --- Recipients ---
+        const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
+        const customerEmail: string[] = customer.email ? [customer.email] : [];
+
+        // --- Emails ---
+        if (customerEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.loyaltyEmailTemplates.POINTS_EXPIRED,
+                {
+                    recipients: customerEmail,
+                    data: {
+                        actor: payload.customer,
+                        expired_points: payload.expired_points,
+                    },
+                },
+            );
+        }
+
+        // --- Notifications ---
+        const notificationDataCustomer = {
+            actor: customer,
+            recipients: [customer],
+            data: {
+                actor: payload.customer,
+                expired_points: payload.expired_points,
+            },
+        };
+
+        const notificationCustomer = await this.notificationsService.sendNotificationToMultiple(
+            this.loyaltyNotificationsTemplate.POINTS_EXPIRED,
+            notificationDataCustomer,
+            NotificationType.SYSTEM
+        );
+
+        // Notify in real-time
+        if (notificationCustomer.length > 0) {
+            this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
         }
     }
 }

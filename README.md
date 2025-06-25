@@ -10,12 +10,15 @@
 
 - Pouvoir récupérer le dernier restaurant qui n'est pas fermé
 
-- Plan de fidélité : 6 commandes, plats offerts (à supprimer)
+- Plan de fidélité : 6 commandes, plats offerts et gains
 
 - Module Messagerie (plus tard)
 
 - Est-ce que le numéro de paiement et le numéro du client qui un blocage (Vérification)
 
+- Historique des activités du clients (Usage de promotion, points gagnés, points utilisés, points bonus, gains utilisés et gains bonus)
+
+- Stratégie de fidélité au niveau de fidélité
 
 ROADMAP POUR AJOUTER UN NOUVEL EVENEMENT D'ACTION (NOTIFICATION ou EMAIL)
 
@@ -40,14 +43,14 @@ ROADMAP POUR AJOUTER UN NOUVEL EVENEMENT D'ACTION (NOTIFICATION ou EMAIL)
 
 # CATEGORIE NOTIFICATION ET EMAIL
 - Creation categorie (Backoffice et lui-même) : OK
-- Mise à jour categorie (Backoffice et lui-même) : En cours
+- Mise à jour categorie (Backoffice et lui-même) : OK
 - Activation categorie (Backoffice et lui-même) : En cours
 - Desactivation categorie (Backoffice et lui-même) : En cours
 - Suppression categorie (Backoffice et lui-même) : En cours
 
 # PLAT NOTIFICATION ET EMAIL
 - Creation plat (Backoffice et lui-même) : OK
-- Mise à jour plat (Backoffice et lui-même) : En cours
+- Mise à jour plat (Backoffice et lui-même) : OK
 - Activation plat (Backoffice et lui-même) : En cours
 - Desactivation plat (Backoffice et lui-même) : En cours
 - Suppression plat (Backoffice et lui-même) : En cours
@@ -65,7 +68,7 @@ ROADMAP POUR AJOUTER UN NOUVEL EVENEMENT D'ACTION (NOTIFICATION ou EMAIL)
 - Suppression commande (Restaurant et lui-même) : En cours
 
 # POINTS DE FIDELITE NOTIFICATION ET EMAIL
-- Gagnez des points (Par bonus, commande) (Client) : OK (revu)
-- Utilisez des points (Client) : OK (revu)
-- Niveau atteint (Client) : OK (revu)
-- Points expirés (Client) : En cours
+- Gagnez des points (Par bonus, commande) (Client) : OK 
+- Utilisez des points (Client) : OK 
+- Niveau atteint (Client) : OK 
+- Points expirés (Client) : OK

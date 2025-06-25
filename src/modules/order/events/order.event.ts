@@ -32,7 +32,6 @@ export class OrderEvent {
     );
   }
 
-
   /**
    * Émet un événement de mise à jour de commande
    */
