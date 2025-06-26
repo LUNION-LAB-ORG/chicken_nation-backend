@@ -393,6 +393,14 @@ export class CommentService {
             if (max_rating) whereClause.rating.lte = max_rating;
         }
 
+        if (query.restaurantId) {
+          whereClause.orders = {
+            some: {
+              restaurant_id: query.restaurantId,
+            },
+          };
+        }
+
         const [comments, total] = await Promise.all([
             this.prisma.comment.findMany({
                 where: whereClause,

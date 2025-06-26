@@ -118,4 +118,9 @@ export class GetCommentsQueryDto {
     @Min(1)
     @Max(5)
     max_rating?: number;
+
+    @ApiProperty({ required: false, description: 'Filtrer par ID de restaurant' })
+    @IsOptional()
+    @IsUUID()
+    restaurantId?: string;
 }

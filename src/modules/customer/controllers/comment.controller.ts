@@ -189,6 +189,7 @@ export class CommentController {
     @ApiQuery({ name: 'limit', required: false, description: 'Nombre d\'éléments par page' })
     @ApiQuery({ name: 'min_rating', required: false, description: 'Note minimum' })
     @ApiQuery({ name: 'max_rating', required: false, description: 'Note maximum' })
+    @ApiQuery({ name: 'restaurantId', required: false, description: 'ID du restaurant' })
     @ApiResponse({
         status: 200,
         description: 'Commentaires récupérés avec succès',

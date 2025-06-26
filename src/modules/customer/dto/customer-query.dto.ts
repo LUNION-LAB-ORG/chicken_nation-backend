@@ -1,4 +1,4 @@
-import { IsOptional, IsEnum, IsString } from 'class-validator';
+import { IsOptional, IsEnum, IsString, IsUUID } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { EntityStatus } from '@prisma/client';
 import { Transform } from 'class-transformer';
@@ -29,4 +29,9 @@ export class CustomerQueryDto {
     @IsOptional()
     @Transform(({ value }) => String(value).trim())
     search?: string;
+
+    @ApiPropertyOptional({ description: "Filtrer par ID de restaurant" })
+    @IsOptional()
+    @IsUUID()
+    restaurantId?: string;
 }
