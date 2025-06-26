@@ -1,5 +1,5 @@
 import { IsBoolean, IsNumber, IsString } from "class-validator";
-import { Transform } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 export class ApplyDiscountPromotionDto {
@@ -8,11 +8,12 @@ export class ApplyDiscountPromotionDto {
     promotion_id: string;
 
     @ApiProperty({ description: 'Montant de la commande' })
-    @Transform(({ value }) => Number(value))
+    @Type(() => Number)
     @IsNumber()
     order_amount: number;
 
     @ApiProperty({ description: 'Liste des plats de la commande' })
+    @Type(() => ApplyItemDto)
     @Transform(({ value }) => JSON.parse(value))
     items: ApplyItemDto[];
 }
@@ -23,12 +24,12 @@ export class ApplyItemDto {
     dish_id: string;
 
     @ApiProperty({ description: 'Quantité du plat' })
-    @Transform(({ value }) => Number(value))
+    @Type(() => Number)
     @IsNumber()
     quantity: number;
 
     @ApiProperty({ description: 'Prix du plat' })
-    @Transform(({ value }) => Number(value))
+    @Type(() => Number)
     @IsNumber()
     price: number;
 }
@@ -36,18 +37,18 @@ export class ApplyItemDto {
 export class ApplyDiscountPromotionDtoResponse {
 
     @ApiProperty({ description: 'Montant de la remise' })
+    @Type(() => Number)
     @IsNumber()
-    @Transform(({ value }) => Number(value))
     discount_amount: number;
 
     @ApiProperty({ description: 'Montant final de la commande' })
+    @Type(() => Number)
     @IsNumber()
-    @Transform(({ value }) => Number(value))
     final_amount: number;
 
     @ApiProperty({ description: 'Indique si la promotion est applicable' })
     @IsBoolean()
-    @Transform(({ value }) => Boolean(value))
+    @Type(() => Boolean)
     applicable: boolean;
 
     @ApiPropertyOptional({ description: 'Motif de non-applicabilité' })

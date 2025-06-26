@@ -1,14 +1,17 @@
 import { IsOptional, IsEnum, IsString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { EntityStatus } from '@prisma/client';
+import { Type } from 'class-transformer';
 
 export class FilterQueryDto {
     @ApiPropertyOptional({ description: 'Numéro de page', default: 1 })
     @IsOptional()
+    @Type(() => Number)
     page?: number = 1;
 
     @ApiPropertyOptional({ description: 'Nombre d\'items par page', default: 10 })
     @IsOptional()
+    @Type(() => Number)
     limit?: number = 10;
 
     @ApiPropertyOptional({

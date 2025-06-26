@@ -1,8 +1,7 @@
 import { IsEnum, IsUUID, IsOptional, IsNumber, Min, IsString, IsDateString } from 'class-validator';
-import { Type } from 'class-transformer';
 import { OrderStatus, OrderType } from '@prisma/client';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { parse, isValid } from 'date-fns';
 
 export class QueryOrderDto {
@@ -54,12 +53,14 @@ export class QueryOrderDto {
     @IsOptional()
     @IsNumber()
     @Min(0)
+    @Type(() => Number)
     minAmount?: number;
 
     @ApiPropertyOptional({ description: "Montant maximum de commande" })
     @IsOptional()
     @IsNumber()
     @Min(0)
+    @Type(() => Number)
     maxAmount?: number;
 
     @ApiPropertyOptional({ description: "Numéro de page", default: 1 })

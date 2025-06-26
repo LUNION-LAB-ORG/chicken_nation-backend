@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsBoolean, IsUUID, IsOptional } from 'class-validator';
 import { NotificationTarget, NotificationType } from '@prisma/client';
-import { Transform } from 'class-transformer';
+import { Type } from 'class-transformer';
 
 export class QueryNotificationDto {
   @ApiPropertyOptional({
@@ -9,7 +9,7 @@ export class QueryNotificationDto {
     example: 1
   })
   @IsOptional()
-  @Transform(({ value }) => Number(value))
+  @Type(() => Number)
   page?: number = 1;
 
   @ApiPropertyOptional({
@@ -17,7 +17,7 @@ export class QueryNotificationDto {
     example: 10
   })
   @IsOptional()
-  @Transform(({ value }) => Number(value))
+  @Type(() => Number)
   limit?: number = 10;
 
   @ApiPropertyOptional({
@@ -52,5 +52,6 @@ export class QueryNotificationDto {
   })
   @IsOptional()
   @IsBoolean()
+  @Type(() => Boolean)
   isRead?: boolean;
 }

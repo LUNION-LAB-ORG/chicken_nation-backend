@@ -19,6 +19,7 @@ export class CreateOrderDto {
     @ApiPropertyOptional({ description: "Nombre de places" })
     @IsOptional()
     @IsInt()
+    @Type(() => Number)
     places?: number;
 
     @ApiProperty({ description: "l'adresse de livraison/retrait" })
@@ -103,6 +104,7 @@ export class CreateOrderDto {
     @ApiPropertyOptional({ description: "Points de fidélité à utiliser" })
     @IsOptional()
     @IsInt()
+    @Type(() => Number) 
     points?: number;
 
     @ApiPropertyOptional({ description: "ID de la promotion" })

@@ -1,6 +1,6 @@
 import { IsNotEmpty, IsNumber, IsString, IsUUID, Max, Min, IsOptional } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
 
 export class CreateCommentDto {
     @ApiProperty({ description: 'Message du commentaire' })
@@ -12,7 +12,7 @@ export class CreateCommentDto {
     @IsNumber()
     @Min(1)
     @Max(5)
-    @Transform(({ value }) => parseFloat(value))
+    @Type(() => Number)
     rating: number;
 
     @ApiProperty({ description: 'ID de la commande' })
@@ -32,7 +32,7 @@ export class UpdateCommentDto {
     @IsOptional()
     @Min(1)
     @Max(5)
-    @Transform(({ value }) => parseFloat(value))
+    @Type(() => Number)
     rating?: number;
 }
 
@@ -96,13 +96,17 @@ export class DishCommentsResponseDto {
 
 export class GetCommentsQueryDto {
     @ApiProperty({ required: false, default: 1 })
-    @IsNumber()
     @IsOptional()
+    @IsNumber()
+    @Min(1)
+    @Type(() => Number)
     page?: number = 1;
 
     @ApiProperty({ required: false, default: 10 })
-    @IsNumber()
     @IsOptional()
+    @IsNumber()
+    @Min(0)
+    @Type(() => Number)
     limit?: number = 10;
 
     @ApiProperty({ required: false, description: 'Filtrer par note minimum' })
@@ -110,6 +114,7 @@ export class GetCommentsQueryDto {
     @IsOptional()
     @Min(1)
     @Max(5)
+    @Type(() => Number)
     min_rating?: number;
 
     @ApiProperty({ required: false, description: 'Filtrer par note maximum' })
@@ -117,6 +122,7 @@ export class GetCommentsQueryDto {
     @IsOptional()
     @Min(1)
     @Max(5)
+    @Type(() => Number)
     max_rating?: number;
 
     @ApiProperty({ required: false, description: 'Filtrer par ID de restaurant' })

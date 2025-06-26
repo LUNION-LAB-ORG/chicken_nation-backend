@@ -23,12 +23,14 @@ export class QueryDishDto {
     @IsOptional()
     @IsNumber()
     @Min(0)
+    @Type(() => Number)
     minPrice?: number;
 
     @ApiPropertyOptional({ description: "Montant maximum du plat" })
     @IsOptional()
     @IsNumber()
     @Min(0)
+    @Type(() => Number)
     maxPrice?: number;
 
     @ApiPropertyOptional({ description: "Numéro de page", default: 1 })

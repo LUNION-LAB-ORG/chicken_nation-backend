@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, IsIn, IsDateString, ValidateIf } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 
 export class GetStatsQueryDto {
     @ApiPropertyOptional({
@@ -29,7 +29,7 @@ export class GetStatsQueryDto {
     @ValidateIf((o) => o.startDate || o.endDate)
     endDate?: string;
 
-    @ApiPropertyOptional({ 
+    @ApiPropertyOptional({
         enum: ['today', 'week', 'month', 'year'],
         description: 'Période prédéfinie pour les statistiques',
         default: 'month'
@@ -45,6 +45,7 @@ export class ObjectiveData {
     value: string;
 
     @ApiProperty({ description: 'Pourcentage d\'atteinte de l\'objectif' })
+    @Type(() => Number)
     percentage: number;
 }
 
@@ -105,7 +106,7 @@ export class DailyRevenueData {
     @ApiProperty({ type: TrendData })
     trend: TrendData;
 
-    @ApiPropertyOptional({ 
+    @ApiPropertyOptional({
         type: [HourlyValue],
         description: 'Données par heure (uniquement pour la période "today")'
     })
@@ -116,7 +117,7 @@ export class RevenueData {
     @ApiProperty({ type: DailyRevenueData })
     dailyData: DailyRevenueData;
 
-    @ApiPropertyOptional({ 
+    @ApiPropertyOptional({
         type: [PeriodicData],
         description: 'Données mensuelles (uniquement pour la période "year")'
     })
@@ -128,11 +129,12 @@ export class DailyOrder {
     day: string;
 
     @ApiProperty({ description: 'Nombre de commandes' })
+    @Type(() => Number)
     count: number;
 }
 
 export class WeeklyOrdersData {
-    @ApiProperty({ 
+    @ApiProperty({
         type: [String],
         description: 'Plages de dates des 4 dernières semaines'
     })
@@ -153,12 +155,14 @@ export class BestSellingMenuItem {
     name: string;
 
     @ApiProperty({ description: 'Quantité vendue' })
+    @Type(() => Number)
     count: number;
 
     @ApiProperty({ description: 'URL de l\'image du plat' })
     image: string;
 
     @ApiProperty({ description: 'Pourcentage des ventes totales' })
+    @Type(() => Number)
     percentage: number;
 
     @ApiProperty({ description: 'Texte descriptif du pourcentage' })
@@ -176,6 +180,7 @@ export class SalesCategory {
     color: string;
 
     @ApiProperty({ description: 'Pourcentage du total' })
+    @Type(() => Number)
     percentage: number;
 }
 
