@@ -58,6 +58,14 @@ export class CustomerService {
       whereClause.entity_status = status;
     }
 
+    if (query.restaurantId) {
+      whereClause.orders = {
+        some: {
+          restaurant_id: query.restaurantId,
+        },
+      };
+    }
+
     const [count, customers] = await Promise.all([
       this.prisma.customer.count({ where: whereClause }),
       this.prisma.customer.findMany({
