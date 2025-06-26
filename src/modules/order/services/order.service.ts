@@ -223,6 +223,9 @@ export class OrderService {
    * Récupère une commande par son ID
    */
   async findById(id: string) {
+    if (!id) {
+      throw new BadRequestException('L\'identifiant de la commande est requis');
+    }
     const order = await this.prisma.order.findFirst({
       where: {
         id,
