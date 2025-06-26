@@ -186,7 +186,9 @@ export class OrderHelper {
 
     // Calculer les détails de la commande
     async calculateOrderDetails(items: CreateOrderDto['items'], dishes: Dish[]) {
+
         let netAmount = 0;
+
         const orderItems: {
             dish_id: string;
             quantity: number;
@@ -245,6 +247,7 @@ export class OrderHelper {
             const itemPrice = (dish.is_promotion && dish.promotion_price !== null)
                 ? dish.promotion_price
                 : dish.price;
+                
             // On calcul le prix du plat sans les suppléments, puis on ajoute le prix des suppléments (QuantitéArticle * PrixArticle + PrixSupplément)
             // Plus tard on devrait faire (QuantitéArticle * (PrixArticle + PrixSupplément)) ou (QuantitéArticle*PrixArticle + QuantitéSupplément*PrixSupplément)
             let itemAmount = itemPrice * item.quantity; // prix un item (article+supplement) mais ici c'est le prix du plat sans les suppléments
