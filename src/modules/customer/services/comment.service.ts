@@ -394,11 +394,9 @@ export class CommentService {
         }
 
         if (query.restaurantId) {
-          whereClause.order = {
-            some: {
-              restaurant_id: query.restaurantId,
-            },
-          };
+            whereClause.order = {
+                restaurant_id: query.restaurantId,
+            };
         }
 
         const [comments, total] = await Promise.all([

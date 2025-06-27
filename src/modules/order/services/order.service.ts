@@ -291,19 +291,7 @@ export class OrderService {
       }),
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
-      ...(restaurantId && {
-        order_items: {
-          some: {
-            dish: {
-              dish_restaurants: {
-                some: {
-                  restaurant_id: restaurantId
-                }
-              }
-            }
-          }
-        }
-      })
+      ...(restaurantId && { restaurant_id: restaurantId })
     };
 
     const [orders, total] = await Promise.all([
