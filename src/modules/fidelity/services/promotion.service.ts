@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { CreatePromotionDto } from '../dto/create-promotion.dto';
 import { UpdatePromotionDto } from '../dto/update-promotion.dto';
 import { PromotionResponseDto } from '../dto/promotion-response.dto';
-import { Customer, Prisma, User, Visibility } from '@prisma/client';
+import { Customer, Dish, Prisma, User, Visibility } from '@prisma/client';
 import { DiscountType, TargetType, PromotionStatus, LoyaltyLevel } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryPromotionDto } from '../dto/query-promotion.dto';
@@ -10,19 +10,12 @@ import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PromotionEvent } from '../events/promotion.event';
 import { Request } from 'express';
 
-interface Dish {
-  id: string;
-  name: string;
-  description: string;
-  price: number;
-  image: string | null;
-  is_promotion: boolean;
-  promotion_price: number;
-  category_id: string;
-  entity_status: PromotionStatus;
-  created_at: string;
-  updated_at: string;
+// Define an interface for your custom exception response
+interface CustomExceptionResponse {
+  message: string;
+  key: string; // The key for frontend to use
 }
+
 
 @Injectable()
 export class PromotionService {
