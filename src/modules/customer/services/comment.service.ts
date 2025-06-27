@@ -394,7 +394,7 @@ export class CommentService {
         }
 
         if (query.restaurantId) {
-          whereClause.orders = {
+          whereClause.order = {
             some: {
               restaurant_id: query.restaurantId,
             },
