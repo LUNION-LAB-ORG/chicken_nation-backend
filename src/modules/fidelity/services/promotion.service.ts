@@ -26,6 +26,8 @@ export class PromotionService {
       ...promotionData
     } = createPromotionDto;
 
+    let all_restaurant_ids: string[] = restaurant_ids;
+
     const user = req.user as User;
 
     // Validation des dates
@@ -41,11 +43,18 @@ export class PromotionService {
     }
 
     // Validation des restaurants
-    if (restaurant_ids.length === 0) {
-      throw new PromotionException({
-        key: PromotionErrorKeys.PROMOTION_MISSING_RESTAURANTS,
-        message: 'Vous devez sélectionner au moins un restaurant pour cette promotion'
-      });
+    if (all_restaurant_ids.length === 0) {
+      const restaurants = await this.prisma.restaurant.findMany({
+        select: { id: true }
+      })
+      if (restaurants.length === 0) {
+        throw new PromotionException({
+          key: PromotionErrorKeys.PROMOTION_MISSING_RESTAURANTS,
+          message: 'Vous devez sélectionner au moins un restaurant pour cette promotion'
+        });
+      }
+
+      all_restaurant_ids = restaurants.map(r => r.id);
     }
 
 
@@ -105,7 +114,7 @@ export class PromotionService {
           // Add restaurant associations here
           restaurantPromotions: {
             createMany: {
-              data: restaurant_ids.map(restaurant_id => ({
+              data: all_restaurant_ids.map(restaurant_id => ({
                 restaurant_id,
               })),
             },

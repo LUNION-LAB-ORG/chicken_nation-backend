@@ -209,6 +209,6 @@ export class CreatePromotionDto {
   })
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
+  @Transform(({ value }) => JSON.parse(value))
   restaurant_ids?: string[];
 }
