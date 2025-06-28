@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { CreatePromotionDto } from '../dto/create-promotion.dto';
 import { UpdatePromotionDto } from '../dto/update-promotion.dto';
 import { PromotionResponseDto } from '../dto/promotion-response.dto';
@@ -10,12 +10,8 @@ import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PromotionEvent } from '../events/promotion.event';
 import { Request } from 'express';
 
-// Define an interface for your custom exception response
-interface CustomExceptionResponse {
-  message: string;
-  key: string; // The key for frontend to use
-}
-
+import { PromotionErrorKeys } from '../enums/promotion-error-keys.enum';
+import { PromotionException } from '../filters/promotion.filter';
 
 @Injectable()
 export class PromotionService {
@@ -36,35 +32,57 @@ export class PromotionService {
     const endDate = new Date(promotionData.expiration_date);
 
     if (startDate >= endDate) {
-      throw new BadRequestException('La date de fin doit être postérieure à la date de début');
+      throw new PromotionException({
+        key: PromotionErrorKeys.PROMOTION_INVALID_DATE_RANGE,
+        message: 'La date de fin doit être postérieure à la date de début',
+        data: { startDate: promotionData.start_date, endDate: promotionData.expiration_date }
+      });
     }
 
     // Validation du ciblage
     if (promotionData.target_type === TargetType.SPECIFIC_PRODUCTS && targeted_dish_ids.length === 0) {
-      throw new BadRequestException('Vous devez sélectionner au moins un plat pour ce type de promotion');
+      throw new PromotionException({
+        key: PromotionErrorKeys.PROMOTION_MISSING_TARGETED_DISHES,
+        message: 'Vous devez sélectionner au moins un plat pour ce type de promotion'
+      });
     }
 
     if (promotionData.target_type === TargetType.CATEGORIES && targeted_category_ids.length === 0) {
-      throw new BadRequestException('Vous devez sélectionner au moins une catégorie pour ce type de promotion');
+      throw new PromotionException({
+        key: PromotionErrorKeys.PROMOTION_MISSING_TARGETED_CATEGORIES,
+        message: 'Vous devez sélectionner au moins une catégorie pour ce type de promotion'
+      });
     }
     // Validation de la visibilité
     if (promotionData.visibility === Visibility.PRIVATE && !promotionData.target_standard && !promotionData.target_premium && !promotionData.target_gold) {
-      throw new BadRequestException('Vous devez sélectionner au moins un niveau de fidélité pour ce type de promotion, exemple : standard, premium, gold');
+      throw new PromotionException({
+        key: PromotionErrorKeys.PROMOTION_MISSING_LOYALTY_LEVELS,
+        message: 'Vous devez sélectionner au moins un niveau de fidélité pour ce type de promotion, exemple : standard, premium, gold'
+      });
     }
 
     // Validation du type de remise
     if (promotionData.discount_type === DiscountType.BUY_X_GET_Y && offered_dishes.length === 0) {
-      throw new BadRequestException('Vous devez sélectionner au moins un plat pour ce type de promotion');
+      throw new PromotionException({
+        key: PromotionErrorKeys.PROMOTION_MISSING_OFFERED_DISHES,
+        message: 'Vous devez sélectionner au moins un plat pour ce type de promotion'
+      });
     }
 
     if (promotionData.discount_type == DiscountType.PERCENTAGE && promotionData.discount_value > 70) {
-      throw new BadRequestException('La remise ne peut pas être supérieure à 70%');
+      throw new PromotionException({
+        key: PromotionErrorKeys.PROMOTION_DISCOUNT_PERCENTAGE_TOO_HIGH,
+        message: 'La remise ne peut pas être supérieure à 70%',
+        data: { max_percentage: 70, provided_percentage: promotionData.discount_value }
+      });
     }
 
     if (promotionData.discount_type == DiscountType.FIXED_AMOUNT && !promotionData.min_order_amount) {
-      throw new BadRequestException('Le montant minimum de commande doit être renseigné');
+      throw new PromotionException({
+        key: PromotionErrorKeys.PROMOTION_MISSING_MIN_ORDER_AMOUNT,
+        message: 'Le montant minimum de commande doit être renseigné'
+      });
     }
-
 
     const promotion = await this.prisma.$transaction(async (tx) => {
       // Créer la promotion
@@ -214,6 +232,7 @@ export class PromotionService {
       },
     };
   }
+
   async findAllForCustomer(req: Request, filters?: QueryPromotionDto): Promise<QueryResponseDto<PromotionResponseDto>> {
     const customer = req.user as Customer;
 
@@ -309,6 +328,7 @@ export class PromotionService {
       },
     };
   }
+
   async findActivePromotions(filters?: QueryPromotionDto): Promise<PromotionResponseDto[]> {
     const promotions = await this.findAll({
       ...filters,
@@ -337,7 +357,11 @@ export class PromotionService {
       }
     });
     if (!promotion) {
-      throw new NotFoundException('Promotion non trouvée');
+      throw new PromotionException({
+        key: PromotionErrorKeys.PROMOTION_NOT_FOUND,
+        message: 'Promotion non trouvée',
+        data: { id }
+      });
     }
 
     return this.mapToResponseDto(promotion);
@@ -426,7 +450,11 @@ export class PromotionService {
       data: { status: PromotionStatus.EXPIRED }
     });
     if (!promotion) {
-      throw new NotFoundException('Promotion non trouvée');
+      throw new PromotionException({
+        key: PromotionErrorKeys.PROMOTION_NOT_FOUND,
+        message: 'Promotion non trouvée',
+        data: { id }
+      });
     }
 
     // Envoyer l'événement de promotion supprimée
@@ -453,7 +481,11 @@ export class PromotionService {
       // Vérifier si le client peut utiliser cette promotion
       const canUse = await this.canCustomerUsePromotion(promotion_id, customer_id);
       if (!canUse.allowed) {
-        throw new BadRequestException(canUse.reason);
+        throw new PromotionException({
+          key: canUse.error_key!, // L'opérateur ! est utilisé car on sait que error_key sera présent si allowed est false
+          message: canUse.reason!,
+          data: canUse.data
+        });
       }
 
       // Calculer la réduction
@@ -466,7 +498,11 @@ export class PromotionService {
       );
 
       if (!discount.applicable) {
-        throw new BadRequestException(discount.reason || 'Promotion non applicable');
+        throw new PromotionException({
+          key: discount.error_key!,
+          message: discount.reason!,
+          data: discount.data
+        });
       }
 
       // Enregistrer l'utilisation
@@ -598,28 +634,49 @@ export class PromotionService {
     final_amount: number;
     applicable: boolean;
     reason?: string;
+    error_key?: PromotionErrorKeys;
+    data?: any;
   }> {
 
     if (!promotion_id) {
-      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion non trouvée' };
+      return {
+        discount_amount: 0,
+        buyXGetY_amount: 0,
+        final_amount: order_amount,
+        applicable: false,
+        reason: 'Promotion non trouvée',
+        error_key: PromotionErrorKeys.PROMOTION_NOT_FOUND
+      };
     }
     const canUsePromotion = await this.canCustomerUsePromotion(promotion_id, customer_id);
 
     if (!canUsePromotion.allowed) {
-      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: canUsePromotion.reason };
+      return {
+        discount_amount: 0,
+        buyXGetY_amount: 0,
+        final_amount: order_amount,
+        applicable: false,
+        reason: canUsePromotion.reason,
+        error_key: canUsePromotion.error_key,
+        data: canUsePromotion.data
+      };
     }
 
 
     if (items.length === 0) {
-      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Aucun plat dans la commande' };
+      return {
+        discount_amount: 0,
+        buyXGetY_amount: 0,
+        final_amount: order_amount,
+        applicable: false,
+        reason: 'Aucun plat dans la commande',
+        error_key: PromotionErrorKeys.PROMOTION_NO_ITEMS_IN_ORDER
+      };
     }
 
+    // Récupère la promotion en utilisant findOne, qui lance déjà une PromotionException si non trouvée
     const promotion = await this.findOne(promotion_id);
 
-    // Si la promotion n'est pas trouvée, retourner 0
-    if (!promotion) {
-      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion non trouvée' };
-    }
 
     // vérifier si certains plats sont en promotion
     let dishesInPromotion: { dish_id: string; quantity: number; price: number }[] = [];
@@ -633,12 +690,24 @@ export class PromotionService {
 
     let someDishesInPromotion: boolean = dishesInPromotion.length > 0;
 
-
     const qteSomeDishesInPromotion = dishesInPromotion.reduce((total, item) => total + item.quantity, 0);
 
 
     if (!someDishesInPromotion || (promotion.discount_type === DiscountType.BUY_X_GET_Y && qteSomeDishesInPromotion < promotion.discount_value)) {
-      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Vous ne pouvez pas bénéficier de cette promotion' };
+      return {
+        discount_amount: 0,
+        buyXGetY_amount: 0,
+        final_amount: order_amount,
+        applicable: false,
+        reason: 'Vous ne pouvez pas bénéficier de cette promotion',
+        error_key: promotion.discount_type === DiscountType.BUY_X_GET_Y ?
+          PromotionErrorKeys.PROMOTION_INSUFFICIENT_ITEMS_FOR_BUY_X_GET_Y :
+          PromotionErrorKeys.PROMOTION_NOT_APPLICABLE,
+        data: promotion.discount_type === DiscountType.BUY_X_GET_Y ? {
+          required_quantity: promotion.discount_value,
+          current_quantity: qteSomeDishesInPromotion
+        } : undefined
+      };
     }
 
     // Vérifier si la promotion est active
@@ -646,7 +715,14 @@ export class PromotionService {
     if (promotion.status !== PromotionStatus.ACTIVE ||
       new Date(promotion.start_date) > now ||
       new Date(promotion.expiration_date) < now) {
-      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion inactive ou expirée' };
+      return {
+        discount_amount: 0,
+        buyXGetY_amount: 0,
+        final_amount: order_amount,
+        applicable: false,
+        reason: 'Promotion inactive ou expirée',
+        error_key: PromotionErrorKeys.PROMOTION_INACTIVE_OR_EXPIRED
+      };
     }
 
 
@@ -657,7 +733,9 @@ export class PromotionService {
         buyXGetY_amount: 0,
         final_amount: order_amount,
         applicable: false,
-        reason: `Montant minimum requis: ${promotion.min_order_amount} XOF`
+        reason: `Montant minimum requis: ${promotion.min_order_amount} XOF`,
+        error_key: PromotionErrorKeys.PROMOTION_MIN_ORDER_AMOUNT_NOT_REACHED,
+        data: { required_amount: promotion.min_order_amount, current_amount: order_amount }
       };
     }
 
@@ -674,11 +752,9 @@ export class PromotionService {
         break;
 
       case DiscountType.BUY_X_GET_Y:
-
         buyXGetY_amount = promotion.offered_dishes?.reduce((total, pd) => {
           const dish = pd as unknown as Dish & { quantity: number };
           if (!dish) return total;
-
           const price = dish.is_promotion ? (dish.promotion_price ?? dish.price) : dish.price;
           return total + pd.quantity * price;
         }, 0) ?? 0;
@@ -700,7 +776,14 @@ export class PromotionService {
     const totalDiscountAmount = usagesAmount._sum.discount_amount ?? 0;
 
     if (promotion.max_discount_amount && totalDiscountAmount >= promotion.max_discount_amount) {
-      return { discount_amount: 0, buyXGetY_amount: 0, final_amount: order_amount, applicable: false, reason: 'Promotion épuisée' };
+      return {
+        discount_amount: 0,
+        buyXGetY_amount: 0,
+        final_amount: order_amount,
+        applicable: false,
+        reason: 'Promotion épuisée',
+        error_key: PromotionErrorKeys.PROMOTION_EXHAUSTED
+      };
     }
 
     // Appliquer le plafond de réduction
@@ -720,7 +803,12 @@ export class PromotionService {
   }
 
   // Vérifier si le client peut utiliser cette promotion
-  async canCustomerUsePromotion(promotion_id: string, customer_id: string) {
+  async canCustomerUsePromotion(promotion_id: string, customer_id: string): Promise<{
+    allowed: boolean;
+    reason?: string;
+    error_key?: PromotionErrorKeys;
+    data?: any;
+  }> {
     const promotion = await this.prisma.promotion.findUnique({
       where: { id: promotion_id },
       include: {
@@ -731,7 +819,12 @@ export class PromotionService {
     });
 
     if (!promotion) {
-      return { allowed: false, reason: 'Promotion non trouvée' };
+      return {
+        allowed: false,
+        reason: 'Promotion non trouvée',
+        error_key: PromotionErrorKeys.PROMOTION_NOT_FOUND,
+        data: { promotion_id }
+      };
     }
 
     // Vérifier les limites d'utilisation
@@ -740,13 +833,19 @@ export class PromotionService {
       if (userUsageCount >= promotion.max_usage_per_user) {
         return {
           allowed: false,
-          reason: `Limite d'utilisation atteinte (${promotion.max_usage_per_user} fois maximum)`
+          reason: `Limite d'utilisation atteinte (${promotion.max_usage_per_user} fois maximum)`,
+          error_key: PromotionErrorKeys.PROMOTION_USAGE_LIMIT_REACHED,
+          data: { max_usage: promotion.max_usage_per_user, current_usage: userUsageCount }
         };
       }
     }
 
     if (promotion.max_total_usage && promotion.current_usage >= promotion.max_total_usage) {
-      return { allowed: false, reason: 'Promotion épuisée' };
+      return {
+        allowed: false,
+        reason: 'Promotion épuisée',
+        error_key: PromotionErrorKeys.PROMOTION_EXHAUSTED
+      };
     }
 
     // Vérifier le niveau de fidélité pour les promotions privées
@@ -756,7 +855,12 @@ export class PromotionService {
       });
 
       if (!customer) {
-        return { allowed: false, reason: 'Client non trouvé' };
+        return {
+          allowed: false,
+          reason: 'Client non trouvé',
+          error_key: PromotionErrorKeys.PROMOTION_CUSTOMER_NOT_FOUND,
+          data: { customer_id }
+        };
       }
 
       const hasAccess = (
@@ -768,7 +872,9 @@ export class PromotionService {
       if (!hasAccess) {
         return {
           allowed: false,
-          reason: 'Cette promotion n\'est pas disponible pour votre niveau de fidélité'
+          reason: 'Cette promotion n\'est pas disponible pour votre niveau de fidélité',
+          error_key: PromotionErrorKeys.PROMOTION_NOT_ACCESSIBLE,
+          data: { customer_loyalty_level: customer.loyalty_level }
         };
       }
     }

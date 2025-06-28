@@ -58,3 +58,5 @@ ROADMAP POUR AJOUTER UN NOUVEL EVENEMENT D'ACTION (NOTIFICATION ou EMAIL)
 - Utilisez des points (Client) : OK 
 - Niveau atteint (Client) : OK 
 - Points expirés (Client) : OK
+
+- SI le restaurant choisi n'a pas un plat, il faudrait renvoyer la commande à un autre restaurant.
