@@ -22,6 +22,7 @@ export class PromotionService {
       targeted_dish_ids = [],
       targeted_category_ids = [],
       offered_dishes = [],
+      restaurant_ids = [],
       ...promotionData
     } = createPromotionDto;
 
@@ -38,6 +39,15 @@ export class PromotionService {
         data: { startDate: promotionData.start_date, endDate: promotionData.expiration_date }
       });
     }
+
+    // Validation des restaurants
+    if (restaurant_ids.length === 0) {
+      throw new PromotionException({
+        key: PromotionErrorKeys.PROMOTION_MISSING_RESTAURANTS,
+        message: 'Vous devez sélectionner au moins un restaurant pour cette promotion'
+      });
+    }
+
 
     // Validation du ciblage
     if (promotionData.target_type === TargetType.SPECIFIC_PRODUCTS && targeted_dish_ids.length === 0) {
@@ -92,6 +102,14 @@ export class PromotionService {
           start_date: startDate.toISOString(),
           expiration_date: endDate.toISOString(),
           created_by_id,
+          // Add restaurant associations here
+          restaurantPromotions: {
+            createMany: {
+              data: restaurant_ids.map(restaurant_id => ({
+                restaurant_id,
+              })),
+            },
+          },
         },
       });
       // Ajouter les plats ciblés
@@ -191,9 +209,22 @@ export class PromotionService {
 
     if (filters?.targeted_category_ids?.length) where.promotion_targeted_categories = { some: { category_id: { in: filters.targeted_category_ids } } };
 
-    if (filters?.targeted_dish_ids?.length) where.promotion_targeted_dishes = { some: { dish_id: { in: filters.targeted_dish_ids } } };
+    if (filters?.targeted_dish_ids?.length) {
+      // Use OR to check both promotion_targeted_dishes and promotion_dishes
+      where.OR = [
+        { promotion_targeted_dishes: { some: { dish_id: { in: filters.targeted_dish_ids } } } },
+        { promotion_dishes: { some: { dish_id: { in: filters.targeted_dish_ids } } } }
+      ];
+    }
 
-    if (filters?.targeted_dish_ids?.length) where.promotion_dishes = { some: { dish_id: { in: filters.targeted_dish_ids } } };
+    // New filter for restaurant_ids
+    if (filters?.restaurant_ids?.length) {
+      where.restaurantPromotions = {
+        some: {
+          restaurant_id: { in: filters.restaurant_ids },
+        },
+      };
+    }
 
     const take = filters?.limit ?? 20;
     const skip = filters?.page ? (filters.page - 1) * take : 0;
@@ -213,6 +244,13 @@ export class PromotionService {
           },
           created_by: {
             select: { id: true, fullname: true, email: true },
+          },
+          restaurantPromotions: { // <--- Include restaurantPromotions here
+            include: {
+              restaurant: {
+                select: { id: true, name: true }
+              }
+            }
           },
         },
         orderBy: { created_at: 'desc' },
@@ -242,17 +280,11 @@ export class PromotionService {
     };
 
     if (filters?.title) where.title = { contains: filters.title, mode: 'insensitive' };
-
     if (filters?.status) where.status = filters.status;
-
     if (filters?.visibility) where.visibility = filters.visibility;
-
     if (filters?.discount_type) where.discount_type = filters.discount_type;
-
     if (filters?.target_type) where.target_type = filters.target_type;
-
     if (filters?.min_order_amount !== undefined) where.min_order_amount = { gte: filters.min_order_amount };
-
     if (filters?.max_discount_amount !== undefined) where.max_discount_amount = { lte: filters.max_discount_amount };
 
     if (filters?.start_date_from || filters?.start_date_to) {
@@ -267,17 +299,29 @@ export class PromotionService {
       if (filters.expiration_date_to) where.expiration_date.lte = filters.expiration_date_to;
     }
 
-    if (filters?.visibility === 'PRIVATE') {
-      if (filters?.target_standard) where.target_standard = true;
-      if (filters?.target_premium) where.target_premium = true;
-      if (filters?.target_gold) where.target_gold = true;
-    }
+    // Customer-specific loyalty level filtering will happen in the .filter() below
+    // No need to add it directly to where clause here if visibility is 'PRIVATE'
+    // as we handle it after fetching.
 
     if (filters?.targeted_category_ids?.length) where.promotion_targeted_categories = { some: { category_id: { in: filters.targeted_category_ids } } };
 
-    if (filters?.targeted_dish_ids?.length) where.promotion_targeted_dishes = { some: { dish_id: { in: filters.targeted_dish_ids } } };
+    if (filters?.targeted_dish_ids?.length) {
+      where.OR = [
+        { promotion_targeted_dishes: { some: { dish_id: { in: filters.targeted_dish_ids } } } },
+        { promotion_dishes: { some: { dish_id: { in: filters.targeted_dish_ids } } } }
+      ];
+    }
 
-    if (filters?.targeted_dish_ids?.length) where.promotion_dishes = { some: { dish_id: { in: filters.targeted_dish_ids } } };
+    // Add restaurant filtering for customer view
+    // This assumes that filters.restaurant_ids will be passed when calling this for a customer
+    // who is viewing promotions for a specific restaurant.
+    if (filters?.restaurant_ids?.length) {
+      where.restaurantPromotions = {
+        some: {
+          restaurant_id: { in: filters.restaurant_ids },
+        },
+      };
+    }
 
     const take = filters?.limit ?? 20;
     const skip = filters?.page ? (filters.page - 1) * take : 0;
@@ -298,6 +342,13 @@ export class PromotionService {
           created_by: {
             select: { id: true, fullname: true, email: true },
           },
+          restaurantPromotions: { // <--- Include for customer view as well
+            include: {
+              restaurant: {
+                select: { id: true, name: true }
+              }
+            }
+          },
         },
         orderBy: { created_at: 'desc' },
         take,
@@ -306,16 +357,21 @@ export class PromotionService {
       this.prisma.promotion.count({ where }),
     ]);
 
+    // The filtering logic for loyalty level is already good here.
+    // Ensure that if a promotion targets specific restaurants, it's displayed only if the customer
+    // is currently associated with one of those restaurants (via the filters?.restaurant_ids)
+    // or if the promotion is truly global.
     return {
       data: promotions.filter((promotion) => {
-        //Si la promotion est publique, on la garde
         if (promotion.visibility == Visibility.PUBLIC) return true;
 
-        //Si la promotion est privée, on vérifie si le client est ciblé
         if (promotion.visibility === Visibility.PRIVATE) {
-          if (promotion.target_standard) return customer.loyalty_level === LoyaltyLevel.STANDARD;
-          if (promotion.target_premium) return customer.loyalty_level === LoyaltyLevel.PREMIUM;
-          if (promotion.target_gold) return customer.loyalty_level === LoyaltyLevel.GOLD;
+          const isTargetedByLoyalty = (
+            (customer.loyalty_level === LoyaltyLevel.STANDARD && promotion.target_standard) ||
+            (customer.loyalty_level === LoyaltyLevel.PREMIUM && promotion.target_premium) ||
+            (customer.loyalty_level === LoyaltyLevel.GOLD && promotion.target_gold)
+          );
+          if (!isTargetedByLoyalty) return false;
         }
 
         return true;
@@ -353,7 +409,14 @@ export class PromotionService {
         },
         created_by: {
           select: { id: true, fullname: true, email: true }
-        }
+        },
+        restaurantPromotions: { // <--- Include here
+          include: {
+            restaurant: {
+              select: { id: true, name: true } // Select relevant restaurant fields
+            }
+          }
+        },
       }
     });
     if (!promotion) {
@@ -372,13 +435,13 @@ export class PromotionService {
       targeted_dish_ids,
       targeted_category_ids,
       offered_dishes,
+      restaurant_ids, // <--- Extract restaurant_ids here
       ...promotionData
     } = updatePromotionDto;
 
     const user = req.user as User;
 
     const promotion = await this.prisma.$transaction(async (tx) => {
-      // Mettre à jour la promotion
       const promotion = await tx.promotion.update({
         where: { id },
         data: {
@@ -388,7 +451,21 @@ export class PromotionService {
         },
       });
 
-      // Mettre à jour les relations si nécessaire
+      if (restaurant_ids !== undefined) {
+        await tx.restaurantPromotion.deleteMany({
+          where: { promotion_id: id }
+        });
+
+        if (restaurant_ids.length > 0) {
+          await tx.restaurantPromotion.createMany({
+            data: restaurant_ids.map(restaurant_id => ({
+              promotion_id: id,
+              restaurant_id,
+            })),
+          });
+        }
+      }
+
       if (promotionData.target_type === TargetType.SPECIFIC_PRODUCTS && targeted_dish_ids !== undefined) {
         await tx.promotionTargetedDish.deleteMany({
           where: { promotion_id: id }
@@ -939,7 +1016,11 @@ export class PromotionService {
       updated_at: promotion.updated_at,
       targeted_dishes: promotion.promotion_targeted_dishes?.map(ptd => ptd.dish) || [],
       targeted_categories: promotion.promotion_targeted_categories?.map(ptc => ptc.category) || [],
-      offered_dishes: promotion.promotion_dishes?.map(pd => ({ ...pd.dish, quantity: pd.quantity })) || []
+      offered_dishes: promotion.promotion_dishes?.map(pd => ({ ...pd.dish, quantity: pd.quantity })) || [],
+      restaurants: promotion.restaurantPromotions?.map(rp => {
+        const restaurant = rp.restaurant;
+        return { id: restaurant.id, name: restaurant.name }
+      }) || [],
     };
   }
 }

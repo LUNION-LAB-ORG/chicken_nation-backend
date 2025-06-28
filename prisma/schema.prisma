@@ -410,11 +410,11 @@ model Restaurant {
   dish_restaurants DishRestaurant[]
   users            User[]
   orders           Order[]
+  restaurantPromotions RestaurantPromotion[]
 
   entity_status       EntityStatus          @default(ACTIVE)
   created_at          DateTime              @default(now()) @db.Timestamp(6)
   updated_at          DateTime              @default(now()) @db.Timestamp(6)
-  RestaurantPromotion RestaurantPromotion[]
 }
 
 model Supplement {
@@ -504,7 +504,7 @@ model Promotion {
   created_at                    DateTime                    @default(now()) @db.Timestamp(6)
   updated_at                    DateTime                    @default(now()) @db.Timestamp(6)
   promotion_targeted_categories PromotionTargetedCategory[]
-  RestaurantPromotion           RestaurantPromotion[]
+  restaurantPromotions          RestaurantPromotion[]
 
   @@index([status, visibility])
   @@index([start_date, expiration_date])

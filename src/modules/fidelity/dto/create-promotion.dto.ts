@@ -179,6 +179,7 @@ export class CreatePromotionDto {
   })
   @IsOptional()
   @IsArray()
+  @IsString({ each: true }) // Validate each item in the array is a string (UUID)
   @Transform(({ value }) => JSON.parse(value))
   targeted_dish_ids?: string[];
 
@@ -188,6 +189,7 @@ export class CreatePromotionDto {
   })
   @IsOptional()
   @IsArray()
+  @IsString({ each: true }) // Validate each item in the array is a string (UUID)
   @Transform(({ value }) => JSON.parse(value))
   targeted_category_ids?: string[];
 
@@ -199,4 +201,14 @@ export class CreatePromotionDto {
   @IsArray()
   @Transform(({ value }) => JSON.parse(value))
   offered_dishes?: { dish_id: string; quantity: number }[];
+
+  @ApiPropertyOptional({
+    description: 'Liste des IDs des restaurants concernés par la promotion',
+    type: [String],
+    example: ['uuid-restaurant-1', 'uuid-restaurant-2'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  restaurant_ids?: string[];
 }
