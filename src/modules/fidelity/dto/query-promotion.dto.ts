@@ -105,6 +105,12 @@ export class QueryPromotionDto {
     @Transform(({ value }) => JSON.parse(value))
     targeted_dish_ids?: string[];
 
+    @ApiPropertyOptional({ description: 'Restaurants ciblés' })
+    @IsOptional()
+    @IsArray()
+    @Transform(({ value }) => JSON.parse(value))
+    restaurant_ids?: string[];
+
     @ApiPropertyOptional({ description: 'Pagination - page' })
     @IsOptional()
     @Type(() => Number)

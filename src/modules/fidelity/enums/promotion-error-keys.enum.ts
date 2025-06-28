@@ -1,4 +1,9 @@
 export enum PromotionErrorKeys {
+    // Erreurs de validation des restaurants
+    /**
+     * Indique qu'aucun restaurant n'a été sélectionné pour la promotion.
+     */
+    PROMOTION_MISSING_RESTAURANTS = 'PROMOTION_MISSING_RESTAURANTS',
     // Erreurs de validation des dates
     /**
      * Indique que la plage de dates spécifiée pour la promotion est invalide.
