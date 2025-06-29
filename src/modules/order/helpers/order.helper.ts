@@ -15,6 +15,7 @@ import {
     addMinutes,
     addSeconds
 } from 'date-fns';
+import { PromotionErrorKeys } from 'src/modules/fidelity/enums/promotion-error-keys.enum';
 
 @Injectable()
 export class OrderHelper {
@@ -247,7 +248,7 @@ export class OrderHelper {
             const itemPrice = (dish.is_promotion && dish.promotion_price !== null)
                 ? dish.promotion_price
                 : dish.price;
-                
+
             // On calcul le prix du plat sans les suppléments, puis on ajoute le prix des suppléments (QuantitéArticle * PrixArticle + PrixSupplément)
             // Plus tard on devrait faire (QuantitéArticle * (PrixArticle + PrixSupplément)) ou (QuantitéArticle*PrixArticle + QuantitéSupplément*PrixSupplément)
             let itemAmount = itemPrice * item.quantity; // prix un item (article+supplement) mais ici c'est le prix du plat sans les suppléments
@@ -609,11 +610,25 @@ export class OrderHelper {
     }
 
     //Calculer le prix si promotion et création de l'utilisation de la promotion
-    async calculatePromotionPrice(promotion_id: string | undefined, customerData: { customer_id: string; loyalty_level: LoyaltyLevel | undefined }, totalDishes: number, orderItems: { dish_id: string; quantity: number; price: number }[]) {
-        if (!promotion_id) return 0;
+    async calculatePromotionPrice(
+        promotion_id: string | undefined,
+        customerData: { customer_id: string; loyalty_level: LoyaltyLevel | undefined },
+        totalDishes: number,
+        orderItems: { dish_id: string; quantity: number; price: number }[]):
+        Promise<{
+            discount_amount: number;
+            buyXGetY_amount: number;
+            final_amount: number;
+            applicable: boolean;
+            reason?: string;
+            error_key?: PromotionErrorKeys;
+            data?: any;
+            offers_dishes: { dish_id: string; quantity: number; price: number }[];
+        } | null> {
+        if (!promotion_id) return null;
         const canUse = await this.promotionService.canCustomerUsePromotion(promotion_id, customerData.customer_id);
         if (!canUse.allowed) {
-            return 0;
+            return null;
         }
         // Calculer la réduction
         const discount = await this.promotionService.calculateDiscount(
@@ -623,11 +638,11 @@ export class OrderHelper {
             orderItems,
             customerData.loyalty_level
         );
-
         if (!discount.applicable) {
-            return 0;
+            return null;
         }
-        return discount.discount_amount;
+
+        return discount;
     }
 
 }

@@ -722,8 +722,9 @@ export class PromotionService {
     reason?: string;
     error_key?: PromotionErrorKeys;
     data?: any;
+    offers_dishes: { dish_id: string; quantity: number; price: number }[];
   }> {
-
+    const offersDishes: { dish_id: string; quantity: number; price: number }[] = [];
     if (!promotion_id) {
       return {
         discount_amount: 0,
@@ -731,7 +732,8 @@ export class PromotionService {
         final_amount: order_amount,
         applicable: false,
         reason: 'Promotion non trouvée',
-        error_key: PromotionErrorKeys.PROMOTION_NOT_FOUND
+        error_key: PromotionErrorKeys.PROMOTION_NOT_FOUND,
+        offers_dishes: []
       };
     }
     const canUsePromotion = await this.canCustomerUsePromotion(promotion_id, customer_id);
@@ -744,7 +746,8 @@ export class PromotionService {
         applicable: false,
         reason: canUsePromotion.reason,
         error_key: canUsePromotion.error_key,
-        data: canUsePromotion.data
+        data: canUsePromotion.data,
+        offers_dishes: []
       };
     }
 
@@ -756,7 +759,8 @@ export class PromotionService {
         final_amount: order_amount,
         applicable: false,
         reason: 'Aucun plat dans la commande',
-        error_key: PromotionErrorKeys.PROMOTION_NO_ITEMS_IN_ORDER
+        error_key: PromotionErrorKeys.PROMOTION_NO_ITEMS_IN_ORDER,
+        offers_dishes: []
       };
     }
 
@@ -792,7 +796,8 @@ export class PromotionService {
         data: promotion.discount_type === DiscountType.BUY_X_GET_Y ? {
           required_quantity: promotion.discount_value,
           current_quantity: qteSomeDishesInPromotion
-        } : undefined
+        } : undefined,
+        offers_dishes: []
       };
     }
 
@@ -807,7 +812,8 @@ export class PromotionService {
         final_amount: order_amount,
         applicable: false,
         reason: 'Promotion inactive ou expirée',
-        error_key: PromotionErrorKeys.PROMOTION_INACTIVE_OR_EXPIRED
+        error_key: PromotionErrorKeys.PROMOTION_INACTIVE_OR_EXPIRED,
+        offers_dishes: []
       };
     }
 
@@ -821,7 +827,8 @@ export class PromotionService {
         applicable: false,
         reason: `Montant minimum requis: ${promotion.min_order_amount} XOF`,
         error_key: PromotionErrorKeys.PROMOTION_MIN_ORDER_AMOUNT_NOT_REACHED,
-        data: { required_amount: promotion.min_order_amount, current_amount: order_amount }
+        data: { required_amount: promotion.min_order_amount, current_amount: order_amount },
+        offers_dishes: []
       };
     }
 
@@ -841,6 +848,11 @@ export class PromotionService {
         buyXGetY_amount = promotion.offered_dishes?.reduce((total, pd) => {
           const dish = pd as unknown as Dish & { quantity: number };
           if (!dish) return total;
+          offersDishes.push({
+            dish_id: dish.id,
+            quantity: pd.quantity,
+            price: dish.is_promotion ? (dish.promotion_price ?? dish.price) : dish.price,
+          });
           const price = dish.is_promotion ? (dish.promotion_price ?? dish.price) : dish.price;
           return total + pd.quantity * price;
         }, 0) ?? 0;
@@ -868,7 +880,8 @@ export class PromotionService {
         final_amount: order_amount,
         applicable: false,
         reason: 'Promotion épuisée',
-        error_key: PromotionErrorKeys.PROMOTION_EXHAUSTED
+        error_key: PromotionErrorKeys.PROMOTION_EXHAUSTED,
+        offers_dishes: []
       };
     }
 
@@ -885,6 +898,7 @@ export class PromotionService {
       buyXGetY_amount,
       final_amount: order_amount - discount_amount,
       applicable: true,
+      offers_dishes: offersDishes
     };
   }
 
