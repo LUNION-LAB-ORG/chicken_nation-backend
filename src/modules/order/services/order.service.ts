@@ -50,12 +50,16 @@ export class OrderService {
     const { orderItems, netAmount, totalDishes } = await this.orderHelper.calculateOrderDetails(items, dishesWithDetails);
 
     //Calculer la promotion et la création de l'utilisation de la promotion
-    const discountPromotion = await this.orderHelper.calculatePromotionPrice(
+    const promotion = await this.orderHelper.calculatePromotionPrice(
       promotion_id ?? "",
       { customer_id: customerData.customer_id, loyalty_level: customerData.loyalty_level },
       totalDishes,
       orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice }))
     );
+
+    const discountPromotion = promotion ? promotion.discount_amount : 0;
+    const offersDishes = promotion ? promotion.offers_dishes : [];
+    const applicable = promotion ? promotion.applicable : false;
 
     // Calculer les frais de livraison selon la distance
     const deliveryFee = await this.orderHelper.calculateDeliveryFee(orderData.type, address);
@@ -90,7 +94,7 @@ export class OrderService {
           phone: customerData.phone,
           email: customerData.email,
           ...(loyaltyFee && { points: points }),
-          ...(discountPromotion && { promotion: { connect: { id: promotion_id } } }),
+          ...(applicable && { promotion: { connect: { id: promotion_id } } }),
           customer: {
             connect: {
               id: customerData.customer_id
@@ -114,12 +118,17 @@ export class OrderService {
           paied_at: payment ? payment.created_at : null,
           paied: payment ? true : false,
           order_items: {
-            create: orderItems.map(item => ({
+            create: [...orderItems.map(item => ({
               dish_id: item.dish_id,
               quantity: item.quantity,
               amount: item.amount,
               supplements: item.supplements
-            })),
+            })), ...offersDishes.map(item => ({
+              dish_id: item.dish_id,
+              quantity: item.quantity,
+              amount: 0,
+              supplements: []
+            }))],
           },
           entity_status: EntityStatus.ACTIVE,
         },
