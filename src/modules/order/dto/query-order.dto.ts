@@ -86,4 +86,9 @@ export class QueryOrderDto {
     @IsOptional()
     @IsString()
     sortOrder?: 'asc' | 'desc';
+
+    @ApiPropertyOptional({ description: "Rechercher une commande par son numéro de référence" })
+    @IsOptional()
+    @IsString()
+    reference?: string;
 }

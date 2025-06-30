@@ -273,6 +273,7 @@ export class OrderService {
    */
   async findAll(filters: QueryOrderDto): Promise<QueryResponseDto<Order>> {
     const {
+      reference,
       status,
       type,
       customerId,
@@ -300,7 +301,8 @@ export class OrderService {
       }),
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
-      ...(restaurantId && { restaurant_id: restaurantId })
+      ...(restaurantId && { restaurant_id: restaurantId }),
+      ...(reference && { reference })
     };
 
     const [orders, total] = await Promise.all([
