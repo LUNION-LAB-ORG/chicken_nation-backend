@@ -302,7 +302,12 @@ export class OrderService {
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
       ...(restaurantId && { restaurant_id: restaurantId }),
-      ...(reference && { reference })
+      ...(reference && {
+        reference: {
+          contains: reference,
+          mode: "insensitive"
+        }
+      })
     };
 
     const [orders, total] = await Promise.all([
