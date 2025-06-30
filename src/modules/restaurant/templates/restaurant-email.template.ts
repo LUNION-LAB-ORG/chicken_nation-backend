@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { Prisma, Restaurant, User } from "@prisma/client";
-import { EmailTemplate } from "src/modules/email/interfaces/email-template.interface";
-import { EmailComponentsService } from "src/modules/email/components/email.components.service";
+import { EmailTemplate } from "src/email/interfaces/email-template.interface";
+import { EmailComponentsService } from "src/email/components/email.components.service";
 import { ConfigService } from "@nestjs/config"; // Assuming ConfigService is available for URLs
 
 @Injectable()

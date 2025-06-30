@@ -1,12 +1,12 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { NotificationType, Prisma, Dish } from '@prisma/client';
-import { IEmailService } from 'src/modules/email/interfaces/email-service.interface';
+import { IEmailService } from 'src/email/interfaces/email-service.interface';
 import { DishEmailTemplates } from '../templates/dish-email.template';
 import { DishNotificationsTemplate } from '../templates/dish-notifications.template';
-import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
-import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
-import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
+import { NotificationRecipientService } from 'src/notifications/recipients/notification-recipient.service';
+import { NotificationsWebSocketService } from 'src/notifications/websockets/notifications-websocket.service';
+import { NotificationsService } from 'src/notifications/services/notifications.service';
 
 @Injectable()
 export class DishListenerService {

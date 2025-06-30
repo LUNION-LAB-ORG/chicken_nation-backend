@@ -10,7 +10,7 @@ import { SpecialOfferModule } from 'src/modules/special-offer/special-offer.modu
 import { CustomerModule } from 'src/modules/customer/customer.module';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { OrderModule } from 'src/modules/order/order.module';
-import { NotificationsModule } from 'src/modules/notifications/notifications.module';
+import { NotificationsModule } from 'src/notifications/notifications.module';
 import { KkiapayModule } from 'src/kkiapay/kkiapay.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -18,7 +18,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { StatisticsModule } from 'src/modules/statistics/statistics.module';
 import { SocketIoModule } from 'src/socket-io/socket-io.module';
 import { TwilioModule } from 'src/twilio/twilio.module';
-import { EmailModule } from 'src/modules/email/email.module';
+import { EmailModule } from 'src/email/email.module';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 @Module({
   imports: [

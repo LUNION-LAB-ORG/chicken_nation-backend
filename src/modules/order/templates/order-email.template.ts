@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
-import { EmailTemplate } from "src/modules/email/interfaces/email-template.interface";
-import { EmailComponentsService } from "src/modules/email/components/email.components.service";
+import { EmailTemplate } from "src/email/interfaces/email-template.interface";
+import { EmailComponentsService } from "src/email/components/email.components.service";
 import { getOrderEmailContent } from "../constantes/order-email.constante";
 import { OrderStatus } from "@prisma/client";
 

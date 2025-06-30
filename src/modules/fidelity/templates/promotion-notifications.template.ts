@@ -1,6 +1,6 @@
 import { Customer, Prisma, Promotion, DiscountType } from "@prisma/client"; // Import DiscountType
-import { notificationIcons } from "src/modules/notifications/constantes/notifications.constante";
-import { NotificationTemplate } from "src/modules/notifications/interfaces/notifications.interface";
+import { notificationIcons } from "src/notifications/constantes/notifications.constante";
+import { NotificationTemplate } from "src/notifications/interfaces/notifications.interface";
 
 export class PromotionNotificationsTemplate {
 

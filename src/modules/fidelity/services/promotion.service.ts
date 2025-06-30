@@ -302,16 +302,6 @@ export class PromotionService {
       if (filters.start_date_to) where.start_date.lte = filters.start_date_to;
     }
 
-    if (filters?.expiration_date_from || filters?.expiration_date_to) {
-      where.expiration_date = {};
-      if (filters.expiration_date_from) where.expiration_date.gte = filters.expiration_date_from;
-      if (filters.expiration_date_to) where.expiration_date.lte = filters.expiration_date_to;
-    }
-
-    // Customer-specific loyalty level filtering will happen in the .filter() below
-    // No need to add it directly to where clause here if visibility is 'PRIVATE'
-    // as we handle it after fetching.
-
     if (filters?.targeted_category_ids?.length) where.promotion_targeted_categories = { some: { category_id: { in: filters.targeted_category_ids } } };
 
     if (filters?.targeted_dish_ids?.length) {
@@ -321,9 +311,6 @@ export class PromotionService {
       ];
     }
 
-    // Add restaurant filtering for customer view
-    // This assumes that filters.restaurant_ids will be passed when calling this for a customer
-    // who is viewing promotions for a specific restaurant.
     if (filters?.restaurant_ids?.length) {
       where.restaurantPromotions = {
         some: {
@@ -366,10 +353,7 @@ export class PromotionService {
       this.prisma.promotion.count({ where }),
     ]);
 
-    // The filtering logic for loyalty level is already good here.
-    // Ensure that if a promotion targets specific restaurants, it's displayed only if the customer
-    // is currently associated with one of those restaurants (via the filters?.restaurant_ids)
-    // or if the promotion is truly global.
+    // Filter promotions based on visibility and loyalty level
     return {
       data: promotions.filter((promotion) => {
         if (promotion.visibility == Visibility.PUBLIC) return true;

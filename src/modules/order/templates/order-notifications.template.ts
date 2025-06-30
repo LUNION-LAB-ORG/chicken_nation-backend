@@ -1,4 +1,4 @@
-import { NotificationTemplate } from "src/modules/notifications/interfaces/notifications.interface";
+import { NotificationTemplate } from "src/notifications/interfaces/notifications.interface";
 import { OrderStatus } from "@prisma/client";
 import { getOrderNotificationContent } from "../constantes/order-notifications.constante";
 

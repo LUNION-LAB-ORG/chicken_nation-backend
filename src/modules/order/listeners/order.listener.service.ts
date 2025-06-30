@@ -1,12 +1,12 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { LoyaltyPointType, NotificationType, OrderStatus } from '@prisma/client';
-import { IEmailService } from 'src/modules/email/interfaces/email-service.interface';
+import { IEmailService } from 'src/email/interfaces/email-service.interface';
 import { OrderEmailTemplates } from '../templates/order-email.template';
 import { OrderNotificationsTemplate } from '../templates/order-notifications.template';
-import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
-import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
-import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
+import { NotificationRecipientService } from 'src/notifications/recipients/notification-recipient.service';
+import { NotificationsWebSocketService } from 'src/notifications/websockets/notifications-websocket.service';
+import { NotificationsService } from 'src/notifications/services/notifications.service';
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
 import { PromotionService } from 'src/modules/fidelity/services/promotion.service';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';

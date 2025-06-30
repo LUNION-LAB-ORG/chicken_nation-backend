@@ -1,10 +1,10 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { LoyaltyLevel, NotificationType, UserType } from '@prisma/client'; // Import UserType
-import { IEmailService } from 'src/modules/email/interfaces/email-service.interface';
-import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
-import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
-import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
+import { IEmailService } from 'src/email/interfaces/email-service.interface';
+import { NotificationRecipientService } from 'src/notifications/recipients/notification-recipient.service';
+import { NotificationsWebSocketService } from 'src/notifications/websockets/notifications-websocket.service';
+import { NotificationsService } from 'src/notifications/services/notifications.service';
 
 import { PromotionManagementEventPayload, PromotionUsedEventPayload } from '../interfaces/promotion.interface';
 

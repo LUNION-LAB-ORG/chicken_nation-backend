@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { Category, Prisma, Restaurant } from "@prisma/client";
-import { EmailTemplate } from "src/modules/email/interfaces/email-template.interface";
-import { EmailComponentsService } from "src/modules/email/components/email.components.service";
+import { EmailTemplate } from "src/email/interfaces/email-template.interface";
+import { EmailComponentsService } from "src/email/components/email.components.service";
 import { userGetRole } from "src/modules/users/constantes/user-get-role.constante";
 import { ConfigService } from "@nestjs/config";
 

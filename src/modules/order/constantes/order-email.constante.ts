@@ -1,5 +1,5 @@
 import { OrderStatus } from "@prisma/client";
-import { EmailComponentsService } from "src/modules/email/components/email.components.service";
+import { EmailComponentsService } from "src/email/components/email.components.service";
 
 export const getOrderEmailContent = (orderData: {
     reference: string;

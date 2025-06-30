@@ -4,7 +4,7 @@ import { AuthController } from './controllers/auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
-import { OtpModule } from './otp/otp.module';
+import { OtpModule } from '../../otp/otp.module';
 import { JwtCustomerStrategy } from './strategies/jwt-customer.strategy';
 
 @Module({

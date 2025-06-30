@@ -1,5 +1,5 @@
 import { OrderStatus } from '@prisma/client';
-import { notificationIcons } from 'src/modules/notifications/constantes/notifications.constante';
+import { notificationIcons } from 'src/notifications/constantes/notifications.constante';
 
 export const getOrderNotificationContent = (orderData: {
     reference: string;

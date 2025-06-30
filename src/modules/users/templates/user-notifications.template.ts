@@ -1,5 +1,5 @@
-import { notificationIcons } from "src/modules/notifications/constantes/notifications.constante";
-import { NotificationTemplate } from "src/modules/notifications/interfaces/notifications.interface";
+import { notificationIcons } from "src/notifications/constantes/notifications.constante";
+import { NotificationTemplate } from "src/notifications/interfaces/notifications.interface";
 import { Prisma, UserType } from "@prisma/client";
 import { userGetRole } from "../constantes/user-get-role.constante"; // Assuming you have this utility
 

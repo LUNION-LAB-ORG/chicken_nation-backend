@@ -6,7 +6,7 @@ import { Request } from 'express';
 import { EntityStatus, User } from '@prisma/client';
 import { LoginUserDto } from 'src/modules/auth/dto/login-user.dto';
 import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
-import { OtpService } from 'src/modules/auth/otp/otp.service';
+import { OtpService } from 'src/otp/otp.service';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { TwilioService } from 'src/twilio/services/twilio.service';
 
