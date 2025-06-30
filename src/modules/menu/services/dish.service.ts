@@ -122,14 +122,10 @@ export class DishService {
 
     const [count, dishes] = await Promise.all([
       this.prisma.dish.count({
-        where: {
-          entity_status: EntityStatus.ACTIVE,
-        },
+        where,
       }),
       this.prisma.dish.findMany({
-        where: {
-          entity_status: EntityStatus.ACTIVE,
-        },
+        where,
         include: {
           category: true,
           dish_restaurants: {
