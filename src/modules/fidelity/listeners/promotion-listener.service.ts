@@ -231,21 +231,6 @@ export class PromotionListenerService {
 
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
-        // --- Emails ---
-        const internalRecipientsEmails = [...new Set([...backofficeEmails, ...restaurantManagerEmails])];
-        if (internalRecipientsEmails.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.promotionEmailTemplates.PROMOTION_UPDATED_INTERNAL,
-                {
-                    recipients: internalRecipientsEmails,
-                    data: {
-                        actor: payload.actor,
-                        promotion: payload.promotion,
-                    },
-                },
-            );
-        }
-
         // --- Notifications ---
         const notificationDataInternal = {
             actor: actorRecipient,
@@ -263,6 +248,22 @@ export class PromotionListenerService {
                 this.notificationsWebSocketService.emitNotification(notif, recipientUser);
             }
         });
+
+        // --- Emails ---
+        const internalRecipientsEmails = [...new Set([...backofficeEmails, ...restaurantManagerEmails])];
+        if (internalRecipientsEmails.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.promotionEmailTemplates.PROMOTION_UPDATED_INTERNAL,
+                {
+                    recipients: internalRecipientsEmails,
+                    data: {
+                        actor: payload.actor,
+                        promotion: payload.promotion,
+                    },
+                },
+            );
+        }
+
     }
 
     /**

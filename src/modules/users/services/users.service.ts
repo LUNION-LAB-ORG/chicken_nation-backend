@@ -4,7 +4,7 @@ import { CreateUserDto } from '../dto/create-user.dto';
 import { EntityStatus, User, UserType } from '@prisma/client';
 import { Request } from 'express';
 import { PrismaService } from 'src/database/services/prisma.service';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { UpdateUserDto } from '../dto/update-user.dto';
 import { UpdateUserPasswordDto } from '../dto/update-user-password.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';

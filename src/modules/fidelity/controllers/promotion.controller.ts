@@ -126,7 +126,4 @@ export class PromotionController {
   ) {
     return this.promotionService.isDishInPromotion(dishId, loyaltyLevel as any);
   }
-
-
-
 }

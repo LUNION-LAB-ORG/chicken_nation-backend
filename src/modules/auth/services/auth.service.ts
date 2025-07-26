@@ -1,7 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { NotFoundException } from '@nestjs/common';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { Request } from 'express';
 import { EntityStatus, User } from '@prisma/client';
 import { LoginUserDto } from 'src/modules/auth/dto/login-user.dto';

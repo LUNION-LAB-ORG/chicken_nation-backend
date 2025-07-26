@@ -65,10 +65,6 @@ export class OrderHelper {
     async getClosestRestaurant(orderData: CreateOrderDto) {
         //  Pour la réservation de table ou à emporter, il faut impérativement fournir un restaurant
         if (orderData.type === OrderType.TABLE || orderData.type === OrderType.PICKUP) {
-            // Renseigner la forme et le nombre de place pour les réservations de table
-            if (orderData.type == OrderType.TABLE && (!orderData.table_type || !orderData.places)) {
-                throw new BadRequestException('Le type de table et le nombre de place doivent être renseignés');
-            }
 
             if (!orderData.restaurant_id) {
                 throw new BadRequestException('Aucun restaurant sélectionné');
@@ -450,6 +446,7 @@ export class OrderHelper {
             OrderStatus.COLLECTED, // Pour retrait
             OrderStatus.COMPLETED // Quand le livreur récupère l'argent
         ];
+        
         // Définir la séquence logique des états pour les commanes à emporter ou à table
         const stateSequence2: OrderStatus[] = [
             OrderStatus.PENDING,

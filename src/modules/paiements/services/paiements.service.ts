@@ -1,8 +1,17 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreatePaiementDto } from 'src/modules/paiements/dto/create-paiement.dto';
 import { UpdatePaiementDto } from 'src/modules/paiements/dto/update-paiement.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { Customer, EntityStatus, PaiementMode, PaiementStatus } from '@prisma/client';
+import {
+  Customer,
+  EntityStatus,
+  PaiementMode,
+  PaiementStatus,
+} from '@prisma/client';
 import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
 import { KkiapayService } from 'src/kkiapay/kkiapay.service';
 import { CreatePaiementKkiapayDto } from 'src/modules/paiements/dto/create-paiement-kkiapay.dto';
@@ -11,12 +20,20 @@ import { PaiementEvent } from 'src/modules/paiements/events/paiement.event';
 
 @Injectable()
 export class PaiementsService {
-  constructor(private readonly prisma: PrismaService, private readonly kkiapay: KkiapayService, private readonly paiementEvent: PaiementEvent) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly kkiapay: KkiapayService,
+    private readonly paiementEvent: PaiementEvent,
+  ) {}
 
   // Payer avec Kkiapay
-  async payWithKkiapay(req: Request, createPaiementKkiapayDto: CreatePaiementKkiapayDto) {
-
-    const transaction = await this.kkiapay.verifyTransaction(createPaiementKkiapayDto.transactionId);
+  async payWithKkiapay(
+    req: Request,
+    createPaiementKkiapayDto: CreatePaiementKkiapayDto,
+  ) {
+    const transaction = await this.kkiapay.verifyTransaction(
+      createPaiementKkiapayDto.transactionId,
+    );
 
     const customer = req.user as Customer;
 
@@ -27,7 +44,10 @@ export class PaiementsService {
       total: transaction.amount + transaction.fees,
       mode: transaction.source,
       source: transaction.source_common_name,
-      client: typeof transaction.client === 'object' ? JSON.stringify(transaction.client) : transaction.client,
+      client:
+        typeof transaction.client === 'object'
+          ? JSON.stringify(transaction.client)
+          : transaction.client,
       status: transaction.status,
       failure_code: transaction.failureCode,
       failure_message: transaction.failureMessage,
@@ -36,8 +56,11 @@ export class PaiementsService {
     });
 
     return {
-      success: transaction.status === "SUCCESS",
-      message: transaction.status === "SUCCESS" ? 'Paiement effectué avec succès' : 'Paiement echoué',
+      success: transaction.status === 'SUCCESS',
+      message:
+        transaction.status === 'SUCCESS'
+          ? 'Paiement effectué avec succès'
+          : 'Paiement echoué',
       transactionId: transaction.transactionId,
       paiement: paiement,
     };
@@ -59,10 +82,21 @@ export class PaiementsService {
 
     if (paiements.length === 0) {
       paiements = paiements.filter((p) => {
-        const client = JSON.parse(typeof p?.client == "string" ? p.client : "{}");
-        return (client?.email?.trim()?.toLowerCase() === customer.email?.trim()?.toLowerCase() ||
-          client?.phone?.trim()?.toLowerCase().includes(customer.phone?.trim()?.toLowerCase())
-          || customer?.phone?.trim()?.toLowerCase().includes(client?.phone?.trim()?.toLowerCase()));
+        const client = JSON.parse(
+          typeof p?.client == 'string' ? p.client : '{}',
+        );
+        return (
+          client?.email?.trim()?.toLowerCase() ===
+            customer.email?.trim()?.toLowerCase() ||
+          client?.phone
+            ?.trim()
+            ?.toLowerCase()
+            .includes(customer.phone?.trim()?.toLowerCase()) ||
+          customer?.phone
+            ?.trim()
+            ?.toLowerCase()
+            .includes(client?.phone?.trim()?.toLowerCase())
+        );
       });
     }
 
@@ -74,35 +108,59 @@ export class PaiementsService {
     const paiement = await this.findOne(paiementId);
 
     if (paiement.status !== PaiementStatus.SUCCESS) {
-      throw new BadRequestException('Le paiement n\'est pas en cours');
+      return {
+        success: false,
+        message: "Le paiement n'est pas en cours",
+        transactionId: paiement.reference,
+        paiement: paiement,
+      };
     }
+    try {
+      const transaction = await this.kkiapay.refundTransaction(
+        paiement.reference,
+      );
 
-    const transaction = await this.kkiapay.refundTransaction(paiement.reference);
+      const updatedPaiement = await this.update(paiementId, {
+        status: PaiementStatus.REVERTED,
+        failure_code: transaction.failureCode,
+        failure_message: transaction.failureMessage,
+      });
 
-    const updatedPaiement = await this.update(paiementId, {
-      status: PaiementStatus.REVERTED,
-      failure_code: transaction.failureCode,
-      failure_message: transaction.failureMessage,
-    });
+      // Émission de l'événement de paiement annulé
+      this.paiementEvent.paiementAnnule(paiement);
 
-    // Émission de l'événement de paiement annulé
-    this.paiementEvent.paiementAnnule(paiement);
-
-    return {
-      success: updatedPaiement.status === "REVERTED",
-      message: updatedPaiement.status === "REVERTED" ? 'Remboursement effectué avec succès' : 'Remboursement echoué',
-      transactionId: updatedPaiement.reference,
-      paiement: updatedPaiement,
-    };
+      return {
+        success: updatedPaiement.status === 'REVERTED',
+        message:
+          updatedPaiement.status === 'REVERTED'
+            ? 'Remboursement effectué avec succès'
+            : 'Remboursement echoué',
+        transactionId: updatedPaiement.reference,
+        paiement: updatedPaiement,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: 'Remboursement echoué',
+        transactionId: paiement.reference,
+        paiement: paiement,
+      };
+    }
   }
 
   // Création de paiement
   async create(createPaiementDto: CreatePaiementDto) {
     // Vérification de la commande
-    const order = await this.verifyOrder(createPaiementDto.amount, createPaiementDto.order_id ?? null);
+    const order = await this.verifyOrder(
+      createPaiementDto.amount,
+      createPaiementDto.order_id ?? null,
+    );
 
     // Traitement du mode de paiement et du type de mobile money
-    const { mode, source } = await this.verifyPaiementMode(createPaiementDto.mode, createPaiementDto.source ?? null);
+    const { mode, source } = await this.verifyPaiementMode(
+      createPaiementDto.mode,
+      createPaiementDto.source ?? null,
+    );
 
     // Traitement du statut du paiement
     const status = await this.verifyPaiementStatus(createPaiementDto.status);
@@ -137,7 +195,14 @@ export class PaiementsService {
 
   // Récupération de tous les paiements
   async findAll(queryDto: QueryPaiementDto) {
-    const { page = 1, limit = 10, status = EntityStatus.ACTIVE, state = PaiementStatus.SUCCESS, order_id, search } = queryDto;
+    const {
+      page = 1,
+      limit = 10,
+      status = EntityStatus.ACTIVE,
+      state = PaiementStatus.SUCCESS,
+      order_id,
+      search,
+    } = queryDto;
     const whereClause: any = { entity_status: EntityStatus.ACTIVE };
 
     if (status) {
@@ -214,13 +279,21 @@ export class PaiementsService {
     const paiement = await this.findOne(paiementId);
 
     // Vérification de la commande
-    const order = await this.verifyOrder(updatePaiementDto.amount ?? paiement.amount, updatePaiementDto.order_id ?? paiement.order_id);
+    const order = await this.verifyOrder(
+      updatePaiementDto.amount ?? paiement.amount,
+      updatePaiementDto.order_id ?? paiement.order_id,
+    );
 
     // Traitement du mode de paiement et du type de mobile money
-    const { mode, source } = await this.verifyPaiementMode(updatePaiementDto.mode ?? paiement.mode, updatePaiementDto.source ?? paiement.source);
+    const { mode, source } = await this.verifyPaiementMode(
+      updatePaiementDto.mode ?? paiement.mode,
+      updatePaiementDto.source ?? paiement.source,
+    );
 
     // Traitement du statut du paiement
-    const status = await this.verifyPaiementStatus(updatePaiementDto.status ?? paiement.status);
+    const status = await this.verifyPaiementStatus(
+      updatePaiementDto.status ?? paiement.status,
+    );
 
     return this.prisma.paiement.update({
       where: {
@@ -261,7 +334,9 @@ export class PaiementsService {
     }
 
     if (amount < order.amount) {
-      throw new BadRequestException('Le montant est inférieur au montant de la commande');
+      throw new BadRequestException(
+        'Le montant est inférieur au montant de la commande',
+      );
     }
     return order;
   }
@@ -273,10 +348,14 @@ export class PaiementsService {
       throw new BadRequestException('Mode de paiement non fourni');
     }
     // Vérification de la validité du mode de paiement
-    if (![PaiementMode.MOBILE_MONEY,
-    PaiementMode.WALLET,
-    PaiementMode.CREDIT_CARD,
-    PaiementMode.CASH].includes(mode)) {
+    if (
+      ![
+        PaiementMode.MOBILE_MONEY,
+        PaiementMode.WALLET,
+        PaiementMode.CREDIT_CARD,
+        PaiementMode.CASH,
+      ].includes(mode)
+    ) {
       throw new BadRequestException('Mode de paiement non valide');
     }
 
@@ -291,9 +370,13 @@ export class PaiementsService {
     }
 
     // Vérification de la validité du statut du paiement
-    if (![PaiementStatus.REVERTED,
-    PaiementStatus.SUCCESS,
-    PaiementStatus.FAILED].includes(status)) {
+    if (
+      ![
+        PaiementStatus.REVERTED,
+        PaiementStatus.SUCCESS,
+        PaiementStatus.FAILED,
+      ].includes(status)
+    ) {
       throw new BadRequestException('Statut du paiement non valide');
     }
     return status;

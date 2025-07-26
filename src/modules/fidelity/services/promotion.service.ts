@@ -444,7 +444,7 @@ export class PromotionService {
       targeted_dish_ids,
       targeted_category_ids,
       offered_dishes,
-      restaurant_ids, // <--- Extract restaurant_ids here
+      restaurant_ids,
       ...promotionData
     } = updatePromotionDto;
 
