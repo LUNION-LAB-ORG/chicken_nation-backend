@@ -12,27 +12,6 @@ export async function userSeed() {
       type: UserType.BACKOFFICE,
       role: UserRole.ADMIN,
     },
-    {
-      fullname: 'Manager',
-      email: 'manager@chicken-nation.com',
-      password: 'Manager@2025',
-      type: UserType.RESTAURANT,
-      role: UserRole.MANAGER,
-    },
-    {
-      fullname: 'Cuisinier',
-      email: 'cuisinier@chicken-nation.com',
-      password: 'Cuisinier@2025',
-      type: UserType.RESTAURANT,
-      role: UserRole.CUISINE,
-    },
-    {
-      fullname: 'Caissier',
-      email: 'caissier@chicken-nation.com',
-      password: 'Caissier@2025',
-      type: UserType.RESTAURANT,
-      role: UserRole.CAISSIER,
-    },
   ];
 
   for (const data of datas) {

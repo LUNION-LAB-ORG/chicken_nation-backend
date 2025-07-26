@@ -146,7 +146,7 @@ model Address {
 model Category {
   id String @id @default(uuid()) @db.Uuid
 
-  name        String  @db.VarChar @unique
+  name        String  @db.VarChar
   description String? @db.VarChar
   image       String? @db.Text
   dishes      Dish[]
@@ -236,7 +236,7 @@ model DishSupplement {
 model Dish {
   id String @id @default(uuid()) @db.Uuid
 
-  name             String           @db.VarChar @unique
+  name             String           @db.VarChar
   description      String?          @db.VarChar
   price            Float
   image            String?          @db.Text
@@ -397,7 +397,7 @@ model Paiement {
 model Restaurant {
   id String @id @default(uuid()) @db.Uuid
 
-  name             String           @db.VarChar @unique
+  name             String           @db.VarChar
   manager          String           @db.Uuid
   description      String?          @db.VarChar
   image            String?          @db.Text
@@ -419,7 +419,7 @@ model Restaurant {
 
 model Supplement {
   id               String             @id @default(uuid()) @db.Uuid
-  name             String             @db.VarChar @unique
+  name             String             @db.VarChar
   price            Float
   image            String?            @db.Text
   available        Boolean            @default(true)
@@ -633,7 +633,7 @@ model LoyaltyConfig {
   premium_threshold  Int @default(700) // 700 points pour Premium
   gold_threshold     Int @default(1000) // 1000 points pour Gold
 
-  is_active  Boolean  @default(false) @unique
+  is_active  Boolean  @default(false)
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
 }
