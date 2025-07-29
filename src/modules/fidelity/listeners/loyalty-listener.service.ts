@@ -31,24 +31,9 @@ export class LoyaltyListenerService {
         const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
         const customerEmail: string[] = customer.email ? [customer.email] : [];
 
-        // --- Emails ---
-        if (customerEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.loyaltyEmailTemplates.LOYALTY_POINTS_ADDED,
-                {
-                    recipients: customerEmail,
-                    data: {
-                        actor: payload.customer,
-                        points: payload.points,
-                        orderReference: payload.orderReference,
-                    },
-                },
-            );
-        }
-
         // --- Notifications ---
         const notificationDataCustomer = {
-            actor: customer,  
+            actor: customer,
             recipients: [customer],
             data: {
                 actor: payload.customer,
@@ -66,6 +51,21 @@ export class LoyaltyListenerService {
         // Notify in real-time
         if (notificationCustomer.length > 0) {
             this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
+        }
+
+        // --- Emails ---
+        if (customerEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.loyaltyEmailTemplates.LOYALTY_POINTS_ADDED,
+                {
+                    recipients: customerEmail,
+                    data: {
+                        actor: payload.customer,
+                        points: payload.points,
+                        orderReference: payload.orderReference,
+                    },
+                },
+            );
         }
     }
 

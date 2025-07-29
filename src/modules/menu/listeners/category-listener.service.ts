@@ -32,27 +32,6 @@ export class CategoryListenerService {
         const managersEmail: string[] = managers.map((user) => user.email!).filter(Boolean) as string[];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
-        // Send Emails
-        // 1- Email to Backoffice
-        if (usersBackofficeEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.categoryEmailTemplates.NEW_CATEGORY_BACKOFFICE,
-                {
-                    recipients: usersBackofficeEmail,
-                    data: payload,
-                },
-            );
-        }
-        // 2- Email to Restaurant Managers
-        if (managersEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.categoryEmailTemplates.NEW_CATEGORY_RESTAURANT,
-                {
-                    recipients: managersEmail,
-                    data: payload,
-                },
-            );
-        }
 
         // Prepare Notification Data
         const notificationDataBackoffice = {
@@ -92,6 +71,29 @@ export class CategoryListenerService {
                 this.notificationsWebSocketService.emitNotification(notification, correspondingRecipient);
             }
         });
+
+        // Send Emails
+        // 1- Email to Backoffice
+        if (usersBackofficeEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.categoryEmailTemplates.NEW_CATEGORY_BACKOFFICE,
+                {
+                    recipients: usersBackofficeEmail,
+                    data: payload,
+                },
+            );
+        }
+        // 2- Email to Restaurant Managers
+        if (managersEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.categoryEmailTemplates.NEW_CATEGORY_RESTAURANT,
+                {
+                    recipients: managersEmail,
+                    data: payload,
+                },
+            );
+        }
+
     }
 
     @OnEvent('category.updated')
@@ -106,27 +108,6 @@ export class CategoryListenerService {
         const managersEmail: string[] = managers.map((user) => user.email!).filter(Boolean) as string[];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
-        // Send Emails
-        // 1- Email to Backoffice
-        if (usersBackofficeEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.categoryEmailTemplates.CATEGORY_UPDATED_BACKOFFICE,
-                {
-                    recipients: usersBackofficeEmail,
-                    data: payload,
-                },
-            );
-        }
-        // 2- Email to Restaurant Managers
-        if (managersEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.categoryEmailTemplates.CATEGORY_UPDATED_RESTAURANT,
-                {
-                    recipients: managersEmail,
-                    data: payload,
-                },
-            );
-        }
 
         // Prepare Notification Data
         const notificationDataBackoffice = {
@@ -166,5 +147,28 @@ export class CategoryListenerService {
                 this.notificationsWebSocketService.emitNotification(notification, correspondingRecipient);
             }
         });
+
+
+        // Send Emails
+        // 1- Email to Backoffice
+        if (usersBackofficeEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.categoryEmailTemplates.CATEGORY_UPDATED_BACKOFFICE,
+                {
+                    recipients: usersBackofficeEmail,
+                    data: payload,
+                },
+            );
+        }
+        // 2- Email to Restaurant Managers
+        if (managersEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.categoryEmailTemplates.CATEGORY_UPDATED_RESTAURANT,
+                {
+                    recipients: managersEmail,
+                    data: payload,
+                },
+            );
+        }
     }
 }

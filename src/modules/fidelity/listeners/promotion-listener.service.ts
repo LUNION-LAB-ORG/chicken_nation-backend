@@ -34,20 +34,6 @@ export class PromotionListenerService {
         const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
         const customerEmail: string[] = customer.email ? [customer.email] : [];
 
-        // --- Emails ---
-        if (customerEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.promotionEmailTemplates.PROMOTION_USED_CUSTOMER,
-                {
-                    recipients: customerEmail,
-                    data: {
-                        customer: payload.customer,
-                        promotion: payload.promotion,
-                        discountAmount: payload.discountAmount,
-                    },
-                },
-            );
-        }
 
         // --- Notifications ---
         const notificationDataCustomer = {
@@ -70,6 +56,22 @@ export class PromotionListenerService {
         if (notificationCustomer.length > 0) {
             this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
         }
+
+
+        // --- Emails ---
+        if (customerEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.promotionEmailTemplates.PROMOTION_USED_CUSTOMER,
+                {
+                    recipients: customerEmail,
+                    data: {
+                        customer: payload.customer,
+                        promotion: payload.promotion,
+                        discountAmount: payload.discountAmount,
+                    },
+                },
+            );
+        }
     }
 
     /**
@@ -88,56 +90,6 @@ export class PromotionListenerService {
         const customerEmails: string[] = allCustomers.map(c => c.email).filter(Boolean) as string[];
 
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
-        // --- Emails ---
-        // 1. Email to Back-Office & Restaurant Managers (Internal)
-        const internalRecipientsEmails = [...new Set([...backofficeEmails, ...restaurantManagerEmails])];
-        if (internalRecipientsEmails.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.promotionEmailTemplates.PROMOTION_CREATED_INTERNAL,
-                {
-                    recipients: internalRecipientsEmails,
-                    data: {
-                        actor: payload.actor,
-                        promotion: payload.promotion,
-                    },
-                },
-            );
-        }
-
-        // 2. Email to Customers (if promotion is public)
-        if (payload.promotion.visibility === 'PUBLIC' && customerEmails.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.promotionEmailTemplates.NEW_PROMOTION_AVAILABLE_CUSTOMER,
-                {
-                    recipients: customerEmails,
-                    data: {
-                        actor: payload.actor,
-                        promotion: payload.promotion,
-                        targetedNames: payload.targetedNames,
-                    },
-                },
-            );
-        }
-        if (payload.promotion.visibility !== 'PUBLIC' && allCustomers.length > 0) {
-
-            const targetedCustomers = allCustomers.filter(c => payload.promotion.target_standard && c.loyalty_level === LoyaltyLevel.STANDARD || payload.promotion.target_premium && c.loyalty_level === LoyaltyLevel.PREMIUM || payload.promotion.target_gold && c.loyalty_level === LoyaltyLevel.GOLD);
-
-            const targetedCustomersEmails: string[] = targetedCustomers.map(c => c.email).filter(Boolean) as string[];
-
-            if (targetedCustomersEmails.length > 0) {
-                await this.emailService.sendEmailTemplate(
-                    this.promotionEmailTemplates.NEW_PROMOTION_AVAILABLE_CUSTOMER,
-                    {
-                        recipients: targetedCustomersEmails,
-                        data: {
-                            actor: payload.actor,
-                            promotion: payload.promotion,
-                            targetedNames: payload.targetedNames,
-                        },
-                    },
-                );
-            }
-        }
 
         // --- Notifications ---
         // 1. Notification to Back-Office (Internal)
@@ -214,6 +166,58 @@ export class PromotionListenerService {
                 }
             });
         }
+
+        // --- Emails ---
+        // 1. Email to Back-Office & Restaurant Managers (Internal)
+        const internalRecipientsEmails = [...new Set([...backofficeEmails, ...restaurantManagerEmails])];
+        if (internalRecipientsEmails.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.promotionEmailTemplates.PROMOTION_CREATED_INTERNAL,
+                {
+                    recipients: internalRecipientsEmails,
+                    data: {
+                        actor: payload.actor,
+                        promotion: payload.promotion,
+                    },
+                },
+            );
+        }
+
+        // 2. Email to Customers (if promotion is public)
+        if (payload.promotion.visibility === 'PUBLIC' && customerEmails.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.promotionEmailTemplates.NEW_PROMOTION_AVAILABLE_CUSTOMER,
+                {
+                    recipients: customerEmails,
+                    data: {
+                        actor: payload.actor,
+                        promotion: payload.promotion,
+                        targetedNames: payload.targetedNames,
+                    },
+                },
+            );
+        }
+        if (payload.promotion.visibility !== 'PUBLIC' && allCustomers.length > 0) {
+
+            const targetedCustomers = allCustomers.filter(c => payload.promotion.target_standard && c.loyalty_level === LoyaltyLevel.STANDARD || payload.promotion.target_premium && c.loyalty_level === LoyaltyLevel.PREMIUM || payload.promotion.target_gold && c.loyalty_level === LoyaltyLevel.GOLD);
+
+            const targetedCustomersEmails: string[] = targetedCustomers.map(c => c.email).filter(Boolean) as string[];
+
+            if (targetedCustomersEmails.length > 0) {
+                await this.emailService.sendEmailTemplate(
+                    this.promotionEmailTemplates.NEW_PROMOTION_AVAILABLE_CUSTOMER,
+                    {
+                        recipients: targetedCustomersEmails,
+                        data: {
+                            actor: payload.actor,
+                            promotion: payload.promotion,
+                            targetedNames: payload.targetedNames,
+                        },
+                    },
+                );
+            }
+        }
+
     }
 
     /**
@@ -281,20 +285,6 @@ export class PromotionListenerService {
 
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
-        // --- Emails ---
-        const internalRecipientsEmails = [...new Set([...backofficeEmails, ...restaurantManagerEmails])];
-        if (internalRecipientsEmails.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.promotionEmailTemplates.PROMOTION_DELETED_INTERNAL,
-                {
-                    recipients: internalRecipientsEmails,
-                    data: {
-                        actor: payload.actor,
-                        promotion: payload.promotion,
-                    },
-                },
-            );
-        }
 
         // --- Notifications ---
         const notificationDataInternal = {
@@ -313,5 +303,22 @@ export class PromotionListenerService {
                 this.notificationsWebSocketService.emitNotification(notif, recipientUser);
             }
         });
+
+
+
+        // --- Emails ---
+        const internalRecipientsEmails = [...new Set([...backofficeEmails, ...restaurantManagerEmails])];
+        if (internalRecipientsEmails.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.promotionEmailTemplates.PROMOTION_DELETED_INTERNAL,
+                {
+                    recipients: internalRecipientsEmails,
+                    data: {
+                        actor: payload.actor,
+                        promotion: payload.promotion,
+                    },
+                },
+            );
+        }
     }
 }

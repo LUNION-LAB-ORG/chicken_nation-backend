@@ -33,23 +33,7 @@ export class UserListenerService {
         const userRecipientEmail: string[] = [userRecipient.email!];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
-        // ENVOIE DES EMAILS
-        // 1- EMAIL AU BACKOFFICE
-        await this.emailService.sendEmailTemplate(
-            this.userEmailTemplates.NEW_USER,
-            {
-                recipients: usersBackofficeEmail,
-                data: payload,
-            },
-        );
-        // 2- EMAIL AU MEMBRE
-        await this.emailService.sendEmailTemplate(
-            this.userEmailTemplates.WELCOME_USER,
-            {
-                recipients: userRecipientEmail,
-                data: payload,
-            },
-        );
+
         // PREPARATION DES DONNEES DE NOTIFICATIONS
         const notificationDataBackoffice = {
             actor: actorRecipient,
@@ -80,6 +64,24 @@ export class UserListenerService {
         // Notifier en temps réel
         this.notificationsWebSocketService.emitNotification(notificationUserRecipient[0], userRecipient);
 
+
+        // ENVOIE DES EMAILS
+        // 1- EMAIL AU BACKOFFICE
+        await this.emailService.sendEmailTemplate(
+            this.userEmailTemplates.NEW_USER,
+            {
+                recipients: usersBackofficeEmail,
+                data: payload,
+            },
+        );
+        // 2- EMAIL AU MEMBRE
+        await this.emailService.sendEmailTemplate(
+            this.userEmailTemplates.WELCOME_USER,
+            {
+                recipients: userRecipientEmail,
+                data: payload,
+            },
+        );
     }
 
     @OnEvent('member.created')
@@ -93,24 +95,6 @@ export class UserListenerService {
         const userRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.user);
         const userRecipientEmail: string[] = [userRecipient.email!];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
-
-        // ENVOIE DES EMAILS
-        // 1- EMAIL AU RESTAURANT
-        await this.emailService.sendEmailTemplate(
-            this.userEmailTemplates.NEW_MEMBER,
-            {
-                recipients: usersRestaurantEmail,
-                data: payload,
-            },
-        );
-        // 2- EMAIL AU MEMBRE
-        await this.emailService.sendEmailTemplate(
-            this.userEmailTemplates.WELCOME_USER,
-            {
-                recipients: userRecipientEmail,
-                data: payload,
-            },
-        );
 
         // PREPARATION DES DONNEES DE NOTIFICATIONS
         const notificationDataRestaurant = {
@@ -142,6 +126,25 @@ export class UserListenerService {
         );
         // Notifier en temps réel
         this.notificationsWebSocketService.emitNotification(notificationMemberRecipient[0], userRecipient);
+
+
+        // ENVOIE DES EMAILS
+        // 1- EMAIL AU RESTAURANT
+        await this.emailService.sendEmailTemplate(
+            this.userEmailTemplates.NEW_MEMBER,
+            {
+                recipients: usersRestaurantEmail,
+                data: payload,
+            },
+        );
+        // 2- EMAIL AU MEMBRE
+        await this.emailService.sendEmailTemplate(
+            this.userEmailTemplates.WELCOME_USER,
+            {
+                recipients: userRecipientEmail,
+                data: payload,
+            },
+        );
     }
 
     @OnEvent('user.activated')

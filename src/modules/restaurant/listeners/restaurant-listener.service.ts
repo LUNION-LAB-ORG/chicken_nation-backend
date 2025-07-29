@@ -33,26 +33,9 @@ export class RestaurantListenerService {
 
         const manager = (await this.notificationRecipientService.getManagerByRestaurant(payload.restaurant.id))[0];
         const managerEmail: string[] = [manager.email!];
-        
+
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
-        // ENVOIE DES EMAILS
-        // 1- EMAIL AU BACKOFFICE
-        await this.emailService.sendEmailTemplate(
-            this.restaurantEmailTemplates.NEW_RESTAURANT,
-            {
-                recipients: usersBackofficeEmail,
-                data: payload,
-            },
-        );
-        // 2- EMAIL AU MEMBRE
-        await this.emailService.sendEmailTemplate(
-            this.restaurantEmailTemplates.WELCOME_RESTAURANT,
-            {
-                recipients: managerEmail,
-                data: payload,
-            },
-        );
         // PREPARATION DES DONNEES DE NOTIFICATIONS
         const notificationDataBackoffice = {
             actor: actorRecipient,
@@ -82,5 +65,25 @@ export class RestaurantListenerService {
         );
         // Notifier en temps réel
         this.notificationsWebSocketService.emitNotification(notificationmanager[0], manager);
+
+
+
+        // ENVOIE DES EMAILS
+        // 1- EMAIL AU BACKOFFICE
+        await this.emailService.sendEmailTemplate(
+            this.restaurantEmailTemplates.NEW_RESTAURANT,
+            {
+                recipients: usersBackofficeEmail,
+                data: payload,
+            },
+        );
+        // 2- EMAIL AU MEMBRE
+        await this.emailService.sendEmailTemplate(
+            this.restaurantEmailTemplates.WELCOME_RESTAURANT,
+            {
+                recipients: managerEmail,
+                data: payload,
+            },
+        );
     }
 }

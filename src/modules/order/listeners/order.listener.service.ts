@@ -28,84 +28,6 @@ export class OrderListenerService {
     @OnEvent('order.created')
     @OnEvent('order.statusUpdated')
     async orderCreatedEventListener(payload: OrderCreatedEvent) {
-        // RECUPERATION DES RECEPTEURS
-        const usersRestaurant = (await this.notificationRecipientService.getAllUsersByRestaurantAndRole(payload.order.restaurant_id));
-        const usersRestaurantEmail: string[] = usersRestaurant.map((user) => user.email!);
-        const customer = await this.notificationRecipientService.getCustomer(payload.order.customer_id);
-        const customerEmail: string[] = customer.email ? [customer.email] : [];
-
-        // ENVOIE DES EMAILS
-        // 1- EMAIL AU RESTAURANT
-        await this.emailService.sendEmailTemplate(
-            this.orderEmailTemplates.NOTIFICATION_ORDER_RESTAURANT,
-            {
-                recipients: usersRestaurantEmail,
-                data: {
-                    reference: payload.order.reference,
-                    status: payload.order.status,
-                    amount: payload.order.amount,
-                    restaurant_name: payload.order.restaurant.name,
-                    customer_name: customer.name,
-                },
-            },
-        );
-        // 2- EMAIL AU CLIENT
-        await this.emailService.sendEmailTemplate(
-            this.orderEmailTemplates.NOTIFICATION_ORDER_CUSTOMER,
-            {
-                recipients: customerEmail,
-                data: {
-                    reference: payload.order.reference,
-                    status: payload.order.status,
-                    amount: payload.order.amount,
-                    restaurant_name: payload.order.restaurant.name,
-                    customer_name: customer.name,
-                },
-            },
-        );
-
-        // PREPARATION DES DONNEES DE NOTIFICATIONS
-        const notificationDataUsersRestaurant = {
-            actor: customer,
-            recipients: usersRestaurant,
-            data: {
-                reference: payload.order.reference,
-                status: payload.order.status,
-                amount: payload.order.amount,
-                restaurant_name: payload.order.restaurant.name,
-                customer_name: customer.name,
-            },
-        };
-        const notificationDataRecipient = {
-            actor: customer,
-            recipients: [customer],
-            data: {
-                reference: payload.order.reference,
-                status: payload.order.status,
-                amount: payload.order.amount,
-                restaurant_name: payload.order.restaurant.name,
-                customer_name: customer.name,
-            },
-        };
-        // ENVOIE DES NOTIFICATIONS
-        // 1- NOTIFICATION AU RESTAURANT
-        const notificationsUsersRestaurant = await this.notificationsService.sendNotificationToMultiple(
-            this.orderNotificationsTemplate.NOTIFICATION_ORDER_RESTAURANT,
-            notificationDataUsersRestaurant,
-            NotificationType.SYSTEM
-        );
-        // Notifier en temps réel
-        this.notificationsWebSocketService.emitNotification(notificationsUsersRestaurant[0], usersRestaurant[0], true);
-
-        // 2- NOTIFICATION AU CLIENT
-        const notificationCustomer = await this.notificationsService.sendNotificationToMultiple(
-            this.orderNotificationsTemplate.NOTIFICATION_ORDER_CUSTOMER,
-            notificationDataRecipient,
-            NotificationType.SYSTEM
-        );
-        // Notifier en temps réel
-        this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
-
         // PROMOTION USAGE
         if (payload.order.promotion_id) {
             if (payload.order.status === OrderStatus.PENDING && payload.order.promotion_id && payload.totalDishes && payload.orderItems && payload.loyalty_level) {
@@ -148,5 +70,87 @@ export class OrderListenerService {
                 }
             }
         }
+
+        // RECUPERATION DES RECEPTEURS
+        const usersRestaurant = (await this.notificationRecipientService.getAllUsersByRestaurantAndRole(payload.order.restaurant_id));
+        const usersRestaurantEmail: string[] = usersRestaurant.map((user) => user.email!);
+        const customer = await this.notificationRecipientService.getCustomer(payload.order.customer_id);
+        const customerEmail: string[] = customer.email ? [customer.email] : [];
+
+
+        // PREPARATION DES DONNEES DE NOTIFICATIONS
+        const notificationDataUsersRestaurant = {
+            actor: customer,
+            recipients: usersRestaurant,
+            data: {
+                reference: payload.order.reference,
+                status: payload.order.status,
+                amount: payload.order.amount,
+                restaurant_name: payload.order.restaurant.name,
+                customer_name: customer.name,
+            },
+        };
+        const notificationDataRecipient = {
+            actor: customer,
+            recipients: [customer],
+            data: {
+                reference: payload.order.reference,
+                status: payload.order.status,
+                amount: payload.order.amount,
+                restaurant_name: payload.order.restaurant.name,
+                customer_name: customer.name,
+            },
+        };
+
+        // ENVOIE DES NOTIFICATIONS
+        // 1- NOTIFICATION AU RESTAURANT
+        const notificationsUsersRestaurant = await this.notificationsService.sendNotificationToMultiple(
+            this.orderNotificationsTemplate.NOTIFICATION_ORDER_RESTAURANT,
+            notificationDataUsersRestaurant,
+            NotificationType.SYSTEM
+        );
+        // Notifier en temps réel
+        this.notificationsWebSocketService.emitNotification(notificationsUsersRestaurant[0], usersRestaurant[0], true);
+
+        // 2- NOTIFICATION AU CLIENT
+        const notificationCustomer = await this.notificationsService.sendNotificationToMultiple(
+            this.orderNotificationsTemplate.NOTIFICATION_ORDER_CUSTOMER,
+            notificationDataRecipient,
+            NotificationType.SYSTEM
+        );
+        // Notifier en temps réel
+        this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
+
+
+        // ENVOIE DES EMAILS
+        // 1- EMAIL AU RESTAURANT
+        await this.emailService.sendEmailTemplate(
+            this.orderEmailTemplates.NOTIFICATION_ORDER_RESTAURANT,
+            {
+                recipients: usersRestaurantEmail,
+                data: {
+                    reference: payload.order.reference,
+                    status: payload.order.status,
+                    amount: payload.order.amount,
+                    restaurant_name: payload.order.restaurant.name,
+                    customer_name: customer.name,
+                },
+            },
+        );
+        // 2- EMAIL AU CLIENT
+        await this.emailService.sendEmailTemplate(
+            this.orderEmailTemplates.NOTIFICATION_ORDER_CUSTOMER,
+            {
+                recipients: customerEmail,
+                data: {
+                    reference: payload.order.reference,
+                    status: payload.order.status,
+                    amount: payload.order.amount,
+                    restaurant_name: payload.order.restaurant.name,
+                    customer_name: customer.name,
+                },
+            },
+        );
+
     }
 }

@@ -32,27 +32,6 @@ export class DishListenerService {
         const managersEmail: string[] = managers.map((user) => user.email!).filter(Boolean) as string[];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
-        // Send Emails
-        // 1- Email to Backoffice
-        if (usersBackofficeEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.dishEmailTemplates.NEW_DISH_BACKOFFICE,
-                {
-                    recipients: usersBackofficeEmail,
-                    data: payload,
-                },
-            );
-        }
-        // 2- Email to Restaurant Managers
-        if (managersEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.dishEmailTemplates.NEW_DISH_RESTAURANT,
-                {
-                    recipients: managersEmail,
-                    data: payload,
-                },
-            );
-        }
 
         // Prepare Notification Data
         const notificationDataBackoffice = {
@@ -92,6 +71,29 @@ export class DishListenerService {
                 this.notificationsWebSocketService.emitNotification(notification, correspondingRecipient);
             }
         });
+
+        // Send Emails
+        // 1- Email to Backoffice
+        if (usersBackofficeEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.dishEmailTemplates.NEW_DISH_BACKOFFICE,
+                {
+                    recipients: usersBackofficeEmail,
+                    data: payload,
+                },
+            );
+        }
+        // 2- Email to Restaurant Managers
+        if (managersEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.dishEmailTemplates.NEW_DISH_RESTAURANT,
+                {
+                    recipients: managersEmail,
+                    data: payload,
+                },
+            );
+        }
+
     }
 
     @OnEvent('dish.updated')
@@ -106,27 +108,6 @@ export class DishListenerService {
         const managersEmail: string[] = managers.map((user) => user.email!).filter(Boolean) as string[];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
-        // Send Emails
-        // 1- Email to Backoffice
-        if (usersBackofficeEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.dishEmailTemplates.DISH_UPDATED_BACKOFFICE,
-                {
-                    recipients: usersBackofficeEmail,
-                    data: payload,
-                },
-            );
-        }
-        // 2- Email to Restaurant Managers
-        if (managersEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.dishEmailTemplates.DISH_UPDATED_RESTAURANT,
-                {
-                    recipients: managersEmail,
-                    data: payload,
-                },
-            );
-        }
 
         // Prepare Notification Data
         const notificationDataBackoffice = {
@@ -166,5 +147,29 @@ export class DishListenerService {
                 this.notificationsWebSocketService.emitNotification(notification, correspondingRecipient);
             }
         });
+
+
+        // Send Emails
+        // 1- Email to Backoffice
+        if (usersBackofficeEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.dishEmailTemplates.DISH_UPDATED_BACKOFFICE,
+                {
+                    recipients: usersBackofficeEmail,
+                    data: payload,
+                },
+            );
+        }
+        // 2- Email to Restaurant Managers
+        if (managersEmail.length > 0) {
+            await this.emailService.sendEmailTemplate(
+                this.dishEmailTemplates.DISH_UPDATED_RESTAURANT,
+                {
+                    recipients: managersEmail,
+                    data: payload,
+                },
+            );
+        }
+
     }
 }

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException,BadRequestException } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
@@ -38,7 +38,7 @@ export class AuthService {
       password,
     );
     if (!isPasswordValid) {
-      throw new UnauthorizedException('Mot de passe invalide');
+      throw new BadRequestException('Mot de passe invalide');
     }
 
     // Génération du token et du refreshToken
