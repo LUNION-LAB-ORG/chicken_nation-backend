@@ -304,13 +304,14 @@ model Notification {
 model OrderItem {
   id String @id @default(uuid()) @db.Uuid
 
-  quantity    Int    @default(1)
+  quantity    Int     @default(1)
   amount      Float
-  order_id    String @db.Uuid
-  dish_id     String @db.Uuid
-  supplements Json?  @db.Json
-  dish        Dish   @relation(fields: [dish_id], references: [id])
-  order       Order  @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  epice       Boolean @default(false)
+  order_id    String  @db.Uuid
+  dish_id     String  @db.Uuid
+  supplements Json?   @db.Json
+  dish        Dish    @relation(fields: [dish_id], references: [id])
+  order       Order   @relation(fields: [order_id], references: [id], onDelete: Cascade)
 
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
@@ -397,24 +398,24 @@ model Paiement {
 model Restaurant {
   id String @id @default(uuid()) @db.Uuid
 
-  name             String           @db.VarChar
-  manager          String           @db.Uuid
-  description      String?          @db.VarChar
-  image            String?          @db.Text
-  address          String?          @db.VarChar
-  latitude         Float?
-  longitude        Float?
-  phone            String?          @db.VarChar
-  email            String?          @db.VarChar
-  schedule         Json?            @db.Json
-  dish_restaurants DishRestaurant[]
-  users            User[]
-  orders           Order[]
+  name                 String                @db.VarChar
+  manager              String                @db.Uuid
+  description          String?               @db.VarChar
+  image                String?               @db.Text
+  address              String?               @db.VarChar
+  latitude             Float?
+  longitude            Float?
+  phone                String?               @db.VarChar
+  email                String?               @db.VarChar
+  schedule             Json?                 @db.Json
+  dish_restaurants     DishRestaurant[]
+  users                User[]
+  orders               Order[]
   restaurantPromotions RestaurantPromotion[]
 
-  entity_status       EntityStatus          @default(ACTIVE)
-  created_at          DateTime              @default(now()) @db.Timestamp(6)
-  updated_at          DateTime              @default(now()) @db.Timestamp(6)
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
 }
 
 model Supplement {

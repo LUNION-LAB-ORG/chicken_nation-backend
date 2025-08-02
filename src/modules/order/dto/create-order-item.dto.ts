@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsArray, IsNumber, IsOptional, IsUUID, Min } from "class-validator";
+import { IsArray, IsBoolean, IsNumber, IsOptional, IsUUID, Min } from "class-validator";
 import { Transform } from "class-transformer";
 
 export class CreateOrderItemDto {
@@ -18,4 +18,10 @@ export class CreateOrderItemDto {
     @IsArray()
     @IsUUID(undefined, { each: true })
     supplements_ids?: string[];
+
+    @ApiPropertyOptional({ description: "ID de la promotion" })
+    @IsOptional()
+    @Transform(({ value }) => String(value).trim() == "true" ? true : false)
+    @IsBoolean()
+    epice: boolean;
 }

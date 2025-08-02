@@ -122,6 +122,7 @@ export class OrderService {
               dish_id: item.dish_id,
               quantity: item.quantity,
               amount: item.amount,
+              epice: item.epice,
               supplements: item.supplements
             })), ...offersDishes.map(item => ({
               dish_id: item.dish_id,

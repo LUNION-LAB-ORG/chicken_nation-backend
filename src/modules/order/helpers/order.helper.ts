@@ -192,6 +192,7 @@ export class OrderHelper {
             amount: number;
             dishPrice: number;
             supplementsPrice: number;
+            epice: boolean;
             supplements: { id: string; name: string; price: number; category: SupplementCategory }[];
         }[] = [];
 
@@ -259,6 +260,7 @@ export class OrderHelper {
                 amount: itemPrice,
                 dishPrice: itemPrice,
                 supplementsPrice: supplementsTotal,
+                epice: item.epice,
                 supplements: supplementsData,
             });
         }
@@ -446,7 +448,7 @@ export class OrderHelper {
             OrderStatus.COLLECTED, // Pour retrait
             OrderStatus.COMPLETED // Quand le livreur récupère l'argent
         ];
-        
+
         // Définir la séquence logique des états pour les commanes à emporter ou à table
         const stateSequence2: OrderStatus[] = [
             OrderStatus.PENDING,
