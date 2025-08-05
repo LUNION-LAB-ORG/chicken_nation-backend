@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException,BadRequestException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
@@ -66,6 +66,9 @@ export class AuthService {
     let customer = await this.prisma.customer.findUnique({
       where: {
         phone,
+        entity_status: {
+          not: EntityStatus.DELETED,
+        },
       },
     });
 
@@ -118,6 +121,9 @@ export class AuthService {
     const customer = await this.prisma.customer.findUnique({
       where: {
         phone: otpToken.phone,
+        entity_status: {
+          not: EntityStatus.DELETED,
+        },
       },
     });
 
