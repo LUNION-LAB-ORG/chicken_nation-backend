@@ -4,9 +4,6 @@ import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto'
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
 import { Request } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { UserRole } from '@prisma/client';
-import { UserRoles } from 'src/common/decorators/user-roles.decorator';
-import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { CustomerQueryDto } from 'src/modules/customer/dto/customer-query.dto';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -22,10 +19,10 @@ export class CustomerController {
 
   // CREATE CUSTOMER
 
-  @ApiOperation({ summary: 'Création d\'un nouveau client' })
   @Post()
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
+  @ApiOperation({ summary: 'Création d\'un nouveau client' })
   async create(@Body() createCustomerDto: CreateCustomerDto, @UploadedFile() image: Express.Multer.File) {
     const resizedPath = await GenerateConfigService.compressImages(
       { "img_1": image?.path },
@@ -40,31 +37,31 @@ export class CustomerController {
     return this.customerService.create({ ...createCustomerDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
-  @ApiOperation({ summary: 'Récupération de tous les clients' })
   @Get()
   @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Récupération de tous les clients' })
   findAll(@Query() query: CustomerQueryDto) {
     return this.customerService.findAll(query);
   }
 
-  @ApiOperation({ summary: 'Obtenir le détail d un client' })
-  @UseGuards(JwtCustomerAuthGuard)
   @Get('/detail')
+  @UseGuards(JwtCustomerAuthGuard)
+  @ApiOperation({ summary: 'Obtenir le détail d un client' })
   detail(@Req() req: Request) {
     return this.customerService.detail(req);
   }
 
-  @ApiOperation({ summary: 'Obtenir un client par ID' })
-  @UseGuards(JwtAuthGuard)
   @Get(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Obtenir un client par ID' })
   findOne(@Param('id') id: string) {
     return this.customerService.findOne(id);
   }
 
-  @ApiOperation({ summary: 'Mettre à jour un client' })
-  @UseGuards(JwtCustomerAuthGuard)
   @Patch()
+  @UseGuards(JwtCustomerAuthGuard)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
+  @ApiOperation({ summary: 'Mettre à jour un client' })
   async update(@Req() req: Request, @Body() updateCustomerDto: UpdateCustomerDto, @UploadedFile() image: Express.Multer.File) {
     const resizedPath = await GenerateConfigService.compressImages(
       { "img_1": image?.path },
@@ -79,15 +76,15 @@ export class CustomerController {
     return this.customerService.update(req, { ...updateCustomerDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
-  @ApiOperation({ summary: 'Obtenir un client par numéro de téléphone' })
   @Get('phone/:phone')
+  @ApiOperation({ summary: 'Obtenir un client par numéro de téléphone' })
   findByPhone(@Param('phone') phone: string) {
     return this.customerService.findByPhone(phone);
   }
 
-  @ApiOperation({ summary: 'Supprimer un client' })
   @Delete(':id')
   @UseGuards(JwtCustomerAuthGuard)
+  @ApiOperation({ summary: 'Supprimer un client' })
   remove(@Param('id') id: string) {
     return this.customerService.remove(id);
   }
