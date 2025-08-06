@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsPhoneNumber, IsString, IsUUID, ValidateNested } from "class-validator";
+import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsUUID, ValidateNested } from "class-validator";
 import { Transform, Type } from "class-transformer";
 import { CreateOrderItemDto } from "src/modules/order/dto/create-order-item.dto";
 import { OrderType } from "src/modules/order/enums/order-type.enum";
@@ -63,7 +63,7 @@ export class CreateOrderDto {
 
     @ApiPropertyOptional({ description: 'Numéro de téléphone du client', example: '+225070707070' })
     @IsOptional()
-    @IsPhoneNumber("CI", { message: 'Numéro de téléphone non valide, utilisez le format +225' })
+    // @IsPhoneNumber("CI", { message: 'Numéro de téléphone non valide, utilisez le format +225' })
     @IsString()
     @Transform(({ value }) => value.trim())
     phone?: string;

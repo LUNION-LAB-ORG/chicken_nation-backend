@@ -1,11 +1,11 @@
-import { IsString, IsOptional, IsEmail, IsPhoneNumber, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsEmail, IsDateString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { parse, isValid } from 'date-fns';
 
 export class CreateCustomerDto {
     @ApiProperty({ description: 'Numéro de téléphone du client', example: '+225070707070' })
-    @IsPhoneNumber("CI", { message: 'Numéro de téléphone non valide, utilisez le format +225' })
+    // @IsPhoneNumber("CI", { message: 'Numéro de téléphone non valide, utilisez le format +225' })
     @IsString()
     @Transform(({ value }) => value.trim())
     phone: string;

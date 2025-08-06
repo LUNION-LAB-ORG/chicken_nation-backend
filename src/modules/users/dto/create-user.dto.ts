@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, MaxLength, IsOptional, IsString, IsPhoneNumber } from 'class-validator';
+import { IsNotEmpty, MaxLength, IsOptional, IsString } from 'class-validator';
 
 export class CreateUserDto {
   // FULLNAME
@@ -30,7 +30,7 @@ export class CreateUserDto {
 
   // PHONE
   @ApiProperty({ description: 'Numéro de téléphone de l\'utilisateur', example: '+225070707070' })
-  @IsPhoneNumber("CI", { message: 'Numéro de téléphone non valide, utilisez le format +225' })
+  // @IsPhoneNumber("CI", { message: 'Numéro de téléphone non valide, utilisez le format +225' })
   @IsString()
   @Transform(({ value }) => value.trim())
   phone: string;
