@@ -2,14 +2,27 @@ import { Injectable } from "@nestjs/common";
 import { hotp } from "otplib";
 import { PrismaService } from "src/database/services/prisma.service";
 import { ConfigService } from '@nestjs/config';
+import * as ms from 'ms';
 
 @Injectable()
 export class OtpService {
   private readonly secret: string;
+  private readonly expiration: number;
 
   constructor(private readonly configService: ConfigService, private readonly prisma: PrismaService) {
 
     this.secret = this.configService.get<string>("OTP_SECRET") ?? "";
+    
+    // Correction de l'utilisation de ms
+    const otpExpirationConfig = this.configService.get<string>("OTP_EXPIRATION") ?? "5m";
+    this.expiration = Number(ms(otpExpirationConfig as any));
+    
+    // Validation de la configuration
+    if (!this.expiration || this.expiration <= 0) {
+      console.warn(`Invalid OTP_EXPIRATION: ${otpExpirationConfig}, using default 5m`);
+      this.expiration = Number(ms('5m' as any));
+    }
+
     hotp.options = { digits: 4 };
   }
 
@@ -33,7 +46,6 @@ export class OtpService {
     let counter = 1;
     const counterOtp = await this.prisma.counterOtp.findFirst();
 
-
     // Création ou mise à jour du counter
     if (counterOtp) {
       counter = counterOtp.counter + 1;
@@ -46,10 +58,8 @@ export class OtpService {
       await this.prisma.counterOtp.create({ data: { counter } });
     }
 
-
     // GENERATE OTP TOKEN
     const token = hotp.generate(this.secret, counter);
-
 
     // CREATE OTP TOKEN
     await this.prisma.otpToken.create({
@@ -57,10 +67,10 @@ export class OtpService {
         code: token,
         phone,
         counter,
-        expire: new Date(Date.now() + 5 * 60 * 1000),
+        expire: new Date(Date.now() + this.expiration),
       },
     });
-
+    
     return token;
   }
 
