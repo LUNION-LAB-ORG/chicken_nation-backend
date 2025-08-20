@@ -1,18 +1,19 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, Req, HttpStatus, HttpCode, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, Req, HttpStatus, HttpCode, UseGuards, Res } from '@nestjs/common';
 import { OrderService } from 'src/modules/order/services/order.service';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
 import { QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
 import { OrderStatus } from '@prisma/client';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { ReceiptsService } from '../services/receipts.service';
 
 @ApiTags('Commandes')
 @Controller('orders')
 export class OrderController {
-  constructor(private readonly orderService: OrderService) { }
+  constructor(private readonly orderService: OrderService, private readonly receiptsService: ReceiptsService) { }
 
   @Post()
   @ApiOperation({ summary: 'Créer une nouvelle commande' })
@@ -117,5 +118,12 @@ export class OrderController {
   @Get("update-statut/:id")
   updateStatut(@Param('id') id: string) {
     return this.orderService.updateStatuts(id);
+  }
+
+
+  @Get(':id/pdf')
+  @UseGuards(JwtAuthGuard)
+  async getReceiptPdf(@Param('id') id: string, @Res() res: Response) {
+    await this.receiptsService.generateReceiptPdf(id, res);
   }
 }

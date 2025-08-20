@@ -14,6 +14,7 @@ import { OrderWebSocketService } from './websockets/order-websocket.service';
 import { RestaurantModule } from '../restaurant/restaurant.module';
 import { OrderEmailTemplates } from './templates/order-email.template';
 import { OrderNotificationsTemplate } from './templates/order-notifications.template';
+import { ReceiptsService } from './services/receipts.service';
 
 @Module({
   imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule],
@@ -28,6 +29,7 @@ import { OrderNotificationsTemplate } from './templates/order-notifications.temp
     OrderWebSocketService,
     OrderEmailTemplates,
     OrderNotificationsTemplate,
+    ReceiptsService,
   ],
 })
 export class OrderModule { }
