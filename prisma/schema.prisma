@@ -127,6 +127,19 @@ enum LoyaltyPointIsUsed {
   PARTIAL // PARTIEL
 }
 
+enum TicketStatus {
+  OPEN // OUVERT
+  IN_PROGRESS // EN COURS
+  RESOLVED // RÉSOLU
+  CLOSED // FERMÉ
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
 model Address {
   id String @id @default(uuid()) @db.Uuid
 
@@ -215,7 +228,152 @@ model Customer {
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
   last_login_at DateTime?
   Comment       Comment[]
+
+  // relations conversations, tickets
+  TicketMessage TicketMessage[] @relation("TicketMsgAuthorCustomer")
+
+  Message Message[] @relation("MessageAuthorCustomer")
+
+  TicketThread TicketThread[]
+
+  Conversation Conversation[]
 }
+
+// -------------------- Gestion des conversations ------------------------------
+
+model Conversation {
+  id String @id @default(uuid()) @db.Uuid
+
+  restaurantId String?     @db.Uuid
+  restaurant   Restaurant? @relation(fields: [restaurantId], references: [id])
+
+  customerId String?   @db.Uuid
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  users    ConversationUser[]
+  messages Message[]
+
+  // multi-escalades : 1 conv -> N tickets
+  escalations TicketThread[] @relation("FromConversation")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ConversationUser {
+  conversationId String @db.Uuid
+  userId         String @db.Uuid
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  joinedAt DateTime @default(now()) // Date de jointure
+
+  @@id([conversationId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id             String       @id @default(uuid()) @db.Uuid
+  conversationId String       @db.Uuid
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  // Auteur (les 2 ne peuvent etre null a la fois)
+  authorUserId     String?   @db.Uuid
+  authorUser       User?     @relation("MessageAuthorUser", fields: [authorUserId], references: [id])
+  authorCustomerId String?   @db.Uuid
+  authorCustomer   Customer? @relation("MessageAuthorCustomer", fields: [authorCustomerId], references: [id])
+
+  body      String
+  meta      Json? // Image, vidéo, fichier, etc.
+  isRead    Boolean  @default(false) // Si le message a été lu
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([conversationId, createdAt])
+  @@index([authorUserId])
+  @@index([authorCustomerId])
+}
+
+// ---------- Tickets (support) ----------
+
+// Cette table represente les tickets de support
+model TicketThread {
+  id String @id @default(uuid()) @db.Uuid
+
+  restaurantId String     @db.Uuid
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  subject  String
+  status   TicketStatus   @default(OPEN)
+  priority TicketPriority @default(MEDIUM)
+  category String? // ex: DELIVERY, BILLING, QUALITY...
+  source   String? // ex: phone, email, webform, escalation
+
+  // Optionnel: ticket lié à un client
+  customerId String?   @db.Uuid
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  // Assignation agent support
+  assigneeId String? @db.Uuid
+  assignee   User?   @relation("TicketAssignee", fields: [assigneeId], references: [id])
+
+  // multi-escalades : N tickets peuvent référencer la même conversation
+  fromConversationId String?       @db.Uuid
+  fromConversation   Conversation? @relation("FromConversation", fields: [fromConversationId], references: [id])
+
+  // Participants & messages
+  participants TicketParticipant[]
+  messages     TicketMessage[]
+
+  // SLA / métriques
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  reopenedCount   Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, priority])
+  @@index([assigneeId])
+  @@index([customerId])
+  @@index([restaurantId, createdAt])
+  @@index([fromConversationId])
+}
+
+// Cette table represente les "employes" qui repondent au ticket d'un client
+model TicketParticipant {
+  ticketId String       @db.Uuid
+  userId   String       @db.Uuid
+  ticket   TicketThread @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt DateTime     @default(now())
+
+  @@id([ticketId, userId])
+  @@index([userId])
+}
+
+model TicketMessage {
+  id       String       @id @default(uuid()) @db.Uuid
+  ticketId String       @db.Uuid
+  ticket   TicketThread @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  // Auteur XOR (valider côté app / trigger SQL)
+  authorUserId     String?   @db.Uuid
+  authorUser       User?     @relation("TicketMsgAuthorUser", fields: [authorUserId], references: [id])
+  authorCustomerId String?   @db.Uuid
+  authorCustomer   Customer? @relation("TicketMsgAuthorCustomer", fields: [authorCustomerId], references: [id])
+
+  body      String
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  @@index([ticketId, createdAt])
+  @@index([authorUserId])
+  @@index([authorCustomerId])
+}
+
+// -------------------- Fin Gestion des conversations ------------------------------
 
 model DishRestaurant {
   id            String     @id @default(uuid()) @db.Uuid
@@ -416,6 +574,10 @@ model Restaurant {
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  TicketThread TicketThread[]
+
+  Conversation Conversation[]
 }
 
 model Supplement {
@@ -450,6 +612,13 @@ model User {
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
   last_login_at DateTime?
+
+  // Relations conversations, tickets
+  TicketMessage     TicketMessage[]     @relation("TicketMsgAuthorUser")
+  TicketParticipant TicketParticipant[]
+  Message           Message[]           @relation("MessageAuthorUser")
+  ConversationUser  ConversationUser[]
+  TicketThread      TicketThread[]      @relation("TicketAssignee")
 
   @@index([email, type])
 }

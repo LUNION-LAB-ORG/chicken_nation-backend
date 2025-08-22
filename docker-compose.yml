@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  database:
+    image: postgres:15-alpine
+    container_name: chicken_nation_db
+    environment:
+      POSTGRES_DB: 'chicken_nation'
+      POSTGRES_USER: 'postgres'
+      POSTGRES_PASSWORD: 'postgres'
+    ports:
+      - "5432:5432"
+    volumes:
+      - chicken_nation_db_data:/var/lib/postgresql/data
+    networks:
+      - chicken_nation_network
+
+  adminer:
+    image: adminer:4.8.0
+    container_name: chicken_nation_adminer
+    environment:
+      ADMINER_DEFAULT_SERVER: database
+    ports:
+      - "8080:8080"
+    depends_on:
+      - database
+    networks:
+      - chicken_nation_network
+
+volumes:
+  chicken_nation_db_data:
+
+networks:
+  chicken_nation_network:
+    driver: bridge

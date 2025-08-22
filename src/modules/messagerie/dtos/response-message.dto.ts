@@ -1,0 +1,38 @@
+import { ApiProperty } from '@nestjs/swagger';
+import { IsOptional } from 'class-validator';
+
+export class ResponseMessageDto {
+  @ApiProperty()
+  id: string;
+
+  @ApiProperty()
+  conversationId: string;
+
+  @ApiProperty()
+  body: string;
+
+  @ApiProperty()
+  isRead: boolean;
+
+  @ApiProperty()
+  createdAt: Date;
+
+  @ApiProperty()
+  updatedAt: Date;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  authorUser?: {
+    id: string;
+    name: string;
+    email: string;
+  } | null;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  authorCustomer?: {
+    id: string;
+    name: string;
+    email: string;
+  } | null;
+}
