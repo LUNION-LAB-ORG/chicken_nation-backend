@@ -20,6 +20,7 @@ import { SocketIoModule } from 'src/socket-io/socket-io.module';
 import { TwilioModule } from 'src/twilio/twilio.module';
 import { EmailModule } from 'src/modules/email/email.module';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
+import { MessagerieModule } from './modules/messagerie/messagerie.module';
 @Module({
   imports: [
     JsonWebTokenModule,
@@ -43,6 +44,7 @@ import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
     EmailModule,
     FidelityModule,
     StatisticsModule,
+    MessagerieModule,
   ],
 })
 
