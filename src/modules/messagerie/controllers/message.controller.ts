@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, Post, Req } from '@nestjs/common';
 import { MessageService } from '../services/message.service';
-import { QueryMessagesDto } from '../dtos/query-messages.dto';
+import { QueryMessagesDto } from '../dto/query-messages.dto';
 import { Request } from 'express';
 import { CreateMessageDto } from '../dto/createMessageDto';
 

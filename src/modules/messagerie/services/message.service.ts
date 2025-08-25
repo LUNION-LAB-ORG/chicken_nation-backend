@@ -1,19 +1,21 @@
 import { Injectable } from '@nestjs/common';
-import { QueryMessagesDto } from '../dtos/query-messages.dto';
+import { QueryMessagesDto } from '../dto/query-messages.dto';
 import { Request } from 'express';
 import { PrismaService } from '../../../database/services/prisma.service';
-import { ResponseMessageDto } from '../dtos/response-message.dto';
+import { ResponseMessageDto } from '../dto/response-message.dto';
 import { QueryResponseDto } from '../../../common/dto/query-response.dto';
 import { ConversationsService } from './conversations.service';
 import { getAuthType } from '../utils/getTypeUser';
 import { Customer, User } from '@prisma/client';
 import { CreateMessageDto } from '../dto/createMessageDto';
+import { MessageWebSocketService } from '../websockets/message-websocket.service';
 
 @Injectable()
 export class MessageService {
   constructor(
     private readonly conversationsService: ConversationsService,
     private readonly prismaService: PrismaService,
+    private readonly messageWebSocketService: MessageWebSocketService,
   ) {}
 
   async getMessages(
@@ -82,10 +84,12 @@ export class MessageService {
   ): Promise<ResponseMessageDto> {
     const { body } = createMessageDto;
     if (!body || body.trim() === '') {
-      throw new Error('Message body is required and must be a non-empty string');
+      throw new Error(
+        'Message body is required and must be a non-empty string',
+      );
     }
 
-    const auth = req.user ?? await this.prismaService.user.findFirst(); // TODO: supprimer
+    const auth = req.user ?? (await this.prismaService.user.findFirst()); // TODO: supprimer
 
     if (!auth) {
       throw new Error('User not authenticated');
@@ -104,24 +108,55 @@ export class MessageService {
       throw new Error('Conversation not found');
     }
 
-    console.log(auth);
-
     // Create a new message in the database
     const message = await this.prismaService.message.create({
       data: {
         body,
         conversationId: conversation.id,
         authorUserId: authType === 'user' ? (auth as User).id : null, // Set user ID if authenticated as user
-        authorCustomerId: authType === 'customer' ? (auth as Customer).id : null, // Set customer ID if authenticated as customer
+        authorCustomerId:
+          authType === 'customer' ? (auth as Customer).id : null, // Set customer ID if authenticated as customer
       },
       include: {
         authorUser: true, // Include user details if needed
         authorCustomer: true, // Include customer details if needed
+        conversation: {
+          select: {
+            id: true,
+            customerId: true,
+            restaurantId: true,
+          },
+          include: {
+            users: {
+              select: { userId: true },
+            },
+          },
+        },
       },
     });
 
+    await this.prismaService.conversation.update({
+      where: { id: conversation.id },
+      data: { updatedAt: new Date() },
+    });
+
+    const mappedMessage = this.mapMessagesField(message);
+
+    // Liste des utilisateurs participant à la conversation
+    const usersId = message.conversation.users.map(
+      (conversationUser) => conversationUser.userId,
+    );
+
+    const { customerId, restaurantId } = message.conversation;
+
+    this.messageWebSocketService.emitNewMessage(
+      usersId,
+      { restaurantId, customerId },
+      mappedMessage,
+    );
+
     // Map the created message to ResponseMessageDto format
-    return this.mapMessagesField(message);
+    return mappedMessage;
   }
 
   private mapMessagesField(message: any): ResponseMessageDto {

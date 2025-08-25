@@ -6,7 +6,7 @@ export class ResponseConversationsDto {
   id: string;
 
   @ApiProperty()
-  restaurantId: string;
+  restaurantId?: string;
 
   @ApiProperty()
   customerId: string;
