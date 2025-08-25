@@ -10,6 +10,7 @@ import { NotificationsService } from 'src/modules/notifications/services/notific
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
 import { PromotionService } from 'src/modules/fidelity/services/promotion.service';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
+import { OrderChannels } from '../enums/order-channels';
 
 @Injectable()
 export class OrderListenerService {
@@ -25,8 +26,10 @@ export class OrderListenerService {
         private readonly orderNotificationsTemplate: OrderNotificationsTemplate,
     ) { }
 
-    @OnEvent('order.created')
-    @OnEvent('order.statusUpdated')
+    @OnEvent(OrderChannels.ORDER_CREATED)
+    @OnEvent(OrderChannels.ORDER_STATUS_UPDATED)
+    @OnEvent(OrderChannels.ORDER_UPDATED)
+    @OnEvent(OrderChannels.ORDER_DELETED)
     async orderCreatedEventListener(payload: OrderCreatedEvent) {
         // PROMOTION USAGE
         if (payload.order.promotion_id) {
