@@ -19,6 +19,7 @@ import { QueryConversationsDto } from '../dto/query-conversations.dto';
 import { CreateConversationDto } from '../dto/create-conversation.dto';
 import { ConversationsService } from '../services/conversations.service';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
 
 @ApiTags('Conversations')
 @ApiBearerAuth()
@@ -39,6 +40,15 @@ export class ConversationsController {
     return await this.conversationsService.getConversations(req, filter);
   }
 
+  @UseGuards(JwtCustomerAuthGuard)
+  @Get('/client')
+  async getConversationsClient(
+    @Req() req: Request,
+    filter: QueryConversationsDto,
+  ) {
+    return await this.conversationsService.getConversations(req, filter);
+  }
+
   @ApiOperation({
     summary: 'Rechercher toutes les commandes avec options de filtrage',
   })
@@ -50,6 +60,18 @@ export class ConversationsController {
   @Post()
   @UseGuards(JwtAuthGuard)
   async createConversation(
+    @Req() req: Request,
+    @Body() createConversationDto: CreateConversationDto,
+  ) {
+    return await this.conversationsService.createConversationWithInitialMessage(
+      req,
+      createConversationDto,
+    );
+  }
+
+  @UseGuards(JwtCustomerAuthGuard)
+  @Post('/client')
+  async createConversationClient(
     @Req() req: Request,
     @Body() createConversationDto: CreateConversationDto,
   ) {

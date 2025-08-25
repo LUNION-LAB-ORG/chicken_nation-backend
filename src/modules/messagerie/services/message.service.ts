@@ -125,8 +125,6 @@ export class MessageService {
             id: true,
             customerId: true,
             restaurantId: true,
-          },
-          include: {
             users: {
               select: { userId: true },
             },
