@@ -5,6 +5,7 @@ import {
   OnGatewayDisconnect,
   SubscribeMessage,
   ConnectedSocket,
+  MessageBody,
 } from '@nestjs/websockets';
 
 import { Server, Socket } from 'socket.io';
@@ -22,6 +23,10 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   server: Server;
 
   private connectedUsers = new Map<string, ConnectedUser>();
+
+  // Map pour tracker qui est en train d'écrire dans quelle conversation
+  private typingUsers = new Map<string, Set<string>>(); // conversationId -> Set<userId>
+  private typingTimeouts = new Map<string, NodeJS.Timeout>(); // userId -> timeout
 
   constructor(
     private prisma: PrismaService,
@@ -73,6 +78,9 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (user) {
       console.log(`${user.type} ${user.id} déconnecté`);
       this.connectedUsers.delete(client.id);
+
+      // Supprimer les typing indicators
+      this.cleanupUserTypingOnDisconnect(user.id);
     }
   }
 
@@ -184,6 +192,133 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       'pong',
       `pong from ${user.type} ${user.id}`,
     );
+  }
+
+  @SubscribeMessage('user_typing_start')
+  handleUserTypingStart(
+    @MessageBody() data: { conversationId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const user = this.connectedUsers.get(client.id);
+    if (!user) return;
+
+    this.notifyUserTyping(data.conversationId, user.id, user.type, true);
+  }
+
+  @SubscribeMessage('user_typing_stop')
+  handleUserTypingStop(
+    @MessageBody() data: { conversationId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const user = this.connectedUsers.get(client.id);
+    if (!user) return;
+
+    this.notifyUserTyping(data.conversationId, user.id, user.type, false);
+  }
+
+  /**
+   * Gère les indicateurs "X est en train d'écrire..."
+   */
+  notifyUserTyping(
+    conversationId: string,
+    userId: string,
+    userType: 'user' | 'customer',
+    isTyping: boolean,
+    userName?: string,
+  ) {
+    try {
+      const typingKey = `${userId}_${conversationId}`;
+
+      if (isTyping) {
+        // Ajouter l'utilisateur à la liste des "en train d'écrire"
+        if (!this.typingUsers.has(conversationId)) {
+          this.typingUsers.set(conversationId, new Set());
+        }
+        this.typingUsers.get(conversationId)!.add(userId);
+
+        // Effacer le timeout précédent s'il existe
+        if (this.typingTimeouts.has(typingKey)) {
+          clearTimeout(this.typingTimeouts.get(typingKey)!);
+        }
+
+        // Auto-stop après 3 secondes d'inactivité
+        const timeout = setTimeout(() => {
+          this.notifyUserTyping(
+            conversationId,
+            userId,
+            userType,
+            false,
+            userName,
+          );
+        }, 3000);
+
+        this.typingTimeouts.set(typingKey, timeout);
+      } else {
+        // Retirer l'utilisateur de la liste
+        if (this.typingUsers.has(conversationId)) {
+          this.typingUsers.get(conversationId)!.delete(userId);
+
+          // Supprimer la conversation si plus personne n'écrit
+          if (this.typingUsers.get(conversationId)!.size === 0) {
+            this.typingUsers.delete(conversationId);
+          }
+        }
+
+        // Effacer le timeout
+        if (this.typingTimeouts.has(typingKey)) {
+          clearTimeout(this.typingTimeouts.get(typingKey)!);
+          this.typingTimeouts.delete(typingKey);
+        }
+      }
+
+      // Préparer la liste des utilisateurs en train d'écrire
+      const typingUsersList = this.typingUsers.get(conversationId) || new Set();
+
+      // Émettre à tous les participants SAUF à celui qui écrit
+      this.server
+        .to(`conversation_${conversationId}`)
+        .except(
+          // Trouver le socketId de l'utilisateur qui écrit
+          Array.from(this.connectedUsers.entries())
+            .filter(([, connectedUser]) => connectedUser.id === userId)
+            .map(([socketId]) => socketId),
+        )
+        .emit('typing_indicator', {
+          conversationId,
+          typingUsers: Array.from(typingUsersList).filter(
+            (id) => id !== userId,
+          ),
+          isTyping: typingUsersList.size > 0,
+          userName: userName || `${userType} ${userId}`,
+        });
+
+      console.log(
+        `Typing indicator: ${userId} ${isTyping ? 'started' : 'stopped'} typing in ${conversationId}`,
+      );
+    } catch (error) {
+      console.error('Error handling typing indicator:', error);
+    }
+  }
+
+  /**
+   * Nettoie les indicateurs de frappe quand un utilisateur se déconnecte
+   * @param userId
+   */
+  private cleanupUserTypingOnDisconnect(userId: string) {
+    // Parcourir toutes les conversations où cet utilisateur était en train d'écrire
+    this.typingUsers.forEach((typingUsersSet, conversationId) => {
+      if (typingUsersSet.has(userId)) {
+        this.notifyUserTyping(conversationId, userId, 'user', false);
+      }
+    });
+
+    // Nettoyer les timeouts de cet utilisateur
+    Array.from(this.typingTimeouts.keys())
+      .filter((key) => key.startsWith(`${userId}_`))
+      .forEach((key) => {
+        clearTimeout(this.typingTimeouts.get(key)!);
+        this.typingTimeouts.delete(key);
+      });
   }
 
   // Getter pour les statistiques

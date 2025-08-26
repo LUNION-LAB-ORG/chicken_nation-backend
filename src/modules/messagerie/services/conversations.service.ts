@@ -1,42 +1,32 @@
 import { HttpException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../database/services/prisma.service';
 import { Request } from 'express';
-import { QueryConversationsDto } from '../dtos/query-conversations.dto';
+import { QueryConversationsDto } from '../dto/query-conversations.dto';
 import { QueryResponseDto } from '../../../common/dto/query-response.dto';
-import { ResponseConversationsDto } from '../dtos/response-conversations.dto';
+import { ResponseConversationsDto } from '../dto/response-conversations.dto';
 import { Customer, Prisma, User } from '@prisma/client';
-import { CreateConversationDto } from '../dtos/create-conversation.dto';
+import { CreateConversationDto } from '../dto/create-conversation.dto';
 import { getAuthType } from '../utils/getTypeUser';
+import { ConversationWebsocketsService } from '../websockets/conversation-websockets.service';
 
 type ConversationWhereUniqueInput = Prisma.ConversationWhereUniqueInput;
 
 @Injectable()
 export class ConversationsService {
-  constructor(private readonly prisma: PrismaService) {}
-
-  async fakeAuth(type: 'user' | 'customer' = 'user') {
-    // TODO Supprimer cette méthode une fois l'authentification implémentée
-    if (type === 'user') {
-      return await this.prisma.user.findFirst();
-    } else if (type === 'customer') {
-      return await this.prisma.customer.findFirst();
-    }
-    throw new Error('Invalid auth type');
-  }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly conversationWebsockets: ConversationWebsocketsService,
+  ) {}
 
   /**
    * Liste les conversations de l'utilisateur authentifié
    * Si l'utilisateur est un client, il ne voit que ses conversations.
-   * Si l'utilisateur est un employé, il peut voir les conversations où il est participant.
+   * Si l'utilisateur est un employé, il peut voir les conversations où il est un participant.
    * @param req
    * @param filter
    */
   async getConversations(req: Request, filter: QueryConversationsDto) {
-    const auth = req.user ?? (await this.fakeAuth());
-
-    if (!auth) {
-      throw new HttpException('Non authentifié', 401);
-    }
+    const auth = req.user!;
 
     let conversations: QueryResponseDto<ResponseConversationsDto> | null = null;
 
@@ -68,18 +58,12 @@ export class ConversationsService {
     req: Request,
     createConversationDto: CreateConversationDto,
   ): Promise<ResponseConversationsDto> {
-    const auth = req.user ?? (await this.fakeAuth()); // TODO: Supprimer cette ligne une fois l'authentification implémentée
+    const auth = req.user!;
     const {
       restaurant_id: restaurantId = null,
       seed_message,
       receiver_user_id: receiverUserId,
     } = createConversationDto;
-
-    console.log(restaurantId, receiverUserId);
-
-    if (!auth) {
-      throw new HttpException('Non authentifié', 401);
-    }
 
     const authType = getAuthType(auth);
     const customerId = authType === 'customer' ? (auth as Customer).id : null;
@@ -137,15 +121,15 @@ export class ConversationsService {
         },
         ...(userId
           ? {
-            users: {
-              createMany: {
-                data: [
-                  { userId: userId }, // Ajoute l'utilisateur qui a initié la conversation
-                  ...(receiverUserId ? [{ userId: receiverUserId }] : []), // Ajoute le destinataire si c'est un DM
-                ],
+              users: {
+                createMany: {
+                  data: [
+                    { userId: userId }, // Ajoute l'utilisateur qui a initié la conversation
+                    ...(receiverUserId ? [{ userId: receiverUserId }] : []), // Ajoute le destinataire si c'est un DM
+                  ],
+                },
               },
-            },
-          }
+            }
           : {}),
       },
       include: {
@@ -155,18 +139,18 @@ export class ConversationsService {
       },
     });
 
-    return this.mapConversationField(conversation);
+    const mappedConversation = this.mapConversationField(conversation);
+
+    this.conversationWebsockets.emitConversationCreated(mappedConversation);
+
+    return mappedConversation;
   }
 
   async getConversationById(
     req: Request,
     conversationId: string,
   ): Promise<ResponseConversationsDto | null> {
-    const auth = req.user ?? (await this.fakeAuth()); // TODO: Supprimer cette ligne une fois l'authentification implémentée
-
-    if (!auth) {
-      throw new HttpException('Non authentifié', 401);
-    }
+    const auth = req.user!;
 
     const authType = getAuthType(auth);
     let whereClause: ConversationWhereUniqueInput = {
@@ -368,7 +352,7 @@ export class ConversationsService {
       restaurantId: conversation.restaurantId,
       customerId: conversation.customerId,
       createdAt: conversation.createdAt,
-      messages: conversation.messages.map((message) => ({
+      messages: conversation.messages.map((message:any) => ({
         id: message.id,
         body: message.body,
         authorUserId: message.authorUserId,
@@ -378,12 +362,12 @@ export class ConversationsService {
       })),
       customer: conversation.customer
         ? {
-          id: conversation.customer.id,
-          first_name: conversation.customer.first_name,
-          last_name: conversation.customer.last_name,
-        }
+            id: conversation.customer.id,
+            first_name: conversation.customer.first_name,
+            last_name: conversation.customer.last_name,
+          }
         : null,
-      users: conversation.users?.map((user) => ({
+      users: conversation.users?.map((user:any) => ({
         id: user.user.id,
         fullname: user.user.fullname,
       })),
