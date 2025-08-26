@@ -26,11 +26,7 @@ export class ConversationsService {
    * @param filter
    */
   async getConversations(req: Request, filter: QueryConversationsDto) {
-    const auth = req.user;
-
-    if (!auth) {
-      throw new HttpException('Non authentifié', 401);
-    }
+    const auth = req.user!;
 
     let conversations: QueryResponseDto<ResponseConversationsDto> | null = null;
 
@@ -62,16 +58,12 @@ export class ConversationsService {
     req: Request,
     createConversationDto: CreateConversationDto,
   ): Promise<ResponseConversationsDto> {
-    const auth = req.user;
+    const auth = req.user!;
     const {
       restaurant_id: restaurantId = null,
       seed_message,
       receiver_user_id: receiverUserId,
     } = createConversationDto;
-
-    if (!auth) {
-      throw new HttpException('Non authentifié', 401);
-    }
 
     const authType = getAuthType(auth);
     const customerId = authType === 'customer' ? (auth as Customer).id : null;
@@ -158,11 +150,7 @@ export class ConversationsService {
     req: Request,
     conversationId: string,
   ): Promise<ResponseConversationsDto | null> {
-    const auth = req.user;
-
-    if (!auth) {
-      throw new HttpException('Non authentifié', 401);
-    }
+    const auth = req.user!;
 
     const authType = getAuthType(auth);
     let whereClause: ConversationWhereUniqueInput = {

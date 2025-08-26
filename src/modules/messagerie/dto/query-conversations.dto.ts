@@ -40,7 +40,7 @@ export class QueryConversationsDto {
 
   // Que les conversations clientes
   @ApiPropertyOptional({ description: 'Que les conversations clientes' })
-  @IsOptional() @IsBoolean()
+  @IsOptional() @IsBoolean() @Type(() => Boolean)
   withCustomer?: boolean;
 
   @IsOptional() @IsEnum(TicketStatus)
