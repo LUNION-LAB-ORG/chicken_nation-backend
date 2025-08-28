@@ -26,6 +26,7 @@ export class ResponseMessageDto {
     id: string;
     name: string;
     email: string;
+    image?: string | null;
   } | null;
 
   @ApiProperty({ required: false })
@@ -33,6 +34,8 @@ export class ResponseMessageDto {
   authorCustomer?: {
     id: string;
     name: string;
-    email: string;
+    first_name?: string | null;
+    last_name?: string | null;
+    image?: string | null;
   } | null;
 }

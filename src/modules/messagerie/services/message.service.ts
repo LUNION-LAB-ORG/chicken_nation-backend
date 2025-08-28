@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { QueryMessagesDto } from '../dto/query-messages.dto';
 import { Request } from 'express';
 import { PrismaService } from '../../../database/services/prisma.service';
@@ -34,7 +34,7 @@ export class MessageService {
 
     // If the conversation does not exist, throw an error
     if (!conversation) {
-      throw new Error('Conversation not found');
+      throw new NotFoundException('Conversation not found');
     }
 
     const whereClause: any = {
@@ -170,13 +170,16 @@ export class MessageService {
             id: message.authorUser.id,
             name: message.authorUser.name,
             email: message.authorUser.email,
+            image: message.authorUser.image || null,
           }
         : null,
       authorCustomer: message.authorCustomer
         ? {
             id: message.authorCustomer.id,
-            name: message.authorCustomer.name,
-            email: message.authorCustomer.email,
+            name: message.authorCustomer.first_name + ' ' + message.authorCustomer.last_name,
+            first_name: message.authorCustomer.first_name || null,
+            last_name: message.authorCustomer.last_name || null,
+            image: message.authorCustomer.image || null,
           }
         : null,
     };
