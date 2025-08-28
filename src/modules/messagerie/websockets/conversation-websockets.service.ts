@@ -16,9 +16,9 @@ export class ConversationWebsocketsService {
       );
     }
 
-    if (conversation.restaurantId) {
+    if (conversation.restaurant?.id) {
       this.appGateway.emitToRestaurant(
-        conversation.restaurantId,
+        conversation.restaurant.id,
         'new:customer_conversation',
         conversation,
       );

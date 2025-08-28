@@ -8,11 +8,91 @@ import { Customer, Prisma, User } from '@prisma/client';
 import { CreateConversationDto } from '../dto/create-conversation.dto';
 import { getAuthType } from '../utils/getTypeUser';
 import { ConversationWebsocketsService } from '../websockets/conversation-websockets.service';
+import { ResponseMessageDto } from '../dto/response-message.dto';
 
 type ConversationWhereUniqueInput = Prisma.ConversationWhereUniqueInput;
 
 @Injectable()
 export class ConversationsService {
+  private createConversationInclude({
+    messageTake = 1,
+    includeMessageAuthors = true,
+    includeRestaurant = true,
+    includeCustomerDetails = true,
+    includeUserImage = true,
+  }: {
+    messageTake?: number;
+    includeMessageAuthors?: boolean;
+    includeRestaurant?: boolean;
+    includeCustomerDetails?: boolean;
+    includeUserImage?: boolean;
+  } = {}): Prisma.ConversationInclude {
+    return {
+      customer: {
+        select: {
+          id: true,
+          first_name: true,
+          last_name: true,
+          ...(includeCustomerDetails
+            ? {
+                email: true,
+                phone: true,
+                image: true,
+              }
+            : {}),
+        },
+      },
+      users: {
+        select: {
+          user: {
+            select: {
+              id: true,
+              fullname: true,
+              ...(includeUserImage ? { image: true } : {}),
+            },
+          },
+        },
+      },
+      messages: {
+        orderBy: { createdAt: 'desc' },
+        take: messageTake,
+        ...(includeMessageAuthors
+          ? {
+              include: {
+                authorUser: {
+                  select: {
+                    id: true,
+                    fullname: true,
+                    email: true,
+                    image: true,
+                  },
+                },
+                authorCustomer: {
+                  select: {
+                    id: true,
+                    first_name: true,
+                    last_name: true,
+                    image: true,
+                  },
+                },
+              },
+            }
+          : {}),
+      },
+      ...(includeRestaurant
+        ? {
+            restaurant: {
+              select: {
+                id: true,
+                name: true,
+                image: true,
+              },
+            },
+          }
+        : {}),
+    };
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly conversationWebsockets: ConversationWebsocketsService,
@@ -96,16 +176,19 @@ export class ConversationsService {
 
     const existingConversation = await this.prisma.conversation.findFirst({
       where: whereClause,
-      include: {
-        messages: { orderBy: { createdAt: 'desc' }, take: 1 },
-        customer: { select: { id: true, first_name: true, last_name: true } },
-        users: { select: { user: { select: { id: true, fullname: true } } } },
-      },
+      include: this.createConversationInclude(),
     });
 
+    const unreadParams = {
+      conversationId: existingConversation?.id || '',
+      authId: authType === 'user' ? (auth as User).id : (auth as Customer).id,
+      type: authType,
+    };
+
     if (existingConversation) {
-      // Si une conversation existe déjà, on retourne cette conversation
-      return this.mapConversationField(existingConversation);
+      const unreadNumer = await this.countUnreadMessages(unreadParams);
+
+      return this.mapConversationField(existingConversation, unreadNumer);
     }
 
     const conversation = await this.prisma.conversation.create({
@@ -115,8 +198,8 @@ export class ConversationsService {
         messages: {
           create: {
             body: seed_message,
-            authorUserId: userId, // si l’auteur est un employé
-            authorCustomerId: customerId, // si l’auteur est un client
+            authorUserId: userId, // si l'auteur est un employé
+            authorCustomerId: customerId, // si l'auteur est un client
           },
         },
         ...(userId
@@ -139,7 +222,12 @@ export class ConversationsService {
       },
     });
 
-    const mappedConversation = this.mapConversationField(conversation);
+    unreadParams.conversationId = conversation.id;
+    const unreadNumer = await this.countUnreadMessages(unreadParams);
+    const mappedConversation = this.mapConversationField(
+      conversation,
+      unreadNumer,
+    );
 
     this.conversationWebsockets.emitConversationCreated(mappedConversation);
 
@@ -189,23 +277,19 @@ export class ConversationsService {
       };
     }
 
-    const conversation = await this.prisma.conversation.findUnique({
+    const [conversation, unreadNumber] = await Promise.all([
+      this.prisma.conversation.findUnique({
       where: whereClause,
-      include: {
-        messages: {
-          orderBy: { createdAt: 'desc' },
-          take: 50, // Récupère les 50 derniers messages de la conversation
-        },
-        customer: {
-          select: { id: true, first_name: true, last_name: true },
-        },
-        users: {
-          select: { user: { select: { id: true, fullname: true } } },
-        },
-      },
-    });
+      include: this.createConversationInclude({ messageTake: 50 }),
+      }),
+      this.countUnreadMessages({
+        conversationId,
+        authId: authType === 'user' ? (auth as User).id : (auth as Customer).id,
+        type: authType,
+      }),
+    ]);
 
-    return this.mapConversationField(conversation);
+    return conversation ? this.mapConversationField(conversation,unreadNumber) : null;
   }
 
   /**
@@ -231,28 +315,26 @@ export class ConversationsService {
     const [conversations, total] = await Promise.all([
       this.prisma.conversation.findMany({
         where: whereClause,
-        include: {
-          messages: {
-            orderBy: { createdAt: 'desc' },
-            take: 1, // Récupère le dernier message de chaque conversation
-          },
-          customer: {
-            select: { id: true, first_name: true, last_name: true },
-          },
-          restaurant: {
-            select: { id: true, name: true },
-          },
-        },
+        include: this.createConversationInclude(),
         skip: skip,
         take: limit,
       }),
       this.prisma.conversation.count({ where: whereClause }),
     ]);
 
+    const mappedConversations = await Promise.all(
+      conversations.map(async (conversation) => {
+        const unreadNumber = await this.countUnreadMessages({
+          conversationId: conversation.id,
+          authId: customerId,
+          type: 'customer',
+        });
+        return this.mapConversationField(conversation, unreadNumber);
+      }),
+    );
+
     return {
-      data: conversations.map((conversation) =>
-        this.mapConversationField(conversation),
-      ),
+      data: mappedConversations,
       meta: {
         total: total,
         page: page,
@@ -310,28 +392,26 @@ export class ConversationsService {
     const [conversations, total] = await Promise.all([
       this.prisma.conversation.findMany({
         where: whereClause,
-        include: {
-          messages: {
-            orderBy: { createdAt: 'desc' },
-            take: 1, // Récupère le dernier message de chaque conversation
-          },
-          customer: {
-            select: { id: true, first_name: true, last_name: true },
-          },
-          users: {
-            select: { user: { select: { id: true, fullname: true } } },
-          },
-        },
+        include: this.createConversationInclude(),
         skip: skip,
         take: limit,
       }),
       this.prisma.conversation.count({ where: whereClause }),
     ]);
 
+    const mappedConversations = await Promise.all(
+      conversations.map(async (conversation) => {
+        const unreadNumber = await this.countUnreadMessages({
+          conversationId: conversation.id,
+          authId: userId,
+          type: 'user',
+        });
+        return this.mapConversationField(conversation, unreadNumber);
+      }),
+    );
+
     return {
-      data: conversations.map((conversation) =>
-        this.mapConversationField(conversation),
-      ),
+      data: mappedConversations,
       meta: {
         total: total,
         page: page,
@@ -344,33 +424,82 @@ export class ConversationsService {
   /**
    * Mappe les champs d'une conversation pour la réponse
    * @param conversation
+   * @param unreadNumber
    * @private
    */
-  private mapConversationField(conversation: any): ResponseConversationsDto {
+  private mapConversationField(
+    conversation: any,
+    unreadNumber: number = 0,
+  ): ResponseConversationsDto {
     return {
       id: conversation.id,
-      restaurantId: conversation.restaurantId,
+      unreadNumber,
       customerId: conversation.customerId,
       createdAt: conversation.createdAt,
-      messages: conversation.messages.map((message:any) => ({
-        id: message.id,
-        body: message.body,
-        authorUserId: message.authorUserId,
-        authorCustomerId: message.authorCustomerId,
-        createdAt: message.createdAt,
-        updatedAt: message.updatedAt,
-      })),
+      messages: conversation.messages.map(
+        (message: any): Omit<ResponseMessageDto, 'conversationId'> => ({
+          id: message.id,
+          isRead: message.isRead,
+          body: message.body,
+          authorUser: message.authorUser
+            ? {
+                id: message.authorUser?.id,
+                name: message.authorUser?.fullname,
+                email: message.authorUser?.email,
+                image: message.authorUser?.image,
+              }
+            : null,
+          authorCustomer: message.authorCustomer
+            ? {
+                id: message.authorCustomer?.id,
+                name: `${message.authorCustomer?.first_name} ${message.authorCustomer?.last_name}`,
+                first_name: message.authorCustomer?.first_name,
+                last_name: message.authorCustomer?.last_name,
+                image: message.authorCustomer?.image,
+              }
+            : null,
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+        }),
+      ),
+      restaurant: conversation.restaurant
+        ? {
+            id: conversation.restaurant.id,
+            name: conversation.restaurant.name,
+            image: conversation.restaurant.image,
+          }
+        : null,
       customer: conversation.customer
         ? {
             id: conversation.customer.id,
             first_name: conversation.customer.first_name,
             last_name: conversation.customer.last_name,
+            image: conversation.customer.image,
+            email: conversation.customer.email,
+            phone: conversation.customer.phone,
           }
         : null,
-      users: conversation.users?.map((user:any) => ({
+      users: conversation.users?.map((user: any) => ({
         id: user.user.id,
-        fullname: user.user.fullname,
+        fullName: user.user.fullname,
+        image: user.user.image || null,
       })),
     };
+  }
+
+  private countUnreadMessages(params: {
+    conversationId: string;
+    authId: string;
+    type: 'user' | 'customer';
+  }): Promise<number> {
+    const { conversationId, authId, type } = params;
+    return this.prisma.message.count({
+      where: {
+        conversationId,
+        isRead: false,
+        ...(type === 'user' ? { authorUserId: { not: authId } } : {}),
+        ...(type === 'customer' ? { authorCustomerId: { not: authId } } : {}),
+      },
+    });
   }
 }
