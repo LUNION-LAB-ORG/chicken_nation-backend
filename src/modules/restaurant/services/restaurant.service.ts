@@ -1,6 +1,16 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
-import { EntityStatus, Restaurant, User, UserRole, UserType } from '@prisma/client';
+import {
+  EntityStatus,
+  Restaurant,
+  User,
+  UserRole,
+  UserType,
+} from '@prisma/client';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateRestaurantDto } from 'src/modules/restaurant/dto/create-restaurant.dto';
@@ -14,16 +24,17 @@ import {
   isBefore,
   isEqual,
   parse,
-  isValid
+  isValid,
 } from 'date-fns';
 import { Request } from 'express';
 
 @Injectable()
 export class RestaurantService {
-  constructor(private readonly prisma: PrismaService,
+  constructor(
+    private readonly prisma: PrismaService,
     private readonly generateDataService: GenerateDataService,
     private readonly restaurantEvent: RestaurantEvent,
-  ) { }
+  ) {}
 
   /**
    * Création d'un nouveau restaurant et de son gestionnaire
@@ -32,11 +43,13 @@ export class RestaurantService {
     const user = req.user as User;
     // Vérifie si un utilisateur avec l'email du gestionnaire existe déjà
     const existingUser = await this.prisma.user.findUnique({
-      where: { email: createRestaurantDto.managerEmail }
+      where: { email: createRestaurantDto.managerEmail },
     });
 
     if (existingUser) {
-      throw new ConflictException(`Utilisateur avec l'email ${createRestaurantDto.managerEmail} existe déjà`);
+      throw new ConflictException(
+        `Utilisateur avec l'email ${createRestaurantDto.managerEmail} existe déjà`,
+      );
     }
 
     const password = this.generateDataService.generateSecurePassword();
@@ -75,9 +88,9 @@ export class RestaurantService {
           // Ajout du gestionnaire comme utilisateur du restaurant
           users: {
             connect: {
-              id: manager.id
-            }
-          }
+              id: manager.id,
+            },
+          },
         },
       });
 
@@ -91,15 +104,15 @@ export class RestaurantService {
     // Emettre l'événement de création de restaurant
     this.restaurantEvent.restaurantCreatedEvent({
       actor: { ...user, restaurant: null },
-      restaurant: restaurant
+      restaurant: restaurant,
     });
 
     return {
       restaurant,
       managerCredentials: {
         email: createRestaurantDto.managerEmail,
-        password: plainPassword
-      }
+        password: plainPassword,
+      },
     };
   }
 
@@ -112,7 +125,7 @@ export class RestaurantService {
     const [restaurants, total] = await Promise.all([
       this.prisma.restaurant.findMany({
         where: {
-          entity_status: { not: EntityStatus.DELETED }
+          entity_status: { not: EntityStatus.DELETED },
         },
         skip,
         take: limit,
@@ -120,8 +133,8 @@ export class RestaurantService {
       }),
       this.prisma.restaurant.count({
         where: {
-          entity_status: { not: EntityStatus.DELETED }
-        }
+          entity_status: { not: EntityStatus.DELETED },
+        },
       }),
     ]);
 
@@ -143,12 +156,12 @@ export class RestaurantService {
     const restaurant = await this.prisma.restaurant.findFirst({
       where: {
         id,
-        entity_status: { not: EntityStatus.DELETED }
+        entity_status: { not: EntityStatus.DELETED },
       },
       include: {
         users: true,
-        dish_restaurants: true
-      }
+        dish_restaurants: true,
+      },
     });
 
     if (!restaurant) {
@@ -184,7 +197,12 @@ export class RestaurantService {
 
     const updatedRestaurant = await this.prisma.restaurant.update({
       where: { id },
-      data: { entity_status: restaurant.entity_status === EntityStatus.ACTIVE ? EntityStatus.INACTIVE : EntityStatus.ACTIVE },
+      data: {
+        entity_status:
+          restaurant.entity_status === EntityStatus.ACTIVE
+            ? EntityStatus.INACTIVE
+            : EntityStatus.ACTIVE,
+      },
     });
 
     // Emettre l'événement de activation/désactivation de restaurant
@@ -199,7 +217,6 @@ export class RestaurantService {
    * Supprimer un restaurant (soft delete)
    */
   async remove(id: string) {
-
     const deletedRestaurant = await this.prisma.restaurant.update({
       where: { id },
       data: { entity_status: EntityStatus.DELETED },
@@ -215,11 +232,23 @@ export class RestaurantService {
    * Obtenir tous les utilisateurs (staff) d'un restaurant
    */
   async getRestaurantUsers(id: string) {
-
     return this.prisma.user.findMany({
       where: {
         restaurant_id: id,
         entity_status: { not: EntityStatus.DELETED },
+      },
+    });
+  }
+
+  async getRestaurantCustomers(id: string) {
+    console.log('Get customers for restaurant ID:', id);
+    return this.prisma.customer.findMany({
+      where: {
+        orders: {
+          some: {
+            restaurant_id: id,
+          },
+        },
       },
     });
   }
@@ -241,21 +270,21 @@ export class RestaurantService {
         phone: true,
         image: true,
         address: true,
-        restaurant_id: true
-      }
+        restaurant_id: true,
+      },
     });
   }
 
   /**
- * Vérifie si un restaurant est ouvert selon ses horaires
- * Supporte les formats simples ("08:00-22:00") et multiples ("08:00-12:00,14:00-22:00")
- * @param schedule - Horaires du restaurant au format JSON
- * @param referenceDate - Date de référence (optionnel, par défaut maintenant)
- * @returns boolean - true si ouvert, false si fermé
- */
+   * Vérifie si un restaurant est ouvert selon ses horaires
+   * Supporte les formats simples ("08:00-22:00") et multiples ("08:00-12:00,14:00-22:00")
+   * @param schedule - Horaires du restaurant au format JSON
+   * @param referenceDate - Date de référence (optionnel, par défaut maintenant)
+   * @returns boolean - true si ouvert, false si fermé
+   */
   public isRestaurantOpen(
     schedule: Record<string, string>[],
-    referenceDate: Date = new Date()
+    referenceDate: Date = new Date(),
   ): boolean {
     if (!schedule || !Array.isArray(schedule)) {
       return false;
@@ -264,8 +293,8 @@ export class RestaurantService {
     const currentDay = getDay(referenceDate);
     const dayMapping = currentDay === 0 ? 7 : currentDay;
 
-    const todaySchedule = schedule.find(day =>
-      day.hasOwnProperty(dayMapping.toString())
+    const todaySchedule = schedule.find((day) =>
+      day.hasOwnProperty(dayMapping.toString()),
     );
 
     if (!todaySchedule) {
@@ -274,16 +303,18 @@ export class RestaurantService {
 
     const timeRange = todaySchedule[dayMapping.toString()];
 
-    if (!timeRange ||
+    if (
+      !timeRange ||
       timeRange.toLowerCase() === 'fermé' ||
-      timeRange.toLowerCase() === 'closed') {
+      timeRange.toLowerCase() === 'closed'
+    ) {
       return false;
     }
 
     // Gérer les créneaux multiples séparés par des virgules
-    const timeSlots = timeRange.split(',').map(slot => slot.trim());
+    const timeSlots = timeRange.split(',').map((slot) => slot.trim());
 
-    return timeSlots.some(slot => {
+    return timeSlots.some((slot) => {
       const timeRangeParts = slot.split('-');
 
       if (timeRangeParts.length !== 2) {
@@ -295,8 +326,16 @@ export class RestaurantService {
       try {
         const baseDate = format(referenceDate, 'yyyy-MM-dd');
 
-        const openTime = parse(`${baseDate} ${openTimeStr.trim()}`, 'yyyy-MM-dd HH:mm', new Date());
-        const closeTime = parse(`${baseDate} ${closeTimeStr.trim()}`, 'yyyy-MM-dd HH:mm', new Date());
+        const openTime = parse(
+          `${baseDate} ${openTimeStr.trim()}`,
+          'yyyy-MM-dd HH:mm',
+          new Date(),
+        );
+        const closeTime = parse(
+          `${baseDate} ${closeTimeStr.trim()}`,
+          'yyyy-MM-dd HH:mm',
+          new Date(),
+        );
 
         if (!isValid(openTime) || !isValid(closeTime)) {
           return false;
@@ -307,21 +346,24 @@ export class RestaurantService {
           const nextDayCloseTime = parse(
             `${format(referenceDate, 'yyyy-MM-dd')} ${closeTimeStr.trim()}`,
             'yyyy-MM-dd HH:mm',
-            new Date()
+            new Date(),
           );
           nextDayCloseTime.setDate(nextDayCloseTime.getDate() + 1);
 
           return (
-            (isAfter(referenceDate, openTime) || isEqual(referenceDate, openTime)) ||
-            (isBefore(referenceDate, nextDayCloseTime) || isEqual(referenceDate, nextDayCloseTime))
+            isAfter(referenceDate, openTime) ||
+            isEqual(referenceDate, openTime) ||
+            isBefore(referenceDate, nextDayCloseTime) ||
+            isEqual(referenceDate, nextDayCloseTime)
           );
         }
 
         return (
-          (isAfter(referenceDate, openTime) || isEqual(referenceDate, openTime)) &&
-          (isBefore(referenceDate, closeTime) || isEqual(referenceDate, closeTime))
+          (isAfter(referenceDate, openTime) ||
+            isEqual(referenceDate, openTime)) &&
+          (isBefore(referenceDate, closeTime) ||
+            isEqual(referenceDate, closeTime))
         );
-
       } catch (error) {
         console.warn('Erreur lors du parsing du créneau:', slot, error);
         return false;
