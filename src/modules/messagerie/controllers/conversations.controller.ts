@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -36,7 +37,10 @@ export class ConversationsController {
   })
   @UseGuards(JwtAuthGuard)
   @Get()
-  async getConversations(@Req() req: Request, filter: QueryConversationsDto) {
+  async getConversations(
+    @Req() req: Request,
+    @Query() filter: QueryConversationsDto,
+  ) {
     return await this.conversationsService.getConversations(req, filter);
   }
 
@@ -44,7 +48,7 @@ export class ConversationsController {
   @Get('/client')
   async getConversationsClient(
     @Req() req: Request,
-    filter: QueryConversationsDto,
+    @Query() filter: QueryConversationsDto,
   ) {
     return await this.conversationsService.getConversations(req, filter);
   }
