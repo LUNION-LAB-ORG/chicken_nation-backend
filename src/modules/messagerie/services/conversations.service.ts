@@ -1,4 +1,4 @@
-import { HttpException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../database/services/prisma.service';
 import { Request } from 'express';
 import { QueryConversationsDto } from '../dto/query-conversations.dto';
@@ -279,8 +279,8 @@ export class ConversationsService {
 
     const [conversation, unreadNumber] = await Promise.all([
       this.prisma.conversation.findUnique({
-      where: whereClause,
-      include: this.createConversationInclude({ messageTake: 50 }),
+        where: whereClause,
+        include: this.createConversationInclude({ messageTake: 50 }),
       }),
       this.countUnreadMessages({
         conversationId,
@@ -289,7 +289,9 @@ export class ConversationsService {
       }),
     ]);
 
-    return conversation ? this.mapConversationField(conversation,unreadNumber) : null;
+    return conversation
+      ? this.mapConversationField(conversation, unreadNumber)
+      : null;
   }
 
   /**
@@ -304,12 +306,13 @@ export class ConversationsService {
     customerId: string,
     filter: QueryConversationsDto,
   ) {
-    const { restaurantId, limit = 10, page = 1 } = filter;
+    console.log('filter', filter);
+    const { limit = 10, page = 1 } = filter;
     const skip = (page - 1) * limit;
 
     const whereClause: Prisma.ConversationWhereInput = {
       customerId,
-      restaurantId: restaurantId, // Filtre par restaurant si spécifié
+      restaurantId: filter.restaurantId, // Filtre par restaurant si spécifié
     };
 
     const [conversations, total] = await Promise.all([

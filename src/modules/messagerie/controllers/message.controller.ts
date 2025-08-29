@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -23,7 +24,7 @@ export class MessageController {
   async getMessages(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,
-    filter: QueryMessagesDto={},
+    @Query() filter: QueryMessagesDto={},
   ) {
     return await this.messageService.getMessages(req, conversationId, filter);
   }
@@ -33,7 +34,7 @@ export class MessageController {
   async getMessagesClient(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,
-    filter: QueryMessagesDto={},
+    @Query() filter: QueryMessagesDto={},
   ) {
     return await this.messageService.getMessages(req, conversationId, filter);
   }
