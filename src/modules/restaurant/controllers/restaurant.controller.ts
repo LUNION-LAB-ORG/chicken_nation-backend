@@ -112,6 +112,16 @@ export class RestaurantController {
     return this.restaurantService.getRestaurantUsers(id);
   }
 
+  @ApiOperation({ summary: 'Obtenir tous les clients d un restaurant qui ont une fois commandé' })
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)
+  // @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
+  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
+  @Get(':id/clients')
+  async getRestaurantCustomers(@Param('id') id: string) {
+    return this.restaurantService.getRestaurantCustomers(id);
+  }
+
   @ApiOperation({ summary: 'Obtenir le manager d un restaurant' })
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, UserRolesGuard, UserTypesGuard)

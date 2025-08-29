@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  HttpException,
+  HttpStatus,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { QueryMessagesDto } from '../dto/query-messages.dto';
 import { Request } from 'express';
 import { PrismaService } from '../../../database/services/prisma.service';
@@ -88,18 +93,17 @@ export class MessageService {
     conversationId: string,
     createMessageDto: CreateMessageDto,
   ): Promise<ResponseMessageDto> {
+    console.log('createMessageDto', createMessageDto);
+    // Validate the message body
     const { body } = createMessageDto;
     if (!body || body.trim() === '') {
-      throw new Error(
+      throw new HttpException(
         'Message body is required and must be a non-empty string',
+        HttpStatus.BAD_REQUEST
       );
     }
 
-    const auth = req.user;
-
-    if (!auth) {
-      throw new Error('User not authenticated');
-    }
+    const auth = req.user!;
 
     const authType = getAuthType(auth);
 
@@ -111,7 +115,7 @@ export class MessageService {
 
     // If the conversation does not exist, throw an error
     if (!conversation) {
-      throw new Error('Conversation not found');
+      throw new HttpException('Conversation not found', HttpStatus.NOT_FOUND);
     }
 
     // Create a new message in the database
@@ -201,7 +205,7 @@ export class MessageService {
       authorUser: message.authorUser
         ? {
             id: message.authorUser.id,
-            name: message.authorUser.name,
+            name: message.authorUser.fullname,
             email: message.authorUser.email,
             image: message.authorUser.image || null,
           }
