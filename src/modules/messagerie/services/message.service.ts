@@ -89,7 +89,7 @@ export class MessageService {
       );
     }
 
-    const auth = req.user ?? (await this.prismaService.user.findFirst()); // TODO: supprimer
+    const auth = req.user;
 
     if (!auth) {
       throw new Error('User not authenticated');
@@ -134,9 +134,32 @@ export class MessageService {
     });
 
     await this.prismaService.conversation.update({
-      where: { id: conversation.id },
-      data: { updatedAt: new Date() },
+      where: {
+        id: conversation.id,
+      },
+      data: {
+        updatedAt: new Date(),
+      },
     });
+
+    // TODO: Chercher comment le faire en une seule requête
+    // Ajouter l'utilisateur à la conversation s'il n'y est pas déjà
+    // Seulement si c'est une conversation entre un client et un restaurant
+    if (authType === 'user') {
+      await this.prismaService.conversationUser.upsert({
+        where: {
+          conversationId_userId: {
+            conversationId: conversation.id,
+            userId: (auth as User).id,
+          },
+        },
+        update: {},
+        create: {
+          conversationId: conversation.id,
+          userId: (auth as User).id,
+        },
+      });
+    }
 
     const mappedMessage = this.mapMessagesField(message);
 
@@ -160,7 +183,11 @@ export class MessageService {
   private mapMessagesField(message: any): ResponseMessageDto {
     return {
       id: message.id,
-      conversationId: message.conversationId,
+      conversation: {
+        id: message.conversationId,
+        restaurantId: message.conversation.restaurantId,
+        customerId: message.conversation.customerId,
+      },
       body: message.body,
       isRead: message.isRead,
       createdAt: message.createdAt,
@@ -176,7 +203,10 @@ export class MessageService {
       authorCustomer: message.authorCustomer
         ? {
             id: message.authorCustomer.id,
-            name: message.authorCustomer.first_name + ' ' + message.authorCustomer.last_name,
+            name:
+              message.authorCustomer.first_name +
+              ' ' +
+              message.authorCustomer.last_name,
             first_name: message.authorCustomer.first_name || null,
             last_name: message.authorCustomer.last_name || null,
             image: message.authorCustomer.image || null,

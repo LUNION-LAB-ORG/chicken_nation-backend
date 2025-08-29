@@ -16,7 +16,7 @@ export class ResponseConversationsDto {
   createdAt: Date;
 
   @ApiProperty({ type: [Object] })
-  messages: Omit<ResponseMessageDto, 'conversationId'>[];
+  messages: Omit<ResponseMessageDto, 'conversationId' | 'conversation'>[];
 
   @ApiProperty({ type: [Object] })
   restaurant?: {
