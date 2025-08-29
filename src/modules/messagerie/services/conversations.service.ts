@@ -1,4 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import {
+  HttpException,
+  HttpStatus,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../../database/services/prisma.service';
 import { Request } from 'express';
 import { QueryConversationsDto } from '../dto/query-conversations.dto';
@@ -144,29 +149,107 @@ export class ConversationsService {
       restaurant_id: restaurantId = null,
       seed_message,
       receiver_user_id: receiverUserId,
+      subject,
+      customer_to_contact_id,
     } = createConversationDto;
 
     const authType = getAuthType(auth);
     const customerId = authType === 'customer' ? (auth as Customer).id : null;
     const userId = authType === 'user' ? (auth as User).id : null;
 
+    if (customer_to_contact_id) {
+      if (authType !== 'user') {
+        throw new HttpException(
+          'Only employees can create conversations on behalf of a customer',
+          HttpStatus.FORBIDDEN,
+        );
+      }
+      // Vérifier que le customer_to_contact_id existe
+      const customerToContact = await this.prisma.customer.findUnique({
+        where: { id: customer_to_contact_id },
+      });
+      if (!customerToContact) {
+        throw new NotFoundException("Le client à contacter n'existe pas");
+      }
+
+      if (!restaurantId) {
+        throw new HttpException(
+          'le restaurantId est obligatoire lorsque vous contactez un client',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      // Vérifier que le client à deja commandé dans ce restaurant
+      const hasOrdered = await this.prisma.order.findFirst({
+        where: {
+          customer_id: customer_to_contact_id,
+          restaurant_id: restaurantId,
+        },
+      });
+
+      if (!hasOrdered) {
+        throw new HttpException(
+          "Le client à contacter n'a jamais commandé dans ce restaurant",
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+    }
+
+    if (restaurantId) {
+      const restaurant = await this.prisma.restaurant.findUnique({
+        where: {
+          id: restaurantId,
+          OR: [
+            { users: { some: { id: userId || undefined } } },
+            { manager: userId || undefined },
+          ],
+        },
+      });
+      if (!restaurant) {
+        throw new NotFoundException("Le restaurant n'a pas été trouvé");
+      }
+    }
+
     let whereClause: Prisma.ConversationWhereInput = {};
 
     // CAS 1 — client ↔ restaurant : unique par (restaurantId, customerId)
-    if (customerId) {
-      whereClause = { restaurantId, customerId };
+    let customerIdToUse: string | null = null;
+    if (customerId || customer_to_contact_id) {
+      customerIdToUse = customerId || customer_to_contact_id!;
+      if (!restaurantId) {
+        throw new HttpException(
+          'No restaurantId provided',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      whereClause = { restaurantId, customerId: customerIdToUse };
     } else {
       // CAS 2 — interne (DM 1–1) : unique par paire (userId, receiver)
       if (!userId || !receiverUserId) {
-        throw new Error('No userId or receiverUserId');
-      }
-      if (userId === receiverUserId) {
-        throw new Error(
-          'DM avec soi-même non supporté (ou à gérer séparément)',
+        throw new HttpException(
+          'No userId or receiverUserId',
+          HttpStatus.BAD_REQUEST,
         );
       }
+      if (userId === receiverUserId) {
+        throw new HttpException(
+          'Vous ne pouvez pas vous envoyer un message à vous-même',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      // Verifier que le receiverUserId est bien un employé du restaurant
+      const isReceiverInRestaurant = await this.prisma.user.findFirst({
+        where: {
+          id: receiverUserId,
+        },
+      });
+
+      if (!isReceiverInRestaurant) {
+        throw new NotFoundException("Le destinataire n'existe pas");
+      }
+
       whereClause = {
         restaurantId,
+        subject: subject,
         customerId: null, // interne
         AND: [
           { users: { some: { userId } } },
@@ -195,7 +278,8 @@ export class ConversationsService {
     const conversation = await this.prisma.conversation.create({
       data: {
         restaurantId,
-        customerId: customerId, // null si interne
+        customerId: customerIdToUse, // null si interne
+        subject: subject,
         messages: {
           create: {
             body: seed_message,
@@ -441,7 +525,9 @@ export class ConversationsService {
       customerId: conversation.customerId,
       createdAt: conversation.createdAt,
       messages: conversation.messages.map(
-        (message: any): Omit<ResponseMessageDto, 'conversationId' | 'conversation'> => ({
+        (
+          message: any,
+        ): Omit<ResponseMessageDto, 'conversationId' | 'conversation'> => ({
           id: message.id,
           isRead: message.isRead,
           body: message.body,

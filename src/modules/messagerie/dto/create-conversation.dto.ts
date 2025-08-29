@@ -30,4 +30,14 @@ export class CreateConversationDto {
   @IsUUID()
   @IsOptional()
   restaurant_id?: string;
+
+  @ApiPropertyOptional({ description: 'ID du restaurant' })
+  @IsString()
+  @IsOptional()
+  subject?: string;
+
+  @ApiPropertyOptional({ description: 'ID du contact client' })
+  @IsUUID()
+  @IsOptional()
+  customer_to_contact_id?:string
 }
