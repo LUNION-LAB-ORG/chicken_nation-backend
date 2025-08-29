@@ -160,7 +160,11 @@ export class MessageService {
   private mapMessagesField(message: any): ResponseMessageDto {
     return {
       id: message.id,
-      conversationId: message.conversationId,
+      conversation: {
+        id: message.conversationId,
+        restaurantId: message.conversation.restaurantId,
+        customerId: message.conversation.customerId,
+      },
       body: message.body,
       isRead: message.isRead,
       createdAt: message.createdAt,
@@ -176,7 +180,10 @@ export class MessageService {
       authorCustomer: message.authorCustomer
         ? {
             id: message.authorCustomer.id,
-            name: message.authorCustomer.first_name + ' ' + message.authorCustomer.last_name,
+            name:
+              message.authorCustomer.first_name +
+              ' ' +
+              message.authorCustomer.last_name,
             first_name: message.authorCustomer.first_name || null,
             last_name: message.authorCustomer.last_name || null,
             image: message.authorCustomer.image || null,

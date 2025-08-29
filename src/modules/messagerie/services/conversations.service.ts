@@ -48,6 +48,7 @@ export class ConversationsService {
             select: {
               id: true,
               fullname: true,
+              role: true,
               ...(includeUserImage ? { image: true } : {}),
             },
           },
@@ -440,7 +441,7 @@ export class ConversationsService {
       customerId: conversation.customerId,
       createdAt: conversation.createdAt,
       messages: conversation.messages.map(
-        (message: any): Omit<ResponseMessageDto, 'conversationId'> => ({
+        (message: any): Omit<ResponseMessageDto, 'conversationId' | 'conversation'> => ({
           id: message.id,
           isRead: message.isRead,
           body: message.body,
@@ -486,6 +487,7 @@ export class ConversationsService {
         id: user.user.id,
         fullName: user.user.fullname,
         image: user.user.image || null,
+        role: user.user.role,
       })),
     };
   }
