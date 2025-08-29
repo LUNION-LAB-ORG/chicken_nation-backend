@@ -391,7 +391,7 @@ export class ConversationsService {
     customerId: string,
     filter: QueryConversationsDto,
   ) {
-    console.log('filter', filter);
+    console.log('customer 1', filter);
     const { limit = 10, page = 1 } = filter;
     const skip = (page - 1) * limit;
 
@@ -399,6 +399,8 @@ export class ConversationsService {
       customerId,
       restaurantId: filter.restaurantId, // Filtre par restaurant si spécifié
     };
+
+    console.log('customer 2', whereClause);
 
     const [conversations, total] = await Promise.all([
       this.prisma.conversation.findMany({
@@ -410,6 +412,8 @@ export class ConversationsService {
       this.prisma.conversation.count({ where: whereClause }),
     ]);
 
+    console.log('customer 3', conversations, total);
+
     const mappedConversations = await Promise.all(
       conversations.map(async (conversation) => {
         const unreadNumber = await this.countUnreadMessages({
@@ -420,6 +424,8 @@ export class ConversationsService {
         return this.mapConversationField(conversation, unreadNumber);
       }),
     );
+
+    console.log('customer 4', mappedConversations);
 
     return {
       data: mappedConversations,
@@ -445,6 +451,8 @@ export class ConversationsService {
   ): Promise<QueryResponseDto<ResponseConversationsDto>> {
     const { limit = 10, page = 1, ...rest } = filter;
     const skip = (page - 1) * limit;
+
+    console.log("log 1",filter);
 
     const whereClause: Prisma.ConversationWhereInput = {
       OR: [
@@ -477,6 +485,8 @@ export class ConversationsService {
       ...rest,
     };
 
+    console.log("log 2",whereClause);
+
     const [conversations, total] = await Promise.all([
       this.prisma.conversation.findMany({
         where: whereClause,
@@ -486,6 +496,8 @@ export class ConversationsService {
       }),
       this.prisma.conversation.count({ where: whereClause }),
     ]);
+
+    console.log("log 3", conversations, total)
 
     const mappedConversations = await Promise.all(
       conversations.map(async (conversation) => {
@@ -497,6 +509,8 @@ export class ConversationsService {
         return this.mapConversationField(conversation, unreadNumber);
       }),
     );
+
+    console.log("log 4", mappedConversations);
 
     return {
       data: mappedConversations,
