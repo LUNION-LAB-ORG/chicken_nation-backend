@@ -53,6 +53,12 @@ export class MessageService {
         include: {
           authorUser: true, // Include user details if needed
           authorCustomer: true, // Include customer details if needed
+          conversation:{
+            select:{
+              customerId:true,
+              restaurantId:true,
+            }
+          }
         },
       }),
       this.prismaService.message.count({
@@ -185,8 +191,8 @@ export class MessageService {
       id: message.id,
       conversation: {
         id: message.conversationId,
-        restaurantId: message.conversation.restaurantId,
-        customerId: message.conversation.customerId,
+        restaurantId: message.conversation?.restaurantId,
+        customerId: message.conversation?.customerId,
       },
       body: message.body,
       isRead: message.isRead,
