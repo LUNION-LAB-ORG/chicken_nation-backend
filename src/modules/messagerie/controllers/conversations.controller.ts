@@ -67,6 +67,7 @@ export class ConversationsController {
     @Req() req: Request,
     @Body() createConversationDto: CreateConversationDto,
   ) {
+    console.log('create conversation', createConversationDto);
     return await this.conversationsService.createConversationWithInitialMessage(
       req,
       createConversationDto,
@@ -79,6 +80,9 @@ export class ConversationsController {
     @Req() req: Request,
     @Body() createConversationDto: CreateConversationDto,
   ) {
+
+    console.log('create conversation client', createConversationDto);
+
     return await this.conversationsService.createConversationWithInitialMessage(
       req,
       createConversationDto,
