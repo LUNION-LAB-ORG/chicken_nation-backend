@@ -302,16 +302,14 @@ model Message {
 model TicketThread {
   id String @id @default(uuid()) @db.Uuid
 
-  restaurantId String     @db.Uuid
-  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
-
   subject  String
+  code     String         @unique @db.VarChar // ex: TCK-0001
   status   TicketStatus   @default(OPEN)
   priority TicketPriority @default(MEDIUM)
   category String? // ex: DELIVERY, BILLING, QUALITY...
   source   String? // ex: phone, email, webform, escalation
 
-  // Optionnel: ticket lié à un client
+  // C'est un client qui contacte le support
   customerId String?   @db.Uuid
   customer   Customer? @relation(fields: [customerId], references: [id])
 
@@ -327,6 +325,10 @@ model TicketThread {
   participants TicketParticipant[]
   messages     TicketMessage[]
 
+  // commande lié au ticket
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id])
+
   // SLA / métriques
   firstResponseAt DateTime?
   resolvedAt      DateTime?
@@ -338,7 +340,6 @@ model TicketThread {
   @@index([status, priority])
   @@index([assigneeId])
   @@index([customerId])
-  @@index([restaurantId, createdAt])
   @@index([fromConversationId])
 }
 
@@ -359,7 +360,7 @@ model TicketMessage {
   ticketId String       @db.Uuid
   ticket   TicketThread @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
-  // Auteur XOR (valider côté app / trigger SQL)
+  // Les 2 authors ne peuvent etre null a la fois
   authorUserId     String?   @db.Uuid
   authorUser       User?     @relation("TicketMsgAuthorUser", fields: [authorUserId], references: [id])
   authorCustomerId String?   @db.Uuid
@@ -369,9 +370,13 @@ model TicketMessage {
   meta      Json?
   createdAt DateTime @default(now())
 
+  isRead   Boolean @default(false) // Si le message a été lu
+  internal Boolean @default(false) // Si le message est pour usage interne
+
   @@index([ticketId, createdAt])
   @@index([authorUserId])
   @@index([authorCustomerId])
+  @@index([isRead])
 }
 
 // -------------------- Fin Gestion des conversations ------------------------------
@@ -515,12 +520,13 @@ model Order {
   promotion_usages PromotionUsage[]
   loyalty_points   LoyaltyPoint[]
 
-  entity_status EntityStatus @default(ACTIVE)
+  entity_status EntityStatus   @default(ACTIVE)
   completed_at  DateTime?
   paied_at      DateTime?
-  created_at    DateTime     @default(now()) @db.Timestamp(6)
-  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+  created_at    DateTime       @default(now()) @db.Timestamp(6)
+  updated_at    DateTime       @default(now()) @db.Timestamp(6)
   Comment       Comment[]
+  TicketThread  TicketThread[]
 
   @@index([reference, status, entity_status, customer_id])
 }
@@ -575,8 +581,6 @@ model Restaurant {
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
-
-  TicketThread TicketThread[]
 
   Conversation Conversation[]
 }

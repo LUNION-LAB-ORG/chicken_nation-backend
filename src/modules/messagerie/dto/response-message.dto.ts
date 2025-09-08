@@ -1,6 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsOptional } from 'class-validator';
-import { object } from 'twilio/lib/base/serialize';
 
 export class ResponseMessageDto {
   @ApiProperty()

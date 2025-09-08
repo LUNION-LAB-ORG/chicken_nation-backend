@@ -21,6 +21,7 @@ import { TwilioModule } from 'src/twilio/twilio.module';
 import { EmailModule } from 'src/modules/email/email.module';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { MessagerieModule } from './modules/messagerie/messagerie.module';
+import { SupportModule } from './modules/support/support.module';
 @Module({
   imports: [
     JsonWebTokenModule,
@@ -45,6 +46,7 @@ import { MessagerieModule } from './modules/messagerie/messagerie.module';
     FidelityModule,
     StatisticsModule,
     MessagerieModule,
+    SupportModule,
   ],
 })
 
