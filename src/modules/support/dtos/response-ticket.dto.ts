@@ -47,44 +47,11 @@ class ResponseTicketAssigneeDto {
     @ApiProperty({ required: false, nullable: true })
     phone: string | null;
 
-    @ApiProperty()
-    password: string;
-
     @ApiProperty({ required: false, nullable: true })
     image: string | null;
 
-    @ApiProperty({ required: false, nullable: true })
-    address: string | null;
-
-    @ApiProperty()
-    password_is_updated: boolean;
-
-    @ApiProperty({ enum: UserType })
-    type: UserType;
-
     @ApiProperty({ enum: UserRole })
     role: UserRole;
-
-    @ApiProperty({ required: false, nullable: true })
-    restaurant_id: string | null;
-
-    @ApiProperty({ enum: EntityStatus })
-    entity_status: EntityStatus;
-
-    @ApiProperty()
-    created_at: Date;
-
-    @ApiProperty()
-    updated_at: Date;
-
-    @ApiProperty({ required: false, nullable: true })
-    last_login_at: Date | null;
-
-    @ApiProperty({ type: ResponseTicketRestaurantDto, required: false, nullable: true })
-    restaurant: ResponseTicketRestaurantDto | null;
-
-    @ApiProperty()
-    _count: Record<string, any>;
 }
 
 class ResponseTicketParticipantDto extends ResponseTicketAssigneeDto { }
@@ -134,6 +101,9 @@ class ResponseTicketOrderDto {
 
     @ApiProperty()
     reference: string;
+
+    @ApiProperty()
+    restaurantId: string;
 }
 
 export class ResponseTicketDto {
@@ -141,7 +111,7 @@ export class ResponseTicketDto {
     id: string;
 
     @ApiProperty()
-    reference: string;
+    code: string;
 
     @ApiProperty({ type: ResponseTicketCustomerDto, required: false, nullable: true })
     @IsOptional()

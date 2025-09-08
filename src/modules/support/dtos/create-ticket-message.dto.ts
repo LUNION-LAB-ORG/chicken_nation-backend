@@ -23,8 +23,7 @@ export class CreateTicketMessageDto {
 
     @ApiProperty({ description: 'Type de l\'auteur (USER ou CUSTOMER)' })
     @IsString()
-    @IsNotEmpty()
-    authorType: 'USER' | 'CUSTOMER';
+    authorType?: 'USER' | 'CUSTOMER';
 
     @ApiProperty({ description: 'Métadonnées supplémentaires', required: false })
     @IsString()

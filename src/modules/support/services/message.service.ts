@@ -5,10 +5,14 @@ import { Prisma } from '@prisma/client';
 import { ResponseTicketMessageDto } from '../dtos/response-ticket-message.dto';
 import { FilterQueryDto } from 'src/common/dto/filter-query.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
+import { SupportWebSocketService } from '../websockets/support-websocket.service';
 
 @Injectable()
 export class TicketMessageService {
-    constructor(private readonly prisma: PrismaService) { }
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly supportWebSocketService: SupportWebSocketService
+    ) { }
 
     private MessageInclude: Prisma.TicketMessageInclude = {
         authorCustomer: {
@@ -49,19 +53,34 @@ export class TicketMessageService {
             throw new HttpException('Author not found', 404);
         }
 
-        const message = await this.prisma.ticketMessage.create({
-            data: {
-                body,
-                ticketId,
-                internal,
-                authorCustomerId: authorType === 'CUSTOMER' ? authorId : null,
-                authorUserId: authorType === 'USER' ? authorId : null,
-                meta,
-            },
-            include: this.MessageInclude,
-        });
+        const [message, ticket] = await Promise.all([
+            this.prisma.ticketMessage.create({
+                data: {
+                    body,
+                    ticketId,
+                    internal,
+                    authorCustomerId: authorType === 'CUSTOMER' ? authorId : null,
+                    authorUserId: authorType === 'USER' ? authorId : null,
+                    meta,
+                },
+                include: this.MessageInclude,
+            }),
+            this.prisma.ticketThread.findUnique({
+                where: { id: ticketId },
+                select: { orderId: true, order: { select: { restaurant_id: true } } }
+            })
+        ]);
 
-        return this.mapMessageToDto(message);
+        const messageDto = this.mapMessageToDto(message);
+
+        const payload = {
+            message: messageDto,
+            restaurantId: ticket!.order!.restaurant_id,
+        }
+
+        this.supportWebSocketService.emitNewTicketMessage(ticketId, payload);
+
+        return messageDto;
     }
 
     async getMessagesByTicketId(ticketId: string, filter: FilterQueryDto): Promise<QueryResponseDto<ResponseTicketMessageDto>> {

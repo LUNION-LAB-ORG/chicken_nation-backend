@@ -24,6 +24,7 @@ export class MessagesController {
     @UseGuards(JwtAuthGuard)
     @Post('messages')
     async createMessage(@Param('ticketId') ticketId: string, @Body() createMessageDto: CreateTicketMessageDto) {
+        createMessageDto.authorType = 'USER';
         return this.messageService.createMessage(ticketId, createMessageDto);
     }
 

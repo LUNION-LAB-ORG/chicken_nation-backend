@@ -14,6 +14,18 @@ services:
       - chicken_nation_db_data:/var/lib/postgresql/data
     networks:
       - chicken_nation_network
+    restart: unless-stopped
+    
+  redis:
+    image: redis:8.2.1-alpine
+    container_name: chicken_nation_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - chicken_nation_network
+    restart: unless-stopped
 
   adminer:
     image: adminer:4.8.0
@@ -29,6 +41,7 @@ services:
 
 volumes:
   chicken_nation_db_data:
+  redis_data:
 
 networks:
   chicken_nation_network:

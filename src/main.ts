@@ -1,15 +1,23 @@
+import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { ValidationPipe } from '@nestjs/common';
-import { join } from 'path';
-import helmet from 'helmet';
-import * as compression from 'compression';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import * as compression from 'compression';
+import helmet from 'helmet';
+import { join } from 'path';
 import { PrismaExceptionFilter } from 'src/database/filters/prisma-exception.filter';
+import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    logger: new ConsoleLogger({
+      timestamp: true,
+      logLevels: ['error', 'warn', 'debug', 'verbose'],
+      json: true,
+      prefix:"chicken_nation_backend"
+    }),
+  });
+
   // injecter globalement ValidationPipe
   app.useGlobalPipes(
     new ValidationPipe({

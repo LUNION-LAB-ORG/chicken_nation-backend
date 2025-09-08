@@ -14,7 +14,7 @@ export class TicketsController {
     return await this.ticketService.getAllTickets(filter);
   }
 
-  @UseGuards(JwtCustomerAuthGuard) @Get('customer')
+  @UseGuards(JwtCustomerAuthGuard) @Get('/customer')
   async getCustomerTickets(@Req() req, @Query() filter: QueryTicketsDto) {
     const customerId = req.user.id;
     return await this.ticketService.getCustomerTickets(customerId, filter);
@@ -27,6 +27,13 @@ export class TicketsController {
 
   @UseGuards(JwtAuthGuard) @Post()
   async createTicket(@Body() createTicketDto: CreateTicketDto) {
+    return await this.ticketService.createTicket(createTicketDto);
+  }
+
+  // Le client creer un ticket
+  @UseGuards(JwtCustomerAuthGuard) @Post('/customer')
+  async createCustomerTicket(@Req() req, @Body() createTicketDto: CreateTicketDto) {
+    createTicketDto.customerId = req.user.id;
     return await this.ticketService.createTicket(createTicketDto);
   }
 
