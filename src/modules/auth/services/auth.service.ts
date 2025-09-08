@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, Logger, HttpException } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
@@ -12,6 +12,8 @@ import { TwilioService } from 'src/twilio/services/twilio.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jsonWebTokenService: JsonWebTokenService,
@@ -86,9 +88,10 @@ export class AuthService {
 
     // Envoyer l'OTP par SMS
     const isSent = await this.twilioService.sendOtp({ phoneNumber: customer.phone, otp });
-    // if (!isSent) {
-    //   throw new Error('Envoi de l\'OTP impossible');
-    // }
+    if (!isSent) {
+      this.logger.error(`Échec de l'envoi de l'OTP au numéro ${customer.phone}`);
+      throw new HttpException('Envoi de l\'OTP impossible', 500);
+    }
     return { otp };
   }
 
