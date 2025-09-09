@@ -7,7 +7,6 @@ import { QueryTicketsDto } from '../dtos/query-tickets.dto';
 import { ResponseTicketDto } from '../dtos/response-ticket.dto';
 import { generateSequentialTicketCode, generateTicketPrefix } from '../utils/code-generator';
 import { SupportWebSocketService } from '../websockets/support-websocket.service';
-import { th } from 'date-fns/locale';
 
 @Injectable()
 export class TicketService {

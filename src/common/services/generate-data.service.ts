@@ -44,8 +44,12 @@ export class GenerateDataService {
         return decrypted.toString('utf8');
     }
 
+    static async generateImageName(): Promise<string> {
+        return "image_" + (new Date().getTime());
+    }
+
     static async generateSecureImageName(name: string): Promise<string> {
-        return GenerateDataService.generateCipher(name);
+        return GenerateDataService.generateImageName();
     }
 
     static async decryptSecureImageName(hash: string): Promise<string> {
