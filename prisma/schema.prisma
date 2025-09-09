@@ -379,6 +379,15 @@ model TicketMessage {
   @@index([isRead])
 }
 
+model TicketCategory {
+  id            String       @id @default(uuid()) @db.Uuid
+  name          String       @unique @db.VarChar
+  description   String?      @db.Text
+  entity_status EntityStatus @default(ACTIVE)
+
+  @@index([name])
+}
+
 // -------------------- Fin Gestion des conversations ------------------------------
 
 model DishRestaurant {
