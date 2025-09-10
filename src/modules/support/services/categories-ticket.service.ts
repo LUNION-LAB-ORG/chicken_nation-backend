@@ -1,3 +1,4 @@
+import { AgentToCategoryDto } from './../dtos/category.dto';
 import { HttpException, Injectable } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateTicketCategoryDto } from '../dtos/create-ticket-category.dto';
@@ -60,5 +61,57 @@ export class CategoriesTicketService {
     async remove(id: string) {
         await this.findOne(id);
         return this.prisma.ticketCategory.update({ where: { id }, data: { entity_status: EntityStatus.DELETED } });
+    }
+
+    async addAgentToCategory(addAgentToCategoryDto: AgentToCategoryDto) {
+        const { categoryId, agentId: userId } = addAgentToCategoryDto;
+        // Vérifier si la catégorie existe
+        const category = await this.prisma.ticketCategory.findUnique({ where: { id: categoryId } });
+        if (!category) {
+            throw new HttpException('Catégorie non trouvée', 404);
+        }
+        // Vérifier si l'agent existe
+        const agent = await this.prisma.user.findUnique({ where: { id: userId } });
+        if (!agent) {
+            throw new HttpException('Agent non trouvé', 404);
+        }
+        // Vérifier si l'agent est déjà assigné à la catégorie
+        const existingAssignment = await this.prisma.ticketUserSkill.findFirst({
+            where: {
+                categoryId,
+                userId
+            }
+        });
+
+        if (existingAssignment) {
+            throw new HttpException('Agent déjà assigné à cette catégorie', 409);
+        }
+
+        // Assigner l'agent à la catégorie
+        return this.prisma.ticketUserSkill.create({
+            data: {
+                categoryId,
+                userId
+            }
+        });
+    }
+
+    async removeUserFromCategory(removeAgentDto: AgentToCategoryDto) {
+        const { categoryId, agentId: userId } = removeAgentDto;
+        // Vérifier si l'assignation existe
+        const existingAssignment = await this.prisma.ticketUserSkill.findFirst({
+            where: {
+                categoryId,
+                userId
+            }
+        });
+        if (!existingAssignment) {
+            throw new HttpException('Assignation non trouvée', 404);
+        }
+        return this.prisma.ticketUserSkill.delete({
+            where: {
+                id: existingAssignment.id
+            }
+        });
     }
 }

@@ -3,6 +3,7 @@ import { CategoriesTicketService } from '../services/categories-ticket.service';
 import { CreateTicketCategoryDto } from '../dtos/create-ticket-category.dto';
 import { UpdateTicketCategoryDto } from '../dtos/update-ticket-category.dto';
 import { FilterQueryDto } from 'src/common/dto/filter-query.dto';
+import { AgentToCategoryDto } from '../dtos/category.dto';
 
 @Controller('categories-ticket')
 export class CategoriesTicketController {
@@ -36,5 +37,17 @@ export class CategoriesTicketController {
     @Delete(':id')
     remove(@Param('id') id: string) {
         return this.categoriesTicketService.remove(id);
+    }
+
+    // Ajouter un agent a une categorie
+    @Post('agents')
+    addAgentToCategory(@Body() addAgentDto: AgentToCategoryDto) {
+        return this.categoriesTicketService.addAgentToCategory(addAgentDto);
+    }
+
+    // Retirer un agent d'une categorie
+    @Delete('agents')
+    removeAgentFromCategory(@Body() removeAgentDto: AgentToCategoryDto) {
+        return this.categoriesTicketService.removeUserFromCategory(removeAgentDto);
     }
 }

@@ -1,12 +1,15 @@
 import { HttpException, Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, TicketStatus } from '@prisma/client';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PrismaService } from '../../../database/services/prisma.service';
 import { CreateTicketDto } from '../dtos/create-ticket.dto';
 import { QueryTicketsDto } from '../dtos/query-tickets.dto';
 import { ResponseTicketDto } from '../dtos/response-ticket.dto';
+import { TicketEvent } from '../events/ticket.event';
 import { generateSequentialTicketCode, generateTicketPrefix } from '../utils/code-generator';
-import { SupportWebSocketService } from '../websockets/support-websocket.service';
+import { CategoriesTicketService } from './categories-ticket.service';
+import { resolve } from 'path';
+import { UpdateTicketDto } from '../dtos/update-ticket.dto';
 
 @Injectable()
 export class TicketService {
@@ -15,7 +18,8 @@ export class TicketService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly supportWebSocketService: SupportWebSocketService
+    private readonly ticketEvent: TicketEvent,
+    private readonly categoryService: CategoriesTicketService
   ) { }
 
   private userSelect: Prisma.UserSelect = {
@@ -45,6 +49,7 @@ export class TicketService {
       take: 10,
     },
     order: { select: { id: true, reference: true } },
+    category: { select: { id: true, name: true } },
   }
 
   async getAllTickets(filter: QueryTicketsDto): Promise<QueryResponseDto<ResponseTicketDto>> {
@@ -142,15 +147,22 @@ export class TicketService {
       this.logger.debug(`Payload: ${JSON.stringify(data)}`);
     }
 
-    const { category } = data;
-    const lastTicket = await this.prisma.ticketThread.findFirst({
-      orderBy: { createdAt: 'desc' },
-      where: { category },
-    });
+    const { categoryId } = data;
 
-    const lastNumber = lastTicket ? parseInt(lastTicket.code.split('-')[1]) : 0;
-    const prefix = generateTicketPrefix(category);
-    const code = generateSequentialTicketCode(prefix, lastNumber);
+    // Verifier que la catégorie existe
+
+    const [lastTicket, category] = await Promise.all([
+      this.prisma.ticketThread.findFirst({
+        orderBy: { createdAt: 'desc' },
+        where: { categoryId },
+      }),
+      this.categoryService.findOne(categoryId)
+    ]);
+
+    if (!category) {
+      this.logger.warn(`Échec création: catégorie ${categoryId} introuvable`);
+      throw new HttpException('Category not found', 404);
+    }
 
     // Vérifier que la commande et le client existent (en parallèle)
     const [order, customer] = await Promise.all([
@@ -172,18 +184,22 @@ export class TicketService {
       throw new HttpException('Customer not found', 404);
     }
 
+    const lastNumber = lastTicket ? parseInt(lastTicket.code.split('-')[1]) : 0;
+    const prefix = generateTicketPrefix(category.name);
+    const code = generateSequentialTicketCode(prefix, lastNumber);
+
     const ticket = await this.prisma.ticketThread.create({
       data: {
         code: code,
         subject: data.subject,
         status: data.status || 'OPEN',
         priority: data.priority,
-        category: data.category,
         source: data.source,
         customerId: data.customerId,
         assigneeId: data.assigneeId,
         fromConversationId: data.fromConversationId,
         orderId: data.orderId,
+        categoryId: data.categoryId,
       },
       include: this.includeFields,
     });
@@ -196,28 +212,37 @@ export class TicketService {
       this.logger.debug(`Ticket DTO: ${JSON.stringify(ticketDto)}`);
     }
 
-    this.supportWebSocketService.emitNewTicket(ticketDto);
+    this.ticketEvent.emitTicketCreated(ticketDto);
 
     return ticketDto;
   }
 
-  async updateTicket(id: string, data: Partial<CreateTicketDto>): Promise<ResponseTicketDto> {
+  async updateTicket(id: string, data: UpdateTicketDto): Promise<ResponseTicketDto> {
     this.logger.log(`Mise à jour du ticket ${id}`);
 
     if (this.isDev) {
       this.logger.debug(`Payload: ${JSON.stringify(data)}`);
     }
 
-    const { subject, status, priority, category, assigneeId, orderId } = data;
+    const { subject, priority, categoryId, orderId } = data;
+
+    // Si une catégorie est fournie, vérifier qu'elle existe
+    if (categoryId) {
+      const category = await this.categoryService.findOne(categoryId);
+
+      if (!category) {
+        this.logger.warn(`Échec mise à jour: catégorie ${categoryId} introuvable`);
+        throw new HttpException('Category not found', 404);
+      }
+    }
+
     const ticket = await this.prisma.ticketThread.update({
       where: { id },
       data: {
         subject,
-        status,
         priority,
-        category,
-        assigneeId,
         orderId,
+        categoryId,
       },
       include: this.includeFields,
     });
@@ -235,8 +260,32 @@ export class TicketService {
       this.logger.debug(`Ticket DTO mis à jour: ${JSON.stringify(ticketDto)}`);
     }
 
-    this.supportWebSocketService.emitUpdateTicket(ticketDto);
+    this.ticketEvent.emitTicketUpdated(ticketDto);
 
+    return ticketDto;
+  }
+
+  async closeTicket(id: string): Promise<ResponseTicketDto> {
+    this.logger.log(`Fermeture du ticket ${id}`);
+
+    const ticket = await this.prisma.ticketThread.update({
+      where: { id },
+      data: {
+        status: TicketStatus.CLOSED,
+        resolvedAt: new Date(),
+      },
+      include: this.includeFields,
+    });
+
+    if (!ticket) {
+      this.logger.warn(`Échec fermeture: ticket ${id} introuvable`);
+      throw new HttpException('Ticket not found', 404);
+    }
+
+    this.logger.log(`Ticket fermé: id=${ticket.id}, code=${ticket.code}`);
+
+    const ticketDto = this.mapTicketToDto(ticket);
+    this.ticketEvent.emitTicketClosed(ticketDto);
     return ticketDto;
   }
 
@@ -249,6 +298,8 @@ export class TicketService {
     return {
       id: ticket.id,
       code: ticket.code,
+      status: ticket.status,
+      priority: ticket.priority,
       customer: {
         id: ticket.customer.id,
         name: `${ticket.customer.first_name} ${ticket.customer.last_name}`,
@@ -277,6 +328,10 @@ export class TicketService {
         reference: ticket.order?.reference,
         restaurantId: ticket.order?.restaurant_id,
       },
+      category: ticket.category && {
+        id: ticket.category.id,
+        name: ticket.category.name,
+      } || null,
     };
   }
 }

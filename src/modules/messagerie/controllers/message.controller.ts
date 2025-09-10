@@ -19,6 +19,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
+import { Customer, User } from '@prisma/client';
 
 @Controller('conversations/:conversationId/messages')
 export class MessageController {
@@ -66,6 +67,18 @@ export class MessageController {
     @UploadedFile() image?: Express.Multer.File, // image peut être undefined ici
   ) {
     return this.handleCreateMessage(req, conversationId, createMessageDto, image);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('messages/read')
+  async markMessagesAsRead(@Req() req: Request, @Param('ticketId') ticketId: string) {
+    return this.messageService.markMessagesAsRead(ticketId, "USER", (req.user as User).id);
+  }
+
+  @UseGuards(JwtCustomerAuthGuard)
+  @Post('customer/messages/read')
+  async markCustomerMessagesAsRead(@Req() req: Request, @Param('ticketId') ticketId: string) {
+    return this.messageService.markMessagesAsRead(ticketId, "CUSTOMER", (req.user as Customer).id);
   }
 
   private async handleCreateMessage(

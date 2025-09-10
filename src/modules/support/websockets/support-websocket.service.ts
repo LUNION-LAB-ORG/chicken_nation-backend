@@ -56,4 +56,8 @@ export class SupportWebSocketService {
             this.appGateway.emitToRestaurant(restaurantId, 'new:ticket_message', { ticketId, message });
         }
     }
+
+    emitMessagesRead(ticketId: string) {
+        this.appGateway.emitToBackoffice('read:ticket_messages', { ticketId });
+    }
 }

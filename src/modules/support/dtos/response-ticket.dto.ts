@@ -1,7 +1,6 @@
-// ...existing code...
 import { ApiProperty } from '@nestjs/swagger';
-import { EntityStatus, UserRole, UserType } from '@prisma/client';
-import { IsOptional } from 'class-validator';
+import { TicketPriority, TicketStatus, UserRole } from '@prisma/client';
+import { IsEnum, IsOptional } from 'class-validator';
 
 class ResponseTicketCustomerDto {
     @ApiProperty()
@@ -129,4 +128,18 @@ export class ResponseTicketDto {
 
     @ApiProperty({ type: ResponseTicketOrderDto })
     order: ResponseTicketOrderDto;
+
+    @ApiProperty()
+    category: {
+        id: string;
+        name: string;
+    }
+
+    @ApiProperty({ enum: TicketStatus, default: TicketStatus.OPEN })
+    @IsEnum(TicketStatus)
+    status: TicketStatus;
+
+    @ApiProperty({ enum: TicketPriority, default: TicketPriority.MEDIUM })
+    @IsEnum(TicketPriority)
+    priority: TicketPriority;
 }

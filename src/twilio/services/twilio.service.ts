@@ -35,7 +35,12 @@ export class TwilioService {
     }
 
     async sendOtp({ phoneNumber, otp }: { phoneNumber: string, otp: string }) {
-
+        const env = this.configService.get<string>('NODE_ENV');
+        if (env !== 'production') {
+            console.log(`OTP for ${phoneNumber}: ${otp}`);
+            return true;
+        }
+        
         return await this.sendWhatsappMessage({
             phoneNumber,
             contentSid: this.twilioWhatsappTemplate.otp_template.sid,

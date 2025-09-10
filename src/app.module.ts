@@ -22,12 +22,30 @@ import { EmailModule } from 'src/modules/email/email.module';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { MessagerieModule } from './modules/messagerie/messagerie.module';
 import { SupportModule } from './modules/support/support.module';
+import { BullModule } from '@nestjs/bullmq';
 @Module({
   imports: [
     JsonWebTokenModule,
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
     EventEmitterModule.forRoot({}),
+    BullModule.forRoot({
+      prefix: 'chicken-nation-queue',
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 1000,
+        },
+      },
+      connection: {
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT ?? '6379'),
+        username: process.env.REDIS_USERNAME || undefined,
+        password: process.env.REDIS_PASSWORD || undefined,
+        db: parseInt(process.env.REDIS_DB ?? '0'),
+      }
+    }),
     DatabaseModule,
     CommonModule,
     UsersModule,

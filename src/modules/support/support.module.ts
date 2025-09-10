@@ -6,9 +6,32 @@ import { MessagesController } from './controllers/messages.controller';
 import { SupportWebSocketService } from './websockets/support-websocket.service';
 import { CategoriesTicketService } from './services/categories-ticket.service';
 import { CategoriesTicketController } from './controllers/categories-ticket.controller';
+import { BullModule } from '@nestjs/bullmq';
+import { TicketEvent } from './events/ticket.event';
+import { TicketListenerService } from './listeners/ticket-listener.service';
+import { AssignmentService } from './services/assignment.service';
+import { TicketsConsumer } from './consumers/tickets.consumer';
 
 @Module({
+  imports: [
+    BullModule.registerQueue({
+      name: 'tickets',
+      defaultJobOptions: {
+        removeOnComplete: true,
+        removeOnFail: false,
+      },
+    })
+  ],
   controllers: [TicketsController, MessagesController, CategoriesTicketController],
-  providers: [TicketService, TicketMessageService, SupportWebSocketService, CategoriesTicketService],
+  providers: [
+    TicketService,
+    TicketMessageService,
+    SupportWebSocketService,
+    CategoriesTicketService,
+    TicketEvent,
+    TicketListenerService,
+    AssignmentService,
+    TicketsConsumer,
+  ],
 })
 export class SupportModule { }
