@@ -24,8 +24,6 @@ export class ConversationWebsocketsService {
       );
     }
 
-    // TODO: Ajouter l'envoi au call_center quand on aura la gestion des call_center
-
     conversation.users.forEach((user) => {
       this.appGateway.emitToUser(
         user.id,
