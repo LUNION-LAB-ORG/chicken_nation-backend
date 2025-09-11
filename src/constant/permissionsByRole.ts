@@ -1,55 +1,56 @@
 import { UserRole } from '@prisma/client';
+import { Modules } from './enum/module-enum';
+ // chemin selon ton projet
 
-// 🔹 Exporter l'interface pour qu'elle puisse être utilisée ailleurs
 export interface RolePermissions {
-  modules: Record<string, string[]>;
-  exclusions?: string[];
+ modules: Partial<Record<Modules, string[]>>;
+  exclusions?: Modules[];
 }
 
 export const permissionsByRole: Record<UserRole, RolePermissions> = {
   [UserRole.CAISSIER]: {
     modules: {
-      commandes: ['read', 'update'],
-      dashboard: ['read'],
+      [Modules.COMMANDES]: ['read', 'update'],
+      [Modules.DASHBOARD]: ['read'],
     },
   },
   [UserRole.MANAGER]: {
     modules: {
-      dashboard: ['read'],
-      menu: ['read'],
-      promotions: ['read'],
+      [Modules.DASHBOARD]: ['read'],
+      [Modules.MENU]: ['read'],
+      [Modules.PROMOTIONS]: ['read'],
     },
   },
   [UserRole.CALL_CENTER]: {
     modules: {
-      commandes: ['read', 'update'],
-      messages: ['read'],
+      [Modules.COMMANDES]: ['read', 'update'],
+      [Modules.MESSAGES]: ['read'],
     },
   },
   [UserRole.ADMIN]: {
     modules: {
-      all: ['create', 'read', 'update', 'delete'],
+      [Modules.ALL]: ['create', 'read', 'update', 'delete'],
     },
-    exclusions: ['commandes', 'clients'],
+    exclusions: [Modules.COMMANDES, Modules.CLIENTS],
   },
   [UserRole.MARKETING]: {
     modules: {
-      dashboard: ['read'],
-      categories: ['create', 'read', 'update', 'delete'],
-      plats: ['create', 'read', 'update', 'delete'],
-      promotions: ['create', 'read', 'update', 'delete'],
+      [Modules.DASHBOARD]: ['read'],
+      [Modules.CATEGORIES]: ['create', 'read', 'update', 'delete'],
+      [Modules.PLATS]: ['create', 'read', 'update', 'delete'],
+      [Modules.PROMOTIONS]: ['create', 'read', 'update', 'delete'],
     },
-    exclusions: ['chiffre_affaires'],
+    exclusions: [Modules.CHIFFRE_AFFAIRES],
   },
   [UserRole.COMPTABLE]: {
     modules: {
-      commandes: ['read'],
-      chiffre_affaires: ['read'],
+      [Modules.COMMANDES]: ['read'],
+      [Modules.CHIFFRE_AFFAIRES]: ['read'],
     },
   },
   [UserRole.CUISINE]: {
     modules: {
-      commandes: ['read', 'update'],
+      [Modules.COMMANDES]: ['read', 'update'],
     },
   },
 };

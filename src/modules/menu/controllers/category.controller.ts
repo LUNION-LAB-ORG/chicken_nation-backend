@@ -23,31 +23,24 @@ import { GenerateConfigService } from 'src/common/services/generate-config.servi
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Request } from 'express';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
-import { ModulePermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
+import { PermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
-
 
 @ApiTags('Categories')
 @ApiBearerAuth()
-@UseGuards(ModulePermissionsGuard) // Vérification dynamique des permissions
 @Controller('categories')
 export class CategoryController {
   constructor(private readonly categoryService: CategoryService) {}
 
-  @ApiOperation({ summary: "Création d'une nouvelle catégorie" })
   @Post()
-  @UseGuards(JwtAuthGuard, UserTypesGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @RequirePermission('categories', 'create')
   @UseInterceptors(
-    FileInterceptor(
-      'image',
-      GenerateConfigService.generateConfigSingleImageUpload(
-        './uploads/categories',
-      ),
-    ),
+    FileInterceptor('image', GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories')),
   )
+  @ApiOperation({ summary: "Création d'une nouvelle catégorie" })
   async create(
     @Req() req: Request,
     @Body() createCategoryDto: CreateCategoryDto,
@@ -56,11 +49,7 @@ export class CategoryController {
     const resizedPath = await GenerateConfigService.compressImages(
       { img_1: image?.path },
       undefined,
-      {
-        quality: 70,
-        width: 600,
-        fit: 'inside',
-      },
+      { quality: 70, width: 600, fit: 'inside' },
       true,
     );
     return this.categoryService.create(req, {
@@ -69,34 +58,31 @@ export class CategoryController {
     });
   }
 
-  @ApiOperation({ summary: 'Récupération de toutes les catégories' })
   @Get()
+  @UseGuards(PermissionsGuard)
   @RequirePermission('categories', 'read')
+  @ApiOperation({ summary: 'Récupération de toutes les catégories' })
   findAll() {
     return this.categoryService.findAll();
   }
 
-  @ApiOperation({ summary: "Récupération d'une catégorie par son id" })
   @Get(':id')
+  @UseGuards(PermissionsGuard)
   @RequirePermission('categories', 'read')
+  @ApiOperation({ summary: "Récupération d'une catégorie par son id" })
   findOne(@Param('id') id: string) {
     return this.categoryService.findOne(id);
   }
 
-  @ApiOperation({ summary: "Mise à jour d'une catégorie par son id" })
   @Patch(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @RequirePermission('categories', 'update')
   @UseInterceptors(
-    FileInterceptor(
-      'image',
-      GenerateConfigService.generateConfigSingleImageUpload(
-        './uploads/categories',
-      ),
-    ),
+    FileInterceptor('image', GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories')),
   )
+  @ApiOperation({ summary: "Mise à jour d'une catégorie par son id" })
   async update(
     @Req() req: Request,
     @Param('id') id: string,
@@ -106,11 +92,7 @@ export class CategoryController {
     const resizedPath = await GenerateConfigService.compressImages(
       { img_1: image?.path },
       undefined,
-      {
-        quality: 70,
-        width: 600,
-        fit: 'inside',
-      },
+      { quality: 70, width: 600, fit: 'inside' },
       true,
     );
     return this.categoryService.update(req, id, {
@@ -119,12 +101,12 @@ export class CategoryController {
     });
   }
 
-  @ApiOperation({ summary: "Suppression d'une catégorie par son id" })
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @RequirePermission('categories', 'delete')
+  @ApiOperation({ summary: "Suppression d'une catégorie par son id" })
   remove(@Param('id') id: string) {
     return this.categoryService.remove(id);
   }

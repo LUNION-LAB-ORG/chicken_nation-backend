@@ -21,30 +21,24 @@ import { CreateConversationDto } from '../dto/create-conversation.dto';
 import { ConversationsService } from '../services/conversations.service';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
-
 import { UserRole } from '@prisma/client';
-import { ModulePermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
+import { PermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
 
 @ApiTags('Conversations')
 @ApiBearerAuth()
-@UseGuards(ModulePermissionsGuard) // Vérification des permissions
 @Controller('conversations')
 export class ConversationsController {
   constructor(private readonly conversationsService: ConversationsService) {}
 
-  @ApiOperation({
-    summary: 'Lister toutes les conversations (staff uniquement)',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Retourne les conversations avec pagination',
-  })
+  // --- Staff : Lister toutes les conversations ---
+  @Get()
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
   @RequirePermission('messages', 'read')
-  @UseGuards(JwtAuthGuard)
-  @Get()
+  @ApiOperation({ summary: 'Lister toutes les conversations (staff uniquement)' })
+  @ApiResponse({ status: 200, description: 'Retourne les conversations avec pagination' })
   async getConversations(
     @Req() req: Request,
     @Query() filter: QueryConversationsDto,
@@ -52,15 +46,11 @@ export class ConversationsController {
     return await this.conversationsService.getConversations(req, filter);
   }
 
-  @ApiOperation({
-    summary: 'Lister les conversations du client connecté',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Retourne les conversations du client',
-  })
-  @UseGuards(JwtCustomerAuthGuard)
+  // --- Client : Lister ses propres conversations ---
   @Get('/client')
+  @UseGuards(JwtCustomerAuthGuard)
+  @ApiOperation({ summary: 'Lister les conversations du client connecté' })
+  @ApiResponse({ status: 200, description: 'Retourne les conversations du client' })
   async getConversationsClient(
     @Req() req: Request,
     @Query() filter: QueryConversationsDto,
@@ -68,18 +58,14 @@ export class ConversationsController {
     return await this.conversationsService.getConversations(req, filter);
   }
 
-  @ApiOperation({
-    summary: 'Créer une nouvelle conversation (staff)',
-  })
-  @ApiResponse({
-    status: 201,
-    description: 'Conversation créée avec message initial',
-  })
-  @ApiBody({ type: CreateConversationDto })
+  // --- Staff : Créer une nouvelle conversation ---
+  @Post()
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
   @RequirePermission('messages', 'create')
-  @UseGuards(JwtAuthGuard)
-  @Post()
+  @ApiOperation({ summary: 'Créer une nouvelle conversation (staff)' })
+  @ApiResponse({ status: 201, description: 'Conversation créée avec message initial' })
+  @ApiBody({ type: CreateConversationDto })
   async createConversation(
     @Req() req: Request,
     @Body() createConversationDto: CreateConversationDto,
@@ -90,15 +76,11 @@ export class ConversationsController {
     );
   }
 
-  @ApiOperation({
-    summary: 'Créer une nouvelle conversation côté client',
-  })
-  @ApiResponse({
-    status: 201,
-    description: 'Conversation client créée avec message initial',
-  })
-  @UseGuards(JwtCustomerAuthGuard)
+  // --- Client : Créer une conversation côté client ---
   @Post('/client')
+  @UseGuards(JwtCustomerAuthGuard)
+  @ApiOperation({ summary: 'Créer une nouvelle conversation côté client' })
+  @ApiResponse({ status: 201, description: 'Conversation client créée avec message initial' })
   async createConversationClient(
     @Req() req: Request,
     @Body() createConversationDto: CreateConversationDto,
@@ -109,17 +91,13 @@ export class ConversationsController {
     );
   }
 
-  @ApiOperation({
-    summary: 'Récupérer une conversation par ID (staff)',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Retourne la conversation correspondante',
-  })
+  // --- Staff : Récupérer une conversation par ID ---
+  @Get(':id')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
   @RequirePermission('messages', 'read')
-  @UseGuards(JwtAuthGuard)
-  @Get(':id')
+  @ApiOperation({ summary: 'Récupérer une conversation par ID (staff)' })
+  @ApiResponse({ status: 200, description: 'Retourne la conversation correspondante' })
   async getConversationById(@Req() req: Request, @Param('id') id: string) {
     return await this.conversationsService.getConversationById(req, id);
   }

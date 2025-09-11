@@ -10,11 +10,11 @@ import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { UserRole } from '@prisma/client';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { Request } from 'express';
-import { ModulePermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
+import { PermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
 
 @ApiTags('Paiements')
-@UseGuards(JwtAuthGuard, ModulePermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('paiements')
 export class PaiementsController {
   constructor(private readonly paiementsService: PaiementsService) {}
