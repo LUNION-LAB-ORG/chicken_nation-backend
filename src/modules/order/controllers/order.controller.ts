@@ -3,125 +3,111 @@ import { OrderService } from 'src/modules/order/services/order.service';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
 import { QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
-import { OrderStatus } from '@prisma/client';
+import { OrderStatus, UserRole } from '@prisma/client';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { ReceiptsService } from '../services/receipts.service';
 
+
+import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
+import { ModulePermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
+import { RequirePermission } from 'src/common/decorators/user-require-permission';
+
+
 @ApiTags('Commandes')
+@UseGuards(UserRolesGuard, ModulePermissionsGuard)
 @Controller('orders')
 export class OrderController {
-  constructor(private readonly orderService: OrderService, private readonly receiptsService: ReceiptsService) { }
+  constructor(
+    private readonly orderService: OrderService,
+    private readonly receiptsService: ReceiptsService
+  ) {}
 
   @Post()
+  @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CALL_CENTER)
+  @RequirePermission('commandes', 'create')
+  @UseGuards(JwtCustomerAuthGuard)
   @ApiOperation({ summary: 'Créer une nouvelle commande' })
   @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
   @ApiBody({ type: CreateOrderDto })
-  @UseGuards(JwtCustomerAuthGuard)
   async create(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
     return this.orderService.create(req, createOrderDto);
   }
 
-
-  @ApiOperation({ summary: 'Rechercher toutes les commandes avec options de filtrage' })
-  @ApiResponse({ status: 200, description: 'Retourne les commandes avec métadonnées de pagination' })
-  @UseGuards(JwtAuthGuard)
   @Get()
+  @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CALL_CENTER, UserRole.COMPTABLE)
+  @RequirePermission('commandes', 'read')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Rechercher toutes les commandes' })
   findAll(@Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.findAll(queryOrderDto);
   }
 
-
-  @ApiOperation({ summary: 'Rechercher toutes les commandes avec options de filtrage d\'un client' })
-  @ApiResponse({ status: 200, description: 'Retourne les commandes avec métadonnées de pagination' })
   @Get("/customer")
+  @UserRoles(UserRole.CAISSIER, UserRole.CALL_CENTER)
+  @RequirePermission('commandes', 'read')
   @UseGuards(JwtCustomerAuthGuard)
+  @ApiOperation({ summary: 'Rechercher commandes d’un client' })
   findAllByCustomer(@Req() req: Request, @Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.findAllByCustomer(req, queryOrderDto);
   }
 
-
-  @ApiOperation({ summary: 'Obtenir les statistiques des commandes pour le tableau de bord' })
-  @ApiResponse({ status: 200, description: 'Retourne les statistiques des commandes' })
-  @UseGuards(JwtAuthGuard)
   @Get('statistics')
+  @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.COMPTABLE)
+  @RequirePermission('dashboard', 'read')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Statistiques des commandes' })
   getOrderStatistics(@Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.getOrderStatistics(queryOrderDto);
   }
 
-  @ApiOperation({ summary: 'Trouver une commande par son ID' })
-  @ApiResponse({ status: 200, description: 'Retourne la commande' })
-  @ApiResponse({ status: 404, description: 'Commande introuvable' })
-  @ApiParam({ name: 'id', description: 'ID de la commande' })
   @Get(':id')
+  @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CALL_CENTER, UserRole.COMPTABLE)
+  @RequirePermission('commandes', 'read')
   findOne(@Param('id') id: string) {
     return this.orderService.findById(id);
   }
 
-
-  @ApiOperation({ summary: 'Mettre à jour une commande' })
-  @ApiResponse({ status: 200, description: 'Commande mise à jour avec succès' })
-  @ApiResponse({ status: 404, description: 'Commande introuvable' })
-  @ApiResponse({ status: 409, description: 'Seules les commandes en attente peuvent être modifiées' })
-  @ApiParam({ name: 'id', description: 'ID de la commande' })
-  @ApiBody({ type: UpdateOrderDto })
   @Patch(':id')
+  @UserRoles(UserRole.ADMIN, UserRole.CAISSIER, UserRole.CALL_CENTER)
+  @RequirePermission('commandes', 'update')
+  @ApiBody({ type: UpdateOrderDto })
   update(@Param('id') id: string, @Body() updateOrderDto: UpdateOrderDto) {
     return this.orderService.update(id, updateOrderDto);
   }
 
-  @ApiOperation({ summary: 'Mettre à jour le statut d\'une commande' })
-  @ApiResponse({ status: 200, description: 'Statut de la commande mis à jour avec succès' })
-  @ApiResponse({ status: 404, description: 'Commande introuvable' })
-  @ApiResponse({ status: 409, description: 'Transition de statut invalide' })
-  @ApiParam({ name: 'id', description: 'ID de la commande' })
+  @Patch(':id/status')
+  @UserRoles(UserRole.ADMIN, UserRole.CAISSIER, UserRole.CALL_CENTER)
+  @RequirePermission('commandes', 'update')
   @ApiBody({
     schema: {
       type: 'object',
       properties: {
-        status: {
-          type: 'string',
-          enum: Object.values(OrderStatus),
-          description: 'Nouveau statut de la commande'
-        },
-        meta: {
-          type: 'object',
-          description: 'Métadonnées supplémentaires pour le changement de statut',
-          additionalProperties: true
-        }
+        status: { type: 'string', enum: Object.values(OrderStatus) },
+        meta: { type: 'object', additionalProperties: true }
       },
       required: ['status']
     }
   })
-  @Patch(':id/status')
-  updateStatus(
-    @Param('id') id: string,
-    @Body() body: { status: OrderStatus; meta?: Record<string, any> }
-  ) {
+  updateStatus(@Param('id') id: string, @Body() body: { status: OrderStatus; meta?: Record<string, any> }) {
     return this.orderService.updateStatus(id, body.status, body.meta);
   }
 
-  @ApiOperation({ summary: 'Supprimer une commande (suppression douce)' })
-  @ApiResponse({ status: 200, description: 'Commande supprimée avec succès' })
-  @ApiResponse({ status: 404, description: 'Commande introuvable' })
-  @ApiResponse({ status: 409, description: 'Seules les commandes en attente ou annulées peuvent être supprimées' })
-  @ApiParam({ name: 'id', description: 'ID de la commande' })
+  @Delete(':id')
+  @UserRoles(UserRole.ADMIN)
+  @RequirePermission('commandes', 'delete')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
-  @Delete(':id')
   remove(@Param('id') id: string) {
     return this.orderService.remove(id);
   }
 
-  @Get("update-statut/:id")
-  updateStatut(@Param('id') id: string) {
-    return this.orderService.updateStatuts(id);
-  }
-
-
   @Get(':id/pdf')
+  @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
+  @RequirePermission('commandes', 'read')
   @UseGuards(JwtAuthGuard)
   async getReceiptPdf(@Param('id') id: string, @Res() res: Response) {
     await this.receiptsService.generateReceiptPdf(id, res);
