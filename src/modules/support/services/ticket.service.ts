@@ -5,11 +5,10 @@ import { PrismaService } from '../../../database/services/prisma.service';
 import { CreateTicketDto } from '../dtos/create-ticket.dto';
 import { QueryTicketsDto } from '../dtos/query-tickets.dto';
 import { ResponseTicketDto } from '../dtos/response-ticket.dto';
+import { UpdateTicketDto } from '../dtos/update-ticket.dto';
 import { TicketEvent } from '../events/ticket.event';
 import { generateSequentialTicketCode, generateTicketPrefix } from '../utils/code-generator';
 import { CategoriesTicketService } from './categories-ticket.service';
-import { resolve } from 'path';
-import { UpdateTicketDto } from '../dtos/update-ticket.dto';
 
 @Injectable()
 export class TicketService {
@@ -174,6 +173,7 @@ export class TicketService {
       })
     ]);
 
+    //TODO: activer la verification de l'existence de la commande
     if (data.orderId && !order) {
       this.logger.warn(`Échec création: commande ${data.orderId} introuvable`);
       throw new HttpException('Order not found', 404);

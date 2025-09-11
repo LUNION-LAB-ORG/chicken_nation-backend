@@ -3,8 +3,10 @@ import { OnEvent } from "@nestjs/event-emitter";
 import { Queue } from "bullmq";
 import { ResponseTicketDto } from "../dtos/response-ticket.dto";
 import { SupportWebSocketService } from "../websockets/support-websocket.service";
+import { Logger } from "@nestjs/common";
 
 export class TicketListenerService {
+	private readonly logger = new Logger(TicketListenerService.name);
 	constructor(
 		private readonly supportWebSocketService: SupportWebSocketService,
 		@InjectQueue('tickets') private readonly ticketsQueue: Queue,
@@ -12,14 +14,19 @@ export class TicketListenerService {
 
 	@OnEvent('ticket.created')
 	handleTicketCreatedEvent(payload: ResponseTicketDto) {
+		// TODO: Creer des queues spécifiques par catégorie
+		this.logger.log(`Handling ticket.created event ${payload.id}`);
 		this.ticketsQueue.add(
-			'auto-assign',
-			{ ticketId: payload.id },
+			`auto-assign-${payload.id}`,
 			{
-				attempts: Infinity,
+				ticketId: payload.id,
+				categoryId: payload.category.id
+			},
+			{
+				attempts: 9999,
 				backoff: {
 					type: 'fixed', // délai constant entre chaque tentative
-					delay: 10000
+					delay: 30000 // 30 secondes de délai entre chaque tentative
 				},
 				removeOnComplete: true,
 				removeOnFail: false
@@ -30,6 +37,7 @@ export class TicketListenerService {
 
 	@OnEvent('ticket.updated')
 	handleTicketUpdatedEvent(payload: ResponseTicketDto) {
+		this.logger.log(`Handling ticket.updated event ${payload.id}`);
 		this.supportWebSocketService.emitUpdateTicket(payload);
 	}
 }

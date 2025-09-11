@@ -6,7 +6,9 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { Request } from 'express';
 import { Customer, User } from '@prisma/client';
+import { ApiTags } from '@nestjs/swagger';
 
+@ApiTags('Support - Messages')
 @Controller(':ticketId/messages')
 export class MessagesController {
     constructor(private readonly messageService: TicketMessageService) { }
