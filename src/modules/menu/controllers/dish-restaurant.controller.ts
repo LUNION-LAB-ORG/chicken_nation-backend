@@ -14,7 +14,7 @@ import { UserRole, UserType } from '@prisma/client';
 import { UserTypesGuard } from 'src/common/guards/user-types.guard';
 import { UserTypes } from 'src/common/decorators/user-types.decorator';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { PermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
+import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
 
@@ -25,7 +25,7 @@ export class DishRestaurantController {
   constructor(private readonly dishRestaurantService: DishRestaurantService) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @RequirePermission('plats', 'create')
@@ -35,7 +35,7 @@ export class DishRestaurantController {
   }
 
   @Get()
-  @UseGuards(PermissionsGuard)
+  @UseGuards(UserPermissionsGuard)
   @RequirePermission('plats', 'read')
   @ApiOperation({ summary: 'Récupération de toutes les relations entre plats et restaurants' })
   findAll() {
@@ -43,7 +43,7 @@ export class DishRestaurantController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @RequirePermission('plats', 'delete')
@@ -53,7 +53,7 @@ export class DishRestaurantController {
   }
 
   @Delete('dish/:dishId/restaurant/:restaurantId')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @RequirePermission('plats', 'delete')

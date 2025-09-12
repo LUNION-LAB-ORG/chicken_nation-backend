@@ -5,10 +5,11 @@ import { Modules } from 'src/constant/enum/module-enum';
 import { UserRole } from '@prisma/client';
 
 @Injectable()
-export class PermissionsGuard implements CanActivate {
+export class UserPermissionsGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
+    
     // Récupère la permission requise depuis le décorateur
     const required = this.reflector.get<{ module: Modules; action: string }>(
       'permission',

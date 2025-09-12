@@ -22,7 +22,7 @@ import { ConversationsService } from '../services/conversations.service';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
 import { UserRole } from '@prisma/client';
-import { PermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
+import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
 
@@ -34,7 +34,7 @@ export class ConversationsController {
 
   // --- Staff : Lister toutes les conversations ---
   @Get()
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
   @RequirePermission('messages', 'read')
   @ApiOperation({ summary: 'Lister toutes les conversations (staff uniquement)' })
@@ -60,7 +60,7 @@ export class ConversationsController {
 
   // --- Staff : Créer une nouvelle conversation ---
   @Post()
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
   @RequirePermission('messages', 'create')
   @ApiOperation({ summary: 'Créer une nouvelle conversation (staff)' })
@@ -93,7 +93,7 @@ export class ConversationsController {
 
   // --- Staff : Récupérer une conversation par ID ---
   @Get(':id')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
   @RequirePermission('messages', 'read')
   @ApiOperation({ summary: 'Récupérer une conversation par ID (staff)' })

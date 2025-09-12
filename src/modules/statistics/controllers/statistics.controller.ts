@@ -4,7 +4,7 @@ import { GetStatsQueryDto, DashboardViewModel } from '../dto/dashboard.dto';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { UserRole } from '@prisma/client';
-import { PermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
+import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
 
 @Controller('statistics')
@@ -12,7 +12,7 @@ export class StatisticsController {
   constructor(private readonly statisticsService: StatisticsService) {}
 
   @Get('dashboard')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission('dashboard', 'read')
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.MARKETING)
   async getDashboardStats(@Query() query: GetStatsQueryDto): Promise<DashboardViewModel> {
@@ -20,7 +20,7 @@ export class StatisticsController {
   }
 
   @Get('revenue')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission('chiffre_affaires', 'read')
   @UserRoles(UserRole.ADMIN, UserRole.COMPTABLE)
   async getRevenueStats(@Query() query: GetStatsQueryDto) {
@@ -29,7 +29,7 @@ export class StatisticsController {
   }
 
   @Get('orders')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission('commandes', 'read')
   @UserRoles(UserRole.ADMIN, UserRole.COMPTABLE, UserRole.CAISSIER, UserRole.CALL_CENTER)
   async getOrdersStats(@Query() query: GetStatsQueryDto) {
@@ -38,7 +38,7 @@ export class StatisticsController {
   }
 
   @Get('menus')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission('plats', 'read')
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   async getMenusStats(@Query() query: GetStatsQueryDto) {
@@ -47,7 +47,7 @@ export class StatisticsController {
   }
 
   @Get('customers')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission('clients', 'read')
   @UserRoles(UserRole.ADMIN)
   async getCustomersStats(@Query() query: GetStatsQueryDto) {
@@ -56,7 +56,7 @@ export class StatisticsController {
   }
 
   @Get('daily-sales')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission('chiffre_affaires', 'read')
   @UserRoles(UserRole.ADMIN, UserRole.COMPTABLE)
   async getDailySales(@Query() query: GetStatsQueryDto) {

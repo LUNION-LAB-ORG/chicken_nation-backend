@@ -27,7 +27,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
 import { Request } from 'express';
-import { PermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
+import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
 
 @ApiTags('Restaurants')
@@ -40,7 +40,7 @@ export class RestaurantController {
   ) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
   @RequirePermission('restaurants', 'create')
@@ -67,21 +67,21 @@ export class RestaurantController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission('restaurants', 'read')
   async findAll(@Query('page') page?: number, @Query('limit') limit?: number) {
     return this.restaurantService.findAll(page || 1, limit || 10);
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission('restaurants', 'read')
   async findOne(@Param('id') id: string) {
     return this.restaurantService.findOne(id);
   }
 
   @Patch(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @RequirePermission('restaurants', 'update')
@@ -108,7 +108,7 @@ export class RestaurantController {
   }
 
   @Patch(':id/activateDeactivate')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @RequirePermission('restaurants', 'update')
@@ -117,7 +117,7 @@ export class RestaurantController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
   @RequirePermission('restaurants', 'delete')
@@ -126,7 +126,7 @@ export class RestaurantController {
   }
 
   @Get(':id/users')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @RequirePermission('restaurants', 'read')
@@ -136,13 +136,13 @@ export class RestaurantController {
 
   // 🔹 Endpoint client, garde JwtCustomerAuthGuard ou JwtAuthGuard
   @Get(':id/clients')
-  @UseGuards(JwtAuthGuard) // pas de PermissionsGuard
+  @UseGuards(JwtAuthGuard) // pas de UserPermissionsGuard
   async getRestaurantCustomers(@Param('id') id: string) {
     return this.restaurantService.getRestaurantCustomers(id);
   }
 
   @Get(':id/manager')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @RequirePermission('restaurants', 'read')
