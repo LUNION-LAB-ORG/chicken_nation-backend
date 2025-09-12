@@ -18,6 +18,8 @@ import { UserRole } from '@prisma/client';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
+import { Modules } from 'src/common/enum/module-enum';
+import { Action } from 'src/common/enum/action.enum';
 
 @Controller('conversations/:conversationId/messages')
 export class MessageController {
@@ -27,7 +29,7 @@ export class MessageController {
   @Get()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
-  @RequirePermission('messages', 'read')
+  @RequirePermission(Modules.MESSAGES, Action.READ)
   async getMessages(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,
@@ -51,7 +53,7 @@ export class MessageController {
   @Post()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN)
-  @RequirePermission('messages', 'create')
+  @RequirePermission(Modules.MESSAGES ,Action.CREATE)
   async createMessage(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,

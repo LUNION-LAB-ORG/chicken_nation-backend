@@ -12,6 +12,8 @@ import { ReceiptsService } from '../services/receipts.service';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
+import { Action } from 'src/common/enum/action.enum';
+import { Modules } from 'src/common/enum/module-enum';
 
 @ApiTags('Commandes')
 @Controller('orders')
@@ -24,7 +26,7 @@ export class OrderController {
   @Post()
   @UseGuards(JwtCustomerAuthGuard) // client peut créer ses propres commandes
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CALL_CENTER)
-  @RequirePermission('commandes', 'create')
+  @RequirePermission(Modules.COMMANDES, Action.CREATE)
   @ApiOperation({ summary: 'Créer une nouvelle commande' })
   @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
   @ApiBody({ type: CreateOrderDto })
@@ -35,7 +37,7 @@ export class OrderController {
   @Get()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CALL_CENTER, UserRole.COMPTABLE)
-  @RequirePermission('commandes', 'read')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
   @ApiOperation({ summary: 'Rechercher toutes les commandes' })
   findAll(@Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.findAll(queryOrderDto);
@@ -44,7 +46,7 @@ export class OrderController {
   @Get('/customer')
   @UseGuards(JwtCustomerAuthGuard)
   @UserRoles(UserRole.CAISSIER, UserRole.CALL_CENTER)
-  @RequirePermission('commandes', 'read')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
   @ApiOperation({ summary: 'Rechercher commandes d’un client' })
   findAllByCustomer(@Req() req: Request, @Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.findAllByCustomer(req, queryOrderDto);
@@ -53,7 +55,7 @@ export class OrderController {
   @Get('statistics')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.COMPTABLE)
-  @RequirePermission('dashboard', 'read')
+  @RequirePermission(Modules.DASHBOARD, Action.READ)
   @ApiOperation({ summary: 'Statistiques des commandes' })
   getOrderStatistics(@Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.getOrderStatistics(queryOrderDto);
@@ -62,7 +64,7 @@ export class OrderController {
   @Get(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CALL_CENTER, UserRole.COMPTABLE)
-  @RequirePermission('commandes', 'read')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
   findOne(@Param('id') id: string) {
     return this.orderService.findById(id);
   }
@@ -70,7 +72,7 @@ export class OrderController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CAISSIER, UserRole.CALL_CENTER)
-  @RequirePermission('commandes', 'update')
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE)
   @ApiBody({ type: UpdateOrderDto })
   update(@Param('id') id: string, @Body() updateOrderDto: UpdateOrderDto) {
     return this.orderService.update(id, updateOrderDto);
@@ -79,7 +81,7 @@ export class OrderController {
   @Patch(':id/status')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CAISSIER, UserRole.CALL_CENTER)
-  @RequirePermission('commandes', 'update')
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE)
   @ApiBody({
     schema: {
       type: 'object',
@@ -97,7 +99,7 @@ export class OrderController {
   @Delete(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN)
-  @RequirePermission('commandes', 'delete')
+  @RequirePermission(Modules.COMMANDES, Action.DELETE)
   @HttpCode(HttpStatus.OK)
   remove(@Param('id') id: string) {
     return this.orderService.remove(id);
@@ -106,7 +108,7 @@ export class OrderController {
   @Get(':id/pdf')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
-  @RequirePermission('commandes', 'read')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
   async getReceiptPdf(@Param('id') id: string, @Res() res: Response) {
     await this.receiptsService.generateReceiptPdf(id, res);
   }

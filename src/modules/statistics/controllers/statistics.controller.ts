@@ -6,6 +6,8 @@ import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { UserRole } from '@prisma/client';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
+import { Modules } from 'src/common/enum/module-enum';
+import { Action } from 'src/common/enum/action.enum';
 
 @Controller('statistics')
 export class StatisticsController {
@@ -13,7 +15,7 @@ export class StatisticsController {
 
   @Get('dashboard')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission('dashboard', 'read')
+  @RequirePermission(Modules.DASHBOARD, Action.READ)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.MARKETING)
   async getDashboardStats(@Query() query: GetStatsQueryDto): Promise<DashboardViewModel> {
     return this.statisticsService.getDashboardStats(query);
@@ -21,7 +23,7 @@ export class StatisticsController {
 
   @Get('revenue')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission('chiffre_affaires', 'read')
+  @RequirePermission(Modules.CHIFFRE_AFFAIRES, Action.READ)
   @UserRoles(UserRole.ADMIN, UserRole.COMPTABLE)
   async getRevenueStats(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);
@@ -30,7 +32,7 @@ export class StatisticsController {
 
   @Get('orders')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission('commandes', 'read')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
   @UserRoles(UserRole.ADMIN, UserRole.COMPTABLE, UserRole.CAISSIER, UserRole.CALL_CENTER)
   async getOrdersStats(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);
@@ -39,7 +41,7 @@ export class StatisticsController {
 
   @Get('menus')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission('plats', 'read')
+  @RequirePermission(Modules.PLATS, Action.READ)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   async getMenusStats(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);
@@ -48,7 +50,7 @@ export class StatisticsController {
 
   @Get('customers')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission('clients', 'read')
+  @RequirePermission(Modules.CLIENTS, Action.READ)
   @UserRoles(UserRole.ADMIN)
   async getCustomersStats(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);
@@ -57,7 +59,7 @@ export class StatisticsController {
 
   @Get('daily-sales')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission('chiffre_affaires', 'read')
+  @RequirePermission(Modules.CHIFFRE_AFFAIRES, Action.READ)
   @UserRoles(UserRole.ADMIN, UserRole.COMPTABLE)
   async getDailySales(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);

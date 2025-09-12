@@ -25,8 +25,8 @@ import { Request } from 'express';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
-import { Modules } from 'src/constant/enum/module-enum';
-import { Action } from 'src/constant/enum/action.enum';
+import { Modules } from 'src/common/enum/module-enum';
+import { Action } from 'src/common/enum/action.enum';
 
 @ApiTags('Categories')
 @ApiBearerAuth()
@@ -62,7 +62,7 @@ export class CategoryController {
 
   @Get()
   @UseGuards(UserPermissionsGuard)
-  @RequirePermission('categories', 'read')
+  @RequirePermission(Modules.CATEGORIES, Action.READ)
   @ApiOperation({ summary: 'Récupération de toutes les catégories' })
   findAll() {
     return this.categoryService.findAll();
@@ -70,7 +70,7 @@ export class CategoryController {
 
   @Get(':id')
   @UseGuards(UserPermissionsGuard)
-  @RequirePermission('categories', 'read')
+  @RequirePermission(Modules.CATEGORIES, Action.READ)
   @ApiOperation({ summary: "Récupération d'une catégorie par son id" })
   findOne(@Param('id') id: string) {
     return this.categoryService.findOne(id);
@@ -80,7 +80,7 @@ export class CategoryController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
-  @RequirePermission('categories', 'update')
+  @RequirePermission(Modules.CATEGORIES, Action.UPDATE)
   @UseInterceptors(
     FileInterceptor('image', GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories')),
   )
@@ -107,7 +107,7 @@ export class CategoryController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
-  @RequirePermission('categories', 'delete')
+  @RequirePermission(Modules.CATEGORIES, Action.DELETE)
   @ApiOperation({ summary: "Suppression d'une catégorie par son id" })
   remove(@Param('id') id: string) {
     return this.categoryService.remove(id);

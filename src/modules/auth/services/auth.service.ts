@@ -8,7 +8,7 @@ import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { OtpService } from 'src/modules/auth/otp/otp.service';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { TwilioService } from 'src/twilio/services/twilio.service';
-import { permissionsByRole } from 'src/constant/permissionsByRole';
+import { permissionsByRole } from 'src/common/constantes/permissionsByRole';
 import { UserRole } from '@prisma/client';
 
 @Injectable()

@@ -25,6 +25,8 @@ import { UserRole } from '@prisma/client';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
+import { Modules } from 'src/common/enum/module-enum';
+import { Action } from 'src/common/enum/action.enum';
 
 @ApiTags('Conversations')
 @ApiBearerAuth()
@@ -36,7 +38,7 @@ export class ConversationsController {
   @Get()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
-  @RequirePermission('messages', 'read')
+  @RequirePermission(Modules.MESSAGES, Action.READ)
   @ApiOperation({ summary: 'Lister toutes les conversations (staff uniquement)' })
   @ApiResponse({ status: 200, description: 'Retourne les conversations avec pagination' })
   async getConversations(
@@ -62,7 +64,7 @@ export class ConversationsController {
   @Post()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
-  @RequirePermission('messages', 'create')
+  @RequirePermission(Modules.MESSAGES, Action.CREATE)
   @ApiOperation({ summary: 'Créer une nouvelle conversation (staff)' })
   @ApiResponse({ status: 201, description: 'Conversation créée avec message initial' })
   @ApiBody({ type: CreateConversationDto })
@@ -95,7 +97,7 @@ export class ConversationsController {
   @Get(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
-  @RequirePermission('messages', 'read')
+  @RequirePermission(Modules.MESSAGES, Action.READ)
   @ApiOperation({ summary: 'Récupérer une conversation par ID (staff)' })
   @ApiResponse({ status: 200, description: 'Retourne la conversation correspondante' })
   async getConversationById(@Req() req: Request, @Param('id') id: string) {

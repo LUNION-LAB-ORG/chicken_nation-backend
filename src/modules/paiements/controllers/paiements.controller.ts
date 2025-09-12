@@ -12,6 +12,8 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { Request } from 'express';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
+import { Modules } from 'src/common/enum/module-enum';
+import { Action } from 'src/common/enum/action.enum';
 
 @ApiTags('Paiements')
 @UseGuards(JwtAuthGuard, UserPermissionsGuard)
@@ -21,7 +23,7 @@ export class PaiementsController {
 
   @ApiOperation({ summary: 'Payer avec Kkiapay' })
   @UseGuards(JwtCustomerAuthGuard)
-  @RequirePermission('commandes', 'create') // Caissier et Customer peuvent créer un paiement
+  @RequirePermission(Modules.COMMANDES, Action.CREATE) // Caissier et Customer peuvent créer un paiement
   @UserRoles(UserRole.CAISSIER)
   @Post('pay')
   payWithKkiapay(@Req() req: Request, @Body() createPaiementKkiapayDto: CreatePaiementKkiapayDto) {
@@ -29,7 +31,7 @@ export class PaiementsController {
   }
 
   @ApiOperation({ summary: 'Remboursement d\'un paiement par Kkiapay' })
-  @RequirePermission('commandes', 'update') // Admin et Manager peuvent rembourser
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE) // Admin et Manager peuvent rembourser
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @UseGuards(JwtAuthGuard)
   @Post('refund/:id')
@@ -39,7 +41,7 @@ export class PaiementsController {
 
   @ApiOperation({ summary: 'Obtenir les paiements libres' })
   @UseGuards(JwtCustomerAuthGuard)
-  @RequirePermission('commandes', 'read') // Caissier et Call Center peuvent lire
+  @RequirePermission(Modules.COMMANDES, Action.READ) // Caissier et Call Center peuvent lire
   @UserRoles(UserRole.CAISSIER, UserRole.CALL_CENTER)
   @Get('free')
   getFreePaiements(@Req() req: Request) {
@@ -47,7 +49,7 @@ export class PaiementsController {
   }
 
   @ApiOperation({ summary: 'Créer un paiement' })
-  @RequirePermission('commandes', 'create')
+  @RequirePermission(Modules.COMMANDES, Action.CREATE)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @Post()
   create(@Body() createPaiementDto: CreatePaiementDto) {
@@ -55,7 +57,7 @@ export class PaiementsController {
   }
 
   @ApiOperation({ summary: 'Lister tous les paiements' })
-  @RequirePermission('commandes', 'read')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER)
   @UseGuards(JwtAuthGuard)
   @Get()
@@ -64,7 +66,7 @@ export class PaiementsController {
   }
 
   @ApiOperation({ summary: 'Obtenir un paiement par son ID' })
-  @RequirePermission('commandes', 'read')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER)
   @UseGuards(JwtAuthGuard)
   @Get(':id')
@@ -73,7 +75,7 @@ export class PaiementsController {
   }
 
   @ApiOperation({ summary: 'Supprimer un paiement' })
-  @RequirePermission('commandes', 'delete')
+  @RequirePermission(Modules.COMMANDES, Action.DELETE)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @UseGuards(JwtAuthGuard)
   @Delete(':id')

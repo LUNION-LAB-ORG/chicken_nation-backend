@@ -1,5 +1,5 @@
 import { UserRole } from '@prisma/client';
-import { Modules } from './enum/module-enum';
+import { Modules } from '../enum/module-enum';
  // chemin selon ton projet
 
 export interface RolePermissions {

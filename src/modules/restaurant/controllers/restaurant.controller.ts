@@ -29,6 +29,8 @@ import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant
 import { Request } from 'express';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
+import { Modules } from 'src/common/enum/module-enum';
+import { Action } from 'src/common/enum/action.enum';
 
 @ApiTags('Restaurants')
 @ApiBearerAuth()
@@ -43,7 +45,7 @@ export class RestaurantController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
-  @RequirePermission('restaurants', 'create')
+  @RequirePermission(Modules.RESTAURANT, Action.CREATE)
   @UseInterceptors(
     FileInterceptor('image', {
       ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants'),
@@ -68,14 +70,14 @@ export class RestaurantController {
 
   @Get()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission('restaurants', 'read')
+  @RequirePermission(Modules.RESTAURANT, Action.CREATE)
   async findAll(@Query('page') page?: number, @Query('limit') limit?: number) {
     return this.restaurantService.findAll(page || 1, limit || 10);
   }
 
   @Get(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission('restaurants', 'read')
+  @RequirePermission(Modules.RESTAURANT, Action.READ)
   async findOne(@Param('id') id: string) {
     return this.restaurantService.findOne(id);
   }
@@ -84,7 +86,7 @@ export class RestaurantController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
-  @RequirePermission('restaurants', 'update')
+  @RequirePermission(Modules.RESTAURANT, Action.UPDATE)
   @UseInterceptors(
     FileInterceptor('image', {
       ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants'),
@@ -111,7 +113,7 @@ export class RestaurantController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
-  @RequirePermission('restaurants', 'update')
+  @RequirePermission(Modules.RESTAURANT, Action.UPDATE)
   async activateDeactivate(@Param('id') id: string) {
     return this.restaurantService.activateDeactivate(id);
   }
@@ -120,7 +122,7 @@ export class RestaurantController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN)
-  @RequirePermission('restaurants', 'delete')
+  @RequirePermission(Modules.RESTAURANT, Action.DELETE)
   async remove(@Param('id') id: string) {
     return this.restaurantService.remove(id);
   }
@@ -129,7 +131,7 @@ export class RestaurantController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
-  @RequirePermission('restaurants', 'read')
+  @RequirePermission(Modules.RESTAURANT, Action.READ)
   async getRestaurantUsers(@Param('id') id: string) {
     return this.restaurantService.getRestaurantUsers(id);
   }
@@ -145,21 +147,21 @@ export class RestaurantController {
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
-  @RequirePermission('restaurants', 'read')
+  @RequirePermission(Modules.RESTAURANT, Action.READ)
   async getRestaurantManager(@Param('id') id: string) {
     return this.restaurantService.getRestaurantManager(id);
   }
 
   @Get(':restaurantId/dishes')
   @UseGuards(JwtAuthGuard) // endpoint client
-  @RequirePermission('plats', 'read')
+  @RequirePermission(Modules.PLATS, Action.READ)
   async getAllDishesByRestaurant(@Param('restaurantId') restaurantId: string) {
     return this.dishRestaurantService.findByRestaurant(restaurantId);
   }
 
   @Get(':id/open')
   @UseGuards(JwtAuthGuard) // endpoint client
-  @RequirePermission('restaurants', 'read')
+  @RequirePermission(Modules.RESTAURANT, Action.CREATE)
   async isRestaurantOpen(
     @Param('id') id: string,
     @Query('date') date?: string,
