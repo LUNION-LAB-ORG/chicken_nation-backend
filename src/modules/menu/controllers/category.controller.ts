@@ -23,8 +23,10 @@ import { GenerateConfigService } from 'src/common/services/generate-config.servi
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Request } from 'express';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
-import { PermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
+import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
+import { Modules } from 'src/constant/enum/module-enum';
+import { Action } from 'src/constant/enum/action.enum';
 
 @ApiTags('Categories')
 @ApiBearerAuth()
@@ -33,10 +35,10 @@ export class CategoryController {
   constructor(private readonly categoryService: CategoryService) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
-  @RequirePermission('categories', 'create')
+  @RequirePermission(Modules.CATEGORIES, Action.CREATE)
   @UseInterceptors(
     FileInterceptor('image', GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories')),
   )
@@ -59,7 +61,7 @@ export class CategoryController {
   }
 
   @Get()
-  @UseGuards(PermissionsGuard)
+  @UseGuards(UserPermissionsGuard)
   @RequirePermission('categories', 'read')
   @ApiOperation({ summary: 'Récupération de toutes les catégories' })
   findAll() {
@@ -67,7 +69,7 @@ export class CategoryController {
   }
 
   @Get(':id')
-  @UseGuards(PermissionsGuard)
+  @UseGuards(UserPermissionsGuard)
   @RequirePermission('categories', 'read')
   @ApiOperation({ summary: "Récupération d'une catégorie par son id" })
   findOne(@Param('id') id: string) {
@@ -75,7 +77,7 @@ export class CategoryController {
   }
 
   @Patch(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @RequirePermission('categories', 'update')
@@ -102,7 +104,7 @@ export class CategoryController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
   @UserTypes(UserType.BACKOFFICE)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @RequirePermission('categories', 'delete')

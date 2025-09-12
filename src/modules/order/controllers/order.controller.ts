@@ -9,7 +9,7 @@ import { Request, Response } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { ReceiptsService } from '../services/receipts.service';
-import { PermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
+import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
 
@@ -33,7 +33,7 @@ export class OrderController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CALL_CENTER, UserRole.COMPTABLE)
   @RequirePermission('commandes', 'read')
   @ApiOperation({ summary: 'Rechercher toutes les commandes' })
@@ -51,7 +51,7 @@ export class OrderController {
   }
 
   @Get('statistics')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.COMPTABLE)
   @RequirePermission('dashboard', 'read')
   @ApiOperation({ summary: 'Statistiques des commandes' })
@@ -60,7 +60,7 @@ export class OrderController {
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CALL_CENTER, UserRole.COMPTABLE)
   @RequirePermission('commandes', 'read')
   findOne(@Param('id') id: string) {
@@ -68,7 +68,7 @@ export class OrderController {
   }
 
   @Patch(':id')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CAISSIER, UserRole.CALL_CENTER)
   @RequirePermission('commandes', 'update')
   @ApiBody({ type: UpdateOrderDto })
@@ -77,7 +77,7 @@ export class OrderController {
   }
 
   @Patch(':id/status')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CAISSIER, UserRole.CALL_CENTER)
   @RequirePermission('commandes', 'update')
   @ApiBody({
@@ -95,7 +95,7 @@ export class OrderController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN)
   @RequirePermission('commandes', 'delete')
   @HttpCode(HttpStatus.OK)
@@ -104,7 +104,7 @@ export class OrderController {
   }
 
   @Get(':id/pdf')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   @RequirePermission('commandes', 'read')
   async getReceiptPdf(@Param('id') id: string, @Res() res: Response) {

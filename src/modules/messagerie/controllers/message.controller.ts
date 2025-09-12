@@ -15,7 +15,7 @@ import { CreateMessageDto } from '../dto/createMessageDto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
 import { UserRole } from '@prisma/client';
-import { PermissionsGuard } from 'src/common/guards/user-module-permissions-guard';
+import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
 
@@ -25,7 +25,7 @@ export class MessageController {
 
   // --- Staff (admin, call_center) : lecture des messages ---
   @Get()
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
   @RequirePermission('messages', 'read')
   async getMessages(
@@ -49,7 +49,7 @@ export class MessageController {
 
   // --- Staff (admin seulement) : création de messages ---
   @Post()
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN)
   @RequirePermission('messages', 'create')
   async createMessage(
