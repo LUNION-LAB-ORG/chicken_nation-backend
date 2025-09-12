@@ -1,4 +1,4 @@
-import { permissionsByRole, RolePermissions } from 'src/constant/permissionsByRole';
+import { permissionsByRole, RolePermissions } from 'src/common/constantes/permissionsByRole';
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Modules } from 'src/constant/enum/module-enum';
