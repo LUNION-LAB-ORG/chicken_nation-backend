@@ -1,6 +1,5 @@
-import { TicketCategory } from './../../../../node_modules/.pnpm/@prisma+client@6.6.0_prisma_3eaf618dc6bf961e0a7b46e938f54554/node_modules/.prisma/client/index.d';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { TicketPriority, TicketStatus } from '@prisma/client';
+import { TicketPriority, TicketStatus, TicketCategory } from '@prisma/client';
 import {
     IsEnum,
     IsNotEmpty,
