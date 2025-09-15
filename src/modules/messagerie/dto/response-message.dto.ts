@@ -1,12 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsOptional } from 'class-validator';
-import { object } from 'twilio/lib/base/serialize';
 
 export class ResponseMessageDto {
   @ApiProperty()
   id: string;
 
-  @ApiProperty({type:[Object]})
+  @ApiProperty({ type: [Object] })
   conversation: {
     id: string;
     restaurantId: string;
@@ -43,4 +42,11 @@ export class ResponseMessageDto {
     last_name?: string | null;
     image?: string | null;
   } | null;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  meta?: {
+    imageUrl?: string | null;
+    orderId?: string | null;
+  };
 }

@@ -9,7 +9,6 @@ export class StatisticsController {
   constructor(private readonly statisticsService: StatisticsService) {}
 
   @UseGuards(JwtAuthGuard)
-  @UseGuards(JwtAuthGuard)
   @Get('dashboard')
   async getDashboardStats(@Query() query: GetStatsQueryDto): Promise<DashboardViewModel> {
     return this.statisticsService.getDashboardStats(query);

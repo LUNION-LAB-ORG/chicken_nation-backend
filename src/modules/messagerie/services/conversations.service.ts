@@ -179,24 +179,19 @@ export class ConversationsService {
         );
       }
       // Vérifier que le client à deja commandé dans ce restaurant
-      // const hasOrdered = await this.prisma.order.findFirst({
-      //   where: {
-      //     customer_id: customer_to_contact_id,
-      //     restaurant_id: restaurantId,
-      //   },
-      // });
-      //
-      // // TODO: temporaire, à enlever plus tard
-      // console.log(
-      //   "Vérification des commandes du client dans le restaurant (temporaire, à enlever plus tard)",
-      //   { hasOrdered },
-      // );
-      // if (!hasOrdered) {
-      //   throw new HttpException(
-      //     "Le client à contacter n'a jamais commandé dans ce restaurant",
-      //     HttpStatus.BAD_REQUEST,
-      //   );
-      // }
+      const hasOrdered = await this.prisma.order.findFirst({
+        where: {
+          customer_id: customer_to_contact_id,
+          restaurant_id: restaurantId,
+        },
+      });
+      
+      if (!hasOrdered) {
+        throw new HttpException(
+          "Le client à contacter n'a jamais commandé dans ce restaurant",
+          HttpStatus.BAD_REQUEST,
+        );
+      }
     }
 
     if (restaurantId) {
