@@ -29,7 +29,7 @@ export class LoyaltyEmailTemplates {
             case LoyaltyLevel.PREMIUM:
                 return "des réductions exclusives, des accès anticipés à des promotions, et des surprises personnalisées. Vous êtes sur la bonne voie !";
             case LoyaltyLevel.GOLD:
-                return "un service client prioritaire, des invitations à des événements spéciaux, des remises VIP et bien plus encore ! Vous êtes notre client le plus précieux !";
+                return "un services client prioritaire, des invitations à des événements spéciaux, des remises VIP et bien plus encore ! Vous êtes notre client le plus précieux !";
             default:
                 return "des avantages exceptionnels. Continuez votre aventure pour découvrir toutes les récompenses !";
         }

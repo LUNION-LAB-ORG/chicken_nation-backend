@@ -31,7 +31,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private prisma: PrismaService,
     private jwtService: JsonWebTokenService,
-  ) {}
+  ) { }
 
   async handleConnection(client: Socket) {
     try {
@@ -82,6 +82,20 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Supprimer les typing indicators
       this.cleanupUserTypingOnDisconnect(user.id);
     }
+  }
+
+  /**
+   * Vérifie si un utilisateur est en ligne (par son id)
+   * @param userId ID de l'utilisateur
+   * @returns true si l'utilisateur est en ligne, false sinon
+   */
+  isUserOnline(userId: string): boolean {
+    for (const user of this.connectedUsers.values()) {
+      if (user.id === userId) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private async identifyUser(

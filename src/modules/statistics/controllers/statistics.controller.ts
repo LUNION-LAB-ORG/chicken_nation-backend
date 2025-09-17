@@ -13,6 +13,7 @@ import { Action } from 'src/common/enum/action.enum';
 export class StatisticsController {
   constructor(private readonly statisticsService: StatisticsService) {}
 
+  @UseGuards(JwtAuthGuard)
   @Get('dashboard')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.DASHBOARD, Action.READ)
