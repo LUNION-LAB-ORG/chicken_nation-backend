@@ -16,6 +16,7 @@ import { OrderEmailTemplates } from './templates/order-email.template';
 import { OrderNotificationsTemplate } from './templates/order-notifications.template';
 import { ReceiptsService } from './services/receipts.service';
 import { TurboModule } from 'src/turbo/turbo.module';
+import { TurboListenerService } from './listeners/turbo.listener.service';
 
 @Module({
   imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule, TurboModule],
@@ -31,6 +32,7 @@ import { TurboModule } from 'src/turbo/turbo.module';
     OrderEmailTemplates,
     OrderNotificationsTemplate,
     ReceiptsService,
+    TurboListenerService
   ],
 })
 export class OrderModule { }
