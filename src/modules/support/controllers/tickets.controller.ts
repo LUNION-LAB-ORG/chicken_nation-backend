@@ -6,6 +6,7 @@ import { QueryTicketsDto } from '../dtos/query-tickets.dto';
 import { TicketService } from '../services/ticket.service';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { UpdateTicketDto } from '../dtos/update-ticket.dto';
+import { assignTicketDto } from '../dtos/assign-ticket.dto';
 
 @Controller('tickets')
 export class TicketsController {
@@ -48,8 +49,8 @@ export class TicketsController {
   }
 
   @UseGuards(JwtAuthGuard) @Post(':id/assign')
-  async assignTicket(@Param('id') id: string, @Body('assigneeId') assigneeId: string) {
-    return await this.assignmentService.assignTicketToAgent(id, assigneeId);
+  async assignTicket(@Param('id') id: string, @Body() assignTicketDto: assignTicketDto) {
+    return await this.assignmentService.assignTicketToAgent(id, assignTicketDto.assigneeId);
   }
 
   @UseGuards(JwtAuthGuard) @Post(':id/close')

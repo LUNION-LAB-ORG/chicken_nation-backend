@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import { GenerateDataService } from "./generate-data.service";
@@ -7,7 +7,6 @@ import * as fs from 'fs';
 
 @Injectable()
 export class GenerateConfigService {
-
     static generateConfigSingleImageUpload(destination: string, name?: string) {
         const imageConfig = {
             storage: diskStorage({
@@ -115,7 +114,6 @@ export class GenerateConfigService {
                 if (deleteOriginal) {
                     fs.unlinkSync(path);
                     finalPath = outputDir ? join(outputDir, finalFilename) : path;
-                    console.log(`Renommage de ${tempOutputPath} en ${finalPath}`);
 
                     fs.renameSync(tempOutputPath, finalPath);
                 } else {

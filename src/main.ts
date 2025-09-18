@@ -9,13 +9,16 @@ import { PrismaExceptionFilter } from 'src/database/filters/prisma-exception.fil
 import { AppModule } from './app.module';
 
 async function bootstrap() {
+  const isProduction = process.env.NODE_ENV === 'production';
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: new ConsoleLogger({
       timestamp: true,
-      logLevels: ['error', 'warn', 'debug', 'verbose', 'log'],
-      json: true,
+      logLevels: isProduction
+        ? ['error', 'warn', 'log']
+        : ['error', 'warn', 'debug', 'verbose', 'log'],
+      json: isProduction,
       prefix: "chicken_nation_backend",
-      colors: true
+      colors: !isProduction
     }),
   });
 

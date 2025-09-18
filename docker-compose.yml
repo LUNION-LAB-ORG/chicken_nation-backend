@@ -1,6 +1,27 @@
 version: '3.8'
 
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chicken_nation_backend
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/chicken_nation
+      - PORT=8081
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    ports:
+      - "8082:8081"
+    depends_on:
+      - database
+      - redis
+    networks:
+      - chicken_nation_network
+    # restart: unless-stopped
+
   database:
     image: postgres:15-alpine
     container_name: chicken_nation_db

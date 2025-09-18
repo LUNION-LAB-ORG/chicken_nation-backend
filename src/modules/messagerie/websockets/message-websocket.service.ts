@@ -1,5 +1,5 @@
 import { AppGateway } from '../../../socket-io/gateways/app.gateway';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ResponseMessageDto } from '../dto/response-message.dto';
 import { Conversation, Prisma } from '@prisma/client';
 
@@ -11,6 +11,7 @@ type ConversationGetPayload = Prisma.ConversationGetPayload<{
 
 @Injectable()
 export class MessageWebSocketService {
+  private readonly logger = new Logger(MessageWebSocketService.name);
   constructor(private appGateway: AppGateway) { }
 
   emitNewMessage(
@@ -60,7 +61,7 @@ export class MessageWebSocketService {
         message,
       );
 
-    console.log('Emitted new message to users and customer:', {
+    this.logger.log('Emitted new message to users and customer:', {
       usersId,
       conversation,
       message,

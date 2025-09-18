@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Logger,
   Param,
   Post,
   Query,
@@ -26,7 +27,8 @@ import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard'
 @ApiBearerAuth()
 @Controller('conversations')
 export class ConversationsController {
-  constructor(private readonly conversationsService: ConversationsService) {}
+  private readonly logger = new Logger(ConversationsController.name);
+  constructor(private readonly conversationsService: ConversationsService) { }
 
   @ApiOperation({
     summary: 'Rechercher toutes les commandes avec options de filtrage',
@@ -67,7 +69,7 @@ export class ConversationsController {
     @Req() req: Request,
     @Body() createConversationDto: CreateConversationDto,
   ) {
-    console.log('create conversation', createConversationDto);
+    this.logger.log('Créer une conversation: ', createConversationDto);
     return await this.conversationsService.createConversationWithInitialMessage(
       req,
       createConversationDto,
@@ -81,7 +83,7 @@ export class ConversationsController {
     @Body() createConversationDto: CreateConversationDto,
   ) {
 
-    console.log('create conversation client', createConversationDto);
+    this.logger.log('Créer une conversation client dto: ', createConversationDto);
 
     return await this.conversationsService.createConversationWithInitialMessage(
       req,
