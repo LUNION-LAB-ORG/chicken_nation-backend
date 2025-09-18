@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { UpdateOrderDto } from '../dto/update-order.dto';
-import { Order} from '@prisma/client';
+import { Order } from '@prisma/client';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
+import { OrderChannels } from '../enums/order-channels';
 
 
 @Injectable()
@@ -17,7 +18,7 @@ export class OrderEvent {
    */
   async orderCreatedEvent(payload: OrderCreatedEvent) {
     this.eventEmitter.emit(
-      'order.created',
+      OrderChannels.ORDER_CREATED,
       payload
     );
   }
@@ -27,7 +28,7 @@ export class OrderEvent {
    */
   async orderStatusUpdatedEvent(order: OrderCreatedEvent) {
     this.eventEmitter.emit(
-      'order.statusUpdated',
+      OrderChannels.ORDER_STATUS_UPDATED,
       order
     );
   }
@@ -37,7 +38,7 @@ export class OrderEvent {
    */
   async orderUpdatedEvent(order: Order, updateOrderDto: UpdateOrderDto) {
     this.eventEmitter.emit(
-      'order.updated',
+      OrderChannels.ORDER_UPDATED,
       order
     );
 
@@ -49,7 +50,7 @@ export class OrderEvent {
 
   async orderDeletedEvent(order: Order) {
     this.eventEmitter.emit(
-      'order.deleted',
+      OrderChannels.ORDER_DELETED,
       order
     );
 

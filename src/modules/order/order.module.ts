@@ -8,7 +8,7 @@ import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
 import { OrderListenerService } from './listeners/order.listener.service';
 import { OrderEvent } from './events/order.event';
-import { OrderTask } from './tasks/order.task';
+// import { OrderTask } from './tasks/order.task';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { OrderWebSocketService } from './websockets/order-websocket.service';
 import { RestaurantModule } from '../restaurant/restaurant.module';
@@ -27,7 +27,7 @@ import { TurboListenerService } from './listeners/turbo.listener.service';
     OrderHelper,
     OrderEvent,
     OrderListenerService,
-    OrderTask,
+    // OrderTask,
     OrderWebSocketService,
     OrderEmailTemplates,
     OrderNotificationsTemplate,
