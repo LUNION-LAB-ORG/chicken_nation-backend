@@ -3,7 +3,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { Address, DeliveryService, OrderStatus } from "@prisma/client";
 import { LivraisonsByKm, TURBO_API, TURBO_API_KEY, mappingMethodPayment } from "../constantes/turbo.constante";
 import { IFraisLivraison, IFraisLivraisonResponsePaginate } from "../dto/frais-livraison.response";
-import { CommandeResponse } from "../interfaces/turbo.interfaces";
+import { CommandeResponse, PaiementMode } from "../interfaces/turbo.interfaces";
 
 @Injectable()
 export class TurboService {
@@ -45,8 +45,8 @@ export class TurboService {
             "longitude": adresse.longitude,
           },
           "zoneId": order.zone_id,
-          "modePaiement": mappingMethodPayment[order.paiements[0].mode],
-          "prix": order.amount,
+          "modePaiement": order.paiements.length ? mappingMethodPayment[order.paiements[0].mode] : PaiementMode.ESPECE,
+          "prix": order.amount - order.delivery_fee,
           "livraisonPaye": order.paied,
         }]
       }
@@ -62,8 +62,6 @@ export class TurboService {
         });
 
         const data = await response.json();
-        console.log("🚀 ~ file: turbo.service.ts:72 ~ TurboService ~ creerCourse ~ formData:", formData)
-        console.log({data});
         if (typeof data === "object" && "statut" in data) {
           throw new Error(data?.message ?? "Une erreur est survenue");
         }

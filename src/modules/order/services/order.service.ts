@@ -220,7 +220,7 @@ export class OrderService {
         restaurant: true,
       },
     });
-
+    
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderStatusUpdatedEvent({
       order: updatedOrder
@@ -636,16 +636,16 @@ export class OrderService {
   }
 
 
-  async updateStatuts(id: string) {
-    const order = await this.findById(id);
+  // async updateStatuts(id: string) {
+  //   const order = await this.findById(id);
 
-    if (!order) {
-      throw new NotFoundException('Commande non trouvée');
-    }
+  //   if (!order) {
+  //     throw new NotFoundException('Commande non trouvée');
+  //   }
 
-    // Émettre l'événement de mise à jour de statut
-    this.orderWebSocketService.emitStatusUpdate(order, OrderStatus.ACCEPTED);
-  }
+  //   // Émettre l'événement de mise à jour de statut
+  //   this.orderWebSocketService.emitStatusUpdate(order, OrderStatus.ACCEPTED);
+  // }
 
 
   async obtenirFraisLivraison(body: FraisLivraisonDto): Promise<{
