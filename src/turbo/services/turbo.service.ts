@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Address, OrderStatus } from "@prisma/client";
-import { TURBO_API, mappingMethodPayment } from "../constantes/turbo.constante";
+import { LivraisonsByKm, TURBO_API, TURBO_API_KEY, mappingMethodPayment } from "../constantes/turbo.constante";
 import { IFraisLivraison, IFraisLivraisonResponsePaginate } from "../dto/frais-livraison.response";
 
 @Injectable()
@@ -28,7 +28,8 @@ export class TurboService {
       // TODO : Récupération de la zone sinon annuler la création de la course 
       // et notification du système à chicken_nation que la course n'a pas été prise en compte par Turbo et qu'elle doit être 
       // traitée manuellement
-      const zone = await this.obtenirFraisLivraison(apikey, adresse.latitude, adresse.longitude);
+      const zone = await this.obtenirFraisLivraison({ apikey, latitude: adresse.latitude, longitude: adresse.longitude });
+
       if (!zone || zone.length === 0) {
         throw new Error("Zone non trouvée");
       }
@@ -68,7 +69,8 @@ export class TurboService {
     }
   }
 
-  async obtenirFraisLivraison(apikey: string, latitude: number, longitude: number): Promise<IFraisLivraison[]> {
+  async obtenirFraisLivraison({ apikey, latitude, longitude }: { apikey: string, latitude: number, longitude: number }): Promise<IFraisLivraison[]> {
+    apikey = apikey || TURBO_API_KEY;
     try {
       const response = await fetch(`${TURBO_API.FRAIS_LIVRAISON}?latitude=${latitude}&longitude=${longitude}`, {
         method: 'GET',
@@ -77,16 +79,20 @@ export class TurboService {
           'X-API-KEY': apikey,
         },
       });
-      const data = await response.json() as IFraisLivraison[];
-      return data;
+      const data = await response.json();
+
+      if (typeof data === "object" && "statut" in data) {
+        throw new Error(data?.message ?? "Une erreur est survenue");
+      }
+
+      return data as IFraisLivraison[];
     } catch (error) {
-      console.log(error);
       return [];
     }
   }
 
   async obtenirFraisLivraisonParRestaurant(apikey: string): Promise<IFraisLivraisonResponsePaginate | null> {
-
+    apikey = apikey || TURBO_API_KEY;
     try {
       const response = await fetch(`${TURBO_API.LISTE_FRAIS}`, {
         method: 'GET',
@@ -95,8 +101,13 @@ export class TurboService {
           'X-API-KEY': apikey,
         },
       });
-      const data = await response.json() as IFraisLivraisonResponsePaginate;
-      return data;
+
+      const data = await response.json();
+      if (typeof data === "object" && "statut" in data) {
+        throw new Error(data?.message ?? "Une erreur est survenue");
+      }
+
+      return data as IFraisLivraisonResponsePaginate;
     } catch (error) {
       console.log(error);
       return null;
@@ -110,4 +121,19 @@ export class TurboService {
     }
     return JSON.parse(address) as Address;
   }
+
+  /**
+   * Calcule le prix de la livraison en fonction de la distance en km.
+   * @param distanceKm La distance de la livraison en kilomètres.
+   * @returns Le prix de la livraison ou null si aucune correspondance n'est trouvée.
+   */
+  getPrixLivraison(distanceKm: number): number | null {
+    for (const palier of LivraisonsByKm) {
+      if (distanceKm <= palier.maxKm) {
+        return palier.price;
+      }
+    }
+    return null;
+  }
+
 }

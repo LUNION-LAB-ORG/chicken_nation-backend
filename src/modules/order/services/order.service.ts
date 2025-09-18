@@ -38,7 +38,7 @@ export class OrderService {
     const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: customer_id ?? customer.id });
 
     // Récupérer le restaurant le plus proche
-    const restaurant = await this.orderHelper.getClosestRestaurant(createOrderDto);
+    const restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: restaurant_id, address: orderData.address });
 
     // Récupérer les plats et vérifier leur disponibilité
     const dishesWithDetails = await this.orderHelper.getDishesWithDetails(items.map(item => item.dish_id));
@@ -646,9 +646,39 @@ export class OrderService {
 
 
   async obtenirFraisLivraison(body: FraisLivraisonDto) {
+    // Récupérer le restaurant le plus proche
+    const restaurant = await this.orderHelper.getNearestRestaurant(JSON.stringify({ latitude: body.lat, longitude: body.long }));
+    // TODO : restaurant.apiKey
+    const frais = await this.turboService.obtenirFraisLivraison({
+      apikey: "",
+      latitude: body.lat,
+      longitude: body.long
+    });
+
+    if (frais.length === 0) {
+
+      // Calculer la distance en km entre le restaurant et le client
+      const distance = this.generateDataService.haversineDistance(
+        restaurant.latitude ?? 0,
+        restaurant.longitude ?? 0,
+        body.lat,
+        body.long,
+      );
+
+      // Calculer le prix de la livraison
+      const price = this.turboService.getPrixLivraison(distance);
+
+      return {
+        montant: price,
+        zone: "Frais de livraison",
+        distance: Math.round(distance),
+      };
+    }
+
     return {
-      montant: 1000,
-      type: "Frais de livraison"
+      montant: frais[0].prix,
+      zone: frais[0].zone,
+      distance: frais[0].distanceFin,
     };
   }
 }

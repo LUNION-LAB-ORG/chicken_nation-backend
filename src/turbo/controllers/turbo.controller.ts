@@ -12,7 +12,7 @@ export class TurboController {
 
   @Post('obtenir-frais-livraison')
   async obtenirFraisLivraison(@Body() body: { apikey: string, latitude: number, longitude: number }) {
-    return this.turboService.obtenirFraisLivraison(body.apikey, body.latitude, body.longitude);
+    return this.turboService.obtenirFraisLivraison(body);
   }
 
   @Post('obtenir-frais-livraison-par-restaurant')
