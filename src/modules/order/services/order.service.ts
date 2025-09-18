@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { UpdateOrderDto } from '../dto/update-order.dto';
-import { OrderStatus, EntityStatus, Customer, Order, Prisma, OrderType } from '@prisma/client';
+import { OrderStatus, EntityStatus, Customer, Order, Prisma, OrderType, DeliveryService } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Request } from 'express';
 import { QueryOrderDto } from '../dto/query-order.dto';
@@ -65,7 +65,8 @@ export class OrderService {
     const applicable = promotion ? promotion.applicable : false;
 
     // Calculer les frais de livraison selon la distance
-    const deliveryFee = orderData.type == OrderType.DELIVERY ? (await this.obtenirFraisLivraison({ lat: address.latitude, long: address.longitude })).montant : 0;
+    const delivery = await this.obtenirFraisLivraison({ lat: address.latitude, long: address.longitude });
+    const deliveryFee = orderData.type == OrderType.DELIVERY ? delivery.montant : 0;
 
     // Vérifier le paiement
     const payment = await this.orderHelper.checkPayment(createOrderDto);
@@ -111,6 +112,8 @@ export class OrderService {
           reference: orderNumber,
           ...(payment && { paiements: { connect: { id: payment.id } } }),
           delivery_fee: Number(deliveryFee),
+          delivery_service: delivery.service,
+          zone_id: delivery.zone_id,
           tax: Number(tax),
           discount: Number(discount),
           net_amount: Number(netAmount),
@@ -645,7 +648,13 @@ export class OrderService {
   }
 
 
-  async obtenirFraisLivraison(body: FraisLivraisonDto) {
+  async obtenirFraisLivraison(body: FraisLivraisonDto): Promise<{
+    montant: number;
+    zone: string;
+    distance: number;
+    service: DeliveryService;
+    zone_id: string | null;
+  }> {
     // Récupérer le restaurant le plus proche
     const restaurant = await this.orderHelper.getNearestRestaurant(JSON.stringify({ latitude: body.lat, longitude: body.long }));
 
@@ -673,6 +682,8 @@ export class OrderService {
         montant: price ?? 0,
         zone: "Frais de livraison",
         distance: Math.round(distance),
+        service: DeliveryService.FREE,
+        zone_id: null,
       };
     }
 
@@ -680,6 +691,8 @@ export class OrderService {
       montant: frais[0].prix,
       zone: frais[0].zone,
       distance: frais[0].distanceFin,
+      service: DeliveryService.TURBO,
+      zone_id: frais[0].id,
     };
   }
 }
