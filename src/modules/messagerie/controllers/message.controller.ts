@@ -17,9 +17,13 @@ import { Request } from 'express';
 import { CreateMessageDto } from '../dto/createMessageDto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { Customer, User, UserRole } from '@prisma/client';
+import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
+import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { RequirePermission } from 'src/common/decorators/user-require-permission';
+import { Modules } from 'src/common/enum/module-enum';
+import { Action } from 'src/common/enum/action.enum';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
-import { Customer, User } from '@prisma/client';
 
 @Controller('conversations/:conversationId/messages')
 export class MessageController {
@@ -27,8 +31,11 @@ export class MessageController {
   private readonly isDev = process.env.NODE_ENV !== 'production';
   constructor(private readonly messageService: MessageService) { }
 
-  @UseGuards(JwtAuthGuard)
+  // --- Staff (admin, call_center) : lecture des messages ---
   @Get()
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
+  @RequirePermission(Modules.MESSAGES, Action.READ)
   async getMessages(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,
@@ -37,8 +44,9 @@ export class MessageController {
     return await this.messageService.getMessages(req, conversationId, filter);
   }
 
-  @UseGuards(JwtCustomerAuthGuard)
+  // --- Client : lecture de ses propres messages ---
   @Get('/client')
+  @UseGuards(JwtCustomerAuthGuard)
   async getMessagesClient(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,
@@ -47,8 +55,11 @@ export class MessageController {
     return await this.messageService.getMessages(req, conversationId, filter);
   }
 
-  @UseGuards(JwtAuthGuard) @Post()
-  @UseInterceptors(FileInterceptor('imageUrl', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/messagerie') }))
+  // --- Staff (admin seulement) : création de messages ---
+  @Post()
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @UserRoles(UserRole.ADMIN)
+  @RequirePermission(Modules.MESSAGES ,Action.CREATE)
   async createMessage(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,
@@ -58,8 +69,9 @@ export class MessageController {
     return this.handleCreateMessage(req, conversationId, createMessageDto, image);
   }
 
-  @UseGuards(JwtCustomerAuthGuard) @Post('/client')
-  @UseInterceptors(FileInterceptor('imageUrl', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/messagerie') }))
+  // --- Client : création de ses propres messages ---
+  @Post('/client')
+  @UseGuards(JwtCustomerAuthGuard)
   async createMessageClient(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,

@@ -1,0 +1,53 @@
+import { PaiementMode } from "@prisma/client";
+
+export const TURBO_API = {
+    CREATION_COURSE: 'https://backend-prod.turbodeliveryapp.com/api/restaurant/course-externe/commande',
+    FRAIS_LIVRAISON: 'https://backend-prod.turbodeliveryapp.com/api/restaurant/course-externe/recupererLesFraisDuRestaurant',
+    LISTE_FRAIS: 'https://backend-prod.turbodeliveryapp.com/api/erp/frais-livraison/restaurant/listeFrais?page=0&size=10',
+}
+
+export const TURBO_API_KEY = 'jq3JVrMe10Isbdo2PR0OvdFUKRIFI61S';
+
+
+export const mappingMethodPayment = {
+    [PaiementMode.MOBILE_MONEY]: "MOBILE_MONEY",
+    [PaiementMode.WALLET]: "WAVE",
+    [PaiementMode.CREDIT_CARD]: "CARD",
+    [PaiementMode.CASH]: "ESPECE",
+}
+
+export const LivraisonsByKm = [
+    { maxKm: 5, price: 800 },
+    { maxKm: 8, price: 1000 },
+    { maxKm: 10, price: 1200 },
+    { maxKm: 12, price: 1500 },
+    { maxKm: 15, price: 1800 },
+    { maxKm: 20, price: 2000 },
+    { maxKm: 25, price: 2500 },
+    { maxKm: 30, price: 3000 },
+    { maxKm: 35, price: 3500 },
+    { maxKm: 40, price: 4000 },
+    { maxKm: 45, price: 4500 },
+    { maxKm: 50, price: 5000 },
+    { maxKm: 55, price: 5500 },
+    { maxKm: 60, price: 6000 },
+    { maxKm: 65, price: 6500 },
+    { maxKm: 70, price: 7000 },
+    { maxKm: 75, price: 7500 },
+    { maxKm: 80, price: 8000 },
+    { maxKm: 85, price: 8500 },
+    { maxKm: 90, price: 9000 },
+    { maxKm: 95, price: 9500 },
+    { maxKm: 100, price: 10000 },
+    { maxKm: 110, price: 11000 },
+    { maxKm: 120, price: 12000 },
+    { maxKm: 130, price: 13000 },
+    { maxKm: 140, price: 14000 },
+    { maxKm: 150, price: 15000 },
+    { maxKm: 160, price: 16000 },
+    { maxKm: 170, price: 17000 },
+    { maxKm: 180, price: 18000 },
+    { maxKm: 190, price: 19000 },
+    { maxKm: 200, price: 20000 },
+    { maxKm: Infinity, price: 20000 },
+];

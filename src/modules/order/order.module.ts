@@ -15,9 +15,10 @@ import { RestaurantModule } from '../restaurant/restaurant.module';
 import { OrderEmailTemplates } from './templates/order-email.template';
 import { OrderNotificationsTemplate } from './templates/order-notifications.template';
 import { ReceiptsService } from './services/receipts.service';
+import { TurboModule } from 'src/turbo/turbo.module';
 
 @Module({
-  imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule],
+  imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule, TurboModule],
   controllers: [OrderController, OrderItemController],
   providers: [
     OrderService,

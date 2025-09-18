@@ -62,38 +62,9 @@ export class OrderHelper {
     }
 
     // Récupérer le restaurant le plus proche
-    async getClosestRestaurant(orderData: CreateOrderDto) {
-        //  Pour la réservation de table ou à emporter, il faut impérativement fournir un restaurant
-        if (orderData.type === OrderType.TABLE || orderData.type === OrderType.PICKUP) {
-
-            if (!orderData.restaurant_id) {
-                throw new BadRequestException('Aucun restaurant sélectionné');
-            }
-            const restaurant = await this.prisma.restaurant.findFirst({
-                where: {
-                    id: orderData.restaurant_id,
-                },
-                select: {
-                    id: true,
-                    name: true,
-                    latitude: true,
-                    longitude: true,
-                    schedule: true,
-                }
-            });
-            if (!restaurant) {
-                throw new BadRequestException('Restaurant introuvable');
-            }
-
-            const schedule = JSON.parse(restaurant.schedule?.toString() ?? "[]");
-            if (!this.restaurantService.isRestaurantOpen(schedule)) {
-                throw new BadRequestException('Le restaurant est fermé');
-            }
-            return restaurant;
-        }
-
+    async getNearestRestaurant(address: string) {
         // 1. Récupération de l'adresse
-        const address = await this.validateAddress(orderData.address ?? "");
+        const addressData = await this.validateAddress(address ?? "");
 
         // 2. Récupération des restaurants actifs
         const restaurants = await this.prisma.restaurant.findMany({
@@ -116,14 +87,15 @@ export class OrderHelper {
         // 3. Calcul de la distance et sélection du plus proche
         const closest = restaurants.reduce((prev, curr) => {
             const prevDistance = this.generateDataService.haversineDistance(
-                address.latitude,
-                address.longitude,
+                addressData.latitude,
+                addressData.longitude,
                 prev.latitude ?? 0,
                 prev.longitude ?? 0,
             );
+
             const currDistance = this.generateDataService.haversineDistance(
-                address.latitude,
-                address.longitude,
+                addressData.latitude,
+                addressData.longitude,
                 curr.latitude ?? 0,
                 curr.longitude ?? 0,
             );
@@ -137,6 +109,48 @@ export class OrderHelper {
             throw new BadRequestException('Le restaurant est fermé');
         }
         return closest;
+    }
+
+    // Récupérer le restaurant le plus proche
+    async getClosestRestaurant({ restaurant_id, address }: { restaurant_id?: string, address?: string }) {
+
+        if (!restaurant_id && address) {
+            // Si l'adresse est fournie et que le restaurant_id n'est pas fourni, récupérer le restaurant le plus proche
+            return this.getNearestRestaurant(address);
+        }
+        else if (restaurant_id) {
+            // Si le restaurant_id est fourni, récupérer le restaurant correspondant
+            const restaurant = await this.prisma.restaurant.findFirst({
+                where: {
+                    id: restaurant_id,
+                    entity_status: EntityStatus.ACTIVE,
+                },
+                select: {
+                    id: true,
+                    name: true,
+                    latitude: true,
+                    longitude: true,
+                    schedule: true,
+                }
+            });
+
+            // Si le restaurant n'est pas trouvé, récupérer le restaurant le plus proche
+            if (!restaurant) {
+                return this.getNearestRestaurant(address ?? "");
+            }
+
+            // Vérifier si le restaurant est ouvert
+            const schedule = JSON.parse(restaurant.schedule?.toString() ?? "[]");
+            if (!this.restaurantService.isRestaurantOpen(schedule)) {
+                // Si le restaurant est fermé, récupérer le restaurant le plus proche
+                return this.getNearestRestaurant(address ?? "");
+            }
+            return restaurant;
+
+        } else {
+            // Si l'adresse n'est pas fournie et que le restaurant_id n'est pas fourni, récupérer le restaurant le plus proche
+            return this.getNearestRestaurant(address ?? "");
+        }
     }
 
     // Récupérer les détails des plats
