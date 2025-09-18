@@ -11,6 +11,7 @@ import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { OrderEvent } from '../events/order.event';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
+import { TurboService } from 'src/turbo/services/turbo.service';
 
 @Injectable()
 export class OrderService {
@@ -21,6 +22,7 @@ export class OrderService {
     private orderHelper: OrderHelper,
     private orderEvent: OrderEvent,
     private readonly orderWebSocketService: OrderWebSocketService,
+    private readonly turboService: TurboService
   ) { }
 
   /**

@@ -62,7 +62,7 @@ export class OrderHelper {
     }
 
     // Récupérer le restaurant le plus proche
-    async getClosestRestaurant(orderData: CreateOrderDto) {
+    async getClosestRestaurant(orderData: { type: OrderType, restaurant_id?: string, address?: string }) {
         //  Pour la réservation de table ou à emporter, il faut impérativement fournir un restaurant
         if (orderData.type === OrderType.TABLE || orderData.type === OrderType.PICKUP) {
 

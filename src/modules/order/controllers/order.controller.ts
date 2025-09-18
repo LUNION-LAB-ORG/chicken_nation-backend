@@ -66,8 +66,8 @@ export class OrderController {
   @ApiOperation({ summary: 'Obtenir le prix des frais de livraison' })
   @ApiResponse({ status: 200, description: 'Frais de livraison obtenus avec succès' })
   @ApiBody({ type: FraisLivraisonDto })
-  async obtenirFraisLivraison(@Body() body: FraisLivraisonDto) {
-    return this.orderService.obtenirFraisLivraison(body);
+  async obtenirFraisLivraison(@Query() params: FraisLivraisonDto) {
+    return this.orderService.obtenirFraisLivraison(params);
   }
 
   @Get(':id')
