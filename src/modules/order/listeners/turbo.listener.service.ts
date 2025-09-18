@@ -13,7 +13,7 @@ export class TurboListenerService {
 
     @OnEvent(OrderChannels.ORDER_STATUS_UPDATED)
     async orderStatutReady(payload: OrderCreatedEvent) {
-
+        console.log("🚀 ~ file: turbo.listener.service.ts:14 ~ TurboListenerService ~ orderStatutReady ~ payload:", payload)
         if (payload.order && payload.order.status === OrderStatus.READY && payload.order.delivery_service === DeliveryService.TURBO) {
             this.TurboService.creerCourse(payload.order.id, "");
         }

@@ -62,7 +62,8 @@ export class TurboService {
         });
 
         const data = await response.json();
-
+        console.log("🚀 ~ file: turbo.service.ts:72 ~ TurboService ~ creerCourse ~ formData:", formData)
+        console.log({data});
         if (typeof data === "object" && "statut" in data) {
           throw new Error(data?.message ?? "Une erreur est survenue");
         }
