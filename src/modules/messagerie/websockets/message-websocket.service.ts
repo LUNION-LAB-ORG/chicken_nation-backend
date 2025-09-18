@@ -61,7 +61,7 @@ export class MessageWebSocketService {
         message,
       );
 
-    this.logger.log('Emitted new message to users and customer:', {
+    this.logger.debug('Emitted new message to users and customer:', {
       usersId,
       conversation,
       message,

@@ -415,7 +415,7 @@ export class ConversationsService {
       this.prisma.conversation.count({ where: whereClause }),
     ]);
 
-    this.logger.log('Liste des conversations client: ', conversations, total);
+    this.logger.debug('Liste des conversations client: ', conversations, total);
 
     const mappedConversations = await Promise.all(
       conversations.map(async (conversation) => {
@@ -428,7 +428,7 @@ export class ConversationsService {
       }),
     );
 
-    this.logger.log('Liste des conversations client mapped: ', mappedConversations);
+    this.logger.debug('Liste des conversations client mapped: ', mappedConversations);
 
     return {
       data: mappedConversations,
@@ -488,7 +488,7 @@ export class ConversationsService {
       ...rest,
     };
 
-    this.logger.log('Where clause pour user conversations: ', whereClause);
+    this.logger.debug('Where clause pour user conversations: ', whereClause);
 
     const [conversations, total] = await Promise.all([
       this.prisma.conversation.findMany({
@@ -500,7 +500,7 @@ export class ConversationsService {
       this.prisma.conversation.count({ where: whereClause }),
     ]);
 
-    this.logger.log('Liste des conversations user: ', conversations, total);
+    this.logger.debug('Liste des conversations user: ', conversations, total);
 
     const mappedConversations = await Promise.all(
       conversations.map(async (conversation) => {
@@ -513,7 +513,7 @@ export class ConversationsService {
       }),
     );
 
-    this.logger.log('Liste des conversations user mapped: ', mappedConversations);
+    this.logger.debug('Liste des conversations user mapped: ', mappedConversations);
 
     return {
       data: mappedConversations,
