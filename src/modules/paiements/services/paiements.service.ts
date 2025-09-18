@@ -24,13 +24,14 @@ export class PaiementsService {
     private readonly prisma: PrismaService,
     private readonly kkiapay: KkiapayService,
     private readonly paiementEvent: PaiementEvent,
-  ) {}
+  ) { }
 
   // Payer avec Kkiapay
   async payWithKkiapay(
     req: Request,
     createPaiementKkiapayDto: CreatePaiementKkiapayDto,
   ) {
+
     const transaction = await this.kkiapay.verifyTransaction(
       createPaiementKkiapayDto.transactionId,
     );
@@ -87,7 +88,7 @@ export class PaiementsService {
         );
         return (
           client?.email?.trim()?.toLowerCase() ===
-            customer.email?.trim()?.toLowerCase() ||
+          customer.email?.trim()?.toLowerCase() ||
           client?.phone
             ?.trim()
             ?.toLowerCase()
@@ -150,6 +151,7 @@ export class PaiementsService {
 
   // Création de paiement
   async create(createPaiementDto: CreatePaiementDto) {
+    console.log("createPaiementDto", createPaiementDto);
     // Vérification de la commande
     const order = await this.verifyOrder(
       createPaiementDto.amount,
@@ -165,6 +167,11 @@ export class PaiementsService {
     // Traitement du statut du paiement
     const status = await this.verifyPaiementStatus(createPaiementDto.status);
 
+    console.log("createPaiementDto", createPaiementDto);
+    console.log("mode", mode, mode in PaiementMode);
+    console.log("status", status, status in PaiementStatus);
+    console.log("source", source);
+    console.log("============================================================");
     const paiement = await this.prisma.paiement.create({
       data: {
         ...createPaiementDto,
