@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { UpdateOrderDto } from '../dto/update-order.dto';
-import { OrderStatus, EntityStatus, Customer, Order, Prisma } from '@prisma/client';
+import { OrderStatus, EntityStatus, Customer, Order, Prisma, OrderType } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Request } from 'express';
 import { QueryOrderDto } from '../dto/query-order.dto';
@@ -65,7 +65,7 @@ export class OrderService {
     const applicable = promotion ? promotion.applicable : false;
 
     // Calculer les frais de livraison selon la distance
-    const deliveryFee = await this.orderHelper.calculateDeliveryFee(orderData.type, address);
+    const deliveryFee = orderData.type == OrderType.DELIVERY ? (await this.obtenirFraisLivraison({ lat: address.latitude, long: address.longitude })).montant : 0;
 
     // Vérifier le paiement
     const payment = await this.orderHelper.checkPayment(createOrderDto);
@@ -648,6 +648,7 @@ export class OrderService {
   async obtenirFraisLivraison(body: FraisLivraisonDto) {
     // Récupérer le restaurant le plus proche
     const restaurant = await this.orderHelper.getNearestRestaurant(JSON.stringify({ latitude: body.lat, longitude: body.long }));
+
     // TODO : restaurant.apiKey
     const frais = await this.turboService.obtenirFraisLivraison({
       apikey: "",
@@ -669,7 +670,7 @@ export class OrderService {
       const price = this.turboService.getPrixLivraison(distance);
 
       return {
-        montant: price,
+        montant: price ?? 0,
         zone: "Frais de livraison",
         distance: Math.round(distance),
       };
