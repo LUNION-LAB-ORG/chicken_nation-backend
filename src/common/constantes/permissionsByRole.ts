@@ -1,9 +1,9 @@
 import { UserRole } from '@prisma/client';
 import { Modules } from '../enum/module-enum';
- // chemin selon ton projet
+// chemin selon ton projet
 
 export interface RolePermissions {
- modules: Partial<Record<Modules, string[]>>;
+  modules: Partial<Record<Modules, string[]>>;
   exclusions?: Modules[];
 }
 

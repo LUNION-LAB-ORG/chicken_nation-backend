@@ -117,6 +117,7 @@ export class GenerateDataService {
      * @param lat2 - Latitude du second point
      * @param lon2 - Longitude du second point
      * @returns La distance entre les deux points en kilomètres
+     * 
      */
     haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
         const R = 6371 // Rayon de la Terre en kilomètres

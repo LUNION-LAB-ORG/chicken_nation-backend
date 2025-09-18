@@ -17,12 +17,13 @@ import { Request } from 'express';
 import { CreateMessageDto } from '../dto/createMessageDto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
-import { UserRole } from '@prisma/client';
+import { Customer, User, UserRole } from '@prisma/client';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
 import { Modules } from 'src/common/enum/module-enum';
 import { Action } from 'src/common/enum/action.enum';
+import { GenerateConfigService } from 'src/common/services/generate-config.service';
 
 @Controller('conversations/:conversationId/messages')
 export class MessageController {

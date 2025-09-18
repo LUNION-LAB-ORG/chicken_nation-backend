@@ -23,6 +23,7 @@ import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { MessagerieModule } from './modules/messagerie/messagerie.module';
 import { SupportModule } from './modules/support/support.module';
 import { BullModule } from '@nestjs/bullmq';
+import { TurboModule } from './turbo/turbo.module';
 @Module({
   imports: [
     JsonWebTokenModule,
@@ -65,6 +66,7 @@ import { BullModule } from '@nestjs/bullmq';
     StatisticsModule,
     MessagerieModule,
     SupportModule,
+    TurboModule,
   ],
 })
 

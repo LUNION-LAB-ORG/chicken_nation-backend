@@ -195,13 +195,14 @@ export class CustomerService {
 
   async remove(id: string) {
     // Vérifier si le client existe
-    await this.findOne(id);
+    const customer = await this.findOne(id);
 
     // Soft delete
     return this.prisma.customer.update({
       where: { id },
       data: {
         entity_status: EntityStatus.DELETED,
+        phone: customer.phone + "D"
       },
     });
   }

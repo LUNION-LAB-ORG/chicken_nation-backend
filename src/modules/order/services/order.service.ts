@@ -10,6 +10,7 @@ import { OrderHelper } from '../helpers/order.helper';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { OrderEvent } from '../events/order.event';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
+import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 
 @Injectable()
 export class OrderService {
@@ -639,5 +640,10 @@ export class OrderService {
 
     // Émettre l'événement de mise à jour de statut
     this.orderWebSocketService.emitStatusUpdate(order, OrderStatus.ACCEPTED);
+  }
+
+
+  async obtenirFraisLivraison(body: FraisLivraisonDto) {
+    return 1000;
   }
 }

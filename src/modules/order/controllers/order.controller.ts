@@ -4,7 +4,7 @@ import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
 import { QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
 import { OrderStatus, UserRole } from '@prisma/client';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiParam } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
@@ -14,6 +14,7 @@ import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
 import { Action } from 'src/common/enum/action.enum';
 import { Modules } from 'src/common/enum/module-enum';
+import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 
 @ApiTags('Commandes')
 @Controller('orders')
@@ -21,7 +22,7 @@ export class OrderController {
   constructor(
     private readonly orderService: OrderService,
     private readonly receiptsService: ReceiptsService,
-  ) {}
+  ) { }
 
   @Post()
   @UseGuards(JwtCustomerAuthGuard) // client peut créer ses propres commandes
@@ -52,13 +53,21 @@ export class OrderController {
     return this.orderService.findAllByCustomer(req, queryOrderDto);
   }
 
-  @Get('statistics')
+  @Get('/statistics')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.COMPTABLE)
   @RequirePermission(Modules.DASHBOARD, Action.READ)
   @ApiOperation({ summary: 'Statistiques des commandes' })
   getOrderStatistics(@Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.getOrderStatistics(queryOrderDto);
+  }
+
+  @Get('/frais-livraison')
+  @ApiOperation({ summary: 'Obtenir le prix des frais de livraison' })
+  @ApiResponse({ status: 200, description: 'Frais de livraison obtenus avec succès' })
+  @ApiBody({ type: FraisLivraisonDto })
+  async obtenirFraisLivraison(@Body() body: FraisLivraisonDto) {
+    return this.orderService.obtenirFraisLivraison(body);
   }
 
   @Get(':id')
