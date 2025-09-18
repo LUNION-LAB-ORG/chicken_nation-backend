@@ -193,11 +193,6 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.to(userType).emit(event, data);
   }
 
-  // Emettre dans un ticket
-  emitToTicket<T>(ticketId: string, event: string, data: T) {
-    this.server.to(`ticket_${ticketId}`).emit(event, data);
-  }
-
   // Broadcast à tous les connectés
   broadcast<T>(event: string, data: T) {
     this.server.emit(event, data);

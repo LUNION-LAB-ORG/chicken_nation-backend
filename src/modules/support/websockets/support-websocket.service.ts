@@ -11,7 +11,6 @@ export class SupportWebSocketService {
   emitNewTicket(ticket: ResponseTicketDto) {
     this.logger.log(`Emitting new ticket event ${ticket.id}`);
     this.appGateway.emitToBackoffice('new:ticket', ticket);
-    this.appGateway.emitToTicket(ticket.id, 'new:ticket', ticket);
 
     if (ticket.assignee?.id) {
       this.logger.log(`Emitting assigned ticket event ${ticket.id} to user ${ticket.assignee.id}`);
@@ -33,16 +32,17 @@ export class SupportWebSocketService {
   emitUpdateTicket(ticket: ResponseTicketDto) {
     this.logger.log(`Emitting update ticket event ${ticket.id}`);
     this.appGateway.emitToBackoffice('update:ticket', ticket);
-    this.appGateway.emitToTicket(ticket.id, 'update:ticket', ticket);
 
     if (ticket.assignee?.id) {
       this.logger.log(`Emitting assigned ticket event ${ticket.id} to user ${ticket.assignee.id}`);
       this.appGateway.emitToUser(ticket.assignee.id, 'user', 'assigned:ticket', ticket);
+      this.appGateway.emitToUserType('customers', 'update:ticket', ticket);
     }
 
     if (ticket.customer?.id) {
       this.logger.log(`Emitting updated ticket event ${ticket.id} to customer ${ticket.customer.id}`);
       this.appGateway.emitToUser(ticket.customer.id, 'customer', 'update:ticket', ticket);
+      this.appGateway.emitToUserType('users', 'update:ticket', ticket);
     }
 
     // notifier le restaurant dont la commande est liée au ticket
@@ -55,17 +55,17 @@ export class SupportWebSocketService {
   emitNewTicketMessage(ticketId: string, { message, restaurantId }: { message: ResponseTicketMessageDto, restaurantId: string }) {
     this.logger.log(`Emitting new ticket message event for ticket ${ticketId}`);
     this.appGateway.emitToBackoffice('new:ticket_message', { ticketId, message });
-    this.appGateway.emitToTicket(ticketId, 'new:ticket_message', { ticketId, message });
 
     if (message.authorUser) {
       this.logger.log(`Emitting new ticket message event for ticket ${ticketId} to user ${message.authorUser.id}`);
       this.appGateway.emitToUser(message.authorUser.id, 'user', 'new:ticket_message', { ticketId, message });
-
+      this.appGateway.emitToUserType('customers', 'new:ticket_message', { ticketId, message });
     }
 
     if (message.authorCustomer) {
       this.logger.log(`Emitting new ticket message event for ticket ${ticketId} to customer ${message.authorCustomer.id}`);
       this.appGateway.emitToUser(message.authorCustomer.id, 'customer', 'new:ticket_message', { ticketId, message });
+      this.appGateway.emitToUserType('users', 'new:ticket_message', { ticketId, message });
     }
 
     if (restaurantId) {
@@ -77,6 +77,6 @@ export class SupportWebSocketService {
   emitMessagesRead(ticketId: string) {
     this.logger.log(`Emitting read ticket messages event for ticket ${ticketId}`);
     this.appGateway.emitToBackoffice('read:ticket_messages', { ticketId });
-    this.appGateway.emitToTicket(ticketId, 'read:ticket_messages', { ticketId });
+    this.appGateway.emitToUserType('customers', 'read:ticket_messages', { ticketId });
   }
 }
