@@ -29,7 +29,6 @@ export class CreatePaiementDto {
 
     @ApiProperty({ description: 'Mode de paiement', enum: PaiementMode })
     @IsEnum(PaiementMode)
-    @Transform(({ value }) => String(value) as PaiementMode)
     mode: PaiementMode;
 
     @ApiPropertyOptional({ description: 'Type de paiement mobile money' })
@@ -46,7 +45,6 @@ export class CreatePaiementDto {
 
     @ApiProperty({ description: 'État du paiement', enum: PaiementStatus })
     @IsEnum(PaiementStatus)
-    @Transform(({ value }) => String(value).trim().toUpperCase() as PaiementStatus)
     status: PaiementStatus;
 
     @ApiPropertyOptional({ description: 'Code d\'echec' })
