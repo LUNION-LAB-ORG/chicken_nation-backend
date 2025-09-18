@@ -646,6 +646,9 @@ export class OrderService {
 
 
   async obtenirFraisLivraison(body: FraisLivraisonDto) {
-    return 1000;
+    return {
+      montant: 1000,
+      type: "Frais de livraison"
+    };
   }
 }
