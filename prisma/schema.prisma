@@ -43,6 +43,11 @@ enum OrderStatus {
   COMPLETED // TERMINÉ, LE LIVREUR A L'ARGENT
 }
 
+enum DeliveryService {
+  TURBO // TURBO
+  FREE
+}
+
 enum PaiementMode {
   MOBILE_MONEY // MOBILE MONEY
   WALLET // WALLET
@@ -510,35 +515,37 @@ model OrderItem {
 }
 
 model Order {
-  id                         String      @id @default(uuid()) @db.Uuid
-  reference                  String      @unique @db.VarChar
-  customer_id                String      @db.Uuid
-  paied                      Boolean     @default(false)
+  id                         String          @id @default(uuid()) @db.Uuid
+  reference                  String          @unique @db.VarChar
+  customer_id                String          @db.Uuid
+  paied                      Boolean         @default(false)
   delivery_fee               Float
-  points                     Int         @default(0)
+  delivery_service           DeliveryService @default(FREE)
+  zone_id                    String?         @db.VarChar          
+  points                     Int             @default(0)
   type                       OrderType
   table_type                 TypeTable?
   places                     Int?
-  address                    Json        @db.Json // { title: string, address: string, street?: string, city?: string, longitude: number, latitude: number, note: string }
-  code_promo                 String?     @db.VarChar
+  address                    Json            @db.Json // { title: string, address: string, street?: string, city?: string, longitude: number, latitude: number, note: string }
+  code_promo                 String?         @db.VarChar
   tax                        Float
   amount                     Float // Tous frais confondu
   net_amount                 Float
-  discount                   Float       @default(0)
-  date                       DateTime?   @db.Date
-  time                       String?     @db.VarChar
+  discount                   Float           @default(0)
+  date                       DateTime?       @db.Date
+  time                       String?         @db.VarChar
   estimated_delivery_time    DateTime?
   estimated_preparation_time DateTime?
-  fullname                   String?     @db.VarChar
-  phone                      String?     @db.VarChar
-  email                      String?     @db.VarChar
-  note                       String?     @db.VarChar
+  fullname                   String?         @db.VarChar
+  phone                      String?         @db.VarChar
+  email                      String?         @db.VarChar
+  note                       String?         @db.VarChar
   status                     OrderStatus
-  restaurant_id              String      @db.Uuid
+  restaurant_id              String          @db.Uuid
   order_items                OrderItem[]
   paiements                  Paiement[]
-  customer                   Customer    @relation(fields: [customer_id], references: [id])
-  restaurant                 Restaurant  @relation(fields: [restaurant_id], references: [id])
+  customer                   Customer        @relation(fields: [customer_id], references: [id])
+  restaurant                 Restaurant      @relation(fields: [restaurant_id], references: [id])
 
   // ================================
   // INTÉGRATION PROMOTIONS ET FIDÉLITÉ

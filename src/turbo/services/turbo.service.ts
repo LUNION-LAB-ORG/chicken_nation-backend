@@ -1,8 +1,9 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from 'src/database/services/prisma.service';
-import { Address, OrderStatus } from "@prisma/client";
+import { Address, DeliveryService, OrderStatus } from "@prisma/client";
 import { LivraisonsByKm, TURBO_API, TURBO_API_KEY, mappingMethodPayment } from "../constantes/turbo.constante";
 import { IFraisLivraison, IFraisLivraisonResponsePaginate } from "../dto/frais-livraison.response";
+import { CommandeResponse } from "../interfaces/turbo.interfaces";
 
 @Injectable()
 export class TurboService {
@@ -11,6 +12,8 @@ export class TurboService {
   ) { }
 
   async creerCourse(order_id: string, apikey: string) {
+    apikey = apikey || TURBO_API_KEY;
+
     const order = await this.prisma.order.findUnique({
       where: {
         id: order_id
@@ -22,50 +25,53 @@ export class TurboService {
       }
     });
 
-    if (order && order.status === OrderStatus.READY) {
+    if (order && order.status === OrderStatus.READY && order.delivery_service === DeliveryService.TURBO) {
       const adresse = this.validateAddress(order.address as string ?? "");
 
-      // TODO : Récupération de la zone sinon annuler la création de la course 
-      // et notification du système à chicken_nation que la course n'a pas été prise en compte par Turbo et qu'elle doit être 
-      // traitée manuellement
-      const zone = await this.obtenirFraisLivraison({ apikey, latitude: adresse.latitude, longitude: adresse.longitude });
-
-      if (!zone || zone.length === 0) {
-        throw new Error("Zone non trouvée");
-      }
       const formData = {
-        "zoneId": zone[0].id,
-        "numero": order.reference,
-        "destinataire": {
-          "nom": order.fullname,
-          "telephone": order.phone,
-          "email": order.email
-        },
-        "lieuRecuperation": {
-          "latitude": order.restaurant.latitude,
-          "longitude": order.restaurant.longitude,
-          "adresse": order.restaurant.address
-        },
-        "lieuLivraison": {
-          "latitude": adresse.latitude,
-          "longitude": adresse.longitude,
-          "adresse": adresse.address
-        },
-        "modePaiement": mappingMethodPayment[order.paiements[0].mode],
-        "prix": order.amount,
-        "livraisonPaye": order.paied,
+        commandes: [{
+          "numero": order.reference,
+          "destinataire": {
+            "nomComplet": order.fullname,
+            "contact": order.phone,
+            "email": order.email
+          },
+          "lieuRecuperation": {
+            "latitude": order.restaurant.latitude,
+            "longitude": order.restaurant.longitude,
+          },
+          "lieuLivraison": {
+            "latitude": adresse.latitude,
+            "longitude": adresse.longitude,
+          },
+          "zoneId": order.zone_id,
+          "modePaiement": mappingMethodPayment[order.paiements[0].mode],
+          "prix": order.amount,
+          "livraisonPaye": order.paied,
+        }]
       }
 
-      const response = await fetch(`${TURBO_API.CREATION_COURSE}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-KEY': apikey,
-        },
-        body: JSON.stringify(formData),
-      });
+      try {
+        const response = await fetch(`${TURBO_API.CREATION_COURSE}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-API-KEY': apikey,
+          },
+          body: JSON.stringify(formData),
+        });
 
-      console.log(response);
+        const data = await response.json();
+
+        if (typeof data === "object" && "statut" in data) {
+          throw new Error(data?.message ?? "Une erreur est survenue");
+        }
+
+        return data as CommandeResponse;
+      } catch (error) {
+        console.log(error);
+        return null;
+      }
     }
   }
 
