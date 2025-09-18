@@ -16,9 +16,7 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
   },
   [UserRole.MANAGER]: {
     modules: {
-      [Modules.DASHBOARD]: ['read'],
-      [Modules.MENU]: ['read'],
-      [Modules.PROMOTIONS]: ['read'],
+      [Modules.ALL]: ['create', 'read', 'update', 'delete'],
     },
   },
   [UserRole.CALL_CENTER]: {
@@ -31,7 +29,7 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
     modules: {
       [Modules.ALL]: ['create', 'read', 'update', 'delete'],
     },
-    exclusions: [Modules.COMMANDES, Modules.CLIENTS],
+    // exclusions: [Modules.COMMANDES, Modules.CLIENTS],
   },
   [UserRole.MARKETING]: {
     modules: {
@@ -54,3 +52,4 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
     },
   },
 };
+
