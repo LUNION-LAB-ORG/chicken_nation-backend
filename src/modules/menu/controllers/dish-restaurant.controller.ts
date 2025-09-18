@@ -25,38 +25,24 @@ export class DishRestaurantController {
   constructor(private readonly dishRestaurantService: DishRestaurantService) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
-  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
-  @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
-
   @ApiOperation({ summary: "Création d'une nouvelle relation entre plat et restaurant" })
   create(@Body() createDishRestaurantDto: CreateDishRestaurantDto) {
     return this.dishRestaurantService.create(createDishRestaurantDto);
   }
 
   @Get()
-  @UseGuards(UserPermissionsGuard)
- 
   @ApiOperation({ summary: 'Récupération de toutes les relations entre plats et restaurants' })
   findAll() {
     return this.dishRestaurantService.findAll();
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
-  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
-  @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
- 
   @ApiOperation({ summary: "Suppression d'une relation entre plat et restaurant (via ID unique)" })
   remove(@Param('id') id: string) {
     return this.dishRestaurantService.remove(id);
   }
 
   @Delete('dish/:dishId/restaurant/:restaurantId')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
-  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
-  @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
- 
   @ApiOperation({ summary: "Suppression d'une relation entre plat et restaurant (via dishId et restaurantId)" })
   removeByDishAndRestaurant(
     @Param('dishId') dishId: string,

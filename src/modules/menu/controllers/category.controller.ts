@@ -62,7 +62,6 @@ export class CategoryController {
 
   @Get()
   @UseGuards(UserPermissionsGuard)
-  @RequirePermission(Modules.CATEGORIES, Action.READ)
   @ApiOperation({ summary: 'Récupération de toutes les catégories' })
   findAll() {
     return this.categoryService.findAll();
@@ -70,7 +69,6 @@ export class CategoryController {
 
   @Get(':id')
   @UseGuards(UserPermissionsGuard)
-  @RequirePermission(Modules.CATEGORIES, Action.READ)
   @ApiOperation({ summary: "Récupération d'une catégorie par son id" })
   findOne(@Param('id') id: string) {
     return this.categoryService.findOne(id);

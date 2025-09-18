@@ -16,11 +16,9 @@ import { RestaurantService } from 'src/modules/restaurant/services/restaurant.se
 import { CreateRestaurantDto } from 'src/modules/restaurant/dto/create-restaurant.dto';
 import { UpdateRestaurantDto } from 'src/modules/restaurant/dto/update-restaurant.dto';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { UserRole, UserType } from '@prisma/client';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
-import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { UserTypesGuard } from 'src/common/guards/user-types.guard';
 import { UserTypes } from 'src/common/decorators/user-types.decorator';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -39,7 +37,7 @@ export class RestaurantController {
   constructor(
     private readonly restaurantService: RestaurantService,
     private readonly dishRestaurantService: DishRestaurantService,
-  ) {}
+  ) { }
 
   @Post()
   @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
@@ -69,15 +67,11 @@ export class RestaurantController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.RESTAURANT, Action.CREATE)
   async findAll(@Query('page') page?: number, @Query('limit') limit?: number) {
     return this.restaurantService.findAll(page || 1, limit || 10);
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.RESTAURANT, Action.READ)
   async findOne(@Param('id') id: string) {
     return this.restaurantService.findOne(id);
   }
