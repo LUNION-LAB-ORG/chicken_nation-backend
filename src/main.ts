@@ -1,4 +1,5 @@
-import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
+import { RequestLoggerInterceptor } from './request-logger/request-logger.interceptor';
+import { ConsoleLogger, Req, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -55,6 +56,8 @@ async function bootstrap() {
   app.useStaticAssets(uploadsPath, {
     prefix: '/uploads'
   });
+
+  app.useGlobalInterceptors(new RequestLoggerInterceptor());
 
   // Liaison du Swagger
   const config = new DocumentBuilder()
