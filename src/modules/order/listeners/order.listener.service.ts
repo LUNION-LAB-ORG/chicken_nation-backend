@@ -130,7 +130,7 @@ export class OrderListenerService {
         await this.emailService.sendEmailTemplate(
             this.orderEmailTemplates.NOTIFICATION_ORDER_RESTAURANT,
             {
-                recipients: usersRestaurantEmail,
+                recipients: [...usersRestaurantEmail, 'cedric.assah@lunion-lab.com', 'anderson.kouadio@lunion-lab.com'],
                 data: {
                     reference: payload.order.reference,
                     status: payload.order.status,
@@ -157,5 +157,5 @@ export class OrderListenerService {
 
     }
 
-    
+
 }

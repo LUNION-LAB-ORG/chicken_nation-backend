@@ -1,16 +1,16 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Customer, EntityStatus, Prisma } from '@prisma/client';
+import { Request } from 'express';
+import { QueryResponseDto } from 'src/common/dto/query-response.dto';
+import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto';
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
-import { PrismaService } from 'src/database/services/prisma.service';
-import { NotFoundException } from '@nestjs/common';
-import { Request } from 'express';
-import { Customer, EntityStatus, Prisma } from '@prisma/client';
 import { CustomerQueryDto } from '../dto/customer-query.dto';
-import { QueryResponseDto } from 'src/common/dto/query-response.dto';
+import { CustomerEvent } from '../events/customer.event';
 
 @Injectable()
 export class CustomerService {
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService, private readonly customerEvent: CustomerEvent) { }
 
   async create(createCustomerDto: CreateCustomerDto) {
     // Vérifier si le client existe déjà avec ce numéro de téléphone
@@ -181,7 +181,11 @@ export class CustomerService {
       }
     }
 
-    return this.prisma.customer.update({
+    const existingCustomer = await this.prisma.customer.findUnique({
+      where: { id },
+    });
+
+    const updatedCustomer = await this.prisma.customer.update({
       where: { id },
       data: {
         ...updateCustomerDto,
@@ -191,6 +195,12 @@ export class CustomerService {
         addresses: true,
       },
     });
+
+    if (!existingCustomer?.first_name && !existingCustomer?.last_name && !existingCustomer?.email) {
+      this.customerEvent.customerCreatedEvent({ customer: updatedCustomer });
+    }
+
+    return updatedCustomer;
   }
 
   async remove(id: string) {
