@@ -110,6 +110,8 @@ export class AuthService {
       data: { entity_status: EntityStatus.ACTIVE, last_login_at: new Date() },
     });
 
+    
+
     return { ...rest, token };
   }
 
