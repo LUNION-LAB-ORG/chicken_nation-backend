@@ -51,10 +51,10 @@ export class TurboController {
         process: false,
       });
     }
-    console.log(body);
-    const { event, data } = body;
 
-    switch (event) {
+    const { alias, data } = body;
+
+    switch (alias) {
       // Lorsqu'une course est créée
       case WebhookEvent.DELIVERY_CREATED:
         return await this.turboWebhookService.handleDeliveryCreated(data);
