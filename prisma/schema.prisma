@@ -438,6 +438,7 @@ model Dish {
   price            Float
   image            String?          @db.Text
   is_promotion     Boolean          @default(false)
+  is_alway_epice   Boolean          @default(false)
   promotion_price  Float?
   category_id      String           @db.Uuid
   category         Category         @relation(fields: [category_id], references: [id], onDelete: Cascade)
@@ -501,14 +502,14 @@ model Notification {
 model OrderItem {
   id String @id @default(uuid()) @db.Uuid
 
-  quantity    Int     @default(1)
+  quantity    Int      @default(1)
   amount      Float
-  epice       Boolean @default(false)
-  order_id    String  @db.Uuid
-  dish_id     String  @db.Uuid
-  supplements Json?   @db.Json
-  dish        Dish    @relation(fields: [dish_id], references: [id])
-  order       Order   @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  epice       Boolean  @default(false)
+  order_id    String   @db.Uuid
+  dish_id     String   @db.Uuid
+  supplements Json?    @db.Json
+  dish        Dish     @relation(fields: [dish_id], references: [id])
+  order       Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
 
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
@@ -521,7 +522,7 @@ model Order {
   paied                      Boolean         @default(false)
   delivery_fee               Float
   delivery_service           DeliveryService @default(FREE)
-  zone_id                    String?         @db.VarChar          
+  zone_id                    String?         @db.VarChar
   points                     Int             @default(0)
   type                       OrderType
   table_type                 TypeTable?
