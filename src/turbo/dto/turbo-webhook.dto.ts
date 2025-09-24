@@ -9,7 +9,7 @@ export class WebhookEventDto {
     description: "Type d'événement reçu via le webhook"
   })
   @IsEnum(WebhookEvent)
-  event: WebhookEvent;
+  alias: WebhookEvent;
 
   @ApiProperty({
     description: "Payload dépendant du type d'événement",
