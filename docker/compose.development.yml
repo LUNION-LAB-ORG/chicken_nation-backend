@@ -1,12 +1,13 @@
 services:
   app:
     build:
-      context: .
+      context: ../.
       dockerfile: Dockerfile
-    container_name: chicken_nation_backend
+    container_name: chicken_nation_backend_dev
     env_file:
-      - .env
+      - ../.env
     environment:
+      - NODE_ENV=development
       - DATABASE_URL=postgresql://postgres:postgres@database:5432/chicken_nation
       - PORT=8081
       - REDIS_HOST=redis
@@ -19,7 +20,7 @@ services:
     networks:
       - chicken_nation_network
     volumes:
-      - chicken_nation_uploads:/app/uploads
+      - ../uploads:/app/uploads
     restart: unless-stopped
 
   database:
@@ -36,7 +37,7 @@ services:
     networks:
       - chicken_nation_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U prisma -d postgres"]
+      test: ['CMD-SHELL', 'pg_isready -U prisma -d postgres']
       interval: 5s
       timeout: 2s
       retries: 20
@@ -52,6 +53,12 @@ services:
     networks:
       - chicken_nation_network
     restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
 volumes:
   chicken_nation_db_data:

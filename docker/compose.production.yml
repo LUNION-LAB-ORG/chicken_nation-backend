@@ -1,0 +1,27 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chicken_nation_backend
+    env_file:
+      - ../.env.production.local
+    ports:
+      - '8083:8081'
+    depends_on:
+      - database
+      - redis
+    networks:
+      - chicken_nation_network
+    volumes:
+      - chicken_nation_uploads:/app/uploads
+    restart: unless-stopped
+
+volumes:
+  chicken_nation_uploads:
+  chicken_nation_db_data:
+  redis_data:
+
+networks:
+  chicken_nation_network:
+    driver: bridge
