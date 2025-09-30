@@ -27,18 +27,6 @@ services:
       - chicken_nation_network
     restart: unless-stopped
 
-  adminer:
-    image: adminer:4.8.0
-    container_name: chicken_nation_adminer
-    environment:
-      ADMINER_DEFAULT_SERVER: database
-    ports:
-      - "8080:8080"
-    depends_on:
-      - database
-    networks:
-      - chicken_nation_network
-
 volumes:
   chicken_nation_db_data:
   redis_data:

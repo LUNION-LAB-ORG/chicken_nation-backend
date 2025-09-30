@@ -22,6 +22,7 @@ import { EmailModule } from 'src/modules/email/email.module';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { MessagerieModule } from './modules/messagerie/messagerie.module';
 import { SupportModule } from './modules/support/support.module';
+import { VoucherModule } from './modules/voucher/voucher.module';
 @Module({
   imports: [
     JsonWebTokenModule,
@@ -47,6 +48,7 @@ import { SupportModule } from './modules/support/support.module';
     StatisticsModule,
     MessagerieModule,
     SupportModule,
+    VoucherModule,
   ],
 })
 
