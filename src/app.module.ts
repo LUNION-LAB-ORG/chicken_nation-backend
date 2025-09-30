@@ -23,12 +23,31 @@ import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { MessagerieModule } from './modules/messagerie/messagerie.module';
 import { SupportModule } from './modules/support/support.module';
 import { VoucherModule } from './modules/voucher/voucher.module';
+import { BullModule } from '@nestjs/bullmq';
+import { TurboModule } from './turbo/turbo.module';
 @Module({
   imports: [
     JsonWebTokenModule,
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
     EventEmitterModule.forRoot({}),
+    BullModule.forRoot({
+      prefix: 'chicken-nation-queue',
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 1000,
+        },
+      },
+      connection: {
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT ?? '6379'),
+        username: process.env.REDIS_USERNAME || undefined,
+        password: process.env.REDIS_PASSWORD || undefined,
+        db: parseInt(process.env.REDIS_DB ?? '0'),
+      }
+    }),
     DatabaseModule,
     CommonModule,
     UsersModule,
@@ -49,6 +68,7 @@ import { VoucherModule } from './modules/voucher/voucher.module';
     MessagerieModule,
     SupportModule,
     VoucherModule,
+    TurboModule,
   ],
 })
 

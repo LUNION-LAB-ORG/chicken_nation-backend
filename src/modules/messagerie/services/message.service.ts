@@ -5,17 +5,16 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { QueryMessagesDto } from '../dto/query-messages.dto';
-import { Request } from 'express';
-import { PrismaService } from '../../../database/services/prisma.service';
-import { ResponseMessageDto } from '../dto/response-message.dto';
-import { QueryResponseDto } from '../../../common/dto/query-response.dto';
-import { ConversationsService } from './conversations.service';
-import { getAuthType } from '../utils/getTypeUser';
 import { Customer, User } from '@prisma/client';
+import { Request } from 'express';
+import { QueryResponseDto } from '../../../common/dto/query-response.dto';
+import { PrismaService } from '../../../database/services/prisma.service';
 import { CreateMessageDto } from '../dto/createMessageDto';
+import { QueryMessagesDto } from '../dto/query-messages.dto';
+import { ResponseMessageDto } from '../dto/response-message.dto';
+import { getAuthType } from '../utils/getTypeUser';
 import { MessageWebSocketService } from '../websockets/message-websocket.service';
-import { th } from 'date-fns/locale';
+import { ConversationsService } from './conversations.service';
 
 @Injectable()
 export class MessageService {
@@ -240,6 +239,36 @@ export class MessageService {
 
     // Map the created message to ResponseMessageDto format
     return mappedMessage;
+  }
+
+  async markMessagesAsRead(conversationId: string, type: 'USER' | 'CUSTOMER', authorId: string): Promise<boolean> {
+    this.logger.log(`Marquer les messages de la conversation ${conversationId} comme lus`);
+    const conversation = await this.prismaService.conversation.findUnique({
+      where: { id: conversationId },
+      include: {
+        users:true
+      }
+    });
+
+    if (!conversation) {
+      this.logger.warn(`Conversation ${conversationId} introuvable`);
+      throw new NotFoundException('Conversation not found');
+    }
+
+    await this.prismaService.message.updateMany({
+      where: {
+        conversationId,
+        isRead: false,
+        ...(type === 'USER' ? { authorUserId: { not: authorId } } : { authorCustomerId: { not: authorId } })
+      },
+      data: { isRead: true },
+    });
+
+
+
+    this.messageWebSocketService.emitMessagesRead(conversation);
+
+    return true;
   }
 
   private mapMessagesField(message: any): ResponseMessageDto {

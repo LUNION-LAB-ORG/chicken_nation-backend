@@ -1,4 +1,5 @@
-import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
+import { RequestLoggerInterceptor } from './request-logger/request-logger.interceptor';
+import { ConsoleLogger, Req, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -9,12 +10,16 @@ import { PrismaExceptionFilter } from 'src/database/filters/prisma-exception.fil
 import { AppModule } from './app.module';
 
 async function bootstrap() {
+  const isProduction = process.env.NODE_ENV === 'production';
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: new ConsoleLogger({
       timestamp: true,
-      logLevels: ['error', 'warn', 'debug', 'verbose'],
-      json: true,
-      prefix:"chicken_nation_backend"
+      logLevels: isProduction
+        ? ['error', 'warn', 'log']
+        : ['error', 'warn', 'debug', 'verbose', 'log'],
+      json: isProduction,
+      prefix: "chicken_nation_backend",
+      colors: !isProduction
     }),
   });
 
@@ -37,7 +42,7 @@ async function bootstrap() {
 
   // CORS
   app.enableCors({
-    origin: ['https://chicken-nation-dashboard.vercel.app', 'http://localhost:3020', 'http://localhost:3001', 'http://localhost:3000'],
+    origin: ['https://chicken-nation-backoffice.vercel.app', 'http://localhost:3000'],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
@@ -51,6 +56,8 @@ async function bootstrap() {
   app.useStaticAssets(uploadsPath, {
     prefix: '/uploads'
   });
+
+  app.useGlobalInterceptors(new RequestLoggerInterceptor());
 
   // Liaison du Swagger
   const config = new DocumentBuilder()

@@ -1,4 +1,4 @@
-import { HttpException, Injectable } from '@nestjs/common';
+import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateTicketMessageDto } from '../dtos/create-ticket-message.dto';
 import { Prisma } from '@prisma/client';
@@ -9,6 +9,7 @@ import { SupportWebSocketService } from '../websockets/support-websocket.service
 
 @Injectable()
 export class TicketMessageService {
+    private readonly logger = new Logger(TicketMessageService.name);
     constructor(
         private readonly prisma: PrismaService,
         private readonly supportWebSocketService: SupportWebSocketService
@@ -112,13 +113,20 @@ export class TicketMessageService {
     }
 
 
-    async markMessagesAsRead(ticketId: string): Promise<void> {
+    async markMessagesAsRead(ticketId: string, type: 'USER' | 'CUSTOMER', authorId: string): Promise<boolean> {
+        this.logger.log(`Marquer les messages du ticket ${ticketId} comme lus`);
         await this.prisma.ticketMessage.updateMany({
-            where: { ticketId, isRead: false },
+            where: {
+                ticketId,
+                isRead: false,
+                ...(type === 'USER' ? { authorUserId: { not: authorId } } : { authorCustomerId: { not: authorId } })
+            },
             data: { isRead: true },
         });
 
-        // TODO: Emit event
+        this.supportWebSocketService.emitMessagesRead(ticketId);
+
+        return true;
     }
 
     private mapMessageToDto(message: any): ResponseTicketMessageDto {

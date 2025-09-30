@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { TicketPriority, TicketStatus } from '@prisma/client';
+import { TicketPriority, TicketStatus, TicketCategory } from '@prisma/client';
 import {
     IsEnum,
     IsNotEmpty,
@@ -25,9 +25,9 @@ export class CreateTicketDto {
     priority?: TicketPriority;
 
     @ApiPropertyOptional({ description: 'Catégorie du ticket (ex: DELIVERY, BILLING, QUALITY)' })
-    @IsString()
+    @IsUUID()
     @IsNotEmpty()
-    category: string;
+    categoryId: string;
 
     @ApiPropertyOptional({ description: 'Source du ticket (ex: phone, email, webform, escalation)' })
     @IsString()

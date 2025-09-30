@@ -1,13 +1,19 @@
+import { AssignmentService } from './../services/assignment.service';
 import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { CreateTicketDto } from '../dtos/create-ticket.dto';
 import { QueryTicketsDto } from '../dtos/query-tickets.dto';
 import { TicketService } from '../services/ticket.service';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { UpdateTicketDto } from '../dtos/update-ticket.dto';
+import { assignTicketDto } from '../dtos/assign-ticket.dto';
 
 @Controller('tickets')
 export class TicketsController {
-  constructor(private readonly ticketService: TicketService) { }
+  constructor(
+    private readonly ticketService: TicketService,
+    private readonly assignmentService: AssignmentService,
+  ) { }
 
   @UseGuards(JwtAuthGuard) @Get()
   async getAllTickets(@Query() filter: QueryTicketsDto) {
@@ -38,7 +44,17 @@ export class TicketsController {
   }
 
   @UseGuards(JwtAuthGuard) @Patch(':id')
-  async updateTicket(@Param('id') id: string, @Body() updateData: Partial<CreateTicketDto>) {
+  async updateTicket(@Param('id') id: string, @Body() updateData: UpdateTicketDto) {
     return await this.ticketService.updateTicket(id, updateData);
+  }
+
+  @UseGuards(JwtAuthGuard) @Post(':id/assign')
+  async assignTicket(@Param('id') id: string, @Body() assignTicketDto: assignTicketDto) {
+    return await this.assignmentService.assignTicketToAgent(id, assignTicketDto.assigneeId);
+  }
+
+  @UseGuards(JwtAuthGuard) @Post(':id/close')
+  async closeTicket(@Param('id') id: string) {
+    return await this.ticketService.closeTicket(id);
   }
 }

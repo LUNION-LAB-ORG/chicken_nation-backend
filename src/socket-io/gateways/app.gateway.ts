@@ -13,12 +13,14 @@ import { EntityStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { ConnectedUser } from '../interfaces/app.gateway.interface';
+import { Logger } from '@nestjs/common';
 
 @WebSocketGateway({
   cors: { origin: '*' },
   namespace: '/app', // Namespace global pour toute l'app
 })
 export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
+  private readonly logger = new Logger(AppGateway.name);
   @WebSocketServer()
   server: Server;
 
@@ -31,7 +33,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private prisma: PrismaService,
     private jwtService: JsonWebTokenService,
-  ) {}
+  ) { }
 
   async handleConnection(client: Socket) {
     try {
@@ -42,7 +44,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const userType = client.handshake.query.type as 'user' | 'customer';
 
       if (!token || !userType) {
-        console.log("Token ou type d'utilisateur manquant");
+        this.logger.warn('Connexion refusée: token ou type manquant');
         client.disconnect();
         return;
       }
@@ -54,7 +56,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const userInfo = await this.identifyUser(decoded, userType);
 
       if (!userInfo) {
-        console.log('Utilisateur non trouvé');
+        this.logger.warn('Connexion refusée: utilisateur non trouvé ou inactif');
         client.disconnect();
         return;
       }
@@ -66,9 +68,9 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
       // Rejoindre les rooms
       await this.joinRooms(client, userInfo);
-      console.log(`${userInfo.type} ${userInfo.id} connecté`);
+      this.logger.log(`Connexion: ${userInfo.type} ${userInfo.id} connecté`);
     } catch (error) {
-      console.error('Erreur de connexion:', error);
+      this.logger.error('Erreur de connexion:', error);
       client.disconnect();
     }
   }
@@ -76,12 +78,26 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   handleDisconnect(client: Socket) {
     const user = this.connectedUsers.get(client.id);
     if (user) {
-      console.log(`${user.type} ${user.id} déconnecté`);
+      this.logger.log(`Déconnexion: ${user.type} ${user.id} déconnecté`);
       this.connectedUsers.delete(client.id);
 
       // Supprimer les typing indicators
       this.cleanupUserTypingOnDisconnect(user.id);
     }
+  }
+
+  /**
+   * Vérifie si un utilisateur est en ligne (par son id)
+   * @param userId ID de l'utilisateur
+   * @returns true si l'utilisateur est en ligne, false sinon
+   */
+  isUserOnline(userId: string): boolean {
+    for (const user of this.connectedUsers.values()) {
+      if (user.id === userId) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private async identifyUser(
@@ -292,11 +308,10 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
           userName: userName || `${userType} ${userId}`,
         });
 
-      console.log(
-        `Typing indicator: ${userId} ${isTyping ? 'started' : 'stopped'} typing in ${conversationId}`,
-      );
+      this.logger.log(`Typing indicator: ${userId} ${isTyping ? 'started' : 'stopped'} typing in ${conversationId}`);
+        
     } catch (error) {
-      console.error('Error handling typing indicator:', error);
+      this.logger.error('Error handling typing indicator:', error);
     }
   }
 

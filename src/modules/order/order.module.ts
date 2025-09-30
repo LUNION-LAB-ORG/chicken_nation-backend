@@ -8,16 +8,18 @@ import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
 import { OrderListenerService } from './listeners/order.listener.service';
 import { OrderEvent } from './events/order.event';
-import { OrderTask } from './tasks/order.task';
+// import { OrderTask } from './tasks/order.task';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { OrderWebSocketService } from './websockets/order-websocket.service';
 import { RestaurantModule } from '../restaurant/restaurant.module';
 import { OrderEmailTemplates } from './templates/order-email.template';
 import { OrderNotificationsTemplate } from './templates/order-notifications.template';
 import { ReceiptsService } from './services/receipts.service';
+import { TurboModule } from 'src/turbo/turbo.module';
+import { TurboListenerService } from './listeners/turbo.listener.service';
 
 @Module({
-  imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule],
+  imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule, TurboModule],
   controllers: [OrderController, OrderItemController],
   providers: [
     OrderService,
@@ -25,11 +27,12 @@ import { ReceiptsService } from './services/receipts.service';
     OrderHelper,
     OrderEvent,
     OrderListenerService,
-    OrderTask,
+    // OrderTask,
     OrderWebSocketService,
     OrderEmailTemplates,
     OrderNotificationsTemplate,
     ReceiptsService,
+    TurboListenerService
   ],
 })
 export class OrderModule { }

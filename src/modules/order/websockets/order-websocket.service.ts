@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { Order, OrderStatus } from '@prisma/client';
+import { OrderChannels } from '../enums/order-channels';
+
+
 
 @Injectable()
 export class OrderWebSocketService {
@@ -8,19 +11,19 @@ export class OrderWebSocketService {
 
     emitOrderCreated(order: Order) {
         // Notifier le client qui a passé la commande
-        this.appGateway.emitToUser(order.customer_id, 'customer', 'order:created', {
+        this.appGateway.emitToUser(order.customer_id, 'customer', OrderChannels.ORDER_CREATED, {
             order,
             message: 'Votre commande a été créée avec succès'
         });
 
         // Notifier le backoffice
-        this.appGateway.emitToBackoffice('order:created', {
+        this.appGateway.emitToBackoffice(OrderChannels.ORDER_CREATED, {
             order,
             message: 'Nouvelle commande reçue'
         });
 
         // Notifier le restaurant
-        this.appGateway.emitToRestaurant(order.restaurant_id, 'order:created', {
+        this.appGateway.emitToRestaurant(order.restaurant_id, OrderChannels.ORDER_CREATED, {
             order,
             message: 'Nouvelle commande pour votre restaurant'
         });
@@ -44,24 +47,24 @@ export class OrderWebSocketService {
             previousStatus: previousStatus
         };
 
-        this.appGateway.emitToUser(order.customer_id, 'customer', 'order:status_updated', statusData);
-        this.appGateway.emitToBackoffice('order:status_updated', statusData);
-        this.appGateway.emitToRestaurant(order.restaurant_id, 'order:status_updated', statusData);
+        this.appGateway.emitToUser(order.customer_id, 'customer', OrderChannels.ORDER_STATUS_UPDATED, statusData);
+        this.appGateway.emitToBackoffice(OrderChannels.ORDER_STATUS_UPDATED, statusData);
+        this.appGateway.emitToRestaurant(order.restaurant_id, OrderChannels.ORDER_STATUS_UPDATED, statusData);
     }
 
     emitOrderUpdated(order: Order) {
         const data = { order, message: 'Commande mise à jour' };
 
-        this.appGateway.emitToUser(order.customer_id, 'customer', 'order:updated', data);
-        this.appGateway.emitToBackoffice('order:updated', data);
-        this.appGateway.emitToRestaurant(order.restaurant_id, 'order:updated', data);
+        this.appGateway.emitToUser(order.customer_id, 'customer', OrderChannels.ORDER_UPDATED, data);
+        this.appGateway.emitToBackoffice(OrderChannels.ORDER_UPDATED, data);
+        this.appGateway.emitToRestaurant(order.restaurant_id, OrderChannels.ORDER_UPDATED, data);
     }
 
     emitOrderDeleted(order: Order) {
         const data = { orderId: order.id, message: 'Commande supprimée' };
 
-        this.appGateway.emitToUser(order.customer_id, 'customer', 'order:deleted', data);
-        this.appGateway.emitToBackoffice('order:deleted', data);
-        this.appGateway.emitToRestaurant(order.restaurant_id, 'order:deleted', data);
+        this.appGateway.emitToUser(order.customer_id, 'customer', OrderChannels.ORDER_DELETED, data);
+        this.appGateway.emitToBackoffice(OrderChannels.ORDER_DELETED, data);
+        this.appGateway.emitToRestaurant(order.restaurant_id, OrderChannels.ORDER_DELETED, data);
     }
 }

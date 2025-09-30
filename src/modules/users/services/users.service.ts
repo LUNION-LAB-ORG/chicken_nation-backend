@@ -9,6 +9,7 @@ import { UpdateUserDto } from '../dto/update-user.dto';
 import { UpdateUserPasswordDto } from '../dto/update-user-password.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { UserEvent } from '../events/user.event';
+import { ResetUserPasswordResponseDto } from '../dto/reset-user-password.dto';
 
 @Injectable()
 export class UsersService {
@@ -182,6 +183,34 @@ export class UsersService {
     const { password, ...rest } = newUser;
 
     return rest;
+  }
+
+  async resetPassword(req: Request, user_id: string): Promise<ResetUserPasswordResponseDto> {
+    // Générer le salt et le hash
+    const pass = this.generateDataService.generateSecurePassword();
+    const salt = await bcrypt.genSalt();
+    const hash = await bcrypt.hash(pass, salt);
+
+    const user = await this.prisma.user.update({
+      where: {
+        id: user_id,
+      },
+      data: {
+        password: hash,
+        password_is_updated: true
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Utilisateur non trouvé');
+    }
+
+
+    return {
+      email: user.email,
+      password: pass,
+    };
+
   }
 
   // PARTIAL DELETE

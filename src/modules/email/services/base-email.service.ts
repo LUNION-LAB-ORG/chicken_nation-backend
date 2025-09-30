@@ -110,26 +110,28 @@ export abstract class BaseEmailService implements IEmailService {
         template: EmailTemplate<T>,
         context: EmailContext<T>,
     ) {
-        try {
-            await this.sendEmail({
-                recipients: context.recipients,
-                subject: template.subject(context),
-                html: this.emailTemplateService.generateEmailTemplate({
-                    content: template.content(context),
-                    header: this.emailComponentsService.Header(this.CHICKEN_NATION_LOGO, this.CHICKEN_NATION_NAME, this.CHICKEN_NATION_DESCRIPTION),
-                    footer: this.emailComponentsService.Footer(
-                        this.CHICKEN_NATION_NAME, // Nom de votre entreprise
-                        this.CHICKEN_NATION_DESCRIPTION, // Description de votre entreprise
-                        this.CHICKEN_NATION_SUPPORT, // Email de support
-                        this.CHICKEN_NATION_UNSUBSCRIBE_URL, // URL de désabonnement
-                        this.CHICKEN_NATION_URL, // URL de votre site web
-                        this.emailComponentsService.SocialLinks(this.CHICKEN_NATION_SOCIAL_LINKS)
-                    )
-                }),
-            });
-        } catch (error) {
-            this.logger.error('Erreur lors de l\'envoi du template email:', error.message);
-            throw error;
+        for (const recipient of context.recipients) {
+            try {
+                await this.sendEmail({
+                    recipients: recipient,
+                    subject: template.subject(context),
+                    html: this.emailTemplateService.generateEmailTemplate({
+                        content: template.content(context),
+                        header: this.emailComponentsService.Header(this.CHICKEN_NATION_LOGO, this.CHICKEN_NATION_NAME, this.CHICKEN_NATION_DESCRIPTION),
+                        footer: this.emailComponentsService.Footer(
+                            this.CHICKEN_NATION_NAME, // Nom de votre entreprise
+                            this.CHICKEN_NATION_DESCRIPTION, // Description de votre entreprise
+                            this.CHICKEN_NATION_SUPPORT, // Email de support
+                            this.CHICKEN_NATION_UNSUBSCRIBE_URL, // URL de désabonnement
+                            this.CHICKEN_NATION_URL, // URL de votre site web
+                            this.emailComponentsService.SocialLinks(this.CHICKEN_NATION_SOCIAL_LINKS)
+                        )
+                    }),
+                });
+            } catch (error) {
+                this.logger.error('Erreur lors de l\'envoi du template email:', error.message);
+                throw error;
+            }
         }
     }
 

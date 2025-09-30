@@ -1,21 +1,25 @@
-import { Controller, Get, Post, Body, Req, UseGuards, Patch, Delete, Param, UseInterceptors, UploadedFile } from '@nestjs/common';
-import { UsersService } from 'src/modules/users/services/users.service';
-import { CreateUserDto } from 'src/modules/users/dto/create-user.dto';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBadRequestResponse,
   ApiBody,
   ApiCreatedResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
-  ApiNotFoundResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { UserRole } from '@prisma/client';
 import { Request } from 'express';
-import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { UpdateUserDto } from 'src/modules/users/dto/update-user.dto';
-import { UpdateUserPasswordDto } from 'src/modules/users/dto/update-user-password.dto';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
+import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { CreateUserDto } from 'src/modules/users/dto/create-user.dto';
+import { UpdateUserPasswordDto } from 'src/modules/users/dto/update-user-password.dto';
+import { UpdateUserDto } from 'src/modules/users/dto/update-user.dto';
+import { UsersService } from 'src/modules/users/services/users.service';
+import { ResetUserPasswordResponseDto } from '../dto/reset-user-password.dto';
 
 @Controller('users')
 export class UsersController {
@@ -144,6 +148,24 @@ export class UsersController {
     @Body() updateUserPasswordDto: UpdateUserPasswordDto,
   ) {
     return this.usersService.updatePassword(req, updateUserPasswordDto);
+  }
+  // UPDATE PASSWORD
+  @Patch(':id/reset-password')
+  @UseGuards(JwtAuthGuard, UserRolesGuard)
+  @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
+  @ApiOperation({ summary: 'Renouvellement mot de passe utilisateur' })
+  @ApiOkResponse({
+    description: 'Mot de passe mis à jour avec succès',
+    type: ResetUserPasswordResponseDto,
+  })
+  @ApiBadRequestResponse({
+    description: 'Utilisateur non trouvé',
+  })
+  async resetPassword(
+    @Req() req: Request,
+    @Param('id') user_id: string,
+  ) {
+    return this.usersService.resetPassword(req, user_id);
   }
 
   // PARTIAL DELETE

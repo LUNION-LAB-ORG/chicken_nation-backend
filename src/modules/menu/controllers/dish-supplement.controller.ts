@@ -17,9 +17,6 @@ export class DishSupplementController {
 
   @ApiOperation({ summary: 'Création d\'une nouvelle relation entre plat et supplément' })
   @Post()
-  @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
-  @UserTypes(UserType.BACKOFFICE, UserType.RESTAURANT)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   create(@Body() createDishSupplementDto: CreateDishSupplementDto) {
     return this.dishSupplementService.create(createDishSupplementDto);
   }
@@ -32,17 +29,12 @@ export class DishSupplementController {
 
   @ApiOperation({ summary: 'Suppression d\'une relation entre plat et supplément' })
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, UserRolesGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
   remove(@Param('id') id: string) {
     return this.dishSupplementService.remove(id);
   }
 
   @ApiOperation({ summary: 'Suppression d\'une relation entre plat et supplément' })
   @Delete('dish/:dishId/supplement/:supplementId')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
-  @UserTypes(UserType.BACKOFFICE)
-  @UserRoles(UserRole.ADMIN)
   removeByDishAndSupplement(
     @Param('dishId') dishId: string,
     @Param('supplementId') supplementId: string,

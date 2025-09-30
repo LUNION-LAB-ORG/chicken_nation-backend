@@ -1,0 +1,11 @@
+.idea
+*.log
+*.md
+.git
+.vscode
+.env
+.env.local
+.env.*.local
+dist
+node_modules
+

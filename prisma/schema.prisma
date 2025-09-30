@@ -43,6 +43,11 @@ enum OrderStatus {
   COMPLETED // TERMINÉ, LE LIVREUR A L'ARGENT
 }
 
+enum DeliveryService {
+  TURBO // TURBO
+  FREE
+}
+
 enum PaiementMode {
   MOBILE_MONEY // MOBILE MONEY
   WALLET // WALLET
@@ -129,8 +134,6 @@ enum LoyaltyPointIsUsed {
 
 enum TicketStatus {
   OPEN // OUVERT
-  IN_PROGRESS // EN COURS
-  RESOLVED // RÉSOLU
   CLOSED // FERMÉ
 }
 
@@ -307,12 +310,15 @@ model TicketThread {
   code     String         @unique @db.VarChar // ex: TCK-0001
   status   TicketStatus   @default(OPEN)
   priority TicketPriority @default(MEDIUM)
-  category String? // ex: DELIVERY, BILLING, QUALITY...
   source   String? // ex: phone, email, webform, escalation
 
   // C'est un client qui contacte le support
   customerId String?   @db.Uuid
   customer   Customer? @relation(fields: [customerId], references: [id])
+
+  // Catégorie du ticket
+  categoryId String?         @db.Uuid
+  category   TicketCategory? @relation(fields: [categoryId], references: [id])
 
   // Assignation agent support
   assigneeId String? @db.Uuid
@@ -327,13 +333,12 @@ model TicketThread {
   messages     TicketMessage[]
 
   // commande lié au ticket
-  orderId String @db.Uuid
-  order   Order  @relation(fields: [orderId], references: [id])
+  orderId String? @db.Uuid
+  order   Order?  @relation(fields: [orderId], references: [id])
 
   // SLA / métriques
   firstResponseAt DateTime?
   resolvedAt      DateTime?
-  reopenedCount   Int       @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -380,6 +385,34 @@ model TicketMessage {
   @@index([isRead])
 }
 
+model TicketCategory {
+  id            String       @id @default(uuid()) @db.Uuid
+  name          String       @unique @db.VarChar
+  description   String?      @db.Text
+  entity_status EntityStatus @default(ACTIVE)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  agents       TicketUserSkill[] @relation("CategoryAgents")
+  TicketThread TicketThread[]
+
+  @@index([name])
+  @@index([entity_status])
+}
+
+model TicketUserSkill {
+  id         String @id @default(uuid()) @db.Uuid
+  userId     String @db.Uuid
+  categoryId String @db.Uuid
+
+  category TicketCategory @relation("CategoryAgents", fields: [categoryId], references: [id], onDelete: Cascade)
+  user     User           @relation("CategoryAgents", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([categoryId])
+  @@index([userId])
+}
+
 // -------------------- Fin Gestion des conversations ------------------------------
 
 model DishRestaurant {
@@ -406,6 +439,7 @@ model Dish {
   price            Float
   image            String?          @db.Text
   is_promotion     Boolean          @default(false)
+  is_alway_epice   Boolean          @default(false)
   promotion_price  Float?
   category_id      String           @db.Uuid
   category         Category         @relation(fields: [category_id], references: [id], onDelete: Cascade)
@@ -469,49 +503,51 @@ model Notification {
 model OrderItem {
   id String @id @default(uuid()) @db.Uuid
 
-  quantity    Int     @default(1)
+  quantity    Int      @default(1)
   amount      Float
-  epice       Boolean @default(false)
-  order_id    String  @db.Uuid
-  dish_id     String  @db.Uuid
-  supplements Json?   @db.Json
-  dish        Dish    @relation(fields: [dish_id], references: [id])
-  order       Order   @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  epice       Boolean  @default(false)
+  order_id    String   @db.Uuid
+  dish_id     String   @db.Uuid
+  supplements Json?    @db.Json
+  dish        Dish     @relation(fields: [dish_id], references: [id])
+  order       Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
 
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
 }
 
 model Order {
-  id                         String      @id @default(uuid()) @db.Uuid
-  reference                  String      @unique @db.VarChar
-  customer_id                String      @db.Uuid
-  paied                      Boolean     @default(false)
+  id                         String          @id @default(uuid()) @db.Uuid
+  reference                  String          @unique @db.VarChar
+  customer_id                String          @db.Uuid
+  paied                      Boolean         @default(false)
   delivery_fee               Float
-  points                     Int         @default(0)
+  delivery_service           DeliveryService @default(FREE)
+  zone_id                    String?         @db.VarChar
+  points                     Int             @default(0)
   type                       OrderType
   table_type                 TypeTable?
   places                     Int?
-  address                    Json        @db.Json // { title: string, address: string, street?: string, city?: string, longitude: number, latitude: number, note: string }
-  code_promo                 String?     @db.VarChar
+  address                    Json            @db.Json // { title: string, address: string, street?: string, city?: string, longitude: number, latitude: number, note: string }
+  code_promo                 String?         @db.VarChar
   tax                        Float
   amount                     Float // Tous frais confondu
   net_amount                 Float
-  discount                   Float       @default(0)
-  date                       DateTime?   @db.Date
-  time                       String?     @db.VarChar
+  discount                   Float           @default(0)
+  date                       DateTime?       @db.Date
+  time                       String?         @db.VarChar
   estimated_delivery_time    DateTime?
   estimated_preparation_time DateTime?
-  fullname                   String?     @db.VarChar
-  phone                      String?     @db.VarChar
-  email                      String?     @db.VarChar
-  note                       String?     @db.VarChar
+  fullname                   String?         @db.VarChar
+  phone                      String?         @db.VarChar
+  email                      String?         @db.VarChar
+  note                       String?         @db.VarChar
   status                     OrderStatus
-  restaurant_id              String      @db.Uuid
+  restaurant_id              String          @db.Uuid
   order_items                OrderItem[]
   paiements                  Paiement[]
-  customer                   Customer    @relation(fields: [customer_id], references: [id])
-  restaurant                 Restaurant  @relation(fields: [restaurant_id], references: [id])
+  customer                   Customer        @relation(fields: [customer_id], references: [id])
+  restaurant                 Restaurant      @relation(fields: [restaurant_id], references: [id])
 
   // ================================
   // INTÉGRATION PROMOTIONS ET FIDÉLITÉ
@@ -627,6 +663,7 @@ model User {
   ConversationUser  ConversationUser[]
   TicketThread      TicketThread[]      @relation("TicketAssignee")
   Voucher           Voucher[]
+  TicketUserSkill   TicketUserSkill[]   @relation("CategoryAgents")
 
   @@index([email, type])
 }

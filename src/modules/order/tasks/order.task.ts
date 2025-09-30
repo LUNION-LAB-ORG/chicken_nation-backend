@@ -20,7 +20,7 @@ export class OrderTask {
    */
   @Cron(CronExpression.EVERY_MINUTE)
   async updateOrders() {
-    this.logger.log('Mise à jour des commandes...');
+    this.logger.debug('Mise à jour des commandes...');
 
     try {
       // Mettre en livraison toutes les commandes prêtes à livrer chaque minute
