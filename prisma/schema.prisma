@@ -240,6 +240,7 @@ model Customer {
   TicketThread TicketThread[]
 
   Conversation Conversation[]
+  Voucher      Voucher[]
 }
 
 // -------------------- Gestion des conversations ------------------------------
@@ -563,6 +564,7 @@ model Order {
   updated_at    DateTime       @default(now()) @db.Timestamp(6)
   Comment       Comment[]
   TicketThread  TicketThread[]
+  Redemption    Redemption[]
 
   @@index([reference, status, entity_status, customer_id])
 }
@@ -660,6 +662,7 @@ model User {
   Message           Message[]           @relation("MessageAuthorUser")
   ConversationUser  ConversationUser[]
   TicketThread      TicketThread[]      @relation("TicketAssignee")
+  Voucher           Voucher[]
   TicketUserSkill   TicketUserSkill[]   @relation("CategoryAgents")
 
   @@index([email, type])
@@ -848,4 +851,45 @@ model LoyaltyConfig {
   is_active  Boolean  @default(false)
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
+}
+
+// ================================
+// # Bon d'achat
+// ================================
+
+enum VoucherStatus {
+  ACTIVE
+  REDEEMED
+  EXPIRED
+  CANCELLED
+}
+
+model Voucher {
+  id               String        @id @default(uuid()) @db.Uuid
+  code             String        @unique @db.VarChar
+  initial_amount   Float // Montant initial du bon
+  remaining_amount Float // Montant restant
+  customer_id      String        @db.Uuid
+  customer         Customer      @relation(fields: [customer_id], references: [id])
+  status           VoucherStatus @default(ACTIVE)
+  redeemed_at      DateTime?     @db.Timestamp(6) // Date de rédemption
+  expires_at       DateTime?     @db.Timestamp(6) // Date d'expiration
+  created_at       DateTime      @default(now()) @db.Timestamp(6)
+  updated_at       DateTime      @default(now()) @db.Timestamp(6)
+  Redemption       Redemption[]
+
+  created_by    String       @db.Uuid
+  creator       User         @relation(fields: [created_by], references: [id])
+  entity_status EntityStatus @default(ACTIVE)
+}
+
+model Redemption {
+  id            String       @id @default(uuid()) @db.Uuid
+  voucher_id    String       @db.Uuid
+  order_id      String       @db.Uuid
+  amount        Float // Montant utilisé lors de la rédemption
+  voucher       Voucher      @relation(fields: [voucher_id], references: [id])
+  order         Order        @relation(fields: [order_id], references: [id])
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  entity_status EntityStatus @default(ACTIVE)
 }

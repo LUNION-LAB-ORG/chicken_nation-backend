@@ -22,6 +22,7 @@ import { EmailModule } from 'src/modules/email/email.module';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { MessagerieModule } from './modules/messagerie/messagerie.module';
 import { SupportModule } from './modules/support/support.module';
+import { VoucherModule } from './modules/voucher/voucher.module';
 import { BullModule } from '@nestjs/bullmq';
 import { TurboModule } from './turbo/turbo.module';
 @Module({
@@ -66,6 +67,7 @@ import { TurboModule } from './turbo/turbo.module';
     StatisticsModule,
     MessagerieModule,
     SupportModule,
+    VoucherModule,
     TurboModule,
   ],
 })
