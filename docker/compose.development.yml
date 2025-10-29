@@ -15,8 +15,10 @@ services:
     ports:
       - '8082:8081'
     depends_on:
-      - database
-      - redis
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - chicken_nation_network
     volumes:
