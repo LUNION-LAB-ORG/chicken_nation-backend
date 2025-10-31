@@ -10,7 +10,10 @@ import { PrismaExceptionFilter } from 'src/database/filters/prisma-exception.fil
 import { AppModule } from './app.module';
 
 async function bootstrap() {
+
+  // Vérification de la production
   const isProduction = process.env.NODE_ENV === 'production';
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: new ConsoleLogger({
       timestamp: true,
