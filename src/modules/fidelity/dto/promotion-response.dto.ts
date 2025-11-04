@@ -1,5 +1,5 @@
 
-import { DiscountType, TargetType, PromotionStatus, Visibility, PromotionTargetedDish, PromotionTargetedCategory, PromotionDish, RestaurantPromotion } from "@prisma/client";
+import { DiscountType, TargetType, PromotionStatus, Visibility, PromotionTargetedDish, PromotionTargetedCategory, PromotionDish } from "@prisma/client";
 
 export class PromotionResponseDto {
     id: string;
@@ -28,10 +28,10 @@ export class PromotionResponseDto {
     created_by_id: string;
     created_at: Date;
     updated_at: Date;
-    
+
     // Relations
     targeted_dishes?: PromotionTargetedDish[];
     targeted_categories?: PromotionTargetedCategory[];
     offered_dishes?: PromotionDish[];
-    restaurants?: {id: string, name: string}[];
+    restaurants?: { id: string, name: string }[];
 }

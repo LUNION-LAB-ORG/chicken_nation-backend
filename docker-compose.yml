@@ -6,34 +6,34 @@ services:
     container_name: chicken_nation_backend
     env_file:
       - .env
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@database:5432/chicken_nation
-      - PORT=8081
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
+    # environment:
+    #   - DATABASE_URL=postgresql://postgres:postgres@database:5432/chicken_nation
+    #   - PORT=8081
+    #   - REDIS_HOST=redis
+    #   - REDIS_PORT=6379
     ports:
       - "8082:8081"
     depends_on:
-      - database
+      # - database
       - redis
     networks:
       - chicken_nation_network
-    # restart: unless-stopped
-
-  database:
-    image: postgres:15-alpine
-    container_name: chicken_nation_db
-    environment:
-      POSTGRES_DB: 'chicken_nation'
-      POSTGRES_USER: 'postgres'
-      POSTGRES_PASSWORD: 'postgres'
-    ports:
-      - "5432:5432"
-    volumes:
-      - chicken_nation_db_data:/var/lib/postgresql/data
-    networks:
-      - chicken_nation_network
     restart: unless-stopped
+
+  # database:
+  #   image: postgres:15-alpine
+  #   container_name: chicken_nation_db
+  #   environment:
+  #     POSTGRES_DB: 'chicken_nation'
+  #     POSTGRES_USER: 'postgres'
+  #     POSTGRES_PASSWORD: 'postgres'
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - chicken_nation_db_data:/var/lib/postgresql/data
+  #   networks:
+  #     - chicken_nation_network
+  #   restart: unless-stopped
     
   redis:
     image: redis:8.2.1-alpine
