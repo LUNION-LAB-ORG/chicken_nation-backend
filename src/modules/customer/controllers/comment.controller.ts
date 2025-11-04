@@ -74,6 +74,25 @@ export class CommentController {
         return this.commentService.deleteComment(commentId);
     }
 
+    @ApiOperation({ summary: 'Récupérer les meilleurs commentaires' })
+    @ApiResponse({
+        status: 200,
+        description: 'Commentaires récupérés avec succès',
+        schema: {
+            type: 'object',
+            properties: {
+                comments: { type: 'array', items: { $ref: '#/components/schemas/CommentResponseDto' } },
+                total: { type: 'number' },
+                page: { type: 'number' },
+                limit: { type: 'number' },
+            },
+        },
+    })
+
+    @Get('bests')
+    async getBestComments(@Query() query: GetCommentsQueryDto) {
+        return this.commentService.getBestComments(query);
+    }
 
     @ApiOperation({ summary: 'Récupérer un commentaire par ID' })
     @ApiParam({ name: 'id', description: 'ID du commentaire' })
@@ -192,4 +211,5 @@ export class CommentController {
     async getAllComments(@Query() query: GetCommentsQueryDto) {
         return this.commentService.getAllComments(query);
     }
+
 }

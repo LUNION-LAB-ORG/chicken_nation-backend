@@ -11,7 +11,7 @@ import { Action } from 'src/common/enum/action.enum';
 
 @Controller('statistics')
 export class StatisticsController {
-  constructor(private readonly statisticsService: StatisticsService) {}
+  constructor(private readonly statisticsService: StatisticsService) { }
 
   @UseGuards(JwtAuthGuard)
   @Get('dashboard')

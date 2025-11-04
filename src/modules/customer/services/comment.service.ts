@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { CreateCommentDto, UpdateCommentDto, CommentResponseDto, DishCommentsResponseDto, GetCommentsQueryDto } from '../dto/comment.dto';
-import { EntityStatus, OrderStatus } from '@prisma/client';
+import { EntityStatus, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 
@@ -429,6 +429,56 @@ export class CommentService {
 
         return {
             data: comments.map(comment => this.mapToResponseDto(comment)),
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            },
+        };
+    }
+
+    async getBestComments(query: GetCommentsQueryDto): Promise<QueryResponseDto<CommentResponseDto>> {
+        const { page = 1, limit = 10 } = query;
+        const skip = (page - 1) * limit;
+
+        const whereClause: Prisma.CommentWhereInput = {
+            entity_status: EntityStatus.ACTIVE,
+            rating: {
+                gte: 4
+            }
+        };
+
+        const [comments, total] = await Promise.all([
+            this.prisma.comment.findMany({
+                where: whereClause,
+                include: {
+                    customer: {
+                        select: {
+                            id: true,
+                            first_name: true,
+                            last_name: true,
+                            phone: true,
+                            image: true,
+                        },
+                    },
+                    order: {
+                        select: {
+                            id: true,
+                            reference: true,
+                            created_at: true,
+                        },
+                    },
+                },
+                orderBy: { rating: 'desc' },
+                skip,
+                take: limit,
+            }),
+            this.prisma.comment.count({ where: whereClause }),
+        ]);
+
+        return {
+            data: comments.filter(comment => comment.message.length > 20 && comment.message.length < 350).map(comment => this.mapToResponseDto(comment)),
             meta: {
                 total,
                 page,
