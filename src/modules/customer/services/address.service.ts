@@ -1,9 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Customer } from '@prisma/client';
+import { Request } from 'express';
+import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateAddressDto } from 'src/modules/customer/dto/create-address.dto';
 import { UpdateAddressDto } from 'src/modules/customer/dto/update-address.dto';
-import { Customer, EntityStatus } from '@prisma/client';
-import { PrismaService } from 'src/database/services/prisma.service';
-import { Request } from 'express';
 
 @Injectable()
 export class AddressService {

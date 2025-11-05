@@ -25,6 +25,8 @@ import { SupportModule } from './modules/support/support.module';
 import { VoucherModule } from './modules/voucher/voucher.module';
 import { BullModule } from '@nestjs/bullmq';
 import { TurboModule } from './turbo/turbo.module';
+import { RecordClickModule } from './modules/analytics/app/recordClick.module';
+
 @Module({
   imports: [
     JsonWebTokenModule,
@@ -69,6 +71,7 @@ import { TurboModule } from './turbo/turbo.module';
     SupportModule,
     VoucherModule,
     TurboModule,
+    RecordClickModule,
   ],
 })
 
