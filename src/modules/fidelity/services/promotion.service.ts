@@ -88,11 +88,11 @@ export class PromotionService {
       });
     }
 
-    if (promotionData.discount_type == DiscountType.PERCENTAGE && promotionData.discount_value > 70) {
+    if (promotionData.discount_type == DiscountType.PERCENTAGE && promotionData.discount_value > 80) {
       throw new PromotionException({
         key: PromotionErrorKeys.PROMOTION_DISCOUNT_PERCENTAGE_TOO_HIGH,
-        message: 'La remise ne peut pas être supérieure à 70%',
-        data: { max_percentage: 70, provided_percentage: promotionData.discount_value }
+        message: 'La remise ne peut pas être supérieure à 80%',
+        data: { max_percentage: 80, provided_percentage: promotionData.discount_value }
       });
     }
 
@@ -285,6 +285,7 @@ export class PromotionService {
 
     const where: Prisma.PromotionWhereInput = {
       status: PromotionStatus.ACTIVE,
+      start_date: { lte: new Date() },
       expiration_date: { gte: new Date() },
     };
 
