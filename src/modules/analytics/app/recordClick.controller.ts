@@ -13,7 +13,8 @@ export class RecordClickController {
   @ApiOperation({ summary: 'Enregistre un nouveau clic sur l\'application' })
   @Post('app-click')
   async recordClick(@Body() body: RecordClickDto, @Req() req: Request) {
-    const ip =
+
+    const backend_ip =
       req.headers['x-forwarded-for']?.toString().split(',')[0] ||
       req.socket.remoteAddress || req.ip ||
       'unknown';
@@ -22,7 +23,7 @@ export class RecordClickController {
     return this.recordClickService.recordClick({
       platform: body.platform,
       userAgent: body.userAgent,
-      ip,
+      ip: body.ip || backend_ip,
       referer,
     });
   }
