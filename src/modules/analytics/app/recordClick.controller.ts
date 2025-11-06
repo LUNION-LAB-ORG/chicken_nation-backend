@@ -39,4 +39,11 @@ export class RecordClickController {
     const count = await this.recordClickService.getClicksCount(query);
     return { totalClicks: count };
   }
+
+  @ApiOperation({ summary: 'Récupère les statistiques des clics' })
+  @Get('stats')
+  async getClicksStats() {
+    const count = await this.recordClickService.getClicksStats();
+    return count;
+  }
 }

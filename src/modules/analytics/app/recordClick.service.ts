@@ -15,8 +15,10 @@ export class RecordClickService {
     return this.prisma.appClick.create({ data });
   }
 
-  async getClicksCount() {
-    return this.prisma.appClick.count();
+  async getClicksCount(query: RecordClickQueryDto) {
+    const where = this.recordClickHelper.buildClickWhereClause(query);
+
+    return this.prisma.appClick.count({ where });
   }
   /**
    * Récupère les statistiques des clics
