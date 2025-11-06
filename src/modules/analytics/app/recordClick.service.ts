@@ -3,6 +3,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { RecordClickDto } from './dto/recordClick.dto';
 import { RecordClickQueryDto } from './dto/recordClick-query.dto';
 import { RecordClickHelper } from './recordClick.helper';
+import { RecordClickStatsDto } from './dto/recordClick-stats.dto';
 
 @Injectable()
 export class RecordClickService {
@@ -14,11 +15,103 @@ export class RecordClickService {
     return this.prisma.appClick.create({ data });
   }
 
-  async getClicksCount(query: RecordClickQueryDto) {
-    const where = this.recordClickHelper.buildClickWhereClause(query);
-    return this.prisma.appClick.count({ where });
+  async getClicksCount() {
+    return this.prisma.appClick.count();
   }
+  /**
+   * Récupère les statistiques des clics
+   */
+  async getClicksStats(): Promise<RecordClickStatsDto> {
+    const now = new Date();
 
+    // Date de début du mois en cours (1er jour à 00:00:00)
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    // Date il y a 24h
+    const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    // Récupérer toutes les statistiques en parallèle pour optimiser les performances
+    const [
+      totalClicks,
+      monthClicks,
+      last24HoursClicks,
+      totalAndroidClicks,
+      monthAndroidClicks,
+      totalIosClicks,
+      monthIosClicks,
+    ] = await Promise.all([
+      // Nombre total de clics
+      this.prisma.appClick.count(),
+
+      // Nombre de clics du mois en cours
+      this.prisma.appClick.count({
+        where: {
+          createdAt: {
+            gte: startOfMonth,
+          },
+        },
+      }),
+
+      // Nombre de clics dans les dernières 24h
+      this.prisma.appClick.count({
+        where: {
+          createdAt: {
+            gte: last24Hours,
+          },
+        },
+      }),
+
+      // Nombre total de clics Android
+      this.prisma.appClick.count({
+        where: {
+          platform: 'android',
+        },
+      }),
+
+      // Nombre de clics Android du mois en cours
+      this.prisma.appClick.count({
+        where: {
+          platform: 'android',
+          createdAt: {
+            gte: startOfMonth,
+          },
+        },
+      }),
+
+      // Nombre total de clics iOS
+      this.prisma.appClick.count({
+        where: {
+          platform: 'ios',
+        },
+      }),
+
+      // Nombre de clics iOS du mois en cours
+      this.prisma.appClick.count({
+        where: {
+          platform: 'ios',
+          createdAt: {
+            gte: startOfMonth,
+          },
+        },
+      }),
+    ]);
+
+    return {
+      total: {
+        allTime: totalClicks,
+        currentMonth: monthClicks,
+        last24Hours: last24HoursClicks,
+      },
+      android: {
+        allTime: totalAndroidClicks,
+        currentMonth: monthAndroidClicks,
+      },
+      ios: {
+        allTime: totalIosClicks,
+        currentMonth: monthIosClicks,
+      },
+    };
+  }
   /**
    * Récupère les clics avec support pour la pagination, le filtrage et le tri.
    */
