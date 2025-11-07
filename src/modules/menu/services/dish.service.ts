@@ -140,6 +140,7 @@ export class DishService {
           },
         },
         orderBy: {
+          name: 'asc',
           [sortBy]: sortOrder,
         },
         skip: (page - 1) * limit,

@@ -46,6 +46,7 @@ export class DishController {
   findAll() {
     return this.dishService.findAll();
   }
+
   @ApiOperation({ summary: 'Recherche de plats' })
   @Get('search')
   findMany(@Query() filter: QueryDishDto) {

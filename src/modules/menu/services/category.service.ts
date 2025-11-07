@@ -50,6 +50,9 @@ export class CategoryService {
       include: {
         dishes: {
           where: { entity_status: EntityStatus.ACTIVE },
+          orderBy: {
+            name: 'asc',
+          },
         },
       },
     });

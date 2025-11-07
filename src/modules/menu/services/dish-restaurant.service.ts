@@ -26,7 +26,6 @@ export class DishRestaurantService {
   }
 
   async findByDish(dishId: string) {
-    console.log(dishId)
     return this.prisma.dishRestaurant.findMany({
       where: {
         dish_id: dishId,
