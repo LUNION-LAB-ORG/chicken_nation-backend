@@ -31,9 +31,10 @@ export class OrderListenerService {
     @OnEvent(OrderChannels.ORDER_UPDATED)
     @OnEvent(OrderChannels.ORDER_DELETED)
     async orderCreatedEventListener(payload: OrderCreatedEvent) {
+        console.log("order created event listener payload", payload)
         // PROMOTION USAGE
         if (payload.order.promotion_id) {
-            if (payload.order.status === OrderStatus.PENDING && payload.order.promotion_id && payload.totalDishes && payload.orderItems && payload.loyalty_level) {
+            if (payload.order.status === OrderStatus.PENDING && payload.totalDishes && payload.orderItems) {
                 await this.promotionService.usePromotion(
                     payload.order.promotion_id,
                     payload.order.customer_id,
@@ -45,10 +46,8 @@ export class OrderListenerService {
             }
         }
 
-
         // LOYALTY POINTS
         if (payload.order.points > 0) {
-
             //Utilisation des points
             if (payload.order.status === OrderStatus.PENDING) {
                 await this.loyaltyService.redeemPoints({
@@ -57,20 +56,20 @@ export class OrderListenerService {
                     reason: `Utilisation de ${payload.order.points} points de fidélité pour la commande #${payload.order.reference}` // Add order reference for clarity
                 });
             }
+        }
 
-            // Attribution des points
-
-            if (payload.order.status === OrderStatus.COMPLETED) {
-                const pts = await this.loyaltyService.calculatePointsForOrder(payload.order.net_amount);
-                if (pts > 0) {
-                    await this.loyaltyService.addPoints({
-                        customer_id: payload.order.customer_id,
-                        points: pts,
-                        type: LoyaltyPointType.EARNED,
-                        reason: `Vous avez gagné ${pts} points de fidélité pour votre commande`,
-                        order_id: payload.order.id
-                    })
-                }
+        // Attribution des points
+        if (payload.order.status === OrderStatus.COMPLETED) {
+            const pts = await this.loyaltyService.calculatePointsForOrder(payload.order.net_amount);
+            console.log("pts", pts)
+            if (pts > 0) {
+                await this.loyaltyService.addPoints({
+                    customer_id: payload.order.customer_id,
+                    points: pts,
+                    type: LoyaltyPointType.EARNED,
+                    reason: `Vous avez gagné ${pts} points de fidélité pour votre commande`,
+                    order_id: payload.order.id
+                })
             }
         }
 

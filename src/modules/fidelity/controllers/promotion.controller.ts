@@ -15,11 +15,13 @@ import { GenerateConfigService } from 'src/common/services/generate-config.servi
 import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { UserRoles } from 'src/common/decorators/user-roles.decorator';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { Logger } from '@nestjs/common';
 
 @ApiTags('Promotions')
 @Controller('fidelity/promotions')
 
 export class PromotionController {
+  private readonly logger = new Logger(PromotionController.name);
   constructor(private readonly promotionService: PromotionService) { }
 
   @ApiOperation({ summary: 'Créer une promotion' })

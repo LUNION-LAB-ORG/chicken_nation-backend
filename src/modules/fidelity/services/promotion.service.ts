@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { CreatePromotionDto } from '../dto/create-promotion.dto';
 import { UpdatePromotionDto } from '../dto/update-promotion.dto';
 import { PromotionResponseDto } from '../dto/promotion-response.dto';
@@ -20,11 +20,10 @@ import { PromotionException } from '../filters/promotion.filter';
 
 @Injectable()
 export class PromotionService {
-  private readonly logger = new Logger(PromotionService.name);
   constructor(
     private prisma: PrismaService,
     private promotionEvent: PromotionEvent,
-  ) {}
+  ) { }
 
   async create(
     req: Request,
@@ -853,16 +852,11 @@ export class PromotionService {
     data?: any;
     offers_dishes: { dish_id: string; quantity: number; price: number }[];
   }> {
-    this.logger.log({
-      message: 'Calculating discount',
-      promotion_id,
-      order_amount,
-      customer_id,
-      items,
-      loyalty_level,
-    });
+    //  initialiser la liste des plats offerts
     const offersDishes: { dish_id: string; quantity: number; price: number }[] =
       [];
+
+    // Vérifier si la promotion existe
     if (!promotion_id) {
       return {
         discount_amount: 0,
@@ -874,6 +868,8 @@ export class PromotionService {
         offers_dishes: [],
       };
     }
+
+    // Vérifier si le client peut utiliser la promotion
     const canUsePromotion = await this.canCustomerUsePromotion(
       promotion_id,
       customer_id,
@@ -892,6 +888,7 @@ export class PromotionService {
       };
     }
 
+    // Vérifier si la commande contient des plats
     if (items.length === 0) {
       return {
         discount_amount: 0,
@@ -904,7 +901,7 @@ export class PromotionService {
       };
     }
 
-    // Récupère la promotion en utilisant findOne, qui lance déjà une PromotionException si non trouvée
+    // Récupère la promotion
     const promotion = await this.findOne(promotion_id);
 
     // vérifier si certains plats sont en promotion
@@ -921,16 +918,8 @@ export class PromotionService {
           promotion_id,
           loyalty_level,
         );
-        if (result.inPromotion) {
-          dishesInPromotion.push(item);
-        }
       }),
     );
-
-    this.logger.log({
-      message: 'Dishes in promotion',
-      dishesInPromotion,
-    })
 
     let someDishesInPromotion: boolean = dishesInPromotion.length > 0;
 
@@ -943,16 +932,6 @@ export class PromotionService {
       (total, item) => total + item.quantity * item.price,
       0,
     );
-
-    this.logger.log({
-      message: 'Price of dishes in promotion',
-      priceSomeDishesInPromotion,
-    })
-
-    this.logger.log({
-      message: 'Quantity of dishes in promotion',
-      qteSomeDishesInPromotion,
-    })
 
     if (
       !someDishesInPromotion ||
@@ -972,9 +951,9 @@ export class PromotionService {
         data:
           promotion.discount_type === DiscountType.BUY_X_GET_Y
             ? {
-                required_quantity: promotion.discount_value,
-                current_quantity: qteSomeDishesInPromotion,
-              }
+              required_quantity: promotion.discount_value,
+              current_quantity: qteSomeDishesInPromotion,
+            }
             : undefined,
         offers_dishes: [],
       };
@@ -1024,11 +1003,7 @@ export class PromotionService {
     switch (promotion.discount_type) {
       case DiscountType.PERCENTAGE:
         discount_amount = (priceSomeDishesInPromotion * promotion.discount_value) / 100;
-        this.logger.log({
-          message: 'Percentage discount calculated',
-          discount_amount,
-          discount_value: promotion.discount_value,
-        })
+
         break;
 
       case DiscountType.FIXED_AMOUNT:
@@ -1143,6 +1118,7 @@ export class PromotionService {
     error_key?: PromotionErrorKeys;
     data?: any;
   }> {
+    // récupérer la promotion
     const promotion = await this.prisma.promotion.findUnique({
       where: { id: promotion_id },
       include: {
@@ -1151,7 +1127,7 @@ export class PromotionService {
         },
       },
     });
-
+    // vérifier si la promotion existe
     if (!promotion) {
       return {
         allowed: false,
@@ -1163,7 +1139,9 @@ export class PromotionService {
 
     // Vérifier les limites d'utilisation
     if (promotion.max_usage_per_user) {
+      // Récupérer le nombre d'utilisations de la promotion par client
       const userUsageCount = promotion.promotion_usages.length;
+
       if (userUsageCount >= promotion.max_usage_per_user) {
         return {
           allowed: false,
