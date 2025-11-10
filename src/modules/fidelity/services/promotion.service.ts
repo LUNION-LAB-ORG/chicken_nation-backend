@@ -778,10 +778,12 @@ export class PromotionService {
         dishesInPromotion.push(item);
       }
     }));
-
     let someDishesInPromotion: boolean = dishesInPromotion.length > 0;
 
     const qteSomeDishesInPromotion = dishesInPromotion.reduce((total, item) => total + item.quantity, 0);
+    const amountSomeDishesInPromotion = dishesInPromotion.reduce((total, item) => total + item.quantity * item.price, 0);
+    
+    console.log({ dishesInPromotion })
 
 
     if (!someDishesInPromotion || (promotion.discount_type === DiscountType.BUY_X_GET_Y && qteSomeDishesInPromotion < promotion.discount_value)) {
@@ -838,7 +840,8 @@ export class PromotionService {
 
     switch (promotion.discount_type) {
       case DiscountType.PERCENTAGE:
-        discount_amount = (order_amount * promotion.discount_value) / 100;
+        discount_amount = (amountSomeDishesInPromotion * promotion.discount_value) / 100;
+        console.log({ amountSomeDishesInPromotion })
         break;
 
       case DiscountType.FIXED_AMOUNT:

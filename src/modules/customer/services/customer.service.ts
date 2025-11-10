@@ -171,15 +171,15 @@ export class CustomerService {
     }
 
     // Vérifier si l'email est unique
-    if (updateCustomerDto.email) {
-      const existingCustomer = await this.prisma.customer.findUnique({
-        where: { email: updateCustomerDto.email },
-      });
+    // if (updateCustomerDto.email) {
+    //   const existingCustomer = await this.prisma.customer.findUnique({
+    //     where: { email: updateCustomerDto.email },
+    //   });
 
-      if (existingCustomer && existingCustomer.id !== id) {
-        throw new ConflictException(`Utilisateur avec l'email ${updateCustomerDto.email} existe déjà`);
-      }
-    }
+    //   if (existingCustomer && existingCustomer.id !== id) {
+    //     throw new ConflictException(`Utilisateur avec l'email ${updateCustomerDto.email} existe déjà`);
+    //   }
+    // }
 
     const existingCustomer = await this.prisma.customer.findUnique({
       where: { id },

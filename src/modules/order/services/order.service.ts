@@ -220,7 +220,7 @@ export class OrderService {
         restaurant: true,
       },
     });
-    
+
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderStatusUpdatedEvent({
       order: updatedOrder
@@ -655,17 +655,18 @@ export class OrderService {
     service: DeliveryService;
     zone_id: string | null;
   }> {
-    // Récupérer le restaurant le plus proche
+
+    // // Récupérer le restaurant le plus proche
     const restaurant = await this.orderHelper.getNearestRestaurant(JSON.stringify({ latitude: body.lat, longitude: body.long }));
 
-    // TODO : restaurant.apiKey
+    // // TODO : restaurant.apiKey
     const frais = await this.turboService.obtenirFraisLivraison({
       apikey: "",
       latitude: body.lat,
       longitude: body.long
     });
-
-    if (frais.length === 0) {
+    // frais.length === 0
+    if (true) {
 
       // Calculer la distance en km entre le restaurant et le client
       const distance = this.generateDataService.haversineDistance(
