@@ -1,10 +1,31 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Req, Res, HttpStatus, HttpCode, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Param,
+  Body,
+  Query,
+  Req,
+  Res,
+  HttpStatus,
+  HttpCode,
+  UseGuards,
+  Logger,
+} from '@nestjs/common';
 import { OrderService } from 'src/modules/order/services/order.service';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
 import { QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
-import { OrderStatus, UserRole } from '@prisma/client';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiParam } from '@nestjs/swagger';
+import { OrderStatus, User, UserRole } from '@prisma/client';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBody,
+  ApiParam,
+} from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
@@ -19,25 +40,42 @@ import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 @ApiTags('Commandes')
 @Controller('orders')
 export class OrderController {
+  private readonly logger = new Logger(OrderController.name);
   constructor(
     private readonly orderService: OrderService,
     private readonly receiptsService: ReceiptsService,
-  ) { }
+  ) {}
 
   @Post()
   @UseGuards(JwtCustomerAuthGuard) // client peut créer ses propres commandes
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CALL_CENTER)
+  @UserRoles(
+    UserRole.ADMIN,
+    UserRole.MANAGER,
+    UserRole.CAISSIER,
+    UserRole.CALL_CENTER,
+  )
   @RequirePermission(Modules.COMMANDES, Action.CREATE)
   @ApiOperation({ summary: 'Créer une nouvelle commande' })
   @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
   @ApiBody({ type: CreateOrderDto })
   async create(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
+    this.logger.debug({
+      message: 'Creating order',
+      createOrderDto,
+      user: (req.user as User).id,
+    })
     return this.orderService.create(req, createOrderDto);
   }
 
   @Get()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CALL_CENTER, UserRole.COMPTABLE)
+  @UserRoles(
+    UserRole.ADMIN,
+    UserRole.MANAGER,
+    UserRole.CAISSIER,
+    UserRole.CALL_CENTER,
+    UserRole.COMPTABLE,
+  )
   @RequirePermission(Modules.COMMANDES, Action.READ)
   @ApiOperation({ summary: 'Rechercher toutes les commandes' })
   findAll(@Query() queryOrderDto: QueryOrderDto) {
@@ -49,7 +87,10 @@ export class OrderController {
   @UserRoles(UserRole.CAISSIER, UserRole.CALL_CENTER)
   @RequirePermission(Modules.COMMANDES, Action.READ)
   @ApiOperation({ summary: 'Rechercher commandes d’un client' })
-  findAllByCustomer(@Req() req: Request, @Query() queryOrderDto: QueryOrderDto) {
+  findAllByCustomer(
+    @Req() req: Request,
+    @Query() queryOrderDto: QueryOrderDto,
+  ) {
     return this.orderService.findAllByCustomer(req, queryOrderDto);
   }
 
@@ -64,7 +105,10 @@ export class OrderController {
 
   @Get('/frais-livraison')
   @ApiOperation({ summary: 'Obtenir le prix des frais de livraison' })
-  @ApiResponse({ status: 200, description: 'Frais de livraison obtenus avec succès' })
+  @ApiResponse({
+    status: 200,
+    description: 'Frais de livraison obtenus avec succès',
+  })
   @ApiBody({ type: FraisLivraisonDto })
   async obtenirFraisLivraison(@Query() params: FraisLivraisonDto) {
     return this.orderService.obtenirFraisLivraison(params);
@@ -72,7 +116,13 @@ export class OrderController {
 
   @Get(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CALL_CENTER, UserRole.COMPTABLE)
+  @UserRoles(
+    UserRole.ADMIN,
+    UserRole.MANAGER,
+    UserRole.CAISSIER,
+    UserRole.CALL_CENTER,
+    UserRole.COMPTABLE,
+  )
   @RequirePermission(Modules.COMMANDES, Action.READ)
   findOne(@Param('id') id: string) {
     return this.orderService.findById(id);
@@ -101,7 +151,10 @@ export class OrderController {
       required: ['status'],
     },
   })
-  updateStatus(@Param('id') id: string, @Body() body: { status: OrderStatus; meta?: Record<string, any> }) {
+  updateStatus(
+    @Param('id') id: string,
+    @Body() body: { status: OrderStatus; meta?: Record<string, any> },
+  ) {
     return this.orderService.updateStatus(id, body.status, body.meta);
   }
 

@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+  Logger,
+} from '@nestjs/common';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { UpdateOrderDto } from '../dto/update-order.dto';
 import { OrderStatus, EntityStatus, Customer, Order, Prisma, OrderType, DeliveryService } from '@prisma/client';
@@ -15,7 +21,7 @@ import { TurboService } from 'src/turbo/services/turbo.service';
 
 @Injectable()
 export class OrderService {
-
+  private readonly logger = new Logger(OrderService.name);
   constructor(
     private prisma: PrismaService,
     private generateDataService: GenerateDataService,
@@ -31,7 +37,11 @@ export class OrderService {
   async create(req: Request, createOrderDto: CreateOrderDto): Promise<any> {
 
     const customer = req.user as Customer;
-
+    this.logger.log({
+      message: 'Creating order service',
+      createOrderDto,
+      customer: customer.id,
+    })
     const { items, paiement_id, customer_id, restaurant_id, promotion_id, points, ...orderData } = createOrderDto;
 
     // Identifier le client ou créer à partir des données
