@@ -48,4 +48,20 @@ export class KkiapayService {
                 throw new BadRequestException("Transaction non trouvée");
             })
     }
+
+    // Gestion des transactions
+    async onSuccess(transactionId: string) {
+        if (!transactionId) {
+            throw new BadRequestException("Transaction non trouvée");
+        }
+
+    }
+
+    // Gestion des transactions
+    async onFail(transactionId: string) {
+        if (!transactionId) {
+            throw new BadRequestException("Transaction non trouvée");
+        }
+
+    }
 }

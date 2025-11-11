@@ -16,4 +16,19 @@ export class KkiapayController {
     async refundTransaction(@Body() body: { transactionId: string }): Promise<KkiapayResponse> {
         return this.kkiapayService.refundTransaction(body.transactionId);
     }
+
+
+    @Post('on-success')
+    async onSuccess(@Body() body: any): Promise<any> {
+        console.log({"Kkiapay onSuccess":body});
+        return body;
+        // return this.kkiapayService.onSuccess(body);
+    }
+
+    @Post('on-fail')
+    async onFail(@Body() body: any): Promise<any> {
+        console.log({"Kkiapay onFail":body});
+        return body;
+        // return this.kkiapayService.onFail(body);
+    }
 }
