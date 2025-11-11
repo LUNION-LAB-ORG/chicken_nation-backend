@@ -51,7 +51,7 @@ enum DeliveryService {
 enum PaiementMode {
   MOBILE_MONEY // MOBILE MONEY
   WALLET // WALLET
-  CREDIT_CARD // CREDIT CARD
+  CARD // CARD
   CASH // ESPÈCES
 }
 

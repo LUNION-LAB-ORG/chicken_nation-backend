@@ -540,14 +540,14 @@ export class StatisticsService {
       [PaiementMode.CASH]: 'Espèces',
       [PaiementMode.MOBILE_MONEY]: 'Mobile Money',
       [PaiementMode.WALLET]: 'Wallet',
-      [PaiementMode.CREDIT_CARD]: 'Carte de crédit',
+      [PaiementMode.CARD]: 'Carte de crédit',
     };
 
     const modeColors: Record<PaiementMode, string> = {
       [PaiementMode.CASH]: '#10B981',
       [PaiementMode.MOBILE_MONEY]: '#3B82F6',
       [PaiementMode.WALLET]: '#F59E0B',
-      [PaiementMode.CREDIT_CARD]: '#8B5CF6',
+      [PaiementMode.CARD]: '#8B5CF6',
     };
 
     const categories = payments.map((p) => {

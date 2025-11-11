@@ -1,7 +1,9 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { kkiapay } from "@kkiapay-org/nodejs-sdk"
 import { ConfigService } from "@nestjs/config";
-import { KkiapayResponse } from './kkiapay.type';
+import { KkiapayResponse, KkiapayWebhookDto } from './kkiapay.type';
+import { PaiementsService } from 'src/modules/paiements/services/paiements.service';
+import { PaiementStatus } from '@prisma/client';
 
 
 @Injectable()
@@ -13,7 +15,7 @@ export class KkiapayService {
     };
     private readonly logger = new Logger(KkiapayService.name);
 
-    constructor(private readonly config: ConfigService) {
+    constructor(private readonly config: ConfigService, private readonly paiementService: PaiementsService) {
         this.kkiapay = kkiapay({
             privatekey: this.config.get<string>('KKIA_PAY_PRIVATE_KEY') ?? "",
             publickey: this.config.get<string>('KKIA_PAY_PUBLIC_KEY') ?? "",
@@ -50,23 +52,29 @@ export class KkiapayService {
             })
     }
 
-    async handleEvent(payload: any): Promise<void> {
+    async handleEvent(payload: KkiapayWebhookDto): Promise<void> {
         this.logger.log({ "Kkiapay event": payload });
         this.logger.log(`Received KkiaPay event: ${payload.event} for transaction ${payload.transactionId}`);
 
         // Exemple de traitement : selon l’event on met à jour la base de données, etc.
         if (payload.event === 'transaction.success') {
-            // Marquer la transaction comme payée
-            // await this.transactionRepository.markPaid(payload.transactionId, payload.amount, payload.fees, payload.performedAt);
             this.logger.log(`Transaction successful: ${payload.transactionId}`);
+
+            // Test création de paiement
+            await this.paiementService.create({
+                reference: payload.transactionId,
+                amount: payload.amount,
+                fees: payload.fees,
+                total: payload.amount + payload.fees,
+                mode: payload.method,
+                source: payload.method,
+                status: PaiementStatus.SUCCESS,
+            });
+
         } else if (payload.event === 'transaction.failed') {
-            // Marquer la transaction comme échouée
-            // await this.transactionRepository.markFailed(payload.transactionId, payload.failureCode, payload.failureMessage, payload.performedAt);
             this.logger.warn(`Transaction failed: ${payload.transactionId} – ${payload.failureCode} / ${payload.failureMessage}`);
         } else {
             this.logger.warn(`Unhandled event type: ${payload.event}`);
         }
-
-        // return payload;
     }
 }

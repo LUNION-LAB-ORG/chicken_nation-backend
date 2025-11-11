@@ -12,7 +12,7 @@ export const TURBO_API_KEY = 'jq3JVrMe10Isbdo2PR0OvdFUKRIFI61S';
 export const mappingMethodPayment = {
     [PaiementMode.MOBILE_MONEY]: PaiementMode.MOBILE_MONEY,
     [PaiementMode.WALLET]: PaiementMode.WALLET,
-    [PaiementMode.CREDIT_CARD]: PaiementMode.CREDIT_CARD,
+    [PaiementMode.CARD]: PaiementMode.CARD,
     [PaiementMode.CASH]: PaiementMode.CASH,
 }
 

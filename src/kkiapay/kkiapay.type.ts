@@ -1,41 +1,112 @@
 import { PaiementMode, PaiementStatus } from "@prisma/client";
+import { Type } from "class-transformer";
+import { IsString, IsNumber, IsBoolean, IsOptional, IsObject, IsEnum } from 'class-validator';
 
 export class KkiapayResponse {
-    performed_at: string;
-    type: "DEBIT" | "CREDIT";
-    status: PaiementStatus;
-    source: PaiementMode;
-    source_common_name: string;
-    amount: number;
-    fees: number;
-    reason: string;
-    failureCode: string;
-    failureMessage: string;
-    state: string | null;
-    partnerId: string;
-    feeSupportedBy: string;
-    income: number;
-    transactionId: string;
-    performedAt: string;
-    client: {
-        fullname: string;
-        phone: string;
-        email: string;
-    }
+  @IsString()
+  performed_at: string;
+
+  @IsString()
+  type: "DEBIT" | "CREDIT";
+
+  @IsString()
+  status: PaiementStatus;
+
+  @IsString()
+  source: PaiementMode;
+
+  @IsString()
+  source_common_name: string;
+
+  @IsNumber()
+  @Type(() => Number)
+  amount: number;
+
+  @IsNumber()
+  @Type(() => Number)
+  fees: number;
+
+  @IsString()
+  reason: string;
+
+  @IsString()
+  failureCode: string;
+
+  @IsString()
+  failureMessage: string;
+
+  @IsString()
+  state: string | null;
+
+  @IsString()
+  partnerId: string;
+
+  @IsString()
+  feeSupportedBy: string;
+
+  @IsNumber()
+  @Type(() => Number)
+  income: number;
+
+  @IsString()
+  transactionId: string;
+
+  @IsString()
+  performedAt: string;
+
+  @IsObject()
+  client: {
+    fullname: string;
+    phone: string;
+    email: string;
+  }
 }
 
-export class KkiaPayWebhookDto {
-    transactionId: string;
-    isPaymentSucces: boolean;
-    account?: string | null;
-    failureCode?: string;
-    failureMessage?: string;
-    label: string;
-    method: 'MOBILE_MONEY' | 'WALLET' | 'CARD';
-    amount: number;
-    fees?: number;
-    partnerId: string;
-    performedAt: string; // ISO timestamp
-    stateData: any;
-    event: 'transaction.success' | 'transaction.failed';
+export class KkiapayWebhookDto {
+  @IsString()
+  transactionId: string;
+
+  @IsBoolean()
+  @Type(() => Boolean)
+  isPaymentSucces: boolean;
+
+  @IsOptional()
+  @IsString()
+  account?: string | null;
+
+  @IsString()
+  label: string;
+
+  @IsEnum(PaiementMode)
+  method: PaiementMode;
+
+  @IsNumber()
+  @Type(() => Number)
+  amount: number;
+
+  @IsNumber()
+  @Type(() => Number)
+  fees: number;
+
+  @IsString()
+  performedAt: string;
+
+  @IsString()
+  stateData: string;
+
+  @IsOptional()
+  @IsString()
+  partnerId?: string;
+
+  @IsOptional()
+  @IsString()
+  failureCode?: string | null;
+
+  @IsOptional()
+  @IsString()
+  failureMessage?: string | null;
+
+  @IsString()
+  @IsEnum(['transaction.success', 'transaction.failed'])
+  event: string;
 }

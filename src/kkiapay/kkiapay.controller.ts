@@ -1,7 +1,7 @@
 import { Body, Controller, Headers, HttpCode, HttpStatus, Post, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { KkiapayService } from './kkiapay.service';
-import { KkiapayResponse } from './kkiapay.type';
+import { KkiapayResponse, KkiapayWebhookDto } from './kkiapay.type';
 import { ConfigService } from '@nestjs/config';
 
 @Controller('kkiapay')
@@ -25,7 +25,7 @@ export class KkiapayController {
         @Req() request: Request,
         @Res() response: Response,
         @Headers('x-kkiapay-secret') receivedSecret: string,
-        @Body() body: any,
+        @Body() body: KkiapayWebhookDto,
     ) {
         const webhookSecret = this.configService.get<string>('KKIA_PAY_WEBHOOK_SECRET') ?? "";
 

@@ -359,7 +359,7 @@ export class PaiementsService {
       ![
         PaiementMode.MOBILE_MONEY,
         PaiementMode.WALLET,
-        PaiementMode.CREDIT_CARD,
+        PaiementMode.CARD,
         PaiementMode.CASH,
       ].includes(mode)
     ) {
