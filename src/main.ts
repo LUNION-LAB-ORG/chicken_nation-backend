@@ -26,6 +26,9 @@ async function bootstrap() {
     }),
   });
 
+  // 🔹 Indique à Express de faire confiance à Nginx pour les headers IP
+  app.set('trust proxy', true);
+
   // injecter globalement ValidationPipe
   app.useGlobalPipes(
     new ValidationPipe({
@@ -45,8 +48,7 @@ async function bootstrap() {
 
   // CORS
   app.enableCors({
-    origin: ['*'],
-    // origin: ['https://chicken-nation-backoffice.vercel.app','https://chicken-nation.com','https://www.chicken-nation.com', 'http://localhost:3000','http://localhost:4006'],
+    origin: ['https://chicken-nation-backoffice.vercel.app', 'https://chicken-nation.com', 'https://www.chicken-nation.com', 'http://localhost:3000', 'http://localhost:4006'],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });

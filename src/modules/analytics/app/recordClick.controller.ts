@@ -14,16 +14,17 @@ export class RecordClickController {
   @Post('app-click')
   async recordClick(@Body() body: RecordClickDto, @Req() req: Request) {
 
-    const backend_ip =
-      req.headers['x-forwarded-for']?.toString().split(',')[0] ||
-      req.socket.remoteAddress || req.ip ||
+    const ip =
+      req.headers['x-forwarded-for']?.toString().split(',')[0].trim() ||
+      req.headers['x-real-ip']?.toString() ||
+      req.socket.remoteAddress ||
       'unknown';
     const referer = req.headers.referer || 'unknown';
 
     return this.recordClickService.recordClick({
       platform: body.platform,
       userAgent: body.userAgent,
-      ip: body.ip || backend_ip,
+      ip,
       referer,
     });
   }
