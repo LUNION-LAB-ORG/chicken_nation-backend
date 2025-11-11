@@ -1,14 +1,13 @@
-import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
+import { RequestLoggerInterceptor } from './request-logger/request-logger.interceptor';
+import { ConsoleLogger, Req, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import * as bodyParser from 'body-parser';
 import * as compression from 'compression';
 import helmet from 'helmet';
 import { join } from 'path';
 import { PrismaExceptionFilter } from 'src/database/filters/prisma-exception.filter';
 import { AppModule } from './app.module';
-import { RequestLoggerInterceptor } from './request-logger/request-logger.interceptor';
 
 async function bootstrap() {
 
@@ -26,12 +25,7 @@ async function bootstrap() {
       colors: !isProduction
     }),
   });
-  // Ajout de bodyParser pour capturer le corps brut de la requête
-  app.use(bodyParser.json({
-    verify: (req: any, res, buf: Buffer) => {
-      req.rawBody = buf.toString();
-    }
-  }));
+
   // 🔹 Indique à Express de faire confiance à Nginx pour les headers IP
   app.set('trust proxy', true);
 

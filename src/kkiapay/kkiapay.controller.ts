@@ -1,5 +1,4 @@
 import { Body, Controller, Headers, HttpCode, HttpStatus, Post, Req, Res } from '@nestjs/common';
-import * as crypto from 'crypto';
 import { Request, Response } from 'express';
 import { KkiapayService } from './kkiapay.service';
 import { KkiapayResponse } from './kkiapay.type';
@@ -25,28 +24,25 @@ export class KkiapayController {
     async handleWebhook(
         @Req() request: Request,
         @Res() response: Response,
-        @Headers('x-kkiapay-secret') signature: string,
+        @Headers('x-kkiapay-secret') receivedSecret: string,
         @Body() body: any,
     ) {
         const webhookSecret = this.configService.get<string>('KKIA_PAY_WEBHOOK_SECRET') ?? "";
-        const rawBody = (request as any).rawBody || JSON.stringify(body);
 
-        // Vérification de la signature
-        const computed = crypto.createHmac('sha256', webhookSecret)
-            .update(rawBody)
-            .digest('hex');
-        if (computed !== signature) {
-            // signature invalide : on renvoie quand même 200 ou 400 selon politique
-            console.log(`Invalid signature for webhook: ${signature}`);
-            return response.status(HttpStatus.BAD_REQUEST).send('Invalid signature');
+        console.log("Received secret:", receivedSecret);
+        console.log("Expected secret:", webhookSecret);
+
+        // Vérification simple : Kkiapay renvoie le secret en clair
+        if (receivedSecret !== webhookSecret) {
+            console.warn(`Invalid webhook secret`);
+            return response.status(HttpStatus.FORBIDDEN).send('Invalid secret');
         }
 
         try {
             await this.kkiapayService.handleEvent(body);
             return response.send({ received: true });
         } catch (err) {
-            console.log('Error processing webhook', err);
-            // On renvoie 200 pour éviter retrys ou on renvoie 5xx selon design
+            console.error('Error processing webhook', err);
             return response.status(HttpStatus.OK).send('Error processing');
         }
     }
