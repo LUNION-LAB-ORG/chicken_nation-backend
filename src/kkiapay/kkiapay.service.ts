@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { kkiapay } from "@kkiapay-org/nodejs-sdk"
 import { ConfigService } from "@nestjs/config";
 import { KkiapayResponse } from './kkiapay.type';
@@ -11,6 +11,7 @@ export class KkiapayService {
         verify: (transactionId: string) => Promise<any>;
         refund: (transactionId: string) => Promise<any>;
     };
+    private readonly logger = new Logger(KkiapayService.name);
 
     constructor(private readonly config: ConfigService) {
         this.kkiapay = kkiapay({
@@ -49,19 +50,23 @@ export class KkiapayService {
             })
     }
 
-    // Gestion des transactions
-    async onSuccess(transactionId: string) {
-        if (!transactionId) {
-            throw new BadRequestException("Transaction non trouvée");
+    async handleEvent(payload: any): Promise<void> {
+        this.logger.log({ "Kkiapay event": payload });
+        this.logger.log(`Received KkiaPay event: ${payload.event} for transaction ${payload.transactionId}`);
+
+        // Exemple de traitement : selon l’event on met à jour la base de données, etc.
+        if (payload.event === 'transaction.success') {
+            // Marquer la transaction comme payée
+            // await this.transactionRepository.markPaid(payload.transactionId, payload.amount, payload.fees, payload.performedAt);
+            this.logger.log(`Transaction successful: ${payload.transactionId}`);
+        } else if (payload.event === 'transaction.failed') {
+            // Marquer la transaction comme échouée
+            // await this.transactionRepository.markFailed(payload.transactionId, payload.failureCode, payload.failureMessage, payload.performedAt);
+            this.logger.warn(`Transaction failed: ${payload.transactionId} – ${payload.failureCode} / ${payload.failureMessage}`);
+        } else {
+            this.logger.warn(`Unhandled event type: ${payload.event}`);
         }
 
-    }
-
-    // Gestion des transactions
-    async onFail(transactionId: string) {
-        if (!transactionId) {
-            throw new BadRequestException("Transaction non trouvée");
-        }
-
+        // return payload;
     }
 }
