@@ -18,21 +18,21 @@ export class KkiapayOrderListenerService {
         this.logger.log("==========================================================================\nJe récupérer les informations du paiement par webhook de kkipay\n==========================================================================")
         this.logger.log({ payload })
         this.logger.log("========================================================================== recherche de la commande")
-        const order = await this.orderService.findById(payload.stateData)
+        const order = await this.orderService.findByReference(payload.stateData)
         this.logger.log("========================================================================== commande trouvée")
         this.logger.log({ order })
         this.logger.log("========================================================================== mise à jour du statut de la commande")
         if (order) {
             // Enregistrer le paiement
             const paiement = await this.paiementsService.linkPaiementToOrder({
-                transactionId: payload.stateData,
+                transactionId: payload.transactionId,
                 orderId: order.id,
                 customer_id: order.customer_id
             });
-            if (paiement && paiement.status === 'SUCCESS' && paiement.amount >= order.amount) {
+            if (paiement && paiement.status === 'SUCCESS') {
                 await this.orderService.update(order.id, {
                     paied: true,
-                    paied_at: new Date().toISOString()
+                    paied_at: new Date().toISOString(),
                 })
             }
         }

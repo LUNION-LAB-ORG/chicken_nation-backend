@@ -281,6 +281,46 @@ export class OrderService {
   }
 
   /**
+   * Récupère une commande par sa référence
+   */
+  async findByReference(reference: string) {
+    if (!reference) {
+      throw new BadRequestException('La référence de la commande est requis');
+    }
+    const order = await this.prisma.order.findFirst({
+      where: {
+        reference,
+        entity_status: { not: EntityStatus.DELETED }
+      },
+      include: {
+        order_items: {
+          include: {
+            dish: true,
+          },
+        },
+        paiements: true,
+        customer: true,
+        restaurant: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+            address: true,
+            phone: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException(`Commande est introuvable`);
+    }
+
+    return order;
+  }
+
+  /**
    * Recherche et filtre les commandes
    */
   async findAll(filters: QueryOrderDto): Promise<QueryResponseDto<Order>> {
