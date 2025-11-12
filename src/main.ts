@@ -48,7 +48,7 @@ async function bootstrap() {
 
   // CORS
   app.enableCors({
-    origin: ['https://chicken-nation-backoffice.vercel.app', 'https://chicken-nation.com', 'https://www.chicken-nation.com', 'http://localhost:3000', 'http://localhost:4006'],
+    origin: ['https://chicken-nation-backoffice.vercel.app', 'https://chicken-nation.com', 'https://www.chicken-nation.com', 'http://localhost:3000', 'http://localhost:4006',"*"],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });

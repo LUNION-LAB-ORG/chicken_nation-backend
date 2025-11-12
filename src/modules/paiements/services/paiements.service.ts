@@ -151,7 +151,7 @@ export class PaiementsService {
 
   // Création de paiement
   async create(createPaiementDto: CreatePaiementDto) {
-    console.log("createPaiementDto", createPaiementDto);
+
     // Vérification de la commande
     const order = await this.verifyOrder(
       createPaiementDto.amount,

@@ -17,7 +17,7 @@ export const mappingMethodPayment = {
 }
 
 export const LivraisonsByKm = [
-    { maxKm: 5, price: 800 },
+    { maxKm: 5, price: 1 },
     { maxKm: 8, price: 1000 },
     { maxKm: 10, price: 1200 },
     { maxKm: 12, price: 1500 },

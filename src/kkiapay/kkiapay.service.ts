@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { kkiapay } from "@kkiapay-org/nodejs-sdk"
 import { ConfigService } from "@nestjs/config";
 import { KkiapayResponse, KkiapayWebhookDto } from './kkiapay.type';
+import { KkiapayEvent } from './kkiapay.event';
 
 
 @Injectable()
@@ -13,7 +14,7 @@ export class KkiapayService {
     };
     private readonly logger = new Logger(KkiapayService.name);
 
-    constructor(private readonly config: ConfigService) {
+    constructor(private readonly config: ConfigService, private readonly eventEmitter: KkiapayEvent) {
         this.kkiapay = kkiapay({
             privatekey: this.config.get<string>('KKIA_PAY_PRIVATE_KEY') ?? "",
             publickey: this.config.get<string>('KKIA_PAY_PUBLIC_KEY') ?? "",
@@ -52,14 +53,15 @@ export class KkiapayService {
 
     async handleEvent(payload: KkiapayWebhookDto): Promise<void> {
         this.logger.log({ "Kkiapay event": payload });
-        this.logger.log(`Received KkiaPay event: ${payload.event} for transaction ${payload.transactionId}`);
 
         // Exemple de traitement : selon l’event on met à jour la base de données, etc.
         if (payload.event === 'transaction.success') {
             this.logger.log(`Transaction successful: ${payload.transactionId}`);
+            this.eventEmitter.kkiapayTransactionSuccessEvent(payload);
 
         } else if (payload.event === 'transaction.failed') {
             this.logger.warn(`Transaction failed: ${payload.transactionId} – ${payload.failureCode} / ${payload.failureMessage}`);
+            this.eventEmitter.kkiapayTransactionFailedEvent(payload);
         } else {
             this.logger.warn(`Unhandled event type: ${payload.event}`);
         }

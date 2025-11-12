@@ -37,11 +37,7 @@ export class OrderService {
   async create(req: Request, createOrderDto: CreateOrderDto): Promise<any> {
 
     const customer = req.user as Customer;
-    this.logger.log({
-      message: 'Creating order service',
-      createOrderDto,
-      customer: customer.id,
-    })
+
     const { items, paiement_id, customer_id, restaurant_id, promotion_id, points, ...orderData } = createOrderDto;
 
     // Identifier le client ou créer à partir des données
@@ -90,7 +86,6 @@ export class OrderService {
     const totalBeforeDiscount = netAmount + deliveryFee + tax;
     const discount = (totalBeforeDiscount * promoDiscount) + loyaltyFee + discountPromotion;
     const totalAmount = totalBeforeDiscount - discount;
-
     if (payment && payment.amount < totalAmount) {
       throw new BadRequestException('Le montant du paiement est inférieur au montant de la commande');
     }
@@ -230,7 +225,7 @@ export class OrderService {
         restaurant: true,
       },
     });
-    
+
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderStatusUpdatedEvent({
       order: updatedOrder
