@@ -67,6 +67,36 @@ export class PaiementsService {
     };
   }
 
+  // Lier un paiement à une commande
+  async linkPaiementToOrder(
+    data: CreatePaiementKkiapayDto & { customer_id: string },
+  ) {
+
+    const transaction = await this.kkiapay.verifyTransaction(
+      data.transactionId,
+    );
+
+    const paiement = await this.create({
+      reference: transaction.transactionId,
+      amount: transaction.amount,
+      fees: transaction.fees,
+      total: transaction.amount + transaction.fees,
+      mode: transaction.source,
+      source: transaction.source_common_name,
+      client:
+        typeof transaction.client === 'object'
+          ? JSON.stringify(transaction.client)
+          : transaction.client,
+      status: transaction.status,
+      failure_code: transaction.failureCode,
+      failure_message: transaction.failureMessage,
+      order_id: data.orderId,
+      client_id: data.customer_id,
+    });
+
+    return paiement;
+  }
+
   // Récupération des paiements succès libres
   async getFreePaiements(req: Request) {
     const customer = req.user as Customer;

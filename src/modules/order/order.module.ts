@@ -17,6 +17,7 @@ import { OrderNotificationsTemplate } from './templates/order-notifications.temp
 import { ReceiptsService } from './services/receipts.service';
 import { TurboModule } from 'src/turbo/turbo.module';
 import { TurboListenerService } from './listeners/turbo.listener.service';
+import { KkiapayOrderListenerService } from './listeners/kkiapay-order.listener.service';
 
 @Module({
   imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule, TurboModule],
@@ -32,7 +33,8 @@ import { TurboListenerService } from './listeners/turbo.listener.service';
     OrderEmailTemplates,
     OrderNotificationsTemplate,
     ReceiptsService,
-    TurboListenerService
+    TurboListenerService,
+    KkiapayOrderListenerService
   ],
 })
 export class OrderModule { }
