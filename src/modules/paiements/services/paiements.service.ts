@@ -370,11 +370,11 @@ export class PaiementsService {
       return null;
     }
 
-    if (amount < order.amount) {
-      throw new BadRequestException(
-        'Le montant est inférieur au montant de la commande',
-      );
-    }
+    // if (amount < order.amount) {
+    //   throw new BadRequestException(
+    //     'Le montant est inférieur au montant de la commande',
+    //   );
+    // }
     return order;
   }
 

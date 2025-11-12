@@ -168,17 +168,17 @@ export class OrderService {
       return createdOrder;
     });
 
-    // Envoyer l'événement de création de commande
-    this.orderEvent.orderCreatedEvent({
-      order,
-      payment_id: payment?.id,
-      loyalty_level: customerData.loyalty_level,
-      totalDishes,
-      orderItems: orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice })),
-    });
+    // // Envoyer l'événement de création de commande
+    // this.orderEvent.orderCreatedEvent({
+    //   order,
+    //   payment_id: payment?.id,
+    //   loyalty_level: customerData.loyalty_level,
+    //   totalDishes,
+    //   orderItems: orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice })),
+    // });
 
-    // Émettre l'événement de création de commande
-    this.orderWebSocketService.emitOrderCreated(order);
+    // // Émettre l'événement de création de commande
+    // this.orderWebSocketService.emitOrderCreated(order);
 
     return order;
   }
@@ -300,16 +300,7 @@ export class OrderService {
         },
         paiements: true,
         customer: true,
-        restaurant: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-            address: true,
-            phone: true,
-            email: true,
-          },
-        },
+        restaurant: true,
       },
     });
 

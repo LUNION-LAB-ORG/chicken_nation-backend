@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { PaiementChannels } from '../enums/paiement-channels';
 
 
 @Injectable()
@@ -14,7 +15,7 @@ export class PaiementEvent {
      */
     async paiementEffectue(payload: any) {
         this.eventEmitter.emit(
-            'paiement.effectue',
+            PaiementChannels.PAIEMENT_SUCCESS,
             payload
         );
     }
@@ -25,7 +26,7 @@ export class PaiementEvent {
      */
     async paiementAnnule(payload: any) {
         this.eventEmitter.emit(
-            'paiement.annule',
+            PaiementChannels.PAIEMENT_CANCEL,
             payload
         );
     }
