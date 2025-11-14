@@ -332,6 +332,7 @@ export class OrderService {
     } = filters;
 
     const where: Prisma.OrderWhereInput = {
+      paied: true,
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),
       ...(type && { type }),
@@ -425,6 +426,7 @@ export class OrderService {
     } = filters;
     const customerId = (req.user as Customer).id;
     const where: Prisma.OrderWhereInput = {
+      paied: true,
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),
       ...(type && { type }),
@@ -591,31 +593,31 @@ export class OrderService {
       topDishes,
     ] = await Promise.all([
       // Nombre total de commandes
-      this.prisma.order.count({ where }),
+      this.prisma.order.count({ where: { paied: true, ...where } }),
 
       // Montant total des ventes
       this.prisma.order.aggregate({
-        where,
+        where: { paied: true, ...where },
         _sum: { amount: true },
       }),
 
       // Commandes par statut
       this.prisma.order.groupBy({
         by: ['status'],
-        where,
+        where: { paied: true, ...where },
         _count: true,
       }),
 
       // Commandes par type
       this.prisma.order.groupBy({
         by: ['type'],
-        where,
+        where: { paied: true, ...where },
         _count: true,
       }),
 
       // Commandes récentes
       this.prisma.order.findMany({
-        where,
+        where: { paied: true, ...where },
         orderBy: { created_at: 'desc' },
         take: 5,
         include: {
@@ -628,7 +630,7 @@ export class OrderService {
 
       // Valeur moyenne des commandes
       this.prisma.order.aggregate({
-        where,
+        where: { paied: true, ...where },
         _avg: { amount: true },
       }),
 
@@ -636,7 +638,7 @@ export class OrderService {
       this.prisma.orderItem.groupBy({
         by: ['dish_id'],
         where: {
-          order: where,
+          order: { paied: true, ...where },
         },
         _sum: {
           quantity: true,
