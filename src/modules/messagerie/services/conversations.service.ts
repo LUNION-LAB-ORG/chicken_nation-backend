@@ -2,7 +2,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
-  Logger,
+  // Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../database/services/prisma.service';
@@ -21,7 +21,7 @@ type ConversationWhereUniqueInput = Prisma.ConversationWhereUniqueInput;
 
 @Injectable()
 export class ConversationsService {
-  private readonly logger = new Logger(ConversationsService.name);
+  // private readonly logger = new Logger(ConversationsService.name);
   private createConversationInclude({
     messageTake = 1,
     includeMessageAuthors = true,
@@ -394,7 +394,7 @@ export class ConversationsService {
     customerId: string,
     filter: QueryConversationsDto,
   ) {
-    this.logger.log('Obtenir liste conversations customer: ', customerId, " filtre :", filter);
+    // this.logger.log('Obtenir liste conversations customer: ', customerId, " filtre :", filter);
     const { limit = 10, page = 1 } = filter;
     const skip = (page - 1) * limit;
 
@@ -403,7 +403,7 @@ export class ConversationsService {
       restaurantId: filter.restaurantId, // Filtre par restaurant si spécifié
     };
 
-    this.logger.log('Obtenir liste conversations customer: ', customerId, " filtre :", filter, " whereClause :", whereClause);
+    // this.logger.log('Obtenir liste conversations customer: ', customerId, " filtre :", filter, " whereClause :", whereClause);
 
     const [conversations, total] = await Promise.all([
       this.prisma.conversation.findMany({
@@ -415,7 +415,7 @@ export class ConversationsService {
       this.prisma.conversation.count({ where: whereClause }),
     ]);
 
-    this.logger.debug('Liste des conversations client: ', conversations, total);
+    // this.logger.debug('Liste des conversations client: ', conversations, total);
 
     const mappedConversations = await Promise.all(
       conversations.map(async (conversation) => {
@@ -428,7 +428,7 @@ export class ConversationsService {
       }),
     );
 
-    this.logger.debug('Liste des conversations client mapped: ', mappedConversations);
+    // this.logger.debug('Liste des conversations client mapped: ', mappedConversations);
 
     return {
       data: mappedConversations,
@@ -455,7 +455,7 @@ export class ConversationsService {
     const { limit = 10, page = 1, ...rest } = filter;
     const skip = (page - 1) * limit;
 
-    this.logger.log('Obtenir liste conversations user: ', userId, " filtre :", filter);
+    // this.logger.log('Obtenir liste conversations user: ', userId, " filtre :", filter);
 
     const whereClause: Prisma.ConversationWhereInput = {
       OR: [
@@ -488,7 +488,7 @@ export class ConversationsService {
       ...rest,
     };
 
-    this.logger.debug('Where clause pour user conversations: ', whereClause);
+    // this.logger.debug('Where clause pour user conversations: ', whereClause);
 
     const [conversations, total] = await Promise.all([
       this.prisma.conversation.findMany({
@@ -500,7 +500,7 @@ export class ConversationsService {
       this.prisma.conversation.count({ where: whereClause }),
     ]);
 
-    this.logger.debug('Liste des conversations user: ', conversations, total);
+    // this.logger.debug('Liste des conversations user: ', conversations, total);
 
     const mappedConversations = await Promise.all(
       conversations.map(async (conversation) => {
@@ -513,7 +513,7 @@ export class ConversationsService {
       }),
     );
 
-    this.logger.debug('Liste des conversations user mapped: ', mappedConversations);
+    // this.logger.debug('Liste des conversations user mapped: ', mappedConversations);
 
     return {
       data: mappedConversations,

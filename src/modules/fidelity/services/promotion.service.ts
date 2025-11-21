@@ -664,6 +664,78 @@ export class PromotionService {
     return this.mapToResponseDto(promotion);
   }
 
+  // Obtenir l'historique des promotions utilisées par un client
+  async getCustomerPromotionHistory(customer_id: string, limit = 20) {
+    return await this.prisma.promotionUsage.findMany({
+      where: { customer_id },
+      include: {
+        promotion: {
+          select: {
+            id: true,
+            title: true,
+            description: true,
+            discount_type: true,
+            discount_value: true,
+          },
+        },
+        order: {
+          select: {
+            id: true,
+            reference: true,
+            created_at: true,
+          },
+        },
+      },
+      orderBy: { created_at: 'desc' },
+      take: limit,
+    });
+  }
+
+  private mapToResponseDto(promotion: any): PromotionResponseDto {
+    return {
+      id: promotion.id,
+      title: promotion.title,
+      description: promotion.description,
+      discount_type: promotion.discount_type,
+      discount_value: promotion.discount_value,
+      target_type: promotion.target_type,
+      min_order_amount: promotion.min_order_amount,
+      max_discount_amount: promotion.max_discount_amount,
+      max_usage_per_user: promotion.max_usage_per_user,
+      max_total_usage: promotion.max_total_usage,
+      current_usage: promotion.current_usage,
+      start_date: promotion.start_date,
+      expiration_date: promotion.expiration_date,
+      status: promotion.status,
+      visibility: promotion.visibility,
+      is_active: promotion.is_active,
+      target_standard: promotion.target_standard,
+      target_premium: promotion.target_premium,
+      target_gold: promotion.target_gold,
+      coupon_image_url: promotion.coupon_image_url,
+      background_color: promotion.background_color,
+      text_color: promotion.text_color,
+      expiration_color: promotion.expiration_color,
+      created_by_id: promotion.created_by_id,
+      created_at: promotion.created_at,
+      updated_at: promotion.updated_at,
+      targeted_dishes:
+        promotion.promotion_targeted_dishes?.map((ptd) => ptd.dish) || [],
+      targeted_categories:
+        promotion.promotion_targeted_categories?.map((ptc) => ptc.category) ||
+        [],
+      offered_dishes:
+        promotion.promotion_dishes?.map((pd) => ({
+          ...pd.dish,
+          quantity: pd.quantity,
+        })) || [],
+      restaurants:
+        promotion.restaurantPromotions?.map((rp) => {
+          const restaurant = rp.restaurant;
+          return { id: restaurant.id, name: restaurant.name };
+        }) || [],
+    };
+  }
   // Utiliser une promotion
   async usePromotion(
     promotion_id: string | undefined,
@@ -906,15 +978,29 @@ export class PromotionService {
       price: number;
     }[] = [];
 
-    await Promise.all(
+    // Stocker les résultats de toutes les vérifications
+    const dishPromotionResults = await Promise.all(
       items.map(async (item) => {
         const result = await this.isDishInPromotion(
           item.dish_id,
           promotion_id,
           loyalty_level,
         );
+
+        if (result.inPromotion) {
+          return {
+            ...item,
+            promotions: result.promotions,
+          };
+        }
+        return null;
       }),
     );
+
+    // Filtrer les null et assigner à dishesInPromotion
+    dishesInPromotion = dishPromotionResults.filter(
+      (item) => item !== null,
+    ) as { dish_id: string; quantity: number; price: number }[];
 
     let someDishesInPromotion: boolean = dishesInPromotion.length > 0;
 
@@ -1195,76 +1281,4 @@ export class PromotionService {
     return { allowed: true };
   }
 
-  // Obtenir l'historique des promotions utilisées par un client
-  async getCustomerPromotionHistory(customer_id: string, limit = 20) {
-    return await this.prisma.promotionUsage.findMany({
-      where: { customer_id },
-      include: {
-        promotion: {
-          select: {
-            id: true,
-            title: true,
-            description: true,
-            discount_type: true,
-            discount_value: true,
-          },
-        },
-        order: {
-          select: {
-            id: true,
-            reference: true,
-            created_at: true,
-          },
-        },
-      },
-      orderBy: { created_at: 'desc' },
-      take: limit,
-    });
-  }
-
-  private mapToResponseDto(promotion: any): PromotionResponseDto {
-    return {
-      id: promotion.id,
-      title: promotion.title,
-      description: promotion.description,
-      discount_type: promotion.discount_type,
-      discount_value: promotion.discount_value,
-      target_type: promotion.target_type,
-      min_order_amount: promotion.min_order_amount,
-      max_discount_amount: promotion.max_discount_amount,
-      max_usage_per_user: promotion.max_usage_per_user,
-      max_total_usage: promotion.max_total_usage,
-      current_usage: promotion.current_usage,
-      start_date: promotion.start_date,
-      expiration_date: promotion.expiration_date,
-      status: promotion.status,
-      visibility: promotion.visibility,
-      is_active: promotion.is_active,
-      target_standard: promotion.target_standard,
-      target_premium: promotion.target_premium,
-      target_gold: promotion.target_gold,
-      coupon_image_url: promotion.coupon_image_url,
-      background_color: promotion.background_color,
-      text_color: promotion.text_color,
-      expiration_color: promotion.expiration_color,
-      created_by_id: promotion.created_by_id,
-      created_at: promotion.created_at,
-      updated_at: promotion.updated_at,
-      targeted_dishes:
-        promotion.promotion_targeted_dishes?.map((ptd) => ptd.dish) || [],
-      targeted_categories:
-        promotion.promotion_targeted_categories?.map((ptc) => ptc.category) ||
-        [],
-      offered_dishes:
-        promotion.promotion_dishes?.map((pd) => ({
-          ...pd.dish,
-          quantity: pd.quantity,
-        })) || [],
-      restaurants:
-        promotion.restaurantPromotions?.map((rp) => {
-          const restaurant = rp.restaurant;
-          return { id: restaurant.id, name: restaurant.name };
-        }) || [],
-    };
-  }
 }

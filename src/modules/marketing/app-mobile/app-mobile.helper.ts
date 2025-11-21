@@ -3,7 +3,7 @@ import { RecordClickQueryDto } from './dto/recordClick-query.dto';
 import { Injectable } from '@nestjs/common';
 
 @Injectable()
-export class RecordClickHelper {
+export class AppMobileHelper {
 
   /**
    * Construit l'objet 'where' pour la requête Prisma en fonction des paramètres du DTO.

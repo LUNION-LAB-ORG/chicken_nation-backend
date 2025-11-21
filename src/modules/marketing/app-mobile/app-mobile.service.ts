@@ -2,12 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { RecordClickDto } from './dto/recordClick.dto';
 import { RecordClickQueryDto } from './dto/recordClick-query.dto';
-import { RecordClickHelper } from './recordClick.helper';
+import { AppMobileHelper } from './app-mobile.helper';
 import { RecordClickStatsDto } from './dto/recordClick-stats.dto';
 
 @Injectable()
-export class RecordClickService {
-  constructor(private prisma: PrismaService, private readonly recordClickHelper: RecordClickHelper) { }
+export class AppMobileService {
+  constructor(private prisma: PrismaService, private readonly AppMobileHelper: AppMobileHelper) { }
 
   // --- Méthodes existantes ---
 
@@ -16,10 +16,11 @@ export class RecordClickService {
   }
 
   async getClicksCount(query: RecordClickQueryDto) {
-    const where = this.recordClickHelper.buildClickWhereClause(query);
+    const where = this.AppMobileHelper.buildClickWhereClause(query);
 
     return this.prisma.appClick.count({ where });
   }
+
   /**
    * Récupère les statistiques des clics
    */
@@ -124,7 +125,7 @@ export class RecordClickService {
     const skip = (page - 1) * limit;
 
     // Construire le filtre 'where'
-    const where = this.recordClickHelper.buildClickWhereClause(query);
+    const where = this.AppMobileHelper.buildClickWhereClause(query);
 
     // 1. Compter le total des éléments correspondant au filtre (pour la pagination)
     const totalCount = await this.prisma.appClick.count({ where });

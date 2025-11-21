@@ -40,11 +40,10 @@ import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 @ApiTags('Commandes')
 @Controller('orders')
 export class OrderController {
-  private readonly logger = new Logger(OrderController.name);
   constructor(
     private readonly orderService: OrderService,
     private readonly receiptsService: ReceiptsService,
-  ) {}
+  ) { }
 
   @Post()
   @UseGuards(JwtCustomerAuthGuard) // client peut créer ses propres commandes
@@ -59,11 +58,6 @@ export class OrderController {
   @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
   @ApiBody({ type: CreateOrderDto })
   async create(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
-    this.logger.debug({
-      message: 'Creating order',
-      createOrderDto,
-      user: (req.user as User).id,
-    })
     return this.orderService.create(req, createOrderDto);
   }
 

@@ -44,7 +44,7 @@ export class OrderHelper {
     private restaurantService: RestaurantService,
   ) {
     this.taxRate = Number(
-      this.configService.get<number>('ORDER_TAX_RATE', 0.005),
+      this.configService.get<number>('ORDER_TAX_RATE', 0.05),
     );
     this.baseDeliveryFee = Number(
       this.configService.get<number>('BASE_DELIVERY_FEE', 1000),
@@ -338,14 +338,21 @@ export class OrderHelper {
     return { orderItems, netAmount, totalDishes, totalSupplements };
   }
 
-  // Calculer les taxes
+  // Calculer les taxes avec arrondi au 10 supérieur
   async calculateTax(netAmount: number): Promise<number> {
     try {
-      // Dans un système réel, on calculerait la distance et appliquerait un tarif
-      // Pour simplifier, on utilise un tarif fixe
-      return this.taxRate * netAmount;
+      // 1. Calcul du montant brut de la taxe
+      const rawTax = netAmount * this.taxRate;
+
+      // 2. Application de l'arrondi : Math.ceil(valeur / 10) * 10
+      // Ex: 143.2 -> 14.32 (ceil) -> 15 -> 150
+      const roundedTax = Math.ceil(rawTax / 10) * 10;
+
+      return roundedTax;
+
     } catch (error) {
-      // En cas d'erreur, utiliser le tarif de base
+      console.error("Erreur lors du calcul de la taxe:", error);
+      // En cas d'erreur, on retourne 0 par sécurité
       return 0;
     }
   }
@@ -662,11 +669,11 @@ export class OrderHelper {
       ...(customerId && { customer_id: customerId }),
       ...(startDate &&
         endDate && {
-          created_at: {
-            gte: new Date(startDate),
-            lte: new Date(endDate),
-          },
-        }),
+        created_at: {
+          gte: new Date(startDate),
+          lte: new Date(endDate),
+        },
+      }),
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
       ...(restaurantId && {

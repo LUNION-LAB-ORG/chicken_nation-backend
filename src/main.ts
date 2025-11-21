@@ -1,5 +1,5 @@
 import { RequestLoggerInterceptor } from './request-logger/request-logger.interceptor';
-import { ConsoleLogger, Req, ValidationPipe } from '@nestjs/common';
+import { ConsoleLogger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -48,7 +48,7 @@ async function bootstrap() {
 
   // CORS
   app.enableCors({
-    origin: ['https://chicken-nation-backoffice.vercel.app', 'https://chicken-nation.com', 'https://www.chicken-nation.com', 'http://localhost:3000', 'http://localhost:4006',"*"],
+    origin: ['https://chicken-nation-backoffice.vercel.app', 'https://chicken-nation.com', 'https://www.chicken-nation.com', 'http://localhost:3000', 'http://localhost:4006', "*"],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
@@ -63,7 +63,7 @@ async function bootstrap() {
     prefix: '/uploads'
   });
 
-  app.useGlobalInterceptors(new RequestLoggerInterceptor());
+  // app.useGlobalInterceptors(new RequestLoggerInterceptor());
 
   // Liaison du Swagger
   const config = new DocumentBuilder()

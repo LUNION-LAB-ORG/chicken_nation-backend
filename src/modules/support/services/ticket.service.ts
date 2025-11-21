@@ -1,4 +1,4 @@
-import { HttpException, Injectable, Logger } from '@nestjs/common';
+import { HttpException, Injectable } from '@nestjs/common';
 import { Prisma, TicketStatus } from '@prisma/client';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PrismaService } from '../../../database/services/prisma.service';
@@ -12,7 +12,7 @@ import { CategoriesTicketService } from './categories-ticket.service';
 
 @Injectable()
 export class TicketService {
-  private readonly logger = new Logger(TicketService.name);
+  // private readonly logger = new Logger(TicketService.name);
   private readonly isDev = process.env.NODE_ENV !== 'production';
 
   constructor(
@@ -52,7 +52,7 @@ export class TicketService {
   }
 
   async getAllTickets(filter: QueryTicketsDto): Promise<QueryResponseDto<ResponseTicketDto>> {
-    this.logger.log(`Récupération de tickets (page=${filter.page ?? 1}, limit=${filter.limit ?? 10})`);
+    // this.logger.log(`Récupération de tickets (page=${filter.page ?? 1}, limit=${filter.limit ?? 10})`);
 
     const { page = 1, limit = 10 } = filter;
 
@@ -66,17 +66,17 @@ export class TicketService {
       this.prisma.ticketThread.count()
     ]);
 
-    this.logger.log(`Tickets récupérés: ${tickets.length}/${total}`);
+    // this.logger.log(`Tickets récupérés: ${tickets.length}/${total}`);
 
     if (this.isDev) {
-      this.logger.debug(`Filtres: ${JSON.stringify(filter)}`);
-      this.logger.debug(`Tickets bruts: ${JSON.stringify(tickets)}`);
+      // this.logger.debug(`Filtres: ${JSON.stringify(filter)}`);
+      // this.logger.debug(`Tickets bruts: ${JSON.stringify(tickets)}`);
     }
 
     const mappedTickets = tickets.map(ticket => this.mapTicketToDto(ticket));
 
     if (this.isDev) {
-      this.logger.debug(`Tickets mappés: ${JSON.stringify(mappedTickets)}`);
+      // this.logger.debug(`Tickets mappés: ${JSON.stringify(mappedTickets)}`);
     }
 
     return {
@@ -91,7 +91,7 @@ export class TicketService {
   }
 
   async getCustomerTickets(customerId: string, filter: QueryTicketsDto): Promise<QueryResponseDto<ResponseTicketDto>> {
-    this.logger.log(`Tickets du client ${customerId} (page=${filter.page ?? 1}, limit=${filter.limit ?? 10})`);
+    // this.logger.log(`Tickets du client ${customerId} (page=${filter.page ?? 1}, limit=${filter.limit ?? 10})`);
 
     const { page = 1, limit = 10 } = filter;
 
@@ -106,11 +106,11 @@ export class TicketService {
       this.prisma.ticketThread.count({ where: { customerId } })
     ]);
 
-    this.logger.log(`Tickets récupérés pour client ${customerId}: ${tickets.length}/${total}`);
+    // this.logger.log(`Tickets récupérés pour client ${customerId}: ${tickets.length}/${total}`);
 
     if (this.isDev) {
-      this.logger.debug(`Filtres du client ${customerId}: ${JSON.stringify(filter)}`);
-      this.logger.debug(`Tickets du client ${customerId} bruts: ${JSON.stringify(tickets)}`);
+      // this.logger.debug(`Filtres du client ${customerId}: ${JSON.stringify(filter)}`);
+      // this.logger.debug(`Tickets du client ${customerId} bruts: ${JSON.stringify(tickets)}`);
     }
 
     return {
@@ -125,14 +125,14 @@ export class TicketService {
   }
 
   async getTicketById(id: string): Promise<ResponseTicketDto> {
-    this.logger.log(`Recuperer du ticket ${id}`);
+    // this.logger.log(`Recuperer du ticket ${id}`);
     const ticket = await this.prisma.ticketThread.findUnique({
       where: { id },
       include: this.includeFields,
     });
 
     if (!ticket) {
-      this.logger.warn(`Ticket ${id} introuvable`);
+      // this.logger.warn(`Ticket ${id} introuvable`);
       throw new HttpException('Ticket not found', 404);
     }
 
@@ -140,10 +140,10 @@ export class TicketService {
   }
 
   async createTicket(data: CreateTicketDto): Promise<ResponseTicketDto> {
-    this.logger.log(`Création d'un ticket pour customer=${data.customerId}`);
+    // this.logger.log(`Création d'un ticket pour customer=${data.customerId}`);
 
     if (this.isDev) {
-      this.logger.debug(`Payload: ${JSON.stringify(data)}`);
+      // this.logger.debug(`Payload: ${JSON.stringify(data)}`);
     }
 
     const { categoryId } = data;
@@ -159,7 +159,7 @@ export class TicketService {
     ]);
 
     if (!category) {
-      this.logger.warn(`Échec création: catégorie ${categoryId} introuvable`);
+      // this.logger.warn(`Échec création: catégorie ${categoryId} introuvable`);
       throw new HttpException('Category not found', 404);
     }
 
@@ -175,12 +175,12 @@ export class TicketService {
 
     //TODO: activer la verification de l'existence de la commande
     if (data.orderId && !order) {
-      this.logger.warn(`Échec création: commande ${data.orderId} introuvable`);
+      // this.logger.warn(`Échec création: commande ${data.orderId} introuvable`);
       throw new HttpException('Order not found', 404);
     }
 
     if (!customer) {
-      this.logger.warn(`Échec création: client ${data.customerId} introuvable`);
+      // this.logger.warn(`Échec création: client ${data.customerId} introuvable`);
       throw new HttpException('Customer not found', 404);
     }
 
@@ -204,12 +204,12 @@ export class TicketService {
       include: this.includeFields,
     });
 
-    this.logger.log(`Ticket créé: id=${ticket.id}, code=${ticket.code}`);
+    // this.logger.log(`Ticket créé: id=${ticket.id}, code=${ticket.code}`);
 
     const ticketDto = this.mapTicketToDto(ticket);
 
     if (this.isDev) {
-      this.logger.debug(`Ticket DTO: ${JSON.stringify(ticketDto)}`);
+      // this.logger.debug(`Ticket DTO: ${JSON.stringify(ticketDto)}`);
     }
 
     this.ticketEvent.emitTicketCreated(ticketDto);
@@ -218,10 +218,10 @@ export class TicketService {
   }
 
   async updateTicket(id: string, data: UpdateTicketDto): Promise<ResponseTicketDto> {
-    this.logger.log(`Mise à jour du ticket ${id}`);
+    // this.logger.log(`Mise à jour du ticket ${id}`);
 
     if (this.isDev) {
-      this.logger.debug(`Payload: ${JSON.stringify(data)}`);
+      // this.logger.debug(`Payload: ${JSON.stringify(data)}`);
     }
 
     const { subject, priority, categoryId, orderId } = data;
@@ -231,7 +231,7 @@ export class TicketService {
       const category = await this.categoryService.findOne(categoryId);
 
       if (!category) {
-        this.logger.warn(`Échec mise à jour: catégorie ${categoryId} introuvable`);
+        // this.logger.warn(`Échec mise à jour: catégorie ${categoryId} introuvable`);
         throw new HttpException('Category not found', 404);
       }
     }
@@ -248,16 +248,16 @@ export class TicketService {
     });
 
     if (!ticket) {
-      this.logger.warn(`Échec mise à jour: ticket ${id} introuvable`);
+      // this.logger.warn(`Échec mise à jour: ticket ${id} introuvable`);
       throw new HttpException('Ticket not found', 404);
     }
 
-    this.logger.log(`Ticket mis à jour: id=${ticket.id}, code=${ticket.code}`);
+    // this.logger.log(`Ticket mis à jour: id=${ticket.id}, code=${ticket.code}`);
 
     const ticketDto = this.mapTicketToDto(ticket);
 
     if (this.isDev) {
-      this.logger.debug(`Ticket DTO mis à jour: ${JSON.stringify(ticketDto)}`);
+      // this.logger.debug(`Ticket DTO mis à jour: ${JSON.stringify(ticketDto)}`);
     }
 
     this.ticketEvent.emitTicketUpdated(ticketDto);
@@ -266,7 +266,7 @@ export class TicketService {
   }
 
   async closeTicket(id: string): Promise<ResponseTicketDto> {
-    this.logger.log(`Fermeture du ticket ${id}`);
+    // this.logger.log(`Fermeture du ticket ${id}`);
 
     const ticket = await this.prisma.ticketThread.update({
       where: { id },
@@ -278,11 +278,11 @@ export class TicketService {
     });
 
     if (!ticket) {
-      this.logger.warn(`Échec fermeture: ticket ${id} introuvable`);
+      // this.logger.warn(`Échec fermeture: ticket ${id} introuvable`);
       throw new HttpException('Ticket not found', 404);
     }
 
-    this.logger.log(`Ticket fermé: id=${ticket.id}, code=${ticket.code}`);
+    // this.logger.log(`Ticket fermé: id=${ticket.id}, code=${ticket.code}`);
 
     const ticketDto = this.mapTicketToDto(ticket);
     this.ticketEvent.emitTicketClosed(ticketDto);
@@ -292,7 +292,7 @@ export class TicketService {
   private mapTicketToDto(ticket: any): ResponseTicketDto {
 
     if (this.isDev) {
-      this.logger.debug(`Mapping du ticket: ${ticket.id}`);
+      // this.logger.debug(`Mapping du ticket: ${ticket.id}`);
     }
 
     return {

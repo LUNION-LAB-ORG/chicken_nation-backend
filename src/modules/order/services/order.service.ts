@@ -80,12 +80,18 @@ export class OrderService {
     // Calculer le montant de réduction des points de fidélité
     const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(customerData.total_points, points ?? 0);
 
-    // Calculer la taxe et le montant total
-    const tax = await this.orderHelper.calculateTax(netAmount);
+    // Calcul de la remise
+    const discount = (netAmount * promoDiscount) + loyaltyFee + discountPromotion;
 
-    const totalBeforeDiscount = netAmount + deliveryFee + tax;
-    const discount = (totalBeforeDiscount * promoDiscount) + loyaltyFee + discountPromotion;
-    const totalAmount = totalBeforeDiscount - discount;
+    // Calcul du montant remisé
+    const totalAfterDiscount = netAmount - discount;
+
+    // calcul de la taxe
+    const tax = await this.orderHelper.calculateTax(totalAfterDiscount);
+
+    // Calcul du montant TTC
+    const totalAmount = totalAfterDiscount + tax + deliveryFee;
+
     if (payment && payment.amount < totalAmount) {
       throw new BadRequestException('Le montant du paiement est inférieur au montant de la commande');
     }

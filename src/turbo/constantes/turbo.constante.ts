@@ -16,74 +16,52 @@ export const mappingMethodPayment = {
     [PaiementMode.CASH]: PaiementMode.CASH,
 }
 
-export const LivraisonsByKm = [
-    { maxKm: 5, price: 1 },
-    { maxKm: 8, price: 1000 },
-    { maxKm: 10, price: 1200 },
-    { maxKm: 12, price: 1500 },
-    { maxKm: 15, price: 1800 },
-    { maxKm: 20, price: 2000 },
-    { maxKm: 25, price: 2500 },
-    { maxKm: 30, price: 3000 },
-    { maxKm: 35, price: 3500 },
-    { maxKm: 40, price: 4000 },
-    { maxKm: 45, price: 4500 },
-    { maxKm: 50, price: 5000 },
-    { maxKm: 55, price: 5500 },
-    { maxKm: 60, price: 6000 },
-    { maxKm: 65, price: 6500 },
-    { maxKm: 70, price: 7000 },
-    { maxKm: 75, price: 7500 },
-    { maxKm: 80, price: 8000 },
-    { maxKm: 85, price: 8500 },
-    { maxKm: 90, price: 9000 },
-    { maxKm: 95, price: 9500 },
-    { maxKm: 100, price: 10000 },
-    { maxKm: 110, price: 11000 },
-    { maxKm: 120, price: 12000 },
-    { maxKm: 130, price: 13000 },
-    { maxKm: 140, price: 14000 },
-    { maxKm: 150, price: 15000 },
-    { maxKm: 160, price: 16000 },
-    { maxKm: 170, price: 17000 },
-    { maxKm: 180, price: 18000 },
-    { maxKm: 190, price: 19000 },
-    { maxKm: 200, price: 20000 },
-    { maxKm: Infinity, price: 20000 },
-];
+/**
+ * Calcule le prix de livraison basé sur la distance (Modèle Abidjan/Yango)
+ * @param {number} distanceInKm - La distance exacte (ex: 5.4)
+ * @returns {number} - Le prix final arrondi en FCFA
+ */
+export const calculateDeliveryPrice = (distanceInKm) => {
+    // --- CONFIGURATION DES TARIFS (Augmentés) ---
 
-// export const LivraisonsByKm = [
-//     { maxKm: 5, price: 10 },
-//     { maxKm: 8, price: 1 },
-//     { maxKm: 10, price: 1 },
-//     { maxKm: 12, price: 1 },
-//     { maxKm: 15, price: 1 },
-//     { maxKm: 20, price: 1 },
-//     { maxKm: 25, price: 2 },
-//     { maxKm: 30, price: 2 },
-//     { maxKm: 35, price: 2 },
-//     { maxKm: 40, price: 2 },
-//     { maxKm: 45, price: 2 },
-//     { maxKm: 50, price: 3 },
-//     { maxKm: 55, price: 3 },
-//     { maxKm: 60, price: 3 },
-//     { maxKm: 65, price: 3 },
-//     { maxKm: 70, price: 3 },
-//     { maxKm: 75, price: 4 },
-//     { maxKm: 80, price: 5 },
-//     { maxKm: 85, price: 5 },
-//     { maxKm: 90, price: 9000 },
-//     { maxKm: 95, price: 9500 },
-//     { maxKm: 100, price: 10000 },
-//     { maxKm: 110, price: 11000 },
-//     { maxKm: 120, price: 12000 },
-//     { maxKm: 130, price: 13000 },
-//     { maxKm: 140, price: 14000 },
-//     { maxKm: 150, price: 15000 },
-//     { maxKm: 160, price: 16000 },
-//     { maxKm: 170, price: 17000 },
-//     { maxKm: 180, price: 18000 },
-//     { maxKm: 190, price: 19000 },
-//     { maxKm: 200, price: 20000 },
-//     { maxKm: Infinity, price: 20000 },
-// ];
+    // 1. Le Forfait de base (jusqu'à 3 km)
+    // Cela couvre la prise en charge et le "dérangement" du livreur
+    const BASE_DIST_KM = 3;
+    const BASE_PRICE = 1000;
+
+    // 2. Le prix au Km en Zone Urbaine (de 3km à 10km)
+    // C'est plus cher car plus de trafic/feux tricolores
+    const PRICE_PER_KM_URBAN = 250;
+
+    // 3. Le prix au Km Longue Distance (au-delà de 10km)
+    // Un peu moins cher au km car la moto roule mieux (voies rapides)
+    const PRICE_PER_KM_LONG = 200;
+
+    let finalPrice = 0;
+
+    // --- LOGIQUE DE CALCUL ---
+
+    if (distanceInKm <= BASE_DIST_KM) {
+        // Cas 1 : Très courte distance
+        finalPrice = BASE_PRICE;
+    }
+    else if (distanceInKm <= 10) {
+        // Cas 2 : Distance Moyenne (3km - 10km)
+        const extraKm = distanceInKm - BASE_DIST_KM;
+        finalPrice = BASE_PRICE + (extraKm * PRICE_PER_KM_URBAN);
+    }
+    else {
+        // Cas 3 : Longue distance (> 10km)
+        // On calcule d'abord le prix complet des 10 premiers km
+        const priceForFirst10Km = BASE_PRICE + ((10 - BASE_DIST_KM) * PRICE_PER_KM_URBAN);
+
+        // Puis on ajoute le reste avec le tarif "route"
+        const extraKm = distanceInKm - 10;
+        finalPrice = priceForFirst10Km + (extraKm * PRICE_PER_KM_LONG);
+    }
+
+    // --- ARRONDISSEMENT "SPÉCIAL ABIDJAN" ---
+    // On arrondit toujours à la centaine supérieure pour éviter les pièces de 25 ou 50.
+    // Ex: 1320 FCFA devient 1400 FCFA. C'est crucial pour la monnaie.
+    return Math.ceil(finalPrice / 100) * 100;
+};

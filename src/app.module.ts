@@ -25,7 +25,7 @@ import { SupportModule } from './modules/support/support.module';
 import { VoucherModule } from './modules/voucher/voucher.module';
 import { BullModule } from '@nestjs/bullmq';
 import { TurboModule } from './turbo/turbo.module';
-import { RecordClickModule } from './modules/analytics/app/recordClick.module';
+import { AppMobileModule } from './modules/marketing/app-mobile/app-mobile.module';
 
 @Module({
   imports: [
@@ -71,7 +71,7 @@ import { RecordClickModule } from './modules/analytics/app/recordClick.module';
     SupportModule,
     VoucherModule,
     TurboModule,
-    RecordClickModule,
+    AppMobileModule,
   ],
 })
 

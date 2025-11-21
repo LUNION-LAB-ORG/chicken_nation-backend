@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Address, DeliveryService, OrderStatus } from "@prisma/client";
-import { LivraisonsByKm, TURBO_API, TURBO_API_KEY, mappingMethodPayment } from "../constantes/turbo.constante";
+import { calculateDeliveryPrice, TURBO_API, TURBO_API_KEY, mappingMethodPayment } from "../constantes/turbo.constante";
 import { IFraisLivraison, IFraisLivraisonResponsePaginate } from "../dto/frais-livraison.response";
 import { CommandeResponse, PaiementMode } from "../interfaces/turbo.interfaces";
 
@@ -130,15 +130,9 @@ export class TurboService {
   /**
    * Calcule le prix de la livraison en fonction de la distance en km.
    * @param distanceKm La distance de la livraison en kilomètres.
-   * @returns Le prix de la livraison ou null si aucune correspondance n'est trouvée.
+   * @returns Le prix de la livraison.
    */
-  getPrixLivraison(distanceKm: number): number | null {
-    for (const palier of LivraisonsByKm) {
-      if (distanceKm <= palier.maxKm) {
-        return palier.price;
-      }
-    }
-    return null;
+  getPrixLivraison(distanceKm: number): number {
+    return calculateDeliveryPrice(distanceKm);
   }
-
 }
