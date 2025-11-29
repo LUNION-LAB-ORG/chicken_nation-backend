@@ -12,6 +12,10 @@ export class KkiapayService {
         verify: (transactionId: string) => Promise<any>;
         refund: (transactionId: string) => Promise<any>;
     };
+    private readonly kkiapay_old: {
+        verify: (transactionId: string) => Promise<any>;
+        refund: (transactionId: string) => Promise<any>;
+    };
     private readonly logger = new Logger(KkiapayService.name);
 
     constructor(private readonly config: ConfigService, private readonly eventEmitter: KkiapayEvent) {
@@ -21,6 +25,12 @@ export class KkiapayService {
             secretkey: this.config.get<string>('KKIA_PAY_SECRET_KEY') ?? "",
             sandbox: this.config.get<string>('KKIA_PAY_SANDBOX') === "true"
         })
+        this.kkiapay_old = kkiapay({
+            privatekey: this.config.get<string>('KKIA_PAY_PRIVATE_KEY_OLD') ?? "",
+            publickey: this.config.get<string>('KKIA_PAY_PUBLIC_KEY_OLD') ?? "",
+            secretkey: this.config.get<string>('KKIA_PAY_SECRET_KEY_OLD') ?? "",
+            sandbox: this.config.get<string>('KKIA_PAY_SANDBOX_OLD') === "true"
+        })
     }
 
     // Verification de la transaction
@@ -28,12 +38,19 @@ export class KkiapayService {
         if (!transactionId) {
             throw new BadRequestException("Transaction non trouvée");
         }
+
         return this.kkiapay.verify(transactionId).
             then((response) => {
                 return response as KkiapayResponse;
             }).
             catch((error) => {
-                throw new BadRequestException("Transaction non trouvée");
+                return this.kkiapay_old.verify(transactionId).
+                    then((response) => {
+                        return response as KkiapayResponse;
+                    }).
+                    catch((error) => {
+                        throw new BadRequestException("Transaction non trouvée");
+                    })
             })
     }
 
