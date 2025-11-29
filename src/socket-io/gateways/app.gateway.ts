@@ -15,16 +15,27 @@ import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { ConnectedUser } from '../interfaces/app.gateway.interface';
 import { Logger } from '@nestjs/common';
 
+// Interface pour le cache
+interface CachedUser {
+  data: ConnectedUser;
+  expiresAt: number;
+}
+
 @WebSocketGateway({
   cors: { origin: '*' },
   namespace: '/app', // Namespace global pour toute l'app
 })
 export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(AppGateway.name);
+
   @WebSocketServer()
   server: Server;
 
   private connectedUsers = new Map<string, ConnectedUser>();
+
+  // Cache pour éviter de spammer la DB lors des boucles de connexion
+  private authCache = new Map<string, CachedUser>();
+  private readonly CACHE_TTL_MS = 10000; // Le cache dure 10 secondes
 
   // Map pour tracker qui est en train d'écrire dans quelle conversation
   private typingUsers = new Map<string, Set<string>>(); // conversationId -> Set<userId>
@@ -44,33 +55,44 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const userType = client.handshake.query.type as 'user' | 'customer';
 
       if (!token || !userType) {
-        this.logger.warn('Connexion refusée: token ou type manquant');
+        // Warning retiré pour éviter de polluer les logs en cas de spam
         client.disconnect();
         return;
       }
 
-      // Vérifier et décoder le token
-      const decoded = await this.jwtService.verifyToken(token, userType);
+      // Vérifier et décoder le token (Opération CPU rapide)
+      let decoded;
+      try {
+        decoded = await this.jwtService.verifyToken(token, userType);
+      } catch (e) {
+        client.disconnect();
+        return;
+      }
 
-      // Identifier le type d'utilisateur et récupérer ses informations
+      // Identifier le type d'utilisateur (AVEC PROTECTION CACHE)
       const userInfo = await this.identifyUser(decoded, userType);
 
       if (!userInfo) {
-        this.logger.warn('Connexion refusée: utilisateur non trouvé ou inactif');
+        // this.logger.warn('Connexion refusée: utilisateur non trouvé ou inactif');
         client.disconnect();
         return;
       }
+
+      // Éviter les doublons de socket si la déconnexion précédente n'est pas encore finie
+      if (this.connectedUsers.has(client.id)) return;
 
       // Stocker la connexion
       this.connectedUsers.set(client.id, {
         ...userInfo,
         socketId: client.id,
       });
+
       // Rejoindre les rooms
       await this.joinRooms(client, userInfo);
-      this.logger.log(`Connexion: ${userInfo.type} ${userInfo.id} connecté`);
+
+      this.logger.log(`Connexion: ${userInfo.type} ${userInfo.id} connecté (Socket: ${client.id})`);
     } catch (error) {
-      this.logger.error('Erreur de connexion:', error);
+      this.logger.error(`Erreur de connexion socket: ${error.message}`);
       client.disconnect();
     }
   }
@@ -100,42 +122,81 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return false;
   }
 
+  /**
+   * Identifie l'utilisateur en utilisant un Cache pour protéger la DB
+   */
   private async identifyUser(
     decoded: { sub: string },
     type: 'user' | 'customer',
   ): Promise<ConnectedUser | null> {
     if (!decoded.sub) return null;
 
-    if (type === 'customer') {
-      const customer = await this.prisma.customer.findUnique({
-        where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
-      });
+    const cacheKey = `${type}_${decoded.sub}`;
+    const now = Date.now();
 
-      if (customer) {
-        return {
-          id: customer.id,
-          type: 'customer',
-          socketId: '',
-        };
-      }
-    } else if (type === 'user') {
-      const user = await this.prisma.user.findUnique({
-        where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
-        include: { restaurant: true },
-      });
-
-      if (user) {
-        return {
-          id: user.id,
-          type: 'user',
-          userType: user.type,
-          restaurantId: user.restaurant_id ?? undefined,
-          socketId: '',
-        };
+    // 1. Vérification du Cache
+    if (this.authCache.has(cacheKey)) {
+      const cached = this.authCache.get(cacheKey);
+      if (cached && cached.expiresAt > now) {
+        // Retourner la version en mémoire sans toucher la DB
+        return cached.data;
+      } else {
+        this.authCache.delete(cacheKey);
       }
     }
 
-    return null;
+    // 2. Requête Base de données (uniquement si pas en cache)
+    let result: ConnectedUser | null = null;
+
+    try {
+      if (type === 'customer') {
+        const customer = await this.prisma.customer.findUnique({
+          where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
+          select: { id: true } // Optimisation : on ne prend que l'ID
+        });
+
+        if (customer) {
+          result = {
+            id: customer.id,
+            type: 'customer',
+            socketId: '',
+          };
+        }
+      } else if (type === 'user') {
+        const user = await this.prisma.user.findUnique({
+          where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
+          include: { restaurant: true },
+        });
+
+        if (user) {
+          result = {
+            id: user.id,
+            type: 'user',
+            userType: user.type,
+            restaurantId: user.restaurant_id ?? undefined,
+            socketId: '',
+          };
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Erreur DB dans identifyUser: ${error.message}`);
+      return null;
+    }
+
+    // 3. Mise en cache du résultat
+    if (result) {
+      this.authCache.set(cacheKey, {
+        data: result,
+        expiresAt: now + this.CACHE_TTL_MS, // Valide 10 secondes
+      });
+
+      // Nettoyage préventif si le cache devient trop gros
+      if (this.authCache.size > 2000) {
+        this.authCache.clear();
+      }
+    }
+
+    return result;
   }
 
   private async joinRooms(client: Socket, userInfo: ConnectedUser) {
@@ -308,8 +369,8 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
           userName: userName || `${userType} ${userId}`,
         });
 
-      this.logger.log(`Typing indicator: ${userId} ${isTyping ? 'started' : 'stopped'} typing in ${conversationId}`);
-        
+      // this.logger.log(`Typing indicator: ${userId} ${isTyping ? 'started' : 'stopped'} typing in ${conversationId}`);
+
     } catch (error) {
       this.logger.error('Error handling typing indicator:', error);
     }

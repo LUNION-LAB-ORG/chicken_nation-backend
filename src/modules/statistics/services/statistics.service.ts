@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Inject } from '@nestjs/common';
 import {
   startOfMonth,
   endOfMonth,
@@ -37,6 +37,8 @@ import {
 } from '../dto/dashboard.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { statisticsIcons } from '../constantes/statistics.constante';
+import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
+import { getCacheKey } from 'src/common/constantes/cache.constante';
 
 interface DateRange {
   startDate: Date;
@@ -50,14 +52,24 @@ interface PreviousPeriod {
 
 @Injectable()
 export class StatisticsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // @Inject(CACHE_MANAGER) private cacheManager: Cache
+  ) { }
 
   async getDashboardStats(query: GetStatsQueryDto): Promise<DashboardViewModel> {
+    // Génération de la clé de cache
+    // const cacheKey = getCacheKey('dashboard_stats', query);
+
     // Validation et parsing des dates
     const dateRange = this.parseDateRange(query);
     const restaurantFilter = this.buildRestaurantFilter(query.restaurantId);
 
     try {
+      // const cachedData = await this.cacheManager.get<DashboardViewModel>(cacheKey);
+      // if (cachedData) {
+      //   return cachedData;
+      // }
       // Exécution parallèle de toutes les requêtes
       const [stats, revenue, weeklyOrders, bestSellingMenus, dailySales] = await Promise.all([
         this.getStatsCards(dateRange, restaurantFilter, query.period || 'month'),
@@ -67,6 +79,15 @@ export class StatisticsService {
         this.getDailySalesData(dateRange, restaurantFilter),
       ]);
 
+      // Stockage des données dans le cache
+      // await this.cacheManager.set(cacheKey, {
+      //   stats,
+      //   revenue,
+      //   weeklyOrders,
+      //   bestSellingMenus,
+      //   dailySales,
+      // });
+      // Retour des données
       return {
         stats,
         revenue,

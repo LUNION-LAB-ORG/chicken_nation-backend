@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { StatisticsService } from '../services/statistics.service';
 import { GetStatsQueryDto, DashboardViewModel } from '../dto/dashboard.dto';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
@@ -8,13 +8,16 @@ import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { RequirePermission } from 'src/common/decorators/user-require-permission';
 import { Modules } from 'src/common/enum/module-enum';
 import { Action } from 'src/common/enum/action.enum';
+import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
 
 @Controller('statistics')
+@UseInterceptors(CacheInterceptor)
 export class StatisticsController {
   constructor(private readonly statisticsService: StatisticsService) { }
 
   @UseGuards(JwtAuthGuard)
   @Get('dashboard')
+  @CacheTTL(5 * 60 * 1000)
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.DASHBOARD, Action.READ)
   @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.MARKETING)

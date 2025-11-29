@@ -25,8 +25,10 @@
     "db:migrate": "npx prisma migrate dev"
   },
   "dependencies": {
+    "@keyv/redis": "^5.1.4",
     "@kkiapay-org/nodejs-sdk": "^1.0.7",
     "@nestjs/bullmq": "^11.0.3",
+    "@nestjs/cache-manager": "^3.0.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.1",
@@ -43,6 +45,7 @@
     "bcryptjs": "^3.0.2",
     "body-parser": "^2.2.0",
     "bullmq": "^5.58.5",
+    "cache-manager": "^7.2.5",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "compression": "^1.8.0",

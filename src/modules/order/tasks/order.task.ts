@@ -21,6 +21,7 @@ export class OrderTask {
   @Cron(CronExpression.EVERY_MINUTE)
   async updateOrders() {
     this.logger.debug('Mise à jour des commandes...');
+    // TODO : Quand on aura ajouter pour gérer le statut de collecté pour les commandes on va retirer
 
     try {
       // Mettre en livraison toutes les commandes prêtes à livrer chaque minute

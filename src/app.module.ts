@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CacheModule } from '@nestjs/cache-manager';
 import { ConfigModule } from '@nestjs/config';
 import { CommonModule } from 'src/common/common.module';
 import { UsersModule } from 'src/modules/users/users.module';
@@ -26,10 +27,24 @@ import { VoucherModule } from './modules/voucher/voucher.module';
 import { BullModule } from '@nestjs/bullmq';
 import { TurboModule } from './turbo/turbo.module';
 import { AppMobileModule } from './modules/marketing/app-mobile/app-mobile.module';
+import KeyvRedis from '@keyv/redis';
 
 @Module({
   imports: [
     JsonWebTokenModule,
+    CacheModule.registerAsync({
+      isGlobal: true,
+      useFactory: async () => {
+        return {
+          stores: [
+            // new Keyv({
+            //   store: new CacheableMemory({ ttl: 60000, lruSize: 5000 }),
+            // }),
+            new KeyvRedis('redis://localhost:6379'),
+          ],
+        };
+      },
+    }),
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
     EventEmitterModule.forRoot({}),
