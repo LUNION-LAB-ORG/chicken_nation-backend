@@ -64,7 +64,13 @@ export class KkiapayService {
                 return response as KkiapayResponse;
             }).
             catch((error) => {
-                throw new BadRequestException("Transaction non trouvée");
+                return this.kkiapay_old.refund(transactionId).
+                    then((response) => {
+                        return response as KkiapayResponse;
+                    }).
+                    catch((error) => {
+                        throw new BadRequestException("Transaction non trouvée");
+                    })
             })
     }
 
