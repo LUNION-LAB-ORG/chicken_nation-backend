@@ -40,7 +40,7 @@ export class TwilioService {
             console.log(`OTP for ${phoneNumber}: ${otp}`);
             return true;
         }
-        
+
         return await this.sendWhatsappMessage({
             phoneNumber,
             contentSid: this.twilioWhatsappTemplate.otp_template.sid,
@@ -64,6 +64,7 @@ export class TwilioService {
             return null;
         }
     }
+
     async sendWhatsappMessage({ phoneNumber, contentSid, contentVariables }: { phoneNumber: string, contentSid: string, contentVariables: string }): Promise<MessageInstance | null> {
         try {
             const response = await this.twilioClient.messages.create({
