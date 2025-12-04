@@ -11,7 +11,7 @@ import {
 } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { Request } from 'express';
-import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';

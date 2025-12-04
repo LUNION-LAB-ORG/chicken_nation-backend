@@ -3,10 +3,10 @@ import { DishSupplementService } from 'src/modules/menu/services/dish-supplement
 import { CreateDishSupplementDto } from 'src/modules/menu/dto/create-dish-supplement.dto';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
-import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { UserRole, UserType } from '@prisma/client';
 import { UserTypesGuard } from 'src/common/guards/user-types.guard';
-import { UserTypes } from 'src/common/decorators/user-types.decorator';
+import { UserTypes } from 'src/modules/auth/decorators/user-types.decorator';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 @ApiTags('Dish Supplements')

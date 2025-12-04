@@ -12,17 +12,17 @@ import { CreateDishRestaurantDto } from 'src/modules/menu/dto/create-dish-restau
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRole, UserType } from '@prisma/client';
 import { UserTypesGuard } from 'src/common/guards/user-types.guard';
-import { UserTypes } from 'src/common/decorators/user-types.decorator';
+import { UserTypes } from 'src/modules/auth/decorators/user-types.decorator';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
-import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 
 
 @ApiTags('Dish Restaurants')
 @ApiBearerAuth()
 @Controller('dish-restaurants')
 export class DishRestaurantController {
-  constructor(private readonly dishRestaurantService: DishRestaurantService) {}
+  constructor(private readonly dishRestaurantService: DishRestaurantService) { }
 
   @Post()
   @ApiOperation({ summary: "Création d'une nouvelle relation entre plat et restaurant" })

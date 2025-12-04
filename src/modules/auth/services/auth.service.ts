@@ -8,7 +8,7 @@ import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { OtpService } from 'src/modules/auth/otp/otp.service';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { TwilioService } from 'src/twilio/services/twilio.service';
-import { permissionsByRole } from 'src/common/constantes/permissionsByRole';
+import { permissionsByRole } from 'src/modules/auth/constantes/permissionsByRole';
 import { UserRole } from '@prisma/client';
 
 @Injectable()
@@ -110,7 +110,7 @@ export class AuthService {
       data: { entity_status: EntityStatus.ACTIVE, last_login_at: new Date() },
     });
 
-    
+
 
     return { ...rest, token };
   }

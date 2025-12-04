@@ -4,10 +4,10 @@ import { CreateSupplementDto } from 'src/modules/menu/dto/create-supplement.dto'
 import { UpdateSupplementDto } from 'src/modules/menu/dto/update-supplement.dto';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
-import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { SupplementCategory, UserRole, UserType } from '@prisma/client';
 import { UserTypesGuard } from 'src/common/guards/user-types.guard';
-import { UserTypes } from 'src/common/decorators/user-types.decorator';
+import { UserTypes } from 'src/modules/auth/decorators/user-types.decorator';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';

@@ -24,9 +24,9 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
 import { UserRole } from '@prisma/client';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
-import { UserRoles } from 'src/common/decorators/user-roles.decorator';
-import { RequirePermission } from 'src/common/decorators/user-require-permission';
-import { Modules } from 'src/common/enum/module-enum';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/common/enum/action.enum';
 
 @ApiTags('Conversations')

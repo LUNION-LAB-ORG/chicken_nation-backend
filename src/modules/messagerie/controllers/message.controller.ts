@@ -19,9 +19,9 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
 import { Customer, User, UserRole } from '@prisma/client';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
-import { UserRoles } from 'src/common/decorators/user-roles.decorator';
-import { RequirePermission } from 'src/common/decorators/user-require-permission';
-import { Modules } from 'src/common/enum/module-enum';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/common/enum/action.enum';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 
@@ -59,7 +59,7 @@ export class MessageController {
   @Post()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @UserRoles(UserRole.ADMIN)
-  @RequirePermission(Modules.MESSAGES ,Action.CREATE)
+  @RequirePermission(Modules.MESSAGES, Action.CREATE)
   async createMessage(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,

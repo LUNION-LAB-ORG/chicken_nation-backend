@@ -1,6 +1,5 @@
 import { UserRole } from '@prisma/client';
-import { Modules } from '../enum/module-enum';
-// chemin selon ton projet
+import { Modules } from '../enums/module-enum';
 
 export interface RolePermissions {
   modules: Partial<Record<Modules, string[]>>;
@@ -34,19 +33,24 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
   [UserRole.MARKETING]: {
     modules: {
       [Modules.DASHBOARD]: ['read'],
-      [Modules.CATEGORIES]: ['create', 'read', 'update', 'delete'],
+      [Modules.INVENTAIRE]: ['create', 'read', 'update', 'delete'],
       [Modules.PLATS]: ['create', 'read', 'update', 'delete'],
       [Modules.PROMOTIONS]: ['create', 'read', 'update', 'delete'],
     },
-    exclusions: [Modules.CHIFFRE_AFFAIRES],
+    exclusions: [Modules.DASHBOARD],
   },
   [UserRole.COMPTABLE]: {
     modules: {
       [Modules.COMMANDES]: ['read'],
-      [Modules.CHIFFRE_AFFAIRES]: ['read'],
+      [Modules.DASHBOARD]: ['read'],
     },
   },
   [UserRole.CUISINE]: {
+    modules: {
+      [Modules.COMMANDES]: ['read', 'update'],
+    },
+  },
+  [UserRole.ASSISTANT_MANAGER]: {
     modules: {
       [Modules.COMMANDES]: ['read', 'update'],
     },

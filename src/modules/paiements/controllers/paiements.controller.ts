@@ -5,7 +5,7 @@ import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
 import { CreatePaiementKkiapayDto } from '../dto/create-paiement-kkiapay.dto';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 // import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
-import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 
 import { UserRole } from '@prisma/client';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
@@ -19,7 +19,7 @@ import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 @UseGuards(JwtAuthGuard, UserPermissionsGuard)
 @Controller('paiements')
 export class PaiementsController {
-  constructor(private readonly paiementsService: PaiementsService) {}
+  constructor(private readonly paiementsService: PaiementsService) { }
 
   @ApiOperation({ summary: 'Payer avec Kkiapay' })
   @Post('pay')

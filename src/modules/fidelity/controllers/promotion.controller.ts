@@ -13,7 +13,7 @@ import { ApplyDiscountPromotionDtoResponse, ApplyItemDto } from '../dto/apply-di
 import { FileInterceptor } from '@nestjs/platform-express';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
-import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { Logger } from '@nestjs/common';
 

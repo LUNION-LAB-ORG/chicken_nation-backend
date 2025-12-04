@@ -31,10 +31,10 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { ReceiptsService } from '../services/receipts.service';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
-import { UserRoles } from 'src/common/decorators/user-roles.decorator';
-import { RequirePermission } from 'src/common/decorators/user-require-permission';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/common/enum/action.enum';
-import { Modules } from 'src/common/enum/module-enum';
+import { Modules } from 'src/modules/auth/enums/module-enum';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 
 @ApiTags('Commandes')

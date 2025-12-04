@@ -2,11 +2,11 @@ import { Controller, Get, Query, UseGuards, UseInterceptors } from '@nestjs/comm
 import { StatisticsService } from '../services/statistics.service';
 import { GetStatsQueryDto, DashboardViewModel } from '../dto/dashboard.dto';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { UserRoles } from 'src/common/decorators/user-roles.decorator';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { UserRole } from '@prisma/client';
 import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
-import { RequirePermission } from 'src/common/decorators/user-require-permission';
-import { Modules } from 'src/common/enum/module-enum';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/common/enum/action.enum';
 import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
 
@@ -27,7 +27,7 @@ export class StatisticsController {
 
   @Get('revenue')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.CHIFFRE_AFFAIRES, Action.READ)
+  @RequirePermission(Modules.DASHBOARD, Action.READ)
   @UserRoles(UserRole.ADMIN, UserRole.COMPTABLE)
   async getRevenueStats(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);
@@ -63,7 +63,7 @@ export class StatisticsController {
 
   @Get('daily-sales')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.CHIFFRE_AFFAIRES, Action.READ)
+  @RequirePermission(Modules.DASHBOARD, Action.READ)
   @UserRoles(UserRole.ADMIN, UserRole.COMPTABLE)
   async getDailySales(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);

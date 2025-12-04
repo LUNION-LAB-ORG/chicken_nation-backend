@@ -91,7 +91,7 @@ export class DishService {
   }
 
   async findMany(filter: QueryDishDto): Promise<QueryResponseDto<Dish>> {
-    const { search, status, categoryId, minPrice, maxPrice, page = 1, limit = 10, sortBy = "created_at", sortOrder = "desc" } = filter;
+    const { search, status, categoryId, minPrice, maxPrice, page = 1, limit = 10, sortBy = "name", sortOrder = "asc" } = filter;
 
     const where: Prisma.DishWhereInput = {
       entity_status: EntityStatus.ACTIVE,
@@ -140,7 +140,7 @@ export class DishService {
           },
         },
         orderBy: {
-          name: 'asc',
+          // name: 'asc',
           [sortBy]: sortOrder,
         },
         skip: (page - 1) * limit,

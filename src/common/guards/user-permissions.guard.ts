@@ -1,15 +1,15 @@
-import { permissionsByRole, RolePermissions } from 'src/common/constantes/permissionsByRole';
+import { permissionsByRole, RolePermissions } from 'src/modules/auth/constantes/permissionsByRole';
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { Modules } from 'src/common/enum/module-enum';
+import { Modules } from 'src/modules/auth/enums/module-enum';
 import { UserRole } from '@prisma/client';
 
 @Injectable()
 export class UserPermissionsGuard implements CanActivate {
-  constructor(private reflector: Reflector) {}
+  constructor(private reflector: Reflector) { }
 
   canActivate(context: ExecutionContext): boolean {
-    
+
     // Récupère la permission requise depuis le décorateur
     const required = this.reflector.get<{ module: Modules; action: string }>(
       'permission',
