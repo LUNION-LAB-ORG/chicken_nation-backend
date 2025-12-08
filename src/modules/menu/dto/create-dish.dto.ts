@@ -49,6 +49,13 @@ export class CreateDishDto {
     @IsUUID()
     category_id: string;
 
+    @ApiPropertyOptional({ description: 'Temps de préparation du plat en minutes', example: 15 })
+    @IsOptional()
+    @IsNumber()
+    @Transform(({ value }) => Number(value))
+     cooking_time:number
+      // en minutes
+
     @ApiPropertyOptional({ description: 'ID des restaurants', example: ['123', '456'] })
     @IsOptional()
     @IsUUID(undefined, { each: true })
