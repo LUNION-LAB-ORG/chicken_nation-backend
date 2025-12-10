@@ -27,6 +27,7 @@ import { PromotionService } from 'src/modules/fidelity/services/promotion.servic
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
 import { addDays, addHours, addMinutes, addSeconds } from 'date-fns';
 import { PromotionErrorKeys } from 'src/modules/fidelity/enums/promotion-error-keys.enum';
+import { VoucherService } from '../../voucher/voucher.service';
 
 @Injectable()
 export class OrderHelper {
@@ -42,6 +43,7 @@ export class OrderHelper {
     private loyaltyService: LoyaltyService,
     private promotionService: PromotionService,
     private restaurantService: RestaurantService,
+    private voucherService: VoucherService,
   ) {
     this.taxRate = Number(
       this.configService.get<number>('ORDER_TAX_RATE', 0.05),
@@ -212,10 +214,6 @@ export class OrderHelper {
   async applyPromoCode(promoCode?: string): Promise<number> {
     if (!promoCode) return 0;
 
-    // Logique pour vérifier et appliquer un code promo
-    // Idéalement, nous aurions une table pour les codes promo
-
-    // Pour simplifier, on renvoie 0 (pas de réduction)
     return 0;
   }
 
@@ -349,9 +347,8 @@ export class OrderHelper {
       const roundedTax = Math.ceil(rawTax / 10) * 10;
 
       return roundedTax;
-
     } catch (error) {
-      console.error("Erreur lors du calcul de la taxe:", error);
+      console.error('Erreur lors du calcul de la taxe:', error);
       // En cas d'erreur, on retourne 0 par sécurité
       return 0;
     }
@@ -669,11 +666,11 @@ export class OrderHelper {
       ...(customerId && { customer_id: customerId }),
       ...(startDate &&
         endDate && {
-        created_at: {
-          gte: new Date(startDate),
-          lte: new Date(endDate),
-        },
-      }),
+          created_at: {
+            gte: new Date(startDate),
+            lte: new Date(endDate),
+          },
+        }),
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
       ...(restaurantId && {
@@ -720,14 +717,13 @@ export class OrderHelper {
     data?: any;
     offers_dishes: { dish_id: string; quantity: number; price: number }[];
   } | null> {
-
     this.logger.debug({
       message: 'Calculating promotion price',
       promotion_id,
       customer_id: customerData.customer_id,
       totalDishes,
       orderItems,
-    })
+    });
 
     if (!promotion_id) return null;
     const canUse = await this.promotionService.canCustomerUsePromotion(

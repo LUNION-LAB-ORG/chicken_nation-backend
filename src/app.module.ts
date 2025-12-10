@@ -27,6 +27,7 @@ import { VoucherModule } from './modules/voucher/voucher.module';
 import { BullModule } from '@nestjs/bullmq';
 import { TurboModule } from './turbo/turbo.module';
 import { AppMobileModule } from './modules/marketing/app-mobile/app-mobile.module';
+import { CodePromoModule } from './modules/code-promo/code-promo.module';
 import KeyvRedis from '@keyv/redis';
 
 @Module({
@@ -87,6 +88,7 @@ import KeyvRedis from '@keyv/redis';
     VoucherModule,
     TurboModule,
     AppMobileModule,
+    CodePromoModule,
   ],
 })
 

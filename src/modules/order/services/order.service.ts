@@ -7,7 +7,15 @@ import {
 } from '@nestjs/common';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { UpdateOrderDto } from '../dto/update-order.dto';
-import { OrderStatus, EntityStatus, Customer, Order, Prisma, OrderType, DeliveryService } from '@prisma/client';
+import {
+  OrderStatus,
+  EntityStatus,
+  Customer,
+  Order,
+  Prisma,
+  OrderType,
+  DeliveryService,
+} from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Request } from 'express';
 import { QueryOrderDto } from '../dto/query-order.dto';
@@ -28,42 +36,69 @@ export class OrderService {
     private orderHelper: OrderHelper,
     private orderEvent: OrderEvent,
     private readonly orderWebSocketService: OrderWebSocketService,
-    private readonly turboService: TurboService
-  ) { }
+    private readonly turboService: TurboService,
+  ) {}
 
   /**
    * Crée une nouvelle commande
    */
   async create(req: Request, createOrderDto: CreateOrderDto): Promise<any> {
-
     const customer = req.user as Customer;
 
-    const { items, paiement_id, customer_id, restaurant_id, promotion_id, points, ...orderData } = createOrderDto;
+    const {
+      items,
+      paiement_id,
+      customer_id,
+      restaurant_id,
+      promotion_id,
+      points,
+      ...orderData
+    } = createOrderDto;
 
     // Identifier le client ou créer à partir des données
-    const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: customer_id ?? customer.id });
+    const customerData = await this.orderHelper.resolveCustomerData({
+      ...createOrderDto,
+      customer_id: customer_id ?? customer.id,
+    });
 
     // Récupérer le restaurant le plus proche
-    const restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: restaurant_id, address: orderData.address });
+    const restaurant = await this.orderHelper.getClosestRestaurant({
+      restaurant_id: restaurant_id,
+      address: orderData.address,
+    });
 
     // Récupérer les plats et vérifier leur disponibilité
-    const dishesWithDetails = await this.orderHelper.getDishesWithDetails(items.map(item => item.dish_id));
+    const dishesWithDetails = await this.orderHelper.getDishesWithDetails(
+      items.map((item) => item.dish_id),
+    );
 
     // Vérifier l'adresse
-    const address = await this.orderHelper.validateAddress(orderData.address ?? "");
+    const address = await this.orderHelper.validateAddress(
+      orderData.address ?? '',
+    );
 
     // Vérifier et appliquer le code promo s'il existe
-    const promoDiscount = await this.orderHelper.applyPromoCode(orderData.code_promo);
+    const promoDiscount = await this.orderHelper.applyPromoCode(
+      orderData.code_promo,
+    );
 
     // Calculer les montants et préparer les order items
-    const { orderItems, netAmount, totalDishes } = await this.orderHelper.calculateOrderDetails(items, dishesWithDetails);
+    const { orderItems, netAmount, totalDishes } =
+      await this.orderHelper.calculateOrderDetails(items, dishesWithDetails);
 
     //Calculer la promotion et la création de l'utilisation de la promotion
     const promotion = await this.orderHelper.calculatePromotionPrice(
-      promotion_id ?? "",
-      { customer_id: customerData.customer_id, loyalty_level: customerData.loyalty_level },
+      promotion_id ?? orderData.code_promo ?? '',
+      {
+        customer_id: customerData.customer_id,
+        loyalty_level: customerData.loyalty_level,
+      },
       totalDishes,
-      orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice }))
+      orderItems.map((item) => ({
+        dish_id: item.dish_id,
+        quantity: item.quantity,
+        price: item.dishPrice,
+      })),
     );
 
     const discountPromotion = promotion ? promotion.discount_amount : 0;
@@ -71,17 +106,24 @@ export class OrderService {
     const applicable = promotion ? promotion.applicable : false;
 
     // Calculer les frais de livraison selon la distance
-    const delivery = await this.obtenirFraisLivraison({ lat: address.latitude, long: address.longitude });
-    const deliveryFee = orderData.type == OrderType.DELIVERY ? delivery.montant : 0;
+    const delivery = await this.obtenirFraisLivraison({
+      lat: address.latitude,
+      long: address.longitude,
+    });
+    const deliveryFee =
+      orderData.type == OrderType.DELIVERY ? delivery.montant : 0;
 
     // Vérifier le paiement
     const payment = await this.orderHelper.checkPayment(createOrderDto);
 
     // Calculer le montant de réduction des points de fidélité
-    const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(customerData.total_points, points ?? 0);
+    const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(
+      customerData.total_points,
+      points ?? 0,
+    );
 
     // Calcul de la remise
-    const discount = (netAmount * promoDiscount) + loyaltyFee + discountPromotion;
+    const discount = netAmount * promoDiscount + loyaltyFee + discountPromotion;
 
     // Calcul du montant remisé
     const totalAfterDiscount = netAmount - discount;
@@ -93,7 +135,9 @@ export class OrderService {
     const totalAmount = totalAfterDiscount + tax + deliveryFee;
 
     if (payment && payment.amount < totalAmount) {
-      throw new BadRequestException('Le montant du paiement est inférieur au montant de la commande');
+      throw new BadRequestException(
+        'Le montant du paiement est inférieur au montant de la commande',
+      );
     }
 
     // Générer un numéro de commande unique
@@ -112,13 +156,13 @@ export class OrderService {
           ...(applicable && { promotion: { connect: { id: promotion_id } } }),
           customer: {
             connect: {
-              id: customerData.customer_id
-            }
+              id: customerData.customer_id,
+            },
           },
           restaurant: {
             connect: {
-              id: restaurant.id
-            }
+              id: restaurant.id,
+            },
           },
           reference: orderNumber,
           ...(payment && { paiements: { connect: { id: payment.id } } }),
@@ -130,23 +174,26 @@ export class OrderService {
           net_amount: Number(netAmount),
           amount: Number(totalAmount),
           date: orderData.date || new Date(),
-          time: orderData.time || "10:00",
+          time: orderData.time || '10:00',
           status: OrderStatus.PENDING,
           paied_at: payment ? payment.created_at : null,
           paied: payment ? true : false,
           order_items: {
-            create: [...orderItems.map(item => ({
-              dish_id: item.dish_id,
-              quantity: item.quantity,
-              amount: item.amount,
-              epice: item.epice,
-              supplements: item.supplements
-            })), ...offersDishes.map(item => ({
-              dish_id: item.dish_id,
-              quantity: item.quantity,
-              amount: 0,
-              supplements: []
-            }))],
+            create: [
+              ...orderItems.map((item) => ({
+                dish_id: item.dish_id,
+                quantity: item.quantity,
+                amount: item.amount,
+                epice: item.epice,
+                supplements: item.supplements,
+              })),
+              ...offersDishes.map((item) => ({
+                dish_id: item.dish_id,
+                quantity: item.quantity,
+                amount: 0,
+                supplements: [],
+              })),
+            ],
           },
           entity_status: EntityStatus.ACTIVE,
         },
@@ -192,7 +239,11 @@ export class OrderService {
   /**
    * Met à jour le statut d'une commande
    */
-  async updateStatus(id: string, status: OrderStatus, meta?: Record<string, any>) {
+  async updateStatus(
+    id: string,
+    status: OrderStatus,
+    meta?: Record<string, any>,
+  ) {
     const order = await this.findById(id);
     //Meta peut contenir estimated_delivery_time, estimated_preparation_time, deliveryDriverId
     // Valider la transition d'état
@@ -205,9 +256,14 @@ export class OrderService {
     const updatedOrder = await this.prisma.order.update({
       where: { id },
       data: {
-        status: status == OrderStatus.ACCEPTED ? OrderStatus.IN_PROGRESS : status,
-        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(meta?.estimated_delivery_time ?? ""),
-        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(meta?.estimated_preparation_time ?? ""),
+        status:
+          status == OrderStatus.ACCEPTED ? OrderStatus.IN_PROGRESS : status,
+        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(
+          meta?.estimated_delivery_time ?? '',
+        ),
+        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(
+          meta?.estimated_preparation_time ?? '',
+        ),
         updated_at: new Date(),
         ...(status === OrderStatus.COMPLETED && { completed_at: new Date() }),
       },
@@ -234,14 +290,11 @@ export class OrderService {
 
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderStatusUpdatedEvent({
-      order: updatedOrder
+      order: updatedOrder,
     });
 
     // Émettre l'événement de mise à jour de statut avec l'ancien statut
-    this.orderWebSocketService.emitStatusUpdate(
-      updatedOrder,
-      order.status
-    );
+    this.orderWebSocketService.emitStatusUpdate(updatedOrder, order.status);
 
     return updatedOrder;
   }
@@ -251,12 +304,12 @@ export class OrderService {
    */
   async findById(id: string) {
     if (!id) {
-      throw new BadRequestException('L\'identifiant de la commande est requis');
+      throw new BadRequestException("L'identifiant de la commande est requis");
     }
     const order = await this.prisma.order.findFirst({
       where: {
         id,
-        entity_status: { not: EntityStatus.DELETED }
+        entity_status: { not: EntityStatus.DELETED },
       },
       include: {
         order_items: {
@@ -296,7 +349,7 @@ export class OrderService {
     const order = await this.prisma.order.findFirst({
       where: {
         reference,
-        entity_status: { not: EntityStatus.DELETED }
+        entity_status: { not: EntityStatus.DELETED },
       },
       include: {
         order_items: {
@@ -334,7 +387,7 @@ export class OrderService {
       page = 1,
       limit = 10,
       sortBy = 'created_at',
-      sortOrder = 'desc'
+      sortOrder = 'desc',
     } = filters;
 
     const where: Prisma.OrderWhereInput = {
@@ -343,21 +396,22 @@ export class OrderService {
       ...(status && { status }),
       ...(type && { type }),
       ...(customerId && { customer_id: customerId }),
-      ...(startDate && endDate && {
-        created_at: {
-          gte: new Date(startDate),
-          lte: new Date(endDate)
-        }
-      }),
+      ...(startDate &&
+        endDate && {
+          created_at: {
+            gte: new Date(startDate),
+            lte: new Date(endDate),
+          },
+        }),
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
       ...(restaurantId && { restaurant_id: restaurantId }),
       ...(reference && {
         reference: {
           contains: reference,
-          mode: "insensitive"
-        }
-      })
+          mode: 'insensitive',
+        },
+      }),
     };
 
     const [orders, total] = await Promise.all([
@@ -399,7 +453,7 @@ export class OrderService {
           [sortBy]: sortOrder,
         },
       }),
-      this.prisma.order.count({ where })
+      this.prisma.order.count({ where }),
     ]);
 
     return {
@@ -409,14 +463,17 @@ export class OrderService {
         page,
         limit,
         totalPages: Math.ceil(total / limit),
-      }
+      },
     };
   }
 
   /**
    * Recherche et filtre les commandes d'un client
    */
-  async findAllByCustomer(req: Request, filters: QueryOrderDto): Promise<QueryResponseDto<Order>> {
+  async findAllByCustomer(
+    req: Request,
+    filters: QueryOrderDto,
+  ): Promise<QueryResponseDto<Order>> {
     const {
       status,
       type,
@@ -428,7 +485,7 @@ export class OrderService {
       page = 1,
       limit = 10,
       sortBy = 'created_at',
-      sortOrder = 'desc'
+      sortOrder = 'desc',
     } = filters;
     const customerId = (req.user as Customer).id;
     const where: Prisma.OrderWhereInput = {
@@ -437,12 +494,13 @@ export class OrderService {
       ...(status && { status }),
       ...(type && { type }),
       ...(customerId && { customer_id: customerId }),
-      ...(startDate && endDate && {
-        created_at: {
-          gte: new Date(startDate),
-          lte: new Date(endDate)
-        }
-      }),
+      ...(startDate &&
+        endDate && {
+          created_at: {
+            gte: new Date(startDate),
+            lte: new Date(endDate),
+          },
+        }),
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
       ...(restaurantId && {
@@ -451,13 +509,13 @@ export class OrderService {
             dish: {
               dish_restaurants: {
                 some: {
-                  restaurant_id: restaurantId
-                }
-              }
-            }
-          }
-        }
-      })
+                  restaurant_id: restaurantId,
+                },
+              },
+            },
+          },
+        },
+      }),
     };
 
     const [orders, total] = await Promise.all([
@@ -499,7 +557,7 @@ export class OrderService {
           [sortBy]: sortOrder,
         },
       }),
-      this.prisma.order.count({ where })
+      this.prisma.order.count({ where }),
     ]);
 
     return {
@@ -509,7 +567,7 @@ export class OrderService {
         page,
         limit,
         totalPages: Math.ceil(total / limit),
-      }
+      },
     };
   }
 
@@ -521,7 +579,9 @@ export class OrderService {
     const { paiement_id, ...rest } = updateOrderDto;
     // Vérifier que la commande peut être modifiée (seulement si PENDING)
     if (order.status !== OrderStatus.PENDING) {
-      throw new ConflictException('Seules les commandes en attente peuvent être modifiées');
+      throw new ConflictException(
+        'Seules les commandes en attente peuvent être modifiées',
+      );
     }
 
     // Appliquer les modifications
@@ -529,8 +589,12 @@ export class OrderService {
       where: { id },
       data: {
         ...rest,
-        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(rest?.estimated_delivery_time ?? ""),
-        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(rest?.estimated_preparation_time ?? ""),
+        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(
+          rest?.estimated_delivery_time ?? '',
+        ),
+        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(
+          rest?.estimated_preparation_time ?? '',
+        ),
         updated_at: new Date(),
       },
       include: {
@@ -547,7 +611,6 @@ export class OrderService {
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderUpdatedEvent(updatedOrder, updateOrderDto);
 
-
     // Émettre via WebSocket
     this.orderWebSocketService.emitOrderUpdated(updatedOrder);
     return updatedOrder;
@@ -560,8 +623,13 @@ export class OrderService {
     const order = await this.findById(id);
 
     // Vérifier que la commande peut être supprimée
-    if (order.status !== OrderStatus.PENDING && order.status !== OrderStatus.CANCELLED) {
-      throw new ConflictException('Seules les commandes en attente ou annulées peuvent être supprimées');
+    if (
+      order.status !== OrderStatus.PENDING &&
+      order.status !== OrderStatus.CANCELLED
+    ) {
+      throw new ConflictException(
+        'Seules les commandes en attente ou annulées peuvent être supprimées',
+      );
     }
 
     const orderDeleted = this.prisma.order.update({
@@ -586,7 +654,8 @@ export class OrderService {
    */
   async getOrderStatistics(filters?: QueryOrderDto) {
     // Construire la clause where à partir des filtres
-    const where: Prisma.OrderWhereInput = this.orderHelper.buildWhereClause(filters);
+    const where: Prisma.OrderWhereInput =
+      this.orderHelper.buildWhereClause(filters);
 
     // Exécuter les requêtes en parallèle pour les performances
     const [
@@ -641,31 +710,33 @@ export class OrderService {
       }),
 
       // Plats les plus commandés
-      this.prisma.orderItem.groupBy({
-        by: ['dish_id'],
-        where: {
-          order: { paied: true, ...where },
-        },
-        _sum: {
-          quantity: true,
-        },
-        orderBy: {
-          _sum: {
-            quantity: 'desc',
+      this.prisma.orderItem
+        .groupBy({
+          by: ['dish_id'],
+          where: {
+            order: { paied: true, ...where },
           },
-        },
-        take: 10,
-      }).then(async (items) => {
-        const dishIds = items.map(item => item.dish_id);
-        const dishes = await this.prisma.dish.findMany({
-          where: { id: { in: dishIds } },
-        });
+          _sum: {
+            quantity: true,
+          },
+          orderBy: {
+            _sum: {
+              quantity: 'desc',
+            },
+          },
+          take: 10,
+        })
+        .then(async (items) => {
+          const dishIds = items.map((item) => item.dish_id);
+          const dishes = await this.prisma.dish.findMany({
+            where: { id: { in: dishIds } },
+          });
 
-        return items.map(item => ({
-          ...item,
-          dish: dishes.find(d => d.id === item.dish_id),
-        }));
-      }),
+          return items.map((item) => ({
+            ...item,
+            dish: dishes.find((d) => d.id === item.dish_id),
+          }));
+        }),
     ]);
 
     return {
@@ -679,7 +750,6 @@ export class OrderService {
     };
   }
 
-
   // async updateStatuts(id: string) {
   //   const order = await this.findById(id);
 
@@ -691,7 +761,6 @@ export class OrderService {
   //   this.orderWebSocketService.emitStatusUpdate(order, OrderStatus.ACCEPTED);
   // }
 
-
   async obtenirFraisLivraison(body: FraisLivraisonDto): Promise<{
     montant: number;
     zone: string;
@@ -700,17 +769,18 @@ export class OrderService {
     zone_id: string | null;
   }> {
     // Récupérer le restaurant le plus proche
-    const restaurant = await this.orderHelper.getNearestRestaurant(JSON.stringify({ latitude: body.lat, longitude: body.long }));
+    const restaurant = await this.orderHelper.getNearestRestaurant(
+      JSON.stringify({ latitude: body.lat, longitude: body.long }),
+    );
 
     // TODO : restaurant.apiKey
     const frais = await this.turboService.obtenirFraisLivraison({
-      apikey: "",
+      apikey: '',
       latitude: body.lat,
-      longitude: body.long
+      longitude: body.long,
     });
 
     if (frais.length === 0) {
-
       // Calculer la distance en km entre le restaurant et le client
       const distance = this.generateDataService.haversineDistance(
         restaurant.latitude ?? 0,
@@ -724,7 +794,7 @@ export class OrderService {
 
       return {
         montant: price ?? 0,
-        zone: "Frais de livraison",
+        zone: 'Frais de livraison',
         distance: Math.round(distance),
         service: DeliveryService.FREE,
         zone_id: null,

@@ -1,19 +1,42 @@
-import { IsString, IsEnum, IsNumber, IsOptional, IsBoolean, IsArray, IsDateString, Min } from 'class-validator';
-import { DiscountType, TargetType, PromotionStatus, Visibility } from '@prisma/client';
+import {
+  IsString,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsBoolean,
+  IsArray,
+  IsDateString,
+  Min,
+} from 'class-validator';
+import {
+  DiscountType,
+  TargetType,
+  PromotionStatus,
+  Visibility,
+} from '@prisma/client';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 
 export class CreatePromotionDto {
   @ApiProperty({
     description: 'Titre de la promotion',
-    example: 'Promotion d\'été',
+    example: "Promotion d'été",
   })
   @IsString()
   title: string;
 
+  @ApiProperty({
+    description: 'Code de la promotion',
+    example: 'SUMMER2025',
+  })
+  @IsString()
+  @Transform(({ value }) => value.toUpperCase())
+  @IsOptional()
+  codePromo?: string | null = null;
+
   @ApiPropertyOptional({
     description: 'Description de la promotion',
-    example: 'Promotion d\'été',
+    example: "Promotion d'été",
   })
   @IsOptional()
   @IsString()
@@ -64,7 +87,7 @@ export class CreatePromotionDto {
   max_discount_amount?: number;
 
   @ApiPropertyOptional({
-    description: 'Nombre maximum d\'utilisations par utilisateur',
+    description: "Nombre maximum d'utilisations par utilisateur",
     example: 1,
   })
   @IsOptional()
@@ -74,7 +97,7 @@ export class CreatePromotionDto {
   max_usage_per_user?: number = 1;
 
   @ApiPropertyOptional({
-    description: 'Nombre maximum d\'utilisations globales',
+    description: "Nombre maximum d'utilisations globales",
     example: 1,
   })
   @IsOptional()

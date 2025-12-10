@@ -18,9 +18,17 @@ import { ReceiptsService } from './services/receipts.service';
 import { TurboModule } from 'src/turbo/turbo.module';
 import { TurboListenerService } from './listeners/turbo.listener.service';
 import { KkiapayOrderListenerService } from './listeners/kkiapay-order.listener.service';
+import { VoucherModule } from '../voucher/voucher.module';
 
 @Module({
-  imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule, TurboModule],
+  imports: [
+    JsonWebTokenModule,
+    PaiementsModule,
+    FidelityModule,
+    RestaurantModule,
+    TurboModule,
+    VoucherModule,
+  ],
   controllers: [OrderController, OrderItemController],
   providers: [
     OrderService,
@@ -34,7 +42,7 @@ import { KkiapayOrderListenerService } from './listeners/kkiapay-order.listener.
     OrderNotificationsTemplate,
     ReceiptsService,
     TurboListenerService,
-    KkiapayOrderListenerService
+    KkiapayOrderListenerService,
   ],
 })
-export class OrderModule { }
+export class OrderModule {}

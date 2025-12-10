@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { HttpException, Injectable } from '@nestjs/common';
 import { CreatePromotionDto } from '../dto/create-promotion.dto';
 import { UpdatePromotionDto } from '../dto/update-promotion.dto';
 import { PromotionResponseDto } from '../dto/promotion-response.dto';
@@ -23,7 +23,7 @@ export class PromotionService {
   constructor(
     private prisma: PrismaService,
     private promotionEvent: PromotionEvent,
-  ) { }
+  ) {}
 
   async create(
     req: Request,
@@ -35,6 +35,7 @@ export class PromotionService {
       targeted_category_ids = [],
       offered_dishes = [],
       restaurant_ids = [],
+      codePromo = null,
       ...promotionData
     } = createPromotionDto;
 
@@ -121,11 +122,17 @@ export class PromotionService {
       });
     }
 
-    if (promotionData.discount_type == DiscountType.PERCENTAGE && promotionData.discount_value > 80) {
+    if (
+      promotionData.discount_type == DiscountType.PERCENTAGE &&
+      promotionData.discount_value > 80
+    ) {
       throw new PromotionException({
         key: PromotionErrorKeys.PROMOTION_DISCOUNT_PERCENTAGE_TOO_HIGH,
         message: 'La remise ne peut pas être supérieure à 80%',
-        data: { max_percentage: 80, provided_percentage: promotionData.discount_value }
+        data: {
+          max_percentage: 80,
+          provided_percentage: promotionData.discount_value,
+        },
       });
     }
 
@@ -144,6 +151,7 @@ export class PromotionService {
       const promotion = await tx.promotion.create({
         data: {
           ...promotionData,
+          codePromo: codePromo,
           start_date: startDate.toISOString(),
           expiration_date: endDate.toISOString(),
           created_by_id,
@@ -492,6 +500,26 @@ export class PromotionService {
       status: PromotionStatus.ACTIVE,
     });
     return promotions.data;
+  }
+
+  /**
+   * Rechercher une promotion par son code promo
+   * @param codePromo
+   */
+  async findByCode(codePromo: string): Promise<PromotionResponseDto | null> {
+    const promotion = await this.prisma.promotion.findFirst({
+      where: {
+        codePromo,
+        status: PromotionStatus.ACTIVE,
+        start_date: { lte: new Date() },
+        expiration_date: { gte: new Date() },
+      },
+    });
+
+    if (!promotion) {
+      throw new HttpException('Code promo invalide ou expiré', 404);
+    }
+    return this.mapToResponseDto(promotion);
   }
 
   async findOne(id: string): Promise<PromotionResponseDto> {
@@ -1032,9 +1060,9 @@ export class PromotionService {
         data:
           promotion.discount_type === DiscountType.BUY_X_GET_Y
             ? {
-              required_quantity: promotion.discount_value,
-              current_quantity: qteSomeDishesInPromotion,
-            }
+                required_quantity: promotion.discount_value,
+                current_quantity: qteSomeDishesInPromotion,
+              }
             : undefined,
         offers_dishes: [],
       };
@@ -1083,7 +1111,8 @@ export class PromotionService {
 
     switch (promotion.discount_type) {
       case DiscountType.PERCENTAGE:
-        discount_amount = (priceSomeDishesInPromotion * promotion.discount_value) / 100;
+        discount_amount =
+          (priceSomeDishesInPromotion * promotion.discount_value) / 100;
 
         break;
 
@@ -1200,8 +1229,10 @@ export class PromotionService {
     data?: any;
   }> {
     // récupérer la promotion
-    const promotion = await this.prisma.promotion.findUnique({
-      where: { id: promotion_id },
+    const promotion = await this.prisma.promotion.findFirst({
+      where: {
+        OR: [{ id: promotion_id }, { codePromo: promotion_id }],
+      },
       include: {
         promotion_usages: {
           where: { customer_id },
@@ -1280,5 +1311,4 @@ export class PromotionService {
 
     return { allowed: true };
   }
-
 }

@@ -1,4 +1,17 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, Req, UseInterceptors, UploadedFile } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  Query,
+  UseGuards,
+  Req,
+  UseInterceptors,
+  UploadedFile,
+} from '@nestjs/common';
 import { PromotionService } from '../services/promotion.service';
 import { CreatePromotionDto } from '../dto/create-promotion.dto';
 import { UpdatePromotionDto } from '../dto/update-promotion.dto';
@@ -9,7 +22,10 @@ import { Customer, LoyaltyLevel, User, UserRole } from '@prisma/client';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { QueryPromotionDto } from '../dto/query-promotion.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
-import { ApplyDiscountPromotionDtoResponse, ApplyItemDto } from '../dto/apply-discount-promotion.dto';
+import {
+  ApplyDiscountPromotionDtoResponse,
+  ApplyItemDto,
+} from '../dto/apply-discount-promotion.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
@@ -19,29 +35,45 @@ import { Logger } from '@nestjs/common';
 
 @ApiTags('Promotions')
 @Controller('fidelity/promotions')
-
 export class PromotionController {
   private readonly logger = new Logger(PromotionController.name);
-  constructor(private readonly promotionService: PromotionService) { }
+  constructor(private readonly promotionService: PromotionService) {}
 
   @ApiOperation({ summary: 'Créer une promotion' })
   @ApiOkResponse({ type: PromotionResponseDto })
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @UseGuards(JwtAuthGuard, UserRolesGuard)
-  @UseInterceptors(FileInterceptor('coupon_image_url', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/promotions') }))
+  @UseInterceptors(
+    FileInterceptor('coupon_image_url', {
+      ...GenerateConfigService.generateConfigSingleImageUpload(
+        './uploads/promotions',
+      ),
+    }),
+  )
   @Post()
-  async create(@Req() req: Request, @Body() createPromotionDto: CreatePromotionDto, @UploadedFile() image: Express.Multer.File) {
+  async create(
+    @Req() req: Request,
+    @Body() createPromotionDto: CreatePromotionDto,
+    @UploadedFile() image: Express.Multer.File,
+  ) {
     const user = req.user as User;
 
     const resizedPath = await GenerateConfigService.compressImages(
-      { "img_1": image?.path },
+      { img_1: image?.path },
       undefined,
       {
         quality: 70,
       },
       true,
     );
-    return this.promotionService.create(req, { ...createPromotionDto, coupon_image_url: resizedPath!["img_1"] ?? image?.path }, user.id);
+    return this.promotionService.create(
+      req,
+      {
+        ...createPromotionDto,
+        coupon_image_url: resizedPath!['img_1'] ?? image?.path,
+      },
+      user.id,
+    );
   }
 
   @ApiOperation({ summary: 'Lister les promotions' })
@@ -58,6 +90,15 @@ export class PromotionController {
     return this.promotionService.findAllForCustomer(req, filters);
   }
 
+  @ApiOperation({
+    summary: 'Obtenir une promotion par code',
+  })
+  @ApiOkResponse({ type: PromotionResponseDto })
+  @Get('code/:code')
+  findByCode(@Param('code') code: string) {
+    return this.promotionService.findByCode(code);
+  }
+
   @ApiOperation({ summary: 'Obtenir une promotion par ID' })
   @ApiOkResponse({ type: PromotionResponseDto })
   @Get(':id')
@@ -67,20 +108,34 @@ export class PromotionController {
 
   @ApiOperation({ summary: 'Mettre à jour une promotion' })
   @ApiOkResponse({ type: PromotionResponseDto })
-  @UseInterceptors(FileInterceptor('coupon_image_url', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/promotions') }))
+  @UseInterceptors(
+    FileInterceptor('coupon_image_url', {
+      ...GenerateConfigService.generateConfigSingleImageUpload(
+        './uploads/promotions',
+      ),
+    }),
+  )
   @UseGuards(JwtAuthGuard, UserRolesGuard)
   @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
   @Patch(':id')
-  async update(@Req() req: Request, @Param('id') id: string, @Body() updatePromotionDto: UpdatePromotionDto, @UploadedFile() image: Express.Multer.File) {
+  async update(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() updatePromotionDto: UpdatePromotionDto,
+    @UploadedFile() image: Express.Multer.File,
+  ) {
     const resizedPath = await GenerateConfigService.compressImages(
-      { "img_1": image?.path },
+      { img_1: image?.path },
       undefined,
       {
         quality: 70,
       },
       true,
     );
-    return this.promotionService.update(req, id, { ...updatePromotionDto, coupon_image_url: resizedPath!["img_1"] ?? image?.path });
+    return this.promotionService.update(req, id, {
+      ...updatePromotionDto,
+      coupon_image_url: resizedPath!['img_1'] ?? image?.path,
+    });
   }
 
   @ApiOperation({ summary: 'Supprimer une promotion' })
@@ -92,7 +147,7 @@ export class PromotionController {
     return this.promotionService.remove(req, id);
   }
 
-  @ApiOperation({ summary: 'Calculer le remise d\'une promotion' })
+  @ApiOperation({ summary: "Calculer le remise d'une promotion" })
   @ApiOkResponse({ type: ApplyDiscountPromotionDtoResponse })
   @Post(':id/calculate-discount')
   @UseGuards(JwtCustomerAuthGuard)
@@ -101,13 +156,21 @@ export class PromotionController {
     @Param('id') promotion_id: string,
     @Query('order_amount') order_amount: number,
     @Query('loyalty_level') loyalty_level: LoyaltyLevel,
-    @Body() items: ApplyItemDto[]
+    @Body() items: ApplyItemDto[],
   ) {
     const customer = req.user as Customer;
-    return this.promotionService.calculateDiscount(promotion_id, order_amount, customer.id, items, loyalty_level);
+    return this.promotionService.calculateDiscount(
+      promotion_id,
+      order_amount,
+      customer.id,
+      items,
+      loyalty_level,
+    );
   }
 
-  @ApiOperation({ summary: 'Vérifier si un client peut utiliser une promotion' })
+  @ApiOperation({
+    summary: 'Vérifier si un client peut utiliser une promotion',
+  })
   @ApiOkResponse({ type: ApplyDiscountPromotionDtoResponse })
   @Post(':id/can-use')
   @UseGuards(JwtCustomerAuthGuard)
@@ -116,7 +179,10 @@ export class PromotionController {
     @Param('id') promotion_id: string,
   ) {
     const customer = req.user as Customer;
-    return this.promotionService.canCustomerUsePromotion(promotion_id, customer.id);
+    return this.promotionService.canCustomerUsePromotion(
+      promotion_id,
+      customer.id,
+    );
   }
 
   @ApiOperation({ summary: 'Vérifier si un plat est dans une promotion' })
@@ -124,7 +190,7 @@ export class PromotionController {
   @Get('dish/:dishId/check')
   checkDishPromotion(
     @Param('dishId') dishId: string,
-    @Query('loyaltyLevel') loyaltyLevel?: string
+    @Query('loyaltyLevel') loyaltyLevel?: string,
   ) {
     return this.promotionService.isDishInPromotion(dishId, loyaltyLevel as any);
   }
