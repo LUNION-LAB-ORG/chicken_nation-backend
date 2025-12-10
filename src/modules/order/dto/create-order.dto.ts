@@ -111,4 +111,11 @@ export class CreateOrderDto {
     @IsOptional()
     @IsUUID()
     promotion_id?: string;
+    
+    @ApiPropertyOptional({ description: "Temps de préparation estimé en minutes" })
+    @IsOptional()
+    @IsInt()
+    @Type(() => Number)
+    cooking_time?: number;
+
 }
