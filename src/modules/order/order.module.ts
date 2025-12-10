@@ -17,9 +17,16 @@ import { OrderNotificationsTemplate } from './templates/order-notifications.temp
 import { ReceiptsService } from './services/receipts.service';
 import { TurboModule } from 'src/turbo/turbo.module';
 import { TurboListenerService } from './listeners/turbo.listener.service';
+import { OrderPrune } from './tasks/order.prune';
 
 @Module({
-  imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule, TurboModule],
+  imports: [
+    JsonWebTokenModule,
+    PaiementsModule,
+    FidelityModule,
+    RestaurantModule,
+    TurboModule,
+  ],
   controllers: [OrderController, OrderItemController],
   providers: [
     OrderService,
@@ -28,11 +35,12 @@ import { TurboListenerService } from './listeners/turbo.listener.service';
     OrderEvent,
     OrderListenerService,
     // OrderTask,
+    OrderPrune,
     OrderWebSocketService,
     OrderEmailTemplates,
     OrderNotificationsTemplate,
     ReceiptsService,
-    TurboListenerService
+    TurboListenerService,
   ],
 })
-export class OrderModule { }
+export class OrderModule {}
