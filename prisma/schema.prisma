@@ -544,7 +544,7 @@ model Order {
   phone                      String?         @db.VarChar
   email                      String?         @db.VarChar
   note                       String?         @db.VarChar
-  cooking_time               Int?            @db.Integer // en minutes
+ 
   status                     OrderStatus
   restaurant_id              String          @db.Uuid
   order_items                OrderItem[]
