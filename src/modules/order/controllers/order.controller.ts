@@ -47,6 +47,14 @@ export class OrderController {
 
   @Post()
   @UseGuards(JwtCustomerAuthGuard) // client peut créer ses propres commandes
+  @ApiOperation({ summary: 'Créer une nouvelle commande' })
+  @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
+  @ApiBody({ type: CreateOrderDto })
+  async create(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
+    return this.orderService.create(req, createOrderDto);
+  }
+  @Post("/create")
+  @UseGuards(JwtAuthGuard)
   @UserRoles(
     UserRole.ADMIN,
     UserRole.MANAGER,
@@ -57,7 +65,7 @@ export class OrderController {
   @ApiOperation({ summary: 'Créer une nouvelle commande' })
   @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
   @ApiBody({ type: CreateOrderDto })
-  async create(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
+  async createBackoffice(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
     return this.orderService.create(req, createOrderDto);
   }
 

@@ -241,7 +241,6 @@ export class RestaurantService {
   }
 
   async getRestaurantCustomers(id: string) {
-    console.log('Get customers for restaurant ID:', id);
     return this.prisma.customer.findMany({
       where: {
         orders: {

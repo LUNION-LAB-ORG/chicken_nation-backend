@@ -12,6 +12,32 @@ import { CustomerEvent } from '../events/customer.event';
 export class CustomerService {
   constructor(private readonly prisma: PrismaService, private readonly customerEvent: CustomerEvent) { }
 
+  private async safeUpdate(customer: Customer, data: CreateCustomerDto) {
+    if (!customer.email && data.email) {
+      await this.prisma.customer.update({
+        where: { id: customer.id },
+        data: {
+          email: data.email
+        }
+      });
+    }
+    if (!customer.first_name && data.first_name) {
+      await this.prisma.customer.update({
+        where: { id: customer.id },
+        data: {
+          first_name: data.first_name
+        }
+      });
+    }
+    if (!customer.last_name && data.last_name) {
+      await this.prisma.customer.update({
+        where: { id: customer.id },
+        data: {
+          last_name: data.last_name
+        }
+      });
+    }
+  }
   async create(createCustomerDto: CreateCustomerDto) {
     // Vérifier si le client existe déjà avec ce numéro de téléphone
     const existingCustomer = await this.prisma.customer.findUnique({
@@ -19,6 +45,7 @@ export class CustomerService {
     });
 
     if (existingCustomer) {
+      this.safeUpdate(existingCustomer, createCustomerDto)
       throw new ConflictException(`Utilisateur avec le numéro de téléphone ${createCustomerDto.phone} existe déjà`);
     }
 
@@ -29,6 +56,7 @@ export class CustomerService {
       });
 
       if (customerWithEmail) {
+        this.safeUpdate(customerWithEmail, createCustomerDto)
         throw new ConflictException(`Utilisateur avec l'email ${createCustomerDto.email} existe déjà`);
       }
     }
@@ -36,7 +64,7 @@ export class CustomerService {
     return this.prisma.customer.create({
       data: {
         ...createCustomerDto,
-        entity_status: EntityStatus.NEW,
+        entity_status: EntityStatus.ACTIVE,
       },
     });
   }

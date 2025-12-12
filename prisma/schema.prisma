@@ -544,13 +544,17 @@ model Order {
   phone                      String?         @db.VarChar
   email                      String?         @db.VarChar
   note                       String?         @db.VarChar
- 
-  status                     OrderStatus
-  restaurant_id              String          @db.Uuid
-  order_items                OrderItem[]
-  paiements                  Paiement[]
-  customer                   Customer        @relation(fields: [customer_id], references: [id])
-  restaurant                 Restaurant      @relation(fields: [restaurant_id], references: [id])
+  auto                       Boolean         @default(true)
+
+  user_id String? @db.Uuid
+  user    User?   @relation(fields: [user_id], references: [id])
+
+  status        OrderStatus
+  restaurant_id String      @db.Uuid
+  order_items   OrderItem[]
+  paiements     Paiement[]
+  customer      Customer    @relation(fields: [customer_id], references: [id])
+  restaurant    Restaurant  @relation(fields: [restaurant_id], references: [id])
 
   // ================================
   // INTÉGRATION PROMOTIONS ET FIDÉLITÉ
@@ -667,6 +671,7 @@ model User {
   TicketThread      TicketThread[]      @relation("TicketAssignee")
   Voucher           Voucher[]
   TicketUserSkill   TicketUserSkill[]   @relation("CategoryAgents")
+  orders            Order[]
 
   @@index([email, type])
 }

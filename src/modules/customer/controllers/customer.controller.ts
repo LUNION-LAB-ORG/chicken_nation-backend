@@ -18,7 +18,6 @@ export class CustomerController {
 
 
   // CREATE CUSTOMER
-
   @Post()
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))

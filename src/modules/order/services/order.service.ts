@@ -35,13 +35,11 @@ export class OrderService {
    * Crée une nouvelle commande
    */
   async create(req: Request, createOrderDto: CreateOrderDto): Promise<any> {
+    const { items, paiement_id, customer_id, restaurant_id, promotion_id, points, user_id, ...orderData } = createOrderDto;
 
-    const customer = req.user as Customer;
-
-    const { items, paiement_id, customer_id, restaurant_id, promotion_id, points, ...orderData } = createOrderDto;
-
+    const customerId = user_id ? undefined : (req.user as Customer).id;
     // Identifier le client ou créer à partir des données
-    const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: customer_id ?? customer.id });
+    const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: customer_id ?? customerId });
 
     // Récupérer le restaurant le plus proche
     const restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: restaurant_id, address: orderData.address });
@@ -71,7 +69,7 @@ export class OrderService {
     const applicable = promotion ? promotion.applicable : false;
 
     // Calculer les frais de livraison selon la distance
-    const delivery = await this.obtenirFraisLivraison({ lat: address.latitude, long: address.longitude });
+    const delivery = await this.obtenirFraisLivraison({ lat: address.latitude, long: address.longitude, restaurant_id });
     const deliveryFee = orderData.type == OrderType.DELIVERY ? delivery.montant : 0;
 
     // Vérifier le paiement
@@ -115,6 +113,13 @@ export class OrderService {
               id: customerData.customer_id
             }
           },
+          ...(user_id && {
+            user: {
+              connect: {
+                id: user_id
+              },
+            }
+          }),
           restaurant: {
             connect: {
               id: restaurant.id
@@ -129,7 +134,7 @@ export class OrderService {
           discount: Number(discount),
           net_amount: Number(netAmount),
           amount: Number(totalAmount),
-          date: orderData.date || new Date(),
+          date: new Date(orderData.date || ""),
           time: orderData.time || "10:00",
           status: OrderStatus.PENDING,
           paied_at: payment ? payment.created_at : null,
@@ -174,17 +179,19 @@ export class OrderService {
       return createdOrder;
     });
 
-    // // Envoyer l'événement de création de commande
-    // this.orderEvent.orderCreatedEvent({
-    //   order,
-    //   payment_id: payment?.id,
-    //   loyalty_level: customerData.loyalty_level,
-    //   totalDishes,
-    //   orderItems: orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice })),
-    // });
+    if (user_id) {
+      // Envoyer l'événement de création de commande
+      this.orderEvent.orderCreatedEvent({
+        order,
+        payment_id: payment?.id,
+        loyalty_level: customerData.loyalty_level,
+        totalDishes,
+        orderItems: orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice })),
+      });
 
-    // // Émettre l'événement de création de commande
-    // this.orderWebSocketService.emitOrderCreated(order);
+      // Émettre l'événement de création de commande
+      this.orderWebSocketService.emitOrderCreated(order);
+    }
 
     return order;
   }
@@ -338,7 +345,16 @@ export class OrderService {
     } = filters;
 
     const where: Prisma.OrderWhereInput = {
-      paied: true,
+      OR: [{
+        AND: [
+          { paied: false },
+          { auto: false }
+        ]
+      },
+      {
+        paied: true,
+
+      }],
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),
       ...(type && { type }),
@@ -432,7 +448,15 @@ export class OrderService {
     } = filters;
     const customerId = (req.user as Customer).id;
     const where: Prisma.OrderWhereInput = {
-      paied: true,
+      OR: [{
+        AND: [
+          { paied: false },
+          { auto: false }
+        ]
+      },
+      {
+        paied: true,
+      }],
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),
       ...(type && { type }),
@@ -700,7 +724,10 @@ export class OrderService {
     zone_id: string | null;
   }> {
     // Récupérer le restaurant le plus proche
-    const restaurant = await this.orderHelper.getNearestRestaurant(JSON.stringify({ latitude: body.lat, longitude: body.long }));
+    const restaurant = await this.orderHelper.getClosestRestaurant({
+      restaurant_id: body.restaurant_id,
+      address: JSON.stringify({ latitude: body.lat, longitude: body.long })
+    });
 
     // TODO : restaurant.apiKey
     const frais = await this.turboService.obtenirFraisLivraison({

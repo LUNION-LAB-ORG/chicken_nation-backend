@@ -1,5 +1,5 @@
-import { ApiProperty } from "@nestjs/swagger";
-import { IsNumber } from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { IsNumber, IsOptional, IsString, IsUUID } from "class-validator";
 import { Transform } from "class-transformer";
 
 export class FraisLivraisonDto {
@@ -12,4 +12,9 @@ export class FraisLivraisonDto {
     @IsNumber()
     @Transform(({ value }) => Number(value))
     long: number;
+
+    @ApiPropertyOptional()
+    @IsUUID()
+    @IsOptional()
+    restaurant_id?: string;
 }

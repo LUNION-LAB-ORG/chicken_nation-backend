@@ -58,7 +58,7 @@ export class OrderHelper {
       const customer = await this.prisma.customer.findFirst({
         where: {
           id: orderData.customer_id,
-          entity_status: EntityStatus.ACTIVE,
+          entity_status: { not: EntityStatus.DELETED },
         },
       });
       if (!customer) {

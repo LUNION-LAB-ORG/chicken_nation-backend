@@ -37,7 +37,7 @@ export class CreateCustomerDto {
     @ApiPropertyOptional({ description: 'Email du client', example: 'john.doe@example.com' })
     @IsEmail({}, { message: 'Email non valide' })
     @IsOptional()
-    @Transform(({ value }) => value.trim())
+    @Transform(({ value }) => value?.trim())
     email?: string;
 
     @ApiPropertyOptional({ description: 'Image du profil du client', type: "file" as "string" })

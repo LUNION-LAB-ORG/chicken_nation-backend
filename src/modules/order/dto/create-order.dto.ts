@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsUUID, ValidateNested } from "class-validator";
+import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsBoolean, IsUUID, ValidateNested } from "class-validator";
 import { Transform, Type } from "class-transformer";
 import { CreateOrderItemDto } from "src/modules/order/dto/create-order-item.dto";
 import { OrderType } from "src/modules/order/enums/order-type.enum";
@@ -46,14 +46,7 @@ export class CreateOrderDto {
 
     @ApiPropertyOptional({ description: "Heure souhaitée de livraison" })
     @IsOptional()
-    @IsDateString({}, { message: 'L\'heure de livraison doit être au format HH:mm' })
-    @Transform(({ value }) => {
-        const parsedDate = parse(value, 'HH:mm', new Date());
-        if (isValid(parsedDate)) {
-            return parsedDate.toISOString();
-        }
-        return value;
-    })
+    @IsString()
     time?: string;
 
     @ApiPropertyOptional({ description: "Nom complet du client" })
@@ -104,14 +97,23 @@ export class CreateOrderDto {
     @ApiPropertyOptional({ description: "Points de fidélité à utiliser" })
     @IsOptional()
     @IsInt()
-    @Type(() => Number) 
+    @Type(() => Number)
     points?: number;
 
     @ApiPropertyOptional({ description: "ID de la promotion" })
     @IsOptional()
     @IsUUID()
     promotion_id?: string;
-    
-   
 
+    @ApiPropertyOptional({ description: "Commande automatique" })
+    @IsOptional()
+    @Transform(({ value }) => String(value).trim() == "true" ? true : false)
+    @IsBoolean()
+    auto?: boolean;
+
+    @ApiPropertyOptional({ description: "Celui qui a enregistrer la commande" })
+    @IsOptional()
+    @Transform(({ value }) => value.trim())
+    @IsString()
+    user_id?: string;
 }

@@ -53,6 +53,13 @@ export class CategoryService {
           orderBy: {
             name: 'asc',
           },
+          include: {
+            dish_supplements: {
+              include: {
+                supplement: true
+              }
+            }
+          }
         },
       },
     });
