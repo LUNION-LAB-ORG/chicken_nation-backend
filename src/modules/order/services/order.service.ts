@@ -35,7 +35,7 @@ export class OrderService {
    * Crée une nouvelle commande
    */
   async create(req: Request, createOrderDto: CreateOrderDto): Promise<any> {
-    const { items, paiement_id, customer_id, restaurant_id, promotion_id, points, user_id, ...orderData } = createOrderDto;
+    const { items, paiement_id, customer_id, restaurant_id, promotion_id, delivery_fee, points, user_id, ...orderData } = createOrderDto;
 
     const customerId = user_id ? undefined : (req.user as Customer).id;
     // Identifier le client ou créer à partir des données
@@ -70,7 +70,7 @@ export class OrderService {
 
     // Calculer les frais de livraison selon la distance
     const delivery = await this.obtenirFraisLivraison({ lat: address.latitude, long: address.longitude, restaurant_id });
-    const deliveryFee = orderData.type == OrderType.DELIVERY ? delivery.montant : 0;
+    const deliveryFee = orderData.type == OrderType.DELIVERY ? (delivery_fee || delivery.montant) : 0;
 
     // Vérifier le paiement
     const payment = await this.orderHelper.checkPayment(createOrderDto);
@@ -85,7 +85,7 @@ export class OrderService {
     const totalAfterDiscount = netAmount - discount;
 
     // calcul de la taxe
-    const tax = await this.orderHelper.calculateTax(totalAfterDiscount);
+    const tax = user_id ? 0 : await this.orderHelper.calculateTax(totalAfterDiscount);
 
     // Calcul du montant TTC
     const totalAmount = totalAfterDiscount + tax + deliveryFee;
@@ -127,7 +127,7 @@ export class OrderService {
           },
           reference: orderNumber,
           ...(payment && { paiements: { connect: { id: payment.id } } }),
-          delivery_fee: Number(deliveryFee),
+          delivery_fee: delivery_fee ? delivery_fee : Number(deliveryFee),
           delivery_service: delivery.service,
           zone_id: delivery.zone_id,
           tax: Number(tax),
@@ -542,7 +542,7 @@ export class OrderService {
    */
   async update(id: string, updateOrderDto: UpdateOrderDto) {
     const order = await this.findById(id);
-    const { paiement_id, ...rest } = updateOrderDto;
+    const { paiement_id, delivery_fee, ...rest } = updateOrderDto;
     // Vérifier que la commande peut être modifiée (seulement si PENDING)
     if (order.status !== OrderStatus.PENDING) {
       throw new ConflictException('Seules les commandes en attente peuvent être modifiées');
@@ -553,6 +553,7 @@ export class OrderService {
       where: { id },
       data: {
         ...rest,
+        delivery_fee,
         estimated_delivery_time: this.orderHelper.calculateEstimatedTime(rest?.estimated_delivery_time ?? ""),
         estimated_preparation_time: this.orderHelper.calculateEstimatedTime(rest?.estimated_preparation_time ?? ""),
         updated_at: new Date(),

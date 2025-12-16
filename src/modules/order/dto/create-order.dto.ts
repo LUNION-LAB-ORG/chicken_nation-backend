@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsBoolean, IsUUID, ValidateNested } from "class-validator";
+import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsBoolean, IsUUID, ValidateNested, IsNumber } from "class-validator";
 import { Transform, Type } from "class-transformer";
 import { CreateOrderItemDto } from "src/modules/order/dto/create-order-item.dto";
 import { OrderType } from "src/modules/order/enums/order-type.enum";
@@ -83,7 +83,6 @@ export class CreateOrderDto {
     @IsUUID()
     customer_id?: string;
 
-
     @ApiPropertyOptional({ description: "ID du restaurant" })
     @IsOptional()
     @IsUUID()
@@ -116,4 +115,10 @@ export class CreateOrderDto {
     @Transform(({ value }) => value.trim())
     @IsString()
     user_id?: string;
+
+    @ApiPropertyOptional({ description: "Celui qui a enregistrer la commande" })
+    @IsOptional()
+    @IsNumber()
+    @Type(() => Number)
+    delivery_fee?: number;
 }
