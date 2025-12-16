@@ -40,7 +40,7 @@ export class CreateOrderDto {
         if (isValid(parsedDate)) {
             return parsedDate.toISOString();
         }
-        return value;
+        return new Date().toISOString();
     })
     date?: string;
 
