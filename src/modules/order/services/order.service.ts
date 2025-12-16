@@ -134,7 +134,7 @@ export class OrderService {
           discount: Number(discount),
           net_amount: Number(netAmount),
           amount: Number(totalAmount),
-          date: new Date(orderData.date || ""),
+          date: orderData.date ? new Date(orderData.date || "") : new Date(),
           time: orderData.time || "10:00",
           status: OrderStatus.PENDING,
           paied_at: payment ? payment.created_at : null,
