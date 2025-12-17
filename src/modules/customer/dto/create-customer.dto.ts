@@ -13,13 +13,13 @@ export class CreateCustomerDto {
     @ApiPropertyOptional({ description: 'Prénom du client', example: 'John' })
     @IsString()
     @IsOptional()
-    @Transform(({ value }) => value.trim())
+    @Transform(({ value }) => (value ? value.trim() : value))
     first_name?: string;
 
     @ApiPropertyOptional({ description: 'Nom du client', example: 'Doe' })
     @IsString()
     @IsOptional()
-    @Transform(({ value }) => value.trim())
+    @Transform(({ value }) => (value ? value.trim() : value))
     last_name?: string;
 
     @ApiPropertyOptional({ description: 'Date de naissance du client', example: '1990-01-01' })
@@ -37,7 +37,7 @@ export class CreateCustomerDto {
     @ApiPropertyOptional({ description: 'Email du client', example: 'john.doe@example.com' })
     @IsEmail({}, { message: 'Email non valide' })
     @IsOptional()
-    @Transform(({ value }) => value?.trim())
+    @Transform(({ value }) => (value ? value.trim() : value))
     email?: string;
 
     @ApiPropertyOptional({ description: 'Image du profil du client', type: "file" as "string" })
