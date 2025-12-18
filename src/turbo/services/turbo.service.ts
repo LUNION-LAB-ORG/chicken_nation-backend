@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Address, DeliveryService, OrderStatus } from "@prisma/client";
-import { calculateDeliveryPrice, TURBO_API, TURBO_API_KEY, mappingMethodPayment } from "../constantes/turbo.constante";
+import { TURBO_API, TURBO_API_KEY, mappingMethodPayment } from "../constantes/turbo.constante";
 import { IFraisLivraison, IFraisLivraisonResponsePaginate } from "../dto/frais-livraison.response";
 import { CommandeResponse, PaiementMode } from "../interfaces/turbo.interfaces";
 
@@ -133,6 +133,40 @@ export class TurboService {
    * @returns Le prix de la livraison.
    */
   getPrixLivraison(distanceKm: number): number {
-    return calculateDeliveryPrice(distanceKm);
+    return this.calculateDeliveryPrice(distanceKm);
+  }
+
+
+
+  /**
+   * Calcule le prix de livraison basé sur la distance (Modèle Abidjan/Yango)
+   * @param {number} distanceInKm - La distance exacte (ex: 5.4)
+   * @returns {number} - Le prix final arrondi en FCFA
+   */
+  private calculateDeliveryPrice(distanceInKm) {
+    // --- CONFIGURATION ---
+    const BASE_DIST_KM = 1.5;       // Forfait 1000F jusqu'à 1.5 km
+    const BASE_PRICE = 1000;        // Prix minimum
+    const PRICE_PER_KM_URBAN = 250;  // Nouveau tarif urbain
+    const PRICE_PER_KM_LONG = 200;   // On peut laisser à 200 pour la longue distance
+
+    let finalPrice = 0;
+
+    // --- LOGIQUE DE CALCUL ---
+    if (distanceInKm <= BASE_DIST_KM) {
+      finalPrice = BASE_PRICE;
+    }
+    else if (distanceInKm <= 10) {
+      const extraKm = distanceInKm - BASE_DIST_KM;
+      finalPrice = BASE_PRICE + (extraKm * PRICE_PER_KM_URBAN);
+    }
+    else {
+      const priceForFirst10Km = BASE_PRICE + ((10 - BASE_DIST_KM) * PRICE_PER_KM_URBAN);
+      const extraKm = distanceInKm - 10;
+      finalPrice = priceForFirst10Km + (extraKm * PRICE_PER_KM_LONG);
+    }
+
+    // Arrondi par palier de 500 FCFA
+    return Math.ceil(finalPrice / 500) * 500;
   }
 }
