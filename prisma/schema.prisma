@@ -166,7 +166,9 @@ model Category {
   name        String  @db.VarChar
   description String? @db.VarChar
   image       String? @db.Text
-  dishes      Dish[]
+  private     Boolean @default(false)
+
+  dishes Dish[]
 
   entity_status                 EntityStatus                @default(ACTIVE)
   created_at                    DateTime                    @default(now()) @db.Timestamp(6)
@@ -444,6 +446,7 @@ model Dish {
   promotion_price  Float?
   category_id      String           @db.Uuid
   cooking_time     Int?             @db.Integer // en minutes
+  private          Boolean          @default(false)
   category         Category         @relation(fields: [category_id], references: [id], onDelete: Cascade)
   dish_restaurants DishRestaurant[]
   dish_supplements DishSupplement[]

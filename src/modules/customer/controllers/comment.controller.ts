@@ -11,6 +11,7 @@ import {
     HttpStatus,
     Req,
     Patch,
+    UseInterceptors,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { CommentService } from '../services/comment.service';
@@ -25,9 +26,11 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { Customer } from '@prisma/client';
 import { Request } from 'express';
+import { CacheInterceptor } from '@nestjs/cache-manager';
 
 @ApiTags('Comments')
 @Controller('comments')
+@UseInterceptors(CacheInterceptor)
 export class CommentController {
     constructor(private readonly commentService: CommentService) { }
 

@@ -27,10 +27,12 @@ import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/common/enum/action.enum';
+import { CacheInterceptor } from '@nestjs/cache-manager';
 
 @ApiTags('Categories')
 @ApiBearerAuth()
 @Controller('categories')
+@UseInterceptors(CacheInterceptor)
 export class CategoryController {
   constructor(private readonly categoryService: CategoryService) { }
 
@@ -61,10 +63,15 @@ export class CategoryController {
   }
 
   @Get()
-  @UseGuards(UserPermissionsGuard)
   @ApiOperation({ summary: 'Récupération de toutes les catégories' })
   findAll() {
     return this.categoryService.findAll();
+  }
+
+  @Get("/get-all")
+  @ApiOperation({ summary: 'Récupération de toutes les catégories' })
+  findAllBackoffice() {
+    return this.categoryService.findAll({ all: true });
   }
 
   @Get(':id')

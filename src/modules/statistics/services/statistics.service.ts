@@ -38,7 +38,6 @@ import {
 import { PrismaService } from 'src/database/services/prisma.service';
 import { statisticsIcons } from '../constantes/statistics.constante';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
-import { getCacheKey } from 'src/common/constantes/cache.constante';
 
 interface DateRange {
   startDate: Date;

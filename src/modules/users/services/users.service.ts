@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 
 import { CreateUserDto } from '../dto/create-user.dto';
 import { EntityStatus, User, UserType } from '@prisma/client';
@@ -10,12 +10,14 @@ import { UpdateUserPasswordDto } from '../dto/update-user-password.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { UserEvent } from '../events/user.event';
 import { ResetUserPasswordResponseDto } from '../dto/reset-user-password.dto';
+import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService,
     private readonly generateDataService: GenerateDataService,
     private readonly userEvent: UserEvent,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache
   ) { }
 
   // CREATE
@@ -54,6 +56,8 @@ export class UsersService {
     this.userEvent.userCreatedEvent({ actor: { ...user, restaurant: null }, user: newUser });
 
     const { password, ...rest } = newUser;
+
+    await this.cacheManager.del("users");
     return { ...rest, password: pass };
   }
 

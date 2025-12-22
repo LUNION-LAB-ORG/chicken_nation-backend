@@ -1,16 +1,18 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, UseInterceptors } from '@nestjs/common';
 import { FavoriteService } from 'src/modules/customer/services/favorite.service';
 import { CreateFavoriteDto } from 'src/modules/customer/dto/create-favorite.dto';
 import { UpdateFavoriteDto } from 'src/modules/customer/dto/update-favorite.dto';
 import { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { CacheInterceptor } from '@nestjs/cache-manager';
 
 @ApiTags('Favorites')
 @ApiBearerAuth()
 @Controller('favorites')
+@UseInterceptors(CacheInterceptor)
 export class FavoriteController {
-  constructor(private readonly favoriteService: FavoriteService) {}
+  constructor(private readonly favoriteService: FavoriteService) { }
 
   @ApiOperation({ summary: 'Création d\'une nouvelle favorite' })
   @UseGuards(JwtCustomerAuthGuard)

@@ -66,9 +66,10 @@ export class DishService {
     return this.findOne(dish.id);
   }
 
-  async findAll() {
+  async findAll(query: { all: boolean } = { all: false }) {
     return this.prisma.dish.findMany({
       where: {
+        private: query.all ? undefined : false,
         entity_status: EntityStatus.ACTIVE,
       },
       include: {

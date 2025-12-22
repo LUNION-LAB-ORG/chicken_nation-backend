@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -20,4 +20,10 @@ export class CreateCategoryDto {
     @IsOptional()
     @IsString()
     image?: string;
+
+    @ApiPropertyOptional({ description: "Si la catégorie est privée" })
+    @IsOptional()
+    @Transform(({ value }) => String(value).trim() == "true" ? true : false)
+    @IsBoolean()
+    private?: boolean;
 }

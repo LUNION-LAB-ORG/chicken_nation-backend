@@ -29,10 +29,12 @@ import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/common/enum/action.enum';
+import { CacheInterceptor } from '@nestjs/cache-manager';
 
 @ApiTags('Restaurants')
 @ApiBearerAuth()
 @Controller('restaurants')
+@UseInterceptors(CacheInterceptor)
 export class RestaurantController {
   constructor(
     private readonly restaurantService: RestaurantService,

@@ -14,6 +14,7 @@ export class CategoryService {
 
   async create(req: Request, createCategoryDto: CreateCategoryDto) {
     const user = req.user as User;
+
     const category = await this.prisma.category.create({
       data: {
         ...createCategoryDto,
@@ -33,9 +34,10 @@ export class CategoryService {
     return category;
   }
 
-  async findAll() {
+  async findAll(query: { all: boolean } = { all: false }) {
     return this.prisma.category.findMany({
       where: {
+        private: query.all ? undefined : false,
         entity_status: EntityStatus.ACTIVE,
       },
       orderBy: {

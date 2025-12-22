@@ -20,8 +20,10 @@ import { UpdateUserPasswordDto } from 'src/modules/users/dto/update-user-passwor
 import { UpdateUserDto } from 'src/modules/users/dto/update-user.dto';
 import { UsersService } from 'src/modules/users/services/users.service';
 import { ResetUserPasswordResponseDto } from '../dto/reset-user-password.dto';
+import { CacheInterceptor } from '@nestjs/cache-manager';
 
 @Controller('users')
+@UseInterceptors(CacheInterceptor)
 export class UsersController {
   constructor(private readonly usersService: UsersService) { }
 

@@ -9,6 +9,7 @@ import {
   Query,
   ParseUUIDPipe,
   HttpStatus,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -27,10 +28,13 @@ import { NotificationResponseDto } from '../dto/response-notification.dto';
 import { UpdateNotificationDto } from '../dto/update-notification.dto';
 import { NotificationStatsDto } from '../dto/notifications-stats.dto';
 import { QueryNotificationDto } from '../dto/query-notification.dto';
+import { CacheInterceptor } from '@nestjs/cache-manager';
 
 @ApiTags('🔔 Notifications')
 @ApiBearerAuth()
 @Controller('notifications')
+@UseInterceptors(CacheInterceptor)
+
 export class NotificationsController {
   constructor(private readonly notificationService: NotificationsService) { }
 

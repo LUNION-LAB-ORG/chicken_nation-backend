@@ -13,6 +13,7 @@ import {
   HttpCode,
   UseGuards,
   Logger,
+  UseInterceptors,
 } from '@nestjs/common';
 import { OrderService } from 'src/modules/order/services/order.service';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
@@ -36,9 +37,11 @@ import { RequirePermission } from 'src/modules/auth/decorators/user-require-perm
 import { Action } from 'src/common/enum/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
+import { CacheInterceptor } from '@nestjs/cache-manager';
 
 @ApiTags('Commandes')
 @Controller('orders')
+@UseInterceptors(CacheInterceptor)
 export class OrderController {
   constructor(
     private readonly orderService: OrderService,

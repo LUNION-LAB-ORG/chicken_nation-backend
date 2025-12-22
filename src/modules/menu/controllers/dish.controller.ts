@@ -14,10 +14,12 @@ import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
 import { Request } from 'express';
 import { QueryDishDto } from '../dto/query-dish.dto';
+import { CacheInterceptor } from '@nestjs/cache-manager';
 
 @Controller('dishes')
 @ApiTags('Dishes')
 @ApiBearerAuth()
+@UseInterceptors(CacheInterceptor)
 export class DishController {
   constructor(private readonly dishService: DishService, private readonly dishRestaurantService: DishRestaurantService) { }
 
@@ -45,6 +47,11 @@ export class DishController {
   @Get()
   findAll() {
     return this.dishService.findAll();
+  }
+  @ApiOperation({ summary: 'Récupération de tous les plats' })
+  @Get("get-all")
+  findAllBackoffice() {
+    return this.dishService.findAll({ all: true });
   }
 
   @ApiOperation({ summary: 'Recherche de plats' })

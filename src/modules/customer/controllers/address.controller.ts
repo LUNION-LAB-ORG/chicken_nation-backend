@@ -1,14 +1,17 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, UseInterceptors } from '@nestjs/common';
 import { AddressService } from 'src/modules/customer/services/address.service';
 import { CreateAddressDto } from 'src/modules/customer/dto/create-address.dto';
 import { UpdateAddressDto } from 'src/modules/customer/dto/update-address.dto';
 import { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { CacheInterceptor } from '@nestjs/cache-manager';
 
 @ApiTags('Addresses')
 @ApiBearerAuth()
 @Controller('addresses')
+@UseInterceptors(CacheInterceptor)
+
 export class AddressController {
   constructor(private readonly addressService: AddressService) { }
 

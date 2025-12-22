@@ -9,10 +9,12 @@ import { GenerateConfigService } from 'src/common/services/generate-config.servi
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { CacheInterceptor } from '@nestjs/cache-manager';
 
 @ApiTags('Customers')
 @ApiBearerAuth()
 @Controller('customer')
+@UseInterceptors(CacheInterceptor)
 export class CustomerController {
   constructor(private readonly customerService: CustomerService) { }
 

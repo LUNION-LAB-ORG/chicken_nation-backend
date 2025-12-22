@@ -36,6 +36,7 @@ import KeyvRedis from '@keyv/redis';
       isGlobal: true,
       useFactory: async () => {
         return {
+          ttl: 1000,
           stores: [
             // new Keyv({
             //   store: new CacheableMemory({ ttl: 60000, lruSize: 5000 }),
