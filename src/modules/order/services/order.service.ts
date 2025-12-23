@@ -69,7 +69,12 @@ export class OrderService {
     const applicable = promotion ? promotion.applicable : false;
 
     // Calculer les frais de livraison selon la distance
-    const delivery = await this.obtenirFraisLivraison({ lat: address.latitude, long: address.longitude, restaurant_id });
+    const delivery = await this.obtenirFraisLivraison({
+      lat: address.latitude,
+      long: address.longitude,
+      restaurant_id: (orderData.type == OrderType.DELIVERY && user_id || orderData.type != OrderType.DELIVERY)
+        ? restaurant_id : undefined
+    });
     // 
     const deliveryFee = orderData.type == OrderType.DELIVERY ? (delivery_fee || delivery.montant) : 0;
 
@@ -740,13 +745,6 @@ export class OrderService {
     if (restaurant) {
       if (restaurant.name.includes("ZONE")) {
         if (distance <= 5) {
-          console.log({
-            montant: 0,
-            zone: `-5km de ${restaurant.name}`,
-            distance: Math.round(distance),
-            service: DeliveryService.FREE,
-            zone_id: null,
-          })
           return {
             montant: 0,
             zone: `-5km de ${restaurant.name}`,
@@ -755,13 +753,6 @@ export class OrderService {
             zone_id: null,
           };
         } else if (distance > 5 && distance <= 10) {
-          console.log({
-            montant: 500,
-            zone: `5-10km de ${restaurant.name}`,
-            distance: Math.round(distance),
-            service: DeliveryService.FREE,
-            zone_id: null,
-          })
           return {
             montant: 500,
             zone: `5-10km de ${restaurant.name}`,
@@ -770,13 +761,6 @@ export class OrderService {
             zone_id: null,
           };
         } else if (distance > 10 && distance <= 20) {
-          console.log({
-            montant: 1000,
-            zone: `10-20km de ${restaurant.name}`,
-            distance: Math.round(distance),
-            service: DeliveryService.FREE,
-            zone_id: null,
-          })
           return {
             montant: 1000,
             zone: `10-20km de ${restaurant.name}`,
@@ -785,13 +769,6 @@ export class OrderService {
             zone_id: null,
           };
         } else {
-          console.log({
-            montant: 1500,
-            zone: `+20km de ${restaurant.name}`,
-            distance: Math.round(distance),
-            service: DeliveryService.FREE,
-            zone_id: null,
-          })
           return {
             montant: 1500,
             zone: `+20km de ${restaurant.name}`,
@@ -802,13 +779,6 @@ export class OrderService {
         }
       } else {
         if (distance <= 5) {
-          console.log({
-            montant: 500,
-            zone: `-5km de ${restaurant.name}`,
-            distance: Math.round(distance),
-            service: DeliveryService.FREE,
-            zone_id: null,
-          })
           return {
             montant: 500,
             zone: `-5km de ${restaurant.name}`,
@@ -817,13 +787,6 @@ export class OrderService {
             zone_id: null,
           };
         } else if (distance > 5 && distance <= 10) {
-          console.log({
-            montant: 1000,
-            zone: `5-10km de ${restaurant.name}`,
-            distance: Math.round(distance),
-            service: DeliveryService.FREE,
-            zone_id: null,
-          })
           return {
             montant: 1000,
             zone: `5-10km de ${restaurant.name}`,
@@ -832,13 +795,6 @@ export class OrderService {
             zone_id: null,
           };
         } else if (distance > 10 && distance <= 20) {
-          console.log({
-            montant: 1500,
-            zone: `10-20km de ${restaurant.name}`,
-            distance: Math.round(distance),
-            service: DeliveryService.FREE,
-            zone_id: null,
-          })
           return {
             montant: 1500,
             zone: `10-20km de ${restaurant.name}`,
@@ -847,13 +803,6 @@ export class OrderService {
             zone_id: null,
           };
         } else {
-          console.log({
-            montant: 2000,
-            zone: `+20km de ${restaurant.name}`,
-            distance: Math.round(distance),
-            service: DeliveryService.FREE,
-            zone_id: null,
-          })
           return {
             montant: 2000,
             zone: `+20km de ${restaurant.name}`,
