@@ -729,42 +729,141 @@ export class OrderService {
       restaurant_id: body.restaurant_id,
       address: JSON.stringify({ latitude: body.lat, longitude: body.long })
     });
+    // Calculer la distance en km entre le restaurant et le client
+    const distance = this.generateDataService.haversineDistance(
+      restaurant.latitude ?? 0,
+      restaurant.longitude ?? 0,
+      body.lat,
+      body.long,
+    );
 
-    // TODO : restaurant.apiKey
-    const frais = await this.turboService.obtenirFraisLivraison({
-      apikey: "",
-      latitude: body.lat,
-      longitude: body.long
-    });
-
-    if (frais.length === 0) {
-
-      // Calculer la distance en km entre le restaurant et le client
-      const distance = this.generateDataService.haversineDistance(
-        restaurant.latitude ?? 0,
-        restaurant.longitude ?? 0,
-        body.lat,
-        body.long,
-      );
-
-      // Calculer le prix de la livraison
-      const price = this.turboService.getPrixLivraison(distance);
-
-      return {
-        montant: price ?? 0,
-        zone: "Frais de livraison",
-        distance: Math.round(distance),
-        service: DeliveryService.FREE,
-        zone_id: null,
-      };
+    if (restaurant) {
+      if (restaurant.name.includes("ZONE")) {
+        if (distance <= 5) {
+          return {
+            montant: 0,
+            zone: `-5km de ${restaurant.name}`,
+            distance: Math.round(distance),
+            service: DeliveryService.FREE,
+            zone_id: null,
+          };
+        } else if (distance > 5 && distance <= 10) {
+          return {
+            montant: 500,
+            zone: `5-10km de ${restaurant.name}`,
+            distance: Math.round(distance),
+            service: DeliveryService.FREE,
+            zone_id: null,
+          };
+        } else if (distance > 10 && distance <= 20) {
+          return {
+            montant: 1000,
+            zone: `10-20km de ${restaurant.name}`,
+            distance: Math.round(distance),
+            service: DeliveryService.FREE,
+            zone_id: null,
+          };
+        } else {
+          return {
+            montant: 1500,
+            zone: `+20km de ${restaurant.name}`,
+            distance: Math.round(distance),
+            service: DeliveryService.FREE,
+            zone_id: null,
+          };
+        }
+      } else {
+        if (distance <= 5) {
+          return {
+            montant: 500,
+            zone: `-5km de ${restaurant.name}`,
+            distance: Math.round(distance),
+            service: DeliveryService.FREE,
+            zone_id: null,
+          };
+        } else if (distance > 5 && distance <= 10) {
+          return {
+            montant: 1000,
+            zone: `5-10km de ${restaurant.name}`,
+            distance: Math.round(distance),
+            service: DeliveryService.FREE,
+            zone_id: null,
+          };
+        } else if (distance > 10 && distance <= 20) {
+          return {
+            montant: 1500,
+            zone: `10-20km de ${restaurant.name}`,
+            distance: Math.round(distance),
+            service: DeliveryService.FREE,
+            zone_id: null,
+          };
+        } else {
+          return {
+            montant: 2000,
+            zone: `+20km de ${restaurant.name}`,
+            distance: Math.round(distance),
+            service: DeliveryService.FREE,
+            zone_id: null,
+          };
+        }
+      }
     }
-
     return {
-      montant: frais[0].prix,
-      zone: frais[0].zone,
-      distance: frais[0].distanceFin,
-      service: DeliveryService.TURBO,
-      zone_id: frais[0].id,
+      montant: 2000,
+      zone: "Zone inconnue",
+      distance: Math.round(distance),
+      service: DeliveryService.FREE,
+      zone_id: null,
     };
   }
+  // async obtenirFraisLivraison(body: FraisLivraisonDto): Promise<{
+  //   montant: number;
+  //   zone: string;
+  //   distance: number;
+  //   service: DeliveryService;
+  //   zone_id: string | null;
+  // }> {
+  //   // Récupérer le restaurant le plus proche
+  //   const restaurant = await this.orderHelper.getClosestRestaurant({
+  //     restaurant_id: body.restaurant_id,
+  //     address: JSON.stringify({ latitude: body.lat, longitude: body.long })
+  //   });
+
+  //   // TODO : restaurant.apiKey
+  //   const frais = await this.turboService.obtenirFraisLivraison({
+  //     apikey: "",
+  //     latitude: body.lat,
+  //     longitude: body.long
+  //   });
+
+  //   if (frais.length === 0) {
+
+  //     // Calculer la distance en km entre le restaurant et le client
+  //     const distance = this.generateDataService.haversineDistance(
+  //       restaurant.latitude ?? 0,
+  //       restaurant.longitude ?? 0,
+  //       body.lat,
+  //       body.long,
+  //     );
+
+  //     // Calculer le prix de la livraison
+  //     const price = this.turboService.getPrixLivraison(distance);
+
+  //     return {
+  //       montant: price ?? 0,
+  //       zone: "Frais de livraison",
+  //       distance: Math.round(distance),
+  //       service: DeliveryService.FREE,
+  //       zone_id: null,
+  //     };
+  //   }
+
+  //   return {
+  //     montant: frais[0].prix,
+  //     zone: frais[0].zone,
+  //     distance: frais[0].distanceFin,
+  //     service: DeliveryService.TURBO,
+  //     zone_id: frais[0].id,
+  //   };
+  // }
 }

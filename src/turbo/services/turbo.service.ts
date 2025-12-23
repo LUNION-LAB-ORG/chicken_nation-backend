@@ -114,7 +114,6 @@ export class TurboService {
 
       return data as IFraisLivraisonResponsePaginate;
     } catch (error) {
-      console.log(error);
       return null;
     }
   }
@@ -143,7 +142,7 @@ export class TurboService {
    * @param {number} distanceInKm - La distance exacte (ex: 5.4)
    * @returns {number} - Le prix final arrondi en FCFA
    */
-  private calculateDeliveryPrice(distanceInKm) {
+  private calculateDeliveryPrice(distanceInKm: number) {
     // --- CONFIGURATION ---
     const BASE_DIST_KM = 1.5;       // Forfait 1000F jusqu'à 1.5 km
     const BASE_PRICE = 1000;        // Prix minimum
