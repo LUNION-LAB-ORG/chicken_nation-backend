@@ -349,7 +349,7 @@ export class OrderService {
       sortBy = 'created_at',
       sortOrder = 'desc'
     } = filters;
-
+    
     const where: Prisma.OrderWhereInput = {
       OR: [{
         AND: [
@@ -365,10 +365,14 @@ export class OrderService {
       ...(status && { status }),
       ...(type && { type }),
       ...(customerId && { customer_id: customerId }),
-      ...(startDate && endDate && {
+      ...(startDate && {
         created_at: {
           gte: new Date(startDate),
-          lte: new Date(endDate)
+        }
+      }),
+      ...(endDate && {
+        created_at: {
+          lte: new Date(endDate),
         }
       }),
       ...(minAmount && { amount: { gte: minAmount } }),
