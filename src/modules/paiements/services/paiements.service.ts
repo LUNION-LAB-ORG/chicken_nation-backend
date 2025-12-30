@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CreatePaiementDto } from 'src/modules/paiements/dto/create-paiement.dto';
+import { AddPaiementDto, CreatePaiementDto } from 'src/modules/paiements/dto/create-paiement.dto';
 import { UpdatePaiementDto } from 'src/modules/paiements/dto/update-paiement.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import {
@@ -38,7 +38,7 @@ export class PaiementsService {
 
     const customer = req.user as Customer;
 
-    const paiement = await this.create({
+    const result = await this.create({
       reference: transaction.transactionId,
       amount: transaction.amount,
       fees: transaction.fees,
@@ -56,6 +56,18 @@ export class PaiementsService {
       client_id: customer.id,
     });
 
+
+    // Mise a jour de la commande à payée
+    if (result.order) {
+      await this.prisma.order.update({
+        where: { id: result.order.id },
+        data: {
+          paied_at: result.paiement.created_at,
+          paied: true,
+        },
+      });
+    }
+
     return {
       success: transaction.status === 'SUCCESS',
       message:
@@ -63,7 +75,54 @@ export class PaiementsService {
           ? 'Paiement effectué avec succès'
           : 'Paiement echoué',
       transactionId: transaction.transactionId,
-      paiement: paiement,
+      paiement: result.paiement
+      ,
+    };
+  }
+  // Payer via backoffice
+  async addPaiement(
+    req: Request,
+    data: AddPaiementDto,
+  ) {
+    const { items } = data;
+    if (!items || items.length === 0) {
+      throw new BadRequestException('Aucun paiement à ajouter');
+    }
+
+    const paiements = items.map(async (item) => {
+      const uniqueRef = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+      return await this.create({
+        reference: uniqueRef,
+        amount: item.amount,
+        fees: 0,
+        total: item.amount,
+        mode: item.mode,
+        source: item.source,
+        status: PaiementStatus.SUCCESS,
+        order_id: item.order_id,
+        client_id: item.client_id,
+      })
+    })
+
+    // Mise a jour de la commande à payée
+    if (paiements.length == items.length) {
+      const result = await paiements[0]
+      if (result) {
+        await this.prisma.order.update({
+          where: { id: result.order?.id },
+          data: {
+            paied_at: result.paiement.created_at,
+            paied: true,
+          },
+        });
+      }
+    }
+
+    return {
+      success: true,
+      message:
+        'Paiement effectué avec succès',
     };
   }
 
@@ -76,7 +135,7 @@ export class PaiementsService {
       data.transactionId,
     );
 
-    const paiement = await this.create({
+    const result = await this.create({
       reference: transaction.transactionId,
       amount: transaction.amount,
       fees: transaction.fees,
@@ -94,7 +153,18 @@ export class PaiementsService {
       client_id: data.customer_id,
     });
 
-    return paiement;
+    // Mise a jour de la commande à payée
+    if (result.order) {
+      await this.prisma.order.update({
+        where: { id: result.order.id },
+        data: {
+          paied_at: result.paiement.created_at,
+          paied: true,
+        },
+      });
+    }
+
+    return result.paiement;
   }
 
   // Récupération des paiements succès libres
@@ -197,11 +267,6 @@ export class PaiementsService {
     // Traitement du statut du paiement
     const status = await this.verifyPaiementStatus(createPaiementDto.status);
 
-    console.log("createPaiementDto", createPaiementDto);
-    console.log("mode", mode, mode in PaiementMode);
-    console.log("status", status, status in PaiementStatus);
-    console.log("source", source);
-    console.log("============================================================");
     const paiement = await this.prisma.paiement.create({
       data: {
         ...createPaiementDto,
@@ -213,21 +278,10 @@ export class PaiementsService {
       },
     });
 
-    // Mise a jour de la commande à payée
-    if (order) {
-      await this.prisma.order.update({
-        where: { id: order.id },
-        data: {
-          paied_at: paiement.created_at,
-          paied: true,
-        },
-      });
-    }
-
     // Émission de l'événement de paiement effectué
     this.paiementEvent.paiementEffectue(paiement);
 
-    return paiement;
+    return { paiement, order };
   }
 
   // Récupération de tous les paiements

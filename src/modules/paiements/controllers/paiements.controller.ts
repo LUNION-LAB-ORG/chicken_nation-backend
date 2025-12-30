@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Body, Param, Delete, Query, UseGuards, Req } from '@nestjs/common';
 import { PaiementsService } from 'src/modules/paiements/services/paiements.service';
-import { CreatePaiementDto } from 'src/modules/paiements/dto/create-paiement.dto';
+import { AddPaiementDto, CreatePaiementDto } from 'src/modules/paiements/dto/create-paiement.dto';
 import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
 import { CreatePaiementKkiapayDto } from '../dto/create-paiement-kkiapay.dto';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
@@ -20,6 +20,13 @@ import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
 @Controller('paiements')
 export class PaiementsController {
   constructor(private readonly paiementsService: PaiementsService) { }
+
+  @ApiOperation({ summary: 'Payer via backoffice' })
+  @Post('add')
+  @UseGuards(JwtAuthGuard)
+  addPaiement(@Req() req: Request, @Body() data: AddPaiementDto) {
+    return this.paiementsService.addPaiement(req, data);
+  }
 
   @ApiOperation({ summary: 'Payer avec Kkiapay' })
   @Post('pay')

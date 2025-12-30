@@ -344,12 +344,13 @@ export class OrderService {
       endDate,
       minAmount,
       maxAmount,
+      auto,
       page = 1,
       limit = 10,
       sortBy = 'created_at',
-      sortOrder = 'desc'
+      sortOrder = 'desc',
     } = filters;
-    
+
     const where: Prisma.OrderWhereInput = {
       OR: [{
         AND: [
@@ -359,7 +360,6 @@ export class OrderService {
       },
       {
         paied: true,
-
       }],
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),

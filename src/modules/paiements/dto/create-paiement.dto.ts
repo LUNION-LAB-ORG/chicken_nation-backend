@@ -1,7 +1,7 @@
-import { IsEnum, IsNumber, IsOptional, IsString, IsUUID } from "class-validator";
-import { Transform } from "class-transformer";
+import { ArrayMinSize, IsArray, IsEnum, IsNumber, IsOptional, IsString, IsUUID, ValidateNested } from "class-validator";
+import { Transform, Type } from "class-transformer";
 import { PaiementMode, PaiementStatus } from "@prisma/client";
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional, PickType } from "@nestjs/swagger";
 
 export class CreatePaiementDto {
 
@@ -59,16 +59,48 @@ export class CreatePaiementDto {
     @Transform(({ value }) => String(value))
     failure_message?: string;
 
-    @ApiPropertyOptional({ description: 'Id de la commande' })
-    @IsString()
+    @ApiPropertyOptional({ description: "ID de la promotion" })
     @IsOptional()
-    @Transform(({ value }) => String(value))
+    @IsUUID()
     order_id?: string;
 
-    @ApiPropertyOptional({ description: 'Id du client' })
+    @ApiPropertyOptional({ description: "ID de la promotion" })
+    @IsOptional()
+    @IsUUID()
+    client_id?: string;
+}
+export class AddPaiementItemDto {
+    @ApiProperty({ description: 'Montant du paiement' })
+    @IsNumber()
+    @Transform(({ value }) => parseFloat(value))
+    amount: number;
+
+    @ApiProperty({ description: 'Mode de paiement', enum: PaiementMode })
+    @IsEnum(PaiementMode)
+    mode: PaiementMode;
+
+    @ApiPropertyOptional({ description: 'Type de paiement mobile money' })
     @IsString()
     @IsOptional()
-    @Transform(({ value }) => String(value))
+    @Transform(({ value }) => String(value).trim().toUpperCase())
+    source?: string;
+
+    @ApiPropertyOptional({ description: "ID de la promotion" })
+    @IsOptional()
+    @IsUUID()
+    order_id?: string;
+
+    @ApiPropertyOptional({ description: "ID de la promotion" })
+    @IsOptional()
+    @IsUUID()
     client_id?: string;
 }
 
+export class AddPaiementDto {
+    @ApiProperty({ description: "Éléments de la commande", type: [AddPaiementItemDto] })
+    @IsArray()
+    @ValidateNested({ each: true })
+    @ArrayMinSize(1)
+    @Type(() => AddPaiementItemDto)
+    items: AddPaiementItemDto[];
+}

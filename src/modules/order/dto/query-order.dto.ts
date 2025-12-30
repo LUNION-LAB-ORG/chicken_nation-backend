@@ -1,4 +1,4 @@
-import { IsEnum, IsUUID, IsOptional, IsNumber, Min, IsString, IsDateString } from 'class-validator';
+import { IsEnum, IsUUID, IsOptional, IsNumber, Min, IsString, IsDateString, IsBoolean } from 'class-validator';
 import { OrderStatus, OrderType } from '@prisma/client';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
@@ -91,4 +91,11 @@ export class QueryOrderDto {
     @IsOptional()
     @IsString()
     reference?: string;
+
+
+    @ApiPropertyOptional({ description: "Commande automatique" })
+    @IsOptional()
+    @Transform(({ value }) => String(value).trim() == "true" ? true : false)
+    @IsBoolean()
+    auto?: boolean;
 }
