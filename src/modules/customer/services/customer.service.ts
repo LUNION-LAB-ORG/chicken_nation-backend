@@ -158,6 +158,9 @@ export class CustomerService {
             },
         },
         favorites: {
+          orderBy: {
+            created_at: 'desc',
+          },
           include: {
             dish: {
               include: {
@@ -166,8 +169,52 @@ export class CustomerService {
             },
           },
         },
+        orders:{
+          orderBy: {
+            created_at: 'desc',
+          },
+        },
         notification_settings: true,
-        
+        loyalty_points:{
+          orderBy: {
+            created_at: 'desc',
+          },
+        },
+        promotion_usages:{
+          orderBy: {
+            created_at: 'desc',
+          },
+        },
+        loyalty_level_history:{
+          orderBy: {
+            created_at: 'desc',
+          },
+        },
+        Comment:{
+          orderBy: {
+            created_at: 'desc',
+          },
+        },
+        TicketMessage:{
+          orderBy: {
+            createdAt: 'desc',
+          },
+        },
+        Message:{
+          orderBy: {
+            createdAt: 'desc',
+          },
+        },
+        TicketThread:{
+          orderBy: {
+            createdAt: 'desc',
+          },
+        },
+        Conversation:{
+          orderBy: {
+            createdAt: 'desc',
+          },
+        },
       },
     });
 
