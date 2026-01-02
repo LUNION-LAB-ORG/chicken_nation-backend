@@ -1,7 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Customer, EntityStatus, Prisma } from '@prisma/client';
 import { Request } from 'express';
-import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto';
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
@@ -69,7 +68,7 @@ export class CustomerService {
     });
   }
 
-  async findAll(query: CustomerQueryDto = {}): Promise<QueryResponseDto<Customer>> {
+  async findAll(query: CustomerQueryDto = {}) {
     const { page = 1, limit = 10, status, search } = query;
     const whereClause: Prisma.CustomerWhereInput = { entity_status: EntityStatus.ACTIVE };
 
@@ -104,6 +103,11 @@ export class CustomerService {
               created_at: 'desc',
             },
           },
+          orders:{
+             orderBy: {
+              created_at: 'desc',
+            },
+          }
         },
         orderBy: {
           created_at: 'desc',
@@ -148,7 +152,11 @@ export class CustomerService {
     const customer = await this.prisma.customer.findUnique({
       where: { id },
       include: {
-        addresses: true,
+        addresses: {
+           orderBy: {
+              created_at: 'desc',
+            },
+        },
         favorites: {
           include: {
             dish: {
@@ -159,6 +167,7 @@ export class CustomerService {
           },
         },
         notification_settings: true,
+        
       },
     });
 
