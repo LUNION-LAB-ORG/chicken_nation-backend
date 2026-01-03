@@ -170,6 +170,20 @@ export class CustomerService {
           },
         },
         orders:{
+          where: {
+        OR: [
+          {
+        AND: [
+          { paied: false },
+          { auto: false }
+        ]
+      },
+      {
+        paied: true,
+      }
+    ],
+      entity_status: { not: EntityStatus.DELETED },
+          },
           orderBy: {
             created_at: 'desc',
           },

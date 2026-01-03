@@ -244,6 +244,8 @@ model Customer {
 
   Conversation Conversation[]
   Voucher      Voucher[]
+  cardRequests CardRequest[]
+  nationCards  NationCard[]
 }
 
 // -------------------- Gestion des conversations ------------------------------
@@ -915,4 +917,59 @@ model AppClick {
   ip        String?
   referer   String?
   createdAt DateTime @default(now())
+}
+
+// CARTE NATION
+enum CardRequestStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum NationCardStatus {
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+model CardRequest {
+  id                    String            @id @default(uuid()) @db.Uuid
+  customer_id           String            @db.Uuid
+  customer              Customer          @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  nickname              String?           @db.VarChar(100)
+  institution           String            @db.VarChar(255)
+  student_card_file_url String            @db.Text
+  status                CardRequestStatus @default(PENDING)
+  rejection_reason      String?           @db.Text
+  reviewed_by           String?           @db.Uuid
+  reviewed_at           DateTime?         @db.Timestamp(6)
+  created_at            DateTime          @default(now()) @db.Timestamp(6)
+  updated_at            DateTime          @updatedAt @db.Timestamp(6)
+  nation_card           NationCard?
+
+  @@unique([customer_id, status], name: "unique_pending_request")
+  @@index([customer_id])
+  @@index([status])
+  @@index([created_at])
+}
+
+model NationCard {
+  id              String           @id @default(uuid()) @db.Uuid
+  customer_id     String           @db.Uuid
+  customer        Customer         @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  card_request_id String           @unique @db.Uuid
+  card_request    CardRequest      @relation(fields: [card_request_id], references: [id], onDelete: Restrict)
+  nickname        String?          @db.VarChar(100)
+  card_number     String           @unique @db.VarChar(50)
+  qr_code_value   String           @unique @db.Text
+  card_image_url  String           @db.Text
+  status          NationCardStatus @default(ACTIVE)
+  created_at      DateTime         @default(now()) @db.Timestamp(6)
+  updated_at      DateTime         @updatedAt @db.Timestamp(6)
+
+  @@index([customer_id])
+  @@index([card_number])
+  @@index([status])
 }
