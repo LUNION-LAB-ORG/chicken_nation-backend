@@ -104,10 +104,24 @@ export class CustomerService {
             },
           },
           orders:{
-             orderBy: {
-              created_at: 'desc',
-            },
-          }
+          where: {
+        OR: [
+          {
+        AND: [
+          { paied: false },
+          { auto: false }
+        ]
+      },
+      {
+        paied: true,
+      }
+    ],
+      entity_status: { not: EntityStatus.DELETED },
+          },
+          orderBy: {
+            created_at: 'desc',
+          },
+        }
         },
         orderBy: {
           created_at: 'desc',
