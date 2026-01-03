@@ -1,6 +1,13 @@
 import { Module } from '@nestjs/common';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+import { BullModule } from '@nestjs/bullmq';
+import { DiscoveryModule } from '@nestjs/core';
+import KeyvRedis from '@keyv/redis';
+
+// Modules internes
 import { CommonModule } from 'src/common/common.module';
 import { UsersModule } from 'src/modules/users/users.module';
 import { AuthModule } from 'src/modules/auth/auth.module';
@@ -14,8 +21,6 @@ import { OrderModule } from 'src/modules/order/order.module';
 import { NotificationsModule } from 'src/modules/notifications/notifications.module';
 import { KkiapayModule } from 'src/kkiapay/kkiapay.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
-import { ScheduleModule } from '@nestjs/schedule';
-import { EventEmitterModule } from '@nestjs/event-emitter';
 import { StatisticsModule } from 'src/modules/statistics/statistics.module';
 import { SocketIoModule } from 'src/socket-io/socket-io.module';
 import { TwilioModule } from 'src/twilio/twilio.module';
@@ -24,48 +29,41 @@ import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { MessagerieModule } from './modules/messagerie/messagerie.module';
 import { SupportModule } from './modules/support/support.module';
 import { VoucherModule } from './modules/voucher/voucher.module';
-import { BullModule } from '@nestjs/bullmq';
 import { TurboModule } from './turbo/turbo.module';
 import { AppMobileModule } from './modules/marketing/app-mobile/app-mobile.module';
-import KeyvRedis from '@keyv/redis';
 
 @Module({
   imports: [
+    // DiscoveryModule,
+    EventEmitterModule.forRoot({}),
+
+    // Modules utilitaires
     JsonWebTokenModule,
-    CacheModule.registerAsync({
-      isGlobal: true,
-      useFactory: async () => {
-        return {
-          ttl: 1000,
-          stores: [
-            // new Keyv({
-            //   store: new CacheableMemory({ ttl: 60000, lruSize: 5000 }),
-            // }),
-            new KeyvRedis('redis://localhost:6379'),
-          ],
-        };
-      },
-    }),
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
-    EventEmitterModule.forRoot({}),
+    CacheModule.registerAsync({
+      isGlobal: true,
+      useFactory: async () => ({
+        ttl: 1000,
+        stores: [new KeyvRedis('redis://localhost:6379')],
+      }),
+    }),
     BullModule.forRoot({
       prefix: 'chicken-nation-queue',
       defaultJobOptions: {
         attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 1000,
-        },
+        backoff: { type: 'exponential', delay: 1000 },
       },
       connection: {
         host: 'localhost',
-        port: parseInt('6379'),
-        username: "default",
-        password: "",
-        db: parseInt('0'),
-      }
+        port: 6379,
+        username: 'default',
+        password: '',
+        db: 0,
+      },
     }),
+
+    // Modules applicatifs
     DatabaseModule,
     CommonModule,
     UsersModule,
@@ -90,5 +88,4 @@ import KeyvRedis from '@keyv/redis';
     AppMobileModule,
   ],
 })
-
-export class AppModule { }
+export class AppModule {}

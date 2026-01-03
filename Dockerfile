@@ -1,35 +1,42 @@
-# Use the official Node.js image as the base image
-FROM node:24-alpine AS base
-ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable
+# ========================
+# Base
+# ========================
+FROM oven/bun:1.1.0 AS base
 WORKDIR /app
 
-FROM base AS prod-deps
-COPY package*.json ./
-COPY pnpm-lock.yaml ./
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --prod --frozen-lockfile
-
+# ========================
+# Dependencies
+# ========================
 FROM base AS deps
-COPY package*.json ./
-COPY pnpm-lock.yaml ./
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+COPY package.json bun.lockb ./
+RUN bun install
 
+# ========================
+# Build
+# ========================
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# Générer le client Prisma avant de build
-RUN npx prisma generate
-RUN pnpm run build
 
-FROM base AS runner
+# Prisma client
+RUN bunx prisma generate
+
+# Build NestJS
+RUN bun run build
+
+# ========================
+# Runner (production)
+# ========================
+FROM oven/bun:1.1.0-slim AS runner
+WORKDIR /app
+
 ENV NODE_ENV=production
+
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY prisma ./prisma
+COPY package.json ./
 
-# Expose the application port
 EXPOSE 8081
 
-# Command to run the application
-CMD ["node", "dist/src/main"]
+CMD ["bun", "run", "start:prod"]

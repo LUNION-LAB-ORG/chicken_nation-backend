@@ -1,69 +1,81 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import type { StringValue } from 'ms';
 
 @Injectable()
 export class JsonWebTokenService {
   private readonly secret: string;
   private readonly refreshSecret: string;
-  private readonly tokenExpiration: string;
-  private readonly refreshExpiration: string;
   private readonly customerSecret: string;
-  private readonly customerExpiration: string;
+
+  private readonly tokenExpiration: StringValue;
+  private readonly refreshExpiration: StringValue;
+  private readonly customerExpiration: StringValue;
+
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
   ) {
-    this.secret = this.configService.get<string>('TOKEN_SECRET') ?? "";
-    this.refreshSecret = this.configService.get<string>('REFRESH_TOKEN_SECRET') ?? "";
-    this.tokenExpiration = this.configService.get<string>('TOKEN_EXPIRATION') ?? "";
-    this.refreshExpiration = this.configService.get<string>('REFRESH_TOKEN_EXPIRATION') ?? "";
-    this.customerSecret = this.configService.get<string>('CUSTOMER_TOKEN_SECRET') ?? "";
-    this.customerExpiration = this.configService.get<string>('CUSTOMER_TOKEN_EXPIRATION') ?? "";
+    this.secret = this.configService.get<string>('TOKEN_SECRET', '');
+    this.refreshSecret = this.configService.get<string>('REFRESH_TOKEN_SECRET', '');
+    this.customerSecret = this.configService.get<string>('CUSTOMER_TOKEN_SECRET', '');
 
+    this.tokenExpiration = this.configService.get<StringValue>(
+      'TOKEN_EXPIRATION',
+      '1h',
+    );
+
+    this.refreshExpiration = this.configService.get<StringValue>(
+      'REFRESH_TOKEN_EXPIRATION',
+      '7d',
+    );
+
+    this.customerExpiration = this.configService.get<StringValue>(
+      'CUSTOMER_TOKEN_EXPIRATION',
+      '30d',
+    );
   }
 
-  // GENERATE TOKEN
+  // USER TOKEN
   async generateToken(userId: string) {
-    const payload = { sub: userId };
-    const token = await this.jwtService.signAsync(payload, {
-      secret: this.secret,
-      expiresIn: this.tokenExpiration,
-    });
-
-    return token;
+    return this.jwtService.signAsync(
+      { sub: userId },
+      {
+        secret: this.secret,
+        expiresIn: this.tokenExpiration,
+      },
+    );
   }
 
-  // GENERATE REFRESH TOKEN
+  // REFRESH TOKEN
   async generateRefreshToken(userId: string) {
-    const payload = { sub: userId };
-    const refreshToken = await this.jwtService.signAsync(payload, {
-      secret: this.refreshSecret,
-      expiresIn: this.refreshExpiration,
-    });
-
-    return refreshToken;
+    return this.jwtService.signAsync(
+      { sub: userId },
+      {
+        secret: this.refreshSecret,
+        expiresIn: this.refreshExpiration,
+      },
+    );
   }
 
-
-  // GENERATE CUSTOMER TOKEN
+  // CUSTOMER TOKEN
   async generateCustomerToken(userId: string) {
-    const payload = { sub: userId };
-    const token = await this.jwtService.signAsync(payload, {
-      secret: this.customerSecret,
-      expiresIn: this.customerExpiration,
-    });
-
-    return token;
+    return this.jwtService.signAsync(
+      { sub: userId },
+      {
+        secret: this.customerSecret,
+        expiresIn: this.customerExpiration,
+      },
+    );
   }
 
-  async verifyToken(token: string, type: "user" | "customer") {
+  async verifyToken(token: string, type: 'user' | 'customer') {
     try {
-      const decoded = await this.jwtService.verifyAsync(token, {
-        secret: type === "user" ? this.secret : this.customerSecret,
+      return await this.jwtService.verifyAsync(token, {
+        secret: type === 'user' ? this.secret : this.customerSecret,
       });
-      return decoded;
-    } catch (error) {
+    } catch {
       throw new UnauthorizedException('Token invalide');
     }
   }
