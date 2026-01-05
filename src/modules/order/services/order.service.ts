@@ -350,31 +350,12 @@ export class OrderService {
       sortBy = 'created_at',
       sortOrder = 'desc',
     } = filters;
-
+    console.log({ filters })
     const where: Prisma.OrderWhereInput = {
-      OR: [{
-        AND: [
-          { paied: false },
-          { auto: false }
-        ]
-      },
-      {
-        paied: true,
-      }],
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),
       ...(type && { type }),
       ...(customerId && { customer_id: customerId }),
-      ...(startDate && {
-        created_at: {
-          gte: new Date(startDate),
-        }
-      }),
-      ...(endDate && {
-        created_at: {
-          lte: new Date(endDate),
-        }
-      }),
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
       ...(restaurantId && { restaurant_id: restaurantId }),
@@ -385,6 +366,32 @@ export class OrderService {
         }
       })
     };
+    if (filters.auto == undefined) {
+      where.OR = [{
+        AND: [
+          { paied: false },
+          { auto: false }
+        ]
+      },
+      {
+        paied: true,
+      }];
+    } else {
+      if (filters.auto === true) {
+        where.auto = true;
+        where.paied = true;
+      } else {
+        where.auto = false;
+      }
+    }
+
+
+    if (filters.startDate && filters.endDate) {
+      where.created_at = {
+        gte: filters.startDate,
+        lte: new Date(new Date(filters.endDate).setHours(23, 59, 59, 999))
+      }
+    }
 
     const [orders, total] = await Promise.all([
       this.prisma.order.findMany({
