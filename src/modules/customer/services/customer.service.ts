@@ -103,25 +103,25 @@ export class CustomerService {
               created_at: 'desc',
             },
           },
-          orders:{
-          where: {
-        OR: [
-          {
-        AND: [
-          { paied: false },
-          { auto: false }
-        ]
-      },
-      {
-        paied: true,
-      }
-    ],
-      entity_status: { not: EntityStatus.DELETED },
-          },
-          orderBy: {
-            created_at: 'desc',
-          },
-        }
+          orders: {
+            where: {
+              OR: [
+                {
+                  AND: [
+                    { paied: false },
+                    { auto: false }
+                  ]
+                },
+                {
+                  paied: true,
+                }
+              ],
+              entity_status: { not: EntityStatus.DELETED },
+            },
+            orderBy: {
+              created_at: 'desc',
+            },
+          }
         },
         orderBy: {
           created_at: 'desc',
@@ -167,9 +167,9 @@ export class CustomerService {
       where: { id },
       include: {
         addresses: {
-           orderBy: {
-              created_at: 'desc',
-            },
+          orderBy: {
+            created_at: 'desc',
+          },
         },
         favorites: {
           orderBy: {
@@ -183,64 +183,74 @@ export class CustomerService {
             },
           },
         },
-        orders:{
+        orders: {
           where: {
-        OR: [
-          {
-        AND: [
-          { paied: false },
-          { auto: false }
-        ]
-      },
-      {
-        paied: true,
-      }
-    ],
-      entity_status: { not: EntityStatus.DELETED },
+            OR: [
+              {
+                AND: [
+                  { paied: false },
+                  { auto: false }
+                ]
+              },
+              {
+                paied: true,
+              }
+            ],
+            entity_status: { not: EntityStatus.DELETED },
           },
           orderBy: {
             created_at: 'desc',
           },
         },
         notification_settings: true,
-        loyalty_points:{
+        loyalty_points: {
           orderBy: {
             created_at: 'desc',
           },
         },
-        promotion_usages:{
+        promotion_usages: {
           orderBy: {
             created_at: 'desc',
           },
         },
-        loyalty_level_history:{
+        loyalty_level_history: {
           orderBy: {
             created_at: 'desc',
           },
         },
-        Comment:{
+        Comment: {
           orderBy: {
             created_at: 'desc',
           },
         },
-        TicketMessage:{
+        TicketMessage: {
           orderBy: {
             createdAt: 'desc',
           },
         },
-        Message:{
+        Message: {
           orderBy: {
             createdAt: 'desc',
           },
         },
-        TicketThread:{
+        TicketThread: {
           orderBy: {
             createdAt: 'desc',
           },
         },
-        Conversation:{
+        Conversation: {
           orderBy: {
             createdAt: 'desc',
+          },
+        },
+        cardRequests: {
+          orderBy: {
+            created_at: 'desc',
+          },
+        },
+        nationCards: {
+          orderBy: {
+            created_at: 'desc',
           },
         },
       },
