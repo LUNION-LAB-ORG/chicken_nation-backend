@@ -53,7 +53,7 @@ export class CardRequestService {
     // upload S3
     const result = await this.s3service.uploadFile({
       buffer: file.buffer,
-      path: "carte-nation/carte-etudiant",
+      path: "chicken-nation/carte-etudiant",
       originalname: file.originalname,
       mimetype: file.mimetype
     })

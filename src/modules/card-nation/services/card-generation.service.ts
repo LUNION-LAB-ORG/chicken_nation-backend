@@ -146,7 +146,7 @@ export class CardGenerationService {
       // S3 upload
       const result = await this.s3service.uploadFile({
         buffer: buffer,
-        path: "carte-nation/carte-nation",
+        path: "chicken-nation/carte-nation",
         originalname: fileName,
         mimetype: 'image/png'
       })
