@@ -4,7 +4,6 @@ import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { BullModule } from '@nestjs/bullmq';
-import { DiscoveryModule } from '@nestjs/core';
 import KeyvRedis from '@keyv/redis';
 
 // Modules internes
@@ -31,10 +30,11 @@ import { SupportModule } from './modules/support/support.module';
 import { VoucherModule } from './modules/voucher/voucher.module';
 import { TurboModule } from './turbo/turbo.module';
 import { AppMobileModule } from './modules/marketing/app-mobile/app-mobile.module';
+import { CardNationModule } from './modules/card-nation/card-nation.module';
+import { S3Module } from './s3/s3.module';
 
 @Module({
   imports: [
-    // DiscoveryModule,
     EventEmitterModule.forRoot({}),
 
     // Modules utilitaires
@@ -86,6 +86,8 @@ import { AppMobileModule } from './modules/marketing/app-mobile/app-mobile.modul
     VoucherModule,
     TurboModule,
     AppMobileModule,
+    CardNationModule,
+    S3Module
   ],
 })
-export class AppModule {}
+export class AppModule { }
