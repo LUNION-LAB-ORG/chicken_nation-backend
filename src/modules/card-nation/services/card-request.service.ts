@@ -102,17 +102,10 @@ export class CardRequestService {
     });
 
     if (!request) {
-      return {
-        success: true,
-        message: 'Aucune demande trouvée',
-        data: null,
-      };
+      throw new NotFoundException('Vous n\'avez pas encore de demande de carte Nation active');
     }
 
-    return {
-      success: true,
-      data: request,
-    };
+    return request;
   }
 
   /**
@@ -145,10 +138,7 @@ export class CardRequestService {
       throw new NotFoundException('Vous n\'avez pas encore de carte Nation active');
     }
 
-    return {
-      success: true,
-      data: card,
-    };
+    return card;
   }
 
   /**

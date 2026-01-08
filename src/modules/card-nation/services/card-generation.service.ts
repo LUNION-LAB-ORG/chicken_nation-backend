@@ -1,9 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createCanvas, loadImage } from 'canvas';
 import * as QRCode from 'qrcode';
-import * as fs from 'fs/promises';
-import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from 'src/s3/s3.service';
+import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class CardGenerationService {
@@ -18,7 +17,7 @@ export class CardGenerationService {
 
   /**
    * Génère un numéro de carte unique
-   * Format: NATION-YYYYMMDD-XXXX
+   * Format: CN-YYYYMMDD-XXXX
    */
   generateCardNumber(): string {
     const date = new Date();
@@ -27,14 +26,14 @@ export class CardGenerationService {
     const day = String(date.getDate()).padStart(2, '0');
     const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
 
-    return `CARTE-NATION-${year}${month}${day}-${random}`;
+    return `CN-${year}${month}${day}-${random}`;
   }
 
   /**
    * Génère une valeur QR code unique
    */
   generateQRValue(cardNumber: string, customerId: string): string {
-    return `CARTE-NATION-${cardNumber}-${customerId}`;
+    return `${cardNumber}-${customerId}`;
   }
 
   /**
@@ -64,15 +63,15 @@ export class CardGenerationService {
       this.roundRect(ctx, 20, 20, this.CARD_WIDTH - 40, this.CARD_HEIGHT - 40, 20);
       ctx.stroke();
 
-      // Logo KLYEO (si disponible)
       try {
-        const logo = await loadImage('./assets/klyeo-logo.png');
-        ctx.drawImage(logo, 50, 40, 150, 60);
+        const logoUrl = this.s3service.getCdnFileUrl('logos/klyeo.png');
+        const logoImage = await loadImage(logoUrl);
+        ctx.drawImage(logoImage, 50, 40, 150, 60);
       } catch (error) {
         // Si le logo n'existe pas, afficher le texte
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 36px Arial';
-        ctx.fillText('KLYEO', 50, 80);
+        ctx.fillText('CHICKEN NATION', 50, 80);
       }
 
       // Titre "CARTE NATION"
@@ -186,12 +185,13 @@ export class CardGenerationService {
   /**
    * Supprime une image de carte
    */
-  async deleteCardImage(filePath: string): Promise<void> {
+  async deleteCardImage(filePath: string): Promise<boolean> {
     try {
-      await fs.unlink(filePath);
       this.logger.log(`Image de carte supprimée: ${filePath}`);
+      return await this.s3service.deleteFile(filePath);
     } catch (error) {
       this.logger.warn(`Impossible de supprimer l'image: ${filePath}`);
+      return false;
     }
   }
 }
