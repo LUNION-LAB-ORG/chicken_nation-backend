@@ -84,10 +84,7 @@ export class S3Service {
             throw new Error('CloudFront URL is not configured');
         }
 
-        const normalizedBaseUrl = this.cloudFrontUrl.replace(/\/$/, '');
-        const normalizedKey = key.replace(/^\//, '');
-
-        return `${normalizedBaseUrl}/${normalizedKey}`;
+        return `${this.cloudFrontUrl}/${key}`;
     }
 
     async deleteFile(key: string): Promise<boolean> {
