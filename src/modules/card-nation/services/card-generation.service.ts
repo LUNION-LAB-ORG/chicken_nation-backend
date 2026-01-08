@@ -64,7 +64,7 @@ export class CardGenerationService {
        🏷️ TITRE "CARTE NATION"
     ====================================================== */
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 90px Arial';
+    ctx.font = 'bold 80px Arial';
     ctx.textAlign = 'left';
     ctx.fillText('CARTE DE LA NATION', 80, 160);
 
@@ -92,7 +92,7 @@ export class CardGenerationService {
     /* =====================================================
        ▶️ CODE CARTE (AU CENTRE GAUCHE)
     ====================================================== */
-    ctx.font = 'bold 90px monospace';
+    ctx.font = 'medium 80px monospace';
     ctx.fillStyle = '#ffffff';
 
     // Triangle play à gauche
