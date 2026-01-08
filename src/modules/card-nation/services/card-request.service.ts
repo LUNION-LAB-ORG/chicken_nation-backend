@@ -127,6 +127,8 @@ export class CardRequestService {
         card_request: {
           select: {
             institution: true,
+            reviewed_at: true,
+            created_at: true,
           },
         },
       },
