@@ -75,7 +75,7 @@ export class AuthService {
 
     const isSent = await this.twilioService.sendOtp({ phoneNumber: customer.phone, otp });
     if (!isSent) {
-      this.logger.error(`Échec de l'envoi de l'OTP au numéro ${customer.phone}`);
+      // this.logger.error(`Échec de l'envoi de l'OTP au numéro ${customer.phone}`);
       throw new HttpException('Envoi de l\'OTP impossible', 500);
     }
     return { otp };

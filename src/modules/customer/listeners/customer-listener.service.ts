@@ -64,18 +64,15 @@ export class CustomerListenerService {
     @OnEvent(CUSTOMER_EVENTS.CUSTOMER_ACTIVATED)
     async customerActivatedEventListener(payload: { customer: any }) {
         // TODO: envoi email + notifications pour l’activation
-        console.log('Customer activated:', payload);
     }
 
     @OnEvent(CUSTOMER_EVENTS.CUSTOMER_DEACTIVATED)
     async customerDeactivatedEventListener(payload: { customer: any }) {
         // TODO: envoi email + notifications pour la désactivation
-        console.log('Customer deactivated:', payload);
     }
 
     @OnEvent(CUSTOMER_EVENTS.CUSTOMER_DELETED)
     async customerDeletedEventListener(payload: { customer: any }) {
         // TODO: envoi email + notifications pour la suppression
-        console.log('Customer deleted:', payload);
     }
 }

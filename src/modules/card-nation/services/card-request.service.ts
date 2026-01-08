@@ -10,7 +10,6 @@ import { S3Service } from 'src/s3/s3.service';
 
 @Injectable()
 export class CardRequestService {
-  private readonly logger = new Logger(CardRequestService.name);
 
   constructor(
     private prisma: PrismaService,
@@ -80,7 +79,6 @@ export class CardRequestService {
       },
     });
 
-    this.logger.log(`Nouvelle demande de carte créée pour le client ${customerId}`);
 
     return {
       success: true,
@@ -269,7 +267,6 @@ export class CardRequestService {
       await this.generateCard(updatedRequest);
     }
 
-    this.logger.log(`Demande ${id} ${reviewDto.status === CardRequestStatus.APPROVED ? 'approuvée' : 'rejetée'}`);
 
     return {
       success: true,
@@ -311,9 +308,7 @@ export class CardRequestService {
         },
       });
 
-      this.logger.log(`Carte Nation générée pour le client ${request.customer_id}`);
     } catch (error) {
-      this.logger.error(`Erreur lors de la génération de la carte: ${error.message}`);
       throw new BadRequestException('Erreur lors de la génération de la carte');
     }
   }
@@ -441,7 +436,6 @@ export class CardRequestService {
       data: { status },
     });
 
-    this.logger.log(`Carte ${id} mise à jour avec le statut ${status}`);
 
     return {
       success: true,

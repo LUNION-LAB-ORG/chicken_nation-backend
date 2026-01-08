@@ -26,7 +26,7 @@ interface CachedUser {
   namespace: '/app', // Namespace global pour toute l'app
 })
 export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  private readonly logger = new Logger(AppGateway.name);
+  // private readonly logger = new Logger(AppGateway.name);
 
   @WebSocketServer()
   server: Server;
@@ -90,9 +90,9 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Rejoindre les rooms
       await this.joinRooms(client, userInfo);
 
-      this.logger.log(`Connexion: ${userInfo.type} ${userInfo.id} connecté (Socket: ${client.id})`);
+      // this.logger.log(`Connexion: ${userInfo.type} ${userInfo.id} connecté (Socket: ${client.id})`);
     } catch (error) {
-      this.logger.error(`Erreur de connexion socket: ${error.message}`);
+      // this.logger.error(`Erreur de connexion socket: ${error.message}`);
       client.disconnect();
     }
   }
@@ -100,7 +100,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   handleDisconnect(client: Socket) {
     const user = this.connectedUsers.get(client.id);
     if (user) {
-      this.logger.log(`Déconnexion: ${user.type} ${user.id} déconnecté`);
+      // this.logger.log(`Déconnexion: ${user.type} ${user.id} déconnecté`);
       this.connectedUsers.delete(client.id);
 
       // Supprimer les typing indicators
@@ -179,7 +179,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
       }
     } catch (error) {
-      this.logger.error(`Erreur DB dans identifyUser: ${error.message}`);
+      // this.logger.error(`Erreur DB dans identifyUser: ${error.message}`);
       return null;
     }
 

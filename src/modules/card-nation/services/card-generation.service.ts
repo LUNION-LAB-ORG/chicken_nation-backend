@@ -89,7 +89,7 @@ export class CardGenerationService {
     ====================== */
     try {
       const logoUrl = this.s3service.getCdnFileUrl(
-        'chicken-nation/assets/images/logos/logo_blanc.png',
+        'chicken-nation/assets/images/logos/logo_fond_blanc.png',
       );
       this.logger.log(`Logo URL: ${logoUrl}`);
 
