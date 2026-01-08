@@ -8,9 +8,9 @@ import { v4 as uuidv4 } from 'uuid';
 export class CardGenerationService {
   private readonly logger = new Logger(CardGenerationService.name);
 
-  // Ratio carte bancaire HD
-  private readonly CARD_WIDTH = 1014;
-  private readonly CARD_HEIGHT = 638;
+  // Résolution de l'image à reproduire
+  private readonly CARD_WIDTH = 1536;
+  private readonly CARD_HEIGHT = 1024;
 
   constructor(private readonly s3service: S3Service) { }
 
@@ -27,16 +27,14 @@ export class CardGenerationService {
 
     return `${dd}${mm} ${yy}${rand().toString().slice(0, 2)} ${rand()} ${rand()}`;
   }
-  generateQRValue(cardNumber: string, customerId: string): string {
-    const d = new Date();
-    const dd = String(d.getDate()).padStart(2, '0');
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const yy = String(d.getFullYear()).slice(-2);
-    const rand = () => Math.floor(1000 + Math.random() * 9000);
 
-    return `${dd}${mm} ${yy}${rand().toString().slice(0, 2)} ${rand()} ${rand()}`;
+  generateQRValue(cardNumber: string, customerId: string): string {
+    return `${cardNumber}-${customerId}`;
   }
 
+  /**
+   * Génération image carte Nation
+   */
   async generateCardImage(
     firstName: string,
     lastName: string,
@@ -47,105 +45,106 @@ export class CardGenerationService {
     const canvas = createCanvas(this.CARD_WIDTH, this.CARD_HEIGHT);
     const ctx = canvas.getContext('2d');
 
-    /* =====================
-       🎨 FOND ORANGE
-    ====================== */
-    const bg = ctx.createLinearGradient(0, 0, this.CARD_WIDTH, this.CARD_HEIGHT);
-    bg.addColorStop(0, '#f59e0b');
-    bg.addColorStop(0.5, '#ea580c');
-    bg.addColorStop(1, '#c2410c');
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, this.CARD_WIDTH, this.CARD_HEIGHT);
+    /* =====================================================
+       🖼️ FOND OFFICIEL (COVER)
+    ====================================================== */
+    const bgUrl = this.s3service.getCdnFileUrl(
+      'chicken-nation/assets/images/carte_nation/carte_nation_fond.png',
+    );
+    const bg = await loadImage(bgUrl);
+    this.drawImageCover(ctx, bg);
 
-    /* =====================
-       🌊 LIGNES ONDULÉES
-    ====================== */
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.lineWidth = 2;
-    for (let i = 0; i < 18; i++) {
-      ctx.beginPath();
-      ctx.moveTo(0, 420 + i * 8);
-      ctx.bezierCurveTo(
-        250,
-        360 - i * 10,
-        750,
-        520 + i * 10,
-        this.CARD_WIDTH,
-        360 - i * 6,
-      );
-      ctx.stroke();
-    }
-
-    /* =====================
-       🏷️ TITRE
-    ====================== */
+    /* =====================================================
+       🏷️ TITRE "CARTE NATION"
+    ====================================================== */
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 48px Arial';
+    ctx.font = 'bold 90px Arial';
     ctx.textAlign = 'left';
-    ctx.fillText('CARTE NATION', 60, 90);
+    ctx.fillText('CARTE NATION', 80, 160);
 
-    /* =====================
-       🐔 LOGO
-    ====================== */
-    try {
-      const logoUrl = this.s3service.getCdnFileUrl(
-        'chicken-nation/assets/images/logos/logo_blanc.png',
-      );
-      const logo = await loadImage(logoUrl);
-      ctx.drawImage(logo, this.CARD_WIDTH - 260, 40, 200, 120);
-    } catch {
-      ctx.font = 'bold 36px Arial';
-      ctx.fillText('CHICKEN NATION', this.CARD_WIDTH - 350, 90);
-    }
+    /* =====================================================
+       🐔 LOGO (AGRANDI - EN HAUT À DROITE)
+    ====================================================== */
+    const logoUrl = this.s3service.getCdnFileUrl(
+      'chicken-nation/assets/images/logos/logo_fond_blanc.png',
+    );
+    const logo = await loadImage(logoUrl);
 
-    /* =====================
-       ▶️ CODE CARTE
-    ====================== */
-    ctx.font = 'bold 44px monospace';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText('▶', 60, 300);
-    ctx.fillText(displayCode, 110, 300);
+    // Logo beaucoup plus grand
+    const logoTargetHeight = 280;
+    const logoRatio = logo.width / logo.height;
+    const logoTargetWidth = logoTargetHeight * logoRatio;
 
-    /* =====================
-       📦 QR CODE
-    ====================== */
-    const qrDataUrl = await QRCode.toDataURL(qrValue, {
-      width: 260,
-      margin: 1,
-      color: { dark: '#000000', light: '#ffffff' },
-    });
-    const qr = await loadImage(qrDataUrl);
-
-    const qrX = this.CARD_WIDTH - 300;
-    const qrY = this.CARD_HEIGHT - 300;
-
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(qrX - 10, qrY - 10, 280, 280);
-    ctx.drawImage(qr, qrX, qrY, 260, 260);
-
-    /* =====================
-       👤 SURNOM
-    ====================== */
-    if (nickname) {
-      ctx.font = 'bold 26px Arial';
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(nickname.toUpperCase(), qrX - 420, qrY + 40);
-    }
-
-    /* =====================
-       👤 NOM COMPLET (SUR LE QR)
-    ====================== */
-    ctx.font = 'bold 34px Arial';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(
-      `${lastName.toUpperCase()} ${firstName.toUpperCase()}`,
-      qrX - 420,
-      qrY + 90,
+    ctx.drawImage(
+      logo,
+      this.CARD_WIDTH - logoTargetWidth - 80,
+      60,
+      logoTargetWidth,
+      logoTargetHeight,
     );
 
-    /* =====================
-       💾 UPLOAD
-    ====================== */
+    /* =====================================================
+       ▶️ CODE CARTE (AU CENTRE GAUCHE)
+    ====================================================== */
+    ctx.font = 'bold 90px monospace';
+    ctx.fillStyle = '#ffffff';
+
+    // Triangle play à gauche
+    ctx.fillText('▶', 70, 520);
+
+    // Code carte avec espacement
+    ctx.fillText(displayCode, 200, 520);
+
+    /* =====================================================
+       📦 QR CODE (EN BAS À DROITE - AGRANDI)
+    ====================================================== */
+    const qrSize = 280;
+
+    const qrDataUrl = await QRCode.toDataURL(qrValue, {
+      width: qrSize,
+      margin: 0,
+      errorCorrectionLevel: 'M',
+    });
+
+    const qr = await loadImage(qrDataUrl);
+
+    const qrX = this.CARD_WIDTH - qrSize - 100;
+    const qrY = this.CARD_HEIGHT - qrSize - 80;
+
+    // Fond blanc pour le QR
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(qrX - 12, qrY - 12, qrSize + 24, qrSize + 24);
+    ctx.drawImage(qr, qrX, qrY, qrSize, qrSize);
+
+    /* =====================================================
+       👤 SURNOM / NOM / PRÉNOMS
+       → EN BAS À GAUCHE DU QR CODE
+       → TEXTES AGRANDIS ET BIEN POSITIONNÉS
+    ====================================================== */
+    const textX = 80;
+    const textBaseY = this.CARD_HEIGHT - 180;
+
+    // Surnom (plus petit, couleur dorée/jaune)
+    if (nickname) {
+      ctx.font = 'bold 42px Arial';
+      ctx.fillStyle = '#FFD700'; // Couleur dorée
+      ctx.textAlign = 'left';
+      ctx.fillText(nickname.toUpperCase(), textX, textBaseY);
+    }
+
+    // Nom et prénom (gros et blanc)
+    ctx.font = 'bold 60px Arial';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left';
+    ctx.fillText(
+      `${lastName.toUpperCase()} ${firstName.toUpperCase()}`,
+      textX,
+      textBaseY + 70,
+    );
+
+    /* =====================================================
+       💾 UPLOAD S3
+    ====================================================== */
     const fileName = `carte-nation-${uuidv4()}.png`;
     const buffer = canvas.toBuffer('image/png');
 
@@ -156,7 +155,40 @@ export class CardGenerationService {
       mimetype: 'image/png',
     });
 
-    this.logger.log(`Carte générée : ${fileName}`);
-    return result?.key || "";
+    this.logger.log(`Carte Nation générée : ${fileName}`);
+    return result?.key || '';
+  }
+
+  /* =====================================================
+     🧩 UTIL — DRAW IMAGE COVER
+  ====================================================== */
+  private drawImageCover(ctx: any, img: any) {
+    const canvasRatio = this.CARD_WIDTH / this.CARD_HEIGHT;
+    const imgRatio = img.width / img.height;
+
+    let sx = 0,
+      sy = 0,
+      sw = img.width,
+      sh = img.height;
+
+    if (imgRatio > canvasRatio) {
+      sw = img.height * canvasRatio;
+      sx = (img.width - sw) / 2;
+    } else {
+      sh = img.width / canvasRatio;
+      sy = (img.height - sh) / 2;
+    }
+
+    ctx.drawImage(
+      img,
+      sx,
+      sy,
+      sw,
+      sh,
+      0,
+      0,
+      this.CARD_WIDTH,
+      this.CARD_HEIGHT,
+    );
   }
 }

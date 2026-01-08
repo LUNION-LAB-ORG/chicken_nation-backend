@@ -46,12 +46,18 @@ export class CardGenerationService {
     const ctx = canvas.getContext('2d');
 
     /* =====================================================
-       🖼️ FOND OFFICIEL (COVER)
+       🖼️ FOND OFFICIEL (COVER) AVEC COINS ARRONDIS
     ====================================================== */
     const bgUrl = this.s3service.getCdnFileUrl(
       'chicken-nation/assets/images/carte_nation/carte_nation_fond.png',
     );
     const bg = await loadImage(bgUrl);
+
+    // Créer un chemin avec coins arrondis
+    const cornerRadius = 40; // Rayon des coins arrondis
+    this.createRoundedRectPath(ctx, 0, 0, this.CARD_WIDTH, this.CARD_HEIGHT, cornerRadius);
+    ctx.clip(); // Appliquer le masque
+
     this.drawImageCover(ctx, bg);
 
     /* =====================================================
@@ -60,7 +66,7 @@ export class CardGenerationService {
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 90px Arial';
     ctx.textAlign = 'left';
-    ctx.fillText('CARTE NATION', 80, 160);
+    ctx.fillText('CARTE DE LA NATION', 80, 160);
 
     /* =====================================================
        🐔 LOGO (AGRANDI - EN HAUT À DROITE)
@@ -190,5 +196,29 @@ export class CardGenerationService {
       this.CARD_WIDTH,
       this.CARD_HEIGHT,
     );
+  }
+
+  /* =====================================================
+     🧩 UTIL — CREATE ROUNDED RECT PATH
+  ====================================================== */
+  private createRoundedRectPath(
+    ctx: any,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    radius: number,
+  ) {
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
   }
 }
