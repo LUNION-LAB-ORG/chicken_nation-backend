@@ -78,7 +78,15 @@ export class CardRequestService {
         },
       },
     });
-
+    // mise à jour du client si date de naissance renseignée
+    if (createDto.birth_day) {
+      await this.prisma.customer.update({
+        where: { id: customerId },
+        data: {
+          birth_day: createDto.birth_day,
+        },
+      });
+    }
 
     return {
       success: true,
