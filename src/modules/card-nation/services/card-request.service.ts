@@ -21,6 +21,7 @@ export class CardRequestService {
    * Créer une demande de carte (depuis l'app mobile)
    */
   async createRequest(customerId: string, createDto: CreateCardRequestDto, file: Express.Multer.File) {
+    console.log(createDto);
     // Vérifier si une demande en attente existe déjà
     const existingRequest = await this.prisma.cardRequest.findFirst({
       where: {
