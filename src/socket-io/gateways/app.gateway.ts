@@ -372,7 +372,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // this.logger.log(`Typing indicator: ${userId} ${isTyping ? 'started' : 'stopped'} typing in ${conversationId}`);
 
     } catch (error) {
-      this.logger.error('Error handling typing indicator:', error);
+      // this.logger.error('Error handling typing indicator:', error);
     }
   }
 

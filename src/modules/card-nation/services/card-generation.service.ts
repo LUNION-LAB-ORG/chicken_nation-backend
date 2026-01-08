@@ -91,10 +91,7 @@ export class CardGenerationService {
       const logoUrl = this.s3service.getCdnFileUrl(
         'chicken-nation/assets/images/logos/logo_fond_blanc.png',
       );
-      this.logger.log(`Logo URL: ${logoUrl}`);
-
       const logo = await loadImage(logoUrl);
-      this.logger.log(`Logo loaded: ${logo}`);
       ctx.drawImage(logo, this.CARD_WIDTH - 260, 40, 200, 120);
     } catch {
       ctx.font = 'bold 36px Arial';
