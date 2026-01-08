@@ -18,14 +18,20 @@ export class CardGenerationService {
    * Génère le code affiché sur la carte
    * Format: DDMM YYXX XXXX XXXX
    */
-  generateCardNumber(): string {
+  generateCardNumber(birth_dayDB: string): string {
     const d = new Date();
     const dd = String(d.getDate()).padStart(2, '0');
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const yy = String(d.getFullYear()).slice(-2);
+
+    const birth_day = new Date(birth_dayDB);
+    const BD_dd = String(birth_day.getDate()).padStart(2, '0');
+    const BD_mm = String(birth_day.getMonth() + 1).padStart(2, '0');
+    const BD_yy = String(birth_day.getFullYear()).slice(-2);
+
     const rand = () => Math.floor(1000 + Math.random() * 9000);
 
-    return `${dd}${mm} ${yy}${rand().toString().slice(0, 2)} ${rand()} ${rand()}`;
+    return `${dd}${mm} ${yy}${BD_dd} ${BD_mm}${BD_yy} ${rand()}`;
   }
 
   generateQRValue(cardNumber: string, customerId: string): string {
