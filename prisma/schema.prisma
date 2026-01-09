@@ -973,3 +973,15 @@ model NationCard {
   @@index([card_number])
   @@index([status])
 }
+
+// News
+model News {
+  id        String   @id @default(uuid())
+  title     String
+  content   String?
+  imageUrl  String? // optionnel, image de la news 2.5:1
+  link      String? // lien externe ou deeplink
+  isActive  Boolean  @default(true) // publié ou non
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
