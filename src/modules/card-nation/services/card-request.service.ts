@@ -290,27 +290,28 @@ export class CardRequestService {
   /**
    * Génère une carte Nation après approbation
    */
-  private async generateCard(request: any) {
+  private async generateCard(requestCard: any) {
     try {
-      const cardNumber = this.cardGenerationService.generateCardNumber(request.customer.birth_day);
+      const cardNumber = this.cardGenerationService.generateCardNumber(requestCard.customer.birth_day);
       const qrCodeValue = this.cardGenerationService.generateQRValue(
         cardNumber,
-        request.customer_id,
+        requestCard.customer_id,
       );
-
+      // Prendre le premier prénom si plusieurs
+      const firstName = requestCard.customer.first_name.split(' ')[0];
       const cardImagePath = await this.cardGenerationService.generateCardImage(
-        request.customer.first_name || '',
-        request.customer.last_name || '',
+        firstName,
+        requestCard.customer.last_name || '',
         cardNumber,
         qrCodeValue,
-        request.nickname,
+        requestCard.nickname,
       );
 
       await this.prisma.nationCard.create({
         data: {
-          customer_id: request.customer_id,
-          card_request_id: request.id,
-          nickname: request.nickname,
+          customer_id: requestCard.customer_id,
+          card_request_id: requestCard.id,
+          nickname: requestCard.nickname,
           card_number: cardNumber,
           qr_code_value: qrCodeValue,
           card_image_url: cardImagePath,
@@ -362,6 +363,7 @@ export class CardRequestService {
           customer: {
             select: {
               id: true,
+              image: true,
               first_name: true,
               last_name: true,
               phone: true,
@@ -371,7 +373,13 @@ export class CardRequestService {
           },
           card_request: {
             select: {
+              id: true,
               institution: true,
+              student_card_file_url: true,
+              rejection_reason: true,
+              reviewed_at: true,
+              reviewed_by: true,
+              status: true,
               created_at: true,
             },
           },
@@ -401,23 +409,25 @@ export class CardRequestService {
         customer: {
           select: {
             id: true,
+            image: true,
             first_name: true,
             last_name: true,
             phone: true,
             email: true,
             birth_day: true,
-            image: true,
           },
         },
         card_request: {
-          include: {
-            customer: {
-              select: {
-                first_name: true,
-                last_name: true,
-              },
-            },
-          },
+          select: {
+            id: true,
+            institution: true,
+            student_card_file_url: true,
+            rejection_reason: true,
+            reviewed_at: true,
+            reviewed_by: true,
+            status: true,
+            created_at: true,
+          }
         },
       },
     });
