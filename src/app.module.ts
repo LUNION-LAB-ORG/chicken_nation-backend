@@ -32,6 +32,7 @@ import { TurboModule } from './turbo/turbo.module';
 import { AppMobileModule } from './modules/marketing/app-mobile/app-mobile.module';
 import { CardNationModule } from './modules/card-nation/card-nation.module';
 import { S3Module } from './s3/s3.module';
+import { NewsModule } from './modules/marketing/news/news.module';
 
 @Module({
   imports: [
@@ -87,7 +88,8 @@ import { S3Module } from './s3/s3.module';
     TurboModule,
     AppMobileModule,
     CardNationModule,
-    S3Module
+    NewsModule,
+    S3Module,
   ],
 })
 export class AppModule { }
