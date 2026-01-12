@@ -350,7 +350,6 @@ export class OrderService {
       sortBy = 'created_at',
       sortOrder = 'desc',
     } = filters;
-    console.log({ filters })
     const where: Prisma.OrderWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),
