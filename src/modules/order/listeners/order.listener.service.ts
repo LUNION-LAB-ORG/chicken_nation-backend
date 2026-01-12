@@ -31,7 +31,6 @@ export class OrderListenerService {
     @OnEvent(OrderChannels.ORDER_UPDATED)
     @OnEvent(OrderChannels.ORDER_DELETED)
     async orderCreatedEventListener(payload: OrderCreatedEvent) {
-        console.log("order created event listener payload", payload)
         // PROMOTION USAGE
         if (payload.order.promotion_id) {
             if (payload.order.status === OrderStatus.PENDING && payload.totalDishes && payload.orderItems) {
