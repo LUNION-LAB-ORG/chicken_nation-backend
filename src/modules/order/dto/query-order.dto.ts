@@ -98,4 +98,10 @@ export class QueryOrderDto {
     @Transform(({ value }) => String(value).trim() == "true" ? true : false)
     @IsBoolean()
     auto?: boolean;
+
+    @ApiPropertyOptional({ description: "Pagination" })
+    @IsOptional()
+    @Transform(({ value }) => String(value).trim() == "true" ? true : false)
+    @IsBoolean()
+    pagination?: boolean;
 }

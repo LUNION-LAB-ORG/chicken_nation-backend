@@ -18,6 +18,7 @@ import { OrderEvent } from '../events/order.event';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 import { TurboService } from 'src/turbo/services/turbo.service';
+import { startOfMonth } from 'date-fns';
 
 @Injectable()
 export class OrderService {
@@ -340,15 +341,15 @@ export class OrderService {
       type,
       customerId,
       restaurantId,
-      startDate,
-      endDate,
       minAmount,
       maxAmount,
-      auto,
       page = 1,
       limit = 10,
+      pagination = true,
       sortBy = 'created_at',
       sortOrder = 'desc',
+      startDate =  startOfMonth(new Date()),
+      endDate = new Date() 
     } = filters;
     const where: Prisma.OrderWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
@@ -425,8 +426,10 @@ export class OrderService {
             },
           },
         },
-        skip: (page - 1) * limit,
-        take: limit,
+        ...(pagination ? {
+          skip: (page - 1) * limit,
+          take: limit,
+        } : {}),
         orderBy: {
           [sortBy]: sortOrder,
         },
@@ -720,7 +723,86 @@ export class OrderService {
     };
   }
 
+  async exportOrderReport(filters: QueryOrderDto) {
 
+    const {
+      startDate,
+      endDate,
+      sortBy = 'created_at',
+      sortOrder = 'desc',
+    } = filters;
+
+    const where: Prisma.OrderWhereInput = {
+      entity_status: { not: EntityStatus.DELETED },
+      OR: [{
+        AND: [
+          { paied: false },
+          { auto: false }
+        ]
+      },
+      {
+        paied: true,
+      }]
+    };
+
+    if (startDate && endDate) {
+      where.created_at = {
+        gte: startDate,
+        lte: new Date(new Date(endDate).setHours(23, 59, 59, 999))
+      }
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where,
+      include: {
+        order_items: {
+          include: {
+            dish: true,
+          },
+        },
+        paiements: true,
+        customer: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            phone: true,
+            email: true,
+            image: true,
+          },
+        },
+        restaurant: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+            address: true,
+            phone: true,
+            email: true,
+            latitude: true,
+            longitude: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            fullname: true,
+            email: true,
+            phone: true,
+            image: true,
+          }
+        }
+      },
+      orderBy: {
+        [sortBy]: sortOrder,
+      },
+    });
+
+    // TODO:GENERATE PDF
+    // const pdf = await this.pdfService.generatePdf(orders);
+    // return pdf;
+    return orders;
+  }
   // async updateStatuts(id: string) {
   //   const order = await this.findById(id);
 
