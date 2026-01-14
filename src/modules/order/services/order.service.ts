@@ -1,25 +1,26 @@
 import {
-  Injectable,
-  NotFoundException,
-  ConflictException,
   BadRequestException,
+  ConflictException,
+  Injectable,
   Logger,
+  NotFoundException,
 } from '@nestjs/common';
-import { CreateOrderDto } from '../dto/create-order.dto';
-import { UpdateOrderDto } from '../dto/update-order.dto';
-import { OrderStatus, EntityStatus, Customer, Order, Prisma, OrderType, DeliveryService } from '@prisma/client';
-import { PrismaService } from 'src/database/services/prisma.service';
+import { Customer, DeliveryService, EntityStatus, Order, OrderStatus, OrderType, Prisma } from '@prisma/client';
+import { format, startOfMonth } from 'date-fns';
+import { fr } from 'date-fns/locale';
+import * as ExcelJS from 'exceljs';
 import { Request } from 'express';
-import { QueryOrderDto } from '../dto/query-order.dto';
-import { GenerateDataService } from 'src/common/services/generate-data.service';
-import { OrderHelper } from '../helpers/order.helper';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
-import { OrderEvent } from '../events/order.event';
-import { OrderWebSocketService } from '../websockets/order-websocket.service';
-import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
+import { GenerateDataService } from 'src/common/services/generate-data.service';
+import { PrismaService } from 'src/database/services/prisma.service';
 import { TurboService } from 'src/turbo/services/turbo.service';
-import { startOfMonth } from 'date-fns';
-
+import { CreateOrderDto } from '../dto/create-order.dto';
+import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
+import { QueryOrderDto } from '../dto/query-order.dto';
+import { UpdateOrderDto } from '../dto/update-order.dto';
+import { OrderEvent } from '../events/order.event';
+import { OrderHelper } from '../helpers/order.helper';
+import { OrderWebSocketService } from '../websockets/order-websocket.service';
 @Injectable()
 export class OrderService {
   private readonly logger = new Logger(OrderService.name);
@@ -348,8 +349,8 @@ export class OrderService {
       pagination = true,
       sortBy = 'created_at',
       sortOrder = 'desc',
-      startDate =  startOfMonth(new Date()),
-      endDate = new Date() 
+      startDate = startOfMonth(new Date()),
+      endDate = new Date()
     } = filters;
     const where: Prisma.OrderWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
@@ -723,7 +724,7 @@ export class OrderService {
     };
   }
 
-  async exportOrderReport(filters: QueryOrderDto) {
+  async exportOrderReportToPDF(filters: QueryOrderDto) {
 
     const {
       startDate,
@@ -803,6 +804,209 @@ export class OrderService {
     // return pdf;
     return orders;
   }
+  async exportOrderReportToExcel(filters: QueryOrderDto) {
+    const {
+      startDate,
+      endDate,
+      sortBy = 'created_at',
+      sortOrder = 'desc',
+    } = filters;
+
+    const where: Prisma.OrderWhereInput = {
+      entity_status: { not: EntityStatus.DELETED },
+      status: OrderStatus.COMPLETED,
+      paied: true,
+    };
+
+    if (startDate && endDate) {
+      where.created_at = {
+        gte: startDate,
+        lte: new Date(new Date(endDate).setHours(23, 59, 59, 999))
+      }
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where,
+      include: {
+        order_items: {
+          include: {
+            dish: true,
+          },
+        },
+        paiements: true,
+        customer: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            phone: true,
+            email: true,
+            image: true,
+          },
+        },
+        restaurant: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+            address: true,
+            phone: true,
+            email: true,
+            latitude: true,
+            longitude: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            fullname: true,
+            email: true,
+            phone: true,
+            image: true,
+          }
+        }
+      },
+      orderBy: {
+        [sortBy]: sortOrder,
+      },
+    });
+
+     // Génération du fichier Excel
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet('Rapport des commandes');
+
+  // En-têtes
+  worksheet.columns = [
+    { header: 'Référence', key: 'reference', width: 20 },
+    { header: 'Total TTC (FCFA)', key: 'amount', width: 18 },
+    { header: 'Sous-total (FCFA)', key: 'net_amount', width: 18 },
+    { header: 'Montant net (FCFA)', key: 'montant_net', width: 20 },
+    { header: 'Frais de livraison (FCFA)', key: 'delivery_fee', width: 25 },
+    { header: 'Taxe (FCFA)', key: 'tax', width: 15 },
+    { header: 'Remise (FCFA)', key: 'discount', width: 15 },
+    { header: 'Date', key: 'date', width: 15 },
+    { header: 'Client', key: 'client', width: 25 },
+    { header: 'Contact', key: 'contact', width: 15 },
+    { header: 'Email', key: 'email', width: 30 },
+    { header: 'Restaurant', key: 'restaurant', width: 25 },
+    { header: 'Source', key: 'source', width: 12 },
+  ];
+
+  // Style de l'en-tête
+  worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  worksheet.getRow(1).fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FF3B82F6' },
+  };
+  worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+
+  // Variables pour les totaux
+  let totalTTC = 0;
+  let totalSousTotal = 0;
+  let totalMontantNet = 0;
+  let totalFraisLivraison = 0;
+  let totalTaxe = 0;
+  let totalRemise = 0;
+
+  // Données
+  orders.forEach((order) => {
+    const montantNet = order.net_amount - order.discount;
+    const clientName = [order.customer.first_name, order.customer.last_name]
+      .filter(Boolean)
+      .join(' ') || 'N/A';
+
+    worksheet.addRow({
+      reference: order.reference,
+      amount: order.amount,
+      net_amount: order.net_amount,
+      montant_net: montantNet,
+      delivery_fee: order.delivery_fee,
+      tax: order.tax,
+      discount: order.discount,
+      date: format(new Date(order.created_at), 'dd/MM/yyyy', { locale: fr }),
+      client: clientName,
+      contact: order.customer.phone || 'N/A',
+      email: order.customer.email || 'N/A',
+      restaurant: order.restaurant.name,
+      source: order.auto ? 'Appli' : 'Téléphone',
+    });
+
+    // Cumul des totaux
+    totalTTC += order.amount;
+    totalSousTotal += order.net_amount;
+    totalMontantNet += montantNet;
+    totalFraisLivraison += order.delivery_fee;
+    totalTaxe += order.tax;
+    totalRemise += order.discount;
+  });
+
+  // Formatage des colonnes monétaires (nombres avec séparateur de milliers)
+  const currencyColumns = ['amount', 'net_amount', 'montant_net', 'delivery_fee', 'tax', 'discount'];
+  currencyColumns.forEach((col) => {
+    const column = worksheet.getColumn(col);
+    column.numFmt = '#,##0';
+    column.alignment = { horizontal: 'right' };
+  });
+
+  // Ligne de totaux
+  const totalRow = worksheet.addRow({
+    reference: 'TOTAL',
+    amount: totalTTC,
+    net_amount: totalSousTotal,
+    montant_net: totalMontantNet,
+    delivery_fee: totalFraisLivraison,
+    tax: totalTaxe,
+    discount: totalRemise,
+    date: '',
+    client: '',
+    contact: '',
+    email: '',
+    restaurant: '',
+    source: '',
+  });
+
+  // Style de la ligne de totaux
+  totalRow.font = { bold: true };
+  totalRow.fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FFE5E7EB' },
+  };
+
+  // Bordures pour toutes les cellules
+  worksheet.eachRow({ includeEmpty: false }, (row) => {
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+      };
+    });
+  });
+
+  // Alternance de couleurs pour les lignes (sauf en-tête et total)
+  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    if (rowNumber > 1 && rowNumber < worksheet.rowCount) {
+      if (rowNumber % 2 === 0) {
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFF9FAFB' },
+        };
+      }
+    }
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+
+  return {
+    buffer,
+    filename: `rapport-commandes-${new Date().toISOString().split('T')[0]}.xlsx`,
+  };
+  }
+
   // async updateStatuts(id: string) {
   //   const order = await this.findById(id);
 
@@ -841,7 +1045,7 @@ export class OrderService {
             montant: 0,
             zone: `-5km de ${restaurant.name}`,
             distance: Math.round(distance),
-            service: DeliveryService.FREE,
+            service: DeliveryService.TURBO,
             zone_id: null,
           };
         } else if (distance > 5 && distance <= 10) {
@@ -849,7 +1053,7 @@ export class OrderService {
             montant: 500,
             zone: `5-10km de ${restaurant.name}`,
             distance: Math.round(distance),
-            service: DeliveryService.FREE,
+            service: DeliveryService.TURBO,
             zone_id: null,
           };
         } else if (distance > 10 && distance <= 20) {
@@ -857,7 +1061,7 @@ export class OrderService {
             montant: 1000,
             zone: `10-20km de ${restaurant.name}`,
             distance: Math.round(distance),
-            service: DeliveryService.FREE,
+            service: DeliveryService.TURBO,
             zone_id: null,
           };
         } else {
@@ -865,7 +1069,7 @@ export class OrderService {
             montant: 1500,
             zone: `+20km de ${restaurant.name}`,
             distance: Math.round(distance),
-            service: DeliveryService.FREE,
+            service: DeliveryService.TURBO,
             zone_id: null,
           };
         }
@@ -875,7 +1079,7 @@ export class OrderService {
             montant: 500,
             zone: `-5km de ${restaurant.name}`,
             distance: Math.round(distance),
-            service: DeliveryService.FREE,
+            service: DeliveryService.TURBO,
             zone_id: null,
           };
         } else if (distance > 5 && distance <= 10) {
@@ -883,7 +1087,7 @@ export class OrderService {
             montant: 1000,
             zone: `5-10km de ${restaurant.name}`,
             distance: Math.round(distance),
-            service: DeliveryService.FREE,
+            service: DeliveryService.TURBO,
             zone_id: null,
           };
         } else if (distance > 10 && distance <= 20) {
@@ -891,7 +1095,7 @@ export class OrderService {
             montant: 1500,
             zone: `10-20km de ${restaurant.name}`,
             distance: Math.round(distance),
-            service: DeliveryService.FREE,
+            service: DeliveryService.TURBO,
             zone_id: null,
           };
         } else {
@@ -899,7 +1103,7 @@ export class OrderService {
             montant: 2000,
             zone: `+20km de ${restaurant.name}`,
             distance: Math.round(distance),
-            service: DeliveryService.FREE,
+            service: DeliveryService.TURBO,
             zone_id: null,
           };
         }
@@ -909,7 +1113,7 @@ export class OrderService {
       montant: 2000,
       zone: "Zone inconnue",
       distance: Math.round(distance),
-      service: DeliveryService.FREE,
+      service: DeliveryService.TURBO,
       zone_id: null,
     };
   }

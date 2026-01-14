@@ -1,8 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { LoyaltyLevel, LoyaltyPointType, LoyaltyPointIsUsed, Customer } from '@prisma/client';
+import { LoyaltyLevel, LoyaltyPointType, LoyaltyPointIsUsed, Customer, LoyaltyPoint, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { AddLoyaltyPointDto } from '../dto/add-loyalty-point.dto';
 import { LoyaltyEvent } from '../events/loyalty.event';
+import { LoyaltyQueryDto } from '../dto/loyalty-query.dto';
+import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 
 @Injectable()
 export class LoyaltyService {
@@ -24,7 +26,72 @@ export class LoyaltyService {
 
         return config;
     }
+    async getAllLoyaltyPoints(query: LoyaltyQueryDto): Promise<QueryResponseDto<LoyaltyPoint>> {
+        const { page = 1, limit = 10, type, is_used, search } = query;
+        const whereClause: Prisma.LoyaltyPointWhereInput = {};
 
+        //    if (search) {
+        //      whereClause.OR = [
+        //        { first_name: { contains: search, mode: 'insensitive' } },
+        //        { last_name: { contains: search, mode: 'insensitive' } },
+        //        { phone: { contains: search } },
+        //        { email: { contains: search, mode: 'insensitive' } },
+        //      ];
+        //    }
+
+        if (type) {
+            whereClause.type = type;
+        }
+
+        if (query.customer_id) {
+            whereClause.customer_id = query.customer_id;
+        }
+        if (is_used) {
+            whereClause.points_used = { gt: 0 };
+        }
+
+        const take = limit ?? 20;
+        const skip = page ? (page - 1) * take : 0;
+
+        const [loyaltyPoints, total] = await Promise.all([
+            this.prisma.loyaltyPoint.findMany({
+                where: whereClause,
+                include: {
+                    customer: {
+                        select: {
+                            id: true,
+                            first_name: true,
+                            last_name: true,
+                            email: true,
+                            phone: true,
+                            image: true,
+
+                        }
+                    },
+                    order: {
+                        select: {
+                            id: true,
+
+                        }
+                    }
+                },
+                orderBy: { created_at: 'desc' },
+                take,
+                skip,
+            }),
+            this.prisma.loyaltyPoint.count({ where: whereClause }),
+        ]);
+
+        return {
+            data: loyaltyPoints,
+            meta: {
+                total,
+                page: page,
+                limit: take,
+                totalPages: Math.ceil(total / take),
+            },
+        };
+    }
     // Ajouter des points bonus ou gagnés
     async addPoints({ customer_id, points, type, reason, order_id }: AddLoyaltyPointDto) {
         const config = await this.getConfig();

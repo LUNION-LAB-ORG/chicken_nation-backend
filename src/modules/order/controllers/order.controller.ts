@@ -108,6 +108,22 @@ export class OrderController {
     return this.orderService.getOrderStatistics(queryOrderDto);
   }
 
+  @Get('/export-report-to-excel')
+  @UseGuards(JwtAuthGuard)
+  @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.COMPTABLE)
+  // @RequirePermission(Modules.DASHBOARD, Action.READ)
+  @ApiOperation({ summary: 'Exporter un rapport des commandes' })
+  @ApiResponse({ status: 200, description: 'Rapport des commandes exporté avec succès' })
+  async exportOrderReportToExcel(@Query() query: QueryOrderDto, @Res() res: Response) {
+    const { buffer, filename } = await this.orderService.exportOrderReportToExcel(query);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.byteLength);
+
+    res.status(HttpStatus.OK).send(buffer);
+  }
+
+
   @Get('/frais-livraison')
   @ApiOperation({ summary: 'Obtenir le prix des frais de livraison' })
   @ApiResponse({

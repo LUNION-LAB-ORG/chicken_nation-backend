@@ -18,14 +18,20 @@ export class CardGenerationService {
    * Génère le code affiché sur la carte
    * Format: DDMM YYXX XXXX XXXX
    */
-  generateCardNumber(): string {
+  generateCardNumber(birth_dayDB: string): string {
     const d = new Date();
     const dd = String(d.getDate()).padStart(2, '0');
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const yy = String(d.getFullYear()).slice(-2);
+
+    const birth_day = new Date(birth_dayDB);
+    const BD_dd = String(birth_day.getDate()).padStart(2, '0');
+    const BD_mm = String(birth_day.getMonth() + 1).padStart(2, '0');
+    const BD_yy = String(birth_day.getFullYear()).slice(-2);
+
     const rand = () => Math.floor(1000 + Math.random() * 9000);
 
-    return `${dd}${mm} ${yy}${rand().toString().slice(0, 2)} ${rand()} ${rand()}`;
+    return `${dd}${mm} ${yy}${BD_dd} ${BD_mm}${BD_yy} ${rand()}`;
   }
 
   generateQRValue(cardNumber: string, customerId: string): string {
@@ -46,21 +52,27 @@ export class CardGenerationService {
     const ctx = canvas.getContext('2d');
 
     /* =====================================================
-       🖼️ FOND OFFICIEL (COVER)
+       🖼️ FOND OFFICIEL (COVER) AVEC COINS ARRONDIS
     ====================================================== */
     const bgUrl = this.s3service.getCdnFileUrl(
       'chicken-nation/assets/images/carte_nation/carte_nation_fond.png',
     );
     const bg = await loadImage(bgUrl);
+
+    // Créer un chemin avec coins arrondis
+    const cornerRadius = 40; // Rayon des coins arrondis
+    this.createRoundedRectPath(ctx, 0, 0, this.CARD_WIDTH, this.CARD_HEIGHT, cornerRadius);
+    ctx.clip(); // Appliquer le masque
+
     this.drawImageCover(ctx, bg);
 
     /* =====================================================
        🏷️ TITRE "CARTE NATION"
     ====================================================== */
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 90px Arial';
+    ctx.font = 'bold 80px Arial';
     ctx.textAlign = 'left';
-    ctx.fillText('CARTE NATION', 80, 160);
+    ctx.fillText('CARTE DE LA NATION', 80, 160);
 
     /* =====================================================
        🐔 LOGO (AGRANDI - EN HAUT À DROITE)
@@ -86,7 +98,7 @@ export class CardGenerationService {
     /* =====================================================
        ▶️ CODE CARTE (AU CENTRE GAUCHE)
     ====================================================== */
-    ctx.font = 'bold 90px monospace';
+    ctx.font = 'medium 80px monospace';
     ctx.fillStyle = '#ffffff';
 
     // Triangle play à gauche
@@ -190,5 +202,29 @@ export class CardGenerationService {
       this.CARD_WIDTH,
       this.CARD_HEIGHT,
     );
+  }
+
+  /* =====================================================
+     🧩 UTIL — CREATE ROUNDED RECT PATH
+  ====================================================== */
+  private createRoundedRectPath(
+    ctx: any,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    radius: number,
+  ) {
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
   }
 }

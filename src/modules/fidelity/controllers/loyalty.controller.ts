@@ -2,6 +2,7 @@ import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
 import { LoyaltyService } from '../services/loyalty.service';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AddLoyaltyPointDto } from '../dto/add-loyalty-point.dto';
+import { LoyaltyQueryDto } from '../dto/loyalty-query.dto';
 
 @ApiTags('Loyalty')
 @Controller('fidelity/loyalty')
@@ -15,6 +16,15 @@ export class LoyaltyController {
   @Get('config')
   getConfig() {
     return this.loyaltyService.getConfig();
+  }
+
+  @ApiOperation({ summary: 'Obtenir les informations de fidélité d\'un client' })
+  @ApiOkResponse({
+    description: 'Informations de fidélité d\'un client obtenues'
+  })
+  @Get('points')
+  getAllLoyaltyPoints(@Query() query: LoyaltyQueryDto) {
+    return this.loyaltyService.getAllLoyaltyPoints(query);
   }
 
   @ApiOperation({ summary: 'Obtenir les informations de fidélité d\'un client' })
