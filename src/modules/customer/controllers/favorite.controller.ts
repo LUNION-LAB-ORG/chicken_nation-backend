@@ -6,6 +6,11 @@ import { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { CacheInterceptor } from '@nestjs/cache-manager';
+import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 
 @ApiTags('Favorites')
 @ApiBearerAuth()
@@ -21,8 +26,10 @@ export class FavoriteController {
     return this.favoriteService.create(req, createFavoriteDto);
   }
 
-  @ApiOperation({ summary: 'Récupération de toutes les favorites' })
   @Get()
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.CLIENTS, Action.READ)
+  @ApiOperation({ summary: 'Récupération de toutes les favorites' })
   findAll() {
     return this.favoriteService.findAll();
   }

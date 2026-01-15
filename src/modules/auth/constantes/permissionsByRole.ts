@@ -1,5 +1,6 @@
 import { UserRole } from '@prisma/client';
 import { Modules } from '../enums/module-enum';
+import { Action } from '../enums/action.enum';
 
 export interface RolePermissions {
   modules: Partial<Record<Modules, string[]>>;
@@ -7,53 +8,114 @@ export interface RolePermissions {
 }
 
 export const permissionsByRole: Record<UserRole, RolePermissions> = {
-  [UserRole.CAISSIER]: {
-    modules: {
-      [Modules.COMMANDES]: ['read', 'update'],
-      [Modules.DASHBOARD]: ['read'],
-    },
-  },
-  [UserRole.MANAGER]: {
-    modules: {
-      [Modules.ALL]: ['create', 'read', 'update', 'delete'],
-    },
-  },
-  [UserRole.CALL_CENTER]: {
-    modules: {
-      [Modules.COMMANDES]: ['read', 'update'],
-      [Modules.MESSAGES]: ['read'],
-    },
-  },
+
+  /* ===================== ADMIN ===================== */
   [UserRole.ADMIN]: {
     modules: {
-      [Modules.ALL]: ['create', 'read', 'update', 'delete'],
+      [Modules.ALL]: Object.values(Action),
     },
-    // exclusions: [Modules.COMMANDES, Modules.CLIENTS],
   },
+
+  /* ===================== MARKETING ===================== */
   [UserRole.MARKETING]: {
     modules: {
-      [Modules.DASHBOARD]: ['read'],
-      [Modules.INVENTAIRE]: ['create', 'read', 'update', 'delete'],
-      [Modules.PLATS]: ['create', 'read', 'update', 'delete'],
-      [Modules.PROMOTIONS]: ['create', 'read', 'update', 'delete'],
+      [Modules.DASHBOARD]: [Action.READ],
+
+      [Modules.MENUS]: [Action.CREATE, Action.READ, Action.UPDATE],
+      [Modules.INVENTAIRE]: [Action.CREATE, Action.READ, Action.UPDATE],
+      [Modules.PROMOTIONS]: [Action.CREATE, Action.READ, Action.UPDATE, Action.DELETE],
+      [Modules.FIDELITE]: [Action.CREATE, Action.READ, Action.UPDATE],
+      [Modules.CARD_NATION]: [Action.CREATE, Action.READ, Action.UPDATE],
+
+      [Modules.CLIENTS]: [Action.READ],
+      [Modules.COMMANDES]: [Action.READ],
+      [Modules.MARKETING]: [Action.CREATE, Action.READ, Action.UPDATE, Action.REPORT],
     },
-    exclusions: [Modules.DASHBOARD],
   },
+
+  /* ===================== COMPTABLE ===================== */
   [UserRole.COMPTABLE]: {
     modules: {
-      [Modules.COMMANDES]: ['read'],
-      [Modules.DASHBOARD]: ['read'],
+      [Modules.DASHBOARD]: [Action.READ],
+
+      [Modules.COMMANDES]: [Action.READ, Action.EXPORT, Action.REPORT],
+      [Modules.MENUS]: [Action.READ],
+      [Modules.INVENTAIRE]: [Action.READ],
+      [Modules.PROMOTIONS]: [Action.READ],
+      [Modules.FIDELITE]: [Action.READ],
+
+      [Modules.RESTAURANTS]: [Action.READ],
     },
   },
-  [UserRole.CUISINE]: {
+
+  /* ===================== CALL CENTER ===================== */
+  [UserRole.CALL_CENTER]: {
     modules: {
-      [Modules.COMMANDES]: ['read', 'update'],
+
+      [Modules.COMMANDES]: [
+        Action.CREATE,
+        Action.READ,
+        Action.UPDATE,
+        Action.PRINT,
+      ],
+
+      [Modules.DASHBOARD]: [Action.READ],
+
+      [Modules.CLIENTS]: [Action.CREATE, Action.READ, Action.UPDATE],
+      [Modules.MENUS]: [Action.READ],
+      [Modules.INVENTAIRE]: [Action.READ],
+      [Modules.PROMOTIONS]: [Action.READ],
+      [Modules.FIDELITE]: [Action.READ, Action.UPDATE],
+      [Modules.CARD_NATION]: [Action.READ, Action.CREATE],
+
+      [Modules.MESSAGES]: [Action.READ, Action.CREATE, Action.UPDATE],
     },
   },
+
+  /* ===================== MANAGER (PDV) ===================== */
+  [UserRole.MANAGER]: {
+    modules: {
+      [Modules.DASHBOARD]: [Action.READ],
+
+      [Modules.COMMANDES]: [Action.READ, Action.UPDATE, Action.PRINT],
+      [Modules.INVENTAIRE]: [Action.READ, Action.UPDATE],
+      [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
+      [Modules.MENUS]: [Action.READ],
+      [Modules.CLIENTS]: [Action.READ],
+    },
+  },
+
+  /* ===================== ASSISTANT MANAGER ===================== */
   [UserRole.ASSISTANT_MANAGER]: {
     modules: {
-      [Modules.COMMANDES]: ['read', 'update'],
+      [Modules.DASHBOARD]: [Action.READ],
+      [Modules.COMMANDES]: [Action.READ, Action.UPDATE, Action.PRINT],
+      [Modules.INVENTAIRE]: [Action.READ, Action.UPDATE],
+      [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
+      [Modules.MENUS]: [Action.READ],
+      [Modules.CLIENTS]: [Action.READ],
+    },
+  },
+
+  /* ===================== CAISSIER ===================== */
+  [UserRole.CAISSIER]: {
+    modules: {
+      [Modules.COMMANDES]: [
+        Action.CREATE,
+        Action.READ,
+        Action.UPDATE,
+        Action.PRINT,
+      ],
+      [Modules.MENUS]: [Action.READ],
+      [Modules.CLIENTS]: [Action.READ],
+      [Modules.CARD_NATION]: [Action.READ],
+    },
+  },
+
+  /* ===================== CUISINE ===================== */
+  [UserRole.CUISINE]: {
+    modules: {
+      [Modules.COMMANDES]: [Action.READ, Action.UPDATE],
     },
   },
 };
-

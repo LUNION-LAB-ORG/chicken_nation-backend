@@ -1,3 +1,4 @@
+import { CacheInterceptor } from '@nestjs/cache-manager';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -9,18 +10,18 @@ import {
   ApiOperation,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
 import { Request } from 'express';
-import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
-import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
 import { GenerateConfigService } from 'src/common/services/generate-config.service';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Action } from 'src/modules/auth/enums/action.enum';
+import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateUserDto } from 'src/modules/users/dto/create-user.dto';
 import { UpdateUserPasswordDto } from 'src/modules/users/dto/update-user-password.dto';
 import { UpdateUserDto } from 'src/modules/users/dto/update-user.dto';
 import { UsersService } from 'src/modules/users/services/users.service';
 import { ResetUserPasswordResponseDto } from '../dto/reset-user-password.dto';
-import { CacheInterceptor } from '@nestjs/cache-manager';
 
 @Controller('users')
 @UseInterceptors(CacheInterceptor)
@@ -29,7 +30,8 @@ export class UsersController {
 
   // CREATE USER
   @Post()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PERSONNELS, Action.CREATE)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @ApiOperation({ summary: 'Création utilisateur' })
   @ApiCreatedResponse({
@@ -55,7 +57,8 @@ export class UsersController {
 
   // CREATE MEMBER
   @Post('member')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PERSONNELS, Action.CREATE)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
   @ApiOperation({ summary: 'Création membre' })
   @ApiCreatedResponse({
@@ -80,9 +83,11 @@ export class UsersController {
 
     return this.usersService.createMember(req, { ...createUserDto, image: resizedPath!["img_1"] ?? image?.path });
   }
+
   // GET DETAIL USER
   @Get('detail')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PERSONNELS, Action.READ)
   @ApiOperation({ summary: "Obtenir les détails d'utilisateur" })
   @ApiOkResponse({
     description: 'Profil utilisateur récupéré avec succès',
@@ -96,7 +101,8 @@ export class UsersController {
 
   // GET ALL USERS
   @Get()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PERSONNELS, Action.READ)
   @ApiOperation({ summary: 'Obtenir la liste des utilisateurs' })
   @ApiOkResponse({
     description: 'Liste des utilisateurs récupérée avec succès',
@@ -153,8 +159,8 @@ export class UsersController {
   }
   // UPDATE PASSWORD
   @Patch(':id/reset-password')
-  @UseGuards(JwtAuthGuard, UserRolesGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PERSONNELS, Action.UPDATE)
   @ApiOperation({ summary: 'Renouvellement mot de passe utilisateur' })
   @ApiOkResponse({
     description: 'Mot de passe mis à jour avec succès',
@@ -171,6 +177,9 @@ export class UsersController {
   }
 
   // PARTIAL DELETE
+  @Delete()
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PERSONNELS, Action.DELETE)
   @ApiOperation({ summary: 'Supprimer partiellement utilisateur' })
   @ApiOkResponse({
     description: 'Utilisateur supprimé partiellement avec succès',
@@ -178,15 +187,14 @@ export class UsersController {
   @ApiUnauthorizedResponse({
     description: 'Utilisateur non trouvé',
   })
-  @UseGuards(JwtAuthGuard)
-  @Delete()
   async partialDelete(@Req() req: Request) {
     return this.usersService.partialRemove(req);
   }
 
   // INACTIVE
   @Post('inactive/:id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PERSONNELS, Action.UPDATE)
   @ApiOperation({ summary: 'Inactiver utilisateur' })
   @ApiOkResponse({
     description: 'Utilisateur inactivé avec succès',
@@ -200,7 +208,8 @@ export class UsersController {
 
   // RESTAURATION 
   @Post('restore/:id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PERSONNELS, Action.UPDATE)
   @ApiOperation({ summary: 'Restaurer utilisateur' })
   @ApiOkResponse({
     description: 'Utilisateur restauré avec succès',
@@ -215,7 +224,8 @@ export class UsersController {
 
   // DELETE
   @Delete('/delete/:id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PERSONNELS, Action.DELETE)
   @ApiOperation({ summary: 'Supprimer définitivement utilisateur' })
   @ApiOkResponse({
     description: 'Utilisateur supprimé définitivement avec succès',

@@ -4,6 +4,7 @@ export enum Action {
   UPDATE = 'update',
   DELETE = 'delete',
   IMPORT = 'import',
+  REPORT = 'report',
   EXPORT = 'export',
   PRINT = 'print',
 }

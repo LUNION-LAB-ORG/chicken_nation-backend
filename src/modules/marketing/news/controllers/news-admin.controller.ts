@@ -1,28 +1,31 @@
 import {
-    Controller,
-    Get,
-    Post,
     Body,
-    Patch,
-    Param,
+    Controller,
     Delete,
+    Get,
+    Param,
+    Patch,
+    Post,
     Query,
+    UploadedFile,
     UseGuards,
     UseInterceptors,
-    UploadedFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Action } from 'src/modules/auth/enums/action.enum';
+import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { NewsService } from '../services/news.service';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateNewsDto } from '../dtos/create-news.dto';
-import { UpdateNewsDto } from '../dtos/update-news.dto';
 import { NewsQueryDto } from '../dtos/news-query.dto';
+import { UpdateNewsDto } from '../dtos/update-news.dto';
+import { NewsService } from '../services/news.service';
 
 @ApiTags('Nouveautés - Administration')
 @ApiBearerAuth()
 @Controller('admin/news')
-@UseGuards(JwtAuthGuard)
 export class NewsAdminController {
     constructor(private readonly newsService: NewsService) { }
 
@@ -30,6 +33,8 @@ export class NewsAdminController {
      * Créer une nouvelle news
      */
     @Post()
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.MARKETING, Action.CREATE)
     @UseInterceptors(FileInterceptor('image'))
     @ApiConsumes('multipart/form-data')
     @ApiOperation({ summary: 'Créer une nouvelle nouveauté' })
@@ -44,6 +49,8 @@ export class NewsAdminController {
      * Liste de toutes les news
      */
     @Get()
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.MARKETING, Action.READ)
     @ApiOperation({ summary: 'Récupérer toutes les nouveautés (actives et inactives)' })
     async findAll(@Query() query: NewsQueryDto) {
         return this.newsService.findAll(query);
@@ -53,6 +60,8 @@ export class NewsAdminController {
      * Statistiques des news
      */
     @Get('stats')
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.MARKETING, Action.REPORT)
     @ApiOperation({ summary: 'Récupérer les statistiques des nouveautés' })
     async getStats() {
         return this.newsService.getStats();
@@ -62,6 +71,8 @@ export class NewsAdminController {
      * Détails d'une news
      */
     @Get(':id')
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.MARKETING, Action.READ)
     @ApiOperation({ summary: 'Récupérer les détails d\'une nouveauté' })
     async findOne(@Param('id') id: string) {
         return this.newsService.findOne(id);
@@ -71,6 +82,8 @@ export class NewsAdminController {
      * Mettre à jour une news
      */
     @Patch(':id')
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.MARKETING, Action.UPDATE)
     @UseInterceptors(FileInterceptor('image'))
     @ApiConsumes('multipart/form-data')
     @ApiOperation({ summary: 'Mettre à jour une nouveauté' })
@@ -86,6 +99,8 @@ export class NewsAdminController {
      * Activer/Désactiver une news
      */
     @Patch(':id/toggle-active')
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.MARKETING, Action.UPDATE)
     @ApiOperation({ summary: 'Activer ou désactiver une nouveauté' })
     async toggleActive(@Param('id') id: string) {
         return this.newsService.toggleActive(id);
@@ -95,6 +110,8 @@ export class NewsAdminController {
      * Supprimer une news
      */
     @Delete(':id')
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.MARKETING, Action.DELETE)
     @ApiOperation({ summary: 'Supprimer une nouveauté' })
     async remove(@Param('id') id: string) {
         return this.newsService.remove(id);

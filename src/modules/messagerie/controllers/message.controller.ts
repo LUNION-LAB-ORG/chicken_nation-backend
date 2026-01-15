@@ -8,22 +8,20 @@ import {
   Query,
   Req,
   UploadedFile,
-  UseGuards,
-  UseInterceptors,
+  UseGuards
 } from '@nestjs/common';
-import { MessageService } from '../services/message.service';
-import { QueryMessagesDto } from '../dto/query-messages.dto';
+import { Customer, User } from '@prisma/client';
 import { Request } from 'express';
-import { CreateMessageDto } from '../dto/createMessageDto';
+import { GenerateConfigService } from 'src/common/services/generate-config.service';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Action } from 'src/modules/auth/enums/action.enum';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
-import { Customer, User, UserRole } from '@prisma/client';
-import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
-import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
-import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
-import { Modules } from 'src/modules/auth/enums/module-enum';
-import { Action } from 'src/common/enum/action.enum';
-import { GenerateConfigService } from 'src/common/services/generate-config.service';
+import { CreateMessageDto } from '../dto/createMessageDto';
+import { QueryMessagesDto } from '../dto/query-messages.dto';
+import { MessageService } from '../services/message.service';
 
 @Controller('conversations/:conversationId/messages')
 export class MessageController {
@@ -31,10 +29,8 @@ export class MessageController {
   private readonly isDev = process.env.NODE_ENV !== 'production';
   constructor(private readonly messageService: MessageService) { }
 
-  // --- Staff (admin, call_center) : lecture des messages ---
   @Get()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.CALL_CENTER)
   @RequirePermission(Modules.MESSAGES, Action.READ)
   async getMessages(
     @Req() req: Request,
@@ -58,7 +54,6 @@ export class MessageController {
   // --- Staff (admin seulement) : création de messages ---
   @Post()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @UserRoles(UserRole.ADMIN)
   @RequirePermission(Modules.MESSAGES, Action.CREATE)
   async createMessage(
     @Req() req: Request,

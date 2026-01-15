@@ -1,43 +1,40 @@
+import { CacheInterceptor } from '@nestjs/cache-manager';
 import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Delete,
-  Param,
   Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
   Query,
   Req,
   Res,
-  HttpStatus,
-  HttpCode,
   UseGuards,
-  Logger,
-  UseInterceptors,
+  UseInterceptors
 } from '@nestjs/common';
-import { OrderService } from 'src/modules/order/services/order.service';
-import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
-import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
-import { QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
-import { OrderStatus, User, UserRole } from '@prisma/client';
 import {
-  ApiTags,
+  ApiBody,
   ApiOperation,
   ApiResponse,
-  ApiBody,
-  ApiParam,
+  ApiTags
 } from '@nestjs/swagger';
+import { OrderStatus } from '@prisma/client';
 import { Request, Response } from 'express';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Action } from 'src/modules/auth/enums/action.enum';
+import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
-import { ReceiptsService } from '../services/receipts.service';
-import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
-import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
-import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
-import { Action } from 'src/common/enum/action.enum';
-import { Modules } from 'src/modules/auth/enums/module-enum';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
+import { QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
+import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
+import { OrderService } from 'src/modules/order/services/order.service';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
-import { CacheInterceptor } from '@nestjs/cache-manager';
+import { ReceiptsService } from '../services/receipts.service';
 
 @ApiTags('Commandes')
 @Controller('orders')
@@ -56,14 +53,10 @@ export class OrderController {
   async create(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
     return this.orderService.create(req, createOrderDto);
   }
+
+
   @Post("/create")
-  @UseGuards(JwtAuthGuard)
-  @UserRoles(
-    UserRole.ADMIN,
-    UserRole.MANAGER,
-    UserRole.CAISSIER,
-    UserRole.CALL_CENTER,
-  )
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.CREATE)
   @ApiOperation({ summary: 'Créer une nouvelle commande' })
   @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
@@ -74,13 +67,6 @@ export class OrderController {
 
   @Get()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @UserRoles(
-    UserRole.ADMIN,
-    UserRole.MANAGER,
-    UserRole.CAISSIER,
-    UserRole.CALL_CENTER,
-    UserRole.COMPTABLE,
-  )
   @RequirePermission(Modules.COMMANDES, Action.READ)
   @ApiOperation({ summary: 'Rechercher toutes les commandes' })
   findAll(@Query() queryOrderDto: QueryOrderDto) {
@@ -89,8 +75,6 @@ export class OrderController {
 
   @Get('/customer')
   @UseGuards(JwtCustomerAuthGuard)
-  @UserRoles(UserRole.CAISSIER, UserRole.CALL_CENTER)
-  @RequirePermission(Modules.COMMANDES, Action.READ)
   @ApiOperation({ summary: 'Rechercher commandes d’un client' })
   findAllByCustomer(
     @Req() req: Request,
@@ -101,7 +85,6 @@ export class OrderController {
 
   @Get('/statistics')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.COMPTABLE)
   @RequirePermission(Modules.DASHBOARD, Action.READ)
   @ApiOperation({ summary: 'Statistiques des commandes' })
   getOrderStatistics(@Query() queryOrderDto: QueryOrderDto) {
@@ -109,9 +92,8 @@ export class OrderController {
   }
 
   @Get('/export-report-to-excel')
-  @UseGuards(JwtAuthGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.COMPTABLE)
-  // @RequirePermission(Modules.DASHBOARD, Action.READ)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.DASHBOARD, Action.EXPORT)
   @ApiOperation({ summary: 'Exporter un rapport des commandes' })
   @ApiResponse({ status: 200, description: 'Rapport des commandes exporté avec succès' })
   async exportOrderReportToExcel(@Query() query: QueryOrderDto, @Res() res: Response) {
@@ -122,7 +104,6 @@ export class OrderController {
 
     res.status(HttpStatus.OK).send(buffer);
   }
-
 
   @Get('/frais-livraison')
   @ApiOperation({ summary: 'Obtenir le prix des frais de livraison' })
@@ -137,13 +118,6 @@ export class OrderController {
 
   @Get(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @UserRoles(
-    UserRole.ADMIN,
-    UserRole.MANAGER,
-    UserRole.CAISSIER,
-    UserRole.CALL_CENTER,
-    UserRole.COMPTABLE,
-  )
   @RequirePermission(Modules.COMMANDES, Action.READ)
   findOne(@Param('id') id: string) {
     return this.orderService.findById(id);
@@ -151,7 +125,6 @@ export class OrderController {
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.CAISSIER, UserRole.CALL_CENTER)
   @RequirePermission(Modules.COMMANDES, Action.UPDATE)
   @ApiBody({ type: UpdateOrderDto })
   update(@Param('id') id: string, @Body() updateOrderDto: UpdateOrderDto) {
@@ -160,7 +133,6 @@ export class OrderController {
 
   @Patch(':id/status')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.CAISSIER, UserRole.CALL_CENTER)
   @RequirePermission(Modules.COMMANDES, Action.UPDATE)
   @ApiBody({
     schema: {
@@ -181,7 +153,6 @@ export class OrderController {
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @UserRoles(UserRole.ADMIN)
   @RequirePermission(Modules.COMMANDES, Action.DELETE)
   @HttpCode(HttpStatus.OK)
   remove(@Param('id') id: string) {
@@ -190,8 +161,7 @@ export class OrderController {
 
   @Get(':id/pdf')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER)
-  @RequirePermission(Modules.COMMANDES, Action.READ)
+  @RequirePermission(Modules.COMMANDES, Action.EXPORT)
   async getReceiptPdf(@Param('id') id: string, @Res() res: Response) {
     await this.receiptsService.generateReceiptPdf(id, res);
   }

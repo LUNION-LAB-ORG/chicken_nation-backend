@@ -1,26 +1,22 @@
-import { Controller, Get, Query, UseGuards, UseInterceptors } from '@nestjs/common';
-import { StatisticsService } from '../services/statistics.service';
-import { GetStatsQueryDto, DashboardViewModel } from '../dto/dashboard.dto';
-import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
-import { UserRole } from '@prisma/client';
-import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
-import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
-import { Modules } from 'src/modules/auth/enums/module-enum';
-import { Action } from 'src/common/enum/action.enum';
 import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
+import { Controller, Get, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Action } from 'src/modules/auth/enums/action.enum';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { DashboardViewModel, GetStatsQueryDto } from '../dto/dashboard.dto';
+import { StatisticsService } from '../services/statistics.service';
 
 @Controller('statistics')
 @UseInterceptors(CacheInterceptor)
 export class StatisticsController {
   constructor(private readonly statisticsService: StatisticsService) { }
 
-  @UseGuards(JwtAuthGuard)
   @Get('dashboard')
-  @CacheTTL(5 * 60 * 1000)
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.DASHBOARD, Action.READ)
-  @UserRoles(UserRole.ADMIN, UserRole.MANAGER, UserRole.CAISSIER, UserRole.MARKETING)
+  @CacheTTL(5 * 60 * 1000)
   async getDashboardStats(@Query() query: GetStatsQueryDto): Promise<DashboardViewModel> {
     return this.statisticsService.getDashboardStats(query);
   }
@@ -28,7 +24,6 @@ export class StatisticsController {
   @Get('revenue')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.DASHBOARD, Action.READ)
-  @UserRoles(UserRole.ADMIN, UserRole.COMPTABLE)
   async getRevenueStats(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);
     return { revenue: dashboard.revenue, revenueCard: dashboard.stats.revenue };
@@ -37,7 +32,6 @@ export class StatisticsController {
   @Get('orders')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.READ)
-  @UserRoles(UserRole.ADMIN, UserRole.COMPTABLE, UserRole.CAISSIER, UserRole.CALL_CENTER)
   async getOrdersStats(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);
     return { weeklyOrders: dashboard.weeklyOrders, ordersCard: dashboard.stats.totalOrders };
@@ -45,8 +39,7 @@ export class StatisticsController {
 
   @Get('menus')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.PLATS, Action.READ)
-  @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
+  @RequirePermission(Modules.MENUS, Action.READ)
   async getMenusStats(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);
     return { bestSellingMenus: dashboard.bestSellingMenus, menusSoldCard: dashboard.stats.menusSold };
@@ -55,7 +48,6 @@ export class StatisticsController {
   @Get('customers')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.CLIENTS, Action.READ)
-  @UserRoles(UserRole.ADMIN)
   async getCustomersStats(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);
     return { customersCard: dashboard.stats.totalCustomers };
@@ -64,7 +56,6 @@ export class StatisticsController {
   @Get('daily-sales')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.DASHBOARD, Action.READ)
-  @UserRoles(UserRole.ADMIN, UserRole.COMPTABLE)
   async getDailySales(@Query() query: GetStatsQueryDto) {
     const dashboard = await this.statisticsService.getDashboardStats(query);
     return dashboard.dailySales;

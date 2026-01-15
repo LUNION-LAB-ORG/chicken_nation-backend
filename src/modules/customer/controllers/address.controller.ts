@@ -6,6 +6,11 @@ import { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { CacheInterceptor } from '@nestjs/cache-manager';
+import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
 
 @ApiTags('Addresses')
 @ApiBearerAuth()
@@ -22,8 +27,10 @@ export class AddressController {
     return this.addressService.create(req, createAddressDto);
   }
 
-  @ApiOperation({ summary: 'Récupération de toutes les adresses' })
   @Get()
+  @ApiOperation({ summary: 'Récupération de toutes les adresses' })
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.CLIENTS, Action.READ)
   findAll() {
     return this.addressService.findAll();
   }

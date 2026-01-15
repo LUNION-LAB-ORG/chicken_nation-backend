@@ -13,7 +13,6 @@ import { AuthModule } from 'src/modules/auth/auth.module';
 import { DatabaseModule } from 'src/database/database.module';
 import { RestaurantModule } from 'src/modules/restaurant/restaurant.module';
 import { MenuModule } from 'src/modules/menu/menu.module';
-import { SpecialOfferModule } from 'src/modules/special-offer/special-offer.module';
 import { CustomerModule } from 'src/modules/customer/customer.module';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { OrderModule } from 'src/modules/order/order.module';
@@ -71,7 +70,6 @@ import { NewsModule } from './modules/marketing/news/news.module';
     AuthModule,
     RestaurantModule,
     MenuModule,
-    SpecialOfferModule,
     CustomerModule,
     PaiementsModule,
     OrderModule,

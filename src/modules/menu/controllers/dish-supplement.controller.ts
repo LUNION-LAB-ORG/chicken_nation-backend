@@ -1,13 +1,7 @@
-import { Controller, Get, Post, Body, Param, Delete, UseGuards } from '@nestjs/common';
-import { DishSupplementService } from 'src/modules/menu/services/dish-supplement.service';
+import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CreateDishSupplementDto } from 'src/modules/menu/dto/create-dish-supplement.dto';
-import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
-import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
-import { UserRole, UserType } from '@prisma/client';
-import { UserTypesGuard } from 'src/common/guards/user-types.guard';
-import { UserTypes } from 'src/modules/auth/decorators/user-types.decorator';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { DishSupplementService } from 'src/modules/menu/services/dish-supplement.service';
 
 @ApiTags('Dish Supplements')
 @ApiBearerAuth()

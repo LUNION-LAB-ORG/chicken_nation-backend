@@ -1,21 +1,14 @@
 import {
-  Controller,
-  Get,
-  Post,
   Body,
+  Controller,
   Delete,
+  Get,
   Param,
-  UseGuards,
+  Post
 } from '@nestjs/common';
-import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CreateDishRestaurantDto } from 'src/modules/menu/dto/create-dish-restaurant.dto';
-import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { UserRole, UserType } from '@prisma/client';
-import { UserTypesGuard } from 'src/common/guards/user-types.guard';
-import { UserTypes } from 'src/modules/auth/decorators/user-types.decorator';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
-import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
+import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
 
 
 @ApiTags('Dish Restaurants')

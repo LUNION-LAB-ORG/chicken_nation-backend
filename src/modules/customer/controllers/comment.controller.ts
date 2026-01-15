@@ -1,32 +1,36 @@
+import { CacheInterceptor } from '@nestjs/cache-manager';
 import {
-    Controller,
-    Get,
-    Post,
-    Delete,
     Body,
-    Param,
-    Query,
-    UseGuards,
+    Controller,
+    Delete,
+    Get,
     HttpCode,
     HttpStatus,
-    Req,
+    Param,
     Patch,
+    Post,
+    Query,
+    Req,
+    UseGuards,
     UseInterceptors,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
-import { CommentService } from '../services/comment.service';
-import {
-    CreateCommentDto,
-    UpdateCommentDto,
-    CommentResponseDto,
-    DishCommentsResponseDto,
-    GetCommentsQueryDto,
-} from '../dto/comment.dto';
-import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Customer } from '@prisma/client';
 import { Request } from 'express';
-import { CacheInterceptor } from '@nestjs/cache-manager';
+import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import {
+    CommentResponseDto,
+    CreateCommentDto,
+    DishCommentsResponseDto,
+    GetCommentsQueryDto,
+    UpdateCommentDto,
+} from '../dto/comment.dto';
+import { CommentService } from '../services/comment.service';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
 
 @ApiTags('Comments')
 @Controller('comments')
@@ -81,15 +85,6 @@ export class CommentController {
     @ApiResponse({
         status: 200,
         description: 'Commentaires récupérés avec succès',
-        schema: {
-            type: 'object',
-            properties: {
-                comments: { type: 'array', items: { $ref: '#/components/schemas/CommentResponseDto' } },
-                total: { type: 'number' },
-                page: { type: 'number' },
-                limit: { type: 'number' },
-            },
-        },
     })
 
     @Get('bests')
@@ -105,7 +100,6 @@ export class CommentController {
     async getCommentById(@Param('id') commentId: string): Promise<CommentResponseDto> {
         return this.commentService.getCommentById(commentId);
     }
-
 
     @ApiOperation({ summary: 'Récupérer les commentaires d\'une commande' })
     @ApiParam({ name: 'orderId', description: 'ID de la commande' })
@@ -144,49 +138,30 @@ export class CommentController {
     }
 
 
+    @Get('customer/my-comments')
     @UseGuards(JwtCustomerAuthGuard)
-    @ApiBearerAuth()
     @ApiOperation({ summary: 'Récupérer mes commentaires' })
     @ApiResponse({
         status: 200,
         description: 'Mes commentaires récupérés avec succès',
-        schema: {
-            type: 'object',
-            properties: {
-                comments: { type: 'array', items: { $ref: '#/components/schemas/CommentResponseDto' } },
-                total: { type: 'number' },
-                page: { type: 'number' },
-                limit: { type: 'number' },
-            },
-        },
     })
-    @Get('customer/my-comments')
     async getMyComments(
         @Req() req: Request,
         @Query() query: GetCommentsQueryDto,
     ) {
         const customer = req.user as Customer;
-        console.log(customer)
         return this.commentService.getCustomerComments(customer.id, query);
     }
 
-
-    @UseGuards(JwtAuthGuard)
+    
+    @Get('customer/:customerId')
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.COMMENTAIRES, Action.READ)
     @ApiOperation({ summary: 'Récupérer les commentaires d\'un client (admin)' })
     @ApiResponse({
         status: 200,
         description: 'Commentaires du client récupérés avec succès',
-        schema: {
-            type: 'object',
-            properties: {
-                comments: { type: 'array', items: { $ref: '#/components/schemas/CommentResponseDto' } },
-                total: { type: 'number' },
-                page: { type: 'number' },
-                limit: { type: 'number' },
-            },
-        },
     })
-    @Get('customer/:customerId')
     async getCustomerComments(
         @Param('customerId') customerId: string,
         @Query() query: GetCommentsQueryDto,
@@ -195,22 +170,15 @@ export class CommentController {
     }
 
 
-    @UseGuards(JwtAuthGuard)
+    @Get()
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.COMMENTAIRES, Action.READ)
     @ApiOperation({ summary: 'Récupérer tous les commentaires (admin)' })
     @ApiResponse({
         status: 200,
         description: 'Commentaires récupérés avec succès',
-        schema: {
-            type: 'object',
-            properties: {
-                comments: { type: 'array', items: { $ref: '#/components/schemas/CommentResponseDto' } },
-                total: { type: 'number' },
-                page: { type: 'number' },
-                limit: { type: 'number' },
-            },
-        },
+
     })
-    @Get()
     async getAllComments(@Query() query: GetCommentsQueryDto) {
         return this.commentService.getAllComments(query);
     }

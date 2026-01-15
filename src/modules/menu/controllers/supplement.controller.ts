@@ -1,16 +1,16 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
-import { SupplementService } from 'src/modules/menu/services/supplement.service';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { SupplementCategory } from '@prisma/client';
+import { GenerateConfigService } from 'src/common/services/generate-config.service';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Action } from 'src/modules/auth/enums/action.enum';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateSupplementDto } from 'src/modules/menu/dto/create-supplement.dto';
 import { UpdateSupplementDto } from 'src/modules/menu/dto/update-supplement.dto';
-import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { UserRolesGuard } from 'src/common/guards/user-roles.guard';
-import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
-import { SupplementCategory, UserRole, UserType } from '@prisma/client';
-import { UserTypesGuard } from 'src/common/guards/user-types.guard';
-import { UserTypes } from 'src/modules/auth/decorators/user-types.decorator';
-import { GenerateConfigService } from 'src/common/services/generate-config.service';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiOperation, ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { SupplementService } from 'src/modules/menu/services/supplement.service';
 
 @ApiTags('Supplements')
 @ApiBearerAuth()
@@ -20,9 +20,8 @@ export class SupplementController {
 
   @ApiOperation({ summary: 'Création d\'un supplément' })
   @Post()
-  @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
-  @UserTypes(UserType.BACKOFFICE)
-  @UserRoles(UserRole.ADMIN)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.INVENTAIRE, Action.CREATE)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/supplements') }))
   async create(@Body() createSupplementDto: CreateSupplementDto, @UploadedFile() image: Express.Multer.File) {
     const resizedPath = await GenerateConfigService.compressImages(
@@ -44,23 +43,22 @@ export class SupplementController {
     return this.supplementService.findAll();
   }
 
-  @ApiOperation({ summary: 'Récupération de tous les suppléments par catégorie' })
   @Get('category/:category')
+  @ApiOperation({ summary: 'Récupération de tous les suppléments par catégorie' })
   findByCategory(@Param('category') category: SupplementCategory) {
     return this.supplementService.findByCategory(category);
   }
 
-  @ApiOperation({ summary: 'Obtenir un supplément par ID' })
   @Get(':id')
+  @ApiOperation({ summary: 'Obtenir un supplément par ID' })
   findOne(@Param('id') id: string) {
     return this.supplementService.findOne(id);
   }
 
-  @ApiOperation({ summary: 'Mettre à jour un supplément' })
   @Patch(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
-  @UserTypes(UserType.BACKOFFICE)
-  @UserRoles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Mettre à jour un supplément' })
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.INVENTAIRE, Action.UPDATE)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/supplements') }))
   async update(@Param('id') id: string, @Body() updateSupplementDto: UpdateSupplementDto, @UploadedFile() image: Express.Multer.File) {
     const resizedPath = await GenerateConfigService.compressImages(
@@ -76,11 +74,10 @@ export class SupplementController {
     return this.supplementService.update(id, { ...updateSupplementDto, image: resizedPath!["img_1"] ?? image?.path });
   }
 
-  @ApiOperation({ summary: 'Supprimer un supplément' })
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, UserRolesGuard)
-  @UserTypes(UserType.BACKOFFICE)
-  @UserRoles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Supprimer un supplément' })
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.INVENTAIRE, Action.DELETE)
   remove(@Param('id') id: string) {
     return this.supplementService.remove(id);
   }

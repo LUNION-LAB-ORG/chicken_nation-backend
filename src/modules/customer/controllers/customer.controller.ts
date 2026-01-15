@@ -10,6 +10,10 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { CacheInterceptor } from '@nestjs/cache-manager';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
 
 @ApiTags('Customers')
 @ApiBearerAuth()
@@ -21,7 +25,8 @@ export class CustomerController {
 
   // CREATE CUSTOMER
   @Post()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.CLIENTS, Action.CREATE)
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
   @ApiOperation({ summary: 'Création d\'un nouveau client' })
   async create(@Body() createCustomerDto: CreateCustomerDto, @UploadedFile() image: Express.Multer.File) {
@@ -39,7 +44,8 @@ export class CustomerController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.CLIENTS, Action.READ)
   @ApiOperation({ summary: 'Récupération de tous les clients' })
   findAll(@Query() query: CustomerQueryDto) {
     return this.customerService.findAll(query);
@@ -53,7 +59,8 @@ export class CustomerController {
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.CLIENTS, Action.READ)
   @ApiOperation({ summary: 'Obtenir un client par ID' })
   findOne(@Param('id') id: string) {
     return this.customerService.findOne(id);

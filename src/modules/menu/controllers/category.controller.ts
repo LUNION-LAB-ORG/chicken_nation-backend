@@ -1,33 +1,29 @@
+import { CacheInterceptor } from '@nestjs/cache-manager';
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
-  Post,
   Patch,
-  Delete,
+  Post,
+  Req,
+  UploadedFile,
   UseGuards,
   UseInterceptors,
-  UploadedFile,
-  Req,
 } from '@nestjs/common';
-import { CategoryService } from 'src/modules/menu/services/category.service';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Request } from 'express';
+import { GenerateConfigService } from 'src/common/services/generate-config.service';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Action } from 'src/modules/auth/enums/action.enum';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
 import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
-import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { UserRole, UserType } from '@prisma/client';
-import { UserTypesGuard } from 'src/common/guards/user-types.guard';
-import { UserTypes } from 'src/modules/auth/decorators/user-types.decorator';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { GenerateConfigService } from 'src/common/services/generate-config.service';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { Request } from 'express';
-import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
-import { UserPermissionsGuard } from 'src/common/guards/user-permissions.guard';
-import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
-import { Modules } from 'src/modules/auth/enums/module-enum';
-import { Action } from 'src/common/enum/action.enum';
-import { CacheInterceptor } from '@nestjs/cache-manager';
+import { CategoryService } from 'src/modules/menu/services/category.service';
 
 @ApiTags('Categories')
 @ApiBearerAuth()
@@ -37,9 +33,7 @@ export class CategoryController {
   constructor(private readonly categoryService: CategoryService) { }
 
   @Post()
-  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
-  @UserTypes(UserType.BACKOFFICE)
-  @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.INVENTAIRE, Action.CREATE)
   @UseInterceptors(
     FileInterceptor('image', GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories')),
@@ -75,16 +69,13 @@ export class CategoryController {
   }
 
   @Get(':id')
-  @UseGuards(UserPermissionsGuard)
   @ApiOperation({ summary: "Récupération d'une catégorie par son id" })
   findOne(@Param('id') id: string) {
     return this.categoryService.findOne(id);
   }
 
   @Patch(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
-  @UserTypes(UserType.BACKOFFICE)
-  @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.INVENTAIRE, Action.UPDATE)
   @UseInterceptors(
     FileInterceptor('image', GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories')),
@@ -109,9 +100,7 @@ export class CategoryController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, UserTypesGuard, UserPermissionsGuard)
-  @UserTypes(UserType.BACKOFFICE)
-  @UserRoles(UserRole.ADMIN, UserRole.MARKETING)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.INVENTAIRE, Action.DELETE)
   @ApiOperation({ summary: "Suppression d'une catégorie par son id" })
   remove(@Param('id') id: string) {

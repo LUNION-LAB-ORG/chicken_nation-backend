@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { OrderService } from './services/order.service';
 import { OrderController } from './controllers/order.controller';
 import { OrderItemService } from './services/order-item.service';
-import { OrderItemController } from './controllers/order-item.controller';
 import { OrderHelper } from './helpers/order.helper';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
@@ -21,7 +20,7 @@ import { KkiapayOrderListenerService } from './listeners/kkiapay-order.listener.
 
 @Module({
   imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule, TurboModule],
-  controllers: [OrderController, OrderItemController],
+  controllers: [OrderController],
   providers: [
     OrderService,
     OrderItemService,

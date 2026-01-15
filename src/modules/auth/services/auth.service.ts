@@ -48,7 +48,7 @@ export class AuthService {
     const rolePermissions = permissionsByRole[user.role as UserRole];
 
     // Renvoi des informations
-    const { password: _, ...rest } = user; // Exclure le mot de passe
+    const { password: _, ...rest } = user;
     return {
       ...rest,
       token,

@@ -1,5 +1,5 @@
 import { SetMetadata } from '@nestjs/common';
-import { Action } from 'src/common/enum/action.enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 
 export const REQUIRE_PERMISSION_KEY = 'permission';
