@@ -11,7 +11,6 @@ import { OrderEvent } from './events/order.event';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { OrderWebSocketService } from './websockets/order-websocket.service';
 import { RestaurantModule } from '../restaurant/restaurant.module';
-import { OrderEmailTemplates } from './templates/order-email.template';
 import { OrderNotificationsTemplate } from './templates/order-notifications.template';
 import { ReceiptsService } from './services/receipts.service';
 import { TurboModule } from 'src/turbo/turbo.module';
@@ -29,7 +28,6 @@ import { KkiapayOrderListenerService } from './listeners/kkiapay-order.listener.
     OrderListenerService,
     // OrderTask,
     OrderWebSocketService,
-    OrderEmailTemplates,
     OrderNotificationsTemplate,
     ReceiptsService,
     TurboListenerService,

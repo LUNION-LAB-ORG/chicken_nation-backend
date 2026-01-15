@@ -1,23 +1,19 @@
-import { Injectable, Inject } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { OnEvent } from "@nestjs/event-emitter";
 import { NotificationType } from "@prisma/client";
-import { IEmailService } from "src/modules/email/interfaces/email-service.interface";
 import { NotificationRecipientService } from "src/modules/notifications/recipients/notification-recipient.service";
 import { NotificationsService } from "src/modules/notifications/services/notifications.service";
 import { NotificationsWebSocketService } from "src/modules/notifications/websockets/notifications-websocket.service";
-import { LoyaltyEmailTemplates } from "../templates/loyalty-email.template";
-import { LoyaltyNotificationsTemplate } from "../templates/loyalty-notifications.template";
 import { LoyaltyLevelUpEvent, LoyaltyPointsAddedEvent, LoyaltyPointsExpiredEvent, LoyaltyPointsExpiringSoonEvent, LoyaltyPointsRedeemedEvent } from "../interfaces/loyalty-event.interface";
+import { LoyaltyNotificationsTemplate } from "../templates/loyalty-notifications.template";
 
 @Injectable()
 export class LoyaltyListenerService {
     constructor(
-        @Inject('EMAIL_SERVICE') private readonly emailService: IEmailService,
         private readonly notificationRecipientService: NotificationRecipientService,
         private readonly notificationsWebSocketService: NotificationsWebSocketService,
         private readonly notificationsService: NotificationsService,
 
-        private readonly loyaltyEmailTemplates: LoyaltyEmailTemplates,
         private readonly loyaltyNotificationsTemplate: LoyaltyNotificationsTemplate,
     ) { }
 
@@ -29,7 +25,6 @@ export class LoyaltyListenerService {
     async handleLoyaltyPointsAdded(payload: LoyaltyPointsAddedEvent) {
         // --- Recipients ---
         const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
-        const customerEmail: string[] = customer.email ? [customer.email] : [];
 
         // --- Notifications ---
         const notificationDataCustomer = {
@@ -52,21 +47,6 @@ export class LoyaltyListenerService {
         if (notificationCustomer.length > 0) {
             this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
         }
-
-        // --- Emails ---
-        if (customerEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.loyaltyEmailTemplates.LOYALTY_POINTS_ADDED,
-                {
-                    recipients: customerEmail,
-                    data: {
-                        actor: payload.customer,
-                        points: payload.points,
-                        orderReference: payload.orderReference,
-                    },
-                },
-            );
-        }
     }
 
     /**
@@ -77,22 +57,6 @@ export class LoyaltyListenerService {
     async handleLoyaltyPointsRedeemed(payload: LoyaltyPointsRedeemedEvent) {
         // --- Recipients ---
         const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
-        const customerEmail: string[] = customer.email ? [customer.email] : [];
-
-        // --- Emails ---
-        if (customerEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.loyaltyEmailTemplates.LOYALTY_POINTS_REDEEMED,
-                {
-                    recipients: customerEmail,
-                    data: {
-                        actor: payload.customer,
-                        points: payload.points,
-                        orderReference: payload.orderReference,
-                    },
-                },
-            );
-        }
 
         // --- Notifications ---
         const notificationDataCustomer = {
@@ -125,22 +89,6 @@ export class LoyaltyListenerService {
     async handleLoyaltyLevelUp(payload: LoyaltyLevelUpEvent) {
         // --- Recipients ---
         const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
-        const customerEmail: string[] = customer.email ? [customer.email] : [];
-
-        // --- Emails ---
-        if (customerEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.loyaltyEmailTemplates.LOYALTY_LEVEL_UP,
-                {
-                    recipients: customerEmail,
-                    data: {
-                        actor: payload.customer,
-                        new_level: payload.new_level,
-                        bonus_points: payload.bonus_points,
-                    },
-                },
-            );
-        }
 
         // --- Notifications ---
         const notificationDataCustomer = {
@@ -173,22 +121,6 @@ export class LoyaltyListenerService {
     async handleLoyaltyPointsExpiringSoon(payload: LoyaltyPointsExpiringSoonEvent) {
         // --- Recipients ---
         const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
-        const customerEmail: string[] = customer.email ? [customer.email] : [];
-
-        // --- Emails ---
-        if (customerEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.loyaltyEmailTemplates.POINTS_EXPIRING_SOON,
-                {
-                    recipients: customerEmail,
-                    data: {
-                        actor: payload.customer,
-                        expiring_points: payload.expiring_points,
-                        days_remaining: payload.days_remaining,
-                    },
-                },
-            );
-        }
 
         // --- Notifications ---
         const notificationDataCustomer = {
@@ -221,21 +153,6 @@ export class LoyaltyListenerService {
     async handleLoyaltyPointsExpired(payload: LoyaltyPointsExpiredEvent) {
         // --- Recipients ---
         const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
-        const customerEmail: string[] = customer.email ? [customer.email] : [];
-
-        // --- Emails ---
-        if (customerEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.loyaltyEmailTemplates.POINTS_EXPIRED,
-                {
-                    recipients: customerEmail,
-                    data: {
-                        actor: payload.customer,
-                        expired_points: payload.expired_points,
-                    },
-                },
-            );
-        }
 
         // --- Notifications ---
         const notificationDataCustomer = {

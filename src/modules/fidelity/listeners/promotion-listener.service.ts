@@ -1,26 +1,21 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { LoyaltyLevel, NotificationType, UserType } from '@prisma/client'; // Import UserType
-import { IEmailService } from 'src/modules/email/interfaces/email-service.interface';
+import { LoyaltyLevel, NotificationType } from '@prisma/client'; // Import UserType
 import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
-import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
 import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
+import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
 
 import { PromotionManagementEventPayload, PromotionUsedEventPayload } from '../interfaces/promotion.interface';
 
 // Import Promotion Templates
-import { PromotionEmailTemplates } from '../templates/promotion-email.template';
 import { PromotionNotificationsTemplate } from '../templates/promotion-notifications.template';
 
 @Injectable()
 export class PromotionListenerService {
     constructor(
-        @Inject('EMAIL_SERVICE') private readonly emailService: IEmailService,
         private readonly notificationRecipientService: NotificationRecipientService,
         private readonly notificationsWebSocketService: NotificationsWebSocketService,
         private readonly notificationsService: NotificationsService,
-
-        private readonly promotionEmailTemplates: PromotionEmailTemplates,
         private readonly promotionNotificationsTemplate: PromotionNotificationsTemplate,
     ) { }
 
@@ -32,7 +27,6 @@ export class PromotionListenerService {
     async handlePromotionUsedEvent(payload: PromotionUsedEventPayload) {
         // --- Recipients ---
         const customer = await this.notificationRecipientService.getCustomer(payload.customer.id);
-        const customerEmail: string[] = customer.email ? [customer.email] : [];
 
 
         // --- Notifications ---
@@ -56,22 +50,6 @@ export class PromotionListenerService {
         if (notificationCustomer.length > 0) {
             this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
         }
-
-
-        // --- Emails ---
-        if (customerEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.promotionEmailTemplates.PROMOTION_USED_CUSTOMER,
-                {
-                    recipients: customerEmail,
-                    data: {
-                        customer: payload.customer,
-                        promotion: payload.promotion,
-                        discountAmount: payload.discountAmount,
-                    },
-                },
-            );
-        }
     }
 
     /**
@@ -84,10 +62,6 @@ export class PromotionListenerService {
         const backofficeUsers = await this.notificationRecipientService.getAllUsersByBackofficeAndRole();
         const restaurantManagers = await this.notificationRecipientService.getAllManagers();
         const allCustomers = await this.notificationRecipientService.getAllCustomers();
-
-        const backofficeEmails: string[] = backofficeUsers.map(u => u.email).filter(Boolean) as string[];
-        const restaurantManagerEmails: string[] = restaurantManagers.map(u => u.email).filter(Boolean) as string[];
-        const customerEmails: string[] = allCustomers.map(c => c.email).filter(Boolean) as string[];
 
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
@@ -166,58 +140,6 @@ export class PromotionListenerService {
                 }
             });
         }
-
-        // --- Emails ---
-        // 1. Email to Back-Office & Restaurant Managers (Internal)
-        const internalRecipientsEmails = [...new Set([...backofficeEmails, ...restaurantManagerEmails])];
-        if (internalRecipientsEmails.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.promotionEmailTemplates.PROMOTION_CREATED_INTERNAL,
-                {
-                    recipients: internalRecipientsEmails,
-                    data: {
-                        actor: payload.actor,
-                        promotion: payload.promotion,
-                    },
-                },
-            );
-        }
-
-        // 2. Email to Customers (if promotion is public)
-        if (payload.promotion.visibility === 'PUBLIC' && customerEmails.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.promotionEmailTemplates.NEW_PROMOTION_AVAILABLE_CUSTOMER,
-                {
-                    recipients: customerEmails,
-                    data: {
-                        actor: payload.actor,
-                        promotion: payload.promotion,
-                        targetedNames: payload.targetedNames,
-                    },
-                },
-            );
-        }
-        if (payload.promotion.visibility !== 'PUBLIC' && allCustomers.length > 0) {
-
-            const targetedCustomers = allCustomers.filter(c => payload.promotion.target_standard && c.loyalty_level === LoyaltyLevel.STANDARD || payload.promotion.target_premium && c.loyalty_level === LoyaltyLevel.PREMIUM || payload.promotion.target_gold && c.loyalty_level === LoyaltyLevel.GOLD);
-
-            const targetedCustomersEmails: string[] = targetedCustomers.map(c => c.email).filter(Boolean) as string[];
-
-            if (targetedCustomersEmails.length > 0) {
-                await this.emailService.sendEmailTemplate(
-                    this.promotionEmailTemplates.NEW_PROMOTION_AVAILABLE_CUSTOMER,
-                    {
-                        recipients: targetedCustomersEmails,
-                        data: {
-                            actor: payload.actor,
-                            promotion: payload.promotion,
-                            targetedNames: payload.targetedNames,
-                        },
-                    },
-                );
-            }
-        }
-
     }
 
     /**
@@ -229,10 +151,6 @@ export class PromotionListenerService {
         // --- Recipients ---
         const backofficeUsers = await this.notificationRecipientService.getAllUsersByBackofficeAndRole();
         const restaurantManagers = await this.notificationRecipientService.getAllManagers();
-
-        const backofficeEmails: string[] = backofficeUsers.map(u => u.email).filter(Boolean) as string[];
-        const restaurantManagerEmails: string[] = restaurantManagers.map(u => u.email).filter(Boolean) as string[];
-
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
         // --- Notifications ---
@@ -252,22 +170,6 @@ export class PromotionListenerService {
                 this.notificationsWebSocketService.emitNotification(notif, recipientUser);
             }
         });
-
-        // --- Emails ---
-        const internalRecipientsEmails = [...new Set([...backofficeEmails, ...restaurantManagerEmails])];
-        if (internalRecipientsEmails.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.promotionEmailTemplates.PROMOTION_UPDATED_INTERNAL,
-                {
-                    recipients: internalRecipientsEmails,
-                    data: {
-                        actor: payload.actor,
-                        promotion: payload.promotion,
-                    },
-                },
-            );
-        }
-
     }
 
     /**
@@ -279,10 +181,6 @@ export class PromotionListenerService {
         // --- Recipients ---
         const backofficeUsers = await this.notificationRecipientService.getAllUsersByBackofficeAndRole();
         const restaurantManagers = await this.notificationRecipientService.getAllManagers();
-
-        const backofficeEmails: string[] = backofficeUsers.map(u => u.email).filter(Boolean) as string[];
-        const restaurantManagerEmails: string[] = restaurantManagers.map(u => u.email).filter(Boolean) as string[];
-
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
 
@@ -303,22 +201,5 @@ export class PromotionListenerService {
                 this.notificationsWebSocketService.emitNotification(notif, recipientUser);
             }
         });
-
-
-
-        // --- Emails ---
-        const internalRecipientsEmails = [...new Set([...backofficeEmails, ...restaurantManagerEmails])];
-        if (internalRecipientsEmails.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.promotionEmailTemplates.PROMOTION_DELETED_INTERNAL,
-                {
-                    recipients: internalRecipientsEmails,
-                    data: {
-                        actor: payload.actor,
-                        promotion: payload.promotion,
-                    },
-                },
-            );
-        }
     }
 }

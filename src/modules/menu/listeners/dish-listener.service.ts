@@ -1,22 +1,17 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { NotificationType, Prisma, Dish } from '@prisma/client';
-import { IEmailService } from 'src/modules/email/interfaces/email-service.interface';
-import { DishEmailTemplates } from '../templates/dish-email.template';
-import { DishNotificationsTemplate } from '../templates/dish-notifications.template';
+import { Dish, NotificationType, Prisma } from '@prisma/client';
 import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
-import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
 import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
+import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
+import { DishNotificationsTemplate } from '../templates/dish-notifications.template';
 
 @Injectable()
 export class DishListenerService {
     constructor(
-        @Inject('EMAIL_SERVICE') private readonly emailService: IEmailService,
         private readonly notificationRecipientService: NotificationRecipientService,
         private readonly notificationsWebSocketService: NotificationsWebSocketService,
         private readonly notificationsService: NotificationsService,
-
-        private readonly dishEmailTemplates: DishEmailTemplates,
         private readonly dishNotificationsTemplate: DishNotificationsTemplate,
     ) { }
 
@@ -27,9 +22,7 @@ export class DishListenerService {
     }) {
         // Retrieve recipients
         const usersBackoffice = await this.notificationRecipientService.getAllUsersByBackofficeAndRole();
-        const usersBackofficeEmail: string[] = usersBackoffice.map((user) => user.email!).filter(Boolean) as string[];
         const managers = await this.notificationRecipientService.getAllManagers();
-        const managersEmail: string[] = managers.map((user) => user.email!).filter(Boolean) as string[];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
 
@@ -72,28 +65,6 @@ export class DishListenerService {
             }
         });
 
-        // Send Emails
-        // 1- Email to Backoffice
-        if (usersBackofficeEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.dishEmailTemplates.NEW_DISH_BACKOFFICE,
-                {
-                    recipients: usersBackofficeEmail,
-                    data: payload,
-                },
-            );
-        }
-        // 2- Email to Restaurant Managers
-        if (managersEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.dishEmailTemplates.NEW_DISH_RESTAURANT,
-                {
-                    recipients: managersEmail,
-                    data: payload,
-                },
-            );
-        }
-
     }
 
     @OnEvent('dish.updated')
@@ -103,9 +74,7 @@ export class DishListenerService {
     }) {
         // Retrieve recipients
         const usersBackoffice = await this.notificationRecipientService.getAllUsersByBackofficeAndRole();
-        const usersBackofficeEmail: string[] = usersBackoffice.map((user) => user.email!).filter(Boolean) as string[];
         const managers = await this.notificationRecipientService.getAllManagers();
-        const managersEmail: string[] = managers.map((user) => user.email!).filter(Boolean) as string[];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
 
@@ -147,29 +116,5 @@ export class DishListenerService {
                 this.notificationsWebSocketService.emitNotification(notification, correspondingRecipient);
             }
         });
-
-
-        // Send Emails
-        // 1- Email to Backoffice
-        if (usersBackofficeEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.dishEmailTemplates.DISH_UPDATED_BACKOFFICE,
-                {
-                    recipients: usersBackofficeEmail,
-                    data: payload,
-                },
-            );
-        }
-        // 2- Email to Restaurant Managers
-        if (managersEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.dishEmailTemplates.DISH_UPDATED_RESTAURANT,
-                {
-                    recipients: managersEmail,
-                    data: payload,
-                },
-            );
-        }
-
     }
 }

@@ -1,20 +1,14 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { PrismaService } from 'src/database/services/prisma.service';
 import { NotificationType, Prisma, User } from '@prisma/client';
-import { IEmailService } from 'src/modules/email/interfaces/email-service.interface';
-import { UserEmailTemplates } from '../templates/user-email.template';
-import { UserNotificationsTemplate } from '../templates/user-notifications.template';
 import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
-import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
 import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
+import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
+import { UserNotificationsTemplate } from '../templates/user-notifications.template';
 
 @Injectable()
 export class UserListenerService {
     constructor(
-        private readonly prisma: PrismaService,
-        @Inject('EMAIL_SERVICE') private readonly emailService: IEmailService,
-        private readonly userEmailTemplates: UserEmailTemplates,
         private readonly userNotificationsTemplate: UserNotificationsTemplate,
         private readonly notificationRecipientService: NotificationRecipientService,
         private readonly notificationsWebSocketService: NotificationsWebSocketService,
@@ -28,9 +22,7 @@ export class UserListenerService {
     }) {
         // RECUPERATION DES RECEPTEURS
         const usersBackoffice = (await this.notificationRecipientService.getAllUsersByBackofficeAndRole()).filter((user) => user.email !== payload.user.email);
-        const usersBackofficeEmail: string[] = usersBackoffice.map((user) => user.email!);
         const userRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.user);
-        const userRecipientEmail: string[] = [userRecipient.email!];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
 
@@ -63,25 +55,6 @@ export class UserListenerService {
         );
         // Notifier en temps réel
         this.notificationsWebSocketService.emitNotification(notificationUserRecipient[0], userRecipient);
-
-
-        // ENVOIE DES EMAILS
-        // 1- EMAIL AU BACKOFFICE
-        await this.emailService.sendEmailTemplate(
-            this.userEmailTemplates.NEW_USER,
-            {
-                recipients: usersBackofficeEmail,
-                data: payload,
-            },
-        );
-        // 2- EMAIL AU MEMBRE
-        await this.emailService.sendEmailTemplate(
-            this.userEmailTemplates.WELCOME_USER,
-            {
-                recipients: userRecipientEmail,
-                data: payload,
-            },
-        );
     }
 
     @OnEvent('member.created')
@@ -91,9 +64,7 @@ export class UserListenerService {
     }) {
         // RECUPERATION DES RECEPTEURS
         const usersRestaurant = (await this.notificationRecipientService.getAllUsersByRestaurantAndRole(payload.actor.restaurant_id ?? "")).filter((user) => user.email !== payload.user.email);
-        const usersRestaurantEmail: string[] = usersRestaurant.map((user) => user.email!);
         const userRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.user);
-        const userRecipientEmail: string[] = [userRecipient.email!];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
         // PREPARATION DES DONNEES DE NOTIFICATIONS
@@ -126,25 +97,6 @@ export class UserListenerService {
         );
         // Notifier en temps réel
         this.notificationsWebSocketService.emitNotification(notificationMemberRecipient[0], userRecipient);
-
-
-        // ENVOIE DES EMAILS
-        // 1- EMAIL AU RESTAURANT
-        await this.emailService.sendEmailTemplate(
-            this.userEmailTemplates.NEW_MEMBER,
-            {
-                recipients: usersRestaurantEmail,
-                data: payload,
-            },
-        );
-        // 2- EMAIL AU MEMBRE
-        await this.emailService.sendEmailTemplate(
-            this.userEmailTemplates.WELCOME_USER,
-            {
-                recipients: userRecipientEmail,
-                data: payload,
-            },
-        );
     }
 
     @OnEvent('user.activated')

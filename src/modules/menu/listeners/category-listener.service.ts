@@ -1,22 +1,18 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Category, NotificationType, Prisma } from '@prisma/client';
-import { IEmailService } from 'src/modules/email/interfaces/email-service.interface';
-import { CategoryEmailTemplates } from '../templates/category-email.template';
-import { CategoryNotificationsTemplate } from '../templates/category-notifications.template';
 import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
-import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
 import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
+import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
+import { CategoryNotificationsTemplate } from '../templates/category-notifications.template';
 
 @Injectable()
 export class CategoryListenerService {
     constructor(
-        @Inject('EMAIL_SERVICE') private readonly emailService: IEmailService,
         private readonly notificationRecipientService: NotificationRecipientService,
         private readonly notificationsWebSocketService: NotificationsWebSocketService,
         private readonly notificationsService: NotificationsService,
 
-        private readonly categoryEmailTemplates: CategoryEmailTemplates,
         private readonly categoryNotificationsTemplate: CategoryNotificationsTemplate,
     ) { }
 
@@ -27,9 +23,7 @@ export class CategoryListenerService {
     }) {
         // Retrieve recipients
         const usersBackoffice = await this.notificationRecipientService.getAllUsersByBackofficeAndRole();
-        const usersBackofficeEmail: string[] = usersBackoffice.map((user) => user.email!).filter(Boolean) as string[];
         const managers = await this.notificationRecipientService.getAllManagers();
-        const managersEmail: string[] = managers.map((user) => user.email!).filter(Boolean) as string[];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
 
@@ -71,29 +65,6 @@ export class CategoryListenerService {
                 this.notificationsWebSocketService.emitNotification(notification, correspondingRecipient);
             }
         });
-
-        // Send Emails
-        // 1- Email to Backoffice
-        if (usersBackofficeEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.categoryEmailTemplates.NEW_CATEGORY_BACKOFFICE,
-                {
-                    recipients: usersBackofficeEmail,
-                    data: payload,
-                },
-            );
-        }
-        // 2- Email to Restaurant Managers
-        if (managersEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.categoryEmailTemplates.NEW_CATEGORY_RESTAURANT,
-                {
-                    recipients: managersEmail,
-                    data: payload,
-                },
-            );
-        }
-
     }
 
     @OnEvent('category.updated')
@@ -103,9 +74,7 @@ export class CategoryListenerService {
     }) {
         // Retrieve recipients
         const usersBackoffice = await this.notificationRecipientService.getAllUsersByBackofficeAndRole();
-        const usersBackofficeEmail: string[] = usersBackoffice.map((user) => user.email!).filter(Boolean) as string[];
         const managers = await this.notificationRecipientService.getAllManagers();
-        const managersEmail: string[] = managers.map((user) => user.email!).filter(Boolean) as string[];
         const actorRecipient = this.notificationRecipientService.mapUserToNotificationRecipient(payload.actor);
 
 
@@ -147,28 +116,5 @@ export class CategoryListenerService {
                 this.notificationsWebSocketService.emitNotification(notification, correspondingRecipient);
             }
         });
-
-
-        // Send Emails
-        // 1- Email to Backoffice
-        if (usersBackofficeEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.categoryEmailTemplates.CATEGORY_UPDATED_BACKOFFICE,
-                {
-                    recipients: usersBackofficeEmail,
-                    data: payload,
-                },
-            );
-        }
-        // 2- Email to Restaurant Managers
-        if (managersEmail.length > 0) {
-            await this.emailService.sendEmailTemplate(
-                this.categoryEmailTemplates.CATEGORY_UPDATED_RESTAURANT,
-                {
-                    recipients: managersEmail,
-                    data: payload,
-                },
-            );
-        }
     }
 }
