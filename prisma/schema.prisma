@@ -570,6 +570,9 @@ model Order {
   loyalty_points   LoyaltyPoint[]
 
   entity_status EntityStatus   @default(ACTIVE)
+  ready_at      DateTime?
+  picked_up_at  DateTime?
+  collected_at  DateTime?
   completed_at  DateTime?
   paied_at      DateTime?
   created_at    DateTime       @default(now()) @db.Timestamp(6)

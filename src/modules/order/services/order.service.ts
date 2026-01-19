@@ -21,6 +21,7 @@ import { UpdateOrderDto } from '../dto/update-order.dto';
 import { OrderEvent } from '../events/order.event';
 import { OrderHelper } from '../helpers/order.helper';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
+
 @Injectable()
 export class OrderService {
   private readonly logger = new Logger(OrderService.name);
@@ -224,6 +225,9 @@ export class OrderService {
         estimated_delivery_time: this.orderHelper.calculateEstimatedTime(meta?.estimated_delivery_time ?? ""),
         estimated_preparation_time: this.orderHelper.calculateEstimatedTime(meta?.estimated_preparation_time ?? ""),
         updated_at: new Date(),
+        ...(status === OrderStatus.READY && { ready_at: new Date() }),
+        ...(status === OrderStatus.PICKED_UP && { picked_up_at: new Date() }),
+        ...(status === OrderStatus.COLLECTED && { collected_at: new Date() }),
         ...(status === OrderStatus.COMPLETED && { completed_at: new Date() }),
       },
       include: {
@@ -871,140 +875,140 @@ export class OrderService {
       },
     });
 
-     // Génération du fichier Excel
-  const workbook = new ExcelJS.Workbook();
-  const worksheet = workbook.addWorksheet('Rapport des commandes');
+    // Génération du fichier Excel
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Rapport des commandes');
 
-  // En-têtes
-  worksheet.columns = [
-    { header: 'Référence', key: 'reference', width: 20 },
-    { header: 'Total TTC (FCFA)', key: 'amount', width: 18 },
-    { header: 'Sous-total (FCFA)', key: 'net_amount', width: 18 },
-    { header: 'Montant net (FCFA)', key: 'montant_net', width: 20 },
-    { header: 'Frais de livraison (FCFA)', key: 'delivery_fee', width: 25 },
-    { header: 'Taxe (FCFA)', key: 'tax', width: 15 },
-    { header: 'Remise (FCFA)', key: 'discount', width: 15 },
-    { header: 'Date', key: 'date', width: 15 },
-    { header: 'Client', key: 'client', width: 25 },
-    { header: 'Contact', key: 'contact', width: 15 },
-    { header: 'Email', key: 'email', width: 30 },
-    { header: 'Restaurant', key: 'restaurant', width: 25 },
-    { header: 'Source', key: 'source', width: 12 },
-  ];
+    // En-têtes
+    worksheet.columns = [
+      { header: 'Référence', key: 'reference', width: 20 },
+      { header: 'Total TTC (FCFA)', key: 'amount', width: 18 },
+      { header: 'Sous-total (FCFA)', key: 'net_amount', width: 18 },
+      { header: 'Montant net (FCFA)', key: 'montant_net', width: 20 },
+      { header: 'Frais de livraison (FCFA)', key: 'delivery_fee', width: 25 },
+      { header: 'Taxe (FCFA)', key: 'tax', width: 15 },
+      { header: 'Remise (FCFA)', key: 'discount', width: 15 },
+      { header: 'Date', key: 'date', width: 15 },
+      { header: 'Client', key: 'client', width: 25 },
+      { header: 'Contact', key: 'contact', width: 15 },
+      { header: 'Email', key: 'email', width: 30 },
+      { header: 'Restaurant', key: 'restaurant', width: 25 },
+      { header: 'Source', key: 'source', width: 12 },
+    ];
 
-  // Style de l'en-tête
-  worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  worksheet.getRow(1).fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: 'FF3B82F6' },
-  };
-  worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+    // Style de l'en-tête
+    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF3B82F6' },
+    };
+    worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
 
-  // Variables pour les totaux
-  let totalTTC = 0;
-  let totalSousTotal = 0;
-  let totalMontantNet = 0;
-  let totalFraisLivraison = 0;
-  let totalTaxe = 0;
-  let totalRemise = 0;
+    // Variables pour les totaux
+    let totalTTC = 0;
+    let totalSousTotal = 0;
+    let totalMontantNet = 0;
+    let totalFraisLivraison = 0;
+    let totalTaxe = 0;
+    let totalRemise = 0;
 
-  // Données
-  orders.forEach((order) => {
-    const montantNet = order.net_amount - order.discount;
-    const clientName = [order.customer.first_name, order.customer.last_name]
-      .filter(Boolean)
-      .join(' ') || 'N/A';
+    // Données
+    orders.forEach((order) => {
+      const montantNet = order.net_amount - order.discount;
+      const clientName = [order.customer.first_name, order.customer.last_name]
+        .filter(Boolean)
+        .join(' ') || 'N/A';
 
-    worksheet.addRow({
-      reference: order.reference,
-      amount: order.amount,
-      net_amount: order.net_amount,
-      montant_net: montantNet,
-      delivery_fee: order.delivery_fee,
-      tax: order.tax,
-      discount: order.discount,
-      date: format(new Date(order.created_at), 'dd/MM/yyyy', { locale: fr }),
-      client: clientName,
-      contact: order.customer.phone || 'N/A',
-      email: order.customer.email || 'N/A',
-      restaurant: order.restaurant.name,
-      source: order.auto ? 'Appli' : 'Téléphone',
+      worksheet.addRow({
+        reference: order.reference,
+        amount: order.amount,
+        net_amount: order.net_amount,
+        montant_net: montantNet,
+        delivery_fee: order.delivery_fee,
+        tax: order.tax,
+        discount: order.discount,
+        date: format(new Date(order.created_at), 'dd/MM/yyyy', { locale: fr }),
+        client: clientName,
+        contact: order.customer.phone || 'N/A',
+        email: order.customer.email || 'N/A',
+        restaurant: order.restaurant.name,
+        source: order.auto ? 'Appli' : 'Téléphone',
+      });
+
+      // Cumul des totaux
+      totalTTC += order.amount;
+      totalSousTotal += order.net_amount;
+      totalMontantNet += montantNet;
+      totalFraisLivraison += order.delivery_fee;
+      totalTaxe += order.tax;
+      totalRemise += order.discount;
     });
 
-    // Cumul des totaux
-    totalTTC += order.amount;
-    totalSousTotal += order.net_amount;
-    totalMontantNet += montantNet;
-    totalFraisLivraison += order.delivery_fee;
-    totalTaxe += order.tax;
-    totalRemise += order.discount;
-  });
-
-  // Formatage des colonnes monétaires (nombres avec séparateur de milliers)
-  const currencyColumns = ['amount', 'net_amount', 'montant_net', 'delivery_fee', 'tax', 'discount'];
-  currencyColumns.forEach((col) => {
-    const column = worksheet.getColumn(col);
-    column.numFmt = '#,##0';
-    column.alignment = { horizontal: 'right' };
-  });
-
-  // Ligne de totaux
-  const totalRow = worksheet.addRow({
-    reference: 'TOTAL',
-    amount: totalTTC,
-    net_amount: totalSousTotal,
-    montant_net: totalMontantNet,
-    delivery_fee: totalFraisLivraison,
-    tax: totalTaxe,
-    discount: totalRemise,
-    date: '',
-    client: '',
-    contact: '',
-    email: '',
-    restaurant: '',
-    source: '',
-  });
-
-  // Style de la ligne de totaux
-  totalRow.font = { bold: true };
-  totalRow.fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: 'FFE5E7EB' },
-  };
-
-  // Bordures pour toutes les cellules
-  worksheet.eachRow({ includeEmpty: false }, (row) => {
-    row.eachCell({ includeEmpty: true }, (cell) => {
-      cell.border = {
-        top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
-        left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
-        bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
-        right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
-      };
+    // Formatage des colonnes monétaires (nombres avec séparateur de milliers)
+    const currencyColumns = ['amount', 'net_amount', 'montant_net', 'delivery_fee', 'tax', 'discount'];
+    currencyColumns.forEach((col) => {
+      const column = worksheet.getColumn(col);
+      column.numFmt = '#,##0';
+      column.alignment = { horizontal: 'right' };
     });
-  });
 
-  // Alternance de couleurs pour les lignes (sauf en-tête et total)
-  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-    if (rowNumber > 1 && rowNumber < worksheet.rowCount) {
-      if (rowNumber % 2 === 0) {
-        row.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FFF9FAFB' },
+    // Ligne de totaux
+    const totalRow = worksheet.addRow({
+      reference: 'TOTAL',
+      amount: totalTTC,
+      net_amount: totalSousTotal,
+      montant_net: totalMontantNet,
+      delivery_fee: totalFraisLivraison,
+      tax: totalTaxe,
+      discount: totalRemise,
+      date: '',
+      client: '',
+      contact: '',
+      email: '',
+      restaurant: '',
+      source: '',
+    });
+
+    // Style de la ligne de totaux
+    totalRow.font = { bold: true };
+    totalRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE5E7EB' },
+    };
+
+    // Bordures pour toutes les cellules
+    worksheet.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: true }, (cell) => {
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
         };
+      });
+    });
+
+    // Alternance de couleurs pour les lignes (sauf en-tête et total)
+    worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber > 1 && rowNumber < worksheet.rowCount) {
+        if (rowNumber % 2 === 0) {
+          row.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFF9FAFB' },
+          };
+        }
       }
-    }
-  });
+    });
 
-  const buffer = await workbook.xlsx.writeBuffer();
+    const buffer = await workbook.xlsx.writeBuffer();
 
-  return {
-    buffer,
-    filename: `rapport-commandes-${new Date().toISOString().split('T')[0]}.xlsx`,
-  };
+    return {
+      buffer,
+      filename: `rapport-commandes-${new Date().toISOString().split('T')[0]}.xlsx`,
+    };
   }
 
   // async updateStatuts(id: string) {
@@ -1117,6 +1121,7 @@ export class OrderService {
       zone_id: null,
     };
   }
+
   // async obtenirFraisLivraison(body: FraisLivraisonDto): Promise<{
   //   montant: number;
   //   zone: string;
