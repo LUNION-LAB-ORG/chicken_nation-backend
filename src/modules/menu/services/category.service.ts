@@ -1,24 +1,47 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
 import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { EntityStatus, User } from '@prisma/client';
 import { CategoryEvent } from 'src/modules/menu/events/category.event';
 import { Request } from 'express';
+import { S3Service } from '../../../s3/s3.service';
 
 @Injectable()
 export class CategoryService {
-  constructor(private prisma: PrismaService,
-    private categoryEvent: CategoryEvent
-  ) { }
+  constructor(
+    private prisma: PrismaService,
+    private categoryEvent: CategoryEvent,
+    private readonly s3service: S3Service,
+  ) {}
 
-  async create(req: Request, createCategoryDto: CreateCategoryDto) {
+  private async uploadImage(image: Express.Multer.File) {
+    return await this.s3service.uploadFile({
+      buffer: image.buffer,
+      path: 'chicken-nation/categories',
+      originalname: image.originalname,
+      mimetype: image.mimetype,
+    });
+  }
+
+  async create(
+    req: Request,
+    createCategoryDto: CreateCategoryDto,
+    image: Express.Multer.File,
+  ) {
     const user = req.user as User;
+
+    const result = await this.uploadImage(image)
 
     const category = await this.prisma.category.create({
       data: {
         ...createCategoryDto,
         entity_status: EntityStatus.ACTIVE,
+        image: result?.key,
       },
     });
 
@@ -58,10 +81,10 @@ export class CategoryService {
           include: {
             dish_supplements: {
               include: {
-                supplement: true
-              }
-            }
-          }
+                supplement: true,
+              },
+            },
+          },
         },
       },
     });
@@ -73,13 +96,22 @@ export class CategoryService {
     return category;
   }
 
-  async update(req: Request, id: string, updateCategoryDto: UpdateCategoryDto) {
-    const user = req.user as User;
+  async update(
+    req: Request,
+    id: string,
+    updateCategoryDto: UpdateCategoryDto,
+    image: Express.Multer.File,
+  ) {
     await this.findOne(id);
+
+    const result = await this.uploadImage(image);
 
     const category = await this.prisma.category.update({
       where: { id },
-      data: updateCategoryDto,
+      data: {
+        ...updateCategoryDto,
+        image: result?.key,
+      },
     });
 
     // Émettre l'événement de mise à jour de catégorie

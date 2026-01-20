@@ -40,26 +40,13 @@ export class RestaurantController {
   @Post()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.RESTAURANTS, Action.CREATE)
-  @UseInterceptors(
-    FileInterceptor('image', {
-      ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants'),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('image'))
   async create(
     @Req() req: Request,
     @Body() createRestaurantDto: CreateRestaurantDto,
     @UploadedFile() image: Express.Multer.File,
   ) {
-    const resizedPath = await GenerateConfigService.compressImages(
-      { img_1: image?.path },
-      undefined,
-      { quality: 70, width: 600, fit: 'inside' },
-      true,
-    );
-    return this.restaurantService.create(req, {
-      ...createRestaurantDto,
-      image: resizedPath!['img_1'] ?? image?.path,
-    });
+    return this.restaurantService.create(req, createRestaurantDto, image);
   }
 
   @Get()
@@ -75,26 +62,13 @@ export class RestaurantController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.RESTAURANTS, Action.UPDATE)
-  @UseInterceptors(
-    FileInterceptor('image', {
-      ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/restaurants'),
-    }),
-  )
+  @UseInterceptors(FileInterceptor('image'))
   async update(
     @Param('id') id: string,
     @Body() updateRestaurantDto: UpdateRestaurantDto,
     @UploadedFile() image: Express.Multer.File,
   ) {
-    const resizedPath = await GenerateConfigService.compressImages(
-      { img_1: image?.path },
-      undefined,
-      { quality: 70, width: 600, fit: 'inside' },
-      true,
-    );
-    return this.restaurantService.update(id, {
-      ...updateRestaurantDto,
-      image: resizedPath!['img_1'] ?? image?.path,
-    });
+    return this.restaurantService.update(id, updateRestaurantDto, image);
   }
 
   @Patch(':id/activateDeactivate')

@@ -30,17 +30,7 @@ export class CustomerController {
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
   @ApiOperation({ summary: 'Création d\'un nouveau client' })
   async create(@Body() createCustomerDto: CreateCustomerDto, @UploadedFile() image: Express.Multer.File) {
-    const resizedPath = await GenerateConfigService.compressImages(
-      { "img_1": image?.path },
-      undefined,
-      {
-        quality: 70,
-        width: 600,
-        fit: 'inside',
-      },
-      true,
-    );
-    return this.customerService.create({ ...createCustomerDto, image: resizedPath!["img_1"] ?? image?.path });
+    return this.customerService.create(createCustomerDto, image);
   }
 
   @Get()
@@ -71,17 +61,7 @@ export class CustomerController {
   @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
   @ApiOperation({ summary: 'Mettre à jour un client' })
   async update(@Req() req: Request, @Body() updateCustomerDto: UpdateCustomerDto, @UploadedFile() image: Express.Multer.File) {
-    const resizedPath = await GenerateConfigService.compressImages(
-      { "img_1": image?.path },
-      undefined,
-      {
-        quality: 70,
-        width: 600,
-        fit: 'inside',
-      },
-      true,
-    );
-    return this.customerService.update(req, { ...updateCustomerDto, image: resizedPath!["img_1"] ?? image?.path });
+    return this.customerService.update(req, updateCustomerDto, image);
   }
 
   @Get('phone/:phone')

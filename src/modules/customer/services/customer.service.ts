@@ -1,51 +1,76 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Customer, EntityStatus, Prisma } from '@prisma/client';
 import { Request } from 'express';
+import * as fs from 'fs';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto';
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
 import { CustomerQueryDto } from '../dto/customer-query.dto';
 import { CustomerEvent } from '../events/customer.event';
+import { S3Service } from '../../../s3/s3.service';
 
 @Injectable()
 export class CustomerService {
-  constructor(private readonly prisma: PrismaService, private readonly customerEvent: CustomerEvent) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly customerEvent: CustomerEvent,
+    private readonly s3service: S3Service,
+  ) {}
 
   private async safeUpdate(customer: Customer, data: CreateCustomerDto) {
     if (!customer.email && data.email) {
       await this.prisma.customer.update({
         where: { id: customer.id },
         data: {
-          email: data.email
-        }
+          email: data.email,
+        },
       });
     }
     if (!customer.first_name && data.first_name) {
       await this.prisma.customer.update({
         where: { id: customer.id },
         data: {
-          first_name: data.first_name
-        }
+          first_name: data.first_name,
+        },
       });
     }
     if (!customer.last_name && data.last_name) {
       await this.prisma.customer.update({
         where: { id: customer.id },
         data: {
-          last_name: data.last_name
-        }
+          last_name: data.last_name,
+        },
       });
     }
   }
-  async create(createCustomerDto: CreateCustomerDto) {
+  private async uploadImage(image?: Express.Multer.File) {
+    if (!image) return null;
+    const buffer = image.buffer ?? fs.readFileSync(image.path);
+    return this.s3service.uploadFile({
+      buffer,
+      path: 'chicken-nation/customer-avatar',
+      originalname: image.originalname,
+      mimetype: image.mimetype,
+    });
+  }
+  async create(
+    createCustomerDto: CreateCustomerDto,
+    image?: Express.Multer.File,
+  ) {
     // Vérifier si le client existe déjà avec ce numéro de téléphone
     const existingCustomer = await this.prisma.customer.findUnique({
       where: { phone: createCustomerDto.phone },
     });
 
     if (existingCustomer) {
-      this.safeUpdate(existingCustomer, createCustomerDto)
-      throw new ConflictException(`Utilisateur avec le numéro de téléphone ${createCustomerDto.phone} existe déjà`);
+      this.safeUpdate(existingCustomer, createCustomerDto);
+      throw new ConflictException(
+        `Utilisateur avec le numéro de téléphone ${createCustomerDto.phone} existe déjà`,
+      );
     }
 
     // Vérifier si l'email existe déjà (s'il est fourni)
@@ -55,22 +80,29 @@ export class CustomerService {
       });
 
       if (customerWithEmail) {
-        this.safeUpdate(customerWithEmail, createCustomerDto)
-        throw new ConflictException(`Utilisateur avec l'email ${createCustomerDto.email} existe déjà`);
+        this.safeUpdate(customerWithEmail, createCustomerDto);
+        throw new ConflictException(
+          `Utilisateur avec l'email ${createCustomerDto.email} existe déjà`,
+        );
       }
     }
+
+    const uploadResult = await this.uploadImage(image);
 
     return this.prisma.customer.create({
       data: {
         ...createCustomerDto,
         entity_status: EntityStatus.ACTIVE,
+        image: uploadResult?.key ?? createCustomerDto.image,
       },
     });
   }
 
   async findAll(query: CustomerQueryDto = {}) {
     const { page = 1, limit = 10, status, search } = query;
-    const whereClause: Prisma.CustomerWhereInput = { entity_status: EntityStatus.ACTIVE };
+    const whereClause: Prisma.CustomerWhereInput = {
+      entity_status: EntityStatus.ACTIVE,
+    };
 
     if (search) {
       whereClause.OR = [
@@ -107,28 +139,26 @@ export class CustomerService {
             where: {
               OR: [
                 {
-                  AND: [
-                    { paied: false },
-                    { auto: false }
-                  ]
+                  AND: [{ paied: false }, { auto: false }],
                 },
                 {
                   paied: true,
-                }
+                },
               ],
               entity_status: { not: EntityStatus.DELETED },
             },
             orderBy: {
               created_at: 'desc',
             },
-          }
+          },
         },
         orderBy: {
           created_at: 'desc',
         },
         take: limit,
         skip: (page - 1) * limit,
-      })]);
+      }),
+    ]);
 
     return {
       data: customers,
@@ -138,7 +168,7 @@ export class CustomerService {
         limit: limit,
         totalPages: Math.ceil(count / limit),
       },
-    }
+    };
   }
 
   async detail(req: Request) {
@@ -187,14 +217,11 @@ export class CustomerService {
           where: {
             OR: [
               {
-                AND: [
-                  { paied: false },
-                  { auto: false }
-                ]
+                AND: [{ paied: false }, { auto: false }],
               },
               {
                 paied: true,
-              }
+              },
             ],
             entity_status: { not: EntityStatus.DELETED },
           },
@@ -272,13 +299,19 @@ export class CustomerService {
     });
 
     if (!customer || customer.entity_status !== EntityStatus.ACTIVE) {
-      throw new NotFoundException(`Utilisateur au téléphone ${phone} est non trouvé`);
+      throw new NotFoundException(
+        `Utilisateur au téléphone ${phone} est non trouvé`,
+      );
     }
 
     return customer;
   }
 
-  async update(req: Request, updateCustomerDto: UpdateCustomerDto) {
+  async update(
+    req: Request,
+    updateCustomerDto: UpdateCustomerDto,
+    image?: Express.Multer.File,
+  ) {
     const id = (req.user as Customer).id;
 
     // Vérifier si le numéro de téléphone est unique
@@ -288,7 +321,9 @@ export class CustomerService {
       });
 
       if (existingCustomer && existingCustomer.id !== id) {
-        throw new ConflictException(`Utilisateur avec le numéro de téléphone ${updateCustomerDto.phone} existe déjà`);
+        throw new ConflictException(
+          `Utilisateur avec le numéro de téléphone ${updateCustomerDto.phone} existe déjà`,
+        );
       }
     }
 
@@ -299,7 +334,9 @@ export class CustomerService {
       });
 
       if (existingCustomer && existingCustomer.id !== id) {
-        throw new ConflictException(`Utilisateur avec l'email ${updateCustomerDto.email} existe déjà`);
+        throw new ConflictException(
+          `Utilisateur avec l'email ${updateCustomerDto.email} existe déjà`,
+        );
       }
     }
 
@@ -307,18 +344,25 @@ export class CustomerService {
       where: { id },
     });
 
+    const uploadResult = await this.uploadImage(image);
+
     const updatedCustomer = await this.prisma.customer.update({
       where: { id },
       data: {
         ...updateCustomerDto,
         entity_status: EntityStatus.ACTIVE,
+        image: uploadResult?.key ?? updateCustomerDto.image,
       },
       include: {
         addresses: true,
       },
     });
 
-    if (!existingCustomer?.first_name && !existingCustomer?.last_name && !existingCustomer?.email) {
+    if (
+      !existingCustomer?.first_name &&
+      !existingCustomer?.last_name &&
+      !existingCustomer?.email
+    ) {
       this.customerEvent.customerCreatedEvent({ customer: updatedCustomer });
     }
 
@@ -334,9 +378,8 @@ export class CustomerService {
       where: { id },
       data: {
         entity_status: EntityStatus.DELETED,
-        phone: customer.phone + "D"
+        phone: customer.phone + 'D',
       },
     });
   }
 }
-

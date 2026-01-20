@@ -15,6 +15,7 @@ import { ResponseMessageDto } from '../dto/response-message.dto';
 import { getAuthType } from '../utils/getTypeUser';
 import { MessageWebSocketService } from '../websockets/message-websocket.service';
 import { ConversationsService } from './conversations.service';
+import { S3Service } from '../../../s3/s3.service';
 
 @Injectable()
 export class MessageService {
@@ -25,7 +26,18 @@ export class MessageService {
     private readonly conversationsService: ConversationsService,
     private readonly prismaService: PrismaService,
     private readonly messageWebSocketService: MessageWebSocketService,
+    private readonly s3service: S3Service,
   ) { }
+
+  private async uploadImage(image?: Express.Multer.File) {
+    if (!image) return null;
+    return await this.s3service.uploadFile({
+      buffer: image.buffer,
+      path: 'chicken-nation/messagerie',
+      originalname: image.originalname,
+      mimetype: image.mimetype,
+    });
+  }
 
   async getMessages(
     req: Request,
@@ -116,6 +128,7 @@ export class MessageService {
     req: Request,
     conversationId: string,
     createMessageDto: CreateMessageDto,
+    image?: Express.Multer.File,
   ): Promise<ResponseMessageDto> {
 
     this.logger.debug(`createMessageDto: ${JSON.stringify(createMessageDto)}, conversation ${conversationId}`);
@@ -148,6 +161,10 @@ export class MessageService {
       throw new HttpException('Conversation not found', HttpStatus.NOT_FOUND);
     }
 
+    // Upload image to S3 if provided
+    const uploadResult = await this.uploadImage(image);
+    const finalImageUrl = uploadResult?.key ?? imageUrl;
+
     // verifier que la commande appartient bien au client de la conversation
     if (orderId) {
       const order = await this.prismaService.order.findUnique({
@@ -174,7 +191,7 @@ export class MessageService {
         authorCustomerId:
           authType === 'customer' ? (auth as Customer).id : null, // Set customer ID if authenticated as customer
         meta: {
-          imageUrl: imageUrl || null,
+          imageUrl: finalImageUrl || null,
           orderId: orderId,
         }
       },

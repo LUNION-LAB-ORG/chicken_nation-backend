@@ -7,21 +7,37 @@ import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
 import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
 import { DishEvent } from 'src/modules/menu/events/dish.event';
 import { QueryDishDto } from '../dto/query-dish.dto';
+import { S3Service } from '../../../s3/s3.service';
 
 @Injectable()
 export class DishService {
-  constructor(private prisma: PrismaService,
-    private dishEvent: DishEvent
+  constructor(
+    private prisma: PrismaService,
+    private dishEvent: DishEvent,
+    private readonly s3service: S3Service,
   ) { }
 
-  async create(req: Request, createDishDto: CreateDishDto) {
+  private async uploadImage(image?: Express.Multer.File) {
+    if (!image) return null;
+    return await this.s3service.uploadFile({
+      buffer: image.buffer,
+      path: 'chicken-nation/dishes',
+      originalname: image.originalname,
+      mimetype: image.mimetype,
+    });
+  }
+
+  async create(req: Request, createDishDto: CreateDishDto, image?: Express.Multer.File) {
     const user = req.user as User;
     const { restaurant_ids, supplement_ids, ...dishData } = createDishDto;
+
+    const uploadResult = await this.uploadImage(image);
 
     // Créer le plat de base
     const dish = await this.prisma.dish.create({
       data: {
         ...dishData,
+        image: uploadResult?.key ?? dishData.image,
         entity_status: EntityStatus.ACTIVE,
       },
     });
@@ -185,13 +201,18 @@ export class DishService {
     return dish;
   }
 
-  async update(req: Request, id: string, updateDishDto: UpdateDishDto) {
+  async update(req: Request, id: string, updateDishDto: UpdateDishDto, image?: Express.Multer.File) {
     const user = req.user as User;
     await this.findOne(id);
 
+    const uploadResult = await this.uploadImage(image);
+
     const dish = await this.prisma.dish.update({
       where: { id },
-      data: updateDishDto,
+      data: {
+        ...updateDishDto,
+        image: uploadResult?.key ?? updateDishDto.image,
+      },
     });
 
     // Émettre l'événement de mise à jour de plat

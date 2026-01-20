@@ -1,5 +1,17 @@
 import { CacheInterceptor } from '@nestjs/cache-manager';
-import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Req,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBadRequestResponse,
@@ -11,7 +23,6 @@ import {
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { Request } from 'express';
-import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
@@ -22,17 +33,31 @@ import { UpdateUserPasswordDto } from 'src/modules/users/dto/update-user-passwor
 import { UpdateUserDto } from 'src/modules/users/dto/update-user.dto';
 import { UsersService } from 'src/modules/users/services/users.service';
 import { ResetUserPasswordResponseDto } from '../dto/reset-user-password.dto';
+import { S3Service } from 'src/s3/s3.service';
 
 @Controller('users')
 @UseInterceptors(CacheInterceptor)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) { }
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly s3service: S3Service,
+  ) {}
+
+  private async uploadImage(image: Express.Multer.File) {
+    if (!image) return null;
+    return await this.s3service.uploadFile({
+      buffer: image.buffer,
+      path: 'chicken-nation/users-avatar',
+      originalname: image.originalname,
+      mimetype: image.mimetype,
+    });
+  }
 
   // CREATE USER
   @Post()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.PERSONNELS, Action.CREATE)
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
+  @UseInterceptors(FileInterceptor('image'))
   @ApiOperation({ summary: 'Création utilisateur' })
   @ApiCreatedResponse({
     description: 'Utilisateur créé avec succès',
@@ -41,25 +66,23 @@ export class UsersController {
     description: "Utilisateur déjà existant, changer d'email",
   })
   @ApiBody({ type: CreateUserDto })
-  async create(@Req() req: Request, @Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
-    const resizedPath = await GenerateConfigService.compressImages(
-      { "img_1": image?.path },
-      undefined,
-      {
-        quality: 70,
-        width: 600,
-        fit: 'inside',
-      },
-      true,
-    );
-    return this.usersService.create(req, { ...createUserDto, image: resizedPath!["img_1"] ?? image?.path });
+  async create(
+    @Req() req: Request,
+    @Body() createUserDto: CreateUserDto,
+    @UploadedFile() image: Express.Multer.File,
+  ) {
+    const result = await this.uploadImage(image);
+    return this.usersService.create(req, {
+      ...createUserDto,
+      image: result?.key,
+    });
   }
 
   // CREATE MEMBER
   @Post('member')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.PERSONNELS, Action.CREATE)
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
+  @UseInterceptors(FileInterceptor('image'))
   @ApiOperation({ summary: 'Création membre' })
   @ApiCreatedResponse({
     description: 'Membre créé avec succès',
@@ -68,20 +91,16 @@ export class UsersController {
     description: "Membre déjà existant, changer d'email",
   })
   @ApiBody({ type: CreateUserDto })
-  async createMember(@Req() req: Request, @Body() createUserDto: CreateUserDto, @UploadedFile() image: Express.Multer.File) {
-
-    const resizedPath = await GenerateConfigService.compressImages(
-      { "img_1": image?.path },
-      undefined,
-      {
-        quality: 70,
-        width: 600,
-        fit: 'inside',
-      },
-      true,
-    );
-
-    return this.usersService.createMember(req, { ...createUserDto, image: resizedPath!["img_1"] ?? image?.path });
+  async createMember(
+    @Req() req: Request,
+    @Body() createUserDto: CreateUserDto,
+    @UploadedFile() image: Express.Multer.File,
+  ) {
+    const result = await this.uploadImage(image);
+    return this.usersService.createMember(req, {
+      ...createUserDto,
+      image: result?.key,
+    });
   }
 
   // GET DETAIL USER
@@ -117,7 +136,7 @@ export class UsersController {
   // UPDATE USER
   @Patch()
   @UseGuards(JwtAuthGuard)
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/users-avatar') }))
+  @UseInterceptors(FileInterceptor('image'))
   @ApiOperation({ summary: 'Mise à jour utilisateur' })
   @ApiOkResponse({
     description: 'Utilisateur mis à jour avec succès',
@@ -126,18 +145,16 @@ export class UsersController {
     description: 'Utilisateur non trouvé',
   })
   @ApiBody({ type: UpdateUserDto })
-  async update(@Req() req: Request, @Body() updateUserDto: UpdateUserDto, @UploadedFile() image: Express.Multer.File) {
-    const resizedPath = await GenerateConfigService.compressImages(
-      { "img_1": image?.path },
-      undefined,
-      {
-        quality: 70,
-        width: 600,
-        fit: 'inside',
-      },
-      true,
-    );
-    return this.usersService.update(req, { ...updateUserDto, image: resizedPath!["img_1"] ?? image?.path });
+  async update(
+    @Req() req: Request,
+    @Body() updateUserDto: UpdateUserDto,
+    @UploadedFile() image: Express.Multer.File,
+  ) {
+    const result = await this.uploadImage(image);
+    return this.usersService.update(req, {
+      ...updateUserDto,
+      image: result?.key,
+    });
   }
 
   // UPDATE PASSWORD
@@ -169,10 +186,7 @@ export class UsersController {
   @ApiBadRequestResponse({
     description: 'Utilisateur non trouvé',
   })
-  async resetPassword(
-    @Req() req: Request,
-    @Param('id') user_id: string,
-  ) {
+  async resetPassword(@Req() req: Request, @Param('id') user_id: string) {
     return this.usersService.resetPassword(req, user_id);
   }
 
@@ -206,7 +220,7 @@ export class UsersController {
     return this.usersService.inactive(req, id);
   }
 
-  // RESTAURATION 
+  // RESTAURATION
   @Post('restore/:id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.PERSONNELS, Action.UPDATE)
@@ -220,7 +234,6 @@ export class UsersController {
   async restore(@Req() req: Request, @Param('id') id: string) {
     return this.usersService.restore(req, id);
   }
-
 
   // DELETE
   @Delete('/delete/:id')
@@ -236,5 +249,4 @@ export class UsersController {
   async delete(@Req() req: Request, @Param('id') id: string) {
     return this.usersService.remove(req, id);
   }
-
 }

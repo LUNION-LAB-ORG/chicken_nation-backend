@@ -27,6 +27,7 @@ import {
   isValid,
 } from 'date-fns';
 import { Request } from 'express';
+import { S3Service } from '../../../s3/s3.service';
 
 @Injectable()
 export class RestaurantService {
@@ -34,12 +35,23 @@ export class RestaurantService {
     private readonly prisma: PrismaService,
     private readonly generateDataService: GenerateDataService,
     private readonly restaurantEvent: RestaurantEvent,
+    private readonly s3service: S3Service,
   ) {}
+
+  private async uploadImage(image?: Express.Multer.File) {
+    if (!image) return null;
+    return await this.s3service.uploadFile({
+      buffer: image.buffer,
+      path: 'chicken-nation/restaurants',
+      originalname: image.originalname,
+      mimetype: image.mimetype,
+    });
+  }
 
   /**
    * Création d'un nouveau restaurant et de son gestionnaire
    */
-  async create(req: Request, createRestaurantDto: CreateRestaurantDto) {
+  async create(req: Request, createRestaurantDto: CreateRestaurantDto, image?: Express.Multer.File) {
     const user = req.user as User;
     // Vérifie si un utilisateur avec l'email du gestionnaire existe déjà
     const existingUser = await this.prisma.user.findUnique({
@@ -55,6 +67,8 @@ export class RestaurantService {
     const password = this.generateDataService.generateSecurePassword();
     const salt = await bcrypt.genSalt();
     const hashedPassword = await bcrypt.hash(password, salt);
+
+    const uploadResult = await this.uploadImage(image);
 
     // Création du restaurant et du gestionnaire dans une transaction
     const result = await this.prisma.$transaction(async (prisma) => {
@@ -77,7 +91,7 @@ export class RestaurantService {
           name: createRestaurantDto.name,
           manager: manager.id,
           description: createRestaurantDto.description,
-          image: createRestaurantDto.image,
+          image: uploadResult?.key ?? createRestaurantDto.image,
           address: createRestaurantDto.address,
           latitude: createRestaurantDto.latitude,
           longitude: createRestaurantDto.longitude,
@@ -174,13 +188,18 @@ export class RestaurantService {
   /**
    * Mettre à jour un restaurant
    */
-  async update(id: string, updateRestaurantDto: UpdateRestaurantDto) {
+  async update(id: string, updateRestaurantDto: UpdateRestaurantDto, image?: Express.Multer.File) {
     // Vérifie si le restaurant existe
     await this.findOne(id);
 
+    const uploadResult = await this.uploadImage(image);
+
     const updatedRestaurant = await this.prisma.restaurant.update({
       where: { id },
-      data: updateRestaurantDto,
+      data: {
+        ...updateRestaurantDto,
+        image: uploadResult?.key ?? updateRestaurantDto.image,
+      },
     });
 
     // Emettre l'événement de mise à jour de restaurant

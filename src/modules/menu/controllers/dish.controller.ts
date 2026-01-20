@@ -1,9 +1,21 @@
 import { CacheInterceptor } from '@nestjs/cache-manager';
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
@@ -20,25 +32,22 @@ import { QueryDishDto } from '../dto/query-dish.dto';
 @ApiBearerAuth()
 @UseInterceptors(CacheInterceptor)
 export class DishController {
-  constructor(private readonly dishService: DishService, private readonly dishRestaurantService: DishRestaurantService) { }
+  constructor(
+    private readonly dishService: DishService,
+    private readonly dishRestaurantService: DishRestaurantService,
+  ) {}
 
   @Post()
-  @ApiOperation({ summary: 'Création d\'un plat' })
+  @ApiOperation({ summary: "Création d'un plat" })
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.MENUS, Action.CREATE)
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/dishes') }))
-  async create(@Req() req: Request, @Body() createDishDto: CreateDishDto, @UploadedFile() image: Express.Multer.File) {
-    const resizedPath = await GenerateConfigService.compressImages(
-      { "img_1": image?.path },
-      undefined,
-      {
-        quality: 70,
-        width: 600,
-        fit: 'inside',
-      },
-      true,
-    );
-    return this.dishService.create(req, { ...createDishDto, image: resizedPath!["img_1"] ?? image?.path });
+  @UseInterceptors(FileInterceptor('image'))
+  async create(
+    @Req() req: Request,
+    @Body() createDishDto: CreateDishDto,
+    @UploadedFile() image: Express.Multer.File,
+  ) {
+    return this.dishService.create(req, createDishDto, image);
   }
 
   @Get()
@@ -47,7 +56,7 @@ export class DishController {
     return this.dishService.findAll();
   }
 
-  @Get("get-all")
+  @Get('get-all')
   @ApiOperation({ summary: 'Récupération de tous les plats' })
   findAllBackoffice() {
     return this.dishService.findAll({ all: true });
@@ -69,19 +78,14 @@ export class DishController {
   @ApiOperation({ summary: 'Mettre à jour un plat' })
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.MENUS, Action.UPDATE)
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/dishes') }))
-  async update(@Req() req: Request, @Param('id') id: string, @Body() updateDishDto: UpdateDishDto, @UploadedFile() image: Express.Multer.File) {
-    const resizedPath = await GenerateConfigService.compressImages(
-      { "img_1": image?.path },
-      undefined,
-      {
-        quality: 70,
-        width: 600,
-        fit: 'inside',
-      },
-      true,
-    );
-    return this.dishService.update(req, id, { ...updateDishDto, image: resizedPath!["img_1"] ?? image?.path });
+  @UseInterceptors(FileInterceptor('image'))
+  async update(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() updateDishDto: UpdateDishDto,
+    @UploadedFile() image: Express.Multer.File,
+  ) {
+    return this.dishService.update(req, id, updateDishDto, image);
   }
 
   @Delete(':id')
@@ -92,13 +96,13 @@ export class DishController {
     return this.dishService.remove(id);
   }
 
-
   @Get(':dishId/restaurants')
-  @ApiOperation({ summary: 'Récupération de tous les restaurants liés à un plat' })
+  @ApiOperation({
+    summary: 'Récupération de tous les restaurants liés à un plat',
+  })
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.MENUS, Action.READ)
   getAllRestaurantsByDish(@Param('dishId') dishId: string) {
     return this.dishRestaurantService.findByDish(dishId);
   }
-
 }

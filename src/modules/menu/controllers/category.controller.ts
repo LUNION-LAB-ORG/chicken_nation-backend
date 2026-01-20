@@ -30,13 +30,18 @@ import { CategoryService } from 'src/modules/menu/services/category.service';
 @Controller('categories')
 @UseInterceptors(CacheInterceptor)
 export class CategoryController {
-  constructor(private readonly categoryService: CategoryService) { }
+  constructor(private readonly categoryService: CategoryService) {}
 
   @Post()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.INVENTAIRE, Action.CREATE)
   @UseInterceptors(
-    FileInterceptor('image', GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories')),
+    FileInterceptor(
+      'image',
+      GenerateConfigService.generateConfigSingleImageUpload(
+        './uploads/categories',
+      ),
+    ),
   )
   @ApiOperation({ summary: "Création d'une nouvelle catégorie" })
   async create(
@@ -44,16 +49,7 @@ export class CategoryController {
     @Body() createCategoryDto: CreateCategoryDto,
     @UploadedFile() image: Express.Multer.File,
   ) {
-    const resizedPath = await GenerateConfigService.compressImages(
-      { img_1: image?.path },
-      undefined,
-      { quality: 70, width: 600, fit: 'inside' },
-      true,
-    );
-    return this.categoryService.create(req, {
-      ...createCategoryDto,
-      image: resizedPath?.['img_1'] ?? image?.path,
-    });
+    return this.categoryService.create(req, createCategoryDto, image);
   }
 
   @Get()
@@ -62,7 +58,7 @@ export class CategoryController {
     return this.categoryService.findAll();
   }
 
-  @Get("/get-all")
+  @Get('/get-all')
   @ApiOperation({ summary: 'Récupération de toutes les catégories' })
   findAllBackoffice() {
     return this.categoryService.findAll({ all: true });
@@ -78,7 +74,12 @@ export class CategoryController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.INVENTAIRE, Action.UPDATE)
   @UseInterceptors(
-    FileInterceptor('image', GenerateConfigService.generateConfigSingleImageUpload('./uploads/categories')),
+    FileInterceptor(
+      'image',
+      GenerateConfigService.generateConfigSingleImageUpload(
+        './uploads/categories',
+      ),
+    ),
   )
   @ApiOperation({ summary: "Mise à jour d'une catégorie par son id" })
   async update(
@@ -87,16 +88,7 @@ export class CategoryController {
     @Body() updateCategoryDto: UpdateCategoryDto,
     @UploadedFile() image: Express.Multer.File,
   ) {
-    const resizedPath = await GenerateConfigService.compressImages(
-      { img_1: image?.path },
-      undefined,
-      { quality: 70, width: 600, fit: 'inside' },
-      true,
-    );
-    return this.categoryService.update(req, id, {
-      ...updateCategoryDto,
-      image: resizedPath?.['img_1'] ?? image?.path,
-    });
+    return this.categoryService.update(req, id, updateCategoryDto, image);
   }
 
   @Delete(':id')

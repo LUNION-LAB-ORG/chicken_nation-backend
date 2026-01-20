@@ -17,18 +17,31 @@ import { Request } from 'express';
 
 import { PromotionErrorKeys } from '../enums/promotion-error-keys.enum';
 import { PromotionException } from '../filters/promotion.filter';
+import { S3Service } from '../../../s3/s3.service';
 
 @Injectable()
 export class PromotionService {
   constructor(
     private prisma: PrismaService,
     private promotionEvent: PromotionEvent,
+    private readonly s3service: S3Service,
   ) { }
+
+  private async uploadImage(image?: Express.Multer.File) {
+    if (!image) return null;
+    return await this.s3service.uploadFile({
+      buffer: image.buffer,
+      path: 'chicken-nation/promotions',
+      originalname: image.originalname,
+      mimetype: image.mimetype,
+    });
+  }
 
   async create(
     req: Request,
     createPromotionDto: CreatePromotionDto,
     created_by_id: string,
+    image?: Express.Multer.File,
   ): Promise<PromotionResponseDto> {
     const {
       targeted_dish_ids = [],
@@ -41,6 +54,8 @@ export class PromotionService {
     let all_restaurant_ids: string[] = restaurant_ids;
 
     const user = req.user as User;
+
+    const uploadResult = await this.uploadImage(image);
 
     // Validation des dates
     const startDate = new Date(promotionData.start_date);
@@ -144,6 +159,7 @@ export class PromotionService {
       const promotion = await tx.promotion.create({
         data: {
           ...promotionData,
+          coupon_image_url: uploadResult?.key ?? promotionData.coupon_image_url,
           start_date: startDate.toISOString(),
           expiration_date: endDate.toISOString(),
           created_by_id,
@@ -535,6 +551,7 @@ export class PromotionService {
     req: Request,
     id: string,
     updatePromotionDto: UpdatePromotionDto,
+    image?: Express.Multer.File,
   ): Promise<PromotionResponseDto> {
     const {
       targeted_dish_ids,
@@ -546,11 +563,14 @@ export class PromotionService {
 
     const user = req.user as User;
 
+    const uploadResult = await this.uploadImage(image);
+
     const promotion = await this.prisma.$transaction(async (tx) => {
       const promotion = await tx.promotion.update({
         where: { id },
         data: {
           ...promotionData,
+          coupon_image_url: uploadResult?.key ?? promotionData.coupon_image_url,
           start_date: updatePromotionDto.start_date
             ? new Date(updatePromotionDto.start_date).toISOString()
             : undefined,

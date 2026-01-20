@@ -3,14 +3,33 @@ import { SupplementCategory } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateSupplementDto } from 'src/modules/menu/dto/create-supplement.dto';
 import { UpdateSupplementDto } from 'src/modules/menu/dto/update-supplement.dto';
+import { S3Service } from '../../../s3/s3.service';
 
 @Injectable()
 export class SupplementService {
-  constructor(private prisma: PrismaService) { }
+  constructor(
+    private prisma: PrismaService,
+    private readonly s3service: S3Service,
+  ) { }
 
-  async create(createSupplementDto: CreateSupplementDto) {
+  private async uploadImage(image?: Express.Multer.File) {
+    if (!image) return null;
+    return await this.s3service.uploadFile({
+      buffer: image.buffer,
+      path: 'chicken-nation/supplements',
+      originalname: image.originalname,
+      mimetype: image.mimetype,
+    });
+  }
+
+  async create(createSupplementDto: CreateSupplementDto, image?: Express.Multer.File) {
+    const uploadResult = await this.uploadImage(image);
+
     return this.prisma.supplement.create({
-      data: createSupplementDto,
+      data: {
+        ...createSupplementDto,
+        image: uploadResult?.key ?? createSupplementDto.image,
+      },
     });
   }
 
@@ -23,7 +42,8 @@ export class SupplementService {
     });
 
     // Organisez les suppléments par catégorie
-    const supplementsByCategory = {
+
+    return {
       [SupplementCategory.FOOD]: supplements.filter(
         (s) => s.category === SupplementCategory.FOOD,
       ),
@@ -34,8 +54,6 @@ export class SupplementService {
         (s) => s.category === SupplementCategory.ACCESSORY,
       ),
     };
-
-    return supplementsByCategory;
   }
 
   async findByCategory(category: SupplementCategory) {
@@ -61,12 +79,17 @@ export class SupplementService {
     return supplement;
   }
 
-  async update(id: string, updateSupplementDto: UpdateSupplementDto) {
+  async update(id: string, updateSupplementDto: UpdateSupplementDto, image?: Express.Multer.File) {
     await this.findOne(id);
+
+    const uploadResult = await this.uploadImage(image);
 
     return this.prisma.supplement.update({
       where: { id },
-      data: updateSupplementDto,
+      data: {
+        ...updateSupplementDto,
+        image: uploadResult?.key ?? updateSupplementDto.image,
+      },
     });
   }
 
