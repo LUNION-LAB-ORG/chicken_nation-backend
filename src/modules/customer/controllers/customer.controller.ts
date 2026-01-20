@@ -1,13 +1,25 @@
-import { Controller, Query, Get, Post, Body, Patch, Param, Delete, Req, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { CustomerService } from 'src/modules/customer/services/customer.service';
 import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto';
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
 import { Request } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { CustomerQueryDto } from 'src/modules/customer/dto/customer-query.dto';
-import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { CacheInterceptor } from '@nestjs/cache-manager';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
@@ -20,16 +32,18 @@ import { Action } from 'src/modules/auth/enums/action.enum';
 @Controller('customer')
 @UseInterceptors(CacheInterceptor)
 export class CustomerController {
-  constructor(private readonly customerService: CustomerService) { }
-
+  constructor(private readonly customerService: CustomerService) {}
 
   // CREATE CUSTOMER
   @Post()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.CLIENTS, Action.CREATE)
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
-  @ApiOperation({ summary: 'Création d\'un nouveau client' })
-  async create(@Body() createCustomerDto: CreateCustomerDto, @UploadedFile() image: Express.Multer.File) {
+  @UseInterceptors(FileInterceptor('image'))
+  @ApiOperation({ summary: "Création d'un nouveau client" })
+  async create(
+    @Body() createCustomerDto: CreateCustomerDto,
+    @UploadedFile() image: Express.Multer.File,
+  ) {
     return this.customerService.create(createCustomerDto, image);
   }
 
@@ -58,9 +72,13 @@ export class CustomerController {
 
   @Patch()
   @UseGuards(JwtCustomerAuthGuard)
-  @UseInterceptors(FileInterceptor('image', { ...GenerateConfigService.generateConfigSingleImageUpload('./uploads/customer-avatar') }))
+  @UseInterceptors(FileInterceptor('image'))
   @ApiOperation({ summary: 'Mettre à jour un client' })
-  async update(@Req() req: Request, @Body() updateCustomerDto: UpdateCustomerDto, @UploadedFile() image: Express.Multer.File) {
+  async update(
+    @Req() req: Request,
+    @Body() updateCustomerDto: UpdateCustomerDto,
+    @UploadedFile() image: Express.Multer.File,
+  ) {
     return this.customerService.update(req, updateCustomerDto, image);
   }
 

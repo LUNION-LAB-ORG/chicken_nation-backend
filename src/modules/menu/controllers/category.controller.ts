@@ -15,7 +15,6 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
-import { GenerateConfigService } from 'src/common/services/generate-config.service';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
@@ -35,14 +34,7 @@ export class CategoryController {
   @Post()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.INVENTAIRE, Action.CREATE)
-  @UseInterceptors(
-    FileInterceptor(
-      'image',
-      GenerateConfigService.generateConfigSingleImageUpload(
-        './uploads/categories',
-      ),
-    ),
-  )
+  @UseInterceptors(FileInterceptor('image'))
   @ApiOperation({ summary: "Création d'une nouvelle catégorie" })
   async create(
     @Req() req: Request,
@@ -73,14 +65,7 @@ export class CategoryController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.INVENTAIRE, Action.UPDATE)
-  @UseInterceptors(
-    FileInterceptor(
-      'image',
-      GenerateConfigService.generateConfigSingleImageUpload(
-        './uploads/categories',
-      ),
-    ),
-  )
+  @UseInterceptors(FileInterceptor('image'))
   @ApiOperation({ summary: "Mise à jour d'une catégorie par son id" })
   async update(
     @Req() req: Request,
