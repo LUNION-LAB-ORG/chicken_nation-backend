@@ -28,19 +28,32 @@ export class CardRequestController {
    */
   @Post('request')
   @UseGuards(JwtCustomerAuthGuard)
-  @UseInterceptors(FileInterceptor('image'))
-  @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Soumettre une demande de carte Nation' })
   async createRequest(
     @Req() req: Request,
     @Body() createDto: CreateCardRequestDto,
-    @UploadedFile() file: Express.Multer.File,
   ) {
     const customerId = (req as any).user.id;
 
     return this.cardRequestService.createRequest(customerId, {
       ...createDto
-    }, file);
+    });
+  }
+  /**
+   * Créer une demande de carte Nation
+   */
+  @Post('verify-request')
+  @UseGuards(JwtCustomerAuthGuard)
+  @UseInterceptors(FileInterceptor('image'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Vérifier une demande de carte Nation' })
+  async verifyRequest(
+    @Req() req: Request,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    const customerId = (req as any).user.id;
+
+    return this.cardRequestService.verifyRequest(customerId, file);
   }
 
   /**

@@ -18,7 +18,6 @@ export class CreateCardRequestDto {
   @Transform(({ value }) => value.trim())
   institution: string;
 
-
   @ApiPropertyOptional({ description: 'Date de naissance du client', example: '1990-01-01' })
   @IsDateString({}, { message: 'La date de naissance doit être au format JJ/MM/AAAA' })
   @IsOptional()
