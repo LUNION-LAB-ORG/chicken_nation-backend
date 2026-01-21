@@ -20,7 +20,7 @@ export class CardRequestService {
   /**
    * Créer une demande de carte (depuis l'app mobile)
    */
-  async createRequest(customerId: string, createDto: CreateCardRequestDto, file: Express.Multer.File) {
+  async createRequest(customerId: string, createDto: CreateCardRequestDto) {
     // Vérifier si une demande en attente existe déjà
     const existingRequest = await this.prisma.cardRequest.findFirst({
       where: {
@@ -48,22 +48,12 @@ export class CardRequestService {
     }
 
     // Créer la demande
-
-    // upload S3
-    const result = await this.s3service.uploadFile({
-      buffer: file.buffer,
-      path: "chicken-nation/carte-etudiant",
-      originalname: file.originalname,
-      mimetype: file.mimetype
-    })
-
-    // creation
     const cardRequest = await this.prisma.cardRequest.create({
       data: {
         customer_id: customerId,
         nickname: createDto.nickname,
         institution: createDto.institution,
-        student_card_file_url: result?.key ?? "",
+        student_card_file_url: "",
         status: CardRequestStatus.PENDING,
       },
       include: {
@@ -91,6 +81,57 @@ export class CardRequestService {
     return {
       success: true,
       message: 'Votre demande de carte Nation a été soumise avec succès',
+      data: cardRequest,
+    };
+  }
+
+
+  async verifyRequest(customerId: string, file: Express.Multer.File) {
+    // Vérifier si une demande en attente existe déjà
+    const existingRequest = await this.prisma.cardRequest.findFirst({
+      where: {
+        customer_id: customerId,
+        status: {
+          in: [CardRequestStatus.PENDING, CardRequestStatus.IN_REVIEW],
+        },
+      },
+    });
+
+    if (!existingRequest) {
+      throw new ConflictException('Vous n\'avez pas de demande en cours de traitement');
+    }
+
+    // upload S3
+    const result = await this.s3service.uploadFile({
+      buffer: file.buffer,
+      path: "chicken-nation/carte-etudiant",
+      originalname: file.originalname,
+      mimetype: file.mimetype
+    })
+
+    // creation
+    const cardRequest = await this.prisma.cardRequest.update({
+      where: { id: existingRequest.id },
+      data: {
+        student_card_file_url: result?.key || "",
+        status: CardRequestStatus.IN_REVIEW,
+      },
+      include: {
+        customer: {
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            phone: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    return {
+      success: true,
+      message: 'Votre demande carte étudiant a été soumise avec succès',
       data: cardRequest,
     };
   }
