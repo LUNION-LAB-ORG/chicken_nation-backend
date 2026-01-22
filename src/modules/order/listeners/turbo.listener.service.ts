@@ -14,7 +14,7 @@ export class TurboListenerService {
     @OnEvent(OrderChannels.ORDER_STATUS_UPDATED)
     async orderStatutReady(payload: OrderCreatedEvent) {
         if (payload.order && payload.order.status === OrderStatus.READY && payload.order.delivery_service === DeliveryService.TURBO) {
-            const retour = this.turboService.creerCourse(payload.order.id, payload.order.restaurant.apikey ?? "");
+          this.turboService.creerCourse(payload.order.id, payload.order.restaurant.apikey ?? "");
         }
     }
 
