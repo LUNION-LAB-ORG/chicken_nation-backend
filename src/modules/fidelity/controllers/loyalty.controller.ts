@@ -8,11 +8,23 @@ import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.g
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
+import { UpdateLoyaltyConfigDto } from '../dto/loyalty-config.dto';
 
 @ApiTags('Loyalty')
 @Controller('fidelity/loyalty')
 export class LoyaltyController {
   constructor(private readonly loyaltyService: LoyaltyService) { }
+
+  @Post('config')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.FIDELITE, Action.CREATE)
+  @ApiOperation({ summary: 'Créer ou mettre à jour la configuration de fidélité' })
+  @ApiOkResponse({
+    description: 'Configuration de fidélité créée/mise à jour'
+  })
+  updateConfig(@Body() body: UpdateLoyaltyConfigDto) {
+    return this.loyaltyService.updateConfig(body);
+  }
 
   @Get('config')
   @ApiOperation({ summary: 'Obtenir la configuration de la fidélité' })

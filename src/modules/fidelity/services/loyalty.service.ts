@@ -5,10 +5,55 @@ import { AddLoyaltyPointDto } from '../dto/add-loyalty-point.dto';
 import { LoyaltyEvent } from '../events/loyalty.event';
 import { LoyaltyQueryDto } from '../dto/loyalty-query.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
+import { UpdateLoyaltyConfigDto } from '../dto/loyalty-config.dto';
 
 @Injectable()
 export class LoyaltyService {
     constructor(private prisma: PrismaService, private loyaltyEvent: LoyaltyEvent) { }
+
+
+    async updateConfig(data: UpdateLoyaltyConfigDto) {
+        // Valider la cohérence des seuils
+        if (data.standard_threshold !== undefined &&
+            data.premium_threshold !== undefined &&
+            data.gold_threshold !== undefined) {
+            if (data.standard_threshold >= data.premium_threshold ||
+                data.premium_threshold >= data.gold_threshold) {
+                throw new BadRequestException(
+                    'Les seuils doivent être croissants: Standard < Premium < Gold'
+                );
+            }
+        }
+
+        // Récupérer la config active ou en créer une
+        let config = await this.prisma.loyaltyConfig.findFirst({
+            where: { is_active: true }
+        });
+
+        if (config) {
+            // Mise à jour
+            config = await this.prisma.loyaltyConfig.update({
+                where: { id: config.id },
+                data: {
+                    ...data,
+                    updated_at: new Date()
+                }
+            });
+        } else {
+            // Création
+            config = await this.prisma.loyaltyConfig.create({
+                data: {
+                    ...data,
+                    is_active: true
+                }
+            });
+        }
+
+        return {
+            message: 'Configuration de fidélité mise à jour avec succès',
+            data: config
+        };
+    }
 
     async getConfig() {
         let config = await this.prisma.loyaltyConfig.findFirst({
