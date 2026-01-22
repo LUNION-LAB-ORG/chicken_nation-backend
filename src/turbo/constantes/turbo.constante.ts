@@ -1,4 +1,5 @@
 import { PaiementMode } from "@prisma/client";
+import { PaiementMethode } from "../interfaces/turbo.interfaces";
 
 export const TURBO_API = {
     CREATION_COURSE: 'https://backend-prod.turbodeliveryapp.com/api/restaurant/course-externe/commande', // création d'une commande
@@ -9,9 +10,9 @@ export const TURBO_API = {
 export const TURBO_API_KEY = 'jq3JVrMe10Isbdo2PR0OvdFUKRIFI61S';
 
 
-export const mappingMethodPayment = {
-    [PaiementMode.MOBILE_MONEY]: PaiementMode.MOBILE_MONEY,
-    [PaiementMode.WALLET]: PaiementMode.WALLET,
-    [PaiementMode.CARD]: PaiementMode.CARD,
-    [PaiementMode.CASH]: PaiementMode.CASH,
+export const mappingMethodPayment: Record<PaiementMode, PaiementMethode> = {
+    [PaiementMode.MOBILE_MONEY]: PaiementMethode.MOBILE_MONEY,
+    [PaiementMode.WALLET]: PaiementMethode.WAVE,
+    [PaiementMode.CARD]: PaiementMethode.CARTE,
+    [PaiementMode.CASH]: PaiementMethode.ESPECE,
 }

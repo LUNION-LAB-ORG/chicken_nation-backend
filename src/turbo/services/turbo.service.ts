@@ -3,7 +3,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { Address, DeliveryService, OrderStatus } from "@prisma/client";
 import { TURBO_API, TURBO_API_KEY, mappingMethodPayment } from "../constantes/turbo.constante";
 import { IFraisLivraison, IFraisLivraisonResponsePaginate } from "../dto/frais-livraison.response";
-import { CommandeResponse, PaiementMode } from "../interfaces/turbo.interfaces";
+import { CommandeResponse, PaiementMethode } from "../interfaces/turbo.interfaces";
 
 @Injectable()
 export class TurboService {
@@ -45,7 +45,7 @@ export class TurboService {
             "longitude": adresse.longitude,
           },
           "zoneId": order.zone_id,
-          "modePaiement": order.paiements.length ? mappingMethodPayment[order.paiements[0].mode] : PaiementMode.ESPECE,
+          "modePaiement": order.paiements.length ? mappingMethodPayment[order.paiements[0].mode] : PaiementMethode.ESPECE,
           "prix": order.amount - order.delivery_fee,
           "livraisonPaye": order.paied,
           "statut": "EN_ATTENTE_RECUPERATION"

@@ -17,10 +17,11 @@ export class Pageable {
 }
 
 
-export enum PaiementMode {
+export enum PaiementMethode {
     ESPECE = "ESPECE",
     CARTE = "CARTE",
     MOBILE_MONEY = "MOBILE_MONEY",
+    WAVE = "WAVE"
 }
 
 export interface CommandeResponse {
@@ -34,7 +35,7 @@ export interface Commande {
     lieuRecuperation: Localisation;
     lieuLivraison: Localisation;
     zoneId: string;
-    modePaiement: PaiementMode;
+    modePaiement: PaiementMethode;
     prix: number;
     livraisonPaye: boolean;
 }
