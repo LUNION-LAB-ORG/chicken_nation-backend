@@ -48,6 +48,7 @@ export class TurboService {
           "modePaiement": order.paiements.length ? mappingMethodPayment[order.paiements[0].mode] : PaiementMode.ESPECE,
           "prix": order.amount - order.delivery_fee,
           "livraisonPaye": order.paied,
+          "statut": "EN_ATTENTE_RECUPERATION"
         }]
       }
 

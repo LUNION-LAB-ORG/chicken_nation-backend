@@ -626,6 +626,7 @@ model Restaurant {
   phone                String?               @db.VarChar
   email                String?               @db.VarChar
   schedule             Json?                 @db.Json
+  apikey               String?               @db.VarChar
   dish_restaurants     DishRestaurant[]
   users                User[]
   orders               Order[]

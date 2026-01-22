@@ -11,13 +11,13 @@ export class LoyaltyTask {
   constructor(
     private loyaltyService: LoyaltyService,
     private prisma: PrismaService
-  ) {}
+  ) { }
 
   // Expire les points tous les jours à minuit
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async expirePoints() {
     this.logger.log('Début de l\'expiration des points de fidélité...');
-    
+
     try {
       const expiredCount = await this.loyaltyService.expirePoints();
       this.logger.log(`${expiredCount} points de fidélité expirés`);
@@ -30,10 +30,10 @@ export class LoyaltyTask {
   @Cron(CronExpression.EVERY_HOUR)
   async updatePromotionStatus() {
     this.logger.log('Mise à jour du statut des promotions...');
-    
+
     try {
       const now = new Date();
-      
+
       // Marquer les promotions expirées
       const expiredPromotions = await this.prisma.promotion.updateMany({
         where: {
@@ -69,7 +69,7 @@ export class LoyaltyTask {
   @Cron(CronExpression.EVERY_WEEK)
   async cleanupOldData() {
     this.logger.log('Nettoyage des données obsolètes...');
-    
+
     try {
       const threeMonthsAgo = new Date();
       threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
