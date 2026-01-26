@@ -22,10 +22,11 @@ export class CreateOrderDto {
     @Type(() => Number)
     places?: number;
 
-    @ApiProperty({ description: "l'adresse de livraison/retrait" })
+    @ApiPropertyOptional({ description: "l'adresse de livraison/retrait" })
     @IsString()
+    @IsOptional()
     @Transform(({ value }) => typeof value !== "string" ? (typeof value == "object" ? JSON.stringify(value) : String(value)) : value)
-    address: string;
+    address?: string;
 
     @ApiPropertyOptional({ description: "Code promo" })
     @IsOptional()

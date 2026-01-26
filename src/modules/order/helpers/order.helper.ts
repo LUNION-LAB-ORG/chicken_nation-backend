@@ -16,6 +16,7 @@ import {
   SupplementCategory,
   Order,
   LoyaltyLevel,
+  DeliveryService,
 } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -27,6 +28,8 @@ import { PromotionService } from 'src/modules/fidelity/services/promotion.servic
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
 import { addDays, addHours, addMinutes, addSeconds } from 'date-fns';
 import { PromotionErrorKeys } from 'src/modules/fidelity/enums/promotion-error-keys.enum';
+import { JsonValue } from '@prisma/client/runtime/library';
+import { TurboService } from 'src/turbo/services/turbo.service';
 
 @Injectable()
 export class OrderHelper {
@@ -42,6 +45,7 @@ export class OrderHelper {
     private loyaltyService: LoyaltyService,
     private promotionService: PromotionService,
     private restaurantService: RestaurantService,
+    private readonly turboService: TurboService
   ) {
     this.taxRate = Number(
       this.configService.get<number>('ORDER_TAX_RATE', 0.05),
@@ -94,6 +98,7 @@ export class OrderHelper {
         latitude: true,
         longitude: true,
         schedule: true,
+        apikey: true,
       },
     });
 
@@ -136,10 +141,7 @@ export class OrderHelper {
     restaurant_id?: string;
     address?: string;
   }) {
-    if (!restaurant_id && address) {
-      // Si l'adresse est fournie et que le restaurant_id n'est pas fourni, récupérer le restaurant le plus proche
-      return this.getNearestRestaurant(address);
-    } else if (restaurant_id) {
+    if (restaurant_id) {
       // Si le restaurant_id est fourni, récupérer le restaurant correspondant
       const restaurant = await this.prisma.restaurant.findFirst({
         where: {
@@ -152,25 +154,24 @@ export class OrderHelper {
           latitude: true,
           longitude: true,
           schedule: true,
+          apikey: true,
         },
       });
 
       // Si le restaurant n'est pas trouvé, récupérer le restaurant le plus proche
       if (!restaurant) {
-        return this.getNearestRestaurant(address ?? '');
+        throw new BadRequestException('Restaurant introuvable');
       }
 
       // Vérifier si le restaurant est ouvert
       const schedule = JSON.parse(restaurant.schedule?.toString() ?? '[]');
       if (!this.restaurantService.isRestaurantOpen(schedule)) {
-        // Si le restaurant est fermé, récupérer le restaurant le plus proche
-        return this.getNearestRestaurant(address ?? '');
+        throw new BadRequestException('Le restaurant est fermé');
       }
       return restaurant;
-    } else {
-      // Si l'adresse n'est pas fournie et que le restaurant_id n'est pas fourni, récupérer le restaurant le plus proche
-      return this.getNearestRestaurant(address ?? '');
     }
+
+    return this.getNearestRestaurant(address ?? '');
   }
 
   // Récupérer les détails des plats
@@ -357,23 +358,157 @@ export class OrderHelper {
     }
   }
 
-  // Calculer les frais de livraison
-  async calculateDeliveryFee(
-    orderType: OrderType,
-    address: Address,
-  ): Promise<number> {
-    if (orderType !== OrderType.DELIVERY) {
-      return 0; // Pas de frais de livraison pour les commandes sur place ou à emporter
+  // Calculer les frais de livraison personnalisé
+  async calculeFraisLivraisonPersonnalise({ lat, long, restaurant }: {
+    lat: number, long: number, restaurant: {
+      name: string;
+      id: string;
+      latitude: number | null;
+      longitude: number | null;
+      schedule: JsonValue;
+    } | undefined
+  }): Promise<{
+    montant: number;
+    zone: string;
+    distance: number;
+    service: DeliveryService;
+    zone_id: string | null;
+  }> {
+    if (!restaurant) {
+      throw new BadRequestException('Aucun restaurant disponible');
     }
 
-    try {
-      // Dans un système réel, on calculerait la distance et appliquerait un tarif
-      // Pour simplifier, on utilise un tarif fixe
-      return this.baseDeliveryFee;
-    } catch (error) {
-      // En cas d'erreur, utiliser le tarif de base
-      return this.baseDeliveryFee;
+    // Calculer la distance entre le restaurant et l'adresse de livraison
+    const distance = this.generateDataService.haversineDistance(
+      restaurant.latitude ?? 0,
+      restaurant.longitude ?? 0,
+      lat,
+      long,
+    );
+
+    // Vérifier si le restaurant est zone 4
+    if (restaurant.name.includes("ZONE")) {
+      if (distance <= 5) {
+        return {
+          montant: 0,
+          zone: `-5km de ${restaurant.name}`,
+          distance: Math.round(distance),
+          service: DeliveryService.TURBO,
+          zone_id: null,
+        };
+      } else if (distance > 5 && distance <= 10) {
+        return {
+          montant: 500,
+          zone: `5-10km de ${restaurant.name}`,
+          distance: Math.round(distance),
+          service: DeliveryService.TURBO,
+          zone_id: null,
+        };
+      } else if (distance > 10 && distance <= 20) {
+        return {
+          montant: 1000,
+          zone: `10-20km de ${restaurant.name}`,
+          distance: Math.round(distance),
+          service: DeliveryService.TURBO,
+          zone_id: null,
+        };
+      } else {
+        return {
+          montant: 1500,
+          zone: `+20km de ${restaurant.name}`,
+          distance: Math.round(distance),
+          service: DeliveryService.TURBO,
+          zone_id: null,
+        };
+      }
+    } else {
+      if (distance <= 5) {
+        return {
+          montant: 500,
+          zone: `-5km de ${restaurant.name}`,
+          distance: Math.round(distance),
+          service: DeliveryService.TURBO,
+          zone_id: null,
+        };
+      } else if (distance > 5 && distance <= 10) {
+        return {
+          montant: 1000,
+          zone: `5-10km de ${restaurant.name}`,
+          distance: Math.round(distance),
+          service: DeliveryService.TURBO,
+          zone_id: null,
+        };
+      } else if (distance > 10 && distance <= 20) {
+        return {
+          montant: 1500,
+          zone: `10-20km de ${restaurant.name}`,
+          distance: Math.round(distance),
+          service: DeliveryService.TURBO,
+          zone_id: null,
+        };
+      } else {
+        return {
+          montant: 2000,
+          zone: `+20km de ${restaurant.name}`,
+          distance: Math.round(distance),
+          service: DeliveryService.TURBO,
+          zone_id: null,
+        };
+      }
     }
+  }
+
+  // Calculer les frais de livraison
+  async calculeFraisLivraison({ lat, long, restaurant }: {
+    lat: number, long: number, restaurant: {
+      name: string;
+      id: string;
+      latitude: number | null;
+      longitude: number | null;
+      schedule: JsonValue;
+      apikey: string | null;
+    } | undefined
+  }): Promise<{
+    montant: number;
+    zone: string;
+    distance: number;
+    service: DeliveryService;
+    zone_id: string | null;
+  }> {
+    if (!restaurant) {
+      throw new BadRequestException('Aucun restaurant disponible');
+    }
+
+    let config: {
+      montant: number;
+      zone: string;
+      distance: number;
+      service: DeliveryService;
+      zone_id: string | null;
+    } = await this.calculeFraisLivraisonPersonnalise({ lat, long, restaurant });
+
+    // Récupérer les zones de livraison de turbo
+    const resultTurbo = await this.turboService.obtenirFraisLivraisonParRestaurant(restaurant.apikey ?? "", 0, 200);
+    const zones = resultTurbo ? resultTurbo.content : [];
+
+    if (zones.length === 0) {
+      return config;
+    }
+
+    // Récupérer la zone la plus proche
+    const zone = zones.reduce((prev, current) => {
+      const prevDistance = this.generateDataService.haversineDistance(prev.latitude, prev.longitude, lat, long);
+      const currentDistance = this.generateDataService.haversineDistance(current.latitude, current.longitude, lat, long);
+      return currentDistance < prevDistance ? current : prev;
+    }, zones[0]);
+
+    return {
+      montant: config.montant,
+      distance: config.distance,
+      zone: zone.zone,
+      service: DeliveryService.TURBO,
+      zone_id: zone.id,
+    };
   }
 
   /**
@@ -493,16 +628,6 @@ export class OrderHelper {
     );
   }
 
-  // Envoyer les notifications
-  async sendOrderNotifications(order: any) {
-    // Notification au client
-    if (order.customer_id) {
-      // await this.notificationService.sendOrderConfirmation(order);
-    }
-
-    // Notification au restaurant
-    // await this.notificationService.notifyRestaurantNewOrder(order);
-  }
 
   // Vérifier la transition d'état
   validateStatusTransition(
@@ -720,14 +845,6 @@ export class OrderHelper {
     data?: any;
     offers_dishes: { dish_id: string; quantity: number; price: number }[];
   } | null> {
-
-    this.logger.debug({
-      message: 'Calculating promotion price',
-      promotion_id,
-      customer_id: customerData.customer_id,
-      totalDishes,
-      orderItems,
-    })
 
     if (!promotion_id) return null;
     const canUse = await this.promotionService.canCustomerUsePromotion(

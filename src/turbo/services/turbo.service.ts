@@ -12,8 +12,6 @@ export class TurboService {
   ) { }
 
   async creerCourse(order_id: string, apikey: string) {
-    apikey = apikey || TURBO_API_KEY;
-
     const order = await this.prisma.order.findUnique({
       where: {
         id: order_id
@@ -76,7 +74,6 @@ export class TurboService {
   }
 
   async obtenirFraisLivraison({ apikey, latitude, longitude }: { apikey: string, latitude: number, longitude: number }): Promise<IFraisLivraison[]> {
-    apikey = apikey || TURBO_API_KEY;
     try {
       const response = await fetch(`${TURBO_API.FRAIS_LIVRAISON}?latitude=${latitude}&longitude=${longitude}`, {
         method: 'GET',
@@ -97,10 +94,9 @@ export class TurboService {
     }
   }
 
-  async obtenirFraisLivraisonParRestaurant(apikey: string): Promise<IFraisLivraisonResponsePaginate | null> {
-    apikey = apikey || TURBO_API_KEY;
+  async obtenirFraisLivraisonParRestaurant(apikey: string, page?: number, size?: number): Promise<IFraisLivraisonResponsePaginate | null> {
     try {
-      const response = await fetch(`${TURBO_API.LISTE_FRAIS}`, {
+      const response = await fetch(`${TURBO_API.LISTE_FRAIS}?page=${page || 0}&size=${size || 200}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -112,7 +108,6 @@ export class TurboService {
       if (typeof data === "object" && "statut" in data) {
         throw new Error(data?.message ?? "Une erreur est survenue");
       }
-
       return data as IFraisLivraisonResponsePaginate;
     } catch (error) {
       return null;
@@ -125,48 +120,5 @@ export class TurboService {
       throw new BadRequestException('Adresse de livraison invalide ou introuvable');
     }
     return JSON.parse(address) as Address;
-  }
-
-  /**
-   * Calcule le prix de la livraison en fonction de la distance en km.
-   * @param distanceKm La distance de la livraison en kilomètres.
-   * @returns Le prix de la livraison.
-   */
-  getPrixLivraison(distanceKm: number): number {
-    return this.calculateDeliveryPrice(distanceKm);
-  }
-
-
-
-  /**
-   * Calcule le prix de livraison basé sur la distance (Modèle Abidjan/Yango)
-   * @param {number} distanceInKm - La distance exacte (ex: 5.4)
-   * @returns {number} - Le prix final arrondi en FCFA
-   */
-  private calculateDeliveryPrice(distanceInKm: number) {
-    // --- CONFIGURATION ---
-    const BASE_DIST_KM = 1.5;       // Forfait 1000F jusqu'à 1.5 km
-    const BASE_PRICE = 1000;        // Prix minimum
-    const PRICE_PER_KM_URBAN = 250;  // Nouveau tarif urbain
-    const PRICE_PER_KM_LONG = 200;   // On peut laisser à 200 pour la longue distance
-
-    let finalPrice = 0;
-
-    // --- LOGIQUE DE CALCUL ---
-    if (distanceInKm <= BASE_DIST_KM) {
-      finalPrice = BASE_PRICE;
-    }
-    else if (distanceInKm <= 10) {
-      const extraKm = distanceInKm - BASE_DIST_KM;
-      finalPrice = BASE_PRICE + (extraKm * PRICE_PER_KM_URBAN);
-    }
-    else {
-      const priceForFirst10Km = BASE_PRICE + ((10 - BASE_DIST_KM) * PRICE_PER_KM_URBAN);
-      const extraKm = distanceInKm - 10;
-      finalPrice = priceForFirst10Km + (extraKm * PRICE_PER_KM_LONG);
-    }
-
-    // Arrondi par palier de 500 FCFA
-    return Math.ceil(finalPrice / 500) * 500;
   }
 }

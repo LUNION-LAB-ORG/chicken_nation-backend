@@ -22,12 +22,6 @@ export class IFraisLivraison {
     updatedAt: string;
 
     @ApiProperty({
-        description: "ID du restaurant associé",
-        example: "r1e2s3t4a5u6r7a8n9t0",
-    })
-    restaurantId: string;
-
-    @ApiProperty({
         description: "Zone géographique de livraison",
         example: "Zone A",
     })

@@ -1,14 +1,29 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { WebhookResponseDto } from '../dto/turbo-webhook.dto';
 import { WebhookEvent } from '../enums/webhook-event.enum';
+import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import { PrismaService } from 'src/database/services/prisma.service';
+import { OrderStatus } from '@prisma/client';
 
 @Injectable()
 export class TurboWebhookService {
   private readonly logger = new Logger(TurboWebhookService.name);
+  constructor(private appGateway: AppGateway,
+    private readonly prisma: PrismaService,
+  ) { }
 
   // Lorsqu'une course est créée
   async handleDeliveryCreated(data: any): Promise<WebhookResponseDto> {
+    const result = await this.prisma.order.update({
+      where: {
+        id: data.order_id
+      },
+      data: {
+        status: OrderStatus.READY
+      }
+    });
     this.logger.log(`✅ Livraison créée: ${JSON.stringify(data)}`);
+
     return {
       event: WebhookEvent.DELIVERY_CREATED,
       received: true,

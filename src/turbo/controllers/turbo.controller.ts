@@ -1,9 +1,8 @@
-import { Controller, Post, Body, Headers, UnauthorizedException } from '@nestjs/common';
+import { Controller, Post, Body, Headers, UnauthorizedException, Query } from '@nestjs/common';
 import { TurboService } from '../services/turbo.service';
 import { ApiBody, ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { WebhookEventDto, WebhookResponseDto } from '../dto/turbo-webhook.dto';
 import { TurboWebhookService } from '../services/turbo-webhook.service';
-import { TURBO_API_KEY } from '../constantes/turbo.constante';
 import { WebhookEvent } from '../enums/webhook-event.enum';
 
 @ApiTags('Turbo')
@@ -24,8 +23,8 @@ export class TurboController {
   }
 
   @Post('obtenir-frais-livraison-par-restaurant')
-  async obtenirFraisLivraisonParRestaurant(@Body() body: { apikey: string }) {
-    return this.turboService.obtenirFraisLivraisonParRestaurant(body.apikey);
+  async obtenirFraisLivraisonParRestaurant(@Body() body: { apikey: string}, @Query() query: { page?: number, size?: number }) {
+    return this.turboService.obtenirFraisLivraisonParRestaurant(body.apikey, query?.page, query?.size);
   }
 
   @Post('webhook')
@@ -44,7 +43,7 @@ export class TurboController {
     @Body() body: WebhookEventDto,
     @Headers('X-API-KEY') apiKey: string,
   ) {
-    if (!apiKey || apiKey !== TURBO_API_KEY) {
+    if (!apiKey) {
       return new UnauthorizedException({
         event: 'unauthorized',
         received: true,
