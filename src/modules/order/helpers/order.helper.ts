@@ -143,6 +143,7 @@ console.log("addressData", addressData)
     address?: string;
   }) {
     if (restaurant_id) {
+      console.log("restaurant_id in helper", restaurant_id)
       // Si le restaurant_id est fourni, récupérer le restaurant correspondant
       const restaurant = await this.prisma.restaurant.findFirst({
         where: {

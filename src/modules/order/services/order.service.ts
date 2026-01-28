@@ -43,7 +43,7 @@ export class OrderService {
     const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: customer_id ?? customerId });
     
     // Récupérer le restaurant le plus proche
-    console.log("address", address);
+    console.log("address", address,"restaurant_id", restaurant_id);
     const restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: restaurant_id, address });
 
     // Récupérer les plats et vérifier leur disponibilité
