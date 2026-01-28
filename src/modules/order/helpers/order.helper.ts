@@ -128,6 +128,8 @@ console.log("addressData", addressData)
       throw new BadRequestException('Aucun restaurant disponible');
     }
     const schedule = JSON.parse(closest.schedule?.toString() ?? '[]');
+    console.log("schedule", schedule, "fermé",!this.restaurantService.isRestaurantOpen(schedule))
+
     if (!this.restaurantService.isRestaurantOpen(schedule)) {
       throw new BadRequestException('Le restaurant est fermé');
     }
@@ -143,7 +145,6 @@ console.log("addressData", addressData)
     address?: string;
   }) {
     if (restaurant_id) {
-      console.log("restaurant_id in helper", restaurant_id)
       // Si le restaurant_id est fourni, récupérer le restaurant correspondant
       const restaurant = await this.prisma.restaurant.findFirst({
         where: {
