@@ -37,12 +37,13 @@ export class OrderService {
    */
   async create(req: Request, createOrderDto: CreateOrderDto): Promise<any> {
     const { items, paiement_id, customer_id, address, restaurant_id, promotion_id, delivery_fee, points, user_id, ...orderData } = createOrderDto;
-
+    
     const customerId = user_id ? undefined : (req.user as Customer).id;
     // Identifier le client ou créer à partir des données
     const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: customer_id ?? customerId });
-
+    
     // Récupérer le restaurant le plus proche
+    console.log("createOrderDto", createOrderDto);
     const restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: restaurant_id, address });
 
     // Récupérer les plats et vérifier leur disponibilité

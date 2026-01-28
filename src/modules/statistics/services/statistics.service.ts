@@ -94,7 +94,7 @@ export class StatisticsService {
         weeklyOrders,
         bestSellingMenus,
         dailySales,
-        deliveryStats,
+        deliveryStats
       };
     } catch (error) {
       throw new BadRequestException(`Erreur lors de la récupération des statistiques: ${error.message}`);
