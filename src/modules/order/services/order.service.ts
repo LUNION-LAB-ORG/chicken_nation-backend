@@ -84,6 +84,7 @@ export class OrderService {
     } | null = null;
     if (orderData.type == OrderType.DELIVERY) {
       restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: undefined, address });
+      console.log("restaurant after",restaurant)
       // Vérifier l'adresse
       const addressData = await this.orderHelper.validateAddress(address ?? "");
       delivery = await this.orderHelper.calculeFraisLivraison({
@@ -92,6 +93,7 @@ export class OrderService {
         restaurant: (orderData.type == OrderType.DELIVERY && user_id || orderData.type != OrderType.DELIVERY)
           ? restaurant : undefined
       });
+      console.log("delivery",delivery)
     } else {
       restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: restaurant_id, address });
     }
