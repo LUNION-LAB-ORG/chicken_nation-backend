@@ -73,7 +73,6 @@ export class OrderService {
       zone_id: string | null;
     } | null = null;
     // Récupérer le restaurant le plus proche
-    console.log("address", address, "restaurant_id", restaurant_id);
     let restaurant: {
       name: string;
       id: string;
@@ -83,17 +82,16 @@ export class OrderService {
       apikey: string | null;
     } | null = null;
     if (orderData.type == OrderType.DELIVERY) {
-      restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: undefined, address });
-      console.log("restaurant after",restaurant)
+      restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: user_id ? restaurant_id : undefined, address });
+      console.log("restaurant after", restaurant)
       // Vérifier l'adresse
       const addressData = await this.orderHelper.validateAddress(address ?? "");
       delivery = await this.orderHelper.calculeFraisLivraison({
         lat: addressData.latitude,
         long: addressData.longitude,
-        restaurant: (orderData.type == OrderType.DELIVERY && user_id || orderData.type != OrderType.DELIVERY)
-          ? restaurant : undefined
+        restaurant
       });
-      console.log("delivery",delivery)
+      console.log("delivery", delivery)
     } else {
       restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: restaurant_id, address });
     }

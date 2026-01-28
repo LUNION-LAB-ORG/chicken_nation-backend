@@ -86,7 +86,6 @@ export class OrderHelper {
   async getNearestRestaurant(address: string) {
     // 1. Récupération de l'adresse
     const addressData = await this.validateAddress(address ?? '');
-console.log("addressData", addressData)
     // 2. Récupération des restaurants actifs
     const restaurants = await this.prisma.restaurant.findMany({
       where: {
@@ -102,7 +101,6 @@ console.log("addressData", addressData)
       },
     });
     
-    console.log("restaurants", restaurants)
     if (!restaurants.length) {
       throw new BadRequestException('Aucun restaurant disponible');
     }
@@ -123,13 +121,10 @@ console.log("addressData", addressData)
       );
       return currDistance < prevDistance ? curr : prev;
     });
-    console.log("closest", closest)
     if (!closest) {
       throw new BadRequestException('Aucun restaurant disponible');
     }
     const schedule = JSON.parse(closest.schedule?.toString() ?? '[]');
-    console.log("schedule", schedule, "fermé",!this.restaurantService.isRestaurantOpen(schedule))
-
     if (!this.restaurantService.isRestaurantOpen(schedule)) {
       throw new BadRequestException('Le restaurant est fermé');
     }
@@ -173,7 +168,6 @@ console.log("addressData", addressData)
       }
       return restaurant;
     }
-console.log("livraison", address)
     return this.getNearestRestaurant(address ?? '');
   }
 
