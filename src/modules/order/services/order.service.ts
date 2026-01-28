@@ -5,7 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Customer, DeliveryService, EntityStatus, Order, OrderStatus, OrderType, Prisma, Restaurant } from '@prisma/client';
+import { Customer, DeliveryService, EntityStatus, Order, OrderStatus, OrderType, Prisma } from '@prisma/client';
 import { format, startOfMonth } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import * as ExcelJS from 'exceljs';
@@ -13,7 +13,6 @@ import { Request } from 'express';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { TurboService } from 'src/turbo/services/turbo.service';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 import { QueryOrderDto } from '../dto/query-order.dto';
@@ -31,7 +30,6 @@ export class OrderService {
     private orderHelper: OrderHelper,
     private orderEvent: OrderEvent,
     private readonly orderWebSocketService: OrderWebSocketService,
-    private readonly turboService: TurboService
   ) { }
 
   /**

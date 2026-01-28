@@ -208,6 +208,43 @@ export class StatsCards {
     @ApiProperty({ type: StatCardData })
     totalCustomers: StatCardData;
 }
+// 1. Ajoutez la classe pour le détail d'une ligne (ex: "Livraison 500F")
+export class DeliveryFeeBreakdown {
+    @ApiProperty({ description: 'Libellé (ex: "Gratuit", "500 FCFA", "Autres")' })
+    label: string;
+
+    @ApiPropertyOptional({ description: 'Montant du frais (null si catégorie "Autres")', type: Number, nullable: true })
+    feeAmount: number | null;
+
+    @ApiProperty({ description: 'Nombre de commandes concernées' })
+    @Type(() => Number)
+    orderCount: number;
+
+    @ApiProperty({ description: 'Chiffre d\'affaires généré par ces commandes (formaté)' })
+    revenueGenerated: string;
+
+    @ApiProperty({ description: 'Total des frais de livraison collectés pour ce groupe' })
+    @Type(() => Number)
+    deliveryFeesCollected: number;
+
+    @ApiProperty({ description: 'Pourcentage par rapport au nombre total de commandes' })
+    @Type(() => Number)
+    percentage: number;
+}
+
+// 2. Ajoutez la classe conteneur pour les stats de livraison
+export class DeliveryStatsData {
+    @ApiProperty({ description: 'Somme totale des frais de livraison collectés sur la période' })
+    @Type(() => Number)
+    totalDeliveryFees: number;
+
+    @ApiProperty({ description: 'Chiffre d\'affaires total des commandes livrées' })
+    @Type(() => Number)
+    totalDeliveryRevenue: number;
+
+    @ApiProperty({ type: [DeliveryFeeBreakdown], description: 'Détail par montant de frais' })
+    breakdown: DeliveryFeeBreakdown[];
+}
 
 export class DashboardViewModel {
     @ApiProperty({ type: StatsCards })
@@ -224,6 +261,9 @@ export class DashboardViewModel {
 
     @ApiProperty({ type: DailySalesData })
     dailySales: DailySalesData;
+
+    @ApiProperty({ type: DeliveryStatsData, description: 'Statistiques détaillées sur la livraison' })
+    deliveryStats: DeliveryStatsData;
 }
 
 // DTOs pour les endpoints spécialisés

@@ -33,11 +33,11 @@ import {
   DailySalesData,
   DailyRevenueData,
   PeriodicData,
-  HourlyValue
+  HourlyValue,
+  DeliveryStatsData
 } from '../dto/dashboard.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { statisticsIcons } from '../constantes/statistics.constante';
-import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 
 interface DateRange {
   startDate: Date;
@@ -70,12 +70,13 @@ export class StatisticsService {
       //   return cachedData;
       // }
       // Exécution parallèle de toutes les requêtes
-      const [stats, revenue, weeklyOrders, bestSellingMenus, dailySales] = await Promise.all([
+      const [stats, revenue, weeklyOrders, bestSellingMenus, dailySales, deliveryStats] = await Promise.all([
         this.getStatsCards(dateRange, restaurantFilter, query.period || 'month'),
         this.getRevenueData(dateRange, restaurantFilter, query.period || 'month'),
         this.getWeeklyOrdersData(dateRange, restaurantFilter),
         this.getBestSellingMenus(dateRange, restaurantFilter),
         this.getDailySalesData(dateRange, restaurantFilter),
+        this.getDeliveryStats(dateRange, restaurantFilter),
       ]);
 
       // Stockage des données dans le cache
@@ -93,10 +94,109 @@ export class StatisticsService {
         weeklyOrders,
         bestSellingMenus,
         dailySales,
+        deliveryStats,
       };
     } catch (error) {
       throw new BadRequestException(`Erreur lors de la récupération des statistiques: ${error.message}`);
     }
+  }
+  // ==========================================
+  // NOUVELLE MÉTHODE DE STATS LIVRAISON
+  // ==========================================
+  private async getDeliveryStats(
+    dateRange: DateRange,
+    restaurantFilter: Prisma.OrderWhereInput
+  ): Promise<DeliveryStatsData> {
+    const { startDate, endDate } = dateRange;
+
+    // 1. Récupération des données groupées par montant de frais de livraison
+    // Cela évite de faire 10 requêtes différentes.
+    const groupedStats = await this.prisma.order.groupBy({
+      by: ['delivery_fee'],
+      _count: {
+        _all: true,
+      },
+      _sum: {
+        net_amount: true, // Le CA généré par ces commandes
+        delivery_fee: true, // La somme des frais de livraison
+      },
+      where: {
+        ...restaurantFilter,
+        status: OrderStatus.COMPLETED,
+        paied: true, // Uniquement les commandes payées
+        created_at: { gte: startDate, lte: endDate },
+        // Optionnel : si vous voulez exclure le SUR PLACE, décommentez la ligne suivante
+        // type: OrderType.DELIVERY 
+      },
+    });
+
+    // 2. Définition des catégories cibles
+    const targetFees = [0, 500, 1000, 1500, 2000, 2500];
+
+    // Map pour accumuler les résultats (Clé -1 pour "Autres")
+    const breakdownMap = new Map<number, { count: number; revenue: number; feesCollected: number }>();
+
+    // Initialisation à 0 pour toutes les cibles (pour qu'elles apparaissent même si vide)
+    targetFees.forEach(fee => breakdownMap.set(fee, { count: 0, revenue: 0, feesCollected: 0 }));
+    breakdownMap.set(-1, { count: 0, revenue: 0, feesCollected: 0 }); // Bucket "Autres"
+
+    let totalOrdersCount = 0;
+    let totalGlobalFees = 0;
+    let totalGlobalRevenue = 0;
+
+    // 3. Répartition des données de la DB dans les catégories
+    for (const group of groupedStats) {
+      const fee = group.delivery_fee || 0;
+      const count = group._count._all;
+      const revenue = group._sum.net_amount || 0;
+      // Si la somme est null (pas de frais), on force 0
+      const feesCollected = group._sum.delivery_fee || 0;
+
+      // Totaux globaux
+      totalOrdersCount += count;
+      totalGlobalFees += feesCollected;
+      totalGlobalRevenue += revenue;
+
+      // Est-ce un montant standard ou un "Autre" ?
+      const key = targetFees.includes(fee) ? fee : -1;
+
+      const entry = breakdownMap.get(key);
+      if (entry) {
+        entry.count += count;
+        entry.revenue += revenue;
+        entry.feesCollected += feesCollected;
+      }
+    }
+
+    // 4. Transformation en tableau pour le DTO
+    const breakdown = Array.from(breakdownMap.entries()).map(([feeKey, data]) => {
+      let label = '';
+      if (feeKey === -1) label = 'Autres montants';
+      else if (feeKey === 0) label = 'Gratuit';
+      else label = `${feeKey} FCFA`;
+
+      return {
+        label,
+        feeAmount: feeKey === -1 ? null : feeKey,
+        orderCount: data.count,
+        revenueGenerated: `${data.revenue.toLocaleString('fr-FR')} XOF`,
+        deliveryFeesCollected: data.feesCollected,
+        percentage: totalOrdersCount > 0 ? Math.round((data.count / totalOrdersCount) * 100) : 0
+      };
+    });
+
+    // Tri : Gratuit en premier, puis montant croissant, puis "Autres" à la fin
+    breakdown.sort((a, b) => {
+      if (a.feeAmount === null) return 1; // Autres à la fin
+      if (b.feeAmount === null) return -1;
+      return a.feeAmount - b.feeAmount;
+    });
+
+    return {
+      totalDeliveryFees: totalGlobalFees,
+      totalDeliveryRevenue: totalGlobalRevenue,
+      breakdown
+    };
   }
 
   private parseDateRange(query: GetStatsQueryDto): DateRange {
