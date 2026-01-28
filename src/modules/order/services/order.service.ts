@@ -37,14 +37,10 @@ export class OrderService {
    */
   async create(req: Request, createOrderDto: CreateOrderDto): Promise<any> {
     const { items, paiement_id, customer_id, address, restaurant_id, promotion_id, delivery_fee, points, user_id, ...orderData } = createOrderDto;
-    
+
     const customerId = user_id ? undefined : (req.user as Customer).id;
     // Identifier le client ou créer à partir des données
     const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: customer_id ?? customerId });
-    
-    // Récupérer le restaurant le plus proche
-    console.log("address", address,"restaurant_id", restaurant_id);
-    const restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: restaurant_id, address });
 
     // Récupérer les plats et vérifier leur disponibilité
     const dishesWithDetails = await this.orderHelper.getDishesWithDetails(items.map(item => item.dish_id));
@@ -76,8 +72,18 @@ export class OrderService {
       service: DeliveryService;
       zone_id: string | null;
     } | null = null;
-
+    // Récupérer le restaurant le plus proche
+    console.log("address", address, "restaurant_id", restaurant_id);
+    let restaurant: {
+      name: string;
+      id: string;
+      longitude: number | null;
+      latitude: number | null;
+      schedule: Prisma.JsonValue;
+      apikey: string | null;
+    } | null = null;
     if (orderData.type == OrderType.DELIVERY) {
+      restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: undefined, address });
       // Vérifier l'adresse
       const addressData = await this.orderHelper.validateAddress(address ?? "");
       delivery = await this.orderHelper.calculeFraisLivraison({
@@ -86,6 +92,8 @@ export class OrderService {
         restaurant: (orderData.type == OrderType.DELIVERY && user_id || orderData.type != OrderType.DELIVERY)
           ? restaurant : undefined
       });
+    } else {
+      restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: restaurant_id, address });
     }
     // Montant frais de livraison 
     const deliveryFee = delivery_fee || (delivery ? delivery?.montant : 0);
