@@ -3,8 +3,8 @@ import { PromotionService } from './services/promotion.service';
 import { PromotionController } from './controllers/promotion.controller';
 import { LoyaltyService } from './services/loyalty.service';
 import { LoyaltyController } from './controllers/loyalty.controller';
-import { PromotionListenerService } from './listeners/promotion-listener.service';
-import { LoyaltyListenerService } from './listeners/loyalty-listener.service';
+// import { PromotionListenerService } from './listeners/promotion-listener.service';
+// import { LoyaltyListenerService } from './listeners/loyalty-listener.service';
 import { LoyaltyEvent } from './events/loyalty.event';
 import { PromotionEvent } from './events/promotion.event';
 import { LoyaltyTask } from './tasks/loyalty.task';
@@ -18,8 +18,8 @@ import { LoyaltyNotificationsTemplate } from './templates/loyalty-notifications.
         LoyaltyService,
         LoyaltyEvent,
         PromotionEvent,
-        PromotionListenerService,
-        LoyaltyListenerService,
+        // PromotionListenerService,
+        // LoyaltyListenerService,
         PromotionNotificationsTemplate,
         LoyaltyNotificationsTemplate,
         LoyaltyTask

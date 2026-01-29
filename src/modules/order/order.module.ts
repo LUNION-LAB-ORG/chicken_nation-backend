@@ -5,7 +5,7 @@ import { OrderItemService } from './services/order-item.service';
 import { OrderHelper } from './helpers/order.helper';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
-import { OrderListenerService } from './listeners/order.listener.service';
+// import { OrderListenerService } from './listeners/order.listener.service';
 import { OrderEvent } from './events/order.event';
 // import { OrderTask } from './tasks/order.task';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
@@ -25,7 +25,7 @@ import { KkiapayOrderListenerService } from './listeners/kkiapay-order.listener.
     OrderItemService,
     OrderHelper,
     OrderEvent,
-    OrderListenerService,
+    // OrderListenerService,
     // OrderTask,
     OrderWebSocketService,
     OrderNotificationsTemplate,

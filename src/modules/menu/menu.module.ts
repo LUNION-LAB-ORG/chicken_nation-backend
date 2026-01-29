@@ -9,8 +9,8 @@ import { DishService } from 'src/modules/menu/services/dish.service';
 import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
 import { DishSupplementService } from 'src/modules/menu/services/dish-supplement.service';
 import { SupplementService } from 'src/modules/menu/services/supplement.service';
-import { CategoryListenerService } from 'src/modules/menu/listeners/category-listener.service';
-import { DishListenerService } from 'src/modules/menu/listeners/dish-listener.service';
+// import { CategoryListenerService } from 'src/modules/menu/listeners/category-listener.service';
+// import { DishListenerService } from 'src/modules/menu/listeners/dish-listener.service';
 import { DishEvent } from './events/dish.event';
 import { CategoryEvent } from './events/category.event';
 import { CategoryNotificationsTemplate } from './templates/category-notifications.template';
@@ -27,8 +27,8 @@ import { DishNotificationsTemplate } from './templates/dish-notifications.templa
     SupplementService,
     DishEvent,
     CategoryEvent,
-    CategoryListenerService,
-    DishListenerService,
+    // CategoryListenerService,
+    // DishListenerService,
     CategoryNotificationsTemplate,
     DishNotificationsTemplate,
   ],

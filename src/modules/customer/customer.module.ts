@@ -8,7 +8,7 @@ import { FavoriteService } from './services/favorite.service';
 import { CommentController } from './controllers/comment.controller';
 import { CommentService } from './services/comment.service';
 import { CustomerEvent } from './events/customer.event';
-import { CustomerListenerService } from './listeners/customer-listener.service';
+// import { CustomerListenerService } from './listeners/customer-listener.service';
 
 @Module({
   imports: [],
@@ -24,7 +24,7 @@ import { CustomerListenerService } from './listeners/customer-listener.service';
     FavoriteService,
     CommentService,
     CustomerEvent,
-    CustomerListenerService
+    // CustomerListenerService
   ],
 })
 export class CustomerModule { }
