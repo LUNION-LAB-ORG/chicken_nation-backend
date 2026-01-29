@@ -4,7 +4,7 @@ import { ExpoPushService } from './expo-push.service';
 import { SendNotificationDto } from './dto/send-notification.dto';
 
 @ApiTags('Notifications')
-@Controller('notifications')
+@Controller('expo-push')
 export class ExpoPushController {
     constructor(private readonly pushService: ExpoPushService) { }
 
