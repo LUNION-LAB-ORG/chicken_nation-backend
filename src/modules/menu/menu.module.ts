@@ -15,8 +15,6 @@ import { DishEvent } from './events/dish.event';
 import { CategoryEvent } from './events/category.event';
 import { CategoryNotificationsTemplate } from './templates/category-notifications.template';
 import { DishNotificationsTemplate } from './templates/dish-notifications.template';
-import { CategoryEmailTemplates } from './templates/category-email.template';
-import { DishEmailTemplates } from './templates/dish-email.template';
 
 @Module({
   imports: [],
@@ -33,8 +31,6 @@ import { DishEmailTemplates } from './templates/dish-email.template';
     DishListenerService,
     CategoryNotificationsTemplate,
     DishNotificationsTemplate,
-    CategoryEmailTemplates,
-    DishEmailTemplates,
   ],
   exports: [DishRestaurantService],
 })

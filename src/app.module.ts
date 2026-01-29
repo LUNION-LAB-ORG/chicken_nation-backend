@@ -22,7 +22,6 @@ import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
 import { StatisticsModule } from 'src/modules/statistics/statistics.module';
 import { SocketIoModule } from 'src/socket-io/socket-io.module';
 import { TwilioModule } from 'src/twilio/twilio.module';
-import { EmailModule } from 'src/modules/email/email.module';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { MessagerieModule } from './modules/messagerie/messagerie.module';
 import { SupportModule } from './modules/support/support.module';
@@ -32,6 +31,7 @@ import { AppMobileModule } from './modules/marketing/app-mobile/app-mobile.modul
 import { CardNationModule } from './modules/card-nation/card-nation.module';
 import { S3Module } from './s3/s3.module';
 import { NewsModule } from './modules/marketing/news/news.module';
+import { ExpoPushModule } from './expo-push/expo-push.module';
 
 @Module({
   imports: [
@@ -64,6 +64,7 @@ import { NewsModule } from './modules/marketing/news/news.module';
     }),
 
     // Modules applicatifs
+    ExpoPushModule,
     DatabaseModule,
     CommonModule,
     UsersModule,
@@ -77,7 +78,6 @@ import { NewsModule } from './modules/marketing/news/news.module';
     KkiapayModule,
     SocketIoModule,
     TwilioModule,
-    EmailModule,
     FidelityModule,
     StatisticsModule,
     MessagerieModule,
