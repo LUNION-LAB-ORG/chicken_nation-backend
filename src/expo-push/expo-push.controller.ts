@@ -3,7 +3,7 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { ExpoPushService } from './expo-push.service';
 import { SendNotificationDto } from './dto/send-notification.dto';
 
-@ApiTags('Notifications')
+@ApiTags('Expo Push')
 @Controller('expo-push')
 export class ExpoPushController {
     constructor(private readonly pushService: ExpoPushService) { }

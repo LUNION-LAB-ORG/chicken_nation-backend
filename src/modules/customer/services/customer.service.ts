@@ -19,7 +19,7 @@ export class CustomerService {
     private readonly prisma: PrismaService,
     private readonly customerEvent: CustomerEvent,
     private readonly s3service: S3Service,
-  ) {}
+  ) { }
 
   private async safeUpdate(customer: Customer, data: CreateCustomerDto) {
     if (!customer.email && data.email) {
@@ -47,6 +47,7 @@ export class CustomerService {
       });
     }
   }
+
   private async uploadImage(image?: Express.Multer.File) {
     if (!image) return null;
     const buffer = image.buffer ?? fs.readFileSync(image.path);
@@ -57,6 +58,7 @@ export class CustomerService {
       mimetype: image.mimetype,
     });
   }
+
   async create(
     createCustomerDto: CreateCustomerDto,
     image?: Express.Multer.File,
@@ -87,15 +89,29 @@ export class CustomerService {
       }
     }
 
+    // upload image
     const uploadResult = await this.uploadImage(image);
 
-    return this.prisma.customer.create({
+    // create customer
+    const customer = await this.prisma.customer.create({
       data: {
         ...createCustomerDto,
         entity_status: EntityStatus.ACTIVE,
         image: uploadResult?.key ?? createCustomerDto.image,
       },
     });
+
+    // Créer ses paramètres de notifications
+    await this.prisma.notificationSetting.create({
+      data: {
+        customer_id: customer.id,
+      },
+    });
+
+    // emit event
+    this.customerEvent.customerCreatedEvent({ customer });
+
+    return customer;
   }
 
   async findAll(query: CustomerQueryDto = {}) {

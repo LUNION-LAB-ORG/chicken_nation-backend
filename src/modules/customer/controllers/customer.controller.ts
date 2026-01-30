@@ -26,13 +26,18 @@ import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.g
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
+import { NotificationSettingService } from '../services/notification-setting.service';
+import { UpdateNotificationSettingDto } from '../dto/update-notification-setting.dto';
+import { Customer } from '@prisma/client';
 
 @ApiTags('Customers')
 @ApiBearerAuth()
 @Controller('customer')
 @UseInterceptors(CacheInterceptor)
 export class CustomerController {
-  constructor(private readonly customerService: CustomerService) {}
+  constructor(private readonly customerService: CustomerService,
+    private readonly notificationSettingService: NotificationSettingService
+  ) { }
 
   // CREATE CUSTOMER
   @Post()
@@ -60,6 +65,14 @@ export class CustomerController {
   @ApiOperation({ summary: 'Obtenir le détail d un client' })
   detail(@Req() req: Request) {
     return this.customerService.detail(req);
+  }
+
+  @Patch('notification-setting')
+  @UseGuards(JwtCustomerAuthGuard)
+  @ApiOperation({ summary: 'Mettre à jour les paramètres de notification' })
+  updateNotificationSetting(@Req() req: Request, @Body() dto: UpdateNotificationSettingDto) {
+    const id = (req.user as Customer).id;
+    return this.notificationSettingService.update(id, dto);
   }
 
   @Get(':id')

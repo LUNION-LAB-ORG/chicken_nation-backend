@@ -8,6 +8,7 @@ import { FavoriteService } from './services/favorite.service';
 import { CommentController } from './controllers/comment.controller';
 import { CommentService } from './services/comment.service';
 import { CustomerEvent } from './events/customer.event';
+import { NotificationSettingService } from './services/notification-setting.service';
 // import { CustomerListenerService } from './listeners/customer-listener.service';
 
 @Module({
@@ -24,6 +25,7 @@ import { CustomerEvent } from './events/customer.event';
     FavoriteService,
     CommentService,
     CustomerEvent,
+    NotificationSettingService
     // CustomerListenerService
   ],
 })
