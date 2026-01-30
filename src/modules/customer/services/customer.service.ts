@@ -382,6 +382,18 @@ export class CustomerService {
       this.customerEvent.customerCreatedEvent({ customer: updatedCustomer });
     }
 
+    // Créer ses paramètres de notifications
+    const exite_notificationSetting = await this.prisma.notificationSetting.findFirst({
+      where: { customer_id: id }
+    })
+    if (!exite_notificationSetting) {
+      await this.prisma.notificationSetting.create({
+        data: {
+          customer_id: id,
+        },
+      });
+    }
+
     return updatedCustomer;
   }
 
