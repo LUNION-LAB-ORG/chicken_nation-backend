@@ -126,12 +126,12 @@ export class StatisticsService {
         paied: true, // Uniquement les commandes payées
         created_at: { gte: startDate, lte: endDate },
         // Optionnel : si vous voulez exclure le SUR PLACE, décommentez la ligne suivante
-        // type: OrderType.DELIVERY 
+        type: OrderType.DELIVERY 
       },
     });
 
     // 2. Définition des catégories cibles
-    const targetFees = [0, 500, 1000, 1500, 2000, 2500];
+    const targetFees = [0, 500, 1000, 1500, 2000, 2500, 3000,3500,4000,4500,5000,5500,6000,6500,7000,7500,8000,8500,9000,9500,10000];
 
     // Map pour accumuler les résultats (Clé -1 pour "Autres")
     const breakdownMap = new Map<number, { count: number; revenue: number; feesCollected: number }>();
