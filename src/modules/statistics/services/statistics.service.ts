@@ -109,88 +109,51 @@ export class StatisticsService {
   ): Promise<DeliveryStatsData> {
     const { startDate, endDate } = dateRange;
 
-    // 1. Récupération des données groupées par montant de frais de livraison
-    // Cela évite de faire 10 requêtes différentes.
+    // 1. Récupération des données groupées (Reste identique)
     const groupedStats = await this.prisma.order.groupBy({
       by: ['delivery_fee'],
-      _count: {
-        _all: true,
-      },
+      _count: { _all: true },
       _sum: {
-        net_amount: true, // Le CA généré par ces commandes
-        delivery_fee: true, // La somme des frais de livraison
+        net_amount: true,
+        delivery_fee: true,
       },
       where: {
         ...restaurantFilter,
         status: OrderStatus.COMPLETED,
-        paied: true, // Uniquement les commandes payées
+        paied: true,
         created_at: { gte: startDate, lte: endDate },
-        // Optionnel : si vous voulez exclure le SUR PLACE, décommentez la ligne suivante
         type: OrderType.DELIVERY
       },
     });
 
-    // 2. Définition des catégories cibles
-    const targetFees = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000, 8500, 9000, 9500, 10000];
+    // 2. Calcul des totaux globaux (plus besoin de boucle manuelle complexe)
+    const totalOrdersCount = groupedStats.reduce((acc, item) => acc + item._count._all, 0);
+    const totalGlobalFees = groupedStats.reduce((acc, item) => acc + (item._sum.delivery_fee || 0), 0);
+    const totalGlobalRevenue = groupedStats.reduce((acc, item) => acc + (item._sum.net_amount || 0), 0);
 
-    // Map pour accumuler les résultats (Clé -1 pour "Autres")
-    const breakdownMap = new Map<number, { count: number; revenue: number; feesCollected: number }>();
-
-    // Initialisation à 0 pour toutes les cibles (pour qu'elles apparaissent même si vide)
-    targetFees.forEach(fee => breakdownMap.set(fee, { count: 0, revenue: 0, feesCollected: 0 }));
-    breakdownMap.set(-1, { count: 0, revenue: 0, feesCollected: 0 }); // Bucket "Autres"
-
-    let totalOrdersCount = 0;
-    let totalGlobalFees = 0;
-    let totalGlobalRevenue = 0;
-
-    // 3. Répartition des données de la DB dans les catégories
-    for (const group of groupedStats) {
-      const fee = group.delivery_fee || 0;
+    // 3. Transformation directe : Pas de targetFees, on prend ce que la DB nous donne
+    const breakdown = groupedStats.map((group) => {
+      const fee = group.delivery_fee || 0; // Gère les null comme 0 (Gratuit)
       const count = group._count._all;
       const revenue = group._sum.net_amount || 0;
-      // Si la somme est null (pas de frais), on force 0
       const feesCollected = group._sum.delivery_fee || 0;
 
-      // Totaux globaux
-      totalOrdersCount += count;
-      totalGlobalFees += feesCollected;
-      totalGlobalRevenue += revenue;
-
-      // Est-ce un montant standard ou un "Autre" ?
-      const key = targetFees.includes(fee) ? fee : -1;
-
-      const entry = breakdownMap.get(key);
-      if (entry) {
-        entry.count += count;
-        entry.revenue += revenue;
-        entry.feesCollected += feesCollected;
-      }
-    }
-
-    // 4. Transformation en tableau pour le DTO
-    const breakdown = Array.from(breakdownMap.entries()).map(([feeKey, data]) => {
-      let label = '';
-      if (feeKey === -1) label = 'Autres montants';
-      else if (feeKey === 0) label = 'Gratuit';
-      else label = `${feeKey} FCFA`;
+      let label = `${fee} FCFA`;
+      if (fee === 0) label = 'Gratuit';
 
       return {
         label,
-        feeAmount: feeKey === -1 ? null : feeKey,
-        orderCount: data.count,
-        revenueGenerated: `${data.revenue.toLocaleString('fr-FR')} XOF`,
-        deliveryFeesCollected: data.feesCollected,
-        percentage: totalOrdersCount > 0 ? Math.round((data.count / totalOrdersCount) * 100) : 0
+        feeAmount: fee,
+        orderCount: count,
+        revenueGenerated: `${revenue.toLocaleString('fr-FR')} XOF`,
+        deliveryFeesCollected: feesCollected,
+        // Calcul du pourcentage sur le total global calculé plus haut
+        percentage: totalOrdersCount > 0 ? Math.round((count / totalOrdersCount) * 100) : 0
       };
     });
 
-    // Tri : Gratuit en premier, puis montant croissant, puis "Autres" à la fin
-    breakdown.sort((a, b) => {
-      if (a.feeAmount === null) return 1; // Autres à la fin
-      if (b.feeAmount === null) return -1;
-      return a.feeAmount - b.feeAmount;
-    });
+    // 4. Tri par montant croissant
+    breakdown.sort((a, b) => a.feeAmount - b.feeAmount);
 
     return {
       totalDeliveryFees: totalGlobalFees,
