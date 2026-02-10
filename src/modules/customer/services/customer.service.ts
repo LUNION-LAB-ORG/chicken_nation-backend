@@ -402,12 +402,27 @@ export class CustomerService {
     const customer = await this.findOne(id);
 
     // Soft delete
-    return this.prisma.customer.update({
+    const deletedCustomer = await this.prisma.customer.update({
       where: { id },
       data: {
         entity_status: EntityStatus.DELETED,
         phone: customer.phone + 'D',
       },
     });
+
+    // Créer ses paramètres de notifications
+    const exite_notificationSetting = await this.prisma.notificationSetting.findFirst({
+      where: { customer_id: id }
+    })
+    if (!exite_notificationSetting) {
+      await this.prisma.notificationSetting.update({
+        where: { customer_id: id },
+        data: {
+          active: false,
+        },
+      });
+    }
+
+    return deletedCustomer;
   }
 }

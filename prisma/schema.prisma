@@ -487,6 +487,7 @@ model NotificationSetting {
   onesignal_id              String?  @db.VarChar
   onesignal_subscription_id String?  @db.VarChar
   customer                  Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  active                    Boolean  @default(true)
 }
 
 model Notification {

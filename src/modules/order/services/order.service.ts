@@ -5,7 +5,15 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Customer, DeliveryService, EntityStatus, Order, OrderStatus, OrderType, Prisma } from '@prisma/client';
+import {
+  Customer,
+  DeliveryService,
+  EntityStatus,
+  Order,
+  OrderStatus,
+  OrderType,
+  Prisma,
+} from '@prisma/client';
 import { format, startOfMonth } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import * as ExcelJS from 'exceljs';
@@ -30,34 +38,59 @@ export class OrderService {
     private orderHelper: OrderHelper,
     private orderEvent: OrderEvent,
     private readonly orderWebSocketService: OrderWebSocketService,
-  ) { }
+  ) {}
 
   /**
    * Crée une nouvelle commande
    */
   async create(req: Request, createOrderDto: CreateOrderDto): Promise<any> {
-    const { items, paiement_id, customer_id, address, restaurant_id, promotion_id, delivery_fee, points, user_id, ...orderData } = createOrderDto;
+    const {
+      items,
+      paiement_id,
+      customer_id,
+      address,
+      restaurant_id,
+      promotion_id,
+      delivery_fee,
+      points,
+      user_id,
+      ...orderData
+    } = createOrderDto;
 
     const customerId = user_id ? undefined : (req.user as Customer).id;
     // Identifier le client ou créer à partir des données
-    const customerData = await this.orderHelper.resolveCustomerData({ ...createOrderDto, customer_id: customer_id ?? customerId });
+    const customerData = await this.orderHelper.resolveCustomerData({
+      ...createOrderDto,
+      customer_id: customer_id ?? customerId,
+    });
 
     // Récupérer les plats et vérifier leur disponibilité
-    const dishesWithDetails = await this.orderHelper.getDishesWithDetails(items.map(item => item.dish_id));
-
+    const dishesWithDetails = await this.orderHelper.getDishesWithDetails(
+      items.map((item) => item.dish_id),
+    );
 
     // Vérifier et appliquer le code promo s'il existe
-    const promoDiscount = await this.orderHelper.applyPromoCode(orderData.code_promo);
+    const promoDiscount = await this.orderHelper.applyPromoCode(
+      orderData.code_promo,
+    );
 
     // Calculer les montants et préparer les order items
-    const { orderItems, netAmount, totalDishes } = await this.orderHelper.calculateOrderDetails(items, dishesWithDetails);
+    const { orderItems, netAmount, totalDishes } =
+      await this.orderHelper.calculateOrderDetails(items, dishesWithDetails);
 
     //Calculer la promotion et la création de l'utilisation de la promotion
     const promotion = await this.orderHelper.calculatePromotionPrice(
-      promotion_id ?? "",
-      { customer_id: customerData.customer_id, loyalty_level: customerData.loyalty_level },
+      promotion_id ?? '',
+      {
+        customer_id: customerData.customer_id,
+        loyalty_level: customerData.loyalty_level,
+      },
       totalDishes,
-      orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice }))
+      orderItems.map((item) => ({
+        dish_id: item.dish_id,
+        quantity: item.quantity,
+        price: item.dishPrice,
+      })),
     );
 
     const discountPromotion = promotion ? promotion.discount_amount : 0;
@@ -82,40 +115,53 @@ export class OrderService {
       apikey: string | null;
     } | null = null;
     if (orderData.type == OrderType.DELIVERY) {
-      restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: user_id ? restaurant_id : undefined, address });
+      restaurant = await this.orderHelper.getClosestRestaurant({
+        restaurant_id: user_id ? restaurant_id : undefined,
+        address,
+      });
       // Vérifier l'adresse
-      const addressData = await this.orderHelper.validateAddress(address ?? "");
+      const addressData = await this.orderHelper.validateAddress(address ?? '');
       delivery = await this.orderHelper.calculeFraisLivraison({
         lat: addressData.latitude,
         long: addressData.longitude,
-        restaurant
+        restaurant,
       });
     } else {
-      restaurant = await this.orderHelper.getClosestRestaurant({ restaurant_id: restaurant_id, address });
+      restaurant = await this.orderHelper.getClosestRestaurant({
+        restaurant_id: restaurant_id,
+        address,
+      });
     }
-    // Montant frais de livraison 
+    // Montant frais de livraison
     const deliveryFee = delivery_fee || (delivery ? delivery?.montant : 0);
 
     // Vérifier le paiement
     const payment = await this.orderHelper.checkPayment(createOrderDto);
 
     // Calculer le montant de réduction des points de fidélité
-    const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(customerData.total_points, points ?? 0);
+    const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(
+      customerData.total_points,
+      points ?? 0,
+    );
 
     // Calcul de la remise
-    const discount = (netAmount * promoDiscount) + loyaltyFee + discountPromotion;
+    const discount = netAmount * promoDiscount + loyaltyFee + discountPromotion;
 
     // Calcul du montant remisé
     const totalAfterDiscount = netAmount - discount;
 
     // calcul de la taxe
-    const tax = user_id ? 0 : await this.orderHelper.calculateTax(totalAfterDiscount);
+    const tax = user_id
+      ? 0
+      : await this.orderHelper.calculateTax(totalAfterDiscount);
 
     // Calcul du montant TTC
     const totalAmount = totalAfterDiscount + tax + deliveryFee;
 
     if (payment && payment.amount < totalAmount) {
-      throw new BadRequestException('Le montant du paiement est inférieur au montant de la commande');
+      throw new BadRequestException(
+        'Le montant du paiement est inférieur au montant de la commande',
+      );
     }
 
     // Générer un numéro de commande unique
@@ -134,24 +180,24 @@ export class OrderService {
           ...(applicable && { promotion: { connect: { id: promotion_id } } }),
           customer: {
             connect: {
-              id: customerData.customer_id
-            }
+              id: customerData.customer_id,
+            },
           },
           ...(user_id && {
             user: {
               connect: {
-                id: user_id
+                id: user_id,
               },
-            }
+            },
           }),
           restaurant: {
             connect: {
-              id: restaurant.id
-            }
+              id: restaurant.id,
+            },
           },
           reference: orderNumber,
           ...(payment && { paiements: { connect: { id: payment.id } } }),
-          address: address ?? "",
+          address: address ?? '',
           delivery_fee: delivery_fee ? delivery_fee : Number(deliveryFee),
           delivery_service: delivery ? delivery.service : DeliveryService.TURBO,
           zone_id: delivery ? delivery.zone_id : undefined,
@@ -159,24 +205,27 @@ export class OrderService {
           discount: Number(discount),
           net_amount: Number(netAmount),
           amount: Number(totalAmount),
-          date: orderData.date ? new Date(orderData.date || "") : new Date(),
-          time: orderData.time || "10:00",
+          date: orderData.date ? new Date(orderData.date || '') : new Date(),
+          time: orderData.time || '10:00',
           status: OrderStatus.PENDING,
           paied_at: payment ? payment.created_at : null,
           paied: payment ? true : false,
           order_items: {
-            create: [...orderItems.map(item => ({
-              dish_id: item.dish_id,
-              quantity: item.quantity,
-              amount: item.amount,
-              epice: item.epice,
-              supplements: item.supplements
-            })), ...offersDishes.map(item => ({
-              dish_id: item.dish_id,
-              quantity: item.quantity,
-              amount: 0,
-              supplements: []
-            }))],
+            create: [
+              ...orderItems.map((item) => ({
+                dish_id: item.dish_id,
+                quantity: item.quantity,
+                amount: item.amount,
+                epice: item.epice,
+                supplements: item.supplements,
+              })),
+              ...offersDishes.map((item) => ({
+                dish_id: item.dish_id,
+                quantity: item.quantity,
+                amount: 0,
+                supplements: [],
+              })),
+            ],
           },
           entity_status: EntityStatus.ACTIVE,
         },
@@ -211,7 +260,11 @@ export class OrderService {
         payment_id: payment?.id,
         loyalty_level: customerData.loyalty_level,
         totalDishes,
-        orderItems: orderItems.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.dishPrice })),
+        orderItems: orderItems.map((item) => ({
+          dish_id: item.dish_id,
+          quantity: item.quantity,
+          price: item.dishPrice,
+        })),
       });
 
       // Émettre l'événement de création de commande
@@ -224,7 +277,11 @@ export class OrderService {
   /**
    * Met à jour le statut d'une commande
    */
-  async updateStatus(id: string, status: OrderStatus, meta?: Record<string, any>) {
+  async updateStatus(
+    id: string,
+    status: OrderStatus,
+    meta?: Record<string, any>,
+  ) {
     const order = await this.findById(id);
     //Meta peut contenir estimated_delivery_time, estimated_preparation_time, deliveryDriverId
     // Valider la transition d'état
@@ -237,9 +294,14 @@ export class OrderService {
     const updatedOrder = await this.prisma.order.update({
       where: { id },
       data: {
-        status: status == OrderStatus.ACCEPTED ? OrderStatus.IN_PROGRESS : status,
-        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(meta?.estimated_delivery_time ?? ""),
-        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(meta?.estimated_preparation_time ?? ""),
+        status:
+          status == OrderStatus.ACCEPTED ? OrderStatus.IN_PROGRESS : status,
+        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(
+          meta?.estimated_delivery_time ?? '',
+        ),
+        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(
+          meta?.estimated_preparation_time ?? '',
+        ),
         updated_at: new Date(),
         ...(status === OrderStatus.READY && { ready_at: new Date() }),
         ...(status === OrderStatus.PICKED_UP && { picked_up_at: new Date() }),
@@ -269,14 +331,11 @@ export class OrderService {
 
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderStatusUpdatedEvent({
-      order: updatedOrder
+      order: updatedOrder,
     });
 
     // Émettre l'événement de mise à jour de statut avec l'ancien statut
-    this.orderWebSocketService.emitStatusUpdate(
-      updatedOrder,
-      order.status
-    );
+    this.orderWebSocketService.emitStatusUpdate(updatedOrder, order.status);
 
     return updatedOrder;
   }
@@ -286,12 +345,12 @@ export class OrderService {
    */
   async findById(id: string) {
     if (!id) {
-      throw new BadRequestException('L\'identifiant de la commande est requis');
+      throw new BadRequestException("L'identifiant de la commande est requis");
     }
     const order = await this.prisma.order.findFirst({
       where: {
         id,
-        entity_status: { not: EntityStatus.DELETED }
+        entity_status: { not: EntityStatus.DELETED },
       },
       include: {
         order_items: {
@@ -331,7 +390,7 @@ export class OrderService {
     const order = await this.prisma.order.findFirst({
       where: {
         reference,
-        entity_status: { not: EntityStatus.DELETED }
+        entity_status: { not: EntityStatus.DELETED },
       },
       include: {
         order_items: {
@@ -370,7 +429,7 @@ export class OrderService {
       sortBy = 'created_at',
       sortOrder = 'desc',
       startDate = startOfMonth(new Date()),
-      endDate = new Date()
+      endDate = new Date(),
     } = filters;
     const where: Prisma.OrderWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
@@ -383,20 +442,19 @@ export class OrderService {
       ...(reference && {
         reference: {
           contains: reference,
-          mode: "insensitive"
-        }
-      })
+          mode: 'insensitive',
+        },
+      }),
     };
     if (filters.auto == undefined) {
-      where.OR = [{
-        AND: [
-          { paied: false },
-          { auto: false }
-        ]
-      },
-      {
-        paied: true,
-      }];
+      where.OR = [
+        {
+          AND: [{ paied: false }, { auto: false }],
+        },
+        {
+          paied: true,
+        },
+      ];
     } else {
       if (filters.auto === true) {
         where.auto = true;
@@ -406,12 +464,11 @@ export class OrderService {
       }
     }
 
-
     if (filters.startDate && filters.endDate) {
       where.created_at = {
         gte: filters.startDate,
-        lte: new Date(new Date(filters.endDate).setHours(23, 59, 59, 999))
-      }
+        lte: new Date(new Date(filters.endDate).setHours(23, 59, 59, 999)),
+      };
     }
 
     const [orders, total] = await Promise.all([
@@ -447,15 +504,17 @@ export class OrderService {
             },
           },
         },
-        ...(pagination ? {
-          skip: (page - 1) * limit,
-          take: limit,
-        } : {}),
+        ...(pagination
+          ? {
+              skip: (page - 1) * limit,
+              take: limit,
+            }
+          : {}),
         orderBy: {
           [sortBy]: sortOrder,
         },
       }),
-      this.prisma.order.count({ where })
+      this.prisma.order.count({ where }),
     ]);
 
     return {
@@ -465,14 +524,17 @@ export class OrderService {
         page,
         limit,
         totalPages: Math.ceil(total / limit),
-      }
+      },
     };
   }
 
   /**
    * Recherche et filtre les commandes d'un client
    */
-  async findAllByCustomer(req: Request, filters: QueryOrderDto): Promise<QueryResponseDto<Order>> {
+  async findAllByCustomer(
+    req: Request,
+    filters: QueryOrderDto,
+  ): Promise<QueryResponseDto<Order>> {
     const {
       status,
       type,
@@ -484,29 +546,29 @@ export class OrderService {
       page = 1,
       limit = 10,
       sortBy = 'created_at',
-      sortOrder = 'desc'
+      sortOrder = 'desc',
     } = filters;
     const customerId = (req.user as Customer).id;
     const where: Prisma.OrderWhereInput = {
-      OR: [{
-        AND: [
-          { paied: false },
-          { auto: false }
-        ]
-      },
-      {
-        paied: true,
-      }],
+      OR: [
+        {
+          AND: [{ paied: false }, { auto: false }],
+        },
+        {
+          paied: true,
+        },
+      ],
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),
       ...(type && { type }),
       ...(customerId && { customer_id: customerId }),
-      ...(startDate && endDate && {
-        created_at: {
-          gte: new Date(startDate),
-          lte: new Date(endDate)
-        }
-      }),
+      ...(startDate &&
+        endDate && {
+          created_at: {
+            gte: new Date(startDate),
+            lte: new Date(endDate),
+          },
+        }),
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
       ...(restaurantId && {
@@ -515,13 +577,13 @@ export class OrderService {
             dish: {
               dish_restaurants: {
                 some: {
-                  restaurant_id: restaurantId
-                }
-              }
-            }
-          }
-        }
-      })
+                  restaurant_id: restaurantId,
+                },
+              },
+            },
+          },
+        },
+      }),
     };
 
     const [orders, total] = await Promise.all([
@@ -563,7 +625,7 @@ export class OrderService {
           [sortBy]: sortOrder,
         },
       }),
-      this.prisma.order.count({ where })
+      this.prisma.order.count({ where }),
     ]);
 
     return {
@@ -573,7 +635,7 @@ export class OrderService {
         page,
         limit,
         totalPages: Math.ceil(total / limit),
-      }
+      },
     };
   }
 
@@ -585,7 +647,9 @@ export class OrderService {
     const { paiement_id, delivery_fee, ...rest } = updateOrderDto;
     // Vérifier que la commande peut être modifiée (seulement si PENDING)
     if (order.status !== OrderStatus.PENDING) {
-      throw new ConflictException('Seules les commandes en attente peuvent être modifiées');
+      throw new ConflictException(
+        'Seules les commandes en attente peuvent être modifiées',
+      );
     }
 
     // Appliquer les modifications
@@ -594,8 +658,12 @@ export class OrderService {
       data: {
         ...rest,
         delivery_fee,
-        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(rest?.estimated_delivery_time ?? ""),
-        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(rest?.estimated_preparation_time ?? ""),
+        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(
+          rest?.estimated_delivery_time ?? '',
+        ),
+        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(
+          rest?.estimated_preparation_time ?? '',
+        ),
         updated_at: new Date(),
       },
       include: {
@@ -612,7 +680,6 @@ export class OrderService {
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderUpdatedEvent(updatedOrder, updateOrderDto);
 
-
     // Émettre via WebSocket
     this.orderWebSocketService.emitOrderUpdated(updatedOrder);
     return updatedOrder;
@@ -625,8 +692,13 @@ export class OrderService {
     const order = await this.findById(id);
 
     // Vérifier que la commande peut être supprimée
-    if (order.status !== OrderStatus.PENDING && order.status !== OrderStatus.CANCELLED) {
-      throw new ConflictException('Seules les commandes en attente ou annulées peuvent être supprimées');
+    if (
+      order.status !== OrderStatus.PENDING &&
+      order.status !== OrderStatus.CANCELLED
+    ) {
+      throw new ConflictException(
+        'Seules les commandes en attente ou annulées peuvent être supprimées',
+      );
     }
 
     const orderDeleted = this.prisma.order.update({
@@ -651,7 +723,8 @@ export class OrderService {
    */
   async getOrderStatistics(filters?: QueryOrderDto) {
     // Construire la clause where à partir des filtres
-    const where: Prisma.OrderWhereInput = this.orderHelper.buildWhereClause(filters);
+    const where: Prisma.OrderWhereInput =
+      this.orderHelper.buildWhereClause(filters);
 
     // Exécuter les requêtes en parallèle pour les performances
     const [
@@ -706,31 +779,33 @@ export class OrderService {
       }),
 
       // Plats les plus commandés
-      this.prisma.orderItem.groupBy({
-        by: ['dish_id'],
-        where: {
-          order: { paied: true, ...where },
-        },
-        _sum: {
-          quantity: true,
-        },
-        orderBy: {
-          _sum: {
-            quantity: 'desc',
+      this.prisma.orderItem
+        .groupBy({
+          by: ['dish_id'],
+          where: {
+            order: { paied: true, ...where },
           },
-        },
-        take: 10,
-      }).then(async (items) => {
-        const dishIds = items.map(item => item.dish_id);
-        const dishes = await this.prisma.dish.findMany({
-          where: { id: { in: dishIds } },
-        });
+          _sum: {
+            quantity: true,
+          },
+          orderBy: {
+            _sum: {
+              quantity: 'desc',
+            },
+          },
+          take: 10,
+        })
+        .then(async (items) => {
+          const dishIds = items.map((item) => item.dish_id);
+          const dishes = await this.prisma.dish.findMany({
+            where: { id: { in: dishIds } },
+          });
 
-        return items.map(item => ({
-          ...item,
-          dish: dishes.find(d => d.id === item.dish_id),
-        }));
-      }),
+          return items.map((item) => ({
+            ...item,
+            dish: dishes.find((d) => d.id === item.dish_id),
+          }));
+        }),
     ]);
 
     return {
@@ -745,7 +820,6 @@ export class OrderService {
   }
 
   async exportOrderReportToPDF(filters: QueryOrderDto) {
-
     const {
       startDate,
       endDate,
@@ -755,22 +829,21 @@ export class OrderService {
 
     const where: Prisma.OrderWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
-      OR: [{
-        AND: [
-          { paied: false },
-          { auto: false }
-        ]
-      },
-      {
-        paied: true,
-      }]
+      OR: [
+        {
+          AND: [{ paied: false }, { auto: false }],
+        },
+        {
+          paied: true,
+        },
+      ],
     };
 
     if (startDate && endDate) {
       where.created_at = {
         gte: startDate,
-        lte: new Date(new Date(endDate).setHours(23, 59, 59, 999))
-      }
+        lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
+      };
     }
 
     const orders = await this.prisma.order.findMany({
@@ -811,8 +884,8 @@ export class OrderService {
             email: true,
             phone: true,
             image: true,
-          }
-        }
+          },
+        },
       },
       orderBy: {
         [sortBy]: sortOrder,
@@ -841,7 +914,25 @@ export class OrderService {
     if (startDate && endDate) {
       where.created_at = {
         gte: startDate,
-        lte: new Date(new Date(endDate).setHours(23, 59, 59, 999))
+        lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
+      };
+    }
+
+    if (filters.auto == undefined) {
+      where.OR = [
+        {
+          AND: [{ paied: false }, { auto: false }],
+        },
+        {
+          paied: true,
+        },
+      ];
+    } else {
+      if (filters.auto === true) {
+        where.auto = true;
+        where.paied = true;
+      } else {
+        where.auto = false;
       }
     }
 
@@ -883,8 +974,8 @@ export class OrderService {
             email: true,
             phone: true,
             image: true,
-          }
-        }
+          },
+        },
       },
       orderBy: {
         [sortBy]: sortOrder,
@@ -919,7 +1010,10 @@ export class OrderService {
       pattern: 'solid',
       fgColor: { argb: 'FF3B82F6' },
     };
-    worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+    worksheet.getRow(1).alignment = {
+      vertical: 'middle',
+      horizontal: 'center',
+    };
 
     // Variables pour les totaux
     let totalTTC = 0;
@@ -932,9 +1026,10 @@ export class OrderService {
     // Données
     orders.forEach((order) => {
       const montantNet = order.net_amount - order.discount;
-      const clientName = [order.customer.first_name, order.customer.last_name]
-        .filter(Boolean)
-        .join(' ') || 'N/A';
+      const clientName =
+        [order.customer.first_name, order.customer.last_name]
+          .filter(Boolean)
+          .join(' ') || 'N/A';
 
       worksheet.addRow({
         reference: order.reference,
@@ -962,7 +1057,14 @@ export class OrderService {
     });
 
     // Formatage des colonnes monétaires (nombres avec séparateur de milliers)
-    const currencyColumns = ['amount', 'net_amount', 'montant_net', 'delivery_fee', 'tax', 'discount'];
+    const currencyColumns = [
+      'amount',
+      'net_amount',
+      'montant_net',
+      'delivery_fee',
+      'tax',
+      'discount',
+    ];
     currencyColumns.forEach((col) => {
       const column = worksheet.getColumn(col);
       column.numFmt = '#,##0';
@@ -1038,9 +1140,13 @@ export class OrderService {
     // Récupérer le restaurant le plus proche
     const restaurant = await this.orderHelper.getClosestRestaurant({
       restaurant_id: body.restaurant_id,
-      address: JSON.stringify({ latitude: body.lat, longitude: body.long })
+      address: JSON.stringify({ latitude: body.lat, longitude: body.long }),
     });
 
-    return this.orderHelper.calculeFraisLivraisonPersonnalise({ lat: body.lat, long: body.long, restaurant });
+    return this.orderHelper.calculeFraisLivraisonPersonnalise({
+      lat: body.lat,
+      long: body.long,
+      restaurant,
+    });
   }
 }
