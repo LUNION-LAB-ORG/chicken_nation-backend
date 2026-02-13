@@ -100,7 +100,7 @@ export class OrderHelper {
         apikey: true,
       },
     });
-    
+
     if (!restaurants.length) {
       throw new BadRequestException('Aucun restaurant disponible');
     }
@@ -384,74 +384,79 @@ export class OrderHelper {
     );
 
     // Vérifier si le restaurant est zone 4
-    if (restaurant.name.includes("ZONE")) {
-      if (distance <= 5) {
-        return {
-          montant: 0,
-          zone: `-5km de ${restaurant.name}`,
-          distance: Math.round(distance),
-          service: DeliveryService.TURBO,
-          zone_id: null,
-        };
-      } else if (distance > 5 && distance <= 10) {
-        return {
-          montant: 500,
-          zone: `5-10km de ${restaurant.name}`,
-          distance: Math.round(distance),
-          service: DeliveryService.TURBO,
-          zone_id: null,
-        };
-      } else if (distance > 10 && distance <= 20) {
-        return {
-          montant: 1000,
-          zone: `10-20km de ${restaurant.name}`,
-          distance: Math.round(distance),
-          service: DeliveryService.TURBO,
-          zone_id: null,
-        };
-      } else {
-        return {
-          montant: 1500,
-          zone: `+20km de ${restaurant.name}`,
-          distance: Math.round(distance),
-          service: DeliveryService.TURBO,
-          zone_id: null,
-        };
-      }
-    } else {
-      if (distance <= 5) {
-        return {
-          montant: 500,
-          zone: `-5km de ${restaurant.name}`,
-          distance: Math.round(distance),
-          service: DeliveryService.TURBO,
-          zone_id: null,
-        };
-      } else if (distance > 5 && distance <= 10) {
-        return {
-          montant: 1000,
-          zone: `5-10km de ${restaurant.name}`,
-          distance: Math.round(distance),
-          service: DeliveryService.TURBO,
-          zone_id: null,
-        };
-      } else if (distance > 10 && distance <= 20) {
-        return {
-          montant: 1500,
-          zone: `10-20km de ${restaurant.name}`,
-          distance: Math.round(distance),
-          service: DeliveryService.TURBO,
-          zone_id: null,
-        };
-      } else {
-        return {
-          montant: 2000,
-          zone: `+20km de ${restaurant.name}`,
-          distance: Math.round(distance),
-          service: DeliveryService.TURBO,
-          zone_id: null,
-        };
-      }
+    if (distance <= 1) {
+      return {
+        montant: 500,
+        zone: `-1km de ${restaurant.name}`,
+        distance: Math.round(distance),
+        service: DeliveryService.TURBO,
+        zone_id: null,
+      };
+    } else if (distance > 1 && distance <= 2) {
+      return {
+        montant: 750,
+        zone: `1-2km de ${restaurant.name}`,
+        distance: Math.round(distance),
+        service: DeliveryService.TURBO,
+        zone_id: null,
+      };
+    } else if (distance > 2 && distance <= 3) {
+      return {
+        montant: 1000,
+        zone: `2-3km de ${restaurant.name}`,
+        distance: Math.round(distance),
+        service: DeliveryService.TURBO,
+        zone_id: null,
+      };
+    } else if (distance > 3 && distance <= 5) {
+      return {
+        montant: 1500,
+        zone: `3-5km de ${restaurant.name}`,
+        distance: Math.round(distance),
+        service: DeliveryService.TURBO,
+        zone_id: null,
+      };
+    } else if (distance > 5 && distance <= 7) {
+      return {
+        montant: 2000,
+        zone: `5-10km de ${restaurant.name}`,
+        distance: Math.round(distance),
+        service: DeliveryService.TURBO,
+        zone_id: null,
+      };
+    } else if (distance > 7 && distance <= 10) {
+      return {
+        montant: 2500,
+        zone: `7-10km de ${restaurant.name}`,
+        distance: Math.round(distance),
+        service: DeliveryService.TURBO,
+        zone_id: null,
+      };
+    } else if (distance > 10 && distance <= 12.5) {
+      return {
+        montant: 2700,
+        zone: `10-12.5km de ${restaurant.name}`,
+        distance: Math.round(distance),
+        service: DeliveryService.TURBO,
+        zone_id: null,
+      };
+    } else if (distance > 12.5 && distance <= 15) {
+      return {
+        montant: 3500,
+        zone: `12.5-15km de ${restaurant.name}`,
+        distance: Math.round(distance),
+        service: DeliveryService.TURBO,
+        zone_id: null,
+      };
+    }
+    else {
+      return {
+        montant: 3500,
+        zone: `+15km de ${restaurant.name}`,
+        distance: Math.round(distance),
+        service: DeliveryService.TURBO,
+        zone_id: null,
+      };
     }
   }
 
@@ -475,7 +480,7 @@ export class OrderHelper {
     if (!restaurant) {
       throw new BadRequestException('Aucun restaurant disponible');
     }
-
+    // Récupérer la configuration de frais de livraison
     let config: {
       montant: number;
       zone: string;
@@ -500,7 +505,7 @@ export class OrderHelper {
     }, zones[0]);
 
     return {
-      montant: config.montant,
+      montant: zone.prix,
       distance: config.distance,
       zone: zone.zone,
       service: DeliveryService.TURBO,
