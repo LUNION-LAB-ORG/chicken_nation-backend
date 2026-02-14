@@ -23,7 +23,7 @@ import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
-import { QueryOrderDto } from '../dto/query-order.dto';
+import { QueryOrderCustomerDto, QueryOrderDto } from '../dto/query-order.dto';
 import { UpdateOrderDto } from '../dto/update-order.dto';
 import { OrderEvent } from '../events/order.event';
 import { OrderHelper } from '../helpers/order.helper';
@@ -38,7 +38,7 @@ export class OrderService {
     private orderHelper: OrderHelper,
     private orderEvent: OrderEvent,
     private readonly orderWebSocketService: OrderWebSocketService,
-  ) {}
+  ) { }
 
   /**
    * Crée une nouvelle commande
@@ -506,9 +506,9 @@ export class OrderService {
         },
         ...(pagination
           ? {
-              skip: (page - 1) * limit,
-              take: limit,
-            }
+            skip: (page - 1) * limit,
+            take: limit,
+          }
           : {}),
         orderBy: {
           [sortBy]: sortOrder,
@@ -533,21 +533,18 @@ export class OrderService {
    */
   async findAllByCustomer(
     req: Request,
-    filters: QueryOrderDto,
+    filters: QueryOrderCustomerDto,
   ): Promise<QueryResponseDto<Order>> {
     const {
-      status,
-      type,
-      restaurantId,
+      status: statusFilter,
       startDate,
       endDate,
       minAmount,
       maxAmount,
       page = 1,
       limit = 10,
-      sortBy = 'created_at',
-      sortOrder = 'desc',
     } = filters;
+    console.log('filters', filters);
     const customerId = (req.user as Customer).id;
     const where: Prisma.OrderWhereInput = {
       OR: [
@@ -559,31 +556,25 @@ export class OrderService {
         },
       ],
       entity_status: { not: EntityStatus.DELETED },
-      ...(status && { status }),
-      ...(type && { type }),
+      ...(statusFilter && {
+        ...(statusFilter == 'processing'
+          ? { status: { in: [OrderStatus.PENDING, OrderStatus.ACCEPTED, OrderStatus.IN_PROGRESS, OrderStatus.READY, OrderStatus.PICKED_UP] } }
+          : statusFilter == 'completed'
+            ? { status: { in: [OrderStatus.COLLECTED, OrderStatus.COMPLETED] } }
+            : statusFilter == 'cancelled'
+              ? { status: OrderStatus.CANCELLED }
+              : {}),
+      }),
       ...(customerId && { customer_id: customerId }),
       ...(startDate &&
         endDate && {
-          created_at: {
-            gte: new Date(startDate),
-            lte: new Date(endDate),
-          },
-        }),
-      ...(minAmount && { amount: { gte: minAmount } }),
-      ...(maxAmount && { amount: { lte: maxAmount } }),
-      ...(restaurantId && {
-        order_items: {
-          some: {
-            dish: {
-              dish_restaurants: {
-                some: {
-                  restaurant_id: restaurantId,
-                },
-              },
-            },
-          },
+        created_at: {
+          gte: new Date(startDate),
+          lte: new Date(endDate),
         },
       }),
+      ...(minAmount && { amount: { gte: minAmount } }),
+      ...(maxAmount && { amount: { lte: maxAmount } }),
     };
 
     const [orders, total] = await Promise.all([
@@ -622,7 +613,7 @@ export class OrderService {
         skip: (page - 1) * limit,
         take: limit,
         orderBy: {
-          [sortBy]: sortOrder,
+          created_at: 'desc',
         },
       }),
       this.prisma.order.count({ where }),
@@ -1143,7 +1134,7 @@ export class OrderService {
       address: JSON.stringify({ latitude: body.lat, longitude: body.long }),
     });
 
-    return this.orderHelper.calculeFraisLivraisonPersonnalise({
+    return await this.orderHelper.calculeFraisLivraison({
       lat: body.lat,
       long: body.long,
       restaurant,

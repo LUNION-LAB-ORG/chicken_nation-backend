@@ -30,7 +30,7 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
-import { QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
+import { QueryOrderCustomerDto, QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
 import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
 import { OrderService } from 'src/modules/order/services/order.service';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
@@ -78,7 +78,7 @@ export class OrderController {
   @ApiOperation({ summary: 'Rechercher commandes d’un client' })
   findAllByCustomer(
     @Req() req: Request,
-    @Query() queryOrderDto: QueryOrderDto,
+    @Query() queryOrderDto: QueryOrderCustomerDto,
   ) {
     return this.orderService.findAllByCustomer(req, queryOrderDto);
   }
