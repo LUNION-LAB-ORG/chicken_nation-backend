@@ -507,7 +507,7 @@ export class OrderHelper {
     return {
       montant: zone.prix,
       distance: config.distance,
-      zone: zone.zone,
+      zone: restaurant.name + " - " + zone.name,
       service: DeliveryService.TURBO,
       zone_id: zone.id,
     };
