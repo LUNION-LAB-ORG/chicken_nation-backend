@@ -21,7 +21,7 @@ import {
   ApiResponse,
   ApiTags
 } from '@nestjs/swagger';
-import { OrderStatus } from '@prisma/client';
+import { OrderStatus, User } from '@prisma/client';
 import { Request, Response } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
@@ -145,10 +145,12 @@ export class OrderController {
     },
   })
   updateStatus(
+    @Req() req: Request,
     @Param('id') id: string,
     @Body() body: { status: OrderStatus; meta?: Record<string, any> },
   ) {
-    return this.orderService.updateStatus(id, body.status, body.meta);
+    const userId = (req.user as User).id;
+    return this.orderService.updateStatus(id, body.status, { ...body.meta, userId });
   }
 
   @Delete(':id')

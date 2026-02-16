@@ -294,8 +294,6 @@ export class OrderService {
     const updatedOrder = await this.prisma.order.update({
       where: { id },
       data: {
-        status:
-          status == OrderStatus.ACCEPTED ? OrderStatus.IN_PROGRESS : status,
         estimated_delivery_time: this.orderHelper.calculateEstimatedTime(
           meta?.estimated_delivery_time ?? '',
         ),
@@ -303,10 +301,14 @@ export class OrderService {
           meta?.estimated_preparation_time ?? '',
         ),
         updated_at: new Date(),
-        ...(status === OrderStatus.READY && { ready_at: new Date() }),
-        ...(status === OrderStatus.PICKED_UP && { picked_up_at: new Date() }),
-        ...(status === OrderStatus.COLLECTED && { collected_at: new Date() }),
-        ...(status === OrderStatus.COMPLETED && { completed_at: new Date() }),
+        status:
+          status == OrderStatus.ACCEPTED ? OrderStatus.IN_PROGRESS : status,
+        ...(status === OrderStatus.ACCEPTED && { accepted_at: new Date(), prepared_at: new Date()}),
+        ...(status === OrderStatus.READY && { ready_at: new Date()}),
+        ...(status === OrderStatus.PICKED_UP && { picked_up_at: new Date()}),
+        ...(status === OrderStatus.COLLECTED && { collected_at: new Date()}),
+        ...(status === OrderStatus.COMPLETED && { completed_at: new Date()}),
+        ...(status === OrderStatus.CANCELLED && { cancelled_at: new Date(), cancelled_by: meta?.userId, cancelled_reason: meta?.reason || '' }),
       },
       include: {
         order_items: {

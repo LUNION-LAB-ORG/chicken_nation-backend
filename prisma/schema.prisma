@@ -564,6 +564,8 @@ model Order {
   paiements     Paiement[]
   customer      Customer    @relation(fields: [customer_id], references: [id])
   restaurant    Restaurant  @relation(fields: [restaurant_id], references: [id])
+  cancelled_by  String?
+  cancelled_reason  String?
 
   // ================================
   // INTÉGRATION PROMOTIONS ET FIDÉLITÉ
@@ -574,10 +576,13 @@ model Order {
   loyalty_points   LoyaltyPoint[]
 
   entity_status EntityStatus   @default(ACTIVE)
+  accepted_at      DateTime?
+  prepared_at      DateTime?
   ready_at      DateTime?
   picked_up_at  DateTime?
   collected_at  DateTime?
   completed_at  DateTime?
+  cancelled_at  DateTime?
   paied_at      DateTime?
   created_at    DateTime       @default(now()) @db.Timestamp(6)
   updated_at    DateTime       @default(now()) @db.Timestamp(6)
