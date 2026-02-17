@@ -176,11 +176,16 @@ export class DishService {
     };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, customerId?: string) {
     const dish = await this.prisma.dish.findUnique({
       where: { id },
       include: {
         category: true,
+        favorites: {
+          select: {
+            customer_id: true,
+          }
+        },
         dish_restaurants: {
           include: {
             restaurant: true,
@@ -197,8 +202,9 @@ export class DishService {
     if (!dish || dish.entity_status !== EntityStatus.ACTIVE) {
       throw new NotFoundException(`Plat non trouvée`);
     }
-
-    return dish;
+    
+    const isFavorite = customerId ? dish.favorites.some((favorite) => favorite.customer_id === customerId) : false;
+    return { ...dish, isFavorite };
   }
 
   async update(req: Request, id: string, updateDishDto: UpdateDishDto, image?: Express.Multer.File) {

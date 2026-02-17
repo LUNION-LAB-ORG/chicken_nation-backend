@@ -892,8 +892,10 @@ export class OrderService {
   }
   async exportOrderReportToExcel(filters: QueryOrderDto) {
     const {
+      restaurantId,
       startDate,
       endDate,
+      status,
       sortBy = 'created_at',
       sortOrder = 'desc',
     } = filters;
@@ -903,6 +905,14 @@ export class OrderService {
       status: OrderStatus.COMPLETED,
       paied: true,
     };
+
+    if (restaurantId) {
+      where.restaurant_id = restaurantId;
+    }
+
+    if (status) {
+      where.status = status;
+    }
 
     if (startDate && endDate) {
       where.created_at = {

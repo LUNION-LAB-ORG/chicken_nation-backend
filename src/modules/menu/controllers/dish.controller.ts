@@ -1,4 +1,4 @@
-import { CacheInterceptor } from '@nestjs/cache-manager';
+import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
 import {
   Body,
   Controller,
@@ -69,9 +69,10 @@ export class DishController {
   }
 
   @Get(':id')
+  // @CacheTTL(20) 
   @ApiOperation({ summary: 'Obtenir un plat par ID' })
-  findOne(@Param('id') id: string) {
-    return this.dishService.findOne(id);
+  findOne(@Param('id') id: string, @Query() query?: { customerId?: string }) {
+    return this.dishService.findOne(id, query?.customerId);
   }
 
   @Patch(':id')

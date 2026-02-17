@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, UseInterceptors } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, UseInterceptors, Query } from '@nestjs/common';
 import { FavoriteService } from 'src/modules/customer/services/favorite.service';
 import { CreateFavoriteDto } from 'src/modules/customer/dto/create-favorite.dto';
 import { UpdateFavoriteDto } from 'src/modules/customer/dto/update-favorite.dto';
@@ -42,8 +42,8 @@ export class FavoriteController {
 
   @ApiOperation({ summary: 'Obtenir toutes les favorites d un client' })
   @Get('customer/:customerId')
-  findByCustomer(@Param('customerId') customerId: string) {
-    return this.favoriteService.findByCustomer(customerId);
+  findByCustomer(@Param('customerId') customerId: string, @Query() query?: { page?: number, limit?: number }) {
+    return this.favoriteService.findByCustomer(customerId, query?.page ?? 1, query?.limit ?? 10);
   }
 
   @ApiOperation({ summary: 'Mettre à jour une favorite' })

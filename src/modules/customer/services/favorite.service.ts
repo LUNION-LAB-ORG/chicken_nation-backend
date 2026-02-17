@@ -2,8 +2,9 @@ import { Injectable, NotFoundException, ConflictException } from '@nestjs/common
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateFavoriteDto } from 'src/modules/customer/dto/create-favorite.dto';
 import { UpdateFavoriteDto } from 'src/modules/customer/dto/update-favorite.dto';
-import { EntityStatus, Customer } from '@prisma/client';
+import { EntityStatus, Customer, Favorite } from '@prisma/client';
 import { Request } from 'express';
+import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 
 @Injectable()
 export class FavoriteService {
@@ -84,22 +85,42 @@ export class FavoriteService {
     return favorite;
   }
 
-  async findByCustomer(customerId: string) {
-    return this.prisma.favorite.findMany({
-      where: {
-        customer_id: customerId,
-      },
-      include: {
-        dish: {
-          include: {
-            category: true,
+  async findByCustomer(customerId: string, page: number, limit: number): Promise<QueryResponseDto<Favorite>> {
+
+    const [favorites, count] = await Promise.all([
+      this.prisma.favorite.findMany({
+        where: {
+          customer_id: customerId,
+        },
+        include: {
+          dish: {
+            include: {
+              category: true,
+            },
           },
         },
+        orderBy: {
+          created_at: 'desc',
+        },
+        skip: (Number(page) - 1) * Number(limit),
+        take: Number(limit),
+      }),
+      this.prisma.favorite.count({
+        where: {
+          customer_id: customerId,
+        },
+      })
+    ])
+
+    return {
+      data: favorites,
+      meta: {
+        total: count,
+        page,
+        limit,
+        totalPages: Math.ceil(count / limit),
       },
-      orderBy: {
-        created_at: 'desc',
-      },
-    });
+    };
   }
 
   async update(id: string, updateFavoriteDto: UpdateFavoriteDto) {
