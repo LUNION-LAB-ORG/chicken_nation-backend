@@ -1047,7 +1047,7 @@ export class OrderService {
         delivery_fee: order.delivery_fee,
         tax: order.tax,
         discount: order.discount,
-        date: format(new Date(order.created_at), 'dd/MM/yyyy', { locale: fr }),
+        date: format(new Date(order.created_at), 'dd/MM/yyyy HH:mm', { locale: fr }),
         client: clientName,
         contact: order.customer.phone || 'N/A',
         email: order.customer.email || 'N/A',
