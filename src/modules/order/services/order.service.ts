@@ -1053,7 +1053,7 @@ export class OrderService {
         email: order.customer.email || 'N/A',
         restaurant: order.restaurant.name,
         source: order.auto ? 'Appli' : 'Téléphone',
-        payment_mode: paymentMethods,
+        payment_mode: paymentMethods.toLowerCase(),
       });
 
       // Cumul des totaux
