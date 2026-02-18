@@ -303,11 +303,11 @@ export class OrderService {
         updated_at: new Date(),
         status:
           status == OrderStatus.ACCEPTED ? OrderStatus.IN_PROGRESS : status,
-        ...(status === OrderStatus.ACCEPTED && { accepted_at: new Date(), prepared_at: new Date()}),
-        ...(status === OrderStatus.READY && { ready_at: new Date()}),
-        ...(status === OrderStatus.PICKED_UP && { picked_up_at: new Date()}),
-        ...(status === OrderStatus.COLLECTED && { collected_at: new Date()}),
-        ...(status === OrderStatus.COMPLETED && { completed_at: new Date()}),
+        ...(status === OrderStatus.ACCEPTED && { accepted_at: new Date(), prepared_at: new Date() }),
+        ...(status === OrderStatus.READY && { ready_at: new Date() }),
+        ...(status === OrderStatus.PICKED_UP && { picked_up_at: new Date() }),
+        ...(status === OrderStatus.COLLECTED && { collected_at: new Date() }),
+        ...(status === OrderStatus.COMPLETED && { completed_at: new Date() }),
         ...(status === OrderStatus.CANCELLED && { cancelled_at: new Date(), cancelled_by: meta?.userId, cancelled_reason: meta?.reason || '' }),
       },
       include: {
@@ -1004,6 +1004,7 @@ export class OrderService {
       { header: 'Email', key: 'email', width: 30 },
       { header: 'Restaurant', key: 'restaurant', width: 25 },
       { header: 'Source', key: 'source', width: 12 },
+      { header: 'Mode de paiement', key: 'payment_mode', width: 25 },
     ];
 
     // Style de l'en-tête
@@ -1034,6 +1035,10 @@ export class OrderService {
           .filter(Boolean)
           .join(' ') || 'N/A';
 
+      const paymentMethods = order.paiements.length > 0
+        ? Array.from(new Set(order.paiements.map(p => p.source || p.mode))).join(', ')
+        : 'N/A';
+
       worksheet.addRow({
         reference: order.reference,
         amount: order.amount,
@@ -1048,6 +1053,7 @@ export class OrderService {
         email: order.customer.email || 'N/A',
         restaurant: order.restaurant.name,
         source: order.auto ? 'Appli' : 'Téléphone',
+        payment_mode: paymentMethods,
       });
 
       // Cumul des totaux
@@ -1089,6 +1095,7 @@ export class OrderService {
       email: '',
       restaurant: '',
       source: '',
+      payment_mode: '', 
     });
 
     // Style de la ligne de totaux
