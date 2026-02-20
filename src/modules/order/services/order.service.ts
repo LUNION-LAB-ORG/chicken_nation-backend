@@ -1279,7 +1279,14 @@ export class OrderService {
       restaurant_id: restaurantId,
       entity_status: { not: EntityStatus.DELETED },
     };
-
+    where.OR = [
+      {
+        AND: [{ paied: false }, { auto: false }],
+      },
+      {
+        paied: true,
+      },
+    ];
     if (startDate && endDate) {
       where.created_at = {
         gte: new Date(startDate),
