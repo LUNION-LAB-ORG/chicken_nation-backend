@@ -46,7 +46,7 @@
     "@types/uuid": "9",
     "bcryptjs": "^3.0.3",
     "body-parser": "^2.2.2",
-    "bullmq": "^5.66.4",
+    "bullmq": "^5.69.3",
     "cache-manager": "^7.2.7",
     "canvas": "^3.2.0",
     "class-transformer": "^0.5.1",
