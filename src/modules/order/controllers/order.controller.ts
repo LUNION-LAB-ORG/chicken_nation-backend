@@ -21,7 +21,7 @@ import {
   ApiResponse,
   ApiTags
 } from '@nestjs/swagger';
-import { OrderStatus, User } from '@prisma/client';
+import { Customer, OrderStatus, User } from '@prisma/client';
 import { Request, Response } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
@@ -35,6 +35,7 @@ import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
 import { OrderService } from 'src/modules/order/services/order.service';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 import { ReceiptsService } from '../services/receipts.service';
+import { OrderCreateDto } from '../dto/order-create.dto';
 
 @ApiTags('Commandes')
 @Controller('orders')
@@ -52,6 +53,15 @@ export class OrderController {
   @ApiBody({ type: CreateOrderDto })
   async create(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
     return this.orderService.create(req, createOrderDto);
+  }
+  @Post("/create-v2")
+  @UseGuards(JwtCustomerAuthGuard)
+  @ApiOperation({ summary: 'Créer une nouvelle commande' })
+  @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
+  @ApiBody({ type: OrderCreateDto })
+  async createorderv2(@Req() req: Request, @Body() createOrderDto: OrderCreateDto) {
+    const customer_id = (req.user as Customer).id;
+    return this.orderService.createv2(customer_id, createOrderDto);
   }
 
 
@@ -166,5 +176,17 @@ export class OrderController {
   @RequirePermission(Modules.COMMANDES, Action.EXPORT)
   async getReceiptPdf(@Param('id') id: string, @Res() res: Response) {
     await this.receiptsService.generateReceiptPdf(id, res);
+  }
+
+  @Get('export/restaurant-pdf')
+  async exportRestaurantPdf(@Query() query: QueryOrderDto, @Res() res: Response) {
+    const result = await this.orderService.exportRestaurantOrdersToPDF(query);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${result.filename}"`,
+      'Content-Length': result.buffer.length,
+    });
+
+    res.send(result.buffer);
   }
 }

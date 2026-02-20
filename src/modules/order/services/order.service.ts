@@ -14,7 +14,7 @@ import {
   OrderType,
   Prisma,
 } from '@prisma/client';
-import { format, startOfMonth } from 'date-fns';
+import { format, startOfMonth, differenceInMinutes } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import * as ExcelJS from 'exceljs';
 import { Request } from 'express';
@@ -28,6 +28,9 @@ import { UpdateOrderDto } from '../dto/update-order.dto';
 import { OrderEvent } from '../events/order.event';
 import { OrderHelper } from '../helpers/order.helper';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
+import { OrderV2Helper } from '../helpers/orderv2.helper';
+import { OrderCreateDto } from '../dto/order-create.dto';
+import * as puppeteer from 'puppeteer';
 
 @Injectable()
 export class OrderService {
@@ -36,9 +39,120 @@ export class OrderService {
     private prisma: PrismaService,
     private generateDataService: GenerateDataService,
     private orderHelper: OrderHelper,
+    private orderHelperV2: OrderV2Helper,
     private orderEvent: OrderEvent,
     private readonly orderWebSocketService: OrderWebSocketService,
   ) { }
+
+  async createv2(customer_id: string, createOrderDto: OrderCreateDto): Promise<Order> {
+    const {
+      items, address, restaurant_id, delivery_fee, type, code_promo, date, fullname, phone, email,
+    } = createOrderDto;
+
+    // 1. Gestion de la Date (Le format ISO géré par le nouveau DTO)
+    let finalDate = date && typeof date === 'string' ? new Date(date) : new Date();
+
+    // 2. Client
+    const customerData = await this.orderHelperV2.resolveCustomerData({
+      customer_id, fullname, phone, email,
+    });
+
+    // 3. Récupération globale des Plats & Calculs
+    const dishIds = items.map((item) => item.dish_id);
+    const dishesWithDetails = await this.orderHelperV2.getDishesWithDetails(dishIds);
+    const promoDiscount = await this.orderHelperV2.applyPromoCode(code_promo);
+
+    // Ton algorithme ajusté !
+    const { orderItems, netAmount, totalDishes } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails);
+
+    // ==========================================
+    // 4. LE MOTEUR DE ROUTAGE DES RESTAURANTS
+    // ==========================================
+    let restaurant: any = null;
+    let delivery: any = null;
+    let finalDeliveryFee = 0;
+
+    if (type === OrderType.DELIVERY) {
+      // 📍 LIVRAISON : Attribution automatique selon la distance et le stock
+      if (!address) throw new BadRequestException("L'adresse est obligatoire pour une livraison.");
+      const addressData = await this.orderHelperV2.validateAddress(address);
+
+      restaurant = await this.orderHelperV2.findEligibleDeliveryRestaurant(addressData, dishIds);
+      if (delivery_fee) {
+        finalDeliveryFee = delivery_fee;
+      } else {
+        delivery = await this.orderHelperV2.calculeFraisLivraison({
+          lat: addressData.latitude,
+          long: addressData.longitude,
+          restaurant,
+        });
+        finalDeliveryFee = delivery.montant;
+      }
+
+      finalDeliveryFee = delivery_fee ?? delivery.montant;
+
+    } else {
+      // 🛍️ EMPORTER & TABLE : Vérification stricte du choix du client
+      if (!restaurant_id) throw new BadRequestException("Le choix du restaurant est obligatoire pour ce type de commande.");
+
+      restaurant = await this.orderHelperV2.validateRestaurantChoice(restaurant_id, dishIds);
+      finalDeliveryFee = 0; // Pas de frais de livraison
+    }
+
+    // 5. Calcul Final des Totaux
+    const discount = netAmount * promoDiscount;
+    const totalAfterDiscount = netAmount - discount;
+    const tax = await this.orderHelperV2.calculateTax(totalAfterDiscount);
+    const totalAmount = totalAfterDiscount + tax + finalDeliveryFee;
+
+    const orderNumber = this.orderHelperV2.generateOrderReference();
+
+    // 6. Sauvegarde en Base de données
+    const order = await this.prisma.$transaction(async (prisma) => {
+      return await prisma.order.create({
+        data: {
+          type,
+          fullname: customerData.fullname,
+          phone: customerData.phone,
+          email: customerData.email,
+          customer: { connect: { id: customerData.customer_id } },
+          restaurant: { connect: { id: restaurant.id } },
+          reference: orderNumber,
+          address: address ?? '',
+          delivery_fee: Number(finalDeliveryFee),
+          delivery_service: delivery ? delivery.service : DeliveryService.TURBO,
+          zone_id: delivery?.zone_id,
+          tax: Number(tax),
+          discount: Number(discount),
+          net_amount: Number(netAmount),
+          amount: Number(totalAmount),
+          date: finalDate,
+          time: finalDate.toISOString().split('T')[1].substring(0, 5),
+          status: OrderStatus.PENDING,
+          paied: false,
+          auto: true,
+          order_items: {
+            create: orderItems.map((item) => ({
+              dish_id: item.dish_id,
+              quantity: item.quantity,
+              amount: item.amount,
+              epice: item.epice,
+              supplements: item.supplements,
+            })),
+          },
+          entity_status: EntityStatus.ACTIVE,
+        },
+        include: {
+          order_items: { include: { dish: true } },
+          customer: { select: { id: true, first_name: true, last_name: true, phone: true, email: true, image: true } },
+          restaurant: true,
+          paiements: true,
+        },
+      });
+    });
+
+    return order;
+  }
 
   /**
    * Crée une nouvelle commande
@@ -1095,7 +1209,7 @@ export class OrderService {
       email: '',
       restaurant: '',
       source: '',
-      payment_mode: '', 
+      payment_mode: '',
     });
 
     // Style de la ligne de totaux
@@ -1136,6 +1250,270 @@ export class OrderService {
     return {
       buffer,
       filename: `rapport-commandes-${new Date().toISOString().split('T')[0]}.xlsx`,
+    };
+  }
+
+
+  /**
+     * Génère les données et la structure pour le PDF des commandes d'un restaurant
+     */
+  async exportRestaurantOrdersToPDF(filters: QueryOrderDto) {
+    const { restaurantId, startDate, endDate, sortBy = 'created_at', sortOrder = 'desc' } = filters;
+
+    if (!restaurantId) {
+      throw new BadRequestException("L'ID du restaurant est obligatoire pour générer ce rapport.");
+    }
+
+    const statusTranslations: Record<OrderStatus, string> = {
+      [OrderStatus.PENDING]: 'En attente',
+      [OrderStatus.CANCELLED]: 'Annulé',
+      [OrderStatus.ACCEPTED]: 'Accepté',
+      [OrderStatus.IN_PROGRESS]: 'En cours',
+      [OrderStatus.READY]: 'Prêt',
+      [OrderStatus.PICKED_UP]: 'En livraison',
+      [OrderStatus.COLLECTED]: 'Collecté (Client)',
+      [OrderStatus.COMPLETED]: 'Terminé',
+    };
+
+    const where: Prisma.OrderWhereInput = {
+      restaurant_id: restaurantId,
+      entity_status: { not: EntityStatus.DELETED },
+    };
+
+    if (startDate && endDate) {
+      where.created_at = {
+        gte: new Date(startDate),
+        lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
+      };
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where,
+      include: {
+        customer: { select: { first_name: true, last_name: true, phone: true } },
+        restaurant: { select: { name: true } }
+      },
+      orderBy: { [sortBy]: sortOrder },
+    });
+
+    if (orders.length === 0) {
+      throw new NotFoundException("Aucune commande trouvée pour cette période.");
+    }
+
+    const restaurantName = orders[0].restaurant.name;
+    const totalOrders = orders.length;
+
+    // 📊 INITIALISATION DES STATISTIQUES
+    const stats = {
+      completedCount: 0,
+      completedAmount: 0,
+      cancelledCount: 0,
+      cancelledAmount: 0,
+      restaurantDelayCount: 0, // Prép > 20 min
+      deliveryDelayCount: 0,   // Livr > 40 min
+      typeDelivery: 0,
+      typePickup: 0,
+      typeTable: 0,
+    };
+
+    // 🔄 Formatage et Calcul des statistiques
+    const formattedOrders = orders.map((order) => {
+      // 1. Catégorisation par type
+      if (order.type === OrderType.DELIVERY) stats.typeDelivery++;
+      else if (order.type === OrderType.PICKUP) stats.typePickup++;
+      else if (order.type === OrderType.TABLE) stats.typeTable++;
+
+      // 2. Chiffre d'affaires et Statuts globaux
+      // On considère comme terminées les commandes "COMPLETED" ou "COLLECTED"
+      const isCompleted = order.status === OrderStatus.COMPLETED || order.status === OrderStatus.COLLECTED;
+      if (isCompleted) {
+        stats.completedCount++;
+        stats.completedAmount += order.amount;
+      } else if (order.status === OrderStatus.CANCELLED) {
+        stats.cancelledCount++;
+        stats.cancelledAmount += order.amount;
+      }
+
+      // 3. Calcul Temps de préparation
+      let prepTime = '-';
+      if (order.created_at && order.ready_at) {
+        const diffPrep = differenceInMinutes(new Date(order.ready_at), new Date(order.created_at));
+        prepTime = `${diffPrep} min`;
+        if (diffPrep > 20) stats.restaurantDelayCount++;
+      }
+
+      // 4. Calcul Temps de livraison/retrait
+      let deliveryTime = '-';
+      const endStatusDate = order.collected_at || order.picked_up_at || order.completed_at;
+      if (order.ready_at && endStatusDate) {
+        const diffDeliv = differenceInMinutes(new Date(endStatusDate), new Date(order.ready_at));
+        deliveryTime = `${diffDeliv} min`;
+        if (diffDeliv > 40) stats.deliveryDelayCount++;
+      }
+
+      const clientName = order.fullname || [order.customer?.first_name, order.customer?.last_name].filter(Boolean).join(' ') || 'Client Inconnu';
+
+      return {
+        reference: order.reference,
+        date: format(new Date(order.created_at), 'dd/MM/yyyy HH:mm', { locale: fr }),
+        prepTime,
+        deliveryTime,
+        clientName,
+        clientPhone: order.phone || order.customer?.phone || '-',
+        status: statusTranslations[order.status] || order.status,
+        rawStatus: order.status,
+        amount: order.amount,
+      };
+    });
+
+    // 🧮 Helpers pour calculer les taux en %
+    const calcRate = (count: number) => totalOrders > 0 ? ((count / totalOrders) * 100).toFixed(1) : '0.0';
+
+    // 🎨 Génération du template HTML
+    const htmlTemplate = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: 'Helvetica', sans-serif; padding: 20px; color: #1f2937; margin: 0; }
+          .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #F17922; padding-bottom: 15px; }
+          h1 { color: #F17922; margin: 0 0 5px 0; font-size: 24px; }
+          h2 { color: #4b5563; margin: 0 0 5px 0; font-size: 18px; }
+          p.period { color: #6b7280; font-size: 14px; margin: 0; }
+          
+          /* Kpis Dashboard */
+          .dashboard { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 25px; }
+          .kpi-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; flex: 1; min-width: 150px; text-align: center; }
+          .kpi-title { font-size: 11px; text-transform: uppercase; color: #6b7280; font-weight: bold; margin-bottom: 5px; }
+          .kpi-value { font-size: 18px; font-weight: bold; color: #111827; }
+          .kpi-sub { font-size: 12px; color: #F17922; font-weight: bold; margin-top: 4px; }
+          .kpi-alert { color: #dc2626; } /* Rouge pour les retards */
+          
+          .recap-types { background: #fff7ed; border: 1px solid #fed7aa; padding: 10px; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-around; font-size: 13px; font-weight: bold; color: #c2410c; }
+          
+          /* Table */
+          table { width: 100%; border-collapse: collapse; font-size: 10px; }
+          th { background-color: #F17922; color: white; padding: 8px; text-align: left; }
+          td { padding: 8px; border-bottom: 1px solid #e5e7eb; }
+          tr:nth-child(even) { background-color: #f9fafb; }
+          .amount { font-weight: bold; text-align: right; }
+          .total-row { background-color: #f3f4f6; font-weight: bold; font-size: 12px; }
+          
+          /* Badges */
+          .badge { padding: 3px 6px; border-radius: 4px; font-weight: bold; font-size: 9px; }
+          .badge-COMPLETED, .badge-COLLECTED { background-color: #dcfce7; color: #166534; }
+          .badge-CANCELLED { background-color: #fee2e2; color: #991b1b; }
+          .badge-PENDING { background-color: #fef3c7; color: #92400e; }
+          .badge-IN_PROGRESS, .badge-ACCEPTED { background-color: #e0f2fe; color: #075985; }
+          .badge-READY { background-color: #fef08a; color: #854d0e; }
+          .badge-PICKED_UP { background-color: #ffedd5; color: #9a3412; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>Rapport d'Activité</h1>
+          <h2>Restaurant : ${restaurantName}</h2>
+          <p class="period">Période : ${startDate ? format(new Date(startDate), 'dd/MM/yyyy') : 'Début'} - ${endDate ? format(new Date(endDate), 'dd/MM/yyyy') : "Aujourd'hui"}</p>
+        </div>
+
+        <div class="dashboard">
+          <div class="kpi-card">
+            <div class="kpi-title">Total Commandes</div>
+            <div class="kpi-value">${totalOrders}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">Terminées (${calcRate(stats.completedCount)}%)</div>
+            <div class="kpi-value" style="color: #166534;">${stats.completedCount}</div>
+            <div class="kpi-sub" style="color: #166534;">${stats.completedAmount.toLocaleString()} FCFA</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">Annulées (${calcRate(stats.cancelledCount)}%)</div>
+            <div class="kpi-value" style="color: #dc2626;">${stats.cancelledCount}</div>
+            <div class="kpi-sub" style="color: #dc2626;">${stats.cancelledAmount.toLocaleString()} FCFA</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">Retards Prép. > 20m</div>
+            <div class="kpi-value kpi-alert">${stats.restaurantDelayCount} <span style="font-size:12px">(${calcRate(stats.restaurantDelayCount)}%)</span></div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-title">Retards Livr. > 40m</div>
+            <div class="kpi-value kpi-alert">${stats.deliveryDelayCount} <span style="font-size:12px">(${calcRate(stats.deliveryDelayCount)}%)</span></div>
+          </div>
+        </div>
+
+        <div class="recap-types">
+          <span>🚚 Livraison : ${stats.typeDelivery}</span>
+          <span>🛍️ À emporter : ${stats.typePickup}</span>
+          <span>🍽️ Sur place : ${stats.typeTable}</span>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Réf.</th>
+              <th>Date</th>
+              <th>Client</th>
+              <th>Téléphone</th>
+              <th>Prépa.</th>
+              <th>Livr/Retrait</th>
+              <th>Statut</th>
+              <th style="text-align: right;">Montant</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${formattedOrders.map(o => `
+              <tr>
+                <td>${o.reference}</td>
+                <td>${o.date}</td>
+                <td>${o.clientName}</td>
+                <td>${o.clientPhone}</td>
+                <td style="${o.prepTime !== '-' && parseInt(o.prepTime) > 20 ? 'color: red; font-weight: bold;' : ''}">${o.prepTime}</td>
+                <td style="${o.deliveryTime !== '-' && parseInt(o.deliveryTime) > 40 ? 'color: red; font-weight: bold;' : ''}">${o.deliveryTime}</td>
+                <td><span class="badge badge-${o.rawStatus}">${o.status}</span></td>
+                <td class="amount">${o.amount.toLocaleString()} FCFA</td>
+              </tr>
+            `).join('')}
+            <tr class="total-row">
+              <td colspan="7" style="text-align: right; padding: 12px;">CHIFFRE D'AFFAIRES BRUT (Toutes commandes confondues) :</td>
+              <td class="amount" style="padding: 12px;">${formattedOrders.reduce((acc, curr) => acc + curr.amount, 0).toLocaleString()} FCFA</td>
+            </tr>
+          </tbody>
+        </table>
+      </body>
+      </html>
+    `;
+
+    // 📄 GÉNÉRATION DU PDF AVEC PUPPETEER
+    let pdfBuffer: Uint8Array;
+    try {
+      const browser = await puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+      });
+      const page = await browser.newPage();
+
+      await page.setContent(htmlTemplate, { waitUntil: 'networkidle0' });
+
+      pdfBuffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '1cm', right: '1cm', bottom: '1cm', left: '1cm' }
+      });
+
+      await browser.close();
+    } catch (error) {
+      this.logger.error("Erreur Puppeteer lors de la génération du PDF", error);
+      throw new BadRequestException("Impossible de générer le fichier PDF.");
+    }
+
+    const safeRestaurantName = restaurantName.replace(/[^a-zA-Z0-9]/g, '_');
+    const safeDate = format(new Date(), 'yyyy-MM-dd');
+    const filename = `Rapport_${safeRestaurantName}_${safeDate}.pdf`;
+
+    return {
+      buffer: Buffer.from(pdfBuffer),
+      filename,
     };
   }
 

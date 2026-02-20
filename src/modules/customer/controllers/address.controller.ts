@@ -15,7 +15,7 @@ import { Action } from 'src/modules/auth/enums/action.enum';
 @ApiTags('Addresses')
 @ApiBearerAuth()
 @Controller('addresses')
-@UseInterceptors(CacheInterceptor)
+// @UseInterceptors(CacheInterceptor)
 
 export class AddressController {
   constructor(private readonly addressService: AddressService) { }
