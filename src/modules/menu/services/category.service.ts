@@ -79,7 +79,7 @@ export class CategoryService {
         dishes: {
           where: { entity_status: EntityStatus.ACTIVE },
           orderBy: {
-            name: 'asc',
+            created_at: 'desc',
           },
           include: {
             dish_supplements: {
