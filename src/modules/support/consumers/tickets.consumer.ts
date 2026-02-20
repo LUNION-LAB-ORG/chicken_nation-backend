@@ -1,4 +1,4 @@
-import { Processor, WorkerHost, Job } from '@nestjs/bullmq';
+import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { AssignmentService } from '../services/assignment.service';
 
@@ -12,15 +12,10 @@ export class TicketsConsumer extends WorkerHost {
     super();
   }
 
-  async process(job: Job, token?: string): Promise<any> {
+  async process(job: any, token?: string): Promise<any> {
     this.logger.log(`Processing job ${job.id}`);
 
     const { ticketId, categoryId } = job.data;
-    this.logger.debug(`Job data: ${JSON.stringify(job.data)}`);
-
-    this.logger.log(
-      `Auto-assigning ticket ${ticketId} in category ${categoryId}`,
-    );
 
     const result = await this.assignmentService.autoAssignTicket(
       ticketId,
@@ -32,7 +27,6 @@ export class TicketsConsumer extends WorkerHost {
         `No agents available for ticket ${ticketId}, retrying...`,
       );
 
-      // En lançant une erreur, BullMQ retry automatiquement
       throw new Error('No agents available, retrying...');
     }
 
