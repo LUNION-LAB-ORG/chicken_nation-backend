@@ -277,7 +277,7 @@ export class OrderService {
         'Le montant du paiement est inférieur au montant de la commande',
       );
     }
-
+    this.orderHelperV2.validateRestaurantChoice(restaurant.id, items.map((item) => item.dish_id))
     // Générer un numéro de commande unique
     const orderNumber = this.generateDataService.generateOrderReference();
 
@@ -1016,8 +1016,6 @@ export class OrderService {
 
     const where: Prisma.OrderWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
-      status: OrderStatus.COMPLETED,
-      paied: true,
     };
 
     if (restaurantId) {
