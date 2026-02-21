@@ -1428,6 +1428,7 @@ export class OrderService {
         type: typeTranslations[order.type] || order.type,
         rawType: order.type,
         amount: order.amount,
+        source: order.auto ? 'Appli' : 'Manuel',
       };
     });
 
