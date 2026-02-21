@@ -1325,6 +1325,12 @@ export class OrderService {
       [OrderStatus.COMPLETED]: 'Terminé',
     };
 
+    const typeTranslations: Record<OrderType, string> = {
+      [OrderType.DELIVERY]: 'Livraison',
+      [OrderType.PICKUP]: 'Emporter',
+      [OrderType.TABLE]: 'Table',
+    };
+
     const where: Prisma.OrderWhereInput = {
       restaurant_id: restaurantId,
       entity_status: { not: EntityStatus.DELETED },
@@ -1419,6 +1425,8 @@ export class OrderService {
         clientPhone: order.phone || order.customer?.phone || '-',
         status: statusTranslations[order.status] || order.status,
         rawStatus: order.status,
+        type: typeTranslations[order.type] || order.type,
+        rawType: order.type,
         amount: order.amount,
       };
     });
@@ -1514,6 +1522,7 @@ export class OrderService {
               <th>Téléphone</th>
               <th>Prépa.</th>
               <th>Livr/Retrait</th>
+              <th>Type</th>
               <th>Statut</th>
               <th style="text-align: right;">Montant</th>
             </tr>
@@ -1527,6 +1536,7 @@ export class OrderService {
                 <td>${o.clientPhone}</td>
                 <td style="${o.prepTime !== '-' && parseInt(o.prepTime) > 20 ? 'color: red; font-weight: bold;' : ''}">${o.prepTime}</td>
                 <td style="${o.deliveryTime !== '-' && parseInt(o.deliveryTime) > 40 ? 'color: red; font-weight: bold;' : ''}">${o.deliveryTime}</td>
+                <td><span class="badge badge-${o.rawType}">${o.type}</span></td>
                 <td><span class="badge badge-${o.rawStatus}">${o.status}</span></td>
                 <td class="amount">${o.amount.toLocaleString()} FCFA</td>
               </tr>
