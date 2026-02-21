@@ -24,7 +24,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateOrderDto } from '../dto/create-order.dto';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 import { QueryOrderCustomerDto, QueryOrderDto } from '../dto/query-order.dto';
-import { UpdateOrderDto } from '../dto/update-order.dto';
+import { OrderUpdatedDto, UpdateOrderDto } from '../dto/update-order.dto';
 import { OrderEvent } from '../events/order.event';
 import { OrderHelper } from '../helpers/order.helper';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
@@ -746,6 +746,58 @@ export class OrderService {
     };
   }
 
+  /**
+   * Met à jour une commande client
+   */
+  async updateClient(id: string, orderUpdatedDto: OrderUpdatedDto) {
+    const { delivery_fee, date, ...rest } = orderUpdatedDto;
+
+    const order = await this.findById(id);
+
+    // 1. Gestion de la Date
+    let finalDate: Date;
+
+    if (date && typeof date === 'string') {
+      // Le client a fourni une nouvelle date via le DTO
+      finalDate = new Date(date);
+    } else {
+      // Le client n'a rien fourni, on reconstruit la date exacte à partir de l'existant
+      finalDate = new Date(order.date!);
+
+      if (order.time) {
+        const [hours, minutes] = order.time.split(':').map(Number);
+        finalDate.setHours(hours, minutes, 0, 0);
+      }
+    }
+
+    // Appliquer les modifications
+    const updatedOrder = await this.prisma.order.update({
+      where: { id },
+      data: {
+        ...rest,
+        date: finalDate,
+        time: finalDate.toISOString().split('T')[1].substring(0, 5),
+        delivery_fee,
+        updated_at: new Date(),
+      },
+      include: {
+        order_items: {
+          include: {
+            dish: true,
+          },
+        },
+        paiements: true,
+        customer: true,
+      },
+    });
+
+    // Envoyer l'événement de mise à jour de statut de commande
+    this.orderEvent.orderUpdatedEvent(updatedOrder, orderUpdatedDto);
+
+    // Émettre via WebSocket
+    this.orderWebSocketService.emitOrderUpdated(updatedOrder);
+    return updatedOrder;
+  }
   /**
    * Met à jour une commande
    */

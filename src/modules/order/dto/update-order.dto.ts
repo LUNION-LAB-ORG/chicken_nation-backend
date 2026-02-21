@@ -2,6 +2,7 @@ import { ApiPropertyOptional, PartialType } from "@nestjs/swagger";
 import { CreateOrderDto } from "src/modules/order/dto/create-order.dto";
 import { IsBoolean, IsNumber, IsOptional, IsString } from "class-validator";
 import { Type } from "class-transformer";
+import { OrderCreateDto } from "./order-create.dto";
 
 export class UpdateOrderDto extends PartialType(CreateOrderDto) {
     @ApiPropertyOptional({ type: Date, required: false, description: "Temps de livraison estimée", example: "1j | 30m | 45m | 2h30m | 60s | 1h" })
@@ -31,4 +32,8 @@ export class UpdateOrderDto extends PartialType(CreateOrderDto) {
     @IsNumber()
     @Type(() => Number)
     amount?: number;
+}
+
+export class OrderUpdatedDto extends PartialType(OrderCreateDto) {
+
 }

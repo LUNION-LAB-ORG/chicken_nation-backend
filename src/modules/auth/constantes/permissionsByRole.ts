@@ -36,7 +36,7 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
   /* ===================== COMPTABLE ===================== */
   [UserRole.COMPTABLE]: {
     modules: {
-      [Modules.DASHBOARD]: [Action.READ],
+      [Modules.DASHBOARD]: [Action.READ; Action.EXPORT],
 
       [Modules.COMMANDES]: [Action.READ, Action.EXPORT, Action.REPORT],
       [Modules.MENUS]: [Action.READ],

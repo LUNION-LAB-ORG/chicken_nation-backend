@@ -31,7 +31,7 @@ import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { QueryOrderCustomerDto, QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
-import { UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
+import { OrderUpdatedDto, UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
 import { OrderService } from 'src/modules/order/services/order.service';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 import { ReceiptsService } from '../services/receipts.service';
@@ -132,6 +132,11 @@ export class OrderController {
   findOne(@Param('id') id: string) {
     return this.orderService.findById(id);
   }
+  @Get(':id/client')
+  @UseGuards(JwtCustomerAuthGuard)
+  findOneClient(@Param('id') id: string) {
+    return this.orderService.findById(id);
+  }
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
@@ -139,6 +144,12 @@ export class OrderController {
   @ApiBody({ type: UpdateOrderDto })
   update(@Param('id') id: string, @Body() updateOrderDto: UpdateOrderDto) {
     return this.orderService.update(id, updateOrderDto);
+  }
+  @Patch(':id/client')
+  @UseGuards(JwtCustomerAuthGuard)
+  @ApiBody({ type: OrderUpdatedDto })
+  updateClient(@Param('id') id: string, @Body() orderUpdatedDto: OrderUpdatedDto) {
+    return this.orderService.updateClient(id, orderUpdatedDto);
   }
 
   @Patch(':id/status')
@@ -155,6 +166,27 @@ export class OrderController {
     },
   })
   updateStatus(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() body: { status: OrderStatus; meta?: Record<string, any> },
+  ) {
+    const userId = (req.user as User).id;
+    return this.orderService.updateStatus(id, body.status, { ...body.meta, userId });
+  }
+
+  @Patch(':id/client/status')
+  @UseGuards(JwtCustomerAuthGuard)
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: Object.values(OrderStatus) },
+        meta: { type: 'object', additionalProperties: true },
+      },
+      required: ['status'],
+    },
+  })
+  updateStatusClient(
     @Req() req: Request,
     @Param('id') id: string,
     @Body() body: { status: OrderStatus; meta?: Record<string, any> },
