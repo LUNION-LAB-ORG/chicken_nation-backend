@@ -344,7 +344,7 @@ export class OrderService {
           date: orderData.date ? new Date(orderData.date || '') : new Date(),
           time: orderData.time || '10:00',
           payment_method: createOrderDto.payment_method ?? 'OFFLINE',
-          status: OrderStatus.PENDING,
+          status: OrderStatus.ACCEPTED,
           paied_at: payment ? payment.created_at : null,
           paied: payment ? true : false,
           order_items: {
