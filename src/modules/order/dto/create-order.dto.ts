@@ -14,6 +14,7 @@ export class CreateOrderDto {
 
     @ApiPropertyOptional({ description: "Type de paiement", enum: PaymentMethod })
     @IsEnum(PaymentMethod)
+    @IsOptional()
     payment_method?: PaymentMethod;
     
     @ApiPropertyOptional({ description: "Type de table", enum: TypeTable })
