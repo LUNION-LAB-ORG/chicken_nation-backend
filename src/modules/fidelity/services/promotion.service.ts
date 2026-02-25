@@ -13,7 +13,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryPromotionDto } from '../dto/query-promotion.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PromotionEvent } from '../events/promotion.event';
-import { Request } from 'express';
+import type { Request } from 'express';
 
 import { PromotionErrorKeys } from '../enums/promotion-error-keys.enum';
 import { PromotionException } from '../filters/promotion.filter';

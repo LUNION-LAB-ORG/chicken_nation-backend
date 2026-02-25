@@ -54,6 +54,10 @@ enum PaiementMode {
   CARD // CARD
   CASH // ESPÈCES
 }
+enum PaymentMethod {
+  OFFLINE // Au restaurant
+  ONLINE // En ligne
+}
 
 enum PaiementStatus {
   REVERTED // ANNULÉ
@@ -554,6 +558,7 @@ model Order {
   email                      String?         @db.VarChar
   note                       String?         @db.VarChar
   auto                       Boolean         @default(true)
+  payment_method             PaymentMethod? @default(ONLINE)
 
   user_id String? @db.Uuid
   user    User?   @relation(fields: [user_id], references: [id])
@@ -583,6 +588,7 @@ model Order {
   collected_at  DateTime?
   completed_at  DateTime?
   cancelled_at  DateTime?
+  deleted_at    DateTime?
   paied_at      DateTime?
   created_at    DateTime       @default(now()) @db.Timestamp(6)
   updated_at    DateTime       @default(now()) @db.Timestamp(6)

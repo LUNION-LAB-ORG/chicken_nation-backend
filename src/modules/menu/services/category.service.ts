@@ -8,7 +8,7 @@ import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { EntityStatus, User } from '@prisma/client';
 import { CategoryEvent } from 'src/modules/menu/events/category.event';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { S3Service } from '../../../s3/s3.service';
 
 @Injectable()

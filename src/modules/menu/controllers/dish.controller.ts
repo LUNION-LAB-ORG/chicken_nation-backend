@@ -15,7 +15,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
@@ -35,7 +35,7 @@ export class DishController {
   constructor(
     private readonly dishService: DishService,
     private readonly dishRestaurantService: DishRestaurantService,
-  ) {}
+  ) { }
 
   @Post()
   @ApiOperation({ summary: "Création d'un plat" })
@@ -68,8 +68,19 @@ export class DishController {
     return this.dishService.findMany(filter);
   }
 
+  @Get('popular')
+  @ApiOperation({ summary: 'Recherche de plats populaires' })
+  async getPopularDishes(
+    @Query('days') days?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const parsedDays = days ? parseInt(days, 10) : 30;
+    const parsedLimit = limit ? parseInt(limit, 10) : 4;
+
+    return this.dishService.findPopular(parsedDays, parsedLimit);
+  }
+
   @Get(':id')
-  // @CacheTTL(20) 
   @ApiOperation({ summary: 'Obtenir un plat par ID' })
   findOne(@Param('id') id: string, @Query() query?: { customerId?: string }) {
     return this.dishService.findOne(id, query?.customerId);

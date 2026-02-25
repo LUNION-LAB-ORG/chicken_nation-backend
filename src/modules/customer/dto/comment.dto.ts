@@ -1,10 +1,10 @@
 import { IsNotEmpty, IsNumber, IsString, IsUUID, Max, Min, IsOptional } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateCommentDto {
-    @ApiProperty({ description: 'Message du commentaire' })
-    @IsNotEmpty()
+    @ApiPropertyOptional({ description: 'Message du commentaire' })
+    @IsOptional()
     @IsString()
     message: string;
 

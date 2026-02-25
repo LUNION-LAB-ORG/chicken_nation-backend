@@ -4,7 +4,7 @@ import { FilterQueryDto } from 'src/common/dto/filter-query.dto';
 import { CreateTicketMessageDto } from '../dtos/create-ticket-message.dto';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { Customer, User } from '@prisma/client';
 import { ApiTags } from '@nestjs/swagger';
 

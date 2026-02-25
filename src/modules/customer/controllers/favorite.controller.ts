@@ -2,7 +2,7 @@ import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, UseI
 import { FavoriteService } from 'src/modules/customer/services/favorite.service';
 import { CreateFavoriteDto } from 'src/modules/customer/dto/create-favorite.dto';
 import { UpdateFavoriteDto } from 'src/modules/customer/dto/update-favorite.dto';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { CacheInterceptor } from '@nestjs/cache-manager';

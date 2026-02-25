@@ -1,4 +1,4 @@
-import { OrderStatus } from '@prisma/client';
+import { OrderStatus, PaymentMethod } from '@prisma/client';
 import { notificationIcons } from 'src/modules/notifications/constantes/notifications.constante';
 
 export const getOrderNotificationContent = (orderData: {
@@ -7,22 +7,25 @@ export const getOrderNotificationContent = (orderData: {
     amount: number;
     restaurant_name: string;
     customer_name: string;
+    payment_method:PaymentMethod
 }, type: 'customer' | 'restaurant') => {
 
     const statusConfig = {
-        PENDING: {
-            title: '🎉 Nouvelle commande en attente !',
+      PENDING: {
+            title: '🎉 Commande enregistrée !',
             message: type === 'customer' ?
-                `Votre commande #${orderData.reference} est bien enregistrée et attend la confirmation du restaurant ${orderData.restaurant_name}. Montant: ${orderData.amount} XOF.` :
-                `Nouvelle commande ! #${orderData.reference} de ${orderData.customer_name}. Montant: ${orderData.amount} XOF. Veuillez la valider !`,
+                (orderData.payment_method === 'OFFLINE' ? 
+                    `Votre commande #${orderData.reference} est prête. Confirmez votre présence sur l'app à votre arrivée pour lancer la cuisson !` : 
+                    `Votre commande #${orderData.reference} est en attente de traitement chez ${orderData.restaurant_name}.`) :
+                `Nouvelle commande #${orderData.reference} (${orderData.customer_name}). En attente de confirmation de présence du client.`,
             icon: notificationIcons.joice.url,
             iconBgColor: notificationIcons.joice.color,
         },
         ACCEPTED: {
-            title: '✅ Commande acceptée et en préparation !',
+            title: '🔥 Cuisson lancée !',
             message: type === 'customer' ?
-                `Bonne nouvelle ! Votre commande #${orderData.reference} chez ${orderData.restaurant_name} a été acceptée et est maintenant en préparation. Bientôt prête !` :
-                `La commande #${orderData.reference} de ${orderData.customer_name} a été acceptée. Le chef est aux fourneaux ! Montant: ${orderData.amount} XOF.`,
+                `C'est parti ! Votre présence est confirmée. ${orderData.restaurant_name} commence la cuisson de votre commande #${orderData.reference}.` :
+                `Le client ${orderData.customer_name} a confirmé sa présence. Lancez la cuisson pour la commande #${orderData.reference} !`,
             icon: notificationIcons.ok.url,
             iconBgColor: notificationIcons.ok.color,
         },

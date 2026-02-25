@@ -71,6 +71,7 @@ export class LoyaltyService {
 
         return config;
     }
+    
     async getAllLoyaltyPoints(query: LoyaltyQueryDto): Promise<QueryResponseDto<LoyaltyPoint>> {
         const { page = 1, limit = 10, type, is_used, search } = query;
         const whereClause: Prisma.LoyaltyPointWhereInput = {};

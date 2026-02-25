@@ -15,7 +15,7 @@ import {
 import { CustomerService } from 'src/modules/customer/services/customer.service';
 import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto';
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { CustomerQueryDto } from 'src/modules/customer/dto/customer-query.dto';
 import { FileInterceptor } from '@nestjs/platform-express';

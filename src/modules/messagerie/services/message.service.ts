@@ -6,9 +6,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Customer, User } from '@prisma/client';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { QueryResponseDto } from '../../../common/dto/query-response.dto';
-import { PrismaService } from '../../../database/services/prisma.service';
+import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateMessageDto } from '../dto/createMessageDto';
 import { QueryMessagesDto } from '../dto/query-messages.dto';
 import { ResponseMessageDto } from '../dto/response-message.dto';
@@ -263,7 +263,7 @@ export class MessageService {
     const conversation = await this.prismaService.conversation.findUnique({
       where: { id: conversationId },
       include: {
-        users:true
+        users: true
       }
     });
 

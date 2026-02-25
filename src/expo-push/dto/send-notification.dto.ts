@@ -1,11 +1,7 @@
 import { IsString, IsArray, IsOptional, IsObject, IsNumber, IsEnum } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
-export enum NotificationPriority {
-    DEFAULT = 'default',
-    NORMAL = 'normal',
-    HIGH = 'high',
-}
+export type NotificationPriority = 'default' | 'normal' | 'high';
 
 export class SendNotificationDto {
     @ApiProperty({
@@ -66,10 +62,9 @@ export class SendNotificationDto {
 
     @ApiPropertyOptional({
         description: "Priorité de livraison (surtout pour Android)",
-        enum: NotificationPriority,
-        default: NotificationPriority.HIGH
+        default: "high"
     })
-    @IsEnum(NotificationPriority)
+    @IsString()
     @IsOptional()
     priority?: NotificationPriority;
 

@@ -6,7 +6,7 @@ import { PaiementsService } from 'src/modules/paiements/services/paiements.servi
 import { CreatePaiementKkiapayDto } from '../dto/create-paiement-kkiapay.dto';
 
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Request } from 'express';
+import type { Request } from 'express';
 
 @ApiTags('Paiements')
 @Controller('paiements')

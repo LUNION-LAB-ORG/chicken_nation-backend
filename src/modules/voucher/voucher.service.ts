@@ -1,7 +1,7 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { Prisma, User, VoucherStatus } from '@prisma/client';
-import { Request } from 'express';
-import { PrismaService } from './../../database/services/prisma.service';
+import type { Request } from 'express';
+import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { QueryVoucherDto } from './dto/query-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';

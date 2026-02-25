@@ -14,7 +14,7 @@ import {
 import { CardRequestService } from '../services/card-request.service';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import { NationCardStatus } from '@prisma/client';
 import { CardRequestQueryDto, NationCardQueryDto } from '../dtos/card-query.dto';
 import { ReviewCardRequestDto } from '../dtos/review-card-request.dto';

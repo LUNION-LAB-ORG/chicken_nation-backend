@@ -1,36 +1,36 @@
 import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { LoyaltyPointType, NotificationType, OrderStatus } from '@prisma/client';
+import { EntityStatus, LoyaltyPointType, OrderStatus, OrderType } from '@prisma/client';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
 import { PromotionService } from 'src/modules/fidelity/services/promotion.service';
-import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
-import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
-import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
 import { OrderChannels } from '../enums/order-channels';
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
-import { OrderNotificationsTemplate } from '../templates/order-notifications.template';
+import { ExpoPushService } from 'src/expo-push/expo-push.service';
 
 @Injectable()
 export class OrderListenerService {
     constructor(
-        private readonly notificationRecipientService: NotificationRecipientService,
-        private readonly notificationsWebSocketService: NotificationsWebSocketService,
-        private readonly notificationsService: NotificationsService,
         private promotionService: PromotionService,
         private loyaltyService: LoyaltyService,
-
-        private readonly orderNotificationsTemplate: OrderNotificationsTemplate,
+        private expoPushService: ExpoPushService
     ) { }
 
+    /* =========================================================
+        🛍️ COMMANDE CRÉÉE
+    ========================================================= */
     @OnEvent(OrderChannels.ORDER_CREATED)
-    @OnEvent(OrderChannels.ORDER_STATUS_UPDATED)
-    @OnEvent(OrderChannels.ORDER_UPDATED)
-    @OnEvent(OrderChannels.ORDER_DELETED)
     async orderCreatedEventListener(payload: OrderCreatedEvent) {
-        // PROMOTION USAGE
+        let isPromotionUsed = false;
+        let isLoyaltyUsed = false;
+
+        // 🔥 PROMOTION
         if (payload.order.promotion_id) {
-            if (payload.order.status === OrderStatus.PENDING && payload.totalDishes && payload.orderItems) {
-                await this.promotionService.usePromotion(
+            if (
+                payload.order.status === OrderStatus.ACCEPTED &&
+                payload.totalDishes &&
+                payload.orderItems
+            ) {
+                const promotion = await this.promotionService.usePromotion(
                     payload.order.promotion_id,
                     payload.order.customer_id,
                     payload.order.id,
@@ -38,84 +38,206 @@ export class OrderListenerService {
                     payload.orderItems,
                     payload.loyalty_level
                 );
+
+                isPromotionUsed =
+                    promotion.final_amount < payload.order.amount;
             }
         }
 
-        // LOYALTY POINTS
+        // ⭐ UTILISATION DES POINTS
         if (payload.order.points > 0) {
-            //Utilisation des points
-            if (payload.order.status === OrderStatus.PENDING) {
+            if (payload.order.status === OrderStatus.ACCEPTED) {
                 await this.loyaltyService.redeemPoints({
                     customer_id: payload.order.customer_id,
                     points: payload.order.points,
-                    reason: `Utilisation de ${payload.order.points} points de fidélité pour la commande #${payload.order.reference}` // Add order reference for clarity
+                    reason: `🔥 ${payload.order.points} points utilisés pour la commande #${payload.order.reference}`,
                 });
+                isLoyaltyUsed = true;
             }
         }
 
-        // Attribution des points
+        // 📲 NOTIFICATION
+        if (payload.expo_token) {
+            const promotionMessage = isPromotionUsed
+                ? "🎉 Une promotion a été appliquée à votre commande !"
+                : "";
+
+            const loyaltyMessage = isLoyaltyUsed
+                ? `⭐ Vous avez utilisé ${payload.order.points} points fidélité.`
+                : "";
+
+            this.expoPushService.sendPushNotifications({
+                tokens: [payload.expo_token],
+                title: "🍗 Commande confirmée !",
+                body: `Merci pour votre confiance ❤️\nVotre commande ${payload.order.reference} a bien été reçue.\n${promotionMessage} ${loyaltyMessage}`,
+                data: { order_id: payload.order.id },
+                subtitle: "On prépare ça avec amour 🔥",
+                sound: "default",
+                badge: 1,
+                priority: 'high',
+                ttl: 3600,
+                channelId: "default",
+                categoryId: "order-created",
+            });
+        }
+    }
+
+    /* =========================================================
+        🚀 STATUT MIS À JOUR
+    ========================================================= */
+    @OnEvent(OrderChannels.ORDER_STATUS_UPDATED)
+    async orderStatusUpdatedEventListener(payload: OrderCreatedEvent) {
+
+        /* =========================
+           ✅ COMMANDE TERMINÉE
+        ========================= */
         if (payload.order.status === OrderStatus.COMPLETED) {
-            const pts = await this.loyaltyService.calculatePointsForOrder(payload.order.net_amount);
-            console.log("pts", pts)
-            if (pts > 0) {
+            const pts = await this.loyaltyService.calculatePointsForOrder(
+                payload.order.net_amount
+            );
+
+            const isPointsEarned = pts > 0;
+
+            if (isPointsEarned) {
                 await this.loyaltyService.addPoints({
                     customer_id: payload.order.customer_id,
                     points: pts,
                     type: LoyaltyPointType.EARNED,
-                    reason: `Vous avez gagné ${pts} points de fidélité pour votre commande`,
-                    order_id: payload.order.id
-                })
+                    reason: `🎉 ${pts} points gagnés grâce à votre commande`,
+                    order_id: payload.order.id,
+                });
+            }
+
+            if (payload.expo_token) {
+                this.expoPushService.sendPushNotifications({
+                    tokens: [payload.expo_token],
+                    title: "🎉 Merci pour votre commande !",
+                    body: `Votre expérience compte pour nous ❤️ ${isPointsEarned
+                        ? `Bonne nouvelle : vous avez gagné ${pts} points fidélité ⭐`
+                        : ""
+                        }`,
+                    data: { order_id: payload.order.id },
+                    subtitle: "À très vite chez Chick Nation 🍗",
+                    sound: "default",
+                    badge: 1,
+                    priority: 'high',
+                    ttl: 3600,
+                    channelId: "default",
+                    categoryId: "order-completed",
+                });
             }
         }
 
-        // RECUPERATION DES RECEPTEURS
-        const usersRestaurant = (await this.notificationRecipientService.getAllUsersByRestaurantAndRole(payload.order.restaurant_id));
-        const customer = await this.notificationRecipientService.getCustomer(payload.order.customer_id);
+        /* =========================
+           ❌ COMMANDE ANNULÉE
+        ========================= */
+        if (
+            payload.order.status === OrderStatus.CANCELLED &&
+            payload.expo_token
+        ) {
+            this.expoPushService.sendPushNotifications({
+                tokens: [payload.expo_token],
+                title: "😔 Commande annulée",
+                body: "Votre commande a été annulée. Nous espérons vous revoir très bientôt pour une nouvelle expérience savoureuse 🍗",
+                data: { order_id: payload.order.id },
+                subtitle: "On reste à votre service ❤️",
+                sound: "default",
+                badge: 1,
+                priority: 'high',
+                ttl: 3600,
+                channelId: "default",
+                categoryId: "order-cancelled",
+            });
+        }
 
-        // PREPARATION DES DONNEES DE NOTIFICATIONS
-        const notificationDataUsersRestaurant = {
-            actor: customer,
-            recipients: usersRestaurant,
-            data: {
-                reference: payload.order.reference,
-                status: payload.order.status,
-                amount: payload.order.amount,
-                restaurant_name: payload.order.restaurant.name,
-                customer_name: customer.name,
-            },
-        };
-        const notificationDataRecipient = {
-            actor: customer,
-            recipients: [customer],
-            data: {
-                reference: payload.order.reference,
-                status: payload.order.status,
-                amount: payload.order.amount,
-                restaurant_name: payload.order.restaurant.name,
-                customer_name: customer.name,
-            },
-        };
+        /* =========================
+           🍽️ COMMANDE PRÊTE
+        ========================= */
+        if (payload.order.status === OrderStatus.READY && payload.expo_token) {
+            if (payload.order.type === OrderType.DELIVERY) {
+                this.expoPushService.sendPushNotifications({
+                    tokens: [payload.expo_token],
+                    title: "🔥 Votre plat est prêt !",
+                    body: "Votre commande est prête et sera bientôt en livraison 🚚",
+                    data: { order_id: payload.order.id },
+                    subtitle: "Merci pour votre confiance 🍗",
+                    sound: "default",
+                    badge: 1,
+                    priority: 'high',
+                    ttl: 3600,
+                    channelId: "default",
+                    categoryId: "order-ready",
+                });
+            } else {
+                this.expoPushService.sendPushNotifications({
+                    tokens: [payload.expo_token],
+                    title: "🔥 C’est prêt !",
+                    body: "Votre commande est prête ! Elle n’attend plus que vous 😋",
+                    data: { order_id: payload.order.id },
+                    subtitle: "On vous attend chez Chick Nation 🍗",
+                    sound: "default",
+                    badge: 1,
+                    priority: 'high',
+                    ttl: 3600,
+                    channelId: "default",
+                    categoryId: "order-ready",
+                });
+            }
 
-        // ENVOIE DES NOTIFICATIONS
-        // 1- NOTIFICATION AU RESTAURANT
-        const notificationsUsersRestaurant = await this.notificationsService.sendNotificationToMultiple(
-            this.orderNotificationsTemplate.NOTIFICATION_ORDER_RESTAURANT,
-            notificationDataUsersRestaurant,
-            NotificationType.SYSTEM
-        );
-        // Notifier en temps réel
-        this.notificationsWebSocketService.emitNotification(notificationsUsersRestaurant[0], usersRestaurant[0], true);
+        }
 
-        // 2- NOTIFICATION AU CLIENT
-        const notificationCustomer = await this.notificationsService.sendNotificationToMultiple(
-            this.orderNotificationsTemplate.NOTIFICATION_ORDER_CUSTOMER,
-            notificationDataRecipient,
-            NotificationType.SYSTEM
-        );
-        // Notifier en temps réel
-        this.notificationsWebSocketService.emitNotification(notificationCustomer[0], customer);
+        /* =========================
+           🚚 EN LIVRAISON
+        ========================= */
+        if (
+            payload.order.status === OrderStatus.PICKED_UP &&
+            payload.expo_token
+        ) {
+            this.expoPushService.sendPushNotifications({
+                tokens: [payload.expo_token],
+                title: "🚚 En route vers vous !",
+                body: "Votre commande est en cours de livraison. Préparez-vous à vous régaler 😍",
+                data: { order_id: payload.order.id },
+                // subtitle: "",
+                sound: "default",
+                badge: 1,
+                priority: 'high',
+                ttl: 3600,
+                channelId: "default",
+                categoryId: "order-picked-up",
+            });
+        }
 
+        /* =========================
+           📦 COMMANDE SUPPRIMÉE
+        ========================= */
+        if (payload.order.entity_status === EntityStatus.DELETED && payload.expo_token) {
+            this.expoPushService.sendPushNotifications({
+                tokens: [payload.expo_token],
+                title: "Commande supprimée",
+                body: "Votre commande a été supprimée. Nous espérons vous revoir très bientôt pour une nouvelle expérience savoureuse 🍗",
+                data: { order_id: payload.order.id },
+                subtitle: "On reste à votre service",
+                sound: "default",
+                badge: 1,
+                priority: 'high',
+                ttl: 3600,
+                channelId: "default",
+                categoryId: "order-deleted",
+            });
+        }
     }
 
+    /* =========================================================
+        🔄 AUTRES ÉVÉNEMENTS
+    ========================================================= */
+    @OnEvent(OrderChannels.ORDER_UPDATED)
+    async orderUpdatedEventListener(payload: OrderCreatedEvent) {
+        // Possibilité future : notifier en cas de modification importante
+    }
 
+    @OnEvent(OrderChannels.ORDER_DELETED)
+    async orderDeletedEventListener(payload: OrderCreatedEvent) {
+        // TODO
+    }
 }

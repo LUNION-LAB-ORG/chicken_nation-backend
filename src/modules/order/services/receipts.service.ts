@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import * as PDFDocument from 'pdfkit';
-import { Response } from 'express';
+import type { Response } from 'express';
 import { OrderService } from './order.service';
 
 @Injectable()

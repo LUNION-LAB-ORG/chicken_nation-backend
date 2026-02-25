@@ -9,13 +9,16 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import {
   Customer,
   EntityStatus,
+  OrderStatus,
+  OrderType,
   PaiementMode,
   PaiementStatus,
+  PaymentMethod,
 } from '@prisma/client';
 import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
 import { KkiapayService } from 'src/kkiapay/kkiapay.service';
 import { CreatePaiementKkiapayDto } from 'src/modules/paiements/dto/create-paiement-kkiapay.dto';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { PaiementEvent } from 'src/modules/paiements/events/paiement.event';
 
 @Injectable()
@@ -155,11 +158,14 @@ export class PaiementsService {
 
     // Mise a jour de la commande à payée
     if (result.order) {
+      const next_status = this.getOrderStatus(result.order.payment_method!, result.order.type, result.order.status);
       await this.prisma.order.update({
         where: { id: result.order.id },
         data: {
           paied_at: result.paiement.created_at,
           paied: true,
+          status: next_status,
+          ...(next_status == OrderStatus.ACCEPTED && { accepted_at: new Date() }),
         },
       });
     }
@@ -471,5 +477,14 @@ export class PaiementsService {
       throw new BadRequestException('Statut du paiement non valide');
     }
     return status;
+  }
+
+  // Déterminer le status à partir de la méthode de paiement, le type de commande et du paiement
+  private getOrderStatus(paymentMethod: PaymentMethod, orderType: OrderType, oldStatus: OrderStatus) {
+    if (paymentMethod === PaymentMethod.ONLINE && orderType === OrderType.DELIVERY) {
+      return OrderStatus.ACCEPTED;
+    }
+
+    return oldStatus;
   }
 }

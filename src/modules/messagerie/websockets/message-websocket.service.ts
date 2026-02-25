@@ -1,7 +1,7 @@
-import { AppGateway } from '../../../socket-io/gateways/app.gateway';
+import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { Injectable, Logger } from '@nestjs/common';
 import { ResponseMessageDto } from '../dto/response-message.dto';
-import { Conversation, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 type ConversationGetPayload = Prisma.ConversationGetPayload<{
   include: {

@@ -11,7 +11,7 @@ import {
     PrismaClientInitializationError,
     PrismaClientRustPanicError
 } from '@prisma/client/runtime/library';
-import { Response } from 'express';
+import type { Response } from 'express';
 
 @Catch(
     PrismaClientKnownRequestError,

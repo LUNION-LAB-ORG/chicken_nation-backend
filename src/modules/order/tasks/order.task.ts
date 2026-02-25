@@ -20,54 +20,6 @@ export class OrderTask {
    */
   @Cron(CronExpression.EVERY_MINUTE)
   async updateOrders() {
-    this.logger.debug('Mise à jour des commandes...');
-    // TODO : Quand on aura ajouter pour gérer le statut de collecté pour les commandes on va retirer
-
-    try {
-      // Mettre en livraison toutes les commandes prêtes à livrer chaque minute
-      const ordersDelivery = await this.prisma.order.findMany({
-        where: {
-          status: OrderStatus.READY,
-          type: OrderType.DELIVERY,
-        },
-      });
-      for (const order of ordersDelivery) {
-        await this.orderService.updateStatus(order.id, OrderStatus.PICKED_UP);
-      }
-      this.logger.log(`${ordersDelivery.length} commandes prêtes à livrer sont en livraison`);
-
-      // Mettre à collecté toutes les commandes en livraison chaque minute
-      const ordersArePickup = await this.prisma.order.findMany({
-        where: {
-          status: OrderStatus.PICKED_UP,
-          type: OrderType.DELIVERY,
-          updated_at: {
-            gte: new Date(new Date().setMinutes(new Date().getMinutes() - 1)),
-          },
-        },
-      });
-      for (const order of ordersArePickup) {
-        await this.orderService.updateStatus(order.id, OrderStatus.COLLECTED);
-      }
-      this.logger.log(`${ordersArePickup.length} commandes en livraison sont collectées`);
-
-      // Mettre en collecté toutes les commandes prêtes à emporter et à table chaque minute
-      const ordersOthers = await this.prisma.order.findMany({
-        where: {
-          status: OrderStatus.READY,
-          type: { in: [OrderType.PICKUP, OrderType.TABLE] },
-          updated_at: {
-            lte: new Date(new Date().setMinutes(new Date().getMinutes() - 1)),
-          },
-        },
-      });
-      for (const order of ordersOthers) {
-        await this.orderService.updateStatus(order.id, OrderStatus.COLLECTED);
-      }
-      this.logger.log(`${ordersOthers.length} commandes prêtes à emporter et à table sont collectées`);
-
-    } catch (error) {
-      this.logger.error('Erreur lors de l\'expiration des points:', error);
-    }
+    
   }
 }

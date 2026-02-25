@@ -5,12 +5,17 @@ import { CreateOrderItemDto } from "src/modules/order/dto/create-order-item.dto"
 import { OrderType } from "src/modules/order/enums/order-type.enum";
 import { TypeTable } from "src/modules/order/enums/order-type-table.enum";
 import { parse, isValid } from 'date-fns';
+import { PaymentMethod } from "@prisma/client";
 
 export class CreateOrderDto {
     @ApiProperty({ description: "Type de commande", enum: OrderType })
     @IsEnum(OrderType)
     type: OrderType;
 
+    @ApiPropertyOptional({ description: "Type de paiement", enum: PaymentMethod })
+    @IsEnum(PaymentMethod)
+    payment_method?: PaymentMethod;
+    
     @ApiPropertyOptional({ description: "Type de table", enum: TypeTable })
     @IsEnum(TypeTable)
     @IsOptional()

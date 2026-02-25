@@ -17,6 +17,7 @@ import {
   Order,
   LoyaltyLevel,
   DeliveryService,
+  PaymentMethod,
 } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -336,23 +337,28 @@ export class OrderHelper {
     return { orderItems, netAmount, totalDishes, totalSupplements };
   }
 
-  // Calculer les taxes avec arrondi au 10 supérieur
-  async calculateTax(netAmount: number): Promise<number> {
-    try {
-      // 1. Calcul du montant brut de la taxe
-      const rawTax = netAmount * this.taxRate;
+  /**
+  * Calcule les frais de service : 1% du sous-total, 
+  * arrondi par défaut (vers le bas) au multiple de 50 le plus proche.
+  * Exemples : 
+  * - 4900 -> 1% = 49 -> 0 FCFA
+  * - 5500 -> 1% = 55 -> 50 FCFA
+  * - 12000 -> 1% = 120 -> 100 FCFA
+  * - 15000 -> 1% = 150 -> 150 FCFA
+  */
+  async calculateTax(subTotal: number): Promise<number> {
+    if (!subTotal || subTotal <= 0) return 0;
 
-      // 2. Application de l'arrondi : Math.ceil(valeur / 10) * 10
-      // Ex: 143.2 -> 14.32 (ceil) -> 15 -> 150
-      const roundedTax = Math.ceil(rawTax / 10) * 10;
+    // 1. Calculer 1% du sous-total
+    const baseFee = subTotal * 0.01;
 
-      return roundedTax;
+    // 2. Arrondir par défaut (Math.floor) au multiple de 50
+    // On divise par 50, on arrondit vers le bas, puis on remultiplie par 50.
+    const roundedFee = Math.floor(baseFee / 50) * 50;
 
-    } catch (error) {
-      console.error("Erreur lors du calcul de la taxe:", error);
-      // En cas d'erreur, on retourne 0 par sécurité
-      return 0;
-    }
+    // 💡 Astuce : Si tu veux forcer un minimum de 50 FCFA (pour éviter que ce soit gratuit 
+    // sur les petites commandes de moins de 5000 FCFA), tu peux décommenter ceci :
+    return Math.max(50, roundedFee);
   }
 
   // Calculer les frais de livraison personnalisé
@@ -791,6 +797,11 @@ export class OrderHelper {
 
     return {
       entity_status: { not: EntityStatus.DELETED },
+      OR: [
+        { paied: true },
+        { payment_method: PaymentMethod.OFFLINE },
+        { auto: false }
+      ],
       ...(status && { status }),
       ...(type && { type }),
       ...(customerId && { customer_id: customerId }),

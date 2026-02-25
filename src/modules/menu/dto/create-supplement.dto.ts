@@ -1,7 +1,7 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { SupplementCategory } from '@prisma/client';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class CreateSupplementDto {
     @ApiProperty({ description: 'Nom du supplément' })
@@ -24,9 +24,8 @@ export class CreateSupplementDto {
     @Transform(({ value }) => Boolean(value))
     available?: boolean = true;
 
-    @ApiProperty({ description: 'Catégorie du supplément', example: "FOOD | DRINK | ACCESSORY" })
+    @ApiProperty({ enum: SupplementCategory, description: 'Catégorie du supplément', example: SupplementCategory.FOOD })
     @IsNotEmpty()
     @IsEnum(SupplementCategory)
-    @Transform(({ value }) => value.trim().toUpperCase() as SupplementCategory)
     category: SupplementCategory;
 }

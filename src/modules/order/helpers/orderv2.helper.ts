@@ -7,7 +7,12 @@ import {
   Address,
   DeliveryService,
   Dish,
-  EntityStatus
+  EntityStatus,
+  OrderStatus,
+  OrderType,
+  Paiement,
+  PaiementStatus,
+  PaymentMethod
 } from '@prisma/client';
 import { JsonValue } from '@prisma/client/runtime/library';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
@@ -81,6 +86,9 @@ export class OrderV2Helper {
         id: customer_id,
         entity_status: { not: EntityStatus.DELETED },
       },
+      include: {
+        notification_settings: true,
+      },
     });
 
     if (!customer) {
@@ -94,6 +102,7 @@ export class OrderV2Helper {
       fullname: fullname || `${customer.first_name} ${customer.last_name}`.trim(),
       phone: phone || customer.phone,
       email: email || customer.email,
+      expo_token: customer.notification_settings ? customer.notification_settings?.expo_push_token : null,
     };
   }
 
@@ -469,5 +478,27 @@ export class OrderV2Helper {
       service: DeliveryService.TURBO,
       zone_id: zone.id,
     };
+  }
+
+  // Déterminer le status à partir de la méthode de paiement, le type de commande et du paiement
+  getOrderStatus(paymentMethod: PaymentMethod, orderType: OrderType) {
+
+    // A Livrer
+    if (orderType === OrderType.DELIVERY) {
+      if (paymentMethod === PaymentMethod.ONLINE) {
+        return OrderStatus.PENDING;
+      }
+      throw new BadRequestException('Méthode de paiement non supportée');
+    }
+
+    // Emporter et Table
+    if (orderType === OrderType.PICKUP || orderType === OrderType.TABLE) {
+      if (paymentMethod === PaymentMethod.OFFLINE) {
+        return OrderStatus.ACCEPTED;
+      }
+      return OrderStatus.PENDING;
+    }
+
+    throw new BadRequestException('Type de commande non supporté');
   }
 }

@@ -2,7 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 
 import { CreateUserDto } from '../dto/create-user.dto';
 import { EntityStatus, User, UserType } from '@prisma/client';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { PrismaService } from 'src/database/services/prisma.service';
 import * as bcrypt from 'bcryptjs';
 import { UpdateUserDto } from '../dto/update-user.dto';

@@ -32,7 +32,7 @@ export class OrderWebSocketService {
     emitStatusUpdate(order: Order, previousStatus: OrderStatus) {
         const statusMessages = {
             PENDING: 'Commande en attente',
-            ACCEPTED: 'Commande acceptée',
+            ACCEPTED: 'Présence confirmée - Lancer la cuisson !',
             IN_PROGRESS: 'Commande en préparation',
             READY: 'Commande prête',
             PICKED_UP: 'Commande en livraison',

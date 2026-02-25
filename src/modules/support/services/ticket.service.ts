@@ -1,7 +1,7 @@
 import { HttpException, Injectable } from '@nestjs/common';
 import { Prisma, TicketStatus } from '@prisma/client';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
-import { PrismaService } from '../../../database/services/prisma.service';
+import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateTicketDto } from '../dtos/create-ticket.dto';
 import { QueryTicketsDto } from '../dtos/query-tickets.dto';
 import { ResponseTicketDto } from '../dtos/response-ticket.dto';

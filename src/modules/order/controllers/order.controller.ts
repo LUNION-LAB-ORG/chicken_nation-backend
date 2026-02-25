@@ -22,7 +22,7 @@ import {
   ApiTags
 } from '@nestjs/swagger';
 import { Customer, OrderStatus, User } from '@prisma/client';
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';

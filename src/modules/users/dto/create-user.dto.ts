@@ -57,14 +57,13 @@ export class CreateUserDto {
   address: string;
 
   // ROLE
-  @ApiProperty({
-    description: "le role de l'utilisateur",
-    example: 'ADMIN',
-    required: true,
-    maxLength: 100,
-  })
+
   @IsNotEmpty()
-  @MaxLength(100)
-  @Transform(({ value }) => value.trim().toUpperCase() as UserRole)
+  @ApiProperty({
+    enum: UserRole,
+    description: "le role de l'utilisateur",
+    example: UserRole.ADMIN,
+    required: true,
+  })
   role: UserRole;
 }

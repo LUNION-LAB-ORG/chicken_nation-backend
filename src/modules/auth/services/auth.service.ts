@@ -1,7 +1,7 @@
 import { Injectable, UnauthorizedException, BadRequestException, NotFoundException, HttpException, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import * as bcrypt from 'bcryptjs';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { EntityStatus, User } from '@prisma/client';
 import { LoginUserDto } from 'src/modules/auth/dto/login-user.dto';
 import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';

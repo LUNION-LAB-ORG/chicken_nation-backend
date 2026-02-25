@@ -7,7 +7,7 @@ import {
   ApiOperation,
   ApiNotFoundResponse,
 } from '@nestjs/swagger';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { JwtRefreshAuthGuard } from '../guards/jwt-refresh-auth.guard';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 

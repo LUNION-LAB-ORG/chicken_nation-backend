@@ -3,7 +3,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateFavoriteDto } from 'src/modules/customer/dto/create-favorite.dto';
 import { UpdateFavoriteDto } from 'src/modules/customer/dto/update-favorite.dto';
 import { EntityStatus, Customer, Favorite } from '@prisma/client';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 
 @Injectable()

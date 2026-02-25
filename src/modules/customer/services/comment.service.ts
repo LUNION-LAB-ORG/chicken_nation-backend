@@ -25,27 +25,15 @@ export class CommentService {
         }
 
         // Vérifier que la commande est terminée
-        if (order.status !== OrderStatus.COMPLETED) {
+        if (order.status !== OrderStatus.COLLECTED && order.status !== OrderStatus.COMPLETED) {
             throw new BadRequestException('Vous ne pouvez commenter que les commandes terminées');
         }
 
-        // Vérifier qu'il n'y a pas déjà un commentaire pour cette commande
-        const existingComment = await this.prisma.comment.findFirst({
-            where: {
-                customer_id: customerId,
-                order_id: order_id,
-                entity_status: EntityStatus.ACTIVE,
-            },
-        });
-
-        if (existingComment) {
-            throw new BadRequestException('Vous avez déjà commenté cette commande');
-        }
 
         // Créer le commentaire
         const comment = await this.prisma.comment.create({
             data: {
-                message,
+                message: message ?? "",
                 rating,
                 customer_id: customerId,
                 order_id,

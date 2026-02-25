@@ -23,15 +23,16 @@ import { StatisticsModule } from 'src/modules/statistics/statistics.module';
 import { SocketIoModule } from 'src/socket-io/socket-io.module';
 import { TwilioModule } from 'src/twilio/twilio.module';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
-import { MessagerieModule } from './modules/messagerie/messagerie.module';
-import { SupportModule } from './modules/support/support.module';
-import { VoucherModule } from './modules/voucher/voucher.module';
-import { TurboModule } from './turbo/turbo.module';
-import { AppMobileModule } from './modules/marketing/app-mobile/app-mobile.module';
-import { CardNationModule } from './modules/card-nation/card-nation.module';
-import { S3Module } from './s3/s3.module';
-import { NewsModule } from './modules/marketing/news/news.module';
-import { ExpoPushModule } from './expo-push/expo-push.module';
+import { MessagerieModule } from 'src/modules/messagerie/messagerie.module';
+import { SupportModule } from 'src/modules/support/support.module';
+import { VoucherModule } from 'src/modules/voucher/voucher.module';
+import { TurboModule } from 'src/turbo/turbo.module';
+import { AppMobileModule } from 'src/modules/marketing/app-mobile/app-mobile.module';
+import { CardNationModule } from 'src/modules/card-nation/card-nation.module';
+import { S3Module } from 'src/s3/s3.module';
+import { NewsModule } from 'src/modules/marketing/news/news.module';
+import { ExpoPushModule } from 'src/expo-push/expo-push.module';
+import { DeeplinkModule } from 'src/modules/marketing/deeplink/deeplink.module';
 
 @Module({
   imports: [
@@ -84,10 +85,11 @@ import { ExpoPushModule } from './expo-push/expo-push.module';
     SupportModule,
     VoucherModule,
     TurboModule,
-    AppMobileModule,
     CardNationModule,
-    NewsModule,
     S3Module,
+    DeeplinkModule,
+    NewsModule,
+    AppMobileModule,
   ],
 })
 export class AppModule { }

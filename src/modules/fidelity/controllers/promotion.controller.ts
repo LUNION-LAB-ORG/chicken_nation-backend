@@ -16,7 +16,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Customer, LoyaltyLevel, User } from '@prisma/client';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';

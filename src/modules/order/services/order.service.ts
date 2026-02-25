@@ -12,12 +12,13 @@ import {
   Order,
   OrderStatus,
   OrderType,
+  PaymentMethod,
   Prisma,
 } from '@prisma/client';
 import { format, startOfMonth, differenceInMinutes } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import * as ExcelJS from 'exceljs';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -46,7 +47,7 @@ export class OrderService {
 
   async createv2(customer_id: string, createOrderDto: OrderCreateDto): Promise<Order> {
     const {
-      items, address, restaurant_id, delivery_fee, type, code_promo, date, fullname, phone, email,
+      items, address, restaurant_id, delivery_fee, type, code_promo, date, fullname, phone, email, payment_method,
     } = createOrderDto;
 
     // 1. Gestion de la Date (Le format ISO géré par le nouveau DTO)
@@ -107,6 +108,7 @@ export class OrderService {
 
     const orderNumber = this.orderHelperV2.generateOrderReference();
 
+    const next_status = this.orderHelperV2.getOrderStatus(payment_method ?? PaymentMethod.OFFLINE, type);
     // 6. Sauvegarde en Base de données
     const order = await this.prisma.$transaction(async (prisma) => {
       return await prisma.order.create({
@@ -128,7 +130,9 @@ export class OrderService {
           amount: Number(totalAmount),
           date: finalDate,
           time: finalDate.toISOString().split('T')[1].substring(0, 5),
-          status: OrderStatus.PENDING,
+          payment_method: payment_method ?? PaymentMethod.OFFLINE,
+          status: next_status,
+          ...(next_status === OrderStatus.ACCEPTED && { accepted_at: new Date() }),
           paied: false,
           auto: true,
           order_items: {
@@ -150,6 +154,24 @@ export class OrderService {
         },
       });
     });
+
+    if (next_status === OrderStatus.ACCEPTED) {
+      // Envoyer l'événement de création de commande
+      this.orderEvent.orderCreatedEvent({
+        order,
+        expo_token: customerData.expo_token,
+        loyalty_level: customerData.loyalty_level,
+        totalDishes,
+        orderItems: orderItems.map((item) => ({
+          dish_id: item.dish_id,
+          quantity: item.quantity,
+          price: item.dishPrice,
+        })),
+      });
+
+      // Émettre l'événement de création de commande
+      this.orderWebSocketService.emitOrderCreated(order);
+    }
 
     return order;
   }
@@ -321,6 +343,7 @@ export class OrderService {
           amount: Number(totalAmount),
           date: orderData.date ? new Date(orderData.date || '') : new Date(),
           time: orderData.time || '10:00',
+          payment_method: createOrderDto.payment_method ?? 'OFFLINE',
           status: OrderStatus.PENDING,
           paied_at: payment ? payment.created_at : null,
           paied: payment ? true : false,
@@ -404,6 +427,7 @@ export class OrderService {
     // Actions spécifiques selon le changement d'état
     await this.orderHelper.handleStatusSpecificActions(order, status, meta);
 
+    const isDeleted = order.payment_method === PaymentMethod.ONLINE && order.status === OrderStatus.PENDING && status === OrderStatus.CANCELLED;
     // Mettre à jour le statut
     const updatedOrder = await this.prisma.order.update({
       where: { id },
@@ -414,10 +438,11 @@ export class OrderService {
         estimated_preparation_time: this.orderHelper.calculateEstimatedTime(
           meta?.estimated_preparation_time ?? '',
         ),
+        ...(isDeleted && { entity_status: EntityStatus.DELETED, deleted_at: new Date() }),
         updated_at: new Date(),
-        status:
-          status == OrderStatus.ACCEPTED ? OrderStatus.IN_PROGRESS : status,
-        ...(status === OrderStatus.ACCEPTED && { accepted_at: new Date(), prepared_at: new Date() }),
+        status,
+        ...(status === OrderStatus.ACCEPTED && { accepted_at: new Date() }),
+        ...(status === OrderStatus.IN_PROGRESS && { prepared_at: new Date() }),
         ...(status === OrderStatus.READY && { ready_at: new Date() }),
         ...(status === OrderStatus.PICKED_UP && { picked_up_at: new Date() }),
         ...(status === OrderStatus.COLLECTED && { collected_at: new Date() }),
@@ -439,6 +464,7 @@ export class OrderService {
             phone: true,
             email: true,
             image: true,
+            notification_settings: true,
           },
         },
         restaurant: true,
@@ -448,6 +474,7 @@ export class OrderService {
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderStatusUpdatedEvent({
       order: updatedOrder,
+       expo_token: updatedOrder.customer.notification_settings?.expo_push_token,
     });
 
     // Émettre l'événement de mise à jour de statut avec l'ancien statut
@@ -547,6 +574,7 @@ export class OrderService {
       startDate = startOfMonth(new Date()),
       endDate = new Date(),
     } = filters;
+
     const where: Prisma.OrderWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),
@@ -562,28 +590,32 @@ export class OrderService {
         },
       }),
     };
-    if (filters.auto == undefined) {
+
+    if (filters.auto === undefined) {
       where.OR = [
+        { auto: false },
         {
-          AND: [{ paied: false }, { auto: false }],
-        },
-        {
-          paied: true,
-        },
+          AND: [
+            { auto: true },
+            { status: { not: OrderStatus.PENDING } } // N'affiche pas les brouillons de l'appli
+          ]
+        }
       ];
-    } else {
-      if (filters.auto === true) {
-        where.auto = true;
-        where.paied = true;
-      } else {
-        where.auto = false;
-      }
+    }
+    // Si on filtre explicitement pour l'appli (ex: stats spécifiques)
+    else if (filters.auto === true) {
+      where.auto = true;
+      where.status = { not: OrderStatus.PENDING }; // Le call center ne voit que les acceptées
+    }
+    // Si on filtre explicitement pour le Call Center
+    else if (filters.auto === false) {
+      where.auto = false;
     }
 
-    if (filters.startDate && filters.endDate) {
+    if (startDate && endDate) {
       where.created_at = {
-        gte: filters.startDate,
-        lte: new Date(new Date(filters.endDate).setHours(23, 59, 59, 999)),
+        gte: startDate,
+        lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
       };
     }
 
@@ -660,28 +692,36 @@ export class OrderService {
       page = 1,
       limit = 10,
     } = filters;
-    console.log('filters', filters);
+
     const customerId = (req.user as Customer).id;
     const where: Prisma.OrderWhereInput = {
-      OR: [
-        {
-          AND: [{ paied: false }, { auto: false }],
-        },
-        {
-          paied: true,
-        },
-      ],
+      customer_id: customerId,
       entity_status: { not: EntityStatus.DELETED },
+
       ...(statusFilter && {
         ...(statusFilter == 'processing'
-          ? { status: { in: [OrderStatus.PENDING, OrderStatus.ACCEPTED, OrderStatus.IN_PROGRESS, OrderStatus.READY, OrderStatus.PICKED_UP] } }
+          ? {
+            status: {
+              in: [
+                OrderStatus.PENDING,
+                OrderStatus.ACCEPTED,
+                OrderStatus.IN_PROGRESS,
+                OrderStatus.READY,
+                OrderStatus.PICKED_UP,
+              ],
+            },
+          }
           : statusFilter == 'completed'
-            ? { status: { in: [OrderStatus.COLLECTED, OrderStatus.COMPLETED] } }
+            ? {
+              status: {
+                in: [OrderStatus.COLLECTED, OrderStatus.COMPLETED],
+              },
+            }
             : statusFilter == 'cancelled'
               ? { status: OrderStatus.CANCELLED }
               : {}),
       }),
-      ...(customerId && { customer_id: customerId }),
+
       ...(startDate &&
         endDate && {
         created_at: {
@@ -689,6 +729,7 @@ export class OrderService {
           lte: new Date(endDate),
         },
       }),
+
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
     };
@@ -750,52 +791,56 @@ export class OrderService {
    * Met à jour une commande client
    */
   async updateClient(id: string, orderUpdatedDto: OrderUpdatedDto) {
-    const { delivery_fee, date, ...rest } = orderUpdatedDto;
-
+    const { delivery_fee, date, status, ...rest } = orderUpdatedDto;
     const order = await this.findById(id);
 
-    // 1. Gestion de la Date
+    // 1. Gestion de la Date (Reconstruction identique)
     let finalDate: Date;
-
     if (date && typeof date === 'string') {
-      // Le client a fourni une nouvelle date via le DTO
       finalDate = new Date(date);
     } else {
-      // Le client n'a rien fourni, on reconstruit la date exacte à partir de l'existant
       finalDate = new Date(order.date!);
-
       if (order.time) {
         const [hours, minutes] = order.time.split(':').map(Number);
         finalDate.setHours(hours, minutes, 0, 0);
       }
     }
 
-    // Appliquer les modifications
+    let statusUpdateData = {};
+    if (status === OrderStatus.ACCEPTED) {
+      if (order.status !== OrderStatus.PENDING) {
+        throw new ConflictException("Cette commande ne peut plus être confirmée.");
+      }
+      statusUpdateData = {
+        status: OrderStatus.ACCEPTED,
+        accepted_at: new Date(),
+      };
+    }
+
     const updatedOrder = await this.prisma.order.update({
       where: { id },
       data: {
         ...rest,
+        ...statusUpdateData,
         date: finalDate,
         time: finalDate.toISOString().split('T')[1].substring(0, 5),
-        delivery_fee,
         updated_at: new Date(),
       },
       include: {
-        order_items: {
-          include: {
-            dish: true,
-          },
-        },
+        order_items: { include: { dish: true } },
         paiements: true,
         customer: true,
       },
     });
 
-    // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderUpdatedEvent(updatedOrder, orderUpdatedDto);
-
-    // Émettre via WebSocket
     this.orderWebSocketService.emitOrderUpdated(updatedOrder);
+
+    // 🔊 Signal spécifique pour la tablette du restaurant
+    if (status === OrderStatus.ACCEPTED) {
+      this.orderWebSocketService.emitStatusUpdate(updatedOrder, order.status);
+    }
+
     return updatedOrder;
   }
   /**
@@ -1085,22 +1130,21 @@ export class OrderService {
       };
     }
 
-    if (filters.auto == undefined) {
+    if (filters.auto === undefined) {
       where.OR = [
+        { auto: false }, // Voit tout du Call Center
         {
-          AND: [{ paied: false }, { auto: false }],
-        },
-        {
-          paied: true,
-        },
+          AND: [
+            { auto: true },
+            { status: { not: OrderStatus.PENDING } } // N'affiche pas les brouillons de l'appli
+          ]
+        }
       ];
-    } else {
-      if (filters.auto === true) {
-        where.auto = true;
-        where.paied = true;
-      } else {
-        where.auto = false;
-      }
+    } else if (filters.auto === true) {
+      where.auto = true;
+      where.status = { not: OrderStatus.PENDING };
+    } else if (filters.auto === false) {
+      where.auto = false;
     }
 
     const orders = await this.prisma.order.findMany({

@@ -5,7 +5,7 @@ import { CreateVoucherDto } from './dto/create-voucher.dto';
 import { UpdateVoucherDto } from './dto/update-voucher.dto';
 import { RedeemVoucherDto } from './dto/redeem-voucher.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { JwtCustomerAuthGuard } from '../auth/guards/jwt-customer-auth.guard';
 import { Customer } from '@prisma/client';
 import { UserPermissionsGuard } from '../auth/guards/user-permissions.guard';

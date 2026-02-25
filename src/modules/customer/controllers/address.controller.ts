@@ -2,7 +2,7 @@ import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, Req, UseI
 import { AddressService } from 'src/modules/customer/services/address.service';
 import { CreateAddressDto } from 'src/modules/customer/dto/create-address.dto';
 import { UpdateAddressDto } from 'src/modules/customer/dto/update-address.dto';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { CacheInterceptor } from '@nestjs/cache-manager';

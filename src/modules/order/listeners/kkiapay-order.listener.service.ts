@@ -7,14 +7,13 @@ import { OrderEvent } from '../events/order.event';
 import { OrderService } from '../services/order.service';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
 
-
 @Injectable()
 export class KkiapayOrderListenerService {
     logger = new Logger(KkiapayOrderListenerService.name);
     constructor(private readonly orderService: OrderService,
         private readonly paiementsService: PaiementsService,
         private orderEvent: OrderEvent,
-        private readonly orderWebSocketService: OrderWebSocketService
+        private readonly orderWebSocketService: OrderWebSocketService,
     ) { }
 
     @OnEvent(KkiapayChannels.TRANSACTION_SUCCESS)
@@ -27,6 +26,7 @@ export class KkiapayOrderListenerService {
                 orderId: order.id,
                 customer_id: order.customer_id
             });
+
             const totalDishes = order.order_items.reduce(
                 (sum, item) => sum + item.amount * item.quantity,
                 0,

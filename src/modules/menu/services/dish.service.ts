@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Dish, EntityStatus, Prisma, User } from '@prisma/client';
-import { Request } from 'express';
+import { Dish, EntityStatus, OrderStatus, Prisma, User } from '@prisma/client';
+import type { Request } from 'express';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
@@ -202,7 +202,7 @@ export class DishService {
     if (!dish || dish.entity_status !== EntityStatus.ACTIVE) {
       throw new NotFoundException(`Plat non trouvée`);
     }
-    
+
     const isFavorite = customerId ? dish.favorites.some((favorite) => favorite.customer_id === customerId) : false;
     return { ...dish, isFavorite };
   }
@@ -265,5 +265,65 @@ export class DishService {
         entity_status: EntityStatus.DELETED,
       },
     });
+  }
+
+  async findPopular(days: number = 30, limit: number = 4) {
+    const dateLimit = new Date();
+    dateLimit.setDate(dateLimit.getDate() - days);
+
+    // 1. Récupérer les IDs des commandes valides sur la période
+    const recentOrders = await this.prisma.order.findMany({
+      where: {
+        created_at: { gte: dateLimit },
+        status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] }
+      },
+      select: { id: true },
+    });
+
+    const orderIds = recentOrders.map((order) => order.id);
+
+    if (orderIds.length === 0) return [];
+
+    // 2. Agréger les quantités vendues pour ces commandes
+    const popularItems = await this.prisma.orderItem.groupBy({
+      by: ['dish_id'],
+      _sum: {
+        quantity: true,
+      },
+      where: {
+        order_id: { in: orderIds },
+      },
+      orderBy: {
+        _sum: { quantity: 'desc' },
+      },
+      take: limit,
+    });
+
+    if (popularItems.length === 0) return [];
+
+    // 3. Récupérer les détails complets des plats populaires
+    const dishIds = popularItems.map((item) => item.dish_id);
+    const dishes = await this.prisma.dish.findMany({
+      where: {
+        id: { in: dishIds },
+        entity_status: EntityStatus.ACTIVE,
+      },
+      include: {
+        category: true,
+      },
+    });
+
+    // 4. Réordonner les plats pour respecter le classement décroissant et formater le retour
+    return popularItems
+      .map((item) => {
+        const dish = dishes.find((d) => d.id === item.dish_id);
+        if (!dish) return null;
+
+        return {
+          ...dish,
+          total_sold: item._sum.quantity,
+        };
+      })
+      .filter(Boolean);
   }
 }

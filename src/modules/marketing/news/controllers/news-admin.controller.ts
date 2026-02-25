@@ -25,7 +25,7 @@ import { NewsService } from '../services/news.service';
 
 @ApiTags('Nouveautés - Administration')
 @ApiBearerAuth()
-@Controller('admin/news')
+@Controller('marketing/admin/news')
 export class NewsAdminController {
     constructor(private readonly newsService: NewsService) { }
 

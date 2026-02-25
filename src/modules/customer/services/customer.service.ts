@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Customer, EntityStatus, Prisma } from '@prisma/client';
-import { Request } from 'express';
+import type { Request } from 'express';
 import * as fs from 'fs';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto';

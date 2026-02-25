@@ -5,8 +5,8 @@ import {
   // Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from '../../../database/services/prisma.service';
-import { Request } from 'express';
+import { PrismaService } from 'src/database/services/prisma.service';
+import type { Request } from 'express';
 import { QueryConversationsDto } from '../dto/query-conversations.dto';
 import { QueryResponseDto } from '../../../common/dto/query-response.dto';
 import { ResponseConversationsDto } from '../dto/response-conversations.dto';

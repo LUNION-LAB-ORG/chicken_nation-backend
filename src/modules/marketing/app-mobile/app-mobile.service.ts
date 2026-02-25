@@ -1,150 +1,72 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { OrderStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { RecordClickDto } from './dto/recordClick.dto';
-import { RecordClickQueryDto } from './dto/recordClick-query.dto';
-import { AppMobileHelper } from './app-mobile.helper';
-import { RecordClickStatsDto } from './dto/recordClick-stats.dto';
 
 @Injectable()
 export class AppMobileService {
-  constructor(private prisma: PrismaService, private readonly AppMobileHelper: AppMobileHelper) { }
+  private readonly minVersion: string;
+  private readonly playstore_link: string;
+  private readonly apptore_link: string;
+  private readonly forceUpdate: boolean;
 
-  // --- Méthodes existantes ---
-
-  async recordClick(data: RecordClickDto) {
-    return this.prisma.appClick.create({ data });
-  }
-
-  async getClicksCount(query: RecordClickQueryDto) {
-    const where = this.AppMobileHelper.buildClickWhereClause(query);
-
-    return this.prisma.appClick.count({ where });
+  constructor(private prisma: PrismaService, private configService: ConfigService) {
+    this.minVersion = this.configService.get<string>('VERSION_APP_MOBILE', "1.0.0");
+    this.playstore_link = this.configService.get<string>('PLAY_STORE_LINK', "1.0.0");
+    this.apptore_link = this.configService.get<string>('APP_STORE_LINK', "1.0.0");
+    this.forceUpdate = this.configService.get<string>('FORCE_UPDATE_APP_MOBILE') === "true"
   }
 
   /**
-   * Récupère les statistiques des clics
+   * Get orders to comment
+   * @param customer_id 
+   * @returns 
    */
-  async getClicksStats(): Promise<RecordClickStatsDto> {
-    const now = new Date();
+  async getOrderToComment(customer_id: string) {
+    // 1. Calculer l'heure qu'il était il y a exactement 30 minutes
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
 
-    // Date de début du mois en cours (1er jour à 00:00:00)
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
-    // Date il y a 24h
-    const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-    // Récupérer toutes les statistiques en parallèle pour optimiser les performances
-    const [
-      totalClicks,
-      monthClicks,
-      last24HoursClicks,
-      totalAndroidClicks,
-      monthAndroidClicks,
-      totalIosClicks,
-      monthIosClicks,
-    ] = await Promise.all([
-      // Nombre total de clics
-      this.prisma.appClick.count(),
-
-      // Nombre de clics du mois en cours
-      this.prisma.appClick.count({
-        where: {
-          createdAt: {
-            gte: startOfMonth,
-          },
+    const orders = await this.prisma.order.findMany({
+      where: {
+        status: {
+          in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED]
         },
-      }),
+        customer_id: customer_id,
 
-      // Nombre de clics dans les dernières 24h
-      this.prisma.appClick.count({
-        where: {
-          createdAt: {
-            gte: last24Hours,
-          },
+        // La commande ne doit pas avoir de commentaire
+        Comment: {
+          none: {},
         },
-      }),
 
-      // Nombre total de clics Android
-      this.prisma.appClick.count({
-        where: {
-          platform: 'android',
-        },
-      }),
-
-      // Nombre de clics Android du mois en cours
-      this.prisma.appClick.count({
-        where: {
-          platform: 'android',
-          createdAt: {
-            gte: startOfMonth,
-          },
-        },
-      }),
-
-      // Nombre total de clics iOS
-      this.prisma.appClick.count({
-        where: {
-          platform: 'ios',
-        },
-      }),
-
-      // Nombre de clics iOS du mois en cours
-      this.prisma.appClick.count({
-        where: {
-          platform: 'ios',
-          createdAt: {
-            gte: startOfMonth,
-          },
-        },
-      }),
-    ]);
-
-    return {
-      total: {
-        allTime: totalClicks,
-        currentMonth: monthClicks,
-        last24Hours: last24HoursClicks,
+        // 2. La commande doit avoir été terminée OU collectée il y a plus de 30 minutes
+        OR: [
+          { completed_at: { lte: thirtyMinutesAgo } },
+          { collected_at: { lte: thirtyMinutesAgo } }
+        ]
       },
-      android: {
-        allTime: totalAndroidClicks,
-        currentMonth: monthAndroidClicks,
+      orderBy: {
+        created_at: 'desc'
       },
-      ios: {
-        allTime: totalIosClicks,
-        currentMonth: monthIosClicks,
-      },
-    };
-  }
-  /**
-   * Récupère les clics avec support pour la pagination, le filtrage et le tri.
-   */
-  async getFilteredClicks(query: RecordClickQueryDto) {
-    const { page = 1, limit = 25 } = query;
-
-    // Déterminer le décalage (skip)
-    const skip = (page - 1) * limit;
-
-    // Construire le filtre 'where'
-    const where = this.AppMobileHelper.buildClickWhereClause(query);
-
-    // 1. Compter le total des éléments correspondant au filtre (pour la pagination)
-    const totalCount = await this.prisma.appClick.count({ where });
-
-    // 2. Récupérer les données paginées et filtrées
-    const data = await this.prisma.appClick.findMany({
-      where,
-      skip: skip,
-      take: limit,
-      orderBy: { createdAt: 'desc' },
+      take: 10,
     });
 
-    // Retourner les données avec les métadonnées de pagination
+    return orders;
+  }
+
+  /**
+   * Get mobile version
+   * @returns 
+   */
+  async getMobileVersion() {
     return {
-      data,
-      totalCount,
-      page,
-      limit,
-      totalPages: Math.ceil(totalCount / limit),
+      minVersion: this.minVersion,
+      title: 'Mise à jour disponible',
+      message: 'Une nouvelle version est disponible pour améliorer votre expérience.',
+      // Remplace par l'ID de ton app Apple
+      storeUrlIOS: this.apptore_link,
+      // Remplace par ton package name Android
+      storeUrlAndroid: this.playstore_link,
+      forceUpdate: this.forceUpdate,
     };
   }
 }

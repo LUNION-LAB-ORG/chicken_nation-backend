@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsBoolean, IsUUID, ValidateNested, IsNumber, Min } from "class-validator";
 import { Transform, Type } from "class-transformer";
 import { OrderType } from "src/modules/order/enums/order-type.enum";
+import { PaymentMethod } from "@prisma/client";
 
 export class SupplementItemDto {
     @IsUUID()
@@ -40,6 +41,10 @@ export class OrderCreateDto {
     @IsEnum(OrderType)
     type: OrderType;
 
+    @ApiPropertyOptional({ description: "Type de paiement", enum: PaymentMethod })
+    @IsEnum(PaymentMethod)
+    payment_method?: PaymentMethod;
+    
     @ApiPropertyOptional({ description: "l'adresse de livraison/retrait" })
     @IsString()
     @IsOptional()

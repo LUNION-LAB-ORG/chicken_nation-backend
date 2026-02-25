@@ -26,7 +26,7 @@ import {
   parse,
   isValid,
 } from 'date-fns';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { S3Service } from '../../../s3/s3.service';
 
 @Injectable()

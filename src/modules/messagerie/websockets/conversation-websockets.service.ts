@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ResponseConversationsDto } from '../dto/response-conversations.dto';
-import { AppGateway } from '../../../socket-io/gateways/app.gateway';
+import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
 @Injectable()
 export class ConversationWebsocketsService {

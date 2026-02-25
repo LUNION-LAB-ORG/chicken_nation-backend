@@ -1,5 +1,5 @@
 import { Body, Controller, Headers, HttpCode, HttpStatus, Post, Req, Res } from '@nestjs/common';
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import { KkiapayService } from './kkiapay.service';
 import { KkiapayResponse, KkiapayWebhookDto } from './kkiapay.type';
 import { ConfigService } from '@nestjs/config';
