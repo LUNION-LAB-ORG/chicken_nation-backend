@@ -48,6 +48,17 @@ export class VoucherController {
     return this.voucherService.getCustomerRedemptions(user.id);
   }
 
+  @Get('client/check/:code')
+  @UseGuards(JwtCustomerAuthGuard)
+  @ApiOperation({ summary: 'Vérifier la validité d\'un voucher pour le client connecté' })
+  checkVoucherValidity(
+    @Param('code') code: string,
+    @Req() req: Request
+  ) {
+    const user = req.user as Customer;
+    return this.voucherService.checkValidityForCustomer(code, user.id);
+  }
+
   @Get(':code')
   @UseGuards(JwtAuthGuard)
   @RequirePermission(Modules.FIDELITE, Action.READ)

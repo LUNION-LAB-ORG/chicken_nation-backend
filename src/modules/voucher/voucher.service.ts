@@ -404,6 +404,45 @@ export class VoucherService {
     }));
   }
 
+  async checkValidityForCustomer(code: string, customerId: string) {
+    const voucher = await this.prismaService.voucher.findUnique({
+      where: { code },
+    });
+
+    // 1. Existe-t-il ?
+    if (!voucher || voucher.entity_status === 'DELETED') {
+      throw new HttpException('Code promo invalide ou introuvable', HttpStatus.NOT_FOUND);
+    }
+
+    // 2. Appartient-il bien à ce client ?
+    if (voucher.customer_id !== customerId) {
+      throw new HttpException('Ce code promo ne vous est pas destiné', HttpStatus.FORBIDDEN);
+    }
+
+    // 3. Est-il actif ?
+    if (voucher.status !== VoucherStatus.ACTIVE) {
+      throw new HttpException('Ce code promo n\'est plus actif ou a déjà été utilisé', HttpStatus.BAD_REQUEST);
+    }
+
+    // 4. Est-il expiré ?
+    if (voucher.expires_at && new Date(voucher.expires_at) < new Date()) {
+      throw new HttpException('Ce code promo a expiré', HttpStatus.BAD_REQUEST);
+    }
+
+    // 5. Reste-t-il de l'argent dessus ?
+    if (voucher.remaining_amount <= 0) {
+      throw new HttpException('Le solde de ce code promo est épuisé', HttpStatus.BAD_REQUEST);
+    }
+
+    // ✅ Tout est bon, on renvoie les infos utiles au frontend
+    return {
+      isValid: true,
+      code: voucher.code,
+      remainingAmount: voucher.remaining_amount,
+      expiresAt: voucher.expires_at
+    };
+  }
+
   // Cron job pour mettre à jour les vouchers expirés (tous les jours à minuit)
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async updateExpiredVouchers() {
