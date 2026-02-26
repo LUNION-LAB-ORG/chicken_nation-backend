@@ -485,6 +485,6 @@ export class PaiementsService {
       return OrderStatus.ACCEPTED;
     }
 
-    return oldStatus;
+    return OrderStatus.ACCEPTED;
   }
 }

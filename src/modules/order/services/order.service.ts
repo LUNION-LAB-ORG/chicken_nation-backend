@@ -343,8 +343,8 @@ export class OrderService {
           amount: Number(totalAmount),
           date: orderData.date ? new Date(orderData.date || '') : new Date(),
           time: orderData.time || '10:00',
-          payment_method: PaymentMethod.OFFLINE,
-          status: OrderStatus.ACCEPTED,
+          payment_method:user_id ? PaymentMethod.OFFLINE : PaymentMethod.ONLINE,
+          status: user_id ? OrderStatus.ACCEPTED : OrderStatus.PENDING,
           paied_at: payment ? payment.created_at : null,
           paied: payment ? true : false,
           order_items: {
