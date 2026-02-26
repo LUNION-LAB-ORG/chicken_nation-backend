@@ -32,6 +32,7 @@ import { OrderWebSocketService } from '../websockets/order-websocket.service';
 import { OrderV2Helper } from '../helpers/orderv2.helper';
 import { OrderCreateDto } from '../dto/order-create.dto';
 import * as puppeteer from 'puppeteer';
+import { VoucherService } from 'src/modules/voucher/voucher.service';
 
 @Injectable()
 export class OrderService {
@@ -43,11 +44,13 @@ export class OrderService {
     private orderHelperV2: OrderV2Helper,
     private orderEvent: OrderEvent,
     private readonly orderWebSocketService: OrderWebSocketService,
+    private voucherService: VoucherService
+
   ) { }
 
   async createv2(customer_id: string, createOrderDto: OrderCreateDto): Promise<Order> {
     const {
-      items, address, restaurant_id, delivery_fee, type, code_promo, date, fullname, phone, email, payment_method,
+      items, address, restaurant_id, delivery_fee, type, code_promo, date, fullname, phone, email, payment_method, points
     } = createOrderDto;
 
     // 1. Gestion de la Date (Le format ISO géré par le nouveau DTO)
@@ -61,10 +64,18 @@ export class OrderService {
     // 3. Récupération globale des Plats & Calculs
     const dishIds = items.map((item) => item.dish_id);
     const dishesWithDetails = await this.orderHelperV2.getDishesWithDetails(dishIds);
-    const promoDiscount = await this.orderHelperV2.applyPromoCode(code_promo);
+
 
     // Ton algorithme ajusté !
     const { orderItems, netAmount, totalDishes } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails);
+
+    const promoDiscount = await this.orderHelperV2.applyPromoCode(code_promo, customerData.customer_id, netAmount);
+
+    // Calculer le montant de réduction des points de fidélité
+    const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(
+      customerData.total_points,
+      points ?? 0,
+    );
 
     // ==========================================
     // 4. LE MOTEUR DE ROUTAGE DES RESTAURANTS
@@ -101,9 +112,9 @@ export class OrderService {
     }
 
     // 5. Calcul Final des Totaux
-    const discount = netAmount * promoDiscount;
+    const discount = promoDiscount + loyaltyFee;
     const totalAfterDiscount = netAmount - discount;
-    const tax = await this.orderHelperV2.calculateTax(totalAfterDiscount);
+    const tax = await this.orderHelperV2.calculateTax(netAmount);
     const totalAmount = totalAfterDiscount + tax + finalDeliveryFee;
 
     const orderNumber = this.orderHelperV2.generateOrderReference();
@@ -111,12 +122,13 @@ export class OrderService {
     const next_status = this.orderHelperV2.getOrderStatus(payment_method ?? PaymentMethod.OFFLINE, type);
     // 6. Sauvegarde en Base de données
     const order = await this.prisma.$transaction(async (prisma) => {
-      return await prisma.order.create({
+      const order = await prisma.order.create({
         data: {
           type,
           fullname: customerData.fullname,
           phone: customerData.phone,
           email: customerData.email,
+          ...(loyaltyFee && { points: points }),
           customer: { connect: { id: customerData.customer_id } },
           restaurant: { connect: { id: restaurant.id } },
           reference: orderNumber,
@@ -153,6 +165,15 @@ export class OrderService {
           paiements: true,
         },
       });
+      // Apply voucher
+      if (code_promo) {
+        await this.voucherService.redeemVoucher(code_promo, customerData.customer_id, {
+          orderId: order.id,
+          amount: Number(promoDiscount),
+        });
+      }
+
+      return order;
     });
 
     if (next_status === OrderStatus.ACCEPTED) {
@@ -343,7 +364,7 @@ export class OrderService {
           amount: Number(totalAmount),
           date: orderData.date ? new Date(orderData.date || '') : new Date(),
           time: orderData.time || '10:00',
-          payment_method:user_id ? PaymentMethod.OFFLINE : PaymentMethod.ONLINE,
+          payment_method: user_id ? PaymentMethod.OFFLINE : PaymentMethod.ONLINE,
           status: user_id ? OrderStatus.ACCEPTED : OrderStatus.PENDING,
           paied_at: payment ? payment.created_at : null,
           paied: payment ? true : false,
@@ -474,7 +495,7 @@ export class OrderService {
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderStatusUpdatedEvent({
       order: updatedOrder,
-       expo_token: updatedOrder.customer.notification_settings?.expo_push_token,
+      expo_token: updatedOrder.customer.notification_settings?.expo_push_token,
     });
 
     // Émettre l'événement de mise à jour de statut avec l'ancien statut

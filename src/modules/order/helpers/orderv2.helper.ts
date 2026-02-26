@@ -10,14 +10,13 @@ import {
   EntityStatus,
   OrderStatus,
   OrderType,
-  Paiement,
-  PaiementStatus,
   PaymentMethod
 } from '@prisma/client';
 import { JsonValue } from '@prisma/client/runtime/library';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
+import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { TurboService } from 'src/turbo/services/turbo.service';
 import { OrderItemDto } from '../dto/order-create.dto';
 
@@ -31,7 +30,8 @@ export class OrderV2Helper {
     private configService: ConfigService,
     private generateDataService: GenerateDataService,
     private restaurantService: RestaurantService,
-    private readonly turboService: TurboService
+    private readonly turboService: TurboService,
+    private voucherService: VoucherService
   ) {
     this.taxRate = Number(
       this.configService.get<number>('ORDER_TAX_RATE', 0.05),
@@ -293,13 +293,21 @@ export class OrderV2Helper {
 
 
   // Appliquer un code promo
-  async applyPromoCode(promoCode?: string): Promise<number> {
-    if (!promoCode) return 0;
+  async applyPromoCode(code?: string, customer_id?: string, netAmount?: number): Promise<number> {
+    if (!code || !customer_id || !netAmount) return 0;
+    const response = await this.voucherService.checkValidityForCustomer(code, customer_id);
 
-    // Logique pour vérifier et appliquer un code promo
-    // Idéalement, nous aurions une table pour les codes promo
+    if (response.isValid) {
+      // Le backend a validé le code. On calcule la réduction possible.
+      // Le client ne peut pas utiliser plus que le montant de son panier.
+      const discountToApply = Math.min(response.remainingAmount, netAmount);
 
-    // Pour simplifier, on renvoie 0 (pas de réduction)
+      if (discountToApply <= 0) {
+        return 0;
+      }
+      // ✅ Succès : On met à jour le store global
+      return discountToApply;
+    }
     return 0;
   }
 
