@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, Req } from '@nestjs/common';
 import { LoyaltyService } from '../services/loyalty.service';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AddLoyaltyPointDto } from '../dto/add-loyalty-point.dto';
@@ -9,6 +9,9 @@ import { RequirePermission } from 'src/modules/auth/decorators/user-require-perm
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { UpdateLoyaltyConfigDto } from '../dto/loyalty-config.dto';
+import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import type { Request } from 'express';
+import { Customer } from '@prisma/client';
 
 @ApiTags('Loyalty')
 @Controller('fidelity/loyalty')
@@ -44,6 +47,17 @@ export class LoyaltyController {
   })
   getAllLoyaltyPoints(@Query() query: LoyaltyQueryDto) {
     return this.loyaltyService.getAllLoyaltyPoints(query);
+  }
+
+  @Get('points/customer')
+  @UseGuards(JwtCustomerAuthGuard)
+  @ApiOperation({ summary: 'Obtenir les informations de fidélité' })
+  @ApiOkResponse({
+    description: 'Informations de fidélité obtenues'
+  })
+  getAllMyLoyaltyPoints(@Req() req: Request, @Query() query: LoyaltyQueryDto) {
+    const customerId = (req.user as Customer).id;
+    return this.loyaltyService.getAllLoyaltyPoints({ ...query, customer_id: customerId });
   }
 
   @Get('customer/:customerId')
