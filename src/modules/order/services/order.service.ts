@@ -122,7 +122,7 @@ export class OrderService {
     const next_status = this.orderHelperV2.getOrderStatus(payment_method ?? PaymentMethod.OFFLINE, type);
     // 6. Sauvegarde en Base de données
     const order = await this.prisma.$transaction(async (prisma) => {
-      const order = await prisma.order.create({
+      return await prisma.order.create({
         data: {
           type,
           fullname: customerData.fullname,
@@ -165,17 +165,15 @@ export class OrderService {
           paiements: true,
         },
       });
-      // Apply voucher
-      if (code_promo) {
-        await this.voucherService.redeemVoucher(code_promo, customerData.customer_id, {
-          orderId: order.id,
-          amount: Number(promoDiscount),
-        });
-      }
-
-      return order;
     });
 
+    // Apply voucher
+    if (code_promo && order) {
+      await this.voucherService.redeemVoucher(code_promo, customerData.customer_id, {
+        orderId: order.id,
+        amount: Number(promoDiscount),
+      });
+    }
     if (next_status === OrderStatus.ACCEPTED) {
       // Envoyer l'événement de création de commande
       this.orderEvent.orderCreatedEvent({
