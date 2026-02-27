@@ -77,7 +77,7 @@ export class GenerateDataService {
     generateReference(name: string): string {
         const random = Math.floor(10000 + Math.random() * 90000);
 
-        return `${name.toUpperCase().slice(0, 3)}-${random}`;
+        return `${name.replaceAll(' ', '_').toUpperCase().slice(0, 4)}-${random}`;
     }
 
     /**
