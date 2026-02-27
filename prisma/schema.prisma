@@ -54,6 +54,7 @@ enum PaiementMode {
   CARD // CARD
   CASH // ESPÈCES
 }
+
 enum PaymentMethod {
   OFFLINE // Au restaurant
   ONLINE // En ligne
@@ -165,8 +166,8 @@ model Address {
 }
 
 model Category {
-  id String @id @default(uuid()) @db.Uuid
-
+  id          String  @id @default(uuid()) @db.Uuid
+  reference   String? @db.VarChar @unique
   name        String  @db.VarChar
   description String? @db.VarChar
   image       String? @db.Text
@@ -444,6 +445,7 @@ model Dish {
   id String @id @default(uuid()) @db.Uuid
 
   name             String           @db.VarChar
+  reference        String?          @db.VarChar @unique
   description      String?          @db.VarChar
   price            Float
   image            String?          @db.Text
@@ -558,19 +560,19 @@ model Order {
   email                      String?         @db.VarChar
   note                       String?         @db.VarChar
   auto                       Boolean         @default(true)
-  payment_method             PaymentMethod? @default(ONLINE)
+  payment_method             PaymentMethod?  @default(ONLINE)
 
   user_id String? @db.Uuid
   user    User?   @relation(fields: [user_id], references: [id])
 
-  status        OrderStatus
-  restaurant_id String      @db.Uuid
-  order_items   OrderItem[]
-  paiements     Paiement[]
-  customer      Customer    @relation(fields: [customer_id], references: [id])
-  restaurant    Restaurant  @relation(fields: [restaurant_id], references: [id])
-  cancelled_by  String?
-  cancelled_reason  String?
+  status           OrderStatus
+  restaurant_id    String      @db.Uuid
+  order_items      OrderItem[]
+  paiements        Paiement[]
+  customer         Customer    @relation(fields: [customer_id], references: [id])
+  restaurant       Restaurant  @relation(fields: [restaurant_id], references: [id])
+  cancelled_by     String?
+  cancelled_reason String?
 
   // ================================
   // INTÉGRATION PROMOTIONS ET FIDÉLITÉ
@@ -581,8 +583,8 @@ model Order {
   loyalty_points   LoyaltyPoint[]
 
   entity_status EntityStatus   @default(ACTIVE)
-  accepted_at      DateTime?
-  prepared_at      DateTime?
+  accepted_at   DateTime?
+  prepared_at   DateTime?
   ready_at      DateTime?
   picked_up_at  DateTime?
   collected_at  DateTime?

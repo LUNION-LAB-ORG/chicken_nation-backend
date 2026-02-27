@@ -8,6 +8,7 @@ import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
 import { DishEvent } from 'src/modules/menu/events/dish.event';
 import { QueryDishDto } from '../dto/query-dish.dto';
 import { S3Service } from '../../../s3/s3.service';
+import { GenerateDataService } from 'src/common/services/generate-data.service';
 
 @Injectable()
 export class DishService {
@@ -15,6 +16,7 @@ export class DishService {
     private prisma: PrismaService,
     private dishEvent: DishEvent,
     private readonly s3service: S3Service,
+    private readonly generateDataService: GenerateDataService
   ) { }
 
   private async uploadImage(image?: Express.Multer.File) {
@@ -39,6 +41,7 @@ export class DishService {
         ...dishData,
         image: uploadResult?.key ?? dishData.image,
         entity_status: EntityStatus.ACTIVE,
+        reference: this.generateDataService.generateReference(dishData.name),
       },
     });
 
@@ -177,8 +180,8 @@ export class DishService {
   }
 
   async findOne(id: string, customerId?: string) {
-    const dish = await this.prisma.dish.findUnique({
-      where: { id },
+    const dish = await this.prisma.dish.findFirst({
+      where: { OR: [{ id }, { reference: id }] },
       include: {
         category: true,
         favorites: {
@@ -209,12 +212,12 @@ export class DishService {
 
   async update(req: Request, id: string, updateDishDto: UpdateDishDto, image?: Express.Multer.File) {
     const user = req.user as User;
-    await this.findOne(id);
+    const dish = await this.findOne(id);
 
     const uploadResult = await this.uploadImage(image);
 
-    const dish = await this.prisma.dish.update({
-      where: { id },
+    const dishUpdated = await this.prisma.dish.update({
+      where: { id: dish.id },
       data: {
         ...updateDishDto,
         image: uploadResult?.key ?? updateDishDto.image,
@@ -222,9 +225,9 @@ export class DishService {
     });
 
     // Émettre l'événement de mise à jour de plat
-    this.dishEvent.updateDish(dish);
+    this.dishEvent.updateDish(dishUpdated);
 
-    return dish;
+    return dishUpdated;
   }
 
   async remove(id: string) {
@@ -260,7 +263,7 @@ export class DishService {
 
     // Supprimer le plat (soft delete)
     return this.prisma.dish.update({
-      where: { id },
+      where: { id: dish.id },
       data: {
         entity_status: EntityStatus.DELETED,
       },

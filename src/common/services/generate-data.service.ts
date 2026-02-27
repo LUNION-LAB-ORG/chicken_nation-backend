@@ -71,6 +71,16 @@ export class GenerateDataService {
     }
 
     /**
+     * Génère un numéro de commande unique
+     * @returns Un numéro de commande au format ORD-YYMMDD-XXXXX
+     */
+    generateReference(name: string): string {
+        const random = Math.floor(10000 + Math.random() * 90000);
+
+        return `${name.toUpperCase().slice(0, 3)}-${random}`;
+    }
+
+    /**
      * Génère un mot de passe sécurisé qui correspond au pattern requis:
      * - Au moins 8 caractères
      * - Au moins 1 lettre majuscule
@@ -133,5 +143,5 @@ export class GenerateDataService {
 
         return R * c
     }
-    
+
 }
