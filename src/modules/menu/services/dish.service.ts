@@ -180,8 +180,13 @@ export class DishService {
   }
 
   async findOne(id: string, customerId?: string) {
+
+    const whereCondition = id.length > 10
+      ? { id }
+      : { reference: id };
+
     const dish = await this.prisma.dish.findFirst({
-      where: { OR: [{ reference: id }, { id }] },
+      where: whereCondition,
       include: {
         category: true,
         favorites: {
