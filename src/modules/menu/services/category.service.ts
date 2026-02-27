@@ -77,7 +77,7 @@ export class CategoryService {
       throw new NotFoundException(`Catégorie non trouvée`);
     }
     const category = await this.prisma.category.findFirst({
-      where: { OR: [{ id }, { reference: id }] },
+      where: { OR: [{ reference: id }, { id }] },
       include: {
         dishes: {
           where: { entity_status: EntityStatus.ACTIVE },
