@@ -555,13 +555,9 @@ export class OrderService {
       throw new BadRequestException('La référence de la commande est requis');
     }
 
-    const whereCondition = reference.length > 10
-      ? { id: reference }
-      : { reference: reference };
-
     const order = await this.prisma.order.findFirst({
       where: {
-        ...whereCondition,
+        reference,
         entity_status: { not: EntityStatus.DELETED },
       },
       include: {
