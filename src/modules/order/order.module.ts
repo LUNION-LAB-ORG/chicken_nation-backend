@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { OrderService } from './services/order.service';
 import { OrderController } from './controllers/order.controller';
-import { OrderItemService } from './services/order-item.service';
 import { OrderHelper } from './helpers/order.helper';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
@@ -24,7 +23,6 @@ import { VoucherModule } from 'src/modules/voucher/voucher.module';
   controllers: [OrderController],
   providers: [
     OrderService,
-    OrderItemService,
     OrderHelper,
     OrderV2Helper,
     OrderEvent,
