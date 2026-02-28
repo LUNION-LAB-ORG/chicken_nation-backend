@@ -12,10 +12,14 @@ export class CommentService {
     async createComment(customerId: string, createCommentDto: CreateCommentDto): Promise<CommentResponseDto> {
         const { message, rating, order_id } = createCommentDto;
 
+        const whereCondition = order_id.length > 10
+            ? { id: order_id }
+            : { reference: order_id };
+
         // Vérifier que la commande existe et appartient au client
         const order = await this.prisma.order.findFirst({
             where: {
-                id: order_id,
+                ...whereCondition,
                 customer_id: customerId,
             },
         });

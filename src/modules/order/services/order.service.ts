@@ -449,7 +449,7 @@ export class OrderService {
     const isDeleted = order.payment_method === PaymentMethod.ONLINE && order.status === OrderStatus.PENDING && status === OrderStatus.CANCELLED;
     // Mettre à jour le statut
     const updatedOrder = await this.prisma.order.update({
-      where: { id },
+      where: { id: order.id },
       data: {
         estimated_delivery_time: this.orderHelper.calculateEstimatedTime(
           meta?.estimated_delivery_time ?? '',
@@ -509,9 +509,14 @@ export class OrderService {
     if (!id) {
       throw new BadRequestException("L'identifiant de la commande est requis");
     }
+
+    const whereCondition = id.length > 10
+      ? { id }
+      : { reference: id };
+
     const order = await this.prisma.order.findFirst({
       where: {
-        id,
+        ...whereCondition,
         entity_status: { not: EntityStatus.DELETED },
       },
       include: {
@@ -549,9 +554,14 @@ export class OrderService {
     if (!reference) {
       throw new BadRequestException('La référence de la commande est requis');
     }
+
+    const whereCondition = reference.length > 10
+      ? { id: reference }
+      : { reference: reference };
+
     const order = await this.prisma.order.findFirst({
       where: {
-        reference,
+        ...whereCondition,
         entity_status: { not: EntityStatus.DELETED },
       },
       include: {
@@ -837,7 +847,7 @@ export class OrderService {
     }
 
     const updatedOrder = await this.prisma.order.update({
-      where: { id },
+      where: { id: order.id },
       data: {
         ...rest,
         ...statusUpdateData,
@@ -877,7 +887,7 @@ export class OrderService {
 
     // Appliquer les modifications
     const updatedOrder = await this.prisma.order.update({
-      where: { id },
+      where: { id: order.id },
       data: {
         ...rest,
         delivery_fee,
@@ -925,7 +935,7 @@ export class OrderService {
     }
 
     const orderDeleted = this.prisma.order.update({
-      where: { id },
+      where: { id: order.id },
       include: {
         customer: true,
       },
