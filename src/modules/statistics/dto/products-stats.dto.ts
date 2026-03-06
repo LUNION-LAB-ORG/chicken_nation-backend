@@ -230,3 +230,82 @@ export class ProductsByZoneResponse {
   @ApiProperty({ type: [TopProductByZoneItem] })
   items: TopProductByZoneItem[];
 }
+
+// ─── Nouveaux KPIs ──────────────────────────────────────────────────────────
+
+export class SalesTrendDailyPoint {
+  @ApiProperty({ description: 'Date (YYYY-MM-DD)' })
+  date: string;
+
+  @ApiProperty({ description: 'Label affiché (ex: "Lun 03")' })
+  label: string;
+
+  @ApiProperty({ description: 'Quantité totale vendue ce jour' })
+  totalQuantity: number;
+
+  @ApiProperty({ description: 'CA généré ce jour' })
+  totalRevenue: number;
+}
+
+export class SalesTrendResponse {
+  @ApiProperty({ type: [SalesTrendDailyPoint] })
+  dailyData: SalesTrendDailyPoint[];
+
+  @ApiProperty({ description: 'Quantité totale sur la période' })
+  totalQuantity: number;
+
+  @ApiProperty({ description: 'CA total sur la période' })
+  totalRevenue: number;
+}
+
+export class ChannelBreakdownResponse {
+  @ApiProperty({ description: 'Plats vendus via App' })
+  appSold: number;
+
+  @ApiProperty({ description: 'CA via App' })
+  appRevenue: number;
+
+  @ApiProperty({ description: 'Plats vendus via Call Center' })
+  callCenterSold: number;
+
+  @ApiProperty({ description: 'CA via Call Center' })
+  callCenterRevenue: number;
+
+  @ApiProperty({ description: '% App' })
+  appPercentage: number;
+
+  @ApiProperty({ description: '% Call Center' })
+  callCenterPercentage: number;
+
+  @ApiProperty({ description: 'Total plats vendus' })
+  totalSold: number;
+}
+
+export class PromotionPerformanceResponse {
+  @ApiProperty({ description: 'Nombre de plats en promo vendus' })
+  promoDishCount: number;
+
+  @ApiProperty({ description: 'Quantité totale vendue (promo)' })
+  promoTotalSold: number;
+
+  @ApiProperty({ description: 'CA total (promo)' })
+  promoRevenue: number;
+
+  @ApiProperty({ description: 'Panier moyen par plat promo' })
+  promoAvgBasket: number;
+
+  @ApiProperty({ description: 'Nombre de plats réguliers vendus' })
+  regularDishCount: number;
+
+  @ApiProperty({ description: 'Quantité totale vendue (régulier)' })
+  regularTotalSold: number;
+
+  @ApiProperty({ description: 'CA total (régulier)' })
+  regularRevenue: number;
+
+  @ApiProperty({ description: 'Panier moyen par plat régulier' })
+  regularAvgBasket: number;
+
+  @ApiProperty({ description: '% du CA provenant des promos' })
+  promoRevenueShare: number;
+}

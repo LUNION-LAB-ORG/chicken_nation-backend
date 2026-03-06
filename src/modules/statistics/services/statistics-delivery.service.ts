@@ -245,6 +245,7 @@ export class StatisticsDeliveryService {
     const dateRange = parseDateRange(query);
     const restaurantFilter = buildRestaurantFilter(query.restaurantId);
 
+    // Aligné sur getLateOrders() de statistics-orders : collected_at strict (réception client réelle)
     const orders = await this.prisma.order.findMany({
       where: {
         ...restaurantFilter,
@@ -253,11 +254,11 @@ export class StatisticsDeliveryService {
         paied: true,
         created_at: buildDateFilter(dateRange),
         ready_at: { not: null },
+        collected_at: { not: null },
       },
       select: {
         ready_at: true,
         collected_at: true,
-        completed_at: true,
       },
     });
 
@@ -269,15 +270,12 @@ export class StatisticsDeliveryService {
       };
     }
 
-    // Utilise collected_at (réception client) avec fallback sur completed_at
+    // Utilise collected_at uniquement (réception client réelle, pas completed_at qui est la clôture)
     const deliveryTimes: number[] = [];
     let lateCount = 0;
 
     for (const order of orders) {
-      const endTime = order.collected_at ?? order.completed_at;
-      if (!endTime) continue;
-
-      const minutes = differenceInMinutes(new Date(endTime), new Date(order.ready_at!));
+      const minutes = differenceInMinutes(new Date(order.collected_at!), new Date(order.ready_at!));
       if (minutes > 0) {
         deliveryTimes.push(minutes);
         if (minutes > StatisticsDeliveryService.LATE_THRESHOLD_MINUTES) {

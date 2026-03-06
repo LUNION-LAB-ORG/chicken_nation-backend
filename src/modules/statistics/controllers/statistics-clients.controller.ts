@@ -86,6 +86,50 @@ export class StatisticsClientsController {
   }
 
   /**
+   * GET /statistics/clients/loyalty-distribution
+   * Répartition par niveau fidélité (STANDARD / PREMIUM / GOLD) avec CA moyen.
+   */
+  @Get('loyalty-distribution')
+  @RequirePermission(Modules.CLIENTS, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getLoyaltyDistribution(@Query() query: ClientsStatsQueryDto) {
+    return this.clientsService.getLoyaltyDistribution(query);
+  }
+
+  /**
+   * GET /statistics/clients/payment-methods
+   * Répartition par méthode de paiement (En ligne / Au restaurant).
+   */
+  @Get('payment-methods')
+  @RequirePermission(Modules.CLIENTS, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getPaymentMethodDistribution(@Query() query: ClientsStatsQueryDto) {
+    return this.clientsService.getPaymentMethodDistribution(query);
+  }
+
+  /**
+   * GET /statistics/clients/revenue-concentration
+   * Concentration du CA : % du CA généré par le top 10/20/50% des clients (Pareto).
+   */
+  @Get('revenue-concentration')
+  @RequirePermission(Modules.CLIENTS, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getRevenueConcentration(@Query() query: ClientsStatsQueryDto) {
+    return this.clientsService.getRevenueConcentration(query);
+  }
+
+  /**
+   * GET /statistics/clients/basket-comparison
+   * Comparaison panier moyen : nouveaux clients vs récurrents.
+   */
+  @Get('basket-comparison')
+  @RequirePermission(Modules.CLIENTS, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getBasketComparison(@Query() query: ClientsStatsQueryDto) {
+    return this.clientsService.getBasketComparison(query);
+  }
+
+  /**
    * GET /statistics/clients/:id/analytics
    * Fiche analytique complète d'un client : canal préféré, LTV, fréquence, top plats, fidélité.
    */

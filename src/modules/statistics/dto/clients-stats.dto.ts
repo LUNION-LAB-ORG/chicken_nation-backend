@@ -245,6 +245,92 @@ export class ClientsByZoneResponse {
   totalClients: number;
 }
 
+// ─── Nouveaux KPIs ──────────────────────────────────────────────────────────
+
+export class LoyaltyLevelItem {
+  @ApiProperty({ description: 'Niveau fidélité (STANDARD, PREMIUM, GOLD)' })
+  level: string;
+
+  @ApiProperty()
+  clientCount: number;
+
+  @ApiProperty()
+  percentage: number;
+
+  @ApiProperty({ description: 'CA moyen par client de ce niveau' })
+  averageRevenue: number;
+}
+
+export class LoyaltyDistributionResponse {
+  @ApiProperty({ type: [LoyaltyLevelItem] })
+  items: LoyaltyLevelItem[];
+
+  @ApiProperty()
+  totalClients: number;
+}
+
+export class PaymentMethodItem {
+  @ApiProperty({ description: 'ONLINE ou OFFLINE' })
+  method: string;
+
+  @ApiProperty()
+  clientCount: number;
+
+  @ApiProperty()
+  orderCount: number;
+
+  @ApiProperty()
+  percentage: number;
+
+  @ApiProperty()
+  revenue: number;
+}
+
+export class PaymentMethodDistributionResponse {
+  @ApiProperty({ type: [PaymentMethodItem] })
+  items: PaymentMethodItem[];
+
+  @ApiProperty()
+  totalClients: number;
+}
+
+export class RevenueConcentrationResponse {
+  @ApiProperty({ description: '% du CA généré par le top 10% des clients' })
+  top10Percentage: number;
+
+  @ApiProperty({ description: '% du CA généré par le top 20% des clients' })
+  top20Percentage: number;
+
+  @ApiProperty({ description: '% du CA généré par le top 50% des clients' })
+  top50Percentage: number;
+
+  @ApiProperty()
+  totalRevenue: number;
+
+  @ApiProperty()
+  totalClients: number;
+}
+
+export class BasketComparisonResponse {
+  @ApiProperty({ description: 'Panier moyen des nouveaux clients' })
+  newClientsBasket: number;
+
+  @ApiProperty({ description: 'Panier moyen des clients récurrents' })
+  recurringClientsBasket: number;
+
+  @ApiProperty({ description: 'CA total des nouveaux' })
+  newClientsRevenue: number;
+
+  @ApiProperty({ description: 'CA total des récurrents' })
+  recurringClientsRevenue: number;
+
+  @ApiProperty()
+  newClientsOrders: number;
+
+  @ApiProperty()
+  recurringClientsOrders: number;
+}
+
 export class ClientAnalyticsProfileResponse {
   @ApiProperty()
   id: string;

@@ -54,6 +54,39 @@ export class StatisticsProductsController {
   }
 
   /**
+   * GET /statistics/products/sales-trend
+   * Tendance des ventes quotidiennes (quantité + CA par jour).
+   */
+  @Get('sales-trend')
+  @RequirePermission(Modules.DASHBOARD, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getSalesTrend(@Query() query: ProductsStatsQueryDto) {
+    return this.productsService.getSalesTrend(query);
+  }
+
+  /**
+   * GET /statistics/products/channel-breakdown
+   * Répartition des ventes par canal (App vs Call Center).
+   */
+  @Get('channel-breakdown')
+  @RequirePermission(Modules.DASHBOARD, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getChannelBreakdown(@Query() query: ProductsStatsQueryDto) {
+    return this.productsService.getChannelBreakdown(query);
+  }
+
+  /**
+   * GET /statistics/products/promotion-performance
+   * Performance des plats en promotion vs réguliers.
+   */
+  @Get('promotion-performance')
+  @RequirePermission(Modules.DASHBOARD, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getPromotionPerformance(@Query() query: ProductsStatsQueryDto) {
+    return this.productsService.getPromotionPerformance(query);
+  }
+
+  /**
    * GET /statistics/products/by-restaurant
    * Répartition des ventes par restaurant (tous les restaurants).
    * Filtres : startDate, endDate, period, limit

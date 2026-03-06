@@ -29,6 +29,10 @@ import {
   InactiveClientItem,
   ClientsByZoneResponse,
   ClientAnalyticsProfileResponse,
+  LoyaltyDistributionResponse,
+  PaymentMethodDistributionResponse,
+  RevenueConcentrationResponse,
+  BasketComparisonResponse,
 } from '../dto/clients-stats.dto';
 
 @Injectable()
@@ -599,6 +603,241 @@ export class StatisticsClientsService {
       topDishes,
       loyaltyLevel: customer.loyalty_level ?? 'STANDARD',
       loyaltyPoints: customer.total_points ?? 0,
+    };
+  }
+
+  // =========================================================================
+  // NOUVEAUX KPIs
+  // =========================================================================
+
+  /**
+   * Répartition des clients par niveau de fidélité (STANDARD / PREMIUM / GOLD).
+   */
+  async getLoyaltyDistribution(
+    query: ClientsStatsQueryDto,
+  ): Promise<LoyaltyDistributionResponse> {
+    const dateRange = parseDateRange(query);
+    const restaurantFilter = buildRestaurantFilter(query.restaurantId);
+
+    // Récupérer les clients actifs sur la période
+    const ordersInPeriod = await this.prisma.order.findMany({
+      where: {
+        ...restaurantFilter,
+        paied: true,
+        status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+        created_at: buildDateFilter(dateRange),
+      },
+      select: { customer_id: true, net_amount: true },
+    });
+
+    const customerRevenueMap = new Map<string, number>();
+    for (const o of ordersInPeriod) {
+      const id = o.customer_id!;
+      customerRevenueMap.set(id, (customerRevenueMap.get(id) ?? 0) + (o.net_amount ?? 0));
+    }
+
+    const customerIds = [...customerRevenueMap.keys()];
+    if (customerIds.length === 0) {
+      return { items: [], totalClients: 0 };
+    }
+
+    const customers = await this.prisma.customer.findMany({
+      where: { id: { in: customerIds } },
+      select: { id: true, loyalty_level: true },
+    });
+
+    const levelMap = new Map<string, { count: number; totalRevenue: number }>();
+    for (const c of customers) {
+      const level = c.loyalty_level ?? 'STANDARD';
+      const existing = levelMap.get(level) ?? { count: 0, totalRevenue: 0 };
+      existing.count++;
+      existing.totalRevenue += customerRevenueMap.get(c.id) ?? 0;
+      levelMap.set(level, existing);
+    }
+
+    const totalClients = customers.length;
+    const items = ['STANDARD', 'PREMIUM', 'GOLD']
+      .map((level) => {
+        const data = levelMap.get(level) ?? { count: 0, totalRevenue: 0 };
+        return {
+          level,
+          clientCount: data.count,
+          percentage: totalClients > 0 ? Math.round((data.count / totalClients) * 100) : 0,
+          averageRevenue: data.count > 0 ? Math.round(data.totalRevenue / data.count) : 0,
+        };
+      })
+      .filter((item) => item.clientCount > 0);
+
+    return { items, totalClients };
+  }
+
+  /**
+   * Répartition des clients par méthode de paiement (ONLINE / OFFLINE).
+   */
+  async getPaymentMethodDistribution(
+    query: ClientsStatsQueryDto,
+  ): Promise<PaymentMethodDistributionResponse> {
+    const dateRange = parseDateRange(query);
+    const restaurantFilter = buildRestaurantFilter(query.restaurantId);
+
+    const orders = await this.prisma.order.findMany({
+      where: {
+        ...restaurantFilter,
+        paied: true,
+        status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+        created_at: buildDateFilter(dateRange),
+      },
+      select: { customer_id: true, payment_method: true, net_amount: true },
+    });
+
+    if (orders.length === 0) {
+      return { items: [], totalClients: 0 };
+    }
+
+    const methodMap = new Map<
+      string,
+      { customers: Set<string>; orderCount: number; revenue: number }
+    >();
+
+    for (const o of orders) {
+      const method = o.payment_method ?? 'ONLINE';
+      if (!methodMap.has(method)) {
+        methodMap.set(method, { customers: new Set(), orderCount: 0, revenue: 0 });
+      }
+      const entry = methodMap.get(method)!;
+      if (o.customer_id) entry.customers.add(o.customer_id);
+      entry.orderCount++;
+      entry.revenue += o.net_amount ?? 0;
+    }
+
+    const allCustomerIds = new Set(orders.map((o) => o.customer_id!));
+    const totalClients = allCustomerIds.size;
+
+    const items = Array.from(methodMap.entries()).map(([method, data]) => ({
+      method: method === 'ONLINE' ? 'En ligne' : 'Au restaurant',
+      clientCount: data.customers.size,
+      orderCount: data.orderCount,
+      percentage: totalClients > 0 ? Math.round((data.customers.size / totalClients) * 100) : 0,
+      revenue: Math.round(data.revenue),
+    }));
+
+    return { items, totalClients };
+  }
+
+  /**
+   * Concentration du CA — Combien de % du CA est généré par le top 10/20/50% des clients.
+   */
+  async getRevenueConcentration(
+    query: ClientsStatsQueryDto,
+  ): Promise<RevenueConcentrationResponse> {
+    const dateRange = parseDateRange(query);
+    const restaurantFilter = buildRestaurantFilter(query.restaurantId);
+
+    const grouped = await this.prisma.order.groupBy({
+      by: ['customer_id'],
+      _sum: { net_amount: true },
+      where: {
+        ...restaurantFilter,
+        paied: true,
+        status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+        created_at: buildDateFilter(dateRange),
+      },
+    });
+
+    if (grouped.length === 0) {
+      return {
+        top10Percentage: 0, top20Percentage: 0, top50Percentage: 0,
+        totalRevenue: 0, totalClients: 0,
+      };
+    }
+
+    // Trier par CA décroissant
+    const revenues = grouped
+      .map((g) => g._sum.net_amount ?? 0)
+      .sort((a, b) => b - a);
+
+    const totalRevenue = revenues.reduce((a, b) => a + b, 0);
+    const totalClients = revenues.length;
+
+    const cumulativeShare = (topPercent: number): number => {
+      const count = Math.max(1, Math.ceil(totalClients * (topPercent / 100)));
+      const topRevenue = revenues.slice(0, count).reduce((a, b) => a + b, 0);
+      return totalRevenue > 0 ? Math.round((topRevenue / totalRevenue) * 100) : 0;
+    };
+
+    return {
+      top10Percentage: cumulativeShare(10),
+      top20Percentage: cumulativeShare(20),
+      top50Percentage: cumulativeShare(50),
+      totalRevenue: Math.round(totalRevenue),
+      totalClients,
+    };
+  }
+
+  /**
+   * Comparaison panier moyen : nouveaux clients vs récurrents.
+   */
+  async getBasketComparison(
+    query: ClientsStatsQueryDto,
+  ): Promise<BasketComparisonResponse> {
+    const dateRange = parseDateRange(query);
+    const restaurantFilter = buildRestaurantFilter(query.restaurantId);
+
+    const paidWhere: Prisma.OrderWhereInput = {
+      ...restaurantFilter,
+      paied: true,
+      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+      created_at: buildDateFilter(dateRange),
+    };
+
+    const ordersInPeriod = await this.prisma.order.findMany({
+      where: paidWhere,
+      select: { customer_id: true, net_amount: true },
+    });
+
+    const customerIds = [...new Set(ordersInPeriod.map((o) => o.customer_id!))] as string[];
+
+    if (customerIds.length === 0) {
+      return {
+        newClientsBasket: 0, recurringClientsBasket: 0,
+        newClientsRevenue: 0, recurringClientsRevenue: 0,
+        newClientsOrders: 0, recurringClientsOrders: 0,
+      };
+    }
+
+    // Identifier les récurrents (ont commandé avant la période)
+    const previousOrders = await this.prisma.order.groupBy({
+      by: ['customer_id'],
+      _count: { _all: true },
+      where: {
+        customer_id: { in: customerIds },
+        created_at: { lt: dateRange.startDate },
+        paied: true,
+        status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+      },
+    });
+    const recurringIds = new Set(previousOrders.map((p) => p.customer_id!));
+
+    let newRevenue = 0, newOrders = 0, recurRevenue = 0, recurOrders = 0;
+
+    for (const o of ordersInPeriod) {
+      const amount = o.net_amount ?? 0;
+      if (recurringIds.has(o.customer_id!)) {
+        recurRevenue += amount;
+        recurOrders++;
+      } else {
+        newRevenue += amount;
+        newOrders++;
+      }
+    }
+
+    return {
+      newClientsBasket: newOrders > 0 ? Math.round(newRevenue / newOrders) : 0,
+      recurringClientsBasket: recurOrders > 0 ? Math.round(recurRevenue / recurOrders) : 0,
+      newClientsRevenue: Math.round(newRevenue),
+      recurringClientsRevenue: Math.round(recurRevenue),
+      newClientsOrders: newOrders,
+      recurringClientsOrders: recurOrders,
     };
   }
 }

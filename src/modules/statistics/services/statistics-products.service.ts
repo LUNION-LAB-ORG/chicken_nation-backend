@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EntityStatus, OrderStatus, Prisma } from '@prisma/client';
-import { format, parseISO, startOfDay, endOfDay } from 'date-fns';
+import { format, parseISO, startOfDay, endOfDay, eachDayOfInterval } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { PrismaService } from 'src/database/services/prisma.service';
 import {
@@ -23,6 +23,10 @@ import {
   ProductsByRestaurantResponse,
   ProductsByZoneResponse,
   TopProductByZoneItem,
+  SalesTrendResponse,
+  SalesTrendDailyPoint,
+  ChannelBreakdownResponse,
+  PromotionPerformanceResponse,
 } from '../dto/products-stats.dto';
 
 @Injectable()
@@ -456,5 +460,174 @@ export class StatisticsProductsService {
     });
 
     return { items };
+  }
+
+  // ─── Nouveaux KPIs ──────────────────────────────────────────────────────────
+
+  /**
+   * Tendance des ventes quotidiennes : quantité et CA par jour.
+   */
+  async getSalesTrend(query: ProductsStatsQueryDto): Promise<SalesTrendResponse> {
+    const dateRange = parseDateRange(query);
+    const restaurantFilter = buildRestaurantFilter(query.restaurantId);
+
+    const baseOrderWhere: Prisma.OrderWhereInput = {
+      ...restaurantFilter,
+      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+      paied: true,
+      created_at: buildDateFilter(dateRange),
+    };
+
+    // Récupérer tous les OrderItems avec la date de commande
+    const items = await this.prisma.orderItem.findMany({
+      where: { order: baseOrderWhere },
+      select: {
+        quantity: true,
+        amount: true,
+        order: { select: { created_at: true } },
+      },
+    });
+
+    // Agréger par jour
+    const dayMap = new Map<string, { totalQuantity: number; totalRevenue: number }>();
+
+    for (const item of items) {
+      const day = format(item.order.created_at, 'yyyy-MM-dd');
+      const existing = dayMap.get(day);
+      if (existing) {
+        existing.totalQuantity += item.quantity;
+        existing.totalRevenue += item.amount;
+      } else {
+        dayMap.set(day, {
+          totalQuantity: item.quantity,
+          totalRevenue: item.amount,
+        });
+      }
+    }
+
+    // Construire les données avec tous les jours de la période (même les jours à 0)
+    const allDays = eachDayOfInterval({
+      start: dateRange.startDate,
+      end: dateRange.endDate,
+    });
+
+    const dailyData: SalesTrendDailyPoint[] = allDays.map((day) => {
+      const key = format(day, 'yyyy-MM-dd');
+      const data = dayMap.get(key) ?? { totalQuantity: 0, totalRevenue: 0 };
+      return {
+        date: key,
+        label: format(day, 'dd MMM', { locale: fr }),
+        totalQuantity: data.totalQuantity,
+        totalRevenue: Math.round(data.totalRevenue),
+      };
+    });
+
+    const totalQuantity = dailyData.reduce((acc, d) => acc + d.totalQuantity, 0);
+    const totalRevenue = dailyData.reduce((acc, d) => acc + d.totalRevenue, 0);
+
+    return { dailyData, totalQuantity, totalRevenue };
+  }
+
+  /**
+   * Répartition des ventes par canal : App (auto=true) vs Call Center (auto=false).
+   */
+  async getChannelBreakdown(query: ProductsStatsQueryDto): Promise<ChannelBreakdownResponse> {
+    const dateRange = parseDateRange(query);
+    const restaurantFilter = buildRestaurantFilter(query.restaurantId);
+
+    const baseWhere = {
+      ...restaurantFilter,
+      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] as OrderStatus[] },
+      paied: true,
+      created_at: buildDateFilter(dateRange),
+    };
+
+    // App (auto = true)
+    const appItems = await this.prisma.orderItem.findMany({
+      where: { order: { ...baseWhere, auto: true } },
+      select: { quantity: true, amount: true },
+    });
+
+    // Call Center (auto = false)
+    const ccItems = await this.prisma.orderItem.findMany({
+      where: { order: { ...baseWhere, auto: false } },
+      select: { quantity: true, amount: true },
+    });
+
+    const appSold = appItems.reduce((acc, i) => acc + i.quantity, 0);
+    const appRevenue = appItems.reduce((acc, i) => acc + i.amount, 0);
+    const callCenterSold = ccItems.reduce((acc, i) => acc + i.quantity, 0);
+    const callCenterRevenue = ccItems.reduce((acc, i) => acc + i.amount, 0);
+    const totalSold = appSold + callCenterSold;
+
+    return {
+      appSold,
+      appRevenue: Math.round(appRevenue),
+      callCenterSold,
+      callCenterRevenue: Math.round(callCenterRevenue),
+      appPercentage: totalSold > 0 ? parseFloat(((appSold / totalSold) * 100).toFixed(1)) : 0,
+      callCenterPercentage: totalSold > 0 ? parseFloat(((callCenterSold / totalSold) * 100).toFixed(1)) : 0,
+      totalSold,
+    };
+  }
+
+  /**
+   * Performance des produits en promotion vs produits réguliers.
+   */
+  async getPromotionPerformance(query: ProductsStatsQueryDto): Promise<PromotionPerformanceResponse> {
+    const dateRange = parseDateRange(query);
+    const restaurantFilter = buildRestaurantFilter(query.restaurantId);
+
+    const baseOrderWhere: Prisma.OrderWhereInput = {
+      ...restaurantFilter,
+      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+      paied: true,
+      created_at: buildDateFilter(dateRange),
+    };
+
+    // Tous les OrderItems avec info promotion du plat
+    const items = await this.prisma.orderItem.findMany({
+      where: { order: baseOrderWhere },
+      select: {
+        quantity: true,
+        amount: true,
+        dish_id: true,
+        dish: { select: { is_promotion: true } },
+      },
+    });
+
+    // Séparer promo vs régulier
+    const promoDishesSeen = new Set<string>();
+    const regularDishesSeen = new Set<string>();
+    let promoTotalSold = 0;
+    let promoRevenue = 0;
+    let regularTotalSold = 0;
+    let regularRevenue = 0;
+
+    for (const item of items) {
+      if (item.dish?.is_promotion) {
+        promoDishesSeen.add(item.dish_id);
+        promoTotalSold += item.quantity;
+        promoRevenue += item.amount;
+      } else {
+        regularDishesSeen.add(item.dish_id);
+        regularTotalSold += item.quantity;
+        regularRevenue += item.amount;
+      }
+    }
+
+    const totalRevenue = promoRevenue + regularRevenue;
+
+    return {
+      promoDishCount: promoDishesSeen.size,
+      promoTotalSold,
+      promoRevenue: Math.round(promoRevenue),
+      promoAvgBasket: promoTotalSold > 0 ? Math.round(promoRevenue / promoTotalSold) : 0,
+      regularDishCount: regularDishesSeen.size,
+      regularTotalSold,
+      regularRevenue: Math.round(regularRevenue),
+      regularAvgBasket: regularTotalSold > 0 ? Math.round(regularRevenue / regularTotalSold) : 0,
+      promoRevenueShare: totalRevenue > 0 ? parseFloat(((promoRevenue / totalRevenue) * 100).toFixed(1)) : 0,
+    };
   }
 }
