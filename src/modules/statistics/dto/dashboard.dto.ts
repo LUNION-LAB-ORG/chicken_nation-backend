@@ -30,14 +30,14 @@ export class GetStatsQueryDto {
     endDate?: string;
 
     @ApiPropertyOptional({
-        enum: ['today', 'week', 'month', 'year'],
+        enum: ['today', 'week', 'month', 'last_month', 'year'],
         description: 'Période prédéfinie pour les statistiques',
         default: 'month'
     })
-    @IsIn(['today', 'week', 'month', 'year'])
+    @IsIn(['today', 'week', 'month', 'last_month', 'year'])
     @IsOptional()
     @Transform(({ value }) => value || 'month')
-    period?: 'today' | 'week' | 'month' | 'year';
+    period?: 'today' | 'week' | 'month' | 'last_month' | 'year';
 }
 
 export class ObjectiveData {
