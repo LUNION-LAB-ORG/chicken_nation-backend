@@ -129,4 +129,38 @@ export class StatisticsOrdersController {
   async getOrdersDailyTrend(@Query() query: OrdersStatsQueryDto) {
     return this.ordersService.getOrdersDailyTrend(query);
   }
+
+  /**
+   * GET /statistics/orders/daily-trend-by-restaurant
+   * Tendance par restaurant : chaque période contient le détail par restaurant
+   * (count, revenue, avgBasket, onTimeRate) pour histogramme empilé.
+   */
+  @Get('daily-trend-by-restaurant')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getDailyTrendByRestaurant(@Query() query: OrdersStatsQueryDto) {
+    return this.ordersService.getDailyTrendByRestaurant(query);
+  }
+
+  /**
+   * GET /statistics/orders/restaurants-locations
+   * Positions géographiques des restaurants (marqueurs carte).
+   */
+  @Get('restaurants-locations')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
+  @CacheTTL(10 * 60 * 1000)
+  async getRestaurantsLocations() {
+    return this.ordersService.getRestaurantsLocations();
+  }
+
+  /**
+   * GET /statistics/orders/influence-zones
+   * Points de livraison associés au restaurant pour carte d'influence.
+   */
+  @Get('influence-zones')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getInfluenceZones(@Query() query: OrdersStatsQueryDto) {
+    return this.ordersService.getInfluenceZones(query);
+  }
 }

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { OrderStatus, OrderType, Prisma } from '@prisma/client';
+import { EntityStatus, OrderStatus, OrderType, Prisma } from '@prisma/client';
 import {
   eachDayOfInterval,
   eachMonthOfInterval,
@@ -37,6 +37,10 @@ import {
   OrdersByRestaurantAndSourceResponse,
   OrdersDailyTrendResponse,
   ClientZonesResponse,
+  DailyTrendByRestaurantResponse,
+  RestaurantMetrics,
+  RestaurantsLocationsResponse,
+  InfluenceZonesResponse,
 } from '../dto/orders-stats.dto';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -816,6 +820,266 @@ export class StatisticsOrdersService {
       points,
       totalOrders,
       totalPoints,
+      center: { lat: centerLat, lng: centerLng },
+    };
+  }
+
+  /**
+   * Tendance journalière par restaurant : chaque période contient le détail par restaurant
+   * (count, revenue, avgBasket, onTimeRate) pour alimenter l'histogramme empilé.
+   */
+  async getDailyTrendByRestaurant(
+    query: OrdersStatsQueryDto,
+  ): Promise<DailyTrendByRestaurantResponse> {
+    const dateRange = parseDateRange(query);
+    const granularity = query.granularity ?? 'day';
+
+    const baseWhere: Prisma.OrderWhereInput = {
+      paied: true,
+      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+      created_at: buildDateFilter(dateRange),
+    };
+
+    const allOrders = await this.prisma.order.findMany({
+      where: baseWhere,
+      select: {
+        restaurant_id: true,
+        created_at: true,
+        net_amount: true,
+        type: true,
+        ready_at: true,
+        collected_at: true,
+      },
+      orderBy: { created_at: 'asc' },
+    });
+
+    // Récupérer les noms des restaurants
+    const restaurantIds = [
+      ...new Set(allOrders.map((o) => o.restaurant_id).filter(Boolean)),
+    ] as string[];
+    const restaurants = await this.prisma.restaurant.findMany({
+      where: { id: { in: restaurantIds } },
+      select: { id: true, name: true },
+    });
+    const nameMap = new Map(restaurants.map((r) => [r.id, r.name]));
+
+    // Construire les intervalles
+    let intervals: Date[];
+    let getIntervalStart: (d: Date) => Date;
+    let getIntervalEnd: (d: Date) => Date;
+    let labelFmt: string;
+
+    if (granularity === 'month') {
+      intervals = eachMonthOfInterval({ start: dateRange.startDate, end: dateRange.endDate });
+      getIntervalStart = startOfMonth;
+      getIntervalEnd = endOfMonth;
+      labelFmt = 'MMM yyyy';
+    } else if (granularity === 'week') {
+      intervals = eachWeekOfInterval(
+        { start: dateRange.startDate, end: dateRange.endDate },
+        { weekStartsOn: 1 },
+      );
+      getIntervalStart = (d) => startOfWeek(d, { weekStartsOn: 1 });
+      getIntervalEnd = (d) => endOfWeek(d, { weekStartsOn: 1 });
+      labelFmt = "'Sem.' w";
+    } else {
+      intervals = eachDayOfInterval({ start: dateRange.startDate, end: dateRange.endDate });
+      getIntervalStart = startOfDay;
+      getIntervalEnd = endOfDay;
+      labelFmt = 'EEE dd MMM';
+    }
+
+    const LATE_THRESHOLD = 40;
+
+    const data = intervals.map((interval) => {
+      const iStart = getIntervalStart(interval);
+      const iEnd = getIntervalEnd(interval);
+
+      const periodOrders = allOrders.filter((o) => {
+        const d = new Date(o.created_at);
+        return d >= iStart && d <= iEnd;
+      });
+
+      // Agréger par restaurant
+      const byRestoRaw = new Map<
+        string,
+        { count: number; revenue: number; deliveries: number; onTime: number }
+      >();
+
+      for (const o of periodOrders) {
+        const rid = o.restaurant_id ?? 'unknown';
+        if (!byRestoRaw.has(rid)) {
+          byRestoRaw.set(rid, { count: 0, revenue: 0, deliveries: 0, onTime: 0 });
+        }
+        const entry = byRestoRaw.get(rid)!;
+        entry.count++;
+        entry.revenue += o.net_amount ?? 0;
+
+        if (o.type === OrderType.DELIVERY && o.ready_at && o.collected_at) {
+          entry.deliveries++;
+          const dur = differenceInMinutes(new Date(o.collected_at), new Date(o.ready_at));
+          if (dur <= LATE_THRESHOLD) entry.onTime++;
+        }
+      }
+
+      const byRestaurant: Record<string, RestaurantMetrics> = {};
+      let totalCount = 0,
+        totalRevenue = 0,
+        totalDeliveries = 0,
+        totalOnTime = 0;
+
+      for (const [rid, stats] of byRestoRaw.entries()) {
+        byRestaurant[rid] = {
+          count: stats.count,
+          revenue: stats.revenue,
+          avgBasket: stats.count > 0 ? Math.round(stats.revenue / stats.count) : 0,
+          onTimeRate:
+            stats.deliveries > 0
+              ? Math.round((stats.onTime / stats.deliveries) * 100)
+              : 100,
+        };
+        totalCount += stats.count;
+        totalRevenue += stats.revenue;
+        totalDeliveries += stats.deliveries;
+        totalOnTime += stats.onTime;
+      }
+
+      return {
+        date: format(interval, 'yyyy-MM-dd'),
+        label: format(interval, labelFmt, { locale: fr }),
+        byRestaurant,
+        total: {
+          count: totalCount,
+          revenue: totalRevenue,
+          avgBasket: totalCount > 0 ? Math.round(totalRevenue / totalCount) : 0,
+          onTimeRate:
+            totalDeliveries > 0
+              ? Math.round((totalOnTime / totalDeliveries) * 100)
+              : 100,
+        },
+      };
+    });
+
+    return {
+      restaurants: restaurants.map((r) => ({ id: r.id, name: r.name })),
+      data,
+    };
+  }
+
+  /**
+   * Positions géographiques des restaurants (lat/lng).
+   * Pour les marqueurs sur la carte Google Maps.
+   */
+  async getRestaurantsLocations(): Promise<RestaurantsLocationsResponse> {
+    const restaurants = await this.prisma.restaurant.findMany({
+      where: {
+        entity_status: EntityStatus.ACTIVE,
+        latitude: { not: null },
+        longitude: { not: null },
+      },
+      select: {
+        id: true,
+        name: true,
+        latitude: true,
+        longitude: true,
+        image: true,
+        address: true,
+      },
+    });
+
+    return {
+      restaurants: restaurants.map((r) => ({
+        id: r.id,
+        name: r.name,
+        latitude: r.latitude!,
+        longitude: r.longitude!,
+        image: r.image ?? '',
+        address: r.address ?? '',
+      })),
+    };
+  }
+
+  /**
+   * Zones d'influence : coordonnées de livraison associées au restaurant.
+   * Chaque point = { lat, lng, restaurantId, count }
+   */
+  async getInfluenceZones(
+    query: OrdersStatsQueryDto,
+  ): Promise<InfluenceZonesResponse> {
+    const dateRange = parseDateRange(query);
+
+    const orders = await this.prisma.order.findMany({
+      where: {
+        paied: true,
+        status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+        created_at: buildDateFilter(dateRange),
+        type: OrderType.DELIVERY,
+        address: { not: Prisma.JsonNull },
+      },
+      select: {
+        address: true,
+        restaurant_id: true,
+      },
+    });
+
+    // Récupérer les noms des restaurants
+    const restaurantIds = [
+      ...new Set(orders.map((o) => o.restaurant_id).filter(Boolean)),
+    ] as string[];
+    const restaurants = await this.prisma.restaurant.findMany({
+      where: { id: { in: restaurantIds } },
+      select: { id: true, name: true },
+    });
+
+    // Regrouper par coordonnées + restaurant
+    const coordCounts = new Map<
+      string,
+      { lat: number; lng: number; restaurantId: string; count: number }
+    >();
+
+    for (const order of orders) {
+      let addr: { latitude?: number; longitude?: number } | null = null;
+      try {
+        const raw = order.address;
+        if (typeof raw === 'string') {
+          addr = JSON.parse(raw);
+        } else if (raw && typeof raw === 'object') {
+          addr = raw as { latitude?: number; longitude?: number };
+        }
+      } catch {
+        continue;
+      }
+      if (!addr || !addr.latitude || !addr.longitude) continue;
+
+      const lat = Math.round(addr.latitude * 1000) / 1000;
+      const lng = Math.round(addr.longitude * 1000) / 1000;
+      const rid = order.restaurant_id ?? 'unknown';
+      const key = `${lat},${lng},${rid}`;
+
+      if (coordCounts.has(key)) {
+        coordCounts.get(key)!.count++;
+      } else {
+        coordCounts.set(key, { lat, lng, restaurantId: rid, count: 1 });
+      }
+    }
+
+    const points = [...coordCounts.values()];
+
+    // Centre moyen
+    let centerLat = 6.3703,
+      centerLng = 2.3912;
+    if (points.length > 0) {
+      const totalWeight = points.reduce((acc, p) => acc + p.count, 0);
+      centerLat =
+        points.reduce((acc, p) => acc + p.lat * p.count, 0) / totalWeight;
+      centerLng =
+        points.reduce((acc, p) => acc + p.lng * p.count, 0) / totalWeight;
+    }
+
+    return {
+      restaurants: restaurants.map((r) => ({ id: r.id, name: r.name })),
+      points,
+      totalOrders: orders.length,
       center: { lat: centerLat, lng: centerLng },
     };
   }

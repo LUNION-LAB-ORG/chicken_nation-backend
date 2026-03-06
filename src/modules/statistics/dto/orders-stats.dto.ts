@@ -386,3 +386,106 @@ export class OrdersDailyTrendResponse {
   @ApiProperty()
   totalRevenue: number;
 }
+
+// ─── Tendance par Restaurant (histogramme empilé) ──────────────────────────────
+
+export class RestaurantMetrics {
+  @ApiProperty()
+  count: number;
+
+  @ApiProperty()
+  revenue: number;
+
+  @ApiProperty()
+  avgBasket: number;
+
+  @ApiProperty({ description: 'Taux de ponctualité en %' })
+  onTimeRate: number;
+}
+
+export class DailyTrendByRestaurantPoint {
+  @ApiProperty()
+  date: string;
+
+  @ApiProperty()
+  label: string;
+
+  @ApiProperty({ description: 'Métriques par restaurant { [restaurantId]: metrics }' })
+  byRestaurant: Record<string, RestaurantMetrics>;
+
+  @ApiProperty()
+  total: RestaurantMetrics;
+}
+
+export class RestaurantInfo {
+  @ApiProperty()
+  id: string;
+
+  @ApiProperty()
+  name: string;
+}
+
+export class DailyTrendByRestaurantResponse {
+  @ApiProperty({ type: [RestaurantInfo] })
+  restaurants: RestaurantInfo[];
+
+  @ApiProperty({ type: [DailyTrendByRestaurantPoint] })
+  data: DailyTrendByRestaurantPoint[];
+}
+
+// ─── Restaurants Locations ──────────────────────────────────────────────────────
+
+export class RestaurantLocationItem {
+  @ApiProperty()
+  id: string;
+
+  @ApiProperty()
+  name: string;
+
+  @ApiProperty()
+  latitude: number;
+
+  @ApiProperty()
+  longitude: number;
+
+  @ApiProperty()
+  image: string;
+
+  @ApiProperty()
+  address: string;
+}
+
+export class RestaurantsLocationsResponse {
+  @ApiProperty({ type: [RestaurantLocationItem] })
+  restaurants: RestaurantLocationItem[];
+}
+
+// ─── Zones d'influence restaurants ──────────────────────────────────────────────
+
+export class InfluenceZonePoint {
+  @ApiProperty()
+  lat: number;
+
+  @ApiProperty()
+  lng: number;
+
+  @ApiProperty()
+  restaurantId: string;
+
+  @ApiProperty()
+  count: number;
+}
+
+export class InfluenceZonesResponse {
+  @ApiProperty({ type: [RestaurantInfo] })
+  restaurants: RestaurantInfo[];
+
+  @ApiProperty({ type: [InfluenceZonePoint] })
+  points: InfluenceZonePoint[];
+
+  @ApiProperty()
+  totalOrders: number;
+
+  @ApiProperty()
+  center: { lat: number; lng: number };
+}
