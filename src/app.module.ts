@@ -33,6 +33,7 @@ import { S3Module } from 'src/s3/s3.module';
 import { NewsModule } from 'src/modules/marketing/news/news.module';
 import { ExpoPushModule } from 'src/expo-push/expo-push.module';
 import { DeeplinkModule } from 'src/modules/marketing/deeplink/deeplink.module';
+import { HubriseModule } from 'src/hubrise/hubrise.module';
 
 @Module({
   imports: [
@@ -90,6 +91,7 @@ import { DeeplinkModule } from 'src/modules/marketing/deeplink/deeplink.module';
     DeeplinkModule,
     NewsModule,
     AppMobileModule,
+    HubriseModule,
   ],
 })
 export class AppModule { }

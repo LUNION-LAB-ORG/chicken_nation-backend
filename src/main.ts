@@ -24,6 +24,8 @@ async function bootstrap() {
       prefix: "chicken_nation_backend",
       colors: !isProduction
     }),
+    // Activer rawBody pour la vérification HMAC des webhooks HubRise
+    rawBody: true,
   });
 
   // 🔹 Indique à Express de faire confiance à Nginx pour les headers IP
