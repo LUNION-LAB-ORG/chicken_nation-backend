@@ -89,6 +89,30 @@ export class StatisticsProductsService {
       where: { dish_id: { in: dishIds }, order: baseOrderWhere },
     });
 
+    // Répartition par source (App / Call Center / HubRise) pour les top plats
+    const sourceItems = await this.prisma.orderItem.findMany({
+      where: { dish_id: { in: dishIds }, order: baseOrderWhere },
+      select: {
+        dish_id: true,
+        quantity: true,
+        order: { select: { auto: true, hubrise_order_id: true } },
+      },
+    });
+
+    // Agréger par dish_id → { app, callCenter, hubrise }
+    const sourceMap = new Map<string, { app: number; callCenter: number; hubrise: number }>();
+    for (const si of sourceItems) {
+      const existing = sourceMap.get(si.dish_id) ?? { app: 0, callCenter: 0, hubrise: 0 };
+      if (si.order.hubrise_order_id) {
+        existing.hubrise += si.quantity;
+      } else if (si.order.auto) {
+        existing.app += si.quantity;
+      } else {
+        existing.callCenter += si.quantity;
+      }
+      sourceMap.set(si.dish_id, existing);
+    }
+
     // Période précédente pour les mêmes plats
     const prevItems = await this.prisma.orderItem.groupBy({
       by: ['dish_id'],
@@ -131,6 +155,7 @@ export class StatisticsProductsService {
           percentage,
           previousPeriodSold,
           evolution: calculateTrend(totalSold, previousPeriodSold),
+          sourceBreakdown: sourceMap.get(item.dish_id) ?? { app: 0, callCenter: 0, hubrise: 0 },
         } as TopProductItem;
       })
       .filter((i): i is TopProductItem => i !== null);

@@ -62,6 +62,18 @@ export class ProductsComparisonQueryDto {
 
 // ─── Response DTOs ─────────────────────────────────────────────────────────────
 
+// Répartition des ventes par source (App, Call Center, HubRise)
+export class SourceBreakdown {
+  @ApiProperty({ description: 'Quantité vendue via l\'App' })
+  app: number;
+
+  @ApiProperty({ description: 'Quantité vendue via Call Center' })
+  callCenter: number;
+
+  @ApiProperty({ description: 'Quantité vendue via HubRise' })
+  hubrise: number;
+}
+
 export class TopProductItem {
   @ApiProperty({ description: 'ID du plat' })
   id: string;
@@ -89,6 +101,9 @@ export class TopProductItem {
 
   @ApiPropertyOptional({ description: 'Quantité vendue période précédente' })
   previousPeriodSold?: number;
+
+  @ApiProperty({ description: 'Répartition par source (App / Call Center / HubRise)', type: SourceBreakdown })
+  sourceBreakdown: SourceBreakdown;
 }
 
 export class TopProductsResponse {
