@@ -22,7 +22,7 @@ import { HUBRISE_OAUTH } from '../constants/hubrise-endpoints.constant';
 // Scopes demandés — format HubRise : location[resource.access, ...]
 // write inclut read — une seule permission par resource type
 const HUBRISE_SCOPES =
-  'location[orders.write,customer_list.write,catalog.read,callback.write]';
+  'location[orders.write,customer_list.write,catalog.read]';
 
 // Réponse du token OAuth HubRise
 interface HubriseTokenResponse {
