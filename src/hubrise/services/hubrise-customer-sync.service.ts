@@ -47,22 +47,29 @@ export class HubriseCustomerSyncService {
    * Synchronise un client HubRise dans Chicken Nation.
    * Appelé après réception d'un webhook customer.create ou customer.update.
    *
-   * @param locationId - ID du location HubRise
    * @param customerId - ID du client HubRise
-   * @param accessToken - Token d'accès HubRise
+   * @param accessToken - Token d'accès HubRise (scopé au location)
+   * @param locationId - ID du location (pour résoudre la customer_list_id)
    */
   async syncCustomerFromHubrise(
-    locationId: string,
     customerId: string,
     accessToken: string,
+    locationId: string,
   ): Promise<void> {
-    this.logger.log(`[HubRise Customer] Sync client ${customerId} depuis location ${locationId}`);
+    this.logger.log(`[HubRise Customer] Sync client ${customerId}`);
 
     try {
+      // Résoudre la customer_list_id du restaurant
+      const customerListId = await this.getCustomerListId(locationId);
+      if (!customerListId) {
+        this.logger.error(`[HubRise Customer] Pas de customer_list_id pour location ${locationId}`);
+        return;
+      }
+
       // 1. Récupérer les détails du client via l'API
       const hubriseCustomer = await this.hubriseApi.request<HubriseCustomer>({
         method: 'GET',
-        url: HUBRISE_CUSTOMERS.GET(locationId, customerId),
+        url: HUBRISE_CUSTOMERS.GET(customerListId, customerId),
         accessToken,
       });
 
@@ -87,15 +94,15 @@ export class HubriseCustomerSyncService {
    * Importe tous les clients HubRise d'un location dans CN.
    * Utile pour la synchronisation initiale.
    *
-   * @param locationId - ID du location HubRise
-   * @param accessToken - Token d'accès HubRise
+   * @param customerListId - ID de la customer_list HubRise
+   * @param accessToken - Token d'accès HubRise (scopé au location)
    * @returns Résumé de l'import
    */
   async pullAllCustomers(
-    locationId: string,
+    customerListId: string,
     accessToken: string,
   ): Promise<CustomerSyncResult> {
-    this.logger.log(`[HubRise Customer] Import de tous les clients du location ${locationId}`);
+    this.logger.log(`[HubRise Customer] Import de tous les clients de la liste ${customerListId}`);
 
     const result: CustomerSyncResult = {
       total: 0,
@@ -107,7 +114,7 @@ export class HubriseCustomerSyncService {
     try {
       // Récupérer tous les clients avec pagination
       const customers = await this.hubriseApi.fetchAllPages<HubriseCustomer>(
-        HUBRISE_CUSTOMERS.LIST(locationId),
+        HUBRISE_CUSTOMERS.LIST(customerListId),
         accessToken,
       );
 
@@ -147,12 +154,12 @@ export class HubriseCustomerSyncService {
    * Envoie un client CN vers HubRise.
    *
    * @param customerId - ID du client CN
-   * @param locationId - ID du location HubRise
-   * @param accessToken - Token d'accès HubRise
+   * @param customerListId - ID de la customer_list HubRise
+   * @param accessToken - Token d'accès HubRise (scopé au location)
    */
   async pushCustomerToHubrise(
     customerId: string,
-    locationId: string,
+    customerListId: string,
     accessToken: string,
   ): Promise<void> {
     const customer = await this.prisma.customer.findUnique({
@@ -177,7 +184,7 @@ export class HubriseCustomerSyncService {
     try {
       await this.hubriseApi.request({
         method: 'POST',
-        url: HUBRISE_CUSTOMERS.CREATE(locationId),
+        url: HUBRISE_CUSTOMERS.CREATE(customerListId),
         accessToken,
         body: payload as unknown as Record<string, unknown>,
       });
@@ -289,6 +296,19 @@ export class HubriseCustomerSyncService {
         });
       }
     }
+  }
+
+  /**
+   * Récupère la customer_list_id associée à un location HubRise.
+   * Stockée dans Restaurant.hubrise_customer_list_id lors du OAuth.
+   */
+  private async getCustomerListId(locationId: string): Promise<string | null> {
+    const restaurant = await this.prisma.restaurant.findFirst({
+      where: { hubrise_location_id: locationId },
+      select: { hubrise_customer_list_id: true },
+    });
+
+    return restaurant?.hubrise_customer_list_id ?? null;
   }
 }
 

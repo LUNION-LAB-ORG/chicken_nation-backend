@@ -83,7 +83,6 @@ export class HubriseWebhookService {
         case HUBRISE_CALLBACK_EVENTS.ORDER_CREATE:
         case HUBRISE_CALLBACK_EVENTS.ORDER_UPDATE:
           await this.orderSync.syncOrderFromHubrise(
-            payload.location_id,
             payload.resource_id,
             accessToken,
           );
@@ -92,9 +91,9 @@ export class HubriseWebhookService {
         case HUBRISE_CALLBACK_EVENTS.CUSTOMER_CREATE:
         case HUBRISE_CALLBACK_EVENTS.CUSTOMER_UPDATE:
           await this.customerSync.syncCustomerFromHubrise(
-            payload.location_id,
             payload.resource_id,
             accessToken,
+            payload.location_id,
           );
           break;
 
@@ -119,28 +118,28 @@ export class HubriseWebhookService {
    * Enregistre le webhook callback auprès de HubRise pour un restaurant.
    * Appelé après la connexion OAuth d'un restaurant.
    *
-   * @param locationId - ID du location HubRise
-   * @param accessToken - Token d'accès HubRise
+   * ⚠️ Format HubRise pour les événements : objet imbriqué
+   *   { "order": ["create", "update"], "customer": ["create"] }
+   * et NON un tableau plat comme ["order.create", "order.update"]
+   *
+   * @param accessToken - Token d'accès HubRise (scopé au location)
    */
   async registerCallback(
-    locationId: string,
     accessToken: string,
   ): Promise<HubriseCallbackResponse | null> {
-    this.logger.log(`[HubRise Webhook] Enregistrement callback pour location ${locationId}`);
+    this.logger.log('[HubRise Webhook] Enregistrement du callback');
 
     try {
       const response = await this.hubriseApi.request<HubriseCallbackResponse>({
         method: 'POST',
-        url: HUBRISE_CALLBACKS.CREATE(locationId),
+        url: HUBRISE_CALLBACKS.CREATE,
         accessToken,
         body: {
           url: this.hubriseApi.webhookUrl,
-          events: [
-            HUBRISE_CALLBACK_EVENTS.ORDER_CREATE,
-            HUBRISE_CALLBACK_EVENTS.ORDER_UPDATE,
-            HUBRISE_CALLBACK_EVENTS.CUSTOMER_CREATE,
-            HUBRISE_CALLBACK_EVENTS.CUSTOMER_UPDATE,
-          ],
+          events: {
+            order: ['create', 'update'],
+            customer: ['create', 'update'],
+          },
         },
       });
 
@@ -156,25 +155,21 @@ export class HubriseWebhookService {
   }
 
   /**
-   * Supprime un callback HubRise.
+   * Supprime le callback HubRise.
    *
-   * @param locationId - ID du location HubRise
-   * @param callbackId - ID du callback à supprimer
-   * @param accessToken - Token d'accès HubRise
+   * @param accessToken - Token d'accès HubRise (scopé au location)
    */
   async unregisterCallback(
-    locationId: string,
-    callbackId: string,
     accessToken: string,
   ): Promise<void> {
     try {
       await this.hubriseApi.request({
         method: 'DELETE',
-        url: HUBRISE_CALLBACKS.DELETE(locationId, callbackId),
+        url: HUBRISE_CALLBACKS.DELETE,
         accessToken,
       });
 
-      this.logger.log(`[HubRise Webhook] Callback ${callbackId} supprimé`);
+      this.logger.log('[HubRise Webhook] Callback supprimé');
     } catch (error) {
       this.logger.error(`[HubRise Webhook] Erreur suppression callback : ${error}`);
     }

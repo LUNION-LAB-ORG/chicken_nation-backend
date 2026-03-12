@@ -2,6 +2,12 @@
  * Constantes des endpoints de l'API HubRise.
  * Base URL : https://api.hubrise.com/v1
  * Documentation : https://developers.hubrise.com/api/general-concepts
+ *
+ * ⚠️ IMPORTANT : Quand on utilise un token scopé à un location (ce qui est le cas
+ * après OAuth), les URLs utilisent `/location/` (singulier, sans ID).
+ * HubRise résout automatiquement le location depuis le token.
+ *
+ * Format : /v1/location/orders   (pas /v1/locations/{id}/orders)
  */
 
 // URL de base de l'API HubRise
@@ -16,26 +22,26 @@ export const HUBRISE_OAUTH = {
   AUTHORIZE: `${HUBRISE_OAUTH_BASE_URL}/authorize`,
   /** Échange du code d'autorisation contre un access_token */
   TOKEN: `${HUBRISE_OAUTH_BASE_URL}/token`,
+  /** Révocation d'un token (POST avec Basic Auth) */
+  REVOKE: `${HUBRISE_OAUTH_BASE_URL}/revoke`,
 } as const;
 
-// === Endpoints Commandes ===
+// === Endpoints Commandes (token-scoped → /location/) ===
 export const HUBRISE_ORDERS = {
-  /** Liste les commandes d'un location (GET) */
-  LIST: (locationId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}/orders`,
+  /** Liste les commandes du location (GET) */
+  LIST: `${HUBRISE_API_BASE_URL}/location/orders`,
+  /** Crée une commande (POST) */
+  CREATE: `${HUBRISE_API_BASE_URL}/location/orders`,
   /** Récupère une commande par ID (GET) */
-  GET: (locationId: string, orderId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}/orders/${orderId}`,
-  /** Met à jour le statut d'une commande (PUT) */
-  UPDATE: (locationId: string, orderId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}/orders/${orderId}`,
+  GET: (orderId: string) =>
+    `${HUBRISE_API_BASE_URL}/location/orders/${orderId}`,
+  /** Met à jour une commande (PUT/PATCH) */
+  UPDATE: (orderId: string) =>
+    `${HUBRISE_API_BASE_URL}/location/orders/${orderId}`,
 } as const;
 
 // === Endpoints Catalogue ===
 export const HUBRISE_CATALOGS = {
-  /** Liste les catalogues d'un account (GET) */
-  LIST: (accountId: string) =>
-    `${HUBRISE_API_BASE_URL}/accounts/${accountId}/catalogs`,
   /** Récupère un catalogue complet (GET) */
   GET: (catalogId: string) =>
     `${HUBRISE_API_BASE_URL}/catalogs/${catalogId}`,
@@ -44,43 +50,43 @@ export const HUBRISE_CATALOGS = {
     `${HUBRISE_API_BASE_URL}/catalogs/${catalogId}`,
 } as const;
 
-// === Endpoints Clients ===
+// === Endpoints Clients (token-scoped) ===
 export const HUBRISE_CUSTOMERS = {
-  /** Liste les clients d'un location (GET) */
-  LIST: (locationId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}/customer_lists/default/customers`,
+  /** Liste les listes de clients du location (GET) */
+  CUSTOMER_LISTS: `${HUBRISE_API_BASE_URL}/location/customer_lists`,
+  /** Liste les clients d'une customer_list (GET) */
+  LIST: (customerListId: string) =>
+    `${HUBRISE_API_BASE_URL}/customer_lists/${customerListId}/customers`,
   /** Recherche un client (GET avec paramètres) */
-  SEARCH: (locationId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}/customer_lists/default/customers`,
+  SEARCH: (customerListId: string) =>
+    `${HUBRISE_API_BASE_URL}/customer_lists/${customerListId}/customers`,
   /** Récupère un client par ID (GET) */
-  GET: (locationId: string, customerId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}/customer_lists/default/customers/${customerId}`,
+  GET: (customerListId: string, customerId: string) =>
+    `${HUBRISE_API_BASE_URL}/customer_lists/${customerListId}/customers/${customerId}`,
   /** Crée un client (POST) */
-  CREATE: (locationId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}/customer_lists/default/customers`,
+  CREATE: (customerListId: string) =>
+    `${HUBRISE_API_BASE_URL}/customer_lists/${customerListId}/customers`,
   /** Met à jour un client (PUT) */
-  UPDATE: (locationId: string, customerId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}/customer_lists/default/customers/${customerId}`,
+  UPDATE: (customerListId: string, customerId: string) =>
+    `${HUBRISE_API_BASE_URL}/customer_lists/${customerListId}/customers/${customerId}`,
 } as const;
 
-// === Endpoints Callbacks (webhooks) ===
+// === Endpoints Callback (webhook) — token-scoped ===
 export const HUBRISE_CALLBACKS = {
-  /** Liste les callbacks d'un location (GET) */
-  LIST: (locationId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}/callbacks`,
-  /** Crée un callback (POST) */
-  CREATE: (locationId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}/callbacks`,
-  /** Supprime un callback (DELETE) */
-  DELETE: (locationId: string, callbackId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}/callbacks/${callbackId}`,
+  /** Récupère le callback actif (GET) */
+  GET: `${HUBRISE_API_BASE_URL}/callback`,
+  /** Crée ou met à jour le callback (POST) */
+  CREATE: `${HUBRISE_API_BASE_URL}/callback`,
+  /** Supprime le callback (DELETE) */
+  DELETE: `${HUBRISE_API_BASE_URL}/callback`,
+  /** Récupère les événements en attente — polling (GET) */
+  EVENTS: `${HUBRISE_API_BASE_URL}/callback/events`,
 } as const;
 
-// === Endpoints Location ===
+// === Endpoints Location (token-scoped) ===
 export const HUBRISE_LOCATIONS = {
-  /** Récupère les infos d'un location (GET) */
-  GET: (locationId: string) =>
-    `${HUBRISE_API_BASE_URL}/locations/${locationId}`,
+  /** Récupère les infos du location associé au token (GET) */
+  GET: `${HUBRISE_API_BASE_URL}/location`,
 } as const;
 
 // === Limites API ===

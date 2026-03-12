@@ -2,13 +2,13 @@
  * Interfaces TypeScript pour les commandes HubRise.
  * Basé sur la documentation : https://developers.hubrise.com/api/orders
  *
- * Le format monétaire HubRise est une chaîne "montant devise", ex: "8.90 EUR".
+ * Le format monétaire HubRise est une chaîne "montant devise", ex: "1500.00 XOF".
  * Les dates sont au format ISO 8601.
  */
 
 import { HubriseOrderStatus, HubriseServiceType } from '../constants/hubrise-status-mapping.constant';
 
-// === Montant HubRise (ex: "8.90 EUR") ===
+// === Montant HubRise (ex: "1500.00 XOF") ===
 export type HubriseMoney = string;
 
 // === Item d'une commande HubRise ===
@@ -21,7 +21,7 @@ export interface HubriseOrderItem {
   sku_name?: string | null;
   /** Référence du produit */
   ref?: string | null;
-  /** Prix unitaire (format "8.90 EUR") */
+  /** Prix unitaire (format "1500.00 XOF") */
   price: HubriseMoney;
   /** Quantité commandée */
   quantity: string;

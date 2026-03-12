@@ -89,11 +89,11 @@ export class HubriseAuthService {
   ): Promise<HubriseTokenResponse> {
     const clientId = this.configService.get<string>('HUBRISE_CLIENT_ID');
     const clientSecret = this.configService.get<string>('HUBRISE_CLIENT_SECRET');
-    const redirectUri = this.getRedirectUri();
 
     this.logger.log(`[HubRise OAuth] Échange du code pour le restaurant ${restaurantId}`);
 
     try {
+      // Postman collection : code, client_id, client_secret (pas de redirect_uri)
       const response = await fetch(HUBRISE_OAUTH.TOKEN, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -101,7 +101,6 @@ export class HubriseAuthService {
           code,
           client_id: clientId!,
           client_secret: clientSecret!,
-          redirect_uri: redirectUri,
         }).toString(),
       });
 
@@ -181,9 +180,23 @@ export class HubriseAuthService {
   }
 
   /**
-   * Déconnecte un restaurant de HubRise (supprime les données OAuth).
+   * Déconnecte un restaurant de HubRise.
+   * 1. Révoque le token côté HubRise (POST /oauth2/v1/revoke avec Basic Auth)
+   * 2. Supprime les données OAuth en base
    */
   async disconnectRestaurant(restaurantId: string): Promise<void> {
+    // Récupérer le token avant de le supprimer pour le révoquer
+    const restaurant = await this.prisma.restaurant.findUnique({
+      where: { id: restaurantId },
+      select: { hubrise_access_token: true },
+    });
+
+    // Révoquer le token côté HubRise
+    if (restaurant?.hubrise_access_token) {
+      await this.revokeToken(restaurant.hubrise_access_token);
+    }
+
+    // Supprimer les données OAuth en base
     await this.prisma.restaurant.update({
       where: { id: restaurantId },
       data: {
@@ -195,6 +208,44 @@ export class HubriseAuthService {
     });
 
     this.logger.log(`[HubRise] Restaurant ${restaurantId} déconnecté de HubRise`);
+  }
+
+  /**
+   * Révoque un access_token auprès de HubRise.
+   * POST /oauth2/v1/revoke avec Basic Auth (client_id:client_secret)
+   * et le token dans le body.
+   */
+  private async revokeToken(accessToken: string): Promise<void> {
+    const clientId = this.configService.get<string>('HUBRISE_CLIENT_ID');
+    const clientSecret = this.configService.get<string>('HUBRISE_CLIENT_SECRET');
+
+    if (!clientId || !clientSecret) {
+      this.logger.warn('[HubRise OAuth] Impossible de révoquer — client_id ou client_secret manquant');
+      return;
+    }
+
+    try {
+      const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+      const response = await fetch(HUBRISE_OAUTH.REVOKE, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Authorization: `Basic ${credentials}`,
+        },
+        body: new URLSearchParams({ token: accessToken }).toString(),
+      });
+
+      if (response.ok) {
+        this.logger.log('[HubRise OAuth] Token révoqué avec succès');
+      } else {
+        const error = await response.text();
+        this.logger.warn(`[HubRise OAuth] Erreur révocation token : ${error}`);
+      }
+    } catch (error) {
+      // Ne pas bloquer la déconnexion locale si la révocation échoue
+      this.logger.warn(`[HubRise OAuth] Erreur réseau lors de la révocation : ${error}`);
+    }
   }
 
   /**

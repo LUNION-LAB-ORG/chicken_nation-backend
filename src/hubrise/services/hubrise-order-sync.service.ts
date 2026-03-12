@@ -48,32 +48,30 @@ export class HubriseOrderSyncService {
    * Synchronise une commande HubRise dans Chicken Nation.
    * Appelé après réception d'un webhook order.create ou order.update.
    *
-   * @param locationId - ID du location HubRise
    * @param orderId - ID de la commande HubRise
-   * @param accessToken - Token du restaurant
+   * @param accessToken - Token du restaurant (scopé au location)
    */
   async syncOrderFromHubrise(
-    locationId: string,
     orderId: string,
     accessToken: string,
   ): Promise<void> {
-    this.logger.log(`[HubRise Sync] Synchronisation commande ${orderId} depuis location ${locationId}`);
+    this.logger.log(`[HubRise Sync] Synchronisation commande ${orderId}`);
 
     try {
       // 1. Récupérer les détails de la commande via l'API HubRise
       const hubriseOrder = await this.hubriseApi.request<HubriseOrder>({
         method: 'GET',
-        url: HUBRISE_ORDERS.GET(locationId, orderId),
+        url: HUBRISE_ORDERS.GET(orderId),
         accessToken,
       });
 
       // 2. Mapper les données
       const mapped = mapHubriseOrderToCN(hubriseOrder);
 
-      // 3. Trouver le restaurant CN associé à ce location_id
-      const restaurant = await this.findRestaurantByLocationId(locationId);
+      // 3. Trouver le restaurant CN associé à ce token
+      const restaurant = await this.findRestaurantByToken(accessToken);
       if (!restaurant) {
-        this.logger.error(`[HubRise Sync] Aucun restaurant CN trouvé pour le location ${locationId}`);
+        this.logger.error('[HubRise Sync] Aucun restaurant CN trouvé pour ce token');
         return;
       }
 
@@ -227,7 +225,6 @@ export class HubriseOrderSyncService {
     }
 
     const hubriseStatus = mapCNStatusToHubrise(newStatus);
-    const locationId = order.restaurant.hubrise_location_id;
     const accessToken = order.restaurant.hubrise_access_token;
 
     if (!accessToken) {
@@ -238,7 +235,7 @@ export class HubriseOrderSyncService {
     try {
       await this.hubriseApi.request({
         method: 'PUT',
-        url: HUBRISE_ORDERS.UPDATE(locationId, order.hubrise_order_id),
+        url: HUBRISE_ORDERS.UPDATE(order.hubrise_order_id),
         accessToken,
         body: { status: hubriseStatus },
       });
@@ -256,12 +253,12 @@ export class HubriseOrderSyncService {
   // ─── Résolution des entités ────────────────────────────────────────
 
   /**
-   * Trouve le restaurant CN correspondant à un location_id HubRise.
+   * Trouve le restaurant CN correspondant à un access_token HubRise.
    */
-  private async findRestaurantByLocationId(locationId: string) {
+  private async findRestaurantByToken(accessToken: string) {
     return this.prisma.restaurant.findFirst({
       where: {
-        hubrise_location_id: locationId,
+        hubrise_access_token: accessToken,
         entity_status: EntityStatus.ACTIVE,
       },
       select: { id: true, name: true },

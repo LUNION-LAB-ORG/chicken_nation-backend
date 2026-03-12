@@ -17,7 +17,7 @@
  * - Dish.reference et Category.reference doivent être renseignés dans CN
  *   avec les mêmes valeurs que les `ref` HubRise
  * - Les Supplements sont matchés par nom (pas de champ reference dans le modèle CN)
- * - Le prix est converti de "X.XX EUR" (HubRise) vers Float (CN) et inversement
+ * - Le prix est converti de "X.XX XOF" (HubRise) vers Float (CN) et inversement
  * - Les images ne sont pas synchronisées automatiquement (URLs différentes)
  */
 

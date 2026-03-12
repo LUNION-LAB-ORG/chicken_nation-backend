@@ -76,23 +76,20 @@ export class HubriseAuthController {
       // Échanger le code contre un token
       const tokenData = await this.authService.exchangeCodeForToken(code, state);
 
-      // Enregistrer le webhook callback si un location_id est retourné
-      if (tokenData.location_id && tokenData.access_token) {
-        await this.webhookService.registerCallback(
-          tokenData.location_id,
-          tokenData.access_token,
-        );
+      // Enregistrer le webhook callback (le token est scopé au location)
+      if (tokenData.access_token) {
+        await this.webhookService.registerCallback(tokenData.access_token);
       }
 
       // Rediriger vers le backoffice avec un message de succès
       const backofficeUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       return res.redirect(
-        `${backofficeUrl}/gestion/restaurants?hubrise=connected&location=${tokenData.location_id}`,
+        `${backofficeUrl}/gestion?hubrise=connected&location=${tokenData.location_id}`,
       );
     } catch (error) {
       this.logger.error(`[HubRise Auth] Erreur callback : ${error}`);
       const backofficeUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      return res.redirect(`${backofficeUrl}/gestion/restaurants?hubrise=error`);
+      return res.redirect(`${backofficeUrl}/gestion?hubrise=error`);
     }
   }
 

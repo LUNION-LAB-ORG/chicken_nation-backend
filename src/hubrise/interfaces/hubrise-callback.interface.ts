@@ -30,11 +30,13 @@ export interface HubriseCallbackPayload {
 }
 
 // === Configuration d'un callback HubRise ===
+// Format HubRise : events est un objet { resource: ["action", ...] }
+// Exemple : { "order": ["create", "update"], "customer": ["create"] }
 export interface HubriseCallbackConfig {
   /** URL de destination (notre endpoint webhook) */
   url: string;
-  /** Événements auxquels s'abonner */
-  events: HubriseCallbackEvent[];
+  /** Événements auxquels s'abonner — objet imbriqué, pas un tableau plat */
+  events: Record<string, string[]>;
   /** Clé secrète pour la vérification HMAC */
   secret?: string;
 }

@@ -110,14 +110,14 @@ export class HubriseSyncController {
     this.logger.log(`[HubRise Sync] Import clients pour restaurant ${restaurantId}`);
 
     const info = await this.authService.getHubriseInfoForRestaurant(restaurantId);
-    if (!info?.hubrise_access_token || !info?.hubrise_location_id) {
+    if (!info?.hubrise_access_token || !info?.hubrise_customer_list_id) {
       throw new BadRequestException(
-        'Le restaurant n\'est pas connecté à HubRise.',
+        'Le restaurant n\'est pas connecté à HubRise ou n\'a pas de liste de clients configurée.',
       );
     }
 
     const result = await this.customerSync.pullAllCustomers(
-      info.hubrise_location_id,
+      info.hubrise_customer_list_id,
       info.hubrise_access_token,
     );
 
