@@ -20,8 +20,9 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { HUBRISE_OAUTH } from '../constants/hubrise-endpoints.constant';
 
 // Scopes demandés — format HubRise : location[resource.access, ...]
+// write inclut read — une seule permission par resource type
 const HUBRISE_SCOPES =
-  'location[orders.read,orders.write,customer_list.read,customer_list.write,catalog.read,callback.write]';
+  'location[orders.write,customer_list.write,catalog.read,callback.write]';
 
 // Réponse du token OAuth HubRise
 interface HubriseTokenResponse {
