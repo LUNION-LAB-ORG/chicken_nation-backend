@@ -56,6 +56,7 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
         Action.CREATE,
         Action.READ,
         Action.UPDATE,
+        Action.UPDATE_FULL,
         Action.PRINT,
       ],
 
@@ -77,7 +78,7 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
     modules: {
       [Modules.DASHBOARD]: [Action.READ],
 
-      [Modules.COMMANDES]: [Action.READ, Action.UPDATE, Action.PRINT],
+      [Modules.COMMANDES]: [Action.READ, Action.UPDATE, Action.UPDATE_FULL, Action.PRINT],
       [Modules.INVENTAIRE]: [Action.READ, Action.UPDATE],
       [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
       [Modules.MENUS]: [Action.READ],
@@ -89,7 +90,7 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
   [UserRole.ASSISTANT_MANAGER]: {
     modules: {
       [Modules.DASHBOARD]: [Action.READ],
-      [Modules.COMMANDES]: [Action.READ, Action.UPDATE, Action.PRINT],
+      [Modules.COMMANDES]: [Action.READ, Action.UPDATE, Action.UPDATE_FULL, Action.PRINT],
       [Modules.INVENTAIRE]: [Action.READ, Action.UPDATE],
       [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
       [Modules.MENUS]: [Action.READ],
@@ -104,6 +105,7 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
         Action.CREATE,
         Action.READ,
         Action.UPDATE,
+        Action.UPDATE_FULL,
         Action.PRINT,
       ],
       [Modules.MENUS]: [Action.READ],

@@ -256,15 +256,37 @@ export class OrderHelper {
         category: SupplementCategory;
       }[] = [];
 
-      if (item.supplements_ids && item.supplements_ids.length > 0) {
-        let supplement_items = item.supplements_ids;
-        if (typeof item.supplements_ids === 'string') {
-          supplement_items = [item.supplements_ids];
+      // Nouveau format avec quantité (prioritaire) : supplements: [{id, quantity}]
+      // Ancien format sans quantité (rétro-compatible) : supplements_ids: [id]
+      const hasNewFormat = item.supplements && item.supplements.length > 0;
+      const hasOldFormat = item.supplements_ids && item.supplements_ids.length > 0;
+
+      if (hasNewFormat || hasOldFormat) {
+        // Construire la map id → quantité
+        const supplementQuantityMap: Record<string, number> = {};
+        let supplementIds: string[] = [];
+
+        if (hasNewFormat) {
+          // Nouveau format : {id, quantity}[]
+          for (const supp of item.supplements!) {
+            supplementQuantityMap[supp.id] = supp.quantity;
+            supplementIds.push(supp.id);
+          }
+        } else {
+          // Ancien format : string[] (chaque supplément = quantité 1)
+          let supplement_items = item.supplements_ids!;
+          if (typeof item.supplements_ids === 'string') {
+            supplement_items = [item.supplements_ids as unknown as string];
+          }
+          for (const id of supplement_items) {
+            supplementQuantityMap[id] = 1;
+            supplementIds.push(id);
+          }
         }
 
         const supplements = await this.prisma.supplement.findMany({
           where: {
-            id: { in: supplement_items },
+            id: { in: supplementIds },
             available: true,
             dish_supplements: {
               some: {
@@ -274,7 +296,7 @@ export class OrderHelper {
           },
         });
 
-        if (supplements.length !== item.supplements_ids.length) {
+        if (supplements.length !== supplementIds.length) {
           throw new BadRequestException(
             'Un ou plusieurs suppléments sont invalides pour ce plat',
           );
@@ -284,11 +306,11 @@ export class OrderHelper {
           id: s.id,
           name: s.name,
           price: s.price,
-          quantity: 1,
+          quantity: supplementQuantityMap[s.id] ?? 1,
           category: s.category,
         }));
 
-        // Calculer le prix des suppléments avec comme quantité 1 au lieu de la quantité choisie par le client
+        // Calculer le prix des suppléments : prix × quantité de chaque supplément
         supplementsTotal = supplementsData.reduce(
           (sum, s) => sum + s.price * s.quantity,
           0,
@@ -320,9 +342,7 @@ export class OrderHelper {
       });
     }
 
-    // Montant Total des suppléments
-    // Plus tard nous devons ajouter la quantité de supplément dans la requête pour un calcul fiable
-    // Pour l'instant on calcule le montant total des suppléments sans tenir compte de la quantité de supplément, ni du plat
+    // Montant Total des suppléments (prix × quantité de chaque supplément)
     const totalSupplements = orderItems.reduce(
       (sum, item) => sum + item.supplementsPrice,
       0,

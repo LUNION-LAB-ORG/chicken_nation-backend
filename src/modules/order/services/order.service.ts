@@ -873,28 +873,109 @@ export class OrderService {
    */
   async update(id: string, updateOrderDto: UpdateOrderDto) {
     const order = await this.findById(id);
-    const { paiement_id, delivery_fee, ...rest } = updateOrderDto;
-    // Vérifier que la commande peut être modifiée (seulement si PENDING)
-    if (order.status !== OrderStatus.PENDING) {
+    // Extraire les champs qui ne sont pas des colonnes directes de la table Order
+    const {
+      paiement_id,
+      delivery_fee,
+      items,
+      customer_id,
+      restaurant_id,
+      user_id,
+      auto,
+      points,
+      promotion_id,
+      code_promo,
+      ...rest
+    } = updateOrderDto;
+
+    // Vérifier que la commande peut être modifiée
+    if (order.status !== OrderStatus.PENDING &&
+      order.status !== OrderStatus.ACCEPTED &&
+      order.status !== OrderStatus.IN_PROGRESS &&
+      order.status !== OrderStatus.READY) {
       throw new ConflictException(
-        'Seules les commandes en attente peuvent être modifiées',
+        'Seules les commandes en attente, acceptées, en préparation ou prêtes peuvent être modifiées',
       );
     }
 
-    // Appliquer les modifications
+    // Si des items sont fournis, recalculer les order_items
+    let orderItemsData: {
+      dish_id: string;
+      quantity: number;
+      amount: number;
+      epice: boolean;
+      supplements: any[];
+    }[] | null = null;
+    let newNetAmount: number | null = null;
+
+    if (items && items.length > 0) {
+      // Récupérer les plats correspondants
+      const dishIds = items.map((item) => item.dish_id);
+      const dishes = await this.prisma.dish.findMany({
+        where: {
+          id: { in: dishIds },
+          entity_status: EntityStatus.ACTIVE,
+        },
+      });
+
+      // Calculer les détails de la commande
+      const { orderItems, netAmount } =
+        await this.orderHelper.calculateOrderDetails(items, dishes);
+
+      orderItemsData = orderItems.map((item) => ({
+        dish_id: item.dish_id,
+        quantity: item.quantity,
+        amount: item.amount,
+        epice: item.epice,
+        supplements: item.supplements,
+      }));
+      newNetAmount = netAmount;
+    }
+
+    // Si le type n'est pas DELIVERY, forcer les frais de livraison à 0
+    const isDelivery = (rest.type ?? order.type) === OrderType.DELIVERY;
+    const finalDeliveryFee = isDelivery ? (delivery_fee ?? order.delivery_fee ?? 0) : 0;
+
+    // Construire les données de mise à jour (uniquement les champs Prisma valides)
+    const updateData: any = {
+      ...rest,
+      delivery_fee: finalDeliveryFee,
+      estimated_delivery_time: this.orderHelper.calculateEstimatedTime(
+        rest?.estimated_delivery_time ?? '',
+      ),
+      estimated_preparation_time: this.orderHelper.calculateEstimatedTime(
+        rest?.estimated_preparation_time ?? '',
+      ),
+      updated_at: new Date(),
+    };
+
+    // Ajouter les relations si fournies
+    if (customer_id) updateData.customer = { connect: { id: customer_id } };
+    if (restaurant_id) updateData.restaurant = { connect: { id: restaurant_id } };
+    if (user_id) updateData.user = { connect: { id: user_id } };
+    if (auto !== undefined) updateData.auto = auto;
+
+    // Si les items ont été recalculés, mettre à jour le montant et les order_items
+    if (orderItemsData && newNetAmount !== null) {
+      // Recalculer le montant total
+      const tax = order.tax ?? 0;
+      const discount = order.discount ?? 0;
+      const totalAfterDiscount = newNetAmount - discount;
+      const totalAmount = totalAfterDiscount + tax + finalDeliveryFee;
+
+      updateData.net_amount = Number(newNetAmount);
+      updateData.amount = Number(totalAmount);
+
+      // Supprimer les anciens items et créer les nouveaux
+      updateData.order_items = {
+        deleteMany: {},
+        create: orderItemsData,
+      };
+    }
+
     const updatedOrder = await this.prisma.order.update({
       where: { id: order.id },
-      data: {
-        ...rest,
-        delivery_fee,
-        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(
-          rest?.estimated_delivery_time ?? '',
-        ),
-        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(
-          rest?.estimated_preparation_time ?? '',
-        ),
-        updated_at: new Date(),
-      },
+      data: updateData,
       include: {
         order_items: {
           include: {
@@ -921,16 +1002,13 @@ export class OrderService {
     const order = await this.findById(id);
 
     // Vérifier que la commande peut être supprimée
-    if (
-      order.status !== OrderStatus.PENDING &&
-      order.status !== OrderStatus.CANCELLED
-    ) {
+    if (order.paied === true) {
       throw new ConflictException(
-        'Seules les commandes en attente ou annulées peuvent être supprimées',
+        'Les commandes payées ne peuvent pas être supprimées',
       );
     }
 
-    const orderDeleted = this.prisma.order.update({
+    const orderDeleted = await this.prisma.order.update({
       where: { id: order.id },
       include: {
         customer: true,

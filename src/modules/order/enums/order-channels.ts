@@ -3,4 +3,5 @@ export enum OrderChannels {
     ORDER_UPDATED = 'order:updated',
     ORDER_DELETED = 'order:deleted',
     ORDER_STATUS_UPDATED = 'order:statusUpdated',
+    ORDER_REFRESH = 'order:refresh',
 }

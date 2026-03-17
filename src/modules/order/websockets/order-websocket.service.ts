@@ -67,4 +67,15 @@ export class OrderWebSocketService {
         this.appGateway.emitToBackoffice(OrderChannels.ORDER_DELETED, data);
         this.appGateway.emitToRestaurant(order.restaurant_id, OrderChannels.ORDER_DELETED, data);
     }
+
+    /**
+     * Émet un événement de rafraîchissement pour forcer tous les clients connectés
+     * à recharger la liste des commandes.
+     */
+    emitOrderRefresh() {
+        this.appGateway.emitToBackoffice(OrderChannels.ORDER_REFRESH, {
+            message: 'Rafraîchissement des commandes',
+            timestamp: new Date().toISOString(),
+        });
+    }
 }

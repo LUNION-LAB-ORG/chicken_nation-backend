@@ -36,6 +36,7 @@ import { OrderService } from 'src/modules/order/services/order.service';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 import { ReceiptsService } from '../services/receipts.service';
 import { OrderCreateDto } from '../dto/order-create.dto';
+import { OrderWebSocketService } from '../websockets/order-websocket.service';
 
 @ApiTags('Commandes')
 @Controller('orders')
@@ -44,6 +45,7 @@ export class OrderController {
   constructor(
     private readonly orderService: OrderService,
     private readonly receiptsService: ReceiptsService,
+    private readonly orderWebSocketService: OrderWebSocketService,
   ) { }
 
   @Post()
@@ -113,6 +115,17 @@ export class OrderController {
     res.setHeader('Content-Length', buffer.byteLength);
 
     res.status(HttpStatus.OK).send(buffer);
+  }
+
+  @Post('/refresh')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.READ)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Émettre un événement de rafraîchissement des commandes' })
+  @ApiResponse({ status: 200, description: 'Événement de rafraîchissement émis' })
+  refresh() {
+    this.orderWebSocketService.emitOrderRefresh();
+    return { success: true, message: 'Rafraîchissement des commandes émis' };
   }
 
   @Get('/frais-livraison')
