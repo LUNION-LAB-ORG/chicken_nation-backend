@@ -2,14 +2,18 @@ import { Injectable } from '@nestjs/common';
 import { Twilio } from 'twilio';
 import { ConfigService } from '@nestjs/config';
 import { MessageInstance } from 'twilio/lib/rest/api/v2010/account/message';
+import { SettingsService } from 'src/modules/settings/settings.service';
 
 @Injectable()
 export class TwilioService {
-    private readonly twilioClient: Twilio;
-    private readonly accountSid: string;
-    private readonly authToken: string;
-    private readonly twilioPhoneNumber: string;
-    private readonly twilioWhatsappNumber: string;
+    private twilioClient: Twilio | null = null;
+    private cachedConfig: {
+        accountSid: string;
+        authToken: string;
+        phoneNumber: string;
+        whatsappNumber: string;
+    } | null = null;
+
     private readonly twilioWhatsappTemplate = {
         otp_template: {
             name: "otp_template",
@@ -25,13 +29,40 @@ export class TwilioService {
         }
     };
 
-    constructor(private readonly configService: ConfigService) {
-        this.accountSid = this.configService.get<string>('ACCOUNT_SID') ?? "";
-        this.authToken = this.configService.get<string>('AUTH_TOKEN') ?? "";
-        this.twilioPhoneNumber = this.configService.get<string>('TWILIO_PHONE_NUMBER') ?? "";
-        this.twilioWhatsappNumber = this.configService.get<string>('TWILIO_WHATSAPP_NUMBER') ?? "";
+    constructor(
+        private readonly configService: ConfigService,
+        private readonly settingsService: SettingsService,
+    ) {}
 
-        this.twilioClient = new Twilio(this.accountSid, this.authToken);
+    /**
+     * Récupère la config Twilio depuis Settings DB avec fallback .env
+     * et crée/met à jour le client si nécessaire
+     */
+    private async getConfig() {
+        const config = await this.settingsService.getManyOrEnv({
+            twilio_account_sid: 'ACCOUNT_SID',
+            twilio_auth_token: 'AUTH_TOKEN',
+            twilio_phone_number: 'TWILIO_PHONE_NUMBER',
+            twilio_whatsapp_number: 'TWILIO_WHATSAPP_NUMBER',
+        });
+
+        const accountSid = config.twilio_account_sid ?? '';
+        const authToken = config.twilio_auth_token ?? '';
+        const phoneNumber = config.twilio_phone_number ?? '';
+        const whatsappNumber = config.twilio_whatsapp_number ?? '';
+
+        // Recréer le client si la config a changé
+        if (
+            !this.twilioClient ||
+            !this.cachedConfig ||
+            this.cachedConfig.accountSid !== accountSid ||
+            this.cachedConfig.authToken !== authToken
+        ) {
+            this.twilioClient = new Twilio(accountSid, authToken);
+            this.cachedConfig = { accountSid, authToken, phoneNumber, whatsappNumber };
+        }
+
+        return { client: this.twilioClient, phoneNumber, whatsappNumber };
     }
 
     async sendOtp({ phoneNumber, otp }: { phoneNumber: string, otp: string }) {
@@ -52,9 +83,10 @@ export class TwilioService {
 
     async sendSmsMessage({ phoneNumber, message }: { phoneNumber: string, message: string }): Promise<MessageInstance | null> {
         try {
-            const response = await this.twilioClient.messages.create({
+            const { client, phoneNumber: fromNumber } = await this.getConfig();
+            const response = await client.messages.create({
                 body: message,
-                from: this.twilioPhoneNumber,
+                from: fromNumber,
                 to: this.formatNumber(phoneNumber),
             });
 
@@ -67,10 +99,11 @@ export class TwilioService {
 
     async sendWhatsappMessage({ phoneNumber, contentSid, contentVariables }: { phoneNumber: string, contentSid: string, contentVariables: string }): Promise<MessageInstance | null> {
         try {
-            const response = await this.twilioClient.messages.create({
+            const { client, whatsappNumber } = await this.getConfig();
+            const response = await client.messages.create({
                 contentSid,
                 contentVariables,
-                from: `whatsapp:${this.twilioWhatsappNumber}`,
+                from: `whatsapp:${whatsappNumber}`,
                 to: `whatsapp:${this.formatNumber(phoneNumber)}`,
             });
             return response;

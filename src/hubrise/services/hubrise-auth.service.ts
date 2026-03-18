@@ -15,8 +15,8 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { SettingsService } from 'src/modules/settings/settings.service';
 import { HUBRISE_OAUTH } from '../constants/hubrise-endpoints.constant';
 
 // Scopes demandés — format HubRise : location[resource.access, ...]
@@ -44,7 +44,7 @@ export class HubriseAuthService {
   private readonly logger = new Logger(HubriseAuthService.name);
 
   constructor(
-    private readonly configService: ConfigService,
+    private readonly settingsService: SettingsService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -55,12 +55,18 @@ export class HubriseAuthService {
    * @param restaurantId - ID du restaurant CN (passé dans le state pour le récupérer au callback)
    * @returns URL complète d'autorisation HubRise
    */
-  getAuthorizationUrl(restaurantId: string): string {
-    const clientId = this.configService.get<string>('HUBRISE_CLIENT_ID');
-    const redirectUri = this.getRedirectUri();
+  async getAuthorizationUrl(restaurantId: string): Promise<string> {
+    const config = await this.settingsService.getManyOrEnv({
+      hubrise_client_id: 'HUBRISE_CLIENT_ID',
+      base_url: 'BASE_URL',
+    });
+
+    const clientId = config.hubrise_client_id;
+    const baseUrl = config.base_url || '';
+    const redirectUri = `${baseUrl}/api/v1/hubrise/auth/callback`;
 
     if (!clientId) {
-      throw new Error('HUBRISE_CLIENT_ID non configuré dans les variables d\'environnement.');
+      throw new Error('HUBRISE_CLIENT_ID non configuré.');
     }
 
     // Construction manuelle de l'URL pour éviter l'encodage des crochets []
@@ -87,8 +93,13 @@ export class HubriseAuthService {
     code: string,
     restaurantId: string,
   ): Promise<HubriseTokenResponse> {
-    const clientId = this.configService.get<string>('HUBRISE_CLIENT_ID');
-    const clientSecret = this.configService.get<string>('HUBRISE_CLIENT_SECRET');
+    const config = await this.settingsService.getManyOrEnv({
+      hubrise_client_id: 'HUBRISE_CLIENT_ID',
+      hubrise_client_secret: 'HUBRISE_CLIENT_SECRET',
+    });
+
+    const clientId = config.hubrise_client_id;
+    const clientSecret = config.hubrise_client_secret;
 
     this.logger.log(`[HubRise OAuth] Échange du code pour le restaurant ${restaurantId}`);
 
@@ -216,8 +227,13 @@ export class HubriseAuthService {
    * et le token dans le body.
    */
   private async revokeToken(accessToken: string): Promise<void> {
-    const clientId = this.configService.get<string>('HUBRISE_CLIENT_ID');
-    const clientSecret = this.configService.get<string>('HUBRISE_CLIENT_SECRET');
+    const config = await this.settingsService.getManyOrEnv({
+      hubrise_client_id: 'HUBRISE_CLIENT_ID',
+      hubrise_client_secret: 'HUBRISE_CLIENT_SECRET',
+    });
+
+    const clientId = config.hubrise_client_id;
+    const clientSecret = config.hubrise_client_secret;
 
     if (!clientId || !clientSecret) {
       this.logger.warn('[HubRise OAuth] Impossible de révoquer — client_id ou client_secret manquant');
@@ -274,13 +290,4 @@ export class HubriseAuthService {
     });
   }
 
-  // ─── Utilitaires internes ──────────────────────────────────────────
-
-  /**
-   * Construit l'URI de redirection OAuth.
-   */
-  private getRedirectUri(): string {
-    const baseUrl = this.configService.get<string>('BASE_URL', '');
-    return `${baseUrl}/api/v1/hubrise/auth/callback`;
-  }
 }

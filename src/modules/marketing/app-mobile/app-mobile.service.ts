@@ -1,21 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { OrderStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { SettingsService } from 'src/modules/settings/settings.service';
 
 @Injectable()
 export class AppMobileService {
-  private readonly minVersion: string;
-  private readonly playstore_link: string;
-  private readonly apptore_link: string;
-  private readonly forceUpdate: boolean;
 
-  constructor(private prisma: PrismaService, private configService: ConfigService) {
-    this.minVersion = this.configService.get<string>('VERSION_APP_MOBILE', "1.0.0");
-    this.playstore_link = this.configService.get<string>('PLAY_STORE_LINK', "1.0.0");
-    this.apptore_link = this.configService.get<string>('APP_STORE_LINK', "1.0.0");
-    this.forceUpdate = this.configService.get<string>('FORCE_UPDATE_APP_MOBILE') === "true"
-  }
+  constructor(
+    private prisma: PrismaService,
+    private readonly settingsService: SettingsService,
+  ) {}
 
   /**
    * Get orders to comment
@@ -58,15 +52,20 @@ export class AppMobileService {
    * @returns 
    */
   async getMobileVersion() {
+    const config = await this.settingsService.getManyOrEnv({
+      version_app_mobile: 'VERSION_APP_MOBILE',
+      play_store_link: 'PLAY_STORE_LINK',
+      app_store_link: 'APP_STORE_LINK',
+      force_update_app_mobile: 'FORCE_UPDATE_APP_MOBILE',
+    });
+
     return {
-      minVersion: this.minVersion,
+      minVersion: config.version_app_mobile || '1.0.0',
       title: 'Mise à jour disponible',
       message: 'Une nouvelle version est disponible pour améliorer votre expérience.',
-      // Remplace par l'ID de ton app Apple
-      storeUrlIOS: this.apptore_link,
-      // Remplace par ton package name Android
-      storeUrlAndroid: this.playstore_link,
-      forceUpdate: this.forceUpdate,
+      storeUrlIOS: config.app_store_link || '',
+      storeUrlAndroid: config.play_store_link || '',
+      forceUpdate: config.force_update_app_mobile === 'true',
     };
   }
 }

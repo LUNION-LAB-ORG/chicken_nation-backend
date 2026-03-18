@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import {
     S3Client,
     PutObjectCommand,
@@ -7,54 +6,74 @@ import {
     DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { Readable } from 'stream';
+import { SettingsService } from 'src/modules/settings/settings.service';
 
 @Injectable()
 export class S3Service {
-    private readonly s3Client: S3Client;
-    private readonly accessKeyId: string;
-    private readonly secretAccessKey: string;
-    private readonly region: string;
-    private readonly bucketName: string;
-    private readonly cloudFrontUrl: string;
-    // private readonly s3Endpoint: string;
+    private s3Client: S3Client | null = null;
+    private cachedConfig: {
+        accessKeyId: string;
+        secretAccessKey: string;
+        region: string;
+        bucketName: string;
+        cloudFrontUrl: string;
+    } | null = null;
 
-    constructor(private readonly configService: ConfigService) {
-        this.accessKeyId = this.configService.get<string>('AWS_ACCESS_KEY_ID') ?? "";
-        this.secretAccessKey = this.configService.get<string>('AWS_SECRET_ACCESS_KEY') ?? "";
-        this.region = this.configService.get<string>('AWS_REGION') ?? "us-east-1";
-        this.bucketName = this.configService.get<string>('AWS_S3_BUCKET_NAME') ?? "";
-        this.cloudFrontUrl = this.configService.get<string>('AWS_CLOUDFRONT_URL') ?? "";
-        // this.s3Endpoint = this.configService.get<string>('AWS_S3_ENDPOINT') ?? "";
+    constructor(private readonly settingsService: SettingsService) {}
 
-        this.s3Client = new S3Client({
-            region: this.region,
-            credentials: {
-                accessKeyId: this.accessKeyId,
-                secretAccessKey: this.secretAccessKey,
-            },
-            // endpoint: this.s3Endpoint || undefined,
-            forcePathStyle: true,
+    private async getConfig() {
+        const config = await this.settingsService.getManyOrEnv({
+            aws_access_key_id: 'AWS_ACCESS_KEY_ID',
+            aws_secret_access_key: 'AWS_SECRET_ACCESS_KEY',
+            aws_region: 'AWS_REGION',
+            aws_s3_bucket_name: 'AWS_S3_BUCKET_NAME',
+            aws_cloudfront_url: 'AWS_CLOUDFRONT_URL',
         });
+
+        const accessKeyId = config.aws_access_key_id ?? '';
+        const secretAccessKey = config.aws_secret_access_key ?? '';
+        const region = config.aws_region ?? 'us-east-1';
+        const bucketName = config.aws_s3_bucket_name ?? '';
+        const cloudFrontUrl = config.aws_cloudfront_url ?? '';
+
+        // Recréer le client si la config a changé
+        if (
+            !this.s3Client ||
+            !this.cachedConfig ||
+            this.cachedConfig.accessKeyId !== accessKeyId ||
+            this.cachedConfig.secretAccessKey !== secretAccessKey ||
+            this.cachedConfig.region !== region
+        ) {
+            this.s3Client = new S3Client({
+                region,
+                credentials: { accessKeyId, secretAccessKey },
+                forcePathStyle: true,
+            });
+            this.cachedConfig = { accessKeyId, secretAccessKey, region, bucketName, cloudFrontUrl };
+        }
+
+        return { client: this.s3Client, bucketName, cloudFrontUrl };
     }
 
     async uploadFile({ buffer, path, originalname, mimetype }: { buffer: Buffer, path: string, originalname: string, mimetype: string }) {
+        const { client, bucketName } = await this.getConfig();
         const name = originalname;
 
         const fileKey = `${path}/${Date.now()}-${this.formatFileName(name)}`;
 
         try {
             const command = new PutObjectCommand({
-                Bucket: this.bucketName,
+                Bucket: bucketName,
                 Key: fileKey,
                 Body: buffer,
                 ContentType: mimetype,
             });
 
-            await this.s3Client.send(command);
+            await client.send(command);
 
             return {
                 key: fileKey,
-                url: `${this.bucketName}/${fileKey}`,
+                url: `${bucketName}/${fileKey}`,
             };
         } catch (error: any) {
             console.error('S3 Upload Error:', error);
@@ -63,13 +82,14 @@ export class S3Service {
     }
 
     async getFile(key: string): Promise<Readable> {
+        const { client, bucketName } = await this.getConfig();
         try {
             const command = new GetObjectCommand({
-                Bucket: this.bucketName,
+                Bucket: bucketName,
                 Key: key,
             });
 
-            const response = await this.s3Client.send(command);
+            const response = await client.send(command);
 
             // Body est un stream
             return response.Body as Readable;
@@ -79,25 +99,27 @@ export class S3Service {
         }
     }
 
-    getCdnFileUrl(key: string): string {
-        if (!this.cloudFrontUrl) {
+    async getCdnFileUrl(key: string): Promise<string> {
+        const { cloudFrontUrl } = await this.getConfig();
+        if (!cloudFrontUrl) {
             throw new Error('CloudFront URL is not configured');
         }
 
-        const normalizedBaseUrl = this.cloudFrontUrl.replace(/\/$/, '');
+        const normalizedBaseUrl = cloudFrontUrl.replace(/\/$/, '');
         const normalizedKey = key.replace(/^\//, '');
 
         return `${normalizedBaseUrl}/${normalizedKey}`;
     }
 
     async deleteFile(key: string): Promise<boolean> {
+        const { client, bucketName } = await this.getConfig();
         try {
             const command = new DeleteObjectCommand({
-                Bucket: this.bucketName,
+                Bucket: bucketName,
                 Key: key,
             });
 
-            await this.s3Client.send(command);
+            await client.send(command);
             return true;
         } catch (error: any) {
             console.error('S3 Delete Error:', error);

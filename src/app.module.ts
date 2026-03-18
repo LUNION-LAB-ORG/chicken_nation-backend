@@ -34,6 +34,7 @@ import { NewsModule } from 'src/modules/marketing/news/news.module';
 import { ExpoPushModule } from 'src/expo-push/expo-push.module';
 import { DeeplinkModule } from 'src/modules/marketing/deeplink/deeplink.module';
 import { HubriseModule } from 'src/hubrise/hubrise.module';
+import { SettingsModule } from 'src/modules/settings/settings.module';
 
 @Module({
   imports: [
@@ -92,6 +93,7 @@ import { HubriseModule } from 'src/hubrise/hubrise.module';
     NewsModule,
     AppMobileModule,
     HubriseModule,
+    SettingsModule,
   ],
 })
 export class AppModule { }

@@ -57,8 +57,9 @@ export class HubriseWebhookService {
     rawBody?: string,
   ): Promise<HubriseCallbackAck> {
     // 1. Vérifier la signature HMAC (si le secret est configuré)
-    if (this.hubriseApi.webhookSecret && hmacSignature && rawBody) {
-      if (!this.verifyHmac(rawBody, hmacSignature)) {
+    const webhookSecret = await this.hubriseApi.getWebhookSecret();
+    if (webhookSecret && hmacSignature && rawBody) {
+      if (!this.verifyHmac(rawBody, hmacSignature, webhookSecret)) {
         this.logger.warn('[HubRise Webhook] Signature HMAC invalide — callback rejeté');
         return { received: false, message: 'Signature HMAC invalide' };
       }
@@ -135,7 +136,7 @@ export class HubriseWebhookService {
         url: HUBRISE_CALLBACKS.CREATE,
         accessToken,
         body: {
-          url: this.hubriseApi.webhookUrl,
+          url: await this.hubriseApi.getWebhookUrl(),
           events: {
             order: ['create', 'update'],
             customer: ['create', 'update'],
@@ -185,8 +186,7 @@ export class HubriseWebhookService {
    * @param signature - Signature reçue dans le header X-HubRise-Hmac
    * @returns true si la signature est valide
    */
-  private verifyHmac(rawBody: string, signature: string): boolean {
-    const secret = this.hubriseApi.webhookSecret;
+  private verifyHmac(rawBody: string, signature: string, secret: string): boolean {
     if (!secret) return true; // Pas de vérification si pas de secret
 
     const expectedSignature = createHmac('sha256', secret)

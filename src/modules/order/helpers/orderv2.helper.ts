@@ -2,7 +2,7 @@ import {
   BadRequestException,
   Injectable,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { SettingsService } from 'src/modules/settings/settings.service';
 import {
   Address,
   DeliveryService,
@@ -22,20 +22,20 @@ import { OrderItemDto } from '../dto/order-create.dto';
 
 @Injectable()
 export class OrderV2Helper {
-  private readonly taxRate: number;
   // private readonly logger = new Logger(OrderV2Helper.name);
 
   constructor(
     private prisma: PrismaService,
-    private configService: ConfigService,
+    private settingsService: SettingsService,
     private generateDataService: GenerateDataService,
     private restaurantService: RestaurantService,
     private readonly turboService: TurboService,
     private voucherService: VoucherService
-  ) {
-    this.taxRate = Number(
-      this.configService.get<number>('ORDER_TAX_RATE', 0.05),
-    );
+  ) {}
+
+  private async getTaxRate(): Promise<number> {
+    const val = await this.settingsService.getOrEnv('order_tax_rate', 'ORDER_TAX_RATE', '0.05');
+    return Number(val);
   }
 
   /**
@@ -315,7 +315,8 @@ export class OrderV2Helper {
   async calculateTax(netAmount: number): Promise<number> {
     try {
       // 1. Calcul du montant brut de la taxe
-      const rawTax = netAmount * this.taxRate;
+      const taxRate = await this.getTaxRate();
+      const rawTax = netAmount * taxRate;
 
       // 2. Application de l'arrondi : Math.ceil(valeur / 10) * 10
       // Ex: 143.2 -> 14.32 (ceil) -> 15 -> 150

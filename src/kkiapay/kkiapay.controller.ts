@@ -2,12 +2,15 @@ import { Body, Controller, Headers, HttpCode, HttpStatus, Post, Req, Res } from 
 import type { Request, Response } from 'express';
 import { KkiapayService } from './kkiapay.service';
 import { KkiapayResponse, KkiapayWebhookDto } from './kkiapay.type';
-import { ConfigService } from '@nestjs/config';
+import { SettingsService } from 'src/modules/settings/settings.service';
 
 @Controller('kkiapay')
 export class KkiapayController {
 
-    constructor(private readonly kkiapayService: KkiapayService, private readonly configService: ConfigService) { }
+    constructor(
+        private readonly kkiapayService: KkiapayService,
+        private readonly settingsService: SettingsService,
+    ) { }
 
     @Post('verify')
     async verifyTransaction(@Body() body: { transactionId: string }): Promise<KkiapayResponse> {
@@ -27,7 +30,11 @@ export class KkiapayController {
         @Headers('x-kkiapay-secret') receivedSecret: string,
         @Body() body: KkiapayWebhookDto,
     ) {
-        const webhookSecret = this.configService.get<string>('KKIA_PAY_WEBHOOK_SECRET') ?? "";
+        const webhookSecret = await this.settingsService.getOrEnv(
+            'kkiapay_webhook_secret',
+            'KKIA_PAY_WEBHOOK_SECRET',
+            '',
+        );
 
         console.log("Received secret:", receivedSecret);
         console.log("Expected secret:", webhookSecret);

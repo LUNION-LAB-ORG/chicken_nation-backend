@@ -46,7 +46,7 @@ export class HubriseAuthController {
   ) {
     this.logger.log(`[HubRise Auth] Connexion initiée pour le restaurant ${restaurantId}`);
 
-    const authUrl = this.authService.getAuthorizationUrl(restaurantId);
+    const authUrl = await this.authService.getAuthorizationUrl(restaurantId);
     return res.redirect(authUrl);
   }
 

@@ -7,6 +7,7 @@ import { StatisticsOrdersController } from './controllers/statistics-orders.cont
 import { StatisticsClientsController } from './controllers/statistics-clients.controller';
 import { StatisticsDeliveryController } from './controllers/statistics-delivery.controller';
 import { StatisticsMarketingController } from './controllers/statistics-marketing.controller';
+import { StatisticsMarketingReportController } from './controllers/statistics-marketing-report.controller';
 
 // Services
 import { StatisticsService } from './services/statistics.service';
@@ -15,6 +16,10 @@ import { StatisticsOrdersService } from './services/statistics-orders.service';
 import { StatisticsClientsService } from './services/statistics-clients.service';
 import { StatisticsDeliveryService } from './services/statistics-delivery.service';
 import { StatisticsMarketingService } from './services/statistics-marketing.service';
+import { MarketingReportService } from './services/marketing-report.service';
+
+// Tasks
+import { MarketingReportTask } from './tasks/marketing-report.task';
 
 @Module({
   controllers: [
@@ -26,6 +31,7 @@ import { StatisticsMarketingService } from './services/statistics-marketing.serv
     StatisticsClientsController,
     StatisticsDeliveryController,
     StatisticsMarketingController,
+    StatisticsMarketingReportController,
   ],
   providers: [
     // Dashboard synthétique (conservé pour rétrocompatibilité)
@@ -36,6 +42,9 @@ import { StatisticsMarketingService } from './services/statistics-marketing.serv
     StatisticsClientsService,
     StatisticsDeliveryService,
     StatisticsMarketingService,
+    MarketingReportService,
+    // Tasks
+    MarketingReportTask,
   ],
   exports: [
     StatisticsService,
@@ -44,6 +53,7 @@ import { StatisticsMarketingService } from './services/statistics-marketing.serv
     StatisticsClientsService,
     StatisticsDeliveryService,
     StatisticsMarketingService,
+    MarketingReportService,
   ],
 })
 export class StatisticsModule {}

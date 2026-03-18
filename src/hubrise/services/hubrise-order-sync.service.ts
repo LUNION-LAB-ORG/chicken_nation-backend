@@ -23,6 +23,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { EntityStatus, OrderStatus, Prisma } from '@prisma/client';
+import { SettingsService } from 'src/modules/settings/settings.service';
 import { HubriseApiService } from './hubrise-api.service';
 import { HUBRISE_ORDERS } from '../constants/hubrise-endpoints.constant';
 import { HubriseOrder } from '../interfaces/hubrise-order.interface';
@@ -40,6 +41,7 @@ export class HubriseOrderSyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly hubriseApi: HubriseApiService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   // ─── HubRise → Chicken Nation ──────────────────────────────────────
@@ -109,7 +111,8 @@ export class HubriseOrderSyncService {
     const reference = await this.generateReference();
 
     // 4. Calculer la taxe (même formule que dans order.service)
-    const taxRate = parseFloat(process.env.ORDER_TAX_RATE ?? '0.005');
+    const taxRateStr = await this.settingsService.getOrEnv('order_tax_rate', 'ORDER_TAX_RATE', '0.005');
+    const taxRate = parseFloat(taxRateStr ?? '0.005');
     const tax = mapped.netAmount * taxRate;
 
     // 5. Créer la commande

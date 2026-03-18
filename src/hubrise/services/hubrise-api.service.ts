@@ -11,7 +11,7 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { SettingsService } from 'src/modules/settings/settings.service';
 import {
   HUBRISE_API_BASE_URL,
   HUBRISE_RATE_LIMIT,
@@ -32,34 +32,44 @@ interface HubriseRequestOptions {
 export class HubriseApiService {
   private readonly logger = new Logger(HubriseApiService.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly settingsService: SettingsService) {}
 
-  // ─── Getters de configuration ────────────────────────────────────────
+  // ─── Getters de configuration (async) ──────────────────────────────
 
-  /** Client ID de l'application HubRise */
-  get clientId(): string {
-    return this.configService.get<string>('HUBRISE_CLIENT_ID', '');
+  private async getHubriseConfig() {
+    return this.settingsService.getManyOrEnv({
+      hubrise_client_id: 'HUBRISE_CLIENT_ID',
+      hubrise_client_secret: 'HUBRISE_CLIENT_SECRET',
+      hubrise_access_token: 'HUBRISE_ACCESS_TOKEN',
+      hubrise_webhook_secret: 'HUBRISE_WEBHOOK_SECRET',
+      base_url: 'BASE_URL',
+    });
   }
 
-  /** Client Secret de l'application HubRise */
-  get clientSecret(): string {
-    return this.configService.get<string>('HUBRISE_CLIENT_SECRET', '');
+  async getClientId(): Promise<string> {
+    const config = await this.getHubriseConfig();
+    return config.hubrise_client_id || '';
   }
 
-  /** Access Token global (si configuré via env) */
-  get defaultAccessToken(): string {
-    return this.configService.get<string>('HUBRISE_ACCESS_TOKEN', '');
+  async getClientSecret(): Promise<string> {
+    const config = await this.getHubriseConfig();
+    return config.hubrise_client_secret || '';
   }
 
-  /** URL de callback pour les webhooks */
-  get webhookUrl(): string {
-    const baseUrl = this.configService.get<string>('BASE_URL', '');
+  async getDefaultAccessToken(): Promise<string> {
+    const config = await this.getHubriseConfig();
+    return config.hubrise_access_token || '';
+  }
+
+  async getWebhookUrl(): Promise<string> {
+    const config = await this.getHubriseConfig();
+    const baseUrl = config.base_url || '';
     return `${baseUrl}/api/v1/hubrise/webhook`;
   }
 
-  /** Secret HMAC pour la vérification des callbacks */
-  get webhookSecret(): string {
-    return this.configService.get<string>('HUBRISE_WEBHOOK_SECRET', '');
+  async getWebhookSecret(): Promise<string> {
+    const config = await this.getHubriseConfig();
+    return config.hubrise_webhook_secret || '';
   }
 
   // ─── Méthodes HTTP ───────────────────────────────────────────────────
@@ -71,7 +81,7 @@ export class HubriseApiService {
    */
   async request<T>(options: HubriseRequestOptions): Promise<T> {
     const { method, url, body, accessToken, params } = options;
-    const token = accessToken || this.defaultAccessToken;
+    const token = accessToken || await this.getDefaultAccessToken();
 
     if (!token) {
       throw new Error('Aucun access_token HubRise configuré. Veuillez connecter votre compte HubRise.');
@@ -194,14 +204,17 @@ export class HubriseApiService {
   /**
    * Vérifie si la connexion HubRise est configurée.
    */
-  isConfigured(): boolean {
-    return !!this.clientId && !!this.clientSecret;
+  async isConfigured(): Promise<boolean> {
+    const config = await this.getHubriseConfig();
+    return !!config.hubrise_client_id && !!config.hubrise_client_secret;
   }
 
   /**
    * Vérifie si un access_token est disponible.
    */
-  hasAccessToken(token?: string): boolean {
-    return !!(token || this.defaultAccessToken);
+  async hasAccessToken(token?: string): Promise<boolean> {
+    if (token) return true;
+    const defaultToken = await this.getDefaultAccessToken();
+    return !!defaultToken;
   }
 }

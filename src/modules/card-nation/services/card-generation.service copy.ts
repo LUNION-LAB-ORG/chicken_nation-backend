@@ -54,7 +54,7 @@ export class CardGenerationService {
     /* =====================================================
        🖼️ FOND OFFICIEL (COVER) AVEC COINS ARRONDIS
     ====================================================== */
-    const bgUrl = this.s3service.getCdnFileUrl(
+    const bgUrl = await this.s3service.getCdnFileUrl(
       'chicken-nation/assets/images/carte_nation/carte_nation_fond.png',
     );
     const bg = await loadImage(bgUrl);
@@ -77,7 +77,7 @@ export class CardGenerationService {
     /* =====================================================
        🐔 LOGO (AGRANDI - EN HAUT À DROITE)
     ====================================================== */
-    const logoUrl = this.s3service.getCdnFileUrl(
+    const logoUrl = await this.s3service.getCdnFileUrl(
       'chicken-nation/assets/images/logos/logo_fond_blanc.png',
     );
     const logo = await loadImage(logoUrl);

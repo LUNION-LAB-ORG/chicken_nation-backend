@@ -5,6 +5,7 @@ import { NotificationsSenderService } from './services/notifications-sender.serv
 import { NotificationsListener } from './listeners/notifications.listener';
 import { NotificationsWebSocketService } from './websockets/notifications-websocket.service';
 import { NotificationRecipientService } from './recipients/notification-recipient.service';
+import { EmailService } from './services/email.service';
 @Global()
 @Module({
   controllers: [NotificationsController],
@@ -12,13 +13,15 @@ import { NotificationRecipientService } from './recipients/notification-recipien
     NotificationRecipientService,
     NotificationsListener,
     NotificationsSenderService,
-    NotificationsWebSocketService],
+    NotificationsWebSocketService,
+    EmailService],
   exports: [
     NotificationsService,
     NotificationsSenderService,
     NotificationRecipientService,
     NotificationsListener,
-    NotificationsWebSocketService
+    NotificationsWebSocketService,
+    EmailService,
   ],
 })
 export class NotificationsModule { }

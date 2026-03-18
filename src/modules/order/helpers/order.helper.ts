@@ -19,8 +19,8 @@ import {
   DeliveryService,
   PaymentMethod,
 } from '@prisma/client';
-import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { SettingsService } from 'src/modules/settings/settings.service';
 import { QueryOrderDto } from '../dto/query-order.dto';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PaiementsService } from 'src/modules/paiements/services/paiements.service';
@@ -34,26 +34,27 @@ import { TurboService } from 'src/turbo/services/turbo.service';
 
 @Injectable()
 export class OrderHelper {
-  private readonly taxRate: number;
-  private readonly baseDeliveryFee: number;
   private readonly logger = new Logger(OrderHelper.name);
 
   constructor(
     private prisma: PrismaService,
-    private configService: ConfigService,
+    private settingsService: SettingsService,
     private generateDataService: GenerateDataService,
     private paiementService: PaiementsService,
     private loyaltyService: LoyaltyService,
     private promotionService: PromotionService,
     private restaurantService: RestaurantService,
     private readonly turboService: TurboService
-  ) {
-    this.taxRate = Number(
-      this.configService.get<number>('ORDER_TAX_RATE', 0.05),
-    );
-    this.baseDeliveryFee = Number(
-      this.configService.get<number>('BASE_DELIVERY_FEE', 1000),
-    );
+  ) {}
+
+  private async getTaxRate(): Promise<number> {
+    const val = await this.settingsService.getOrEnv('order_tax_rate', 'ORDER_TAX_RATE', '0.05');
+    return Number(val);
+  }
+
+  private async getBaseDeliveryFee(): Promise<number> {
+    const val = await this.settingsService.getOrEnv('base_delivery_fee', 'BASE_DELIVERY_FEE', '1000');
+    return Number(val);
   }
 
   // Récupérer les données du client
