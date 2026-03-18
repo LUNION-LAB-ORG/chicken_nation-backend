@@ -21,7 +21,8 @@ export class CategoryService {
     private readonly generateDataService: GenerateDataService,
   ) { }
 
-  private async uploadImage(image: Express.Multer.File) {
+  private async uploadImage(image?: Express.Multer.File) {
+    if (!image || !image.buffer) return null;
     return await this.s3service.uploadFile({
       buffer: image.buffer,
       path: 'chicken-nation/categories',
@@ -110,7 +111,7 @@ export class CategoryService {
     req: Request,
     id: string,
     updateCategoryDto: UpdateCategoryDto,
-    image: Express.Multer.File,
+    image?: Express.Multer.File,
   ) {
     const category = await this.findOne(id);
 
@@ -120,7 +121,7 @@ export class CategoryService {
       where: { id: category.id },
       data: {
         ...updateCategoryDto,
-        image: result?.key,
+        ...(result?.key ? { image: result.key } : {}),
       },
     });
 

@@ -20,7 +20,7 @@ export class DishService {
   ) { }
 
   private async uploadImage(image?: Express.Multer.File) {
-    if (!image) return null;
+    if (!image || !image.buffer) return null;
     return await this.s3service.uploadFile({
       buffer: image.buffer,
       path: 'chicken-nation/dishes',
