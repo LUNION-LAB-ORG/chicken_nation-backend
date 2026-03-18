@@ -8,7 +8,6 @@ import { SettingsService } from 'src/modules/settings/settings.service';
 export class KkiapayService {
 
     private kkiapayInstance: { verify: (id: string) => Promise<any>; refund: (id: string) => Promise<any>; } | null = null;
-    private kkiapayOldInstance: { verify: (id: string) => Promise<any>; refund: (id: string) => Promise<any>; } | null = null;
     private readonly logger = new Logger(KkiapayService.name);
 
     constructor(
@@ -16,9 +15,9 @@ export class KkiapayService {
         private readonly eventEmitter: KkiapayEvent,
     ) {}
 
-    private async getKkiapayInstances() {
-        if (this.kkiapayInstance && this.kkiapayOldInstance) {
-            return { main: this.kkiapayInstance, old: this.kkiapayOldInstance };
+    private async getKkiapayInstance() {
+        if (this.kkiapayInstance) {
+            return this.kkiapayInstance;
         }
 
         const config = await this.settingsService.getManyOrEnv({
@@ -35,22 +34,7 @@ export class KkiapayService {
             sandbox: config.kkiapay_sandbox === "true"
         });
 
-        // Les anciennes clés restent en .env (pas configurables depuis le backoffice)
-        const oldConfig = await this.settingsService.getManyOrEnv({
-            kkiapay_private_key_old: 'KKIA_PAY_PRIVATE_KEY_OLD',
-            kkiapay_public_key_old: 'KKIA_PAY_PUBLIC_KEY_OLD',
-            kkiapay_secret_key_old: 'KKIA_PAY_SECRET_KEY_OLD',
-            kkiapay_sandbox_old: 'KKIA_PAY_SANDBOX_OLD',
-        });
-
-        this.kkiapayOldInstance = kkiapay({
-            privatekey: oldConfig.kkiapay_private_key_old ?? "",
-            publickey: oldConfig.kkiapay_public_key_old ?? "",
-            secretkey: oldConfig.kkiapay_secret_key_old ?? "",
-            sandbox: oldConfig.kkiapay_sandbox_old === "true"
-        });
-
-        return { main: this.kkiapayInstance, old: this.kkiapayOldInstance };
+        return this.kkiapayInstance;
     }
 
     // Verification de la transaction
@@ -59,21 +43,14 @@ export class KkiapayService {
             throw new BadRequestException("Transaction non trouvée");
         }
 
-        const { main, old } = await this.getKkiapayInstances();
+        const instance = await this.getKkiapayInstance();
 
-        return main.verify(transactionId).
-            then((response) => {
-                return response as KkiapayResponse;
-            }).
-            catch((error) => {
-                return old.verify(transactionId).
-                    then((response) => {
-                        return response as KkiapayResponse;
-                    }).
-                    catch((error) => {
-                        throw new BadRequestException("Transaction non trouvée");
-                    })
-            })
+        try {
+            const response = await instance.verify(transactionId);
+            return response as KkiapayResponse;
+        } catch (error) {
+            throw new BadRequestException("Transaction non trouvée");
+        }
     }
 
     // Remboursement de la transaction
@@ -82,21 +59,14 @@ export class KkiapayService {
             throw new BadRequestException("Transaction non trouvée");
         }
 
-        const { main, old } = await this.getKkiapayInstances();
+        const instance = await this.getKkiapayInstance();
 
-        return main.refund(transactionId).
-            then((response) => {
-                return response as KkiapayResponse;
-            }).
-            catch((error) => {
-                return old.refund(transactionId).
-                    then((response) => {
-                        return response as KkiapayResponse;
-                    }).
-                    catch((error) => {
-                        throw new BadRequestException("Transaction non trouvée");
-                    })
-            })
+        try {
+            const response = await instance.refund(transactionId);
+            return response as KkiapayResponse;
+        } catch (error) {
+            throw new BadRequestException("Transaction non trouvée");
+        }
     }
 
     async handleEvent(payload: KkiapayWebhookDto): Promise<void> {
