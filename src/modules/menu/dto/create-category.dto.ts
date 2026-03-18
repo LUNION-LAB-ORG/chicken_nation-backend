@@ -20,4 +20,10 @@ export class CreateCategoryDto {
   @Transform(({ value }) => (String(value).trim() == 'true'))
   @IsBoolean()
   private?: boolean;
+
+  @ApiPropertyOptional({ description: 'SKU HubRise pour la correspondance catalogue' })
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => value?.trim())
+  hubrise_sku?: string;
 }

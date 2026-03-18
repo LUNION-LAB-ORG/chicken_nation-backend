@@ -28,4 +28,10 @@ export class CreateSupplementDto {
     @IsNotEmpty()
     @IsEnum(SupplementCategory)
     category: SupplementCategory;
+
+    @ApiPropertyOptional({ description: 'SKU HubRise pour la correspondance catalogue' })
+    @IsOptional()
+    @IsString()
+    @Transform(({ value }) => value?.trim())
+    hubrise_sku?: string;
 }

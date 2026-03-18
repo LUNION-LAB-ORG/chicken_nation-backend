@@ -172,6 +172,7 @@ model Category {
   description String? @db.VarChar
   image       String? @db.Text
   private     Boolean @default(false)
+  hubrise_sku String? @unique @db.VarChar
 
   dishes Dish[]
 
@@ -455,6 +456,7 @@ model Dish {
   category_id      String           @db.Uuid
   cooking_time     Int?             @db.Integer // en minutes
   private          Boolean          @default(false)
+  hubrise_sku      String?          @unique @db.VarChar
   category         Category         @relation(fields: [category_id], references: [id], onDelete: Cascade)
   dish_restaurants DishRestaurant[]
   dish_supplements DishSupplement[]
@@ -676,6 +678,7 @@ model Supplement {
   image            String?            @db.Text
   available        Boolean            @default(true)
   category         SupplementCategory
+  hubrise_sku      String?            @unique @db.VarChar
   dish_supplements DishSupplement[]
 }
 
