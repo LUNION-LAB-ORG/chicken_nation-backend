@@ -25,6 +25,10 @@ import { CreateSegmentDto } from './dto/create-segment.dto';
 import { UpdateSegmentDto } from './dto/update-segment.dto';
 import { CreateScheduledNotificationDto } from './dto/create-scheduled-notification.dto';
 import { UpdateScheduledNotificationDto } from './dto/update-scheduled-notification.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { CreateAliasDto } from './dto/create-alias.dto';
+import { UpdateSubscriptionDto } from './dto/update-subscription.dto';
+import { ViewUsersQueryDto } from './dto/view-users-query.dto';
 
 @ApiTags('OneSignal')
 @ApiBearerAuth()
@@ -174,6 +178,109 @@ export class OnesignalController {
   @ApiOperation({ summary: 'Supprimer une notification planifiée' })
   removeScheduled(@Param('id') id: string) {
     return this.scheduledNotificationService.remove(id);
+  }
+
+  // ── Users ──
+
+  @Get('users')
+  @ApiOperation({ summary: 'Liste des utilisateurs OneSignal (depuis DB locale)' })
+  listUsers(@Query() query: ViewUsersQueryDto) {
+    return this.onesignalService.listUsers({
+      page: query.page ? parseInt(query.page, 10) : 1,
+      limit: query.limit ? parseInt(query.limit, 10) : 20,
+      search: query.search,
+    });
+  }
+
+  @Get('users/:externalId')
+  @ApiOperation({ summary: 'Détail d\'un utilisateur OneSignal (subscriptions, tags, aliases)' })
+  viewUser(@Param('externalId') externalId: string) {
+    return this.onesignalService.viewUser(externalId);
+  }
+
+  @Patch('users/:externalId')
+  @ApiOperation({ summary: 'Modifier tags/properties d\'un utilisateur OneSignal' })
+  updateUser(
+    @Param('externalId') externalId: string,
+    @Body() dto: UpdateUserDto,
+  ) {
+    return this.onesignalService.updateUser(externalId, dto);
+  }
+
+  @Delete('users/:externalId')
+  @ApiOperation({ summary: 'Supprimer un utilisateur OneSignal' })
+  deleteUser(@Param('externalId') externalId: string) {
+    return this.onesignalService.deleteUser(externalId);
+  }
+
+  // ── Aliases ──
+
+  @Get('users/:externalId/aliases')
+  @ApiOperation({ summary: 'Voir les aliases d\'un utilisateur' })
+  fetchAliases(@Param('externalId') externalId: string) {
+    return this.onesignalService.fetchAliases(externalId);
+  }
+
+  @Post('users/:externalId/aliases')
+  @ApiOperation({ summary: 'Ajouter un alias à un utilisateur' })
+  createAlias(
+    @Param('externalId') externalId: string,
+    @Body() dto: CreateAliasDto,
+  ) {
+    return this.onesignalService.createAlias(externalId, dto);
+  }
+
+  @Delete('users/:externalId/aliases/:label')
+  @ApiOperation({ summary: 'Supprimer un alias d\'un utilisateur' })
+  deleteAlias(
+    @Param('externalId') externalId: string,
+    @Param('label') label: string,
+  ) {
+    return this.onesignalService.deleteAlias(externalId, label);
+  }
+
+  // ── Subscriptions ──
+
+  @Patch('subscriptions/:subscriptionId')
+  @ApiOperation({ summary: 'Modifier une subscription (activer/désactiver, token)' })
+  updateSubscription(
+    @Param('subscriptionId') subscriptionId: string,
+    @Body() dto: UpdateSubscriptionDto,
+  ) {
+    return this.onesignalService.updateSubscription(subscriptionId, dto);
+  }
+
+  @Delete('subscriptions/:subscriptionId')
+  @ApiOperation({ summary: 'Supprimer une subscription' })
+  deleteSubscription(@Param('subscriptionId') subscriptionId: string) {
+    return this.onesignalService.deleteSubscription(subscriptionId);
+  }
+
+  // ── Analytics ──
+
+  @Get('analytics/outcomes')
+  @ApiOperation({ summary: 'Résultats des campagnes (outcomes)' })
+  viewOutcomes(
+    @Query('outcome_names') outcomeNames: string,
+    @Query('outcome_time_range') timeRange?: string,
+    @Query('outcome_platforms') platforms?: string,
+    @Query('outcome_attribution') attribution?: string,
+  ) {
+    return this.onesignalService.viewOutcomes({
+      outcome_names: outcomeNames || 'os__session_duration,os__click,os__direct',
+      outcome_time_range: timeRange,
+      outcome_platforms: platforms,
+      outcome_attribution: attribution,
+    });
+  }
+
+  @Post('analytics/export/players')
+  @ApiOperation({ summary: 'Export CSV des utilisateurs' })
+  exportCsvPlayers(
+    @Body('extra_fields') extraFields?: string[],
+    @Body('segment_name') segmentName?: string,
+  ) {
+    return this.onesignalService.exportCsvPlayers(extraFields, segmentName);
   }
 
   // ── Tags Sync ──
