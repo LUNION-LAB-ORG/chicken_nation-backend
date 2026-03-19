@@ -519,6 +519,37 @@ model Notification {
   @@index([type, is_read])
 }
 
+model ScheduledNotification {
+  id String @id @default(uuid()) @db.Uuid
+
+  name    String @db.VarChar
+  channel String @default("push") @db.VarChar
+
+  // Message content (OneSignal payload)
+  payload   Json
+  // Targeting config { type, segments?, filters?, aliases? }
+  targeting Json
+
+  // Schedule
+  schedule_type   String    @db.VarChar // once | daily | weekly | monthly | custom
+  cron_expression String?   @db.VarChar
+  scheduled_at    DateTime? @db.Timestamp(6)
+  timezone        String    @default("Africa/Abidjan") @db.VarChar
+
+  // State
+  active       Boolean   @default(true)
+  last_sent_at DateTime? @db.Timestamp(6)
+  next_run_at  DateTime? @db.Timestamp(6)
+  send_count   Int       @default(0)
+
+  // Meta
+  created_by String   @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([active, next_run_at])
+}
+
 model OrderItem {
   id String @id @default(uuid()) @db.Uuid
 

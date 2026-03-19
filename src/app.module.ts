@@ -35,6 +35,7 @@ import { ExpoPushModule } from 'src/expo-push/expo-push.module';
 import { DeeplinkModule } from 'src/modules/marketing/deeplink/deeplink.module';
 import { HubriseModule } from 'src/hubrise/hubrise.module';
 import { SettingsModule } from 'src/modules/settings/settings.module';
+import { OnesignalModule } from 'src/modules/onesignal/onesignal.module';
 
 @Module({
   imports: [
@@ -94,6 +95,7 @@ import { SettingsModule } from 'src/modules/settings/settings.module';
     AppMobileModule,
     HubriseModule,
     SettingsModule,
+    OnesignalModule,
   ],
 })
 export class AppModule { }
