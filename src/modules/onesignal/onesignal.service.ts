@@ -87,9 +87,12 @@ export class OnesignalService {
           ? JSON.stringify({ title: data.title, code: data.code })
           : `OneSignal API error ${response.status}`;
 
-      // 404 et 409 sont souvent attendus (user not found, tag limit) — pas besoin de ERROR
-      if (response.status === 404 || response.status === 409) {
-        this.logger.debug(`OneSignal ${method} ${path} → ${response.status}: ${errorMessage}`);
+      // 404 est attendu (user not found) — debug level
+      // 409 — on log le body complet pour diagnostiquer
+      if (response.status === 404) {
+        this.logger.debug(`OneSignal ${method} ${path} → 404: ${errorMessage}`);
+      } else if (response.status === 409) {
+        this.logger.warn(`OneSignal ${method} ${path} → 409: ${JSON.stringify(data)}`);
       } else {
         this.logger.error(`OneSignal ${method} ${path} → ${response.status}: ${errorMessage}`);
       }

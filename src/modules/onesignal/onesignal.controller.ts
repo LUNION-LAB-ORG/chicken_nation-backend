@@ -7,12 +7,15 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Request } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { OnesignalService } from './onesignal.service';
 import { OnesignalTagsTask } from './tasks/onesignal-tags.task';
+import { ScheduledNotificationService } from './scheduled-notification.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { CreateMessageDto } from './dto/create-message.dto';
 import { ViewMessagesQueryDto, ViewTemplatesQueryDto, ViewSegmentsQueryDto } from './dto/view-messages-query.dto';
@@ -20,6 +23,8 @@ import { CreateTemplateDto } from './dto/create-template.dto';
 import { UpdateTemplateDto } from './dto/update-template.dto';
 import { CreateSegmentDto } from './dto/create-segment.dto';
 import { UpdateSegmentDto } from './dto/update-segment.dto';
+import { CreateScheduledNotificationDto } from './dto/create-scheduled-notification.dto';
+import { UpdateScheduledNotificationDto } from './dto/update-scheduled-notification.dto';
 
 @ApiTags('OneSignal')
 @ApiBearerAuth()
@@ -29,6 +34,7 @@ export class OnesignalController {
   constructor(
     private readonly onesignalService: OnesignalService,
     private readonly onesignalTagsTask: OnesignalTagsTask,
+    private readonly scheduledNotificationService: ScheduledNotificationService,
     private readonly settingsService: SettingsService,
   ) {}
 
@@ -123,6 +129,51 @@ export class OnesignalController {
   @ApiOperation({ summary: 'Supprimer un segment' })
   deleteSegment(@Param('id') id: string) {
     return this.onesignalService.deleteSegment(id);
+  }
+
+  // ── Scheduled Notifications ──
+
+  @Post('scheduled')
+  @ApiOperation({ summary: 'Créer une notification planifiée / récurrente' })
+  createScheduled(@Req() req: Request, @Body() dto: CreateScheduledNotificationDto) {
+    const user = req.user as { id: string };
+    return this.scheduledNotificationService.create(dto, user.id);
+  }
+
+  @Get('scheduled')
+  @ApiOperation({ summary: 'Liste des notifications planifiées' })
+  listScheduled(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.scheduledNotificationService.findAll(
+      page ? parseInt(page, 10) : 1,
+      limit ? parseInt(limit, 10) : 20,
+    );
+  }
+
+  @Get('scheduled/:id')
+  @ApiOperation({ summary: 'Détail d\'une notification planifiée' })
+  getScheduled(@Param('id') id: string) {
+    return this.scheduledNotificationService.findOne(id);
+  }
+
+  @Patch('scheduled/:id')
+  @ApiOperation({ summary: 'Modifier une notification planifiée' })
+  updateScheduled(@Param('id') id: string, @Body() dto: UpdateScheduledNotificationDto) {
+    return this.scheduledNotificationService.update(id, dto);
+  }
+
+  @Patch('scheduled/:id/toggle')
+  @ApiOperation({ summary: 'Activer / désactiver une notification planifiée' })
+  toggleScheduled(@Param('id') id: string, @Body('active') active: boolean) {
+    return this.scheduledNotificationService.toggleActive(id, active);
+  }
+
+  @Delete('scheduled/:id')
+  @ApiOperation({ summary: 'Supprimer une notification planifiée' })
+  removeScheduled(@Param('id') id: string) {
+    return this.scheduledNotificationService.remove(id);
   }
 
   // ── Tags Sync ──

@@ -241,12 +241,12 @@ export class OnesignalTagsTask {
           if (errorMsg.includes('404') || errorMsg.includes("doesn't match")) {
             notFound++;
           }
-          // 409 = tag limit atteinte sur le plan OneSignal
-          else if (errorMsg.includes('409') || errorMsg.includes('tag-limit')) {
+          // 409 = conflit OneSignal (tag limit, alias conflict, etc.)
+          else if (errorMsg.includes('409')) {
             tagLimited++;
-            if (tagLimited === 1) {
+            if (tagLimited <= 3) {
               this.logger.warn(
-                '⚠️  Limite de tags atteinte sur le plan OneSignal. Certains utilisateurs ne peuvent pas recevoir tous les tags.',
+                `⚠️  409 pour ${customer.id}: ${errorMsg}`,
               );
             }
           } else {
