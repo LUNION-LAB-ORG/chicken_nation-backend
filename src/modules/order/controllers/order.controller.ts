@@ -204,7 +204,7 @@ export class OrderController {
     @Param('id') id: string,
     @Body() body: { status: OrderStatus; meta?: Record<string, any> },
   ) {
-    const userId = (req.user as User).id;
+    const userId = (req.user as Customer).id;
     return this.orderService.updateStatus(id, body.status, { ...body.meta, userId });
   }
 

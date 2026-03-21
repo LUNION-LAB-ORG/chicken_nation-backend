@@ -550,6 +550,64 @@ model ScheduledNotification {
   @@index([active, next_run_at])
 }
 
+model PushCampaign {
+  id        String @id @default(uuid()) @db.Uuid
+  name      String @db.VarChar
+  title     String @db.VarChar
+  body      String @db.Text
+  data      Json?
+  image_url String? @db.VarChar
+
+  // Ciblage
+  target_type   String @db.VarChar // all | segment | filters | ids
+  target_config Json               // { segment?, filters?, ids? }
+
+  // Stats
+  total_targeted Int @default(0)
+  total_sent     Int @default(0)
+  total_delivered Int @default(0)
+  total_failed   Int @default(0)
+
+  // Scheduling
+  status       String    @default("sent") @db.VarChar // draft | sent | scheduled | failed
+  scheduled_at DateTime? @db.Timestamp(6)
+  sent_at      DateTime? @db.Timestamp(6)
+
+  // Meta
+  created_by String   @db.VarChar
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([status, created_at])
+}
+
+model PushTemplate {
+  id        String  @id @default(uuid()) @db.Uuid
+  name      String  @db.VarChar
+  title     String  @db.VarChar
+  body      String  @db.Text
+  data      Json?
+  image_url String? @db.VarChar
+
+  created_by String   @db.VarChar
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+}
+
+model PushSegment {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @db.VarChar
+  description String? @db.Text
+  filters     Json
+  is_system   Boolean @default(false)
+
+  created_by String   @db.VarChar
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([is_system])
+}
+
 model OrderItem {
   id String @id @default(uuid()) @db.Uuid
 

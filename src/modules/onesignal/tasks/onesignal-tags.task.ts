@@ -3,7 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { OnesignalService } from '../onesignal.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
-import { subHours, differenceInDays } from 'date-fns';
+import { subHours } from 'date-fns';
 
 /**
  * CRON — Synchronisation automatique des tags OneSignal
@@ -288,18 +288,11 @@ export class OnesignalTagsTask {
     return {
       id: true,
       loyalty_level: true,
-      addresses: {
-        select: { city: true },
-        orderBy: { created_at: 'desc' as const },
-        take: 1,
-      },
       orders: {
         where: { status: 'COMPLETED' as const, entity_status: 'ACTIVE' as const },
         select: {
           amount: true,
-          completed_at: true,
         },
-        orderBy: { completed_at: 'desc' as const },
       },
     };
   }
@@ -318,8 +311,7 @@ export class OnesignalTagsTask {
     customer: {
       id: string;
       loyalty_level: string | null;
-      addresses: { city: string | null }[];
-      orders: { amount: number; completed_at: Date | null }[];
+      orders: { amount: number }[];
     },
     now: Date,
   ): Record<string, string | number> {
@@ -329,27 +321,16 @@ export class OnesignalTagsTask {
       completedOrders.reduce((sum, o) => sum + o.amount, 0),
     );
 
-    // Jours depuis la dernière commande (-1 = jamais commandé)
-    const lastOrder = completedOrders[0]; // Trié par completed_at DESC
-    const lastOrderDays = lastOrder?.completed_at
-      ? differenceInDays(now, new Date(lastOrder.completed_at))
-      : -1;
-
     const loyaltyLevel = customer.loyalty_level ?? 'STANDARD';
-    const city = customer.addresses[0]?.city ?? '';
 
-    // 5 tags marketing (modèle RFM + géo + fidélité)
+    // 3 tags marketing (limité par le plan OneSignal gratuit)
     // - orders         → Fréquence (combien de commandes)
     // - total_spent    → Montant (valeur du client en FCFA)
-    // - last_order_days → Récence (jours depuis dernière commande, -1 = jamais)
     // - loyalty_level  → Niveau fidélité (STANDARD / PREMIUM / GOLD)
-    // - city           → Ville (ciblage géographique)
     const tags: Record<string, string | number> = {
       orders: orderCount,
       total_spent: totalSpent,
-      last_order_days: lastOrderDays,
       loyalty_level: loyaltyLevel,
-      city,
     };
 
     // Ne pas envoyer les tags vides pour économiser le quota

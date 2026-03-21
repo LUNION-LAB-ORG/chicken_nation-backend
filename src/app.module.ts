@@ -36,6 +36,7 @@ import { DeeplinkModule } from 'src/modules/marketing/deeplink/deeplink.module';
 import { HubriseModule } from 'src/hubrise/hubrise.module';
 import { SettingsModule } from 'src/modules/settings/settings.module';
 import { OnesignalModule } from 'src/modules/onesignal/onesignal.module';
+import { PushCampaignModule } from 'src/modules/push-campaign/push-campaign.module';
 
 @Module({
   imports: [
@@ -96,6 +97,7 @@ import { OnesignalModule } from 'src/modules/onesignal/onesignal.module';
     HubriseModule,
     SettingsModule,
     OnesignalModule,
+    PushCampaignModule,
   ],
 })
 export class AppModule { }
