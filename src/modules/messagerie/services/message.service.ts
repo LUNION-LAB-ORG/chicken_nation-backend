@@ -220,23 +220,27 @@ export class MessageService {
       },
     });
 
-    // TODO: Chercher comment le faire en une seule requête
     // Ajouter l'utilisateur à la conversation s'il n'y est pas déjà
-    // Seulement si c'est une conversation entre un client et un restaurant
     if (authType === 'user') {
-      await this.prismaService.conversationUser.upsert({
-        where: {
-          conversationId_userId: {
+      try {
+        await this.prismaService.conversationUser.upsert({
+          where: {
+            conversationId_userId: {
+              conversationId: conversation.id,
+              userId: (auth as User).id,
+            },
+          },
+          update: {},
+          create: {
             conversationId: conversation.id,
             userId: (auth as User).id,
           },
-        },
-        update: {},
-        create: {
-          conversationId: conversation.id,
-          userId: (auth as User).id,
-        },
-      });
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Impossible d'ajouter l'utilisateur ${(auth as User).id} à la conversation ${conversation.id}: ${error.message}`,
+        );
+      }
     }
 
     const mappedMessage = this.mapMessagesField(message);

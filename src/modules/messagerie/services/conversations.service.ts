@@ -15,7 +15,6 @@ import { CreateConversationDto } from '../dto/create-conversation.dto';
 import { getAuthType } from '../utils/getTypeUser';
 import { ConversationWebsocketsService } from '../websockets/conversation-websockets.service';
 import { ResponseMessageDto } from '../dto/response-message.dto';
-import { th } from 'date-fns/locale';
 
 type ConversationWhereUniqueInput = Prisma.ConversationWhereUniqueInput;
 
@@ -261,63 +260,66 @@ export class ConversationsService {
       };
     }
 
-    const existingConversation = await this.prisma.conversation.findFirst({
-      where: whereClause,
-      include: this.createConversationInclude(),
+    // Utiliser une transaction pour éviter les race conditions (création en double)
+    const result = await this.prisma.$transaction(async (tx) => {
+      const existingConversation = await tx.conversation.findFirst({
+        where: whereClause,
+        include: this.createConversationInclude(),
+      });
+
+      if (existingConversation) {
+        return { conversation: existingConversation, isNew: false };
+      }
+
+      const conversation = await tx.conversation.create({
+        data: {
+          restaurantId,
+          customerId: customerIdToUse, // null si interne
+          subject: subject,
+          messages: {
+            create: {
+              body: seed_message,
+              authorUserId: userId, // si l'auteur est un employé
+              authorCustomerId: customerId, // si l'auteur est un client
+            },
+          },
+          ...(userId
+            ? {
+              users: {
+                createMany: {
+                  data: [
+                    { userId: userId },
+                    ...(receiverUserId ? [{ userId: receiverUserId }] : []),
+                  ],
+                },
+              },
+            }
+            : {}),
+        },
+        include: {
+          customer: { select: { id: true, first_name: true, last_name: true } },
+          users: { select: { user: { select: { id: true, fullname: true } } } },
+          messages: { orderBy: { createdAt: 'desc' }, take: 1 },
+        },
+      });
+
+      return { conversation, isNew: true };
     });
 
-    const unreadParams = {
-      conversationId: existingConversation?.id || '',
+    const unreadNumber = await this.countUnreadMessages({
+      conversationId: result.conversation.id,
       authId: authType === 'user' ? (auth as User).id : (auth as Customer).id,
       type: authType,
-    };
-
-    if (existingConversation) {
-      const unreadNumer = await this.countUnreadMessages(unreadParams);
-
-      return this.mapConversationField(existingConversation, unreadNumer);
-    }
-
-    const conversation = await this.prisma.conversation.create({
-      data: {
-        restaurantId,
-        customerId: customerIdToUse, // null si interne
-        subject: subject,
-        messages: {
-          create: {
-            body: seed_message,
-            authorUserId: userId, // si l'auteur est un employé
-            authorCustomerId: customerId, // si l'auteur est un client
-          },
-        },
-        ...(userId
-          ? {
-            users: {
-              createMany: {
-                data: [
-                  { userId: userId }, // Ajoute l'utilisateur qui a initié la conversation
-                  ...(receiverUserId ? [{ userId: receiverUserId }] : []), // Ajoute le destinataire si c'est un DM
-                ],
-              },
-            },
-          }
-          : {}),
-      },
-      include: {
-        customer: { select: { id: true, first_name: true, last_name: true } },
-        users: { select: { user: { select: { id: true, fullname: true } } } },
-        messages: { orderBy: { createdAt: 'desc' }, take: 1 },
-      },
     });
 
-    unreadParams.conversationId = conversation.id;
-    const unreadNumer = await this.countUnreadMessages(unreadParams);
     const mappedConversation = this.mapConversationField(
-      conversation,
-      unreadNumer,
+      result.conversation,
+      unreadNumber,
     );
 
-    this.conversationWebsockets.emitConversationCreated(mappedConversation);
+    if (result.isNew) {
+      this.conversationWebsockets.emitConversationCreated(mappedConversation);
+    }
 
     return mappedConversation;
   }
@@ -417,18 +419,20 @@ export class ConversationsService {
 
     // this.logger.debug('Liste des conversations client: ', conversations, total);
 
-    const mappedConversations = await Promise.all(
-      conversations.map(async (conversation) => {
-        const unreadNumber = await this.countUnreadMessages({
-          conversationId: conversation.id,
-          authId: customerId,
-          type: 'customer',
-        });
-        return this.mapConversationField(conversation, unreadNumber);
-      }),
+    // Batch unread counts en une seule requête (au lieu de N+1)
+    const conversationIds = conversations.map((c) => c.id);
+    const unreadCounts = await this.batchCountUnreadMessages(
+      conversationIds,
+      customerId,
+      'customer',
     );
 
-    // this.logger.debug('Liste des conversations client mapped: ', mappedConversations);
+    const mappedConversations = conversations.map((conversation) =>
+      this.mapConversationField(
+        conversation,
+        unreadCounts.get(conversation.id) ?? 0,
+      ),
+    );
 
     return {
       data: mappedConversations,
@@ -502,18 +506,20 @@ export class ConversationsService {
 
     // this.logger.debug('Liste des conversations user: ', conversations, total);
 
-    const mappedConversations = await Promise.all(
-      conversations.map(async (conversation) => {
-        const unreadNumber = await this.countUnreadMessages({
-          conversationId: conversation.id,
-          authId: userId,
-          type: 'user',
-        });
-        return this.mapConversationField(conversation, unreadNumber);
-      }),
+    // Batch unread counts en une seule requête (au lieu de N+1)
+    const conversationIds = conversations.map((c) => c.id);
+    const unreadCounts = await this.batchCountUnreadMessages(
+      conversationIds,
+      userId,
+      'user',
     );
 
-    // this.logger.debug('Liste des conversations user mapped: ', mappedConversations);
+    const mappedConversations = conversations.map((conversation) =>
+      this.mapConversationField(
+        conversation,
+        unreadCounts.get(conversation.id) ?? 0,
+      ),
+    );
 
     return {
       data: mappedConversations,
@@ -609,5 +615,31 @@ export class ConversationsService {
         ...(type === 'customer' ? { authorCustomerId: { not: authId } } : {}),
       },
     });
+  }
+
+  /**
+   * Batch count des messages non-lus pour N conversations en une seule requête
+   */
+  private async batchCountUnreadMessages(
+    conversationIds: string[],
+    authId: string,
+    type: 'user' | 'customer',
+  ): Promise<Map<string, number>> {
+    if (conversationIds.length === 0) return new Map();
+
+    const counts = await this.prisma.message.groupBy({
+      by: ['conversationId'],
+      where: {
+        conversationId: { in: conversationIds },
+        isRead: false,
+        ...(type === 'user' ? { authorUserId: { not: authId } } : {}),
+        ...(type === 'customer' ? { authorCustomerId: { not: authId } } : {}),
+      },
+      _count: { id: true },
+    });
+
+    const map = new Map<string, number>();
+    counts.forEach((c) => map.set(c.conversationId, c._count.id));
+    return map;
   }
 }

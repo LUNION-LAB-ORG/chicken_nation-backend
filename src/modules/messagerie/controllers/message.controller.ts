@@ -90,26 +90,26 @@ export class MessageController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Post('messages/read')
+  @Post('read')
   async markMessagesAsRead(
     @Req() req: Request,
-    @Param('ticketId') ticketId: string,
+    @Param('conversationId') conversationId: string,
   ) {
     return this.messageService.markMessagesAsRead(
-      ticketId,
+      conversationId,
       'USER',
       (req.user as User).id,
     );
   }
 
   @UseGuards(JwtCustomerAuthGuard)
-  @Post('customer/messages/read')
+  @Post('customer/read')
   async markCustomerMessagesAsRead(
     @Req() req: Request,
-    @Param('ticketId') ticketId: string,
+    @Param('conversationId') conversationId: string,
   ) {
     return this.messageService.markMessagesAsRead(
-      ticketId,
+      conversationId,
       'CUSTOMER',
       (req.user as Customer).id,
     );
