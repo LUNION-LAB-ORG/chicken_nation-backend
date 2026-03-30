@@ -36,6 +36,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // Cache pour éviter de spammer la DB lors des boucles de connexion
   private authCache = new Map<string, CachedUser>();
   private readonly CACHE_TTL_MS = 10000; // Le cache dure 10 secondes
+  private readonly CACHE_MAX_SIZE = 2000;
 
   // Map pour tracker qui est en train d'écrire dans quelle conversation
   private typingUsers = new Map<string, Set<string>>(); // conversationId -> Set<userId>
@@ -190,13 +191,37 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
         expiresAt: now + this.CACHE_TTL_MS, // Valide 10 secondes
       });
 
-      // Nettoyage préventif si le cache devient trop gros
-      if (this.authCache.size > 2000) {
-        this.authCache.clear();
+      // Nettoyage LRU si le cache devient trop gros
+      if (this.authCache.size > this.CACHE_MAX_SIZE) {
+        this.evictCache(now);
       }
     }
 
     return result;
+  }
+
+  /**
+   * Éviction progressive du cache : supprime d'abord les entrées expirées,
+   * puis les plus anciennes si le cache dépasse toujours la limite.
+   */
+  private evictCache(now: number) {
+    // Phase 1 : Supprimer toutes les entrées expirées
+    for (const [key, cached] of this.authCache) {
+      if (cached.expiresAt <= now) {
+        this.authCache.delete(key);
+      }
+    }
+
+    // Phase 2 : Si toujours au-dessus de la limite, supprimer les plus anciennes
+    if (this.authCache.size > this.CACHE_MAX_SIZE) {
+      const entries = Array.from(this.authCache.entries())
+        .sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+
+      const toRemove = this.authCache.size - this.CACHE_MAX_SIZE;
+      for (let i = 0; i < toRemove; i++) {
+        this.authCache.delete(entries[i][0]);
+      }
+    }
   }
 
   private async joinRooms(client: Socket, userInfo: ConnectedUser) {
