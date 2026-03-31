@@ -9,6 +9,11 @@ export class QueryVoucherDto {
     @IsString()
     code?: string;
 
+    @ApiPropertyOptional({ description: "Recherche globale (code ou nom/téléphone du client)" })
+    @IsOptional()
+    @IsString()
+    search?: string;
+
     @ApiPropertyOptional({ description: "Filtrer par statut" })
     @IsOptional()
     @IsEnum(VoucherStatus)

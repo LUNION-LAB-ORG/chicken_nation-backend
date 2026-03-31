@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { DiscountType } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 export class QueryPromoCodeDto {
@@ -12,7 +12,11 @@ export class QueryPromoCodeDto {
   @ApiPropertyOptional({ description: 'Filtrer par statut actif/inactif' })
   @IsOptional()
   @IsBoolean()
-  @Type(() => Boolean)
+  @Transform(({ value }) => {
+    if (value === 'true' || value === true) return true;
+    if (value === 'false' || value === false) return false;
+    return undefined;
+  })
   is_active?: boolean;
 
   @ApiPropertyOptional({ description: 'Filtrer par type de réduction', enum: DiscountType })

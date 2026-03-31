@@ -113,7 +113,7 @@ export class VoucherService {
       sortOrder,
     });
 
-    const where = {
+    const where: Prisma.VoucherWhereInput = {
       entity_status: { not: 'DELETED' as const },
       ...(rest.status && { status: rest.status }),
       ...(rest.code && { code: { contains: rest.code, mode: 'insensitive' as const } }),
@@ -125,6 +125,17 @@ export class VoucherService {
       ...(rest.minExpiresAt && { expires_at: { gte: rest.minExpiresAt } }),
       ...(rest.maxExpiresAt && { expires_at: { lte: rest.maxExpiresAt } }),
     };
+
+    // Recherche globale : code OU nom/téléphone du client
+    if (rest.search) {
+      const s = rest.search.trim();
+      where.OR = [
+        { code: { contains: s, mode: 'insensitive' } },
+        { customer: { first_name: { contains: s, mode: 'insensitive' } } },
+        { customer: { last_name: { contains: s, mode: 'insensitive' } } },
+        { customer: { phone: { contains: s } } },
+      ];
+    }
 
     const [vouchers, total] = await Promise.all([
       this.prismaService.voucher.findMany({
