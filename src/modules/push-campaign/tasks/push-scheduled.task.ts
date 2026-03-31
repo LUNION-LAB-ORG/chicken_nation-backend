@@ -13,11 +13,7 @@ import { addDays, addMonths, addWeeks } from 'date-fns';
  *   - active = true
  *   - next_run_at <= now
  *
- * Pour chaque notification due :
- *   1. Résout les tokens via PushCampaignService.resolveTargetTokens()
- *   2. Envoie via ExpoPushService
- *   3. Crée un PushCampaign pour l'historique
- *   4. Met à jour next_run_at / send_count / last_sent_at
+ * Supporte les variables dynamiques {{first_name}}, {{last_name}}, etc.
  */
 @Injectable()
 export class PushScheduledTask {
@@ -44,7 +40,7 @@ export class PushScheduledTask {
     if (dueNotifications.length === 0) return;
 
     this.logger.log(
-      `📬 ${dueNotifications.length} notification(s) planifiée(s) à envoyer`,
+      `${dueNotifications.length} notification(s) planifiée(s) à envoyer`,
     );
 
     for (const notification of dueNotifications) {
@@ -58,48 +54,98 @@ export class PushScheduledTask {
     }
   }
 
-  private async processOne(
-    notification: any,
-    now: Date,
-  ) {
+  private async processOne(notification: any, now: Date) {
     const payload = notification.payload as any;
     const targeting = notification.targeting as any;
 
-    // 1. Résoudre les tokens
-    const tokens = await this.pushCampaignService.resolveTargetTokens(
-      targeting?.type ?? 'all',
-      targeting?.config ?? {},
-    );
+    const title = payload?.title ?? notification.name;
+    const body = payload?.body ?? '';
+    const hasVars = /\{\{[a-z_]+\}\}/.test(title) || /\{\{[a-z_]+\}\}/.test(body);
 
     let totalSent = 0;
     let totalFailed = 0;
+    let totalTargeted = 0;
 
-    // 2. Envoyer via Expo Push
-    if (tokens.length > 0) {
-      const result = await this.expoPushService.sendPushNotifications({
-        tokens,
-        title: payload?.title ?? notification.name,
-        body: payload?.body ?? '',
-        data: payload?.data ?? {},
-        sound: 'default',
-        priority: 'high',
-      });
-      totalSent = result.ticketsReceived ?? 0;
-      totalFailed = result.errorsCount ?? 0;
+    if (hasVars) {
+      // Personalized send — resolve variables per customer
+      const customerSettings = await this.resolveTargetCustomerSettings(
+        targeting?.type ?? 'all',
+        targeting?.config ?? {},
+      );
+
+      if (customerSettings.length > 0) {
+        const customerIds = customerSettings.map((s) => s.customer_id);
+        const customers = await this.prisma.customer.findMany({
+          where: { id: { in: customerIds } },
+          select: {
+            id: true,
+            first_name: true,
+            last_name: true,
+            phone: true,
+            loyalty_level: true,
+            total_points: true,
+            addresses: { select: { city: true }, take: 1, orderBy: { created_at: 'desc' } },
+          },
+        });
+        const customerMap = new Map(customers.map((c) => [c.id, c]));
+
+        const messages = customerSettings.map((setting) => {
+          const customer = customerMap.get(setting.customer_id);
+          const vars: Record<string, string> = {
+            first_name: customer?.first_name ?? '',
+            last_name: customer?.last_name ?? '',
+            phone: customer?.phone ?? '',
+            city: customer?.addresses?.[0]?.city ?? '',
+            loyalty_level: customer?.loyalty_level ?? '',
+            total_points: String(customer?.total_points ?? 0),
+          };
+          return {
+            token: setting.expo_push_token!,
+            title: this.resolveText(title, vars),
+            body: this.resolveText(body, vars),
+            data: payload?.data ?? {},
+          };
+        });
+
+        totalTargeted = messages.length;
+        const result = await this.expoPushService.sendPersonalizedPushNotifications(messages);
+        totalSent = result.ticketsReceived ?? 0;
+        totalFailed = result.errorsCount ?? 0;
+      }
+    } else {
+      // Standard batch send
+      const tokens = await this.pushCampaignService.resolveTargetTokens(
+        targeting?.type ?? 'all',
+        targeting?.config ?? {},
+      );
+      totalTargeted = tokens.length;
+
+      if (tokens.length > 0) {
+        const result = await this.expoPushService.sendPushNotifications({
+          tokens,
+          title,
+          body,
+          data: payload?.data ?? {},
+          sound: 'default',
+          priority: 'high',
+        });
+        totalSent = result.ticketsReceived ?? 0;
+        totalFailed = result.errorsCount ?? 0;
+      }
     }
 
-    // 3. Créer un PushCampaign pour l'historique
+    // Créer un PushCampaign pour l'historique
     await this.prisma.pushCampaign.create({
       data: {
         name: `[Auto] ${notification.name}`,
-        title: payload?.title ?? notification.name,
-        body: payload?.body ?? '',
+        title,
+        body,
         data: payload?.data ?? undefined,
         image_url: payload?.image_url,
         target_type: targeting?.type ?? 'all',
         target_config: targeting?.config ?? {},
         status: 'sent',
-        total_targeted: tokens.length,
+        total_targeted: totalTargeted,
         total_sent: totalSent,
         total_failed: totalFailed,
         sent_at: now,
@@ -107,7 +153,7 @@ export class PushScheduledTask {
       },
     });
 
-    // 4. Mettre à jour la notification planifiée
+    // Mettre à jour la notification planifiée
     const nextRun = this.computeNextRun(notification);
 
     await this.prisma.scheduledNotification.update({
@@ -116,14 +162,45 @@ export class PushScheduledTask {
         last_sent_at: now,
         send_count: { increment: 1 },
         next_run_at: nextRun,
-        // Désactiver les one-shot après envoi
         ...(notification.schedule_type === 'once' ? { active: false } : {}),
       },
     });
 
     this.logger.log(
-      `✅ "${notification.name}" envoyé → ${totalSent} push, ${totalFailed} erreurs (${tokens.length} ciblés)`,
+      `"${notification.name}" envoyé → ${totalSent} push, ${totalFailed} erreurs (${totalTargeted} ciblés)`,
     );
+  }
+
+  private resolveText(text: string, vars: Record<string, string>): string {
+    return text.replace(/\{\{([a-z_]+)\}\}/g, (_, key) => vars[key] ?? '');
+  }
+
+  private async resolveTargetCustomerSettings(
+    targetType: string,
+    targetConfig: Record<string, any>,
+  ) {
+    const where: any = {
+      push: true,
+      active: true,
+      expo_push_token: { not: null },
+    };
+
+    if (targetType === 'ids' && targetConfig.ids) {
+      where.customer_id = { in: targetConfig.ids };
+    } else if (targetType === 'segment' && targetConfig.segment) {
+      const ids = await (this.pushCampaignService as any).resolveSegmentCustomerIds(targetConfig.segment);
+      if (ids.length === 0) return [];
+      where.customer_id = { in: ids };
+    } else if (targetType === 'filters') {
+      const ids = await (this.pushCampaignService as any).resolveFilterCustomerIds(targetConfig);
+      if (ids.length === 0) return [];
+      where.customer_id = { in: ids };
+    }
+
+    return this.prisma.notificationSetting.findMany({
+      where,
+      select: { customer_id: true, expo_push_token: true },
+    });
   }
 
   private computeNextRun(notification: any): Date | null {
@@ -139,8 +216,6 @@ export class PushScheduledTask {
       case 'monthly':
         return addMonths(now, 1);
       case 'custom':
-        // Pour les CRON custom, on calcule simplement +1 jour
-        // Le CRON tourne chaque minute donc il détectera le bon moment
         return addDays(now, 1);
       default:
         return null;

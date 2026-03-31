@@ -48,7 +48,7 @@ export class PushCampaignService {
 
     // Envoi immédiat si pas planifié
     if (!isScheduled) {
-      return this.sendCampaign(campaign.id);
+      return this.sendCampaignPersonalized(campaign.id);
     }
 
     return campaign;
@@ -211,9 +211,6 @@ export class PushCampaignService {
       this.countByLoyalty('PREMIUM'),
     ]);
 
-    // Villes dynamiques
-    const cities = await this.getDistinctCities();
-
     const segments: any[] = [
       { key: 'all', label: 'Tous les abonnés', count: allSubscribers, description: 'Push actif', is_system: true },
       { key: 'active_buyers', label: 'Acheteurs actifs', count: activeBuyers, description: 'Commande < 7j', is_system: true },
@@ -223,13 +220,6 @@ export class PushCampaignService {
       { key: 'big_spenders', label: 'Gros acheteurs', count: bigSpenders, description: '> 50 000 FCFA', is_system: true },
       { key: 'gold', label: 'Gold', count: goldMembers, description: 'Offres VIP', is_system: true },
       { key: 'premium', label: 'Premium', count: premiumMembers, description: 'Offres premium', is_system: true },
-      ...cities.map((c) => ({
-        key: `city_${c.city}`,
-        label: c.city,
-        count: c.count,
-        description: 'Géo-ciblé',
-        is_system: true,
-      })),
     ];
 
     // ── Segments custom (depuis DB) ──
@@ -317,6 +307,12 @@ export class PushCampaignService {
   async previewSegment(dto: SegmentPreviewDto) {
     const tokens = await this.resolveTargetTokens(dto.target_type, dto.target_config);
     return { count: tokens.length };
+  }
+
+  /** Preview avec filtres custom (utilise la logique complète de résolution) */
+  async previewCustomFilters(filters: SegmentFiltersDto) {
+    const count = await this.countByCustomFilters(filters);
+    return { count };
   }
 
   /** Résout les tokens Expo Push en fonction du ciblage */
@@ -790,9 +786,61 @@ export class PushCampaignService {
     });
   }
 
-  async findAllScheduled() {
+  async createScheduledMulti(
+    dto: CreateScheduledDto,
+    scheduleDates: string[],
+    userId: string,
+  ) {
+    if (!scheduleDates || scheduleDates.length === 0) {
+      throw new NotFoundException('Au moins une date est requise');
+    }
+
+    const payload = {
+      title: dto.title,
+      body: dto.body,
+      data: dto.data,
+      image_url: dto.image_url,
+    };
+
+    const targeting = {
+      type: dto.target_type,
+      config: dto.target_config,
+    };
+
+    // Group name for tracking
+    const groupId = `multi_${Date.now()}`;
+
+    const records = await Promise.all(
+      scheduleDates.map((dateStr, index) => {
+        const scheduledAt = new Date(dateStr);
+        return this.prisma.scheduledNotification.create({
+          data: {
+            name: scheduleDates.length > 1
+              ? `${dto.name} (${index + 1}/${scheduleDates.length})`
+              : dto.name,
+            channel: 'expo_push',
+            payload: { ...payload, _group: groupId },
+            targeting,
+            schedule_type: 'once',
+            scheduled_at: scheduledAt,
+            timezone: dto.timezone ?? 'Africa/Abidjan',
+            next_run_at: scheduledAt,
+            created_by: userId,
+          },
+        });
+      }),
+    );
+
+    return { count: records.length, items: records };
+  }
+
+  async findAllScheduled(channel?: string) {
+    const where: any = {};
+    if (channel) {
+      where.channel = channel;
+    }
     return this.prisma.scheduledNotification.findMany({
-      where: { channel: 'expo_push' },
+      where,
       orderBy: { created_at: 'desc' },
     });
   }
@@ -845,6 +893,17 @@ export class PushCampaignService {
     return this.prisma.scheduledNotification.update({
       where: { id },
       data: { active: !scheduled.active },
+    });
+  }
+
+  async migrateToExpoPush(id: string) {
+    const scheduled = await this.findOneScheduled(id);
+    if (scheduled.channel === 'expo_push') {
+      return scheduled; // Already on Expo Push
+    }
+    return this.prisma.scheduledNotification.update({
+      where: { id },
+      data: { channel: 'expo_push' },
     });
   }
 
@@ -1125,6 +1184,162 @@ export class PushCampaignService {
     }
 
     return Array.from(customerIds);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // VARIABLES — Résolution dynamique par client
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  static readonly AVAILABLE_VARIABLES = [
+    { key: 'first_name', label: 'Prénom', example: 'Amadou' },
+    { key: 'last_name', label: 'Nom', example: 'Koné' },
+    { key: 'phone', label: 'Téléphone', example: '+22507...' },
+    { key: 'city', label: 'Ville', example: 'Abidjan' },
+    { key: 'loyalty_level', label: 'Niveau fidélité', example: 'GOLD' },
+    { key: 'total_points', label: 'Points fidélité', example: '1500' },
+  ];
+
+  private hasVariables(text: string): boolean {
+    return /\{\{[a-z_]+\}\}/.test(text);
+  }
+
+  private resolveText(
+    text: string,
+    vars: Record<string, string>,
+  ): string {
+    return text.replace(/\{\{([a-z_]+)\}\}/g, (_, key) => vars[key] ?? '');
+  }
+
+  /**
+   * Envoie une campagne avec résolution de variables si nécessaire.
+   * Si le title/body contient {{...}}, on personnalise par client.
+   */
+  async sendCampaignPersonalized(campaignId: string) {
+    const campaign = await this.findOne(campaignId);
+    const needsPersonalization =
+      this.hasVariables(campaign.title) || this.hasVariables(campaign.body);
+
+    if (!needsPersonalization) {
+      return this.sendCampaign(campaignId);
+    }
+
+    try {
+      // Resolve customer IDs for targeting
+      const customerSettings = await this.resolveTargetCustomerSettings(
+        campaign.target_type,
+        campaign.target_config as Record<string, any>,
+      );
+
+      if (customerSettings.length === 0) {
+        return this.prisma.pushCampaign.update({
+          where: { id: campaignId },
+          data: { status: 'sent', total_targeted: 0, total_sent: 0, sent_at: new Date() },
+        });
+      }
+
+      // Fetch customer data for variable resolution
+      const customerIds = customerSettings.map((s) => s.customer_id);
+      const customers = await this.prisma.customer.findMany({
+        where: { id: { in: customerIds } },
+        select: {
+          id: true,
+          first_name: true,
+          last_name: true,
+          phone: true,
+          loyalty_level: true,
+          total_points: true,
+          addresses: { select: { city: true }, take: 1, orderBy: { created_at: 'desc' } },
+        },
+      });
+
+      const customerMap = new Map(customers.map((c) => [c.id, c]));
+
+      // Build personalized messages
+      const messages: Array<{
+        token: string;
+        title: string;
+        body: string;
+        data?: Record<string, any>;
+      }> = [];
+
+      for (const setting of customerSettings) {
+        const customer = customerMap.get(setting.customer_id);
+        const vars: Record<string, string> = {
+          first_name: customer?.first_name ?? '',
+          last_name: customer?.last_name ?? '',
+          phone: customer?.phone ?? '',
+          city: customer?.addresses?.[0]?.city ?? '',
+          loyalty_level: customer?.loyalty_level ?? '',
+          total_points: String(customer?.total_points ?? 0),
+        };
+
+        messages.push({
+          token: setting.expo_push_token!,
+          title: this.resolveText(campaign.title, vars),
+          body: this.resolveText(campaign.body, vars),
+          data: (campaign.data as Record<string, any>) ?? {},
+        });
+      }
+
+      const result = await this.expoPushService.sendPersonalizedPushNotifications(messages);
+
+      return this.prisma.pushCampaign.update({
+        where: { id: campaignId },
+        data: {
+          status: 'sent',
+          total_targeted: messages.length,
+          total_sent: result.ticketsReceived ?? 0,
+          total_failed: result.errorsCount ?? 0,
+          sent_at: new Date(),
+        },
+      });
+    } catch (error) {
+      this.logger.error(`Erreur envoi personnalisé campagne ${campaignId}: ${error.message}`);
+      return this.prisma.pushCampaign.update({
+        where: { id: campaignId },
+        data: { status: 'failed' },
+      });
+    }
+  }
+
+  /** Retourne les NotificationSetting avec token pour le ciblage donné */
+  private async resolveTargetCustomerSettings(
+    targetType: string,
+    targetConfig: Record<string, any>,
+  ) {
+    const customerIds = await this.resolveTargetCustomerIds(targetType, targetConfig);
+
+    const where: any = {
+      push: true,
+      active: true,
+      expo_push_token: { not: null },
+    };
+    if (customerIds) {
+      where.customer_id = { in: customerIds };
+    }
+
+    return this.prisma.notificationSetting.findMany({
+      where,
+      select: { customer_id: true, expo_push_token: true },
+    });
+  }
+
+  private async resolveTargetCustomerIds(
+    targetType: string,
+    targetConfig: Record<string, any>,
+  ): Promise<string[] | null> {
+    switch (targetType) {
+      case 'all':
+        return null; // all customers with push tokens
+      case 'segment':
+        return this.resolveSegmentCustomerIds(targetConfig.segment);
+      case 'filters':
+        return this.resolveFilterCustomerIds(targetConfig);
+      case 'ids':
+        return targetConfig.ids ?? [];
+      default:
+        return [];
+    }
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────

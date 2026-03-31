@@ -80,6 +80,71 @@ export class ExpoPushService {
     }
 
     /**
+     * Envoie des notifications personnalisées (un message différent par token)
+     */
+    async sendPersonalizedPushNotifications(
+        messages: Array<{
+            token: string;
+            title: string;
+            body: string;
+            data?: Record<string, any>;
+            subtitle?: string;
+        }>,
+    ) {
+        const pushMessages: ExpoPushMessage[] = [];
+
+        for (const msg of messages) {
+            if (!Expo.isExpoPushToken(msg.token)) {
+                this.logger.warn(`Token invalide ignoré: ${msg.token}`);
+                continue;
+            }
+            pushMessages.push({
+                to: msg.token,
+                sound: 'default' as any,
+                title: msg.title,
+                body: msg.body,
+                data: msg.data || {},
+                subtitle: msg.subtitle,
+                priority: 'high',
+                channelId: 'default',
+            });
+        }
+
+        if (pushMessages.length === 0) {
+            return { status: 'skipped', totalSent: 0, ticketsReceived: 0, errorsCount: 0 };
+        }
+
+        const chunks = this.expo.chunkPushNotifications(pushMessages);
+        const tickets: ExpoPushTicket[] = [];
+        const errors: ExpoPushErrorReceipt[] = [];
+
+        for (const chunk of chunks) {
+            try {
+                const ticketChunk = await this.expo.sendPushNotificationsAsync(chunk);
+                tickets.push(...ticketChunk);
+                ticketChunk.forEach((ticket) => {
+                    if (ticket.status === 'error') {
+                        this.logger.error(`Erreur d'envoi: ${ticket.message}`);
+                        errors.push(ticket);
+                    }
+                });
+            } catch (error) {
+                this.logger.error('Erreur critique chunk personnalisé', error);
+                errors.push(error);
+            }
+        }
+
+        this.processReceiptsAsync(tickets);
+
+        return {
+            status: 'processed',
+            totalSent: pushMessages.length,
+            ticketsReceived: tickets.length,
+            errorsCount: errors.length,
+        };
+    }
+
+    /**
      * Phase 2 : Vérification des reçus et Nettoyage DB
      * Cette méthode analyse si Apple/Google a bien livré le message.
      */

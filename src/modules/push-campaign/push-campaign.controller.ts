@@ -50,6 +50,12 @@ export class PushCampaignController {
     return this.service.getStats();
   }
 
+  @Get('variables')
+  @ApiOperation({ summary: 'Variables disponibles pour la personnalisation' })
+  getVariables() {
+    return PushCampaignService.AVAILABLE_VARIABLES;
+  }
+
   @Get('segments')
   @ApiOperation({ summary: 'Liste des segments avec compteurs live' })
   getSegments() {
@@ -60,6 +66,12 @@ export class PushCampaignController {
   @ApiOperation({ summary: 'Preview du nombre de destinataires' })
   previewSegment(@Body() dto: SegmentPreviewDto) {
     return this.service.previewSegment(dto);
+  }
+
+  @Post('segments/preview-filters')
+  @ApiOperation({ summary: 'Preview du nombre de destinataires avec filtres custom' })
+  previewSegmentFilters(@Body() dto: { filters: Record<string, any> }) {
+    return this.service.previewCustomFilters(dto.filters);
   }
 
   @Post('segments/custom')
@@ -151,10 +163,20 @@ export class PushCampaignController {
     return this.service.createScheduled(dto, userId);
   }
 
+  @Post('scheduled/multi')
+  @ApiOperation({ summary: 'Créer des notifications planifiées sur plusieurs dates' })
+  createScheduledMulti(
+    @Body() dto: CreateScheduledDto & { schedule_dates: string[] },
+    @Req() req: Request,
+  ) {
+    const userId = (req.user as User).id;
+    return this.service.createScheduledMulti(dto, dto.schedule_dates, userId);
+  }
+
   @Get('scheduled')
   @ApiOperation({ summary: 'Lister les notifications planifiées' })
-  findAllScheduled() {
-    return this.service.findAllScheduled();
+  findAllScheduled(@Query('channel') channel?: string) {
+    return this.service.findAllScheduled(channel);
   }
 
   @Get('scheduled/:id')
@@ -179,6 +201,12 @@ export class PushCampaignController {
   @ApiOperation({ summary: 'Activer/désactiver une notification planifiée' })
   toggleScheduled(@Param('id') id: string) {
     return this.service.toggleScheduled(id);
+  }
+
+  @Patch('scheduled/:id/migrate')
+  @ApiOperation({ summary: 'Migrer une notification OneSignal vers Expo Push' })
+  migrateScheduled(@Param('id') id: string) {
+    return this.service.migrateToExpoPush(id);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
