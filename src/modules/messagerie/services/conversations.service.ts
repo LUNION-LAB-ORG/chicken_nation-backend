@@ -10,7 +10,7 @@ import type { Request } from 'express';
 import { QueryConversationsDto } from '../dto/query-conversations.dto';
 import { QueryResponseDto } from '../../../common/dto/query-response.dto';
 import { ResponseConversationsDto } from '../dto/response-conversations.dto';
-import { Customer, Prisma, User } from '@prisma/client';
+import { Customer, Prisma, User, UserType } from '@prisma/client';
 import { CreateConversationDto } from '../dto/create-conversation.dto';
 import { getAuthType } from '../utils/getTypeUser';
 import { ConversationWebsocketsService } from '../websockets/conversation-websockets.service';
@@ -129,6 +129,7 @@ export class ConversationsService {
       conversations = await this.getUserConversations(
         (auth as User).id,
         filter,
+        (auth as User).type,
       );
     }
 
@@ -338,33 +339,36 @@ export class ConversationsService {
     if (authType === 'customer') {
       whereClause = {
         ...whereClause,
-        customerId: (auth as Customer).id, // Vérifie si le client est associé à la conversation
+        customerId: (auth as Customer).id,
       };
     } else if (authType === 'user') {
-      whereClause = {
-        ...whereClause,
-        OR: [
-          {
-            users: {
-              some: {
-                userId: (auth as User).id, // Vérifie si l'utilisateur est participant à la conversation
-              },
-            },
-          },
-          {
-            customerId: {
-              not: null, // Si c'est une conversation avec un client
-            },
-            restaurant: {
+      // BACKOFFICE peut voir n'importe quelle conversation
+      if ((auth as User).type !== UserType.BACKOFFICE) {
+        whereClause = {
+          ...whereClause,
+          OR: [
+            {
               users: {
                 some: {
-                  id: (auth as User).id, // Vérifie si l'utilisateur est employé du restaurant
+                  userId: (auth as User).id,
                 },
               },
             },
-          },
-        ],
-      };
+            {
+              customerId: {
+                not: null,
+              },
+              restaurant: {
+                users: {
+                  some: {
+                    id: (auth as User).id,
+                  },
+                },
+              },
+            },
+          ],
+        };
+      }
     }
 
     const [conversation, unreadNumber] = await Promise.all([
@@ -382,6 +386,73 @@ export class ConversationsService {
     return conversation
       ? this.mapConversationField(conversation, unreadNumber)
       : null;
+  }
+
+  /**
+   * Statistiques des conversations pour le backoffice
+   */
+  async getConversationStats(req: Request) {
+    const auth = req.user!;
+    const authType = getAuthType(auth);
+
+    if (authType !== 'user') {
+      return { total_conversations: 0, unread_conversations: 0, total_messages: 0, unread_messages: 0 };
+    }
+
+    const user = auth as User;
+    const isBackoffice = user.type === UserType.BACKOFFICE;
+
+    // Where clause selon le type d'utilisateur
+    const conversationWhere: Prisma.ConversationWhereInput = isBackoffice
+      ? {
+        OR: [
+          { customerId: { not: null } },
+          { users: { some: { userId: user.id } } },
+        ],
+      }
+      : {
+        OR: [
+          { users: { some: { userId: user.id } } },
+          {
+            customerId: { not: null },
+            restaurant: { users: { some: { id: user.id } } },
+          },
+        ],
+      };
+
+    const [totalConversations, totalMessages, unreadMessages] = await Promise.all([
+      this.prisma.conversation.count({ where: conversationWhere }),
+      this.prisma.message.count({
+        where: { conversation: conversationWhere },
+      }),
+      this.prisma.message.count({
+        where: {
+          conversation: conversationWhere,
+          isRead: false,
+          authorUserId: { not: user.id },
+        },
+      }),
+    ]);
+
+    // Compter les conversations qui ont au moins 1 message non lu
+    const conversationsWithUnread = await this.prisma.conversation.count({
+      where: {
+        ...conversationWhere,
+        messages: {
+          some: {
+            isRead: false,
+            authorUserId: { not: user.id },
+          },
+        },
+      },
+    });
+
+    return {
+      total_conversations: totalConversations,
+      unread_conversations: conversationsWithUnread,
+      total_messages: totalMessages,
+      unread_messages: unreadMessages,
+    };
   }
 
   /**
@@ -455,42 +526,51 @@ export class ConversationsService {
   private async getUserConversations(
     userId: string,
     filter: QueryConversationsDto = {},
+    userType?: UserType,
   ): Promise<QueryResponseDto<ResponseConversationsDto>> {
     const { limit = 10, page = 1, ...rest } = filter;
     const skip = (page - 1) * limit;
 
-    // this.logger.log('Obtenir liste conversations user: ', userId, " filtre :", filter);
-
-    const whereClause: Prisma.ConversationWhereInput = {
-      OR: [
-        {
-          users: {
-            some: {
-              userId: userId, // Vérifie si l'utilisateur est participant à la conversation
-            },
-          },
-        },
-        {
-          AND: [
-            {
-              customerId: {
-                not: null, // Si c'est une conversation avec un client
+    // Les utilisateurs BACKOFFICE voient toutes les conversations
+    // (tous restaurants + conversations internes où ils sont participants)
+    const whereClause: Prisma.ConversationWhereInput = userType === UserType.BACKOFFICE
+      ? {
+        OR: [
+          { customerId: { not: null } },        // Toutes les conversations client ↔ restaurant
+          { users: { some: { userId } } },       // + conversations internes où il est participant
+        ],
+        ...rest,
+      }
+      : {
+        OR: [
+          {
+            users: {
+              some: {
+                userId: userId, // Vérifie si l'utilisateur est participant à la conversation
               },
             },
-            {
-              restaurant: {
-                users: {
-                  some: {
-                    id: userId, // Vérifie si l'utilisateur est employé du restaurant
+          },
+          {
+            AND: [
+              {
+                customerId: {
+                  not: null, // Si c'est une conversation avec un client
+                },
+              },
+              {
+                restaurant: {
+                  users: {
+                    some: {
+                      id: userId, // Vérifie si l'utilisateur est employé du restaurant
+                    },
                   },
                 },
               },
-            },
-          ],
-        },
-      ],
-      ...rest,
-    };
+            ],
+          },
+        ],
+        ...rest,
+      };
 
     // this.logger.debug('Where clause pour user conversations: ', whereClause);
 

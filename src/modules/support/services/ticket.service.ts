@@ -163,6 +163,19 @@ export class TicketService {
       averageResolutionTime = Math.round(totalMs / resolvedTickets.length / 60000); // en minutes
     }
 
+    // Tickets avec au moins un message non lu (de client)
+    const unreadTickets = await this.prisma.ticketThread.count({
+      where: {
+        ...baseWhere,
+        messages: {
+          some: {
+            isRead: false,
+            authorCustomerId: { not: null },
+          },
+        },
+      },
+    });
+
     return {
       total,
       open,
@@ -172,6 +185,7 @@ export class TicketService {
       high,
       medium,
       low,
+      unreadTickets,
       averageResponseTime: 0,
       averageResolutionTime,
     };

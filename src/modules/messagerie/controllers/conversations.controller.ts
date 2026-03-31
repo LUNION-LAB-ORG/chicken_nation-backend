@@ -95,6 +95,16 @@ export class ConversationsController {
     );
   }
 
+  // --- Staff : Statistiques des conversations ---
+  @Get('stats')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.MESSAGES, Action.READ)
+  @ApiOperation({ summary: 'Statistiques des conversations (staff uniquement)' })
+  @ApiResponse({ status: 200, description: 'Retourne les stats de conversations' })
+  async getConversationStats(@Req() req: Request) {
+    return await this.conversationsService.getConversationStats(req);
+  }
+
   // --- Staff : Récupérer une conversation par ID ---
   @Get(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
