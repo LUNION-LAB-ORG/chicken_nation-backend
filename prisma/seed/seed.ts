@@ -1,11 +1,18 @@
 import { PrismaClient } from '@prisma/client';
 import { userSeed } from './user.seed';
+import { retentionCallbackReasonsSeed } from './retention-callback-reasons.seed';
 
 const prisma = new PrismaClient({ log: ['query', 'info', 'warn', 'error'] });
 
 async function main() {
   // user seed
   await userSeed().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+
+  // retention callback reasons seed
+  await retentionCallbackReasonsSeed().catch((e) => {
     console.error(e);
     process.exit(1);
   });

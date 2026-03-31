@@ -38,6 +38,7 @@ import { SettingsModule } from 'src/modules/settings/settings.module';
 import { OnesignalModule } from 'src/modules/onesignal/onesignal.module';
 import { PushCampaignModule } from 'src/modules/push-campaign/push-campaign.module';
 import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
+import { RetentionCallbackModule } from 'src/modules/retention-callback/retention-callback.module';
 
 @Module({
   imports: [
@@ -100,6 +101,7 @@ import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
     OnesignalModule,
     PushCampaignModule,
     PromoCodeModule,
+    RetentionCallbackModule,
   ],
 })
 export class AppModule { }
