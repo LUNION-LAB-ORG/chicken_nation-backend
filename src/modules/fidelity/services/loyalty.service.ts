@@ -6,10 +6,15 @@ import { LoyaltyEvent } from '../events/loyalty.event';
 import { LoyaltyQueryDto } from '../dto/loyalty-query.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { UpdateLoyaltyConfigDto } from '../dto/loyalty-config.dto';
+import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
 @Injectable()
 export class LoyaltyService {
-    constructor(private prisma: PrismaService, private loyaltyEvent: LoyaltyEvent) { }
+    constructor(
+        private prisma: PrismaService,
+        private loyaltyEvent: LoyaltyEvent,
+        private readonly appGateway: AppGateway,
+    ) { }
 
 
     async updateConfig(data: UpdateLoyaltyConfigDto) {
@@ -185,6 +190,20 @@ export class LoyaltyService {
             this.loyaltyEvent.addPointsEvent({
                 customer,
                 points,
+            });
+
+            // WebSocket: notifier le client de ses nouveaux points
+            this.appGateway.emitToUser(customer_id, 'customer', 'loyalty:points_added', {
+                points,
+                type,
+                reason,
+                newTotal: customer.total_points + points,
+            });
+            this.appGateway.emitToBackoffice('loyalty:points_added', {
+                customerId: customer_id,
+                points,
+                type,
+                reason,
             });
 
             return loyaltyPoint;
@@ -368,6 +387,16 @@ export class LoyaltyService {
             points,
         });
 
+        // WebSocket: notifier le client
+        this.appGateway.emitToUser(customer_id, 'customer', 'loyalty:points_redeemed', {
+            pointsUsed: points,
+            newTotal: customer.total_points - points,
+        });
+        this.appGateway.emitToBackoffice('loyalty:points_redeemed', {
+            customerId: customer_id,
+            pointsUsed: points,
+        });
+
         return payload;
     }
 
@@ -503,6 +532,18 @@ export class LoyaltyService {
                 customer,
                 new_level: newLevel,
                 bonus_points: bonusPoints
+            });
+
+            // WebSocket: notifier le client de son changement de niveau
+            this.appGateway.emitToUser(customer.id, 'customer', 'loyalty:level_up', {
+                previousLevel: customer.loyalty_level,
+                newLevel,
+                bonusPoints,
+            });
+            this.appGateway.emitToBackoffice('loyalty:level_up', {
+                customerId: customer.id,
+                previousLevel: customer.loyalty_level,
+                newLevel,
             });
         }
     }

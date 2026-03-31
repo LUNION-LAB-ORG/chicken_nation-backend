@@ -135,12 +135,23 @@ export class OrderListenerService {
             payload.order.status === OrderStatus.CANCELLED &&
             payload.expo_token
         ) {
+            let body = "Votre commande a été annulée. Nous espérons vous revoir très bientôt pour une nouvelle expérience savoureuse 🍗";
+            let subtitle = "On reste à votre service ❤️";
+
+            if (payload.voucher) {
+                body = `Votre commande a été annulée. Un bon d'achat de ${payload.voucher.initial_amount} FCFA (code: ${payload.voucher.code}) a été crédité sur votre compte 🎁`;
+                subtitle = "Utilisez-le lors de votre prochaine commande ❤️";
+            }
+
             this.expoPushService.sendPushNotifications({
                 tokens: [payload.expo_token],
                 title: "😔 Commande annulée",
-                body: "Votre commande a été annulée. Nous espérons vous revoir très bientôt pour une nouvelle expérience savoureuse 🍗",
-                data: { order_id: payload.order.id },
-                subtitle: "On reste à votre service ❤️",
+                body,
+                data: {
+                    order_id: payload.order.id,
+                    ...(payload.voucher && { voucher_code: payload.voucher.code }),
+                },
+                subtitle,
                 sound: "default",
                 badge: 1,
                 priority: 'high',

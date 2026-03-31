@@ -37,6 +37,7 @@ import { HubriseModule } from 'src/hubrise/hubrise.module';
 import { SettingsModule } from 'src/modules/settings/settings.module';
 import { OnesignalModule } from 'src/modules/onesignal/onesignal.module';
 import { PushCampaignModule } from 'src/modules/push-campaign/push-campaign.module';
+import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
 
 @Module({
   imports: [
@@ -98,6 +99,7 @@ import { PushCampaignModule } from 'src/modules/push-campaign/push-campaign.modu
     SettingsModule,
     OnesignalModule,
     PushCampaignModule,
+    PromoCodeModule,
   ],
 })
 export class AppModule { }

@@ -18,6 +18,7 @@ import type { Request } from 'express';
 import { PromotionErrorKeys } from '../enums/promotion-error-keys.enum';
 import { PromotionException } from '../filters/promotion.filter';
 import { S3Service } from '../../../s3/s3.service';
+import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
 @Injectable()
 export class PromotionService {
@@ -25,6 +26,7 @@ export class PromotionService {
     private prisma: PrismaService,
     private promotionEvent: PromotionEvent,
     private readonly s3service: S3Service,
+    private readonly appGateway: AppGateway,
   ) { }
 
   private async uploadImage(image?: Express.Multer.File) {
@@ -238,7 +240,15 @@ export class PromotionService {
         targetedNames: targeted,
       });
     }
-    return this.mapToResponseDto(promotion);
+    const result = this.mapToResponseDto(promotion);
+
+    // WebSocket: notifier le backoffice et tous les restaurants
+    this.appGateway.emitToBackoffice('promotion:created', result);
+    for (const rid of all_restaurant_ids) {
+      this.appGateway.emitToRestaurant(rid, 'promotion:created', result);
+    }
+
+    return result;
   }
 
   async findAll(
@@ -658,7 +668,12 @@ export class PromotionService {
       promotion,
     });
 
-    return this.mapToResponseDto(promotion);
+    const updateResult = this.mapToResponseDto(promotion);
+
+    // WebSocket: notifier le backoffice
+    this.appGateway.emitToBackoffice('promotion:updated', updateResult);
+
+    return updateResult;
   }
 
   async remove(req: Request, id: string): Promise<PromotionResponseDto> {
@@ -681,7 +696,12 @@ export class PromotionService {
       promotion,
     });
 
-    return this.mapToResponseDto(promotion);
+    const removeResult = this.mapToResponseDto(promotion);
+
+    // WebSocket: notifier le backoffice
+    this.appGateway.emitToBackoffice('promotion:deleted', removeResult);
+
+    return removeResult;
   }
 
   // Obtenir l'historique des promotions utilisées par un client

@@ -494,6 +494,11 @@ export class OrderService {
     this.orderEvent.orderStatusUpdatedEvent({
       order: updatedOrder,
       expo_token: updatedOrder.customer.notification_settings?.expo_push_token,
+      voucher: meta?._voucher ? {
+        code: meta._voucher.code,
+        initial_amount: meta._voucher.initial_amount,
+        expires_at: meta._voucher.expires_at,
+      } : null,
     });
 
     // Émettre l'événement de mise à jour de statut avec l'ancien statut

@@ -31,6 +31,7 @@ import { addDays, addHours, addMinutes, addSeconds } from 'date-fns';
 import { PromotionErrorKeys } from 'src/modules/fidelity/enums/promotion-error-keys.enum';
 import { JsonValue } from '@prisma/client/runtime/library';
 import { TurboService } from 'src/turbo/services/turbo.service';
+import { VoucherService } from 'src/modules/voucher/voucher.service';
 
 @Injectable()
 export class OrderHelper {
@@ -44,7 +45,8 @@ export class OrderHelper {
     private loyaltyService: LoyaltyService,
     private promotionService: PromotionService,
     private restaurantService: RestaurantService,
-    private readonly turboService: TurboService
+    private readonly turboService: TurboService,
+    private readonly voucherService: VoucherService,
   ) {}
 
   private async getTaxRate(): Promise<number> {
@@ -664,18 +666,16 @@ export class OrderHelper {
     currentStatus: OrderStatus,
     newStatus: OrderStatus,
   ) {
-    // Cas spécial : annulation
+    // Cas spécial : annulation — uniquement depuis PENDING ou ACCEPTED
     if (newStatus === OrderStatus.CANCELLED) {
       if (
-        [
-          OrderStatus.READY as string,
-          OrderStatus.PICKED_UP as string,
-          OrderStatus.COLLECTED as string,
-          OrderStatus.COMPLETED as string,
+        ![
+          OrderStatus.PENDING as string,
+          OrderStatus.ACCEPTED as string,
         ].includes(currentStatus)
       ) {
         throw new ConflictException(
-          'Une commande dans un état ultérieur ne peut pas être annulée',
+          'Une commande ne peut être annulée que si elle est en attente ou acceptée',
         );
       }
       return;
@@ -772,8 +772,25 @@ export class OrderHelper {
           },
         });
         if (paiement) {
-          // Remboursement du paiement
-          await this.paiementService.refundPaiement(paiement.id);
+          // Tenter le remboursement
+          const refundResult = await this.paiementService.refundPaiement(paiement.id);
+          if (!refundResult.success) {
+            // Remboursement échoué → créer un voucher du montant de la commande
+            const voucher = await this.prisma.voucher.create({
+              data: {
+                code: `CNR-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+                initial_amount: paiement.amount,
+                remaining_amount: paiement.amount,
+                customer_id: order.customer_id,
+                expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 90 jours
+                created_by: meta?.userId || null,
+              },
+            });
+            // Stocker le voucher dans le meta pour la notification
+            if (meta) {
+              meta._voucher = voucher;
+            }
+          }
         }
         break;
     }

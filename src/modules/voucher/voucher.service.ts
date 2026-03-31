@@ -9,6 +9,7 @@ import { VoucherResponseDto } from './dto/voucher-response.dto';
 import { RedeemVoucherDto } from './dto/redeem-voucher.dto';
 import { RedemptionResponseDto } from './dto/redemption-response.dto';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
 const voucherInclude = {
   customer: {
@@ -38,6 +39,7 @@ export class VoucherService {
   private readonly logger = new Logger(VoucherService.name);
   constructor(
     private readonly prismaService: PrismaService,
+    private readonly appGateway: AppGateway,
   ) { }
 
   private readonly include = voucherInclude;
@@ -89,12 +91,18 @@ export class VoucherService {
       expiryDate: createVoucherDto.expiresAt,
     });
 
-    return this.mapToDto(voucher);
+    const dto = this.mapToDto(voucher);
+
+    // WebSocket: notifier le client et le backoffice
+    this.appGateway.emitToUser(voucher.customer_id, 'customer', 'voucher:created', dto);
+    this.appGateway.emitToBackoffice('voucher:created', dto);
+
+    return dto;
   }
 
   async findAll(filter: QueryVoucherDto) {
-    const { page, limit = 20, sortBy = 'created_at', sortOrder = 'desc', ...rest } = filter;
-    const skip = page && limit ? (page - 1) * limit : undefined;
+    const { page = 1, limit = 20, sortBy = 'created_at', sortOrder = 'desc', ...rest } = filter;
+    const skip = (page - 1) * limit;
 
     this.logger.log({
       message: 'Fetching all vouchers with filters',
@@ -105,28 +113,44 @@ export class VoucherService {
       sortOrder,
     });
 
-    const vouchers = await this.prismaService.voucher.findMany({
-      include: this.include,
-      where: {
-        entity_status: { not: 'DELETED' },
-        ...(rest.customerId && { customer_id: rest.customerId }),
-        ...(rest.minInitialAmount && { initial_amount: { gte: rest.minInitialAmount } }),
-        ...(rest.maxInitialAmount && { initial_amount: { lte: rest.maxInitialAmount } }),
-        ...(rest.minRemainingAmount && { remaining_amount: { gte: rest.minRemainingAmount } }),
-        ...(rest.maxRemainingAmount && { remaining_amount: { lte: rest.maxRemainingAmount } }),
-        ...(rest.minExpiresAt && { expires_at: { gte: rest.minExpiresAt } }),
-        ...(rest.maxExpiresAt && { expires_at: { lte: rest.maxExpiresAt } }),
-      },
-      orderBy: { [sortBy]: sortOrder },
-      ...(page && limit ? { skip, take: limit } : {}),
-    });
+    const where = {
+      entity_status: { not: 'DELETED' as const },
+      ...(rest.status && { status: rest.status }),
+      ...(rest.code && { code: { contains: rest.code, mode: 'insensitive' as const } }),
+      ...(rest.customerId && { customer_id: rest.customerId }),
+      ...(rest.minInitialAmount && { initial_amount: { gte: rest.minInitialAmount } }),
+      ...(rest.maxInitialAmount && { initial_amount: { lte: rest.maxInitialAmount } }),
+      ...(rest.minRemainingAmount && { remaining_amount: { gte: rest.minRemainingAmount } }),
+      ...(rest.maxRemainingAmount && { remaining_amount: { lte: rest.maxRemainingAmount } }),
+      ...(rest.minExpiresAt && { expires_at: { gte: rest.minExpiresAt } }),
+      ...(rest.maxExpiresAt && { expires_at: { lte: rest.maxExpiresAt } }),
+    };
+
+    const [vouchers, total] = await Promise.all([
+      this.prismaService.voucher.findMany({
+        include: this.include,
+        where,
+        orderBy: { [sortBy]: sortOrder },
+        skip,
+        take: limit,
+      }),
+      this.prismaService.voucher.count({ where }),
+    ]);
 
     this.logger.log({
       message: 'Fetched all vouchers',
       count: vouchers.length,
     });
 
-    return vouchers.map(voucher => this.mapToDto(voucher));
+    return {
+      data: vouchers.map(voucher => this.mapToDto(voucher)),
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 
   async findOne(code: string) {
@@ -183,7 +207,13 @@ export class VoucherService {
       include: this.include,
     });
 
-    return this.mapToDto(updatedVoucher);
+    const updatedDto = this.mapToDto(updatedVoucher);
+
+    // WebSocket: notifier le client et le backoffice
+    this.appGateway.emitToUser(updatedVoucher.customer_id, 'customer', 'voucher:updated', updatedDto);
+    this.appGateway.emitToBackoffice('voucher:updated', updatedDto);
+
+    return updatedDto;
   }
 
   async remove(code: string): Promise<boolean> {
@@ -245,7 +275,13 @@ export class VoucherService {
     });
 
     this.logger.log({ message: `Voucher ${code} cancelled successfully` });
-    return this.mapToDto(cancelledVoucher);
+    const cancelledDto = this.mapToDto(cancelledVoucher);
+
+    // WebSocket: notifier le client et le backoffice
+    this.appGateway.emitToUser(cancelledVoucher.customer_id, 'customer', 'voucher:cancelled', cancelledDto);
+    this.appGateway.emitToBackoffice('voucher:cancelled', cancelledDto);
+
+    return cancelledDto;
   }
 
   async redeemVoucher(code: string, customerId: string, redeemDto: RedeemVoucherDto): Promise<RedemptionResponseDto> {
@@ -338,7 +374,7 @@ export class VoucherService {
         fullyRedeemed: isFullyRedeemed,
       });
 
-      return {
+      const result = {
         redemption: {
           id: redemption.id,
           amount: redemption.amount,
@@ -347,6 +383,12 @@ export class VoucherService {
         },
         voucher: this.mapToDto(updatedVoucher),
       };
+
+      // WebSocket: notifier le client et le backoffice
+      this.appGateway.emitToUser(customerId, 'customer', 'voucher:redeemed', result);
+      this.appGateway.emitToBackoffice('voucher:redeemed', result);
+
+      return result;
     });
   }
 

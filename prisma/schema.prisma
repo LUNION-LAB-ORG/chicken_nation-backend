@@ -251,9 +251,10 @@ model Customer {
   TicketThread TicketThread[]
 
   Conversation Conversation[]
-  Voucher      Voucher[]
-  cardRequests CardRequest[]
-  nationCards  NationCard[]
+  Voucher           Voucher[]
+  cardRequests      CardRequest[]
+  nationCards       NationCard[]
+  promo_code_usages PromoCodeUsage[]
 }
 
 // -------------------- Gestion des conversations ------------------------------
@@ -692,9 +693,10 @@ model Order {
   paied_at      DateTime?
   created_at    DateTime       @default(now()) @db.Timestamp(6)
   updated_at    DateTime       @default(now()) @db.Timestamp(6)
-  Comment       Comment[]
-  TicketThread  TicketThread[]
-  Redemption    Redemption[]
+  Comment           Comment[]
+  TicketThread      TicketThread[]
+  Redemption        Redemption[]
+  promo_code_usages PromoCodeUsage[]
 
   @@index([reference, status, entity_status, customer_id])
 }
@@ -802,9 +804,10 @@ model User {
   Message           Message[]           @relation("MessageAuthorUser")
   ConversationUser  ConversationUser[]
   TicketThread      TicketThread[]      @relation("TicketAssignee")
-  Voucher           Voucher[]
-  TicketUserSkill   TicketUserSkill[]   @relation("CategoryAgents")
-  orders            Order[]
+  Voucher              Voucher[]
+  TicketUserSkill      TicketUserSkill[]   @relation("CategoryAgents")
+  orders               Order[]
+  promo_codes_created  PromoCode[]         @relation("promo_code_creator")
 
   @@index([email, type])
 }
@@ -1033,6 +1036,51 @@ model Redemption {
   order         Order        @relation(fields: [order_id], references: [id])
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   entity_status EntityStatus @default(ACTIVE)
+}
+
+// ================================
+// CODES PROMO
+// ================================
+
+model PromoCode {
+  id                  String            @id @default(uuid()) @db.Uuid
+  code                String            @unique @db.VarChar
+  description         String?           @db.Text
+  discount_type       DiscountType
+  discount_value      Float
+  min_order_amount    Float?            @default(0)
+  max_discount_amount Float?
+  max_usage           Int?
+  max_usage_per_user  Int?              @default(1)
+  usage_count         Int               @default(0)
+  start_date          DateTime          @db.Timestamp(6)
+  expiration_date     DateTime          @db.Timestamp(6)
+  is_active           Boolean           @default(true)
+  restaurant_ids      String[]          @default([])
+  created_by          String?           @db.Uuid
+  creator             User?             @relation("promo_code_creator", fields: [created_by], references: [id])
+  created_at          DateTime          @default(now()) @db.Timestamp(6)
+  updated_at          DateTime          @updatedAt @db.Timestamp(6)
+  entity_status       EntityStatus      @default(ACTIVE)
+  usages              PromoCodeUsage[]
+
+  @@index([code])
+  @@index([is_active, entity_status])
+}
+
+model PromoCodeUsage {
+  id              String    @id @default(uuid()) @db.Uuid
+  promo_code_id   String    @db.Uuid
+  promo_code      PromoCode @relation(fields: [promo_code_id], references: [id])
+  customer_id     String    @db.Uuid
+  customer        Customer  @relation(fields: [customer_id], references: [id])
+  order_id        String?   @db.Uuid
+  order           Order?    @relation(fields: [order_id], references: [id])
+  discount_amount Float
+  created_at      DateTime  @default(now()) @db.Timestamp(6)
+
+  @@index([promo_code_id])
+  @@index([customer_id])
 }
 
 // ================================

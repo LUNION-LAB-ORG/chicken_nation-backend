@@ -7,4 +7,5 @@ export class OrderCreatedEvent {
   loyalty_level?: LoyaltyLevel;
   totalDishes?: number;
   orderItems?: { dish_id: string, quantity: number, price: number }[];
+  voucher?: { code: string; initial_amount: number; expires_at: Date | null } | null;
 }
