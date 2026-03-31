@@ -117,6 +117,19 @@ export class OrderController {
     res.status(HttpStatus.OK).send(buffer);
   }
 
+  @Get('/export-delivery-pivot')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.DASHBOARD, Action.EXPORT)
+  @ApiOperation({ summary: 'Exporter le pivot livraisons par restaurant' })
+  async exportDeliveryPivot(@Query() query: QueryOrderDto, @Res() res: Response) {
+    const { buffer, filename } = await this.orderService.exportDeliveryPivotToExcel(query);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.byteLength);
+
+    res.status(HttpStatus.OK).send(buffer);
+  }
+
   @Post('/refresh')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.READ)

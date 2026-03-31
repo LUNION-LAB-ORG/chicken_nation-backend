@@ -51,33 +51,69 @@ export class TicketService {
     category: { select: { id: true, name: true } },
   }
 
-  async getAllTickets(filter: QueryTicketsDto): Promise<QueryResponseDto<ResponseTicketDto>> {
-    // this.logger.log(`Récupération de tickets (page=${filter.page ?? 1}, limit=${filter.limit ?? 10})`);
+  private buildWhereClause(filter: QueryTicketsDto, extraWhere?: Prisma.TicketThreadWhereInput): Prisma.TicketThreadWhereInput {
+    const where: Prisma.TicketThreadWhereInput = { ...extraWhere };
 
+    if (filter.status?.length) {
+      where.status = { in: filter.status };
+    }
+
+    if (filter.priority?.length) {
+      where.priority = { in: filter.priority };
+    }
+
+    if (filter.category?.length) {
+      where.categoryId = { in: filter.category };
+    }
+
+    if (filter.assignedToId?.length) {
+      where.assigneeId = { in: filter.assignedToId };
+    }
+
+    if (filter.clientId) {
+      where.customerId = filter.clientId;
+    }
+
+    if (filter.dateFrom || filter.dateTo) {
+      where.createdAt = {};
+      if (filter.dateFrom) {
+        (where.createdAt as any).gte = new Date(filter.dateFrom);
+      }
+      if (filter.dateTo) {
+        (where.createdAt as any).lte = new Date(filter.dateTo);
+      }
+    }
+
+    if (filter.search) {
+      const searchTerm = filter.search.trim();
+      where.OR = [
+        { code: { contains: searchTerm, mode: 'insensitive' } },
+        { subject: { contains: searchTerm, mode: 'insensitive' } },
+        { customer: { first_name: { contains: searchTerm, mode: 'insensitive' } } },
+        { customer: { last_name: { contains: searchTerm, mode: 'insensitive' } } },
+        { customer: { email: { contains: searchTerm, mode: 'insensitive' } } },
+      ];
+    }
+
+    return where;
+  }
+
+  async getAllTickets(filter: QueryTicketsDto): Promise<QueryResponseDto<ResponseTicketDto>> {
     const { page = 1, limit = 10 } = filter;
+    const where = this.buildWhereClause(filter);
 
     const [tickets, total] = await Promise.all([
       this.prisma.ticketThread.findMany({
+        where,
         include: this.includeFields,
         orderBy: { updatedAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
       }),
-      this.prisma.ticketThread.count()
+      this.prisma.ticketThread.count({ where })
     ]);
 
-    // this.logger.log(`Tickets récupérés: ${tickets.length}/${total}`);
-
-    if (this.isDev) {
-      // this.logger.debug(`Filtres: ${JSON.stringify(filter)}`);
-      // this.logger.debug(`Tickets bruts: ${JSON.stringify(tickets)}`);
-    }
-
     const mappedTickets = tickets.map(ticket => this.mapTicketToDto(ticket));
-
-    if (this.isDev) {
-      // this.logger.debug(`Tickets mappés: ${JSON.stringify(mappedTickets)}`);
-    }
 
     return {
       data: mappedTickets,
@@ -90,28 +126,62 @@ export class TicketService {
     };
   }
 
-  async getCustomerTickets(customerId: string, filter: QueryTicketsDto): Promise<QueryResponseDto<ResponseTicketDto>> {
-    // this.logger.log(`Tickets du client ${customerId} (page=${filter.page ?? 1}, limit=${filter.limit ?? 10})`);
+  async getTicketStats() {
+    const [total, open, inProgress, resolved, closed, high, medium, low] = await Promise.all([
+      this.prisma.ticketThread.count(),
+      this.prisma.ticketThread.count({ where: { status: TicketStatus.OPEN } }),
+      this.prisma.ticketThread.count({ where: { status: TicketStatus.IN_PROGRESS } }),
+      this.prisma.ticketThread.count({ where: { status: TicketStatus.RESOLVED } }),
+      this.prisma.ticketThread.count({ where: { status: TicketStatus.CLOSED } }),
+      this.prisma.ticketThread.count({ where: { priority: 'HIGH' } }),
+      this.prisma.ticketThread.count({ where: { priority: 'MEDIUM' } }),
+      this.prisma.ticketThread.count({ where: { priority: 'LOW' } }),
+    ]);
 
+    // Calcul du temps moyen de résolution (tickets résolus avec resolvedAt)
+    const resolvedTickets = await this.prisma.ticketThread.findMany({
+      where: { resolvedAt: { not: null } },
+      select: { createdAt: true, resolvedAt: true },
+      take: 100,
+      orderBy: { resolvedAt: 'desc' },
+    });
+
+    let averageResolutionTime = 0;
+    if (resolvedTickets.length > 0) {
+      const totalMs = resolvedTickets.reduce((sum, t) => {
+        return sum + (t.resolvedAt!.getTime() - t.createdAt.getTime());
+      }, 0);
+      averageResolutionTime = Math.round(totalMs / resolvedTickets.length / 60000); // en minutes
+    }
+
+    return {
+      total,
+      open,
+      inProgress,
+      resolved,
+      closed,
+      high,
+      medium,
+      low,
+      averageResponseTime: 0,
+      averageResolutionTime,
+    };
+  }
+
+  async getCustomerTickets(customerId: string, filter: QueryTicketsDto): Promise<QueryResponseDto<ResponseTicketDto>> {
     const { page = 1, limit = 10 } = filter;
+    const where = this.buildWhereClause(filter, { customerId });
 
     const [tickets, total] = await Promise.all([
       this.prisma.ticketThread.findMany({
-        where: { customerId },
+        where,
         include: this.includeFields,
         orderBy: { updatedAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
       }),
-      this.prisma.ticketThread.count({ where: { customerId } })
+      this.prisma.ticketThread.count({ where })
     ]);
-
-    // this.logger.log(`Tickets récupérés pour client ${customerId}: ${tickets.length}/${total}`);
-
-    if (this.isDev) {
-      // this.logger.debug(`Filtres du client ${customerId}: ${JSON.stringify(filter)}`);
-      // this.logger.debug(`Tickets du client ${customerId} bruts: ${JSON.stringify(tickets)}`);
-    }
 
     return {
       data: tickets.map(ticket => this.mapTicketToDto(ticket)),
@@ -224,7 +294,7 @@ export class TicketService {
       // this.logger.debug(`Payload: ${JSON.stringify(data)}`);
     }
 
-    const { subject, priority, categoryId, orderId } = data;
+    const { subject, status, priority, categoryId, orderId } = data;
 
     // Si une catégorie est fournie, vérifier qu'elle existe
     if (categoryId) {
@@ -236,14 +306,22 @@ export class TicketService {
       }
     }
 
+    const updateData: any = {
+      subject,
+      status,
+      priority,
+      orderId,
+      categoryId,
+    };
+
+    // Si le statut passe à RESOLVED ou CLOSED, enregistrer la date de résolution
+    if (status === TicketStatus.RESOLVED || status === TicketStatus.CLOSED) {
+      updateData.resolvedAt = new Date();
+    }
+
     const ticket = await this.prisma.ticketThread.update({
       where: { id },
-      data: {
-        subject,
-        priority,
-        orderId,
-        categoryId,
-      },
+      data: updateData,
       include: this.includeFields,
     });
 

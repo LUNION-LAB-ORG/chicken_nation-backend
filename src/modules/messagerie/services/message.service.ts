@@ -16,6 +16,7 @@ import { getAuthType } from '../utils/getTypeUser';
 import { MessageWebSocketService } from '../websockets/message-websocket.service';
 import { ConversationsService } from './conversations.service';
 import { S3Service } from '../../../s3/s3.service';
+import { ExpoPushService } from '../../../expo-push/expo-push.service';
 
 @Injectable()
 export class MessageService {
@@ -27,6 +28,7 @@ export class MessageService {
     private readonly prismaService: PrismaService,
     private readonly messageWebSocketService: MessageWebSocketService,
     private readonly s3service: S3Service,
+    private readonly expoPushService: ExpoPushService,
   ) { }
 
   private async uploadImage(image?: Express.Multer.File) {
@@ -258,6 +260,13 @@ export class MessageService {
       mappedMessage,
     );
 
+    // Envoyer une push notification au client si le message vient du staff
+    if (authType === 'user' && customerId) {
+      this.sendPushToCustomer(customerId, mappedMessage, restaurantId).catch((err) =>
+        this.logger.warn(`Push notification échouée: ${err.message}`),
+      );
+    }
+
     // Map the created message to ResponseMessageDto format
     return mappedMessage;
   }
@@ -290,6 +299,39 @@ export class MessageService {
     this.messageWebSocketService.emitMessagesRead(conversation);
 
     return true;
+  }
+
+  /**
+   * Envoie une push notification Expo au client d'une conversation
+   */
+  private async sendPushToCustomer(customerId: string, message: ResponseMessageDto, restaurantId?: string | null) {
+    const [settings, restaurant] = await Promise.all([
+      this.prismaService.notificationSetting.findUnique({
+        where: { customer_id: customerId },
+      }),
+      restaurantId
+        ? this.prismaService.restaurant.findUnique({
+            where: { id: restaurantId },
+            select: { name: true },
+          })
+        : null,
+    ]);
+
+    if (!settings?.expo_push_token || !settings.push || !settings.active) return;
+
+    const senderName = restaurant?.name || message.authorUser?.name || message.authorUser?.email || 'Chicken Nation';
+
+    await this.expoPushService.sendPushNotifications({
+      tokens: [settings.expo_push_token],
+      title: senderName,
+      body: message.body?.substring(0, 150) || 'Nouveau message',
+      sound: 'default',
+      data: {
+        type: 'new_message',
+        conversationId: message.conversation?.id || '',
+        messageId: message.id,
+      },
+    });
   }
 
   private mapMessagesField(message: any): ResponseMessageDto {

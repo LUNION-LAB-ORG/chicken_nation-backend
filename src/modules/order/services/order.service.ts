@@ -1452,6 +1452,178 @@ export class OrderService {
 
 
   /**
+   * Export Excel pivot : Date × Restaurants → nb livraisons
+   */
+  async exportDeliveryPivotToExcel(filters: QueryOrderDto) {
+    const { restaurantId, startDate, endDate, status } = filters;
+
+    const where: Prisma.OrderWhereInput = {
+      entity_status: { not: EntityStatus.DELETED },
+      type: OrderType.DELIVERY,
+    };
+
+    if (restaurantId) {
+      where.restaurant_id = restaurantId;
+    }
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (startDate && endDate) {
+      where.created_at = {
+        gte: startDate,
+        lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
+      };
+    }
+
+    if (filters.auto === undefined) {
+      where.OR = [
+        { auto: false },
+        {
+          AND: [
+            { auto: true },
+            { status: { not: OrderStatus.PENDING } },
+          ],
+        },
+      ];
+    } else if (filters.auto === true) {
+      where.auto = true;
+      where.status = { not: OrderStatus.PENDING };
+    } else if (filters.auto === false) {
+      where.auto = false;
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where,
+      select: {
+        created_at: true,
+        restaurant: { select: { id: true, name: true } },
+      },
+      orderBy: { created_at: 'asc' },
+    });
+
+    // Collecter tous les restaurants uniques (triés par nom)
+    const restaurantMap = new Map<string, string>();
+    orders.forEach((o) => restaurantMap.set(o.restaurant.id, o.restaurant.name));
+    const restaurants = Array.from(restaurantMap.entries()).sort((a, b) =>
+      a[1].localeCompare(b[1]),
+    );
+
+    // Pivoter : date → { restaurantId → count }
+    const pivotMap = new Map<string, Map<string, number>>();
+    orders.forEach((o) => {
+      const dateKey = format(new Date(o.created_at), 'dd/MM/yyyy');
+      if (!pivotMap.has(dateKey)) pivotMap.set(dateKey, new Map());
+      const dayMap = pivotMap.get(dateKey)!;
+      dayMap.set(o.restaurant.id, (dayMap.get(o.restaurant.id) || 0) + 1);
+    });
+
+    // Générer le fichier Excel
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Livraisons par restaurant');
+
+    // Colonnes dynamiques
+    worksheet.columns = [
+      { header: 'Date', key: 'date', width: 14 },
+      ...restaurants.map(([id, name]) => ({
+        header: name,
+        key: id,
+        width: Math.max(name.length + 2, 12),
+      })),
+      { header: 'TOTAL', key: 'total', width: 12 },
+    ];
+
+    // Style de l'en-tête
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFF17922' },
+    };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    // Totaux par restaurant (pour la ligne de total en bas)
+    const restaurantTotals = new Map<string, number>();
+    let grandTotal = 0;
+
+    // Données - une ligne par date
+    const sortedDates = Array.from(pivotMap.keys());
+    sortedDates.forEach((dateKey) => {
+      const dayMap = pivotMap.get(dateKey)!;
+      const rowData: Record<string, any> = { date: dateKey };
+      let dayTotal = 0;
+
+      restaurants.forEach(([id]) => {
+        const count = dayMap.get(id) || 0;
+        rowData[id] = count;
+        dayTotal += count;
+        restaurantTotals.set(id, (restaurantTotals.get(id) || 0) + count);
+      });
+
+      rowData.total = dayTotal;
+      grandTotal += dayTotal;
+      worksheet.addRow(rowData);
+    });
+
+    // Ligne de totaux
+    const totalRowData: Record<string, any> = { date: 'TOTAL' };
+    restaurants.forEach(([id]) => {
+      totalRowData[id] = restaurantTotals.get(id) || 0;
+    });
+    totalRowData.total = grandTotal;
+    const totalRow = worksheet.addRow(totalRowData);
+
+    totalRow.font = { bold: true };
+    totalRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE5E7EB' },
+    };
+
+    // Alignement des colonnes numériques
+    restaurants.forEach(([id]) => {
+      worksheet.getColumn(id).alignment = { horizontal: 'center' };
+      worksheet.getColumn(id).numFmt = '#,##0';
+    });
+    worksheet.getColumn('total').alignment = { horizontal: 'center' };
+    worksheet.getColumn('total').numFmt = '#,##0';
+
+    // Bordures
+    worksheet.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: true }, (cell) => {
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        };
+      });
+    });
+
+    // Alternance de couleurs
+    worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber > 1 && rowNumber < worksheet.rowCount) {
+        if (rowNumber % 2 === 0) {
+          row.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFF9FAFB' },
+          };
+        }
+      }
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    return {
+      buffer,
+      filename: `livraisons-par-restaurant-${new Date().toISOString().split('T')[0]}.xlsx`,
+    };
+  }
+
+  /**
      * Génère les données et la structure pour le PDF des commandes d'un restaurant
      */
   async exportRestaurantOrdersToPDF(filters: QueryOrderDto) {

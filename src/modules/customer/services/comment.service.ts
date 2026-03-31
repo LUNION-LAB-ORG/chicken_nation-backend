@@ -412,15 +412,26 @@ export class CommentService {
                         },
                     },
                 },
-                orderBy: { created_at: 'desc' },
+                orderBy: [
+                    { message: 'desc' },
+                    { created_at: 'desc' },
+                ],
                 skip,
                 take: limit,
             }),
             this.prisma.comment.count({ where: whereClause }),
         ]);
 
+        // Trier : avis avec message en premier, puis par date
+        const sorted = comments.sort((a, b) => {
+            const aHasMsg = a.message && a.message.trim().length > 0 ? 1 : 0;
+            const bHasMsg = b.message && b.message.trim().length > 0 ? 1 : 0;
+            if (bHasMsg !== aHasMsg) return bHasMsg - aHasMsg;
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        });
+
         return {
-            data: comments.map(comment => this.mapToResponseDto(comment)),
+            data: sorted.map(comment => this.mapToResponseDto(comment)),
             meta: {
                 total,
                 page,

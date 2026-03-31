@@ -6,13 +6,15 @@ import { ResponseTicketMessageDto } from '../dtos/response-ticket-message.dto';
 import { FilterQueryDto } from 'src/common/dto/filter-query.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { SupportWebSocketService } from '../websockets/support-websocket.service';
+import { ExpoPushService } from '../../../expo-push/expo-push.service';
 
 @Injectable()
 export class TicketMessageService {
     private readonly logger = new Logger(TicketMessageService.name);
     constructor(
         private readonly prisma: PrismaService,
-        private readonly supportWebSocketService: SupportWebSocketService
+        private readonly supportWebSocketService: SupportWebSocketService,
+        private readonly expoPushService: ExpoPushService,
     ) { }
 
     private MessageInclude: Prisma.TicketMessageInclude = {
@@ -68,7 +70,11 @@ export class TicketMessageService {
             }),
             this.prisma.ticketThread.findUnique({
                 where: { id: ticketId },
-                select: { orderId: true, order: { select: { restaurant_id: true } } }
+                select: {
+                    customerId: true,
+                    orderId: true,
+                    order: { select: { restaurant_id: true } },
+                },
             })
         ]);
 
@@ -80,6 +86,13 @@ export class TicketMessageService {
         }
 
         this.supportWebSocketService.emitNewTicketMessage(ticketId, payload);
+
+        // Push notification au client si message vient du staff et n'est pas interne
+        if (authorType === 'USER' && !internal && ticket?.customerId) {
+            this.sendPushToCustomer(ticket.customerId, ticketId, body).catch((err) =>
+                this.logger.warn(`Push notification ticket échouée: ${err.message}`),
+            );
+        }
 
         return messageDto;
     }
@@ -127,6 +140,25 @@ export class TicketMessageService {
         this.supportWebSocketService.emitMessagesRead(ticketId);
 
         return true;
+    }
+
+    private async sendPushToCustomer(customerId: string, ticketId: string, body: string) {
+        const settings = await this.prisma.notificationSetting.findUnique({
+            where: { customer_id: customerId },
+        });
+
+        if (!settings?.expo_push_token || !settings.push || !settings.active) return;
+
+        await this.expoPushService.sendPushNotifications({
+            tokens: [settings.expo_push_token],
+            title: 'Réponse du support',
+            body: body?.substring(0, 100) || 'Nouveau message',
+            sound: 'default',
+            data: {
+                type: 'new_ticket_message',
+                ticketId,
+            },
+        });
     }
 
     private mapMessageToDto(message: any): ResponseTicketMessageDto {

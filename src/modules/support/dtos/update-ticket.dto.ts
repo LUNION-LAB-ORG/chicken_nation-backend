@@ -1,12 +1,20 @@
 import { IsOptional, IsString, IsNumber, IsEnum, IsUUID } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { TicketPriority } from '@prisma/client';
+import { TicketPriority, TicketStatus } from '@prisma/client';
 
 export class UpdateTicketDto {
     @ApiPropertyOptional({ description: 'Le sujet du ticket' })
     @IsOptional()
     @IsString()
     subject?: string;
+
+    @ApiPropertyOptional({
+        description: 'Le statut du ticket',
+        enum: TicketStatus,
+    })
+    @IsOptional()
+    @IsEnum(TicketStatus)
+    status?: TicketStatus;
 
     @ApiPropertyOptional({
         description: 'Le niveau de priorité du ticket',

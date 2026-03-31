@@ -26,6 +26,11 @@ export class TicketsController {
     return await this.ticketService.getCustomerTickets(customerId, filter);
   }
 
+  @UseGuards(JwtAuthGuard) @Get('stats')
+  async getTicketStats() {
+    return await this.ticketService.getTicketStats();
+  }
+
   @UseGuards(JwtAuthGuard) @Get(':id')
   async getTicketById(@Param('id') id: string) {
     return await this.ticketService.getTicketById(id);

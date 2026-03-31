@@ -68,6 +68,7 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.PROMOTIONS]: [Action.READ],
       [Modules.FIDELITE]: [Action.READ, Action.UPDATE],
       [Modules.CARD_NATION]: [Action.READ, Action.CREATE],
+      [Modules.COMMENTAIRES]: [Action.READ],
 
       [Modules.MESSAGES]: [Action.READ, Action.CREATE, Action.UPDATE],
     },
@@ -111,6 +112,8 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.MENUS]: [Action.READ],
       [Modules.CLIENTS]: [Action.READ],
       [Modules.CARD_NATION]: [Action.READ],
+      [Modules.COMMENTAIRES]: [Action.READ],
+      [Modules.MESSAGES]: [Action.READ, Action.CREATE, Action.UPDATE],
     },
   },
 
