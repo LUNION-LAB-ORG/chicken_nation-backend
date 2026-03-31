@@ -47,8 +47,9 @@ export class TicketService {
       orderBy: { createdAt: 'desc' },
       take: 10,
     },
-    order: { select: { id: true, reference: true } },
+    order: { select: { id: true, reference: true, restaurant_id: true } },
     category: { select: { id: true, name: true } },
+    _count: { select: { messages: { where: { isRead: false, authorCustomerId: { not: null } } } } },
   }
 
   private buildWhereClause(filter: QueryTicketsDto, extraWhere?: Prisma.TicketThreadWhereInput): Prisma.TicketThreadWhereInput {
@@ -82,6 +83,10 @@ export class TicketService {
       if (filter.dateTo) {
         (where.createdAt as any).lte = new Date(filter.dateTo);
       }
+    }
+
+    if (filter.restaurantId) {
+      where.order = { restaurant_id: filter.restaurantId };
     }
 
     if (filter.search) {
@@ -126,21 +131,25 @@ export class TicketService {
     };
   }
 
-  async getTicketStats() {
+  async getTicketStats(restaurantId?: string) {
+    const baseWhere: Prisma.TicketThreadWhereInput = restaurantId
+      ? { order: { restaurant_id: restaurantId } }
+      : {};
+
     const [total, open, inProgress, resolved, closed, high, medium, low] = await Promise.all([
-      this.prisma.ticketThread.count(),
-      this.prisma.ticketThread.count({ where: { status: TicketStatus.OPEN } }),
-      this.prisma.ticketThread.count({ where: { status: TicketStatus.IN_PROGRESS } }),
-      this.prisma.ticketThread.count({ where: { status: TicketStatus.RESOLVED } }),
-      this.prisma.ticketThread.count({ where: { status: TicketStatus.CLOSED } }),
-      this.prisma.ticketThread.count({ where: { priority: 'HIGH' } }),
-      this.prisma.ticketThread.count({ where: { priority: 'MEDIUM' } }),
-      this.prisma.ticketThread.count({ where: { priority: 'LOW' } }),
+      this.prisma.ticketThread.count({ where: baseWhere }),
+      this.prisma.ticketThread.count({ where: { ...baseWhere, status: TicketStatus.OPEN } }),
+      this.prisma.ticketThread.count({ where: { ...baseWhere, status: TicketStatus.IN_PROGRESS } }),
+      this.prisma.ticketThread.count({ where: { ...baseWhere, status: TicketStatus.RESOLVED } }),
+      this.prisma.ticketThread.count({ where: { ...baseWhere, status: TicketStatus.CLOSED } }),
+      this.prisma.ticketThread.count({ where: { ...baseWhere, priority: 'HIGH' } }),
+      this.prisma.ticketThread.count({ where: { ...baseWhere, priority: 'MEDIUM' } }),
+      this.prisma.ticketThread.count({ where: { ...baseWhere, priority: 'LOW' } }),
     ]);
 
     // Calcul du temps moyen de résolution (tickets résolus avec resolvedAt)
     const resolvedTickets = await this.prisma.ticketThread.findMany({
-      where: { resolvedAt: { not: null } },
+      where: { ...baseWhere, resolvedAt: { not: null } },
       select: { createdAt: true, resolvedAt: true },
       take: 100,
       orderBy: { resolvedAt: 'desc' },
@@ -410,6 +419,7 @@ export class TicketService {
         id: ticket.category.id,
         name: ticket.category.name,
       } || null,
+      unreadCount: ticket._count?.messages ?? 0,
     };
   }
 }

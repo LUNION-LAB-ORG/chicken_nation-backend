@@ -1,5 +1,5 @@
 import { AssignmentService } from './../services/assignment.service';
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpException, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { CreateTicketDto } from '../dtos/create-ticket.dto';
 import { QueryTicketsDto } from '../dtos/query-tickets.dto';
@@ -16,7 +16,12 @@ export class TicketsController {
   ) { }
 
   @UseGuards(JwtAuthGuard) @Get()
-  async getAllTickets(@Query() filter: QueryTicketsDto) {
+  async getAllTickets(@Req() req, @Query() filter: QueryTicketsDto) {
+    // Les utilisateurs RESTAURANT ne voient que les tickets liés à leur restaurant
+    const user = req.user;
+    if (user?.type === 'RESTAURANT' && user?.restaurant_id) {
+      filter.restaurantId = user.restaurant_id;
+    }
     return await this.ticketService.getAllTickets(filter);
   }
 
@@ -27,13 +32,23 @@ export class TicketsController {
   }
 
   @UseGuards(JwtAuthGuard) @Get('stats')
-  async getTicketStats() {
-    return await this.ticketService.getTicketStats();
+  async getTicketStats(@Req() req) {
+    const user = req.user;
+    const restaurantId = user?.type === 'RESTAURANT' && user?.restaurant_id ? user.restaurant_id : undefined;
+    return await this.ticketService.getTicketStats(restaurantId);
   }
 
   @UseGuards(JwtAuthGuard) @Get(':id')
-  async getTicketById(@Param('id') id: string) {
-    return await this.ticketService.getTicketById(id);
+  async getTicketById(@Req() req, @Param('id') id: string) {
+    const ticket = await this.ticketService.getTicketById(id);
+    // Vérifier que le restaurant ne consulte pas un ticket d'un autre restaurant
+    const user = req.user;
+    if (user?.type === 'RESTAURANT' && user?.restaurant_id) {
+      if (ticket.order?.restaurantId && ticket.order.restaurantId !== user.restaurant_id) {
+        throw new HttpException('Accès interdit à ce ticket', 403);
+      }
+    }
+    return ticket;
   }
 
   @UseGuards(JwtAuthGuard) @Post()

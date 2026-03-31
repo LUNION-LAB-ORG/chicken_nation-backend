@@ -142,4 +142,7 @@ export class ResponseTicketDto {
     @ApiProperty({ enum: TicketPriority, default: TicketPriority.MEDIUM })
     @IsEnum(TicketPriority)
     priority: TicketPriority;
+
+    @ApiProperty({ description: 'Nombre de messages non lus du client', default: 0 })
+    unreadCount?: number;
 }

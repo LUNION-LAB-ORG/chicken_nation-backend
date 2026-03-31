@@ -45,7 +45,7 @@ export class SupportWebSocketService {
 
   emitNewTicketMessage(
     ticketId: string,
-    { message, restaurantId }: { message: ResponseTicketMessageDto; restaurantId: string },
+    { message, restaurantId }: { message: ResponseTicketMessageDto; restaurantId: string | null },
   ) {
     this.logger.log(`Emitting new ticket message event for ticket ${ticketId}`);
     const payload = { ticketId, message };

@@ -82,14 +82,14 @@ export class TicketMessageService {
 
         const payload = {
             message: messageDto,
-            restaurantId: ticket!.order!.restaurant_id,
+            restaurantId: ticket?.order?.restaurant_id || null,
         }
 
         this.supportWebSocketService.emitNewTicketMessage(ticketId, payload);
 
         // Push notification au client si message vient du staff et n'est pas interne
         if (authorType === 'USER' && !internal && ticket?.customerId) {
-            this.sendPushToCustomer(ticket.customerId, ticketId, body).catch((err) =>
+            this.sendPushToCustomer(ticket.customerId, ticketId, body, ticket?.order?.restaurant_id).catch((err) =>
                 this.logger.warn(`Push notification ticket échouée: ${err.message}`),
             );
         }
@@ -142,17 +142,27 @@ export class TicketMessageService {
         return true;
     }
 
-    private async sendPushToCustomer(customerId: string, ticketId: string, body: string) {
-        const settings = await this.prisma.notificationSetting.findUnique({
-            where: { customer_id: customerId },
-        });
+    private async sendPushToCustomer(customerId: string, ticketId: string, body: string, restaurantId?: string | null) {
+        const [settings, restaurant] = await Promise.all([
+            this.prisma.notificationSetting.findUnique({
+                where: { customer_id: customerId },
+            }),
+            restaurantId
+                ? this.prisma.restaurant.findUnique({
+                    where: { id: restaurantId },
+                    select: { name: true },
+                })
+                : null,
+        ]);
 
         if (!settings?.expo_push_token || !settings.push || !settings.active) return;
 
+        const title = restaurant?.name || 'Chicken Nation';
+
         await this.expoPushService.sendPushNotifications({
             tokens: [settings.expo_push_token],
-            title: 'Réponse du support',
-            body: body?.substring(0, 100) || 'Nouveau message',
+            title,
+            body: body?.substring(0, 150) || 'Nouveau message',
             sound: 'default',
             data: {
                 type: 'new_ticket_message',

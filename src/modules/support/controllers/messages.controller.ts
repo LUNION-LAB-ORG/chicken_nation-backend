@@ -9,44 +9,44 @@ import { Customer, User } from '@prisma/client';
 import { ApiTags } from '@nestjs/swagger';
 
 @ApiTags('Support - Messages')
-@Controller(':ticketId/messages')
+@Controller('tickets/:ticketId/messages')
 export class MessagesController {
     constructor(private readonly messageService: TicketMessageService) { }
 
     @UseGuards(JwtAuthGuard)
-    @Get('messages')
+    @Get()
     async getMessagesByTicketId(@Param('ticketId') ticketId: string, @Query() filter: FilterQueryDto) {
         return this.messageService.getMessagesByTicketId(ticketId, filter);
     }
 
     @UseGuards(JwtCustomerAuthGuard)
-    @Get('customer/messages')
+    @Get('customer')
     async getCustomerMessagesByTicketId(@Param('ticketId') ticketId: string, @Query() filter: FilterQueryDto) {
         return this.messageService.getMessagesByTicketId(ticketId, filter);
     }
 
     @UseGuards(JwtAuthGuard)
-    @Post('messages')
+    @Post()
     async createMessage(@Param('ticketId') ticketId: string, @Body() createMessageDto: CreateTicketMessageDto) {
         createMessageDto.authorType = 'USER';
         return this.messageService.createMessage(ticketId, createMessageDto);
     }
 
     @UseGuards(JwtCustomerAuthGuard)
-    @Post('customer/messages')
+    @Post('customer')
     async createCustomerMessage(@Param('ticketId') ticketId: string, @Body() createMessageDto: CreateTicketMessageDto) {
         createMessageDto.authorType = 'CUSTOMER';
         return this.messageService.createMessage(ticketId, createMessageDto);
     }
 
     @UseGuards(JwtAuthGuard)
-    @Post('messages/read')
+    @Post('read')
     async markMessagesAsRead(@Req() req: Request, @Param('ticketId') ticketId: string) {
         return this.messageService.markMessagesAsRead(ticketId, "USER", (req.user as User).id);
     }
 
     @UseGuards(JwtCustomerAuthGuard)
-    @Post('customer/messages/read')
+    @Post('customer/read')
     async markCustomerMessagesAsRead(@Req() req: Request, @Param('ticketId') ticketId: string) {
         return this.messageService.markMessagesAsRead(ticketId, "CUSTOMER", (req.user as Customer).id);
     }
