@@ -6,7 +6,7 @@ import { RetentionCallbackReasonService } from './retention-callback-reason.serv
 import { RetentionReconquestCheckTask } from './tasks/retention-reconquest-check.task';
 
 @Module({
-  controllers: [RetentionCallbackController, RetentionCallbackReasonController],
+  controllers: [RetentionCallbackReasonController, RetentionCallbackController],
   providers: [
     RetentionCallbackService,
     RetentionCallbackReasonService,
