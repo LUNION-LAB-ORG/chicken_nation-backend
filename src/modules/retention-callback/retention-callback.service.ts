@@ -85,15 +85,33 @@ export class RetentionCallbackService {
 
   async findDue() {
     const now = new Date();
+    const endOfDay = new Date(now);
+    endOfDay.setHours(23, 59, 59, 999);
     return this.prisma.retentionCallback.findMany({
       where: {
         entity_status: { not: EntityStatus.DELETED },
         status: RetentionCallbackStatus.CALLBACK_SCHEDULED,
-        next_callback_at: { lte: now },
+        next_callback_at: { lte: endOfDay },
       },
       include: callbackInclude,
       orderBy: { next_callback_at: 'asc' },
     });
+  }
+
+  async getCalledCustomerIds() {
+    const results = await this.prisma.retentionCallback.findMany({
+      where: { entity_status: { not: EntityStatus.DELETED } },
+      select: { customer_id: true, status: true },
+    });
+    const customerMap = new Map<string, string>();
+    results.forEach((r) => {
+      // Keep the most relevant status per customer
+      customerMap.set(r.customer_id, r.status);
+    });
+    return {
+      calledCustomerIds: [...customerMap.keys()],
+      customerStatuses: Object.fromEntries(customerMap),
+    };
   }
 
   async findByCustomer(customerId: string) {
@@ -142,8 +160,18 @@ export class RetentionCallbackService {
 
   // === STATS ===
 
-  async getOverview() {
-    const baseWhere = { entity_status: { not: EntityStatus.DELETED } } as const;
+  private buildStatsWhere(dateFrom?: string, dateTo?: string) {
+    const where: any = { entity_status: { not: EntityStatus.DELETED } };
+    if (dateFrom || dateTo) {
+      where.called_at = {};
+      if (dateFrom) where.called_at.gte = new Date(dateFrom);
+      if (dateTo) where.called_at.lte = new Date(dateTo);
+    }
+    return where;
+  }
+
+  async getOverview(dateFrom?: string, dateTo?: string) {
+    const baseWhere = this.buildStatsWhere(dateFrom, dateTo);
 
     const [total, byStatus, reconquered] = await Promise.all([
       this.prisma.retentionCallback.count({ where: baseWhere }),
@@ -171,10 +199,11 @@ export class RetentionCallbackService {
     };
   }
 
-  async getByReason() {
+  async getByReason(dateFrom?: string, dateTo?: string) {
+    const baseWhere = this.buildStatsWhere(dateFrom, dateTo);
     const result = await this.prisma.retentionCallback.groupBy({
       by: ['reason_id'],
-      where: { entity_status: { not: EntityStatus.DELETED }, reason_id: { not: null } },
+      where: { ...baseWhere, reason_id: { not: null } },
       _count: true,
     });
 
@@ -192,8 +221,8 @@ export class RetentionCallbackService {
     }));
   }
 
-  async getAgentPerformance() {
-    const baseWhere = { entity_status: { not: EntityStatus.DELETED } } as const;
+  async getAgentPerformance(dateFrom?: string, dateTo?: string) {
+    const baseWhere = this.buildStatsWhere(dateFrom, dateTo);
 
     const grouped = await this.prisma.retentionCallback.groupBy({
       by: ['caller_user_id', 'status'],
@@ -230,8 +259,8 @@ export class RetentionCallbackService {
     });
   }
 
-  async getFunnel() {
-    const baseWhere = { entity_status: { not: EntityStatus.DELETED } } as const;
+  async getFunnel(dateFrom?: string, dateTo?: string) {
+    const baseWhere = this.buildStatsWhere(dateFrom, dateTo);
 
     const [called, scheduled, reconquered, lost] = await Promise.all([
       this.prisma.retentionCallback.count({ where: baseWhere }),
@@ -249,15 +278,16 @@ export class RetentionCallbackService {
     return { called, scheduled, reconquered, lost };
   }
 
-  async getTrend(days = 30) {
-    const since = new Date();
-    since.setDate(since.getDate() - days);
+  async getTrend(days = 30, dateFrom?: string, dateTo?: string) {
+    const baseWhere = this.buildStatsWhere(dateFrom, dateTo);
+    if (!baseWhere.called_at) {
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      baseWhere.called_at = { gte: since };
+    }
 
     const callbacks = await this.prisma.retentionCallback.findMany({
-      where: {
-        entity_status: { not: EntityStatus.DELETED },
-        called_at: { gte: since },
-      },
+      where: baseWhere,
       select: { called_at: true, status: true },
       orderBy: { called_at: 'asc' },
     });

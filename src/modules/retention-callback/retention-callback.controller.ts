@@ -15,6 +15,14 @@ class TrendQueryDto {
   days?: number = 30;
 }
 
+class StatsDateFilterDto {
+  @IsOptional()
+  dateFrom?: string;
+
+  @IsOptional()
+  dateTo?: string;
+}
+
 @Controller('retention-callback')
 @UseGuards(JwtAuthGuard)
 export class RetentionCallbackController {
@@ -32,6 +40,11 @@ export class RetentionCallbackController {
     return this.callbackService.findDue();
   }
 
+  @Get('called-customers')
+  getCalledCustomerIds() {
+    return this.callbackService.getCalledCustomerIds();
+  }
+
   @Get('customer/:customerId')
   findByCustomer(@Param('customerId') customerId: string) {
     return this.callbackService.findByCustomer(customerId);
@@ -40,28 +53,28 @@ export class RetentionCallbackController {
   // === STATS ===
 
   @Get('stats/overview')
-  getOverview() {
-    return this.callbackService.getOverview();
+  getOverview(@Query() query: StatsDateFilterDto) {
+    return this.callbackService.getOverview(query.dateFrom, query.dateTo);
   }
 
   @Get('stats/by-reason')
-  getByReason() {
-    return this.callbackService.getByReason();
+  getByReason(@Query() query: StatsDateFilterDto) {
+    return this.callbackService.getByReason(query.dateFrom, query.dateTo);
   }
 
   @Get('stats/agent-performance')
-  getAgentPerformance() {
-    return this.callbackService.getAgentPerformance();
+  getAgentPerformance(@Query() query: StatsDateFilterDto) {
+    return this.callbackService.getAgentPerformance(query.dateFrom, query.dateTo);
   }
 
   @Get('stats/funnel')
-  getFunnel() {
-    return this.callbackService.getFunnel();
+  getFunnel(@Query() query: StatsDateFilterDto) {
+    return this.callbackService.getFunnel(query.dateFrom, query.dateTo);
   }
 
   @Get('stats/trend')
-  getTrend(@Query() query: TrendQueryDto) {
-    return this.callbackService.getTrend(query.days);
+  getTrend(@Query() query: TrendQueryDto & StatsDateFilterDto) {
+    return this.callbackService.getTrend(query.days, query.dateFrom, query.dateTo);
   }
 
   // === CRUD (must be after all specific routes) ===
