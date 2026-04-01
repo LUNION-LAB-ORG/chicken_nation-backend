@@ -1,5 +1,5 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
-import { Prisma, User, VoucherStatus } from '@prisma/client';
+import { NotificationType, Prisma, User, VoucherStatus } from '@prisma/client';
 import type { Request } from 'express';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateVoucherDto } from './dto/create-voucher.dto';
@@ -10,6 +10,10 @@ import { RedeemVoucherDto } from './dto/redeem-voucher.dto';
 import { RedemptionResponseDto } from './dto/redemption-response.dto';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
+import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
+import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
+import { notificationIcons } from 'src/modules/notifications/constantes/notifications.constante';
 
 const voucherInclude = {
   customer: {
@@ -40,6 +44,9 @@ export class VoucherService {
   constructor(
     private readonly prismaService: PrismaService,
     private readonly appGateway: AppGateway,
+    private readonly notificationsService: NotificationsService,
+    private readonly notificationRecipientService: NotificationRecipientService,
+    private readonly notificationsWebSocketService: NotificationsWebSocketService,
   ) { }
 
   private readonly include = voucherInclude;
@@ -97,7 +104,39 @@ export class VoucherService {
     this.appGateway.emitToUser(voucher.customer_id, 'customer', 'voucher:created', dto);
     this.appGateway.emitToBackoffice('voucher:created', dto);
 
+    // Notification in-app pour le client
+    this.sendVoucherNotification(voucher).catch((err) =>
+      this.logger.error({ message: 'Failed to send voucher notification', error: err.message }),
+    );
+
     return dto;
+  }
+
+  private async sendVoucherNotification(voucher: VoucherWithRelations) {
+    const customer = await this.notificationRecipientService.getCustomer(voucher.customer_id);
+
+    const expiresInfo = voucher.expires_at
+      ? ` Valide jusqu'au ${new Date(voucher.expires_at).toLocaleDateString('fr-FR')}.`
+      : '';
+
+    const template = {
+      title: () => `🎁 Vous avez reçu un bon de ${voucher.initial_amount.toLocaleString('fr-FR')} F CFA !`,
+      message: () =>
+        `Un bon d'une valeur de ${voucher.initial_amount.toLocaleString('fr-FR')} F CFA vous a été offert. Code : ${voucher.code}.${expiresInfo} Utilisez-le lors de votre prochaine commande !`,
+      icon: () => notificationIcons.good.url,
+      iconBgColor: () => notificationIcons.good.color,
+      showChevron: true,
+    };
+
+    const notifications = await this.notificationsService.sendNotificationToMultiple(
+      template,
+      { actor: customer, recipients: [customer], data: {} },
+      NotificationType.PROMOTION,
+    );
+
+    if (notifications.length > 0) {
+      this.notificationsWebSocketService.emitNotification(notifications[0], customer);
+    }
   }
 
   async findAll(filter: QueryVoucherDto) {
