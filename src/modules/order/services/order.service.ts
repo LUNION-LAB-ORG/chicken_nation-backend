@@ -33,6 +33,7 @@ import { OrderV2Helper } from '../helpers/orderv2.helper';
 import { OrderCreateDto } from '../dto/order-create.dto';
 import * as puppeteer from 'puppeteer';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
+import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 import { TwilioService } from 'src/twilio/services/twilio.service';
 
 @Injectable()
@@ -46,6 +47,7 @@ export class OrderService {
     private orderEvent: OrderEvent,
     private readonly orderWebSocketService: OrderWebSocketService,
     private voucherService: VoucherService,
+    private promoCodeService: PromoCodeService,
     private twilioService: TwilioService,
 
   ) { }
@@ -71,7 +73,8 @@ export class OrderService {
     // Ton algorithme ajusté !
     const { orderItems, netAmount, totalDishes } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails);
 
-    const promoDiscount = await this.orderHelperV2.applyPromoCode(code_promo, customerData.customer_id, netAmount);
+    const promoResult = await this.orderHelperV2.applyPromoCode(code_promo, customerData.customer_id, netAmount);
+    const promoDiscount = promoResult.discount;
 
     // Calculer le montant de réduction des points de fidélité
     const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(
@@ -169,12 +172,27 @@ export class OrderService {
       });
     });
 
-    // Apply voucher
-    if (code_promo && order) {
-      await this.voucherService.redeemVoucher(code_promo, customerData.customer_id, {
-        orderId: order.id,
-        amount: Number(promoDiscount),
-      });
+    // Enregistrer l'usage du code promo ou voucher
+    if (code_promo && order && promoDiscount > 0) {
+      try {
+        if (promoResult.type === 'PROMO_CODE' && promoResult.promoCodeId) {
+          // C'est un code promo → enregistrer l'usage dans PromoCodeUsage
+          await this.promoCodeService.recordUsage(
+            promoResult.promoCodeId,
+            customerData.customer_id,
+            order.id,
+            Number(promoDiscount),
+          );
+        } else if (promoResult.type === 'VOUCHER') {
+          // C'est un voucher → consommer le voucher
+          await this.voucherService.redeemVoucher(code_promo, customerData.customer_id, {
+            orderId: order.id,
+            amount: Number(promoDiscount),
+          });
+        }
+      } catch (error) {
+        this.logger.error(`Erreur lors de l'enregistrement de l'usage du code ${code_promo}: ${error.message}`);
+      }
     }
     if (next_status === OrderStatus.ACCEPTED) {
       // Envoyer l'événement de création de commande

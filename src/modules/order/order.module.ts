@@ -17,9 +17,10 @@ import { KkiapayOrderListenerService } from './listeners/kkiapay-order.listener.
 import { OrderV2Helper } from './helpers/orderv2.helper';
 import { ExpoPushModule } from 'src/expo-push/expo-push.module';
 import { VoucherModule } from 'src/modules/voucher/voucher.module';
+import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
 
 @Module({
-  imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule, TurboModule, ExpoPushModule, VoucherModule],
+  imports: [JsonWebTokenModule, PaiementsModule, FidelityModule, RestaurantModule, TurboModule, ExpoPushModule, VoucherModule, PromoCodeModule],
   controllers: [OrderController],
   providers: [
     OrderService,

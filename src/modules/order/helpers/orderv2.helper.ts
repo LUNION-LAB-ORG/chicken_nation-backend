@@ -17,6 +17,7 @@ import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
+import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 import { TurboService } from 'src/turbo/services/turbo.service';
 import { OrderItemDto } from '../dto/order-create.dto';
 
@@ -30,7 +31,8 @@ export class OrderV2Helper {
     private generateDataService: GenerateDataService,
     private restaurantService: RestaurantService,
     private readonly turboService: TurboService,
-    private voucherService: VoucherService
+    private voucherService: VoucherService,
+    private promoCodeService: PromoCodeService,
   ) {}
 
   private async getTaxRate(): Promise<number> {
@@ -292,23 +294,40 @@ export class OrderV2Helper {
   }
 
 
-  // Appliquer un code promo
-  async applyPromoCode(code?: string, customer_id?: string, netAmount?: number): Promise<number> {
-    if (!code || !customer_id || !netAmount) return 0;
-    const response = await this.voucherService.checkValidityForCustomer(code, customer_id);
+  // Appliquer un code promo ou un voucher
+  // Retourne { discount, type } pour savoir quel type a été appliqué
+  async applyPromoCode(code?: string, customer_id?: string, netAmount?: number): Promise<{ discount: number; type: 'PROMO_CODE' | 'VOUCHER' | null; promoCodeId?: string }> {
+    if (!code || !customer_id || !netAmount) return { discount: 0, type: null };
 
-    if (response.isValid) {
-      // Le backend a validé le code. On calcule la réduction possible.
-      // Le client ne peut pas utiliser plus que le montant de son panier.
-      const discountToApply = Math.min(response.remainingAmount, netAmount);
-
-      if (discountToApply <= 0) {
-        return 0;
+    // 1. Essayer d'abord comme Code Promo (PromoCode)
+    try {
+      const promoResult = await this.promoCodeService.applyPromoCode(code, customer_id, netAmount);
+      if (promoResult.isValid && promoResult.discountAmount > 0) {
+        return {
+          discount: Math.min(promoResult.discountAmount, netAmount),
+          type: 'PROMO_CODE',
+          promoCodeId: promoResult.promoCode.id,
+        };
       }
-      // ✅ Succès : On met à jour le store global
-      return discountToApply;
+    } catch {
+      // Code promo non trouvé ou invalide → on essaie comme voucher
     }
-    return 0;
+
+    // 2. Fallback : Essayer comme Voucher
+    try {
+      const voucherResult = await this.voucherService.checkValidityForCustomer(code, customer_id);
+      if (voucherResult.isValid) {
+        const discountToApply = Math.min(voucherResult.remainingAmount, netAmount);
+        if (discountToApply > 0) {
+          return { discount: discountToApply, type: 'VOUCHER' };
+        }
+      }
+    } catch {
+      // Voucher non trouvé ou invalide
+    }
+
+    // 3. Aucun des deux n'a fonctionné
+    throw new BadRequestException('Code promo invalide ou introuvable');
   }
 
   // Calculer les taxes avec arrondi au 10 supérieur
