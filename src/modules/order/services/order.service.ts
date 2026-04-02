@@ -574,6 +574,7 @@ export class OrderService {
         },
         paiements: true,
         customer: true,
+        promotion: true,
         restaurant: {
           select: {
             id: true,
