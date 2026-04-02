@@ -2,8 +2,8 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { LoyaltyPointType } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
-    IsBoolean,
     IsEnum,
+    IsIn,
     IsNumber,
     IsOptional,
     IsString,
@@ -16,20 +16,21 @@ export class LoyaltyQueryDto {
     @IsUUID()
     customer_id?: string;
 
-    @ApiPropertyOptional({ description: 'Type de points' })
+    @ApiPropertyOptional({ description: 'Type de points', enum: LoyaltyPointType })
     @IsOptional()
     @IsEnum(LoyaltyPointType)
     type?: LoyaltyPointType;
 
-    @ApiPropertyOptional({ description: 'Utilisés' })
+    @ApiPropertyOptional({ description: 'Statut d\'utilisation: available, used, partial, all' })
     @IsOptional()
-    @IsBoolean()
-    is_used?: boolean;
+    @IsIn(['all', 'available', 'used', 'partial'])
+    is_used?: 'all' | 'available' | 'used' | 'partial';
 
     @ApiPropertyOptional({ description: 'Recherche' })
     @IsOptional()
     @IsString()
     search?: string;
+
     @ApiPropertyOptional({ description: 'Pagination - page' })
     @IsOptional()
     @Type(() => Number)

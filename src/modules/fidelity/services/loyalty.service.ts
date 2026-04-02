@@ -97,8 +97,18 @@ export class LoyaltyService {
         if (query.customer_id) {
             whereClause.customer_id = query.customer_id;
         }
-        if (is_used) {
-            whereClause.points_used = { gt: 0 };
+        if (is_used && is_used !== 'all') {
+            switch (is_used) {
+                case 'available':
+                    whereClause.is_used = LoyaltyPointIsUsed.NO;
+                    break;
+                case 'used':
+                    whereClause.is_used = LoyaltyPointIsUsed.YES;
+                    break;
+                case 'partial':
+                    whereClause.is_used = LoyaltyPointIsUsed.PARTIAL;
+                    break;
+            }
         }
 
         const take = limit ?? 20;
