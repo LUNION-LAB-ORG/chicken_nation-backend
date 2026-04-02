@@ -491,7 +491,7 @@ export class OrderV2Helper {
 
   // Déterminer le status à partir de la méthode de paiement, le type de commande et du paiement
   // Tous les types de commande paient en ligne (ONLINE)
-  getOrderStatus(paymentMethod: PaymentMethod, orderType: OrderType) {
+  getOrderStatus(paymentMethod: PaymentMethod, orderType: OrderType): OrderStatus {
 
     // A Livrer
     if (orderType === OrderType.DELIVERY) {
