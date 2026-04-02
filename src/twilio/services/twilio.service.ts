@@ -110,16 +110,26 @@ export class TwilioService {
 
         const template = this.twilioWhatsappTemplate.tracking_order;
 
-        // Essai avec uniquement les variables body (le bouton URL peut être statique)
-        // Si le template a aussi une variable bouton, ajouter "3": orderReference
-        return await this.sendWhatsappMessage({
-            phoneNumber,
-            contentSid: template.sid,
-            contentVariables: JSON.stringify({
-                "1": customerName,
-                "2": orderReference,
-            }),
-        });
+        // Log détaillé pour debug
+        console.log(`[TrackingOrder] Template SID: ${template.sid}`);
+        console.log(`[TrackingOrder] customerName: "${customerName}", orderReference: "${orderReference}"`);
+
+        // Tenter d'abord avec les variables body uniquement
+        // Si le template a un bouton URL dynamique, il faudra peut-être ajouter la variable bouton
+        try {
+            const result = await this.sendWhatsappMessage({
+                phoneNumber,
+                contentSid: template.sid,
+                contentVariables: JSON.stringify({
+                    "1": customerName || "Client",
+                    "2": orderReference || "N/A",
+                }),
+            });
+            return result;
+        } catch (error: any) {
+            console.error(`[TrackingOrder] Erreur envoi: ${error?.message || error}`);
+            return null;
+        }
     }
 
     async sendSmsMessage({ phoneNumber, message }: { phoneNumber: string, message: string }): Promise<MessageInstance | null> {
