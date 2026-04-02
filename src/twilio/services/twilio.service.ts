@@ -26,7 +26,19 @@ export class TwilioService {
                     description: "OTP"
                 }
             ]
-        }
+        },
+        tracking_order: {
+            name: "tracking_order",
+            sid: "HX6182fd26ef390de4214806ce66d7b75b",
+            language: "fr",
+            bodyVariables: [
+                { name: "1", description: "Prenom du client" },
+                { name: "2", description: "Reference de la commande" },
+            ],
+            buttonVariables: [
+                { name: "1", description: "Reference de la commande (suffixe URL)" },
+            ],
+        },
     };
 
     constructor(
@@ -78,6 +90,33 @@ export class TwilioService {
             contentVariables: JSON.stringify({
                 [this.twilioWhatsappTemplate.otp_template.variables[0].name]: otp
             })
+        });
+    }
+
+    /**
+     * Envoie un WhatsApp de suivi de commande avec deeplink vers l'app.
+     * Utilisé uniquement pour les clients qui n'ont PAS l'app (pas de push token).
+     */
+    async sendTrackingOrder({ phoneNumber, customerName, orderReference }: {
+        phoneNumber: string;
+        customerName: string;
+        orderReference: string;
+    }) {
+        const env = this.configService.get<string>('NODE_ENV');
+        if (env !== 'production') {
+            console.log(`[TrackingOrder] WhatsApp pour ${customerName} (${phoneNumber}) - Commande ${orderReference}`);
+            return true;
+        }
+
+        const template = this.twilioWhatsappTemplate.tracking_order;
+
+        return await this.sendWhatsappMessage({
+            phoneNumber,
+            contentSid: template.sid,
+            contentVariables: JSON.stringify({
+                "1": customerName,
+                "2": orderReference,
+            }),
         });
     }
 

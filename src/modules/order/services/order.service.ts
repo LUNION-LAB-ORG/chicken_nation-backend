@@ -33,6 +33,7 @@ import { OrderV2Helper } from '../helpers/orderv2.helper';
 import { OrderCreateDto } from '../dto/order-create.dto';
 import * as puppeteer from 'puppeteer';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
+import { TwilioService } from 'src/twilio/services/twilio.service';
 
 @Injectable()
 export class OrderService {
@@ -44,7 +45,8 @@ export class OrderService {
     private orderHelperV2: OrderV2Helper,
     private orderEvent: OrderEvent,
     private readonly orderWebSocketService: OrderWebSocketService,
-    private voucherService: VoucherService
+    private voucherService: VoucherService,
+    private twilioService: TwilioService,
 
   ) { }
 
@@ -425,9 +427,49 @@ export class OrderService {
 
       // Émettre l'événement de création de commande
       this.orderWebSocketService.emitOrderCreated(order);
+
+      // WhatsApp tracking : uniquement si le client n'a PAS l'app
+      this.sendTrackingWhatsAppIfNoApp(
+        customerData.customer_id,
+        customerData.fullname || order.phone || 'Client',
+        order.phone || '',
+        order.reference || '',
+      ).catch((err) =>
+        this.logger.error(`Erreur envoi WhatsApp tracking: ${err.message}`),
+      );
     }
 
     return order;
+  }
+
+  /**
+   * Envoie un WhatsApp de suivi si le client n'a pas l'app installée.
+   * Détecte l'absence d'app via expo_push_token et onesignal_id.
+   */
+  private async sendTrackingWhatsAppIfNoApp(
+    customerId: string,
+    customerName: string,
+    phone: string,
+    orderReference: string,
+  ) {
+    const notifSettings = await this.prisma.notificationSetting.findUnique({
+      where: { customer_id: customerId },
+      select: { expo_push_token: true, onesignal_id: true },
+    });
+
+    // Si le client a un push token → il a l'app → on ne fait rien
+    if (notifSettings?.expo_push_token || notifSettings?.onesignal_id) {
+      this.logger.log(`Client ${customerId} a l'app, pas de WhatsApp tracking`);
+      return;
+    }
+
+    // Pas d'app → envoyer le WhatsApp tracking
+    this.logger.log(`Client ${customerId} n'a pas l'app, envoi WhatsApp tracking pour commande ${orderReference}`);
+    await this.twilioService.sendTrackingOrder({
+      phoneNumber: phone,
+      customerName: customerName || 'Client',
+      orderReference,
+    });
   }
 
   /**
