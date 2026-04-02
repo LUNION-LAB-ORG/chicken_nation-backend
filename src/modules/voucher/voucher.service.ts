@@ -14,6 +14,7 @@ import { NotificationsService } from 'src/modules/notifications/services/notific
 import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
 import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
 import { notificationIcons } from 'src/modules/notifications/constantes/notifications.constante';
+import { ExpoPushService } from 'src/expo-push/expo-push.service';
 
 const voucherInclude = {
   customer: {
@@ -47,6 +48,7 @@ export class VoucherService {
     private readonly notificationsService: NotificationsService,
     private readonly notificationRecipientService: NotificationRecipientService,
     private readonly notificationsWebSocketService: NotificationsWebSocketService,
+    private readonly expoPushService: ExpoPushService,
   ) { }
 
   private readonly include = voucherInclude;
@@ -119,15 +121,18 @@ export class VoucherService {
       ? ` Valide jusqu'au ${new Date(voucher.expires_at).toLocaleDateString('fr-FR')}.`
       : '';
 
+    const pushTitle = `🎁 Vous avez reçu un bon de ${voucher.initial_amount.toLocaleString('fr-FR')} F CFA !`;
+    const pushBody = `Un bon d'une valeur de ${voucher.initial_amount.toLocaleString('fr-FR')} F CFA vous a été offert. Code : ${voucher.code}.${expiresInfo} Utilisez-le lors de votre prochaine commande !`;
+
     const template = {
-      title: () => `🎁 Vous avez reçu un bon de ${voucher.initial_amount.toLocaleString('fr-FR')} F CFA !`,
-      message: () =>
-        `Un bon d'une valeur de ${voucher.initial_amount.toLocaleString('fr-FR')} F CFA vous a été offert. Code : ${voucher.code}.${expiresInfo} Utilisez-le lors de votre prochaine commande !`,
+      title: () => pushTitle,
+      message: () => pushBody,
       icon: () => notificationIcons.good.url,
       iconBgColor: () => notificationIcons.good.color,
       showChevron: true,
     };
 
+    // 1. Notification in-app (DB + WebSocket)
     const notifications = await this.notificationsService.sendNotificationToMultiple(
       template,
       { actor: customer, recipients: [customer], data: {} },
@@ -136,6 +141,29 @@ export class VoucherService {
 
     if (notifications.length > 0) {
       this.notificationsWebSocketService.emitNotification(notifications[0], customer);
+    }
+
+    // 2. Push notification Expo
+    try {
+      const notifSettings = await this.prismaService.notificationSetting.findUnique({
+        where: { customer_id: voucher.customer_id },
+      });
+
+      if (notifSettings?.expo_push_token && notifSettings?.push) {
+        await this.expoPushService.sendPushNotifications({
+          tokens: [notifSettings.expo_push_token],
+          title: pushTitle,
+          body: pushBody,
+          data: { type: 'VOUCHER', voucher_code: voucher.code },
+          sound: 'default',
+          badge: 1,
+          priority: 'high',
+          channelId: 'default',
+        });
+        this.logger.log(`Push Expo envoyé au client ${voucher.customer_id} pour le bon ${voucher.code}`);
+      }
+    } catch (pushError: any) {
+      this.logger.error(`Erreur envoi push Expo pour voucher: ${pushError.message}`);
     }
   }
 
