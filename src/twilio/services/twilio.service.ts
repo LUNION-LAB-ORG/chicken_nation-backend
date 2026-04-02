@@ -29,7 +29,7 @@ export class TwilioService {
         },
         tracking_order: {
             name: "tracking_order",
-            sid: "HX6182fd26ef390de4214806ce66d7b75b",
+            sid: "HX3601e215533e74979a7848ff0ff723ce",
             language: "fr",
             bodyVariables: [
                 { name: "1", description: "Prenom du client" },
