@@ -110,12 +110,15 @@ export class TwilioService {
 
         const template = this.twilioWhatsappTemplate.tracking_order;
 
+        // contentVariables: indices séquentiels pour body + bouton URL dynamique
+        // "1" = body {{1}} (nom client), "2" = body {{2}} (référence), "3" = button {{1}} (suffixe URL)
         return await this.sendWhatsappMessage({
             phoneNumber,
             contentSid: template.sid,
             contentVariables: JSON.stringify({
                 "1": customerName,
                 "2": orderReference,
+                "3": orderReference,
             }),
         });
     }
@@ -139,16 +142,20 @@ export class TwilioService {
     async sendWhatsappMessage({ phoneNumber, contentSid, contentVariables }: { phoneNumber: string, contentSid: string, contentVariables: string }): Promise<MessageInstance | null> {
         try {
             const { client, whatsappNumber } = await this.getConfig();
+            const to = `whatsapp:${this.formatNumber(phoneNumber)}`;
+            const from = `whatsapp:${whatsappNumber}`;
+            console.log(`[WhatsApp] Sending: from=${from}, to=${to}, contentSid=${contentSid}, vars=${contentVariables}`);
             const response = await client.messages.create({
                 contentSid,
                 contentVariables,
-                from: `whatsapp:${whatsappNumber}`,
-                to: `whatsapp:${this.formatNumber(phoneNumber)}`,
+                from,
+                to,
             });
+            console.log(`[WhatsApp] Sent successfully: sid=${response.sid}, status=${response.status}`);
             return response;
 
         } catch (error: any) {
-            console.error('Error sending message:', error);
+            console.error('[WhatsApp] Error sending message:', error?.message || error);
             return null;
         }
     }
