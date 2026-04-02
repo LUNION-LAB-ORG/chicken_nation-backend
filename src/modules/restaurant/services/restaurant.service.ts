@@ -359,7 +359,7 @@ export class RestaurantService {
           return false;
         }
 
-        // Gestion du cas après minuit
+        // Gestion du cas après minuit (ex: "22:00-02:00")
         if (isBefore(closeTime, openTime)) {
           const nextDayCloseTime = parse(
             `${format(referenceDate, 'yyyy-MM-dd')} ${closeTimeStr.trim()}`,
@@ -368,12 +368,13 @@ export class RestaurantService {
           );
           nextDayCloseTime.setDate(nextDayCloseTime.getDate() + 1);
 
-          return (
-            isAfter(referenceDate, openTime) ||
-            isEqual(referenceDate, openTime) ||
-            isBefore(referenceDate, nextDayCloseTime) ||
-            isEqual(referenceDate, nextDayCloseTime)
-          );
+          // Deux cas possibles :
+          // 1) On est dans la soirée (après l'ouverture) : ex 23h pour "22:00-02:00"
+          // 2) On est tôt le matin (avant la fermeture du lendemain) : ex 01h pour "22:00-02:00"
+          const isAfterOpen = isAfter(referenceDate, openTime) || isEqual(referenceDate, openTime);
+          const isBeforeClose = isBefore(referenceDate, nextDayCloseTime) || isEqual(referenceDate, nextDayCloseTime);
+
+          return isAfterOpen && isBeforeClose;
         }
 
         return (

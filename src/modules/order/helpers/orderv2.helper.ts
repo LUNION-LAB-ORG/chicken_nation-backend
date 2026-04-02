@@ -494,10 +494,10 @@ export class OrderV2Helper {
 
     // A Livrer
     if (orderType === OrderType.DELIVERY) {
-      if (paymentMethod === PaymentMethod.ONLINE) {
-        return OrderStatus.PENDING;
+      if (paymentMethod === PaymentMethod.OFFLINE) {
+        return OrderStatus.ACCEPTED;
       }
-      throw new BadRequestException('Méthode de paiement non supportée');
+      return OrderStatus.PENDING;
     }
 
     // Emporter et Table
