@@ -490,21 +490,16 @@ export class OrderV2Helper {
   }
 
   // Déterminer le status à partir de la méthode de paiement, le type de commande et du paiement
+  // Tous les types de commande paient en ligne (ONLINE)
   getOrderStatus(paymentMethod: PaymentMethod, orderType: OrderType) {
 
     // A Livrer
     if (orderType === OrderType.DELIVERY) {
-      if (paymentMethod === PaymentMethod.OFFLINE) {
-        return OrderStatus.ACCEPTED;
-      }
       return OrderStatus.PENDING;
     }
 
     // Emporter et Table
     if (orderType === OrderType.PICKUP || orderType === OrderType.TABLE) {
-      if (paymentMethod === PaymentMethod.OFFLINE) {
-        return OrderStatus.ACCEPTED;
-      }
       return OrderStatus.PENDING;
     }
 
