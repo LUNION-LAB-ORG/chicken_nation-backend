@@ -183,6 +183,55 @@ export class PushCampaignService {
     };
   }
 
+  async getStatsChart(days = 30) {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    since.setHours(0, 0, 0, 0);
+
+    const campaigns = await this.prisma.pushCampaign.findMany({
+      where: { created_at: { gte: since } },
+      select: {
+        total_targeted: true,
+        total_sent: true,
+        total_failed: true,
+        status: true,
+        sent_at: true,
+        created_at: true,
+      },
+      orderBy: { created_at: 'asc' },
+    });
+
+    // Group by day
+    const dailyMap = new Map<string, { date: string; sent: number; failed: number; targeted: number; campaigns: number }>();
+
+    for (let d = new Date(since); d <= new Date(); d.setDate(d.getDate() + 1)) {
+      const key = d.toISOString().slice(0, 10);
+      dailyMap.set(key, { date: key, sent: 0, failed: 0, targeted: 0, campaigns: 0 });
+    }
+
+    for (const c of campaigns) {
+      const date = (c.sent_at ?? c.created_at).toISOString().slice(0, 10);
+      const entry = dailyMap.get(date);
+      if (entry) {
+        entry.sent += c.total_sent;
+        entry.failed += c.total_failed;
+        entry.targeted += c.total_targeted;
+        entry.campaigns += 1;
+      }
+    }
+
+    // Status distribution
+    const statusCounts: Record<string, number> = {};
+    for (const c of campaigns) {
+      statusCounts[c.status] = (statusCounts[c.status] ?? 0) + 1;
+    }
+
+    return {
+      daily: Array.from(dailyMap.values()),
+      statusDistribution: Object.entries(statusCounts).map(([status, count]) => ({ status, count })),
+    };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // SEGMENTATION — requêtes DB directes (PAS de sync de tags)
   // ═══════════════════════════════════════════════════════════════════════════

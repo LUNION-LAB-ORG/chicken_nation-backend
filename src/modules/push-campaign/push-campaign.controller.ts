@@ -50,6 +50,12 @@ export class PushCampaignController {
     return this.service.getStats();
   }
 
+  @Get('stats/chart')
+  @ApiOperation({ summary: 'Données pour les graphiques analytics (30 derniers jours)' })
+  getStatsChart(@Query('days') days?: string) {
+    return this.service.getStatsChart(parseInt(days ?? '30', 10));
+  }
+
   @Get('variables')
   @ApiOperation({ summary: 'Variables disponibles pour la personnalisation' })
   getVariables() {
