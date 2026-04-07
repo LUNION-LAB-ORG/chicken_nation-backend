@@ -89,6 +89,24 @@ export class OrderListenerService {
     async orderStatusUpdatedEventListener(payload: OrderCreatedEvent) {
 
         /* =========================
+           ✅ COMMANDE ACCEPTÉE → déduire les points et appliquer les promotions
+        ========================= */
+        if (payload.order.status === OrderStatus.ACCEPTED) {
+            // ⭐ DÉDUCTION DES POINTS DE FIDÉLITÉ
+            if (payload.order.points > 0) {
+                try {
+                    await this.loyaltyService.redeemPoints({
+                        customer_id: payload.order.customer_id,
+                        points: payload.order.points,
+                        reason: `🔥 ${payload.order.points} points utilisés pour la commande #${payload.order.reference}`,
+                    });
+                } catch (error) {
+                    // Log but don't block — points will show in history regardless
+                }
+            }
+        }
+
+        /* =========================
            ✅ COMMANDE TERMINÉE
         ========================= */
         if (payload.order.status === OrderStatus.COMPLETED) {

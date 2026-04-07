@@ -194,23 +194,21 @@ export class OrderService {
         this.logger.error(`Erreur lors de l'enregistrement de l'usage du code ${code_promo}: ${error.message}`);
       }
     }
-    if (next_status === OrderStatus.ACCEPTED) {
-      // Envoyer l'événement de création de commande
-      this.orderEvent.orderCreatedEvent({
-        order,
-        expo_token: customerData.expo_token,
-        loyalty_level: customerData.loyalty_level,
-        totalDishes,
-        orderItems: orderItems.map((item) => ({
-          dish_id: item.dish_id,
-          quantity: item.quantity,
-          price: item.dishPrice,
-        })),
-      });
+    // Envoyer l'événement de création de commande
+    this.orderEvent.orderCreatedEvent({
+      order,
+      expo_token: customerData.expo_token,
+      loyalty_level: customerData.loyalty_level,
+      totalDishes,
+      orderItems: orderItems.map((item) => ({
+        dish_id: item.dish_id,
+        quantity: item.quantity,
+        price: item.dishPrice,
+      })),
+    });
 
-      // Émettre l'événement de création de commande
-      this.orderWebSocketService.emitOrderCreated(order);
-    }
+    // Émettre l'événement WebSocket de création de commande
+    this.orderWebSocketService.emitOrderCreated(order);
 
     return order;
   }
