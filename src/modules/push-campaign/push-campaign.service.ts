@@ -371,9 +371,14 @@ export class PushCampaignService {
   ): Promise<string[]> {
     switch (targetType) {
       case 'all':
+      case 'segments': // OneSignal format — treat as "all"
         return this.getAllTokens();
 
       case 'segment':
+        // If segment is "all" or missing, send to everyone
+        if (!targetConfig.segment || targetConfig.segment === 'all') {
+          return this.getAllTokens();
+        }
         return this.getTokensBySegment(targetConfig.segment);
 
       case 'filters':

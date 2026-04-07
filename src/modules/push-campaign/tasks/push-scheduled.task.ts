@@ -58,6 +58,12 @@ export class PushScheduledTask {
     const payload = notification.payload as any;
     const targeting = notification.targeting as any;
 
+    // Normaliser le targeting : "segments" (OneSignal) → "all"
+    const targetType = targeting?.type === 'segments' ? 'all'
+      : (targeting?.type === 'segment' && (!targeting?.config?.segment || targeting?.config?.segment === 'all')) ? 'all'
+      : targeting?.type ?? 'all';
+    const targetConfig = targeting?.config ?? {};
+
     const title = payload?.title ?? notification.name;
     const body = payload?.body ?? '';
     const hasVars = /\{\{[a-z_]+\}\}/.test(title) || /\{\{[a-z_]+\}\}/.test(body);
@@ -69,8 +75,8 @@ export class PushScheduledTask {
     if (hasVars) {
       // Personalized send — resolve variables per customer
       const customerSettings = await this.resolveTargetCustomerSettings(
-        targeting?.type ?? 'all',
-        targeting?.config ?? {},
+        targetType,
+        targetConfig,
       );
 
       if (customerSettings.length > 0) {
@@ -115,8 +121,8 @@ export class PushScheduledTask {
     } else {
       // Standard batch send
       const tokens = await this.pushCampaignService.resolveTargetTokens(
-        targeting?.type ?? 'all',
-        targeting?.config ?? {},
+        targetType,
+        targetConfig,
       );
       totalTargeted = tokens.length;
 
