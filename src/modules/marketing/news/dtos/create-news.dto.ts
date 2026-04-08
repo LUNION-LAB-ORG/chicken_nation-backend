@@ -25,5 +25,6 @@ export class CreateNewsDto {
   @ApiPropertyOptional({ description: 'Statut de publication', example: true })
   @IsBoolean()
   @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
   isActive?: boolean = true;
 }
