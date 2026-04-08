@@ -1,7 +1,18 @@
-import { IsOptional, IsEnum, IsString, IsUUID } from 'class-validator';
+import { IsOptional, IsEnum, IsString, IsUUID, IsIn } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { EntityStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
+
+export const CUSTOMER_SEGMENTS = [
+    'all',               // Tous les clients
+    'app_users',         // Ont l'app installée (expo_push_token)
+    'no_app',            // N'ont pas l'app (pas de expo_push_token)
+    'has_ordered',       // Ont déjà commandé
+    'never_ordered',     // Jamais commandé
+    'incomplete_profile', // Nom ou prénom manquant
+] as const;
+
+export type CustomerSegment = (typeof CUSTOMER_SEGMENTS)[number];
 
 export class CustomerQueryDto {
     @ApiPropertyOptional({ description: 'Numéro de page', default: 1 })
@@ -30,8 +41,17 @@ export class CustomerQueryDto {
     @Transform(({ value }) => String(value).trim())
     search?: string;
 
-    @ApiPropertyOptional({ description: "Filtrer par ID de restaurant" })
+    @ApiPropertyOptional({ description: 'Filtrer par ID de restaurant' })
     @IsOptional()
     @IsUUID()
     restaurantId?: string;
+
+    @ApiPropertyOptional({
+        description: 'Segment prédéfini',
+        enum: CUSTOMER_SEGMENTS,
+    })
+    @IsOptional()
+    @IsString()
+    @IsIn(CUSTOMER_SEGMENTS)
+    segment?: CustomerSegment;
 }

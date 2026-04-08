@@ -115,7 +115,7 @@ export class CustomerService {
   }
 
   async findAll(query: CustomerQueryDto = {}) {
-    const { page = 1, limit = 10, status, search } = query;
+    const { page = 1, limit = 10, status, search, segment } = query;
     const whereClause: Prisma.CustomerWhereInput = {
       entity_status: EntityStatus.ACTIVE,
     };
@@ -141,6 +141,78 @@ export class CustomerService {
       };
     }
 
+    // ── Segment filters ──
+    if (segment && segment !== 'all') {
+      switch (segment) {
+        case 'app_users':
+          whereClause.notification_settings = {
+            expo_push_token: { not: null },
+            active: true,
+          };
+          break;
+        case 'no_app':
+          whereClause.OR = undefined; // reset search OR to use AND
+          whereClause.AND = [
+            // Re-add search if present
+            ...(search
+              ? [{
+                  OR: [
+                    { first_name: { contains: search, mode: 'insensitive' as const } },
+                    { last_name: { contains: search, mode: 'insensitive' as const } },
+                    { phone: { contains: search } },
+                    { email: { contains: search, mode: 'insensitive' as const } },
+                  ],
+                }]
+              : []),
+            {
+              OR: [
+                { notification_settings: null },
+                { notification_settings: { expo_push_token: null } },
+              ],
+            },
+          ];
+          break;
+        case 'has_ordered':
+          whereClause.orders = {
+            some: {
+              entity_status: { not: EntityStatus.DELETED },
+              ...(query.restaurantId ? { restaurant_id: query.restaurantId } : {}),
+            },
+          };
+          break;
+        case 'never_ordered':
+          whereClause.orders = {
+            none: {
+              entity_status: { not: EntityStatus.DELETED },
+            },
+          };
+          break;
+        case 'incomplete_profile':
+          whereClause.OR = undefined;
+          whereClause.AND = [
+            ...(search
+              ? [{
+                  OR: [
+                    { first_name: { contains: search, mode: 'insensitive' as const } },
+                    { last_name: { contains: search, mode: 'insensitive' as const } },
+                    { phone: { contains: search } },
+                    { email: { contains: search, mode: 'insensitive' as const } },
+                  ],
+                }]
+              : []),
+            {
+              OR: [
+                { first_name: null },
+                { first_name: '' },
+                { last_name: null },
+                { last_name: '' },
+              ],
+            },
+          ];
+          break;
+      }
+    }
+
     const [count, customers] = await Promise.all([
       this.prisma.customer.count({ where: whereClause }),
       this.prisma.customer.findMany({
@@ -150,6 +222,9 @@ export class CustomerService {
             orderBy: {
               created_at: 'desc',
             },
+          },
+          notification_settings: {
+            select: { expo_push_token: true, active: true },
           },
           orders: {
             where: {
