@@ -77,6 +77,19 @@ export class TwilioService {
         return { client: this.twilioClient, phoneNumber, whatsappNumber };
     }
 
+    /**
+     * Vérifie si WhatsApp est activé via le setting `twilio_whatsapp_enabled`.
+     * Par défaut true si le setting n'existe pas.
+     */
+    private async isWhatsAppEnabled(): Promise<boolean> {
+        const value = await this.settingsService.getOrEnv(
+            'twilio_whatsapp_enabled',
+            'TWILIO_WHATSAPP_ENABLED',
+            'true',
+        );
+        return value === 'true' || value === '1';
+    }
+
     async sendOtp({ phoneNumber, otp }: { phoneNumber: string, otp: string }) {
         const env = this.configService.get<string>('NODE_ENV');
         if (env !== 'production') {
@@ -86,24 +99,29 @@ export class TwilioService {
 
         const smsMessage = `Votre code de vérification Chicken Nation est : ${otp}\n\nCe code expire dans 5 minutes.`;
 
-        // Tenter WhatsApp d'abord, fallback SMS si erreur
-        const whatsappResult = await this.sendWhatsappMessage({
-            phoneNumber,
-            contentSid: this.twilioWhatsappTemplate.otp_template.sid,
-            contentVariables: JSON.stringify({
-                [this.twilioWhatsappTemplate.otp_template.variables[0].name]: otp
-            })
-        });
+        // Si WhatsApp est activé, tenter WhatsApp d'abord
+        if (await this.isWhatsAppEnabled()) {
+            const whatsappResult = await this.sendWhatsappMessage({
+                phoneNumber,
+                contentSid: this.twilioWhatsappTemplate.otp_template.sid,
+                contentVariables: JSON.stringify({
+                    [this.twilioWhatsappTemplate.otp_template.variables[0].name]: otp
+                })
+            });
 
-        if (whatsappResult) return whatsappResult;
+            if (whatsappResult) return whatsappResult;
+            console.log(`[OTP] WhatsApp échoué pour ${phoneNumber}, bascule sur SMS`);
+        } else {
+            console.log(`[OTP] WhatsApp désactivé, envoi par SMS pour ${phoneNumber}`);
+        }
 
-        console.log(`[OTP] WhatsApp échoué pour ${phoneNumber}, bascule sur SMS`);
         return await this.sendSmsMessage({ phoneNumber, message: smsMessage });
     }
 
     /**
      * Envoie un message de suivi de commande.
-     * Tente WhatsApp d'abord, bascule sur SMS en cas d'erreur.
+     * Si WhatsApp est activé, tente WhatsApp d'abord puis fallback SMS.
+     * Si WhatsApp est désactivé, envoie directement par SMS.
      * Utilisé uniquement pour les clients qui n'ont PAS l'app (pas de push token).
      */
     async sendTrackingOrder({ phoneNumber, customerName, orderReference }: {
@@ -118,32 +136,34 @@ export class TwilioService {
         }
 
         const name = customerName || "Client";
-        const template = this.twilioWhatsappTemplate.tracking_order;
+        const smsMessage = `Bonjour ${name} ! Votre commande ${orderReference} a bien été reçue. Merci pour votre confiance. - Chicken Nation`;
 
-        // Tenter WhatsApp d'abord
-        try {
-            const whatsappResult = await this.sendWhatsappMessage({
-                phoneNumber,
-                contentSid: template.sid,
-                contentVariables: JSON.stringify({
-                    "1": name,
-                    "2": orderReference || "N/A",
-                    "3": orderReference || "N/A",
-                }),
-            });
+        // Si WhatsApp est activé, tenter WhatsApp d'abord
+        if (await this.isWhatsAppEnabled()) {
+            const template = this.twilioWhatsappTemplate.tracking_order;
+            try {
+                const whatsappResult = await this.sendWhatsappMessage({
+                    phoneNumber,
+                    contentSid: template.sid,
+                    contentVariables: JSON.stringify({
+                        "1": name,
+                        "2": orderReference || "N/A",
+                        "3": orderReference || "N/A",
+                    }),
+                });
 
-            if (whatsappResult) return whatsappResult;
-        } catch (error: any) {
-            console.warn(`[TrackingOrder] WhatsApp échoué: ${error?.message || error}`);
+                if (whatsappResult) return whatsappResult;
+            } catch (error: any) {
+                console.warn(`[TrackingOrder] WhatsApp échoué: ${error?.message || error}`);
+            }
+            console.log(`[TrackingOrder] Bascule sur SMS pour ${name} (${phoneNumber})`);
+        } else {
+            console.log(`[TrackingOrder] WhatsApp désactivé, envoi par SMS pour ${name} (${phoneNumber})`);
         }
 
-        // Fallback SMS
-        console.log(`[TrackingOrder] Bascule sur SMS pour ${name} (${phoneNumber})`);
+        // SMS
         try {
-            return await this.sendSmsMessage({
-                phoneNumber,
-                message: `Bonjour ${name} ! Votre commande ${orderReference} a bien été reçue. Merci pour votre confiance. - Chicken Nation`,
-            });
+            return await this.sendSmsMessage({ phoneNumber, message: smsMessage });
         } catch (error: any) {
             console.error(`[TrackingOrder] Erreur envoi SMS: ${error?.message || error}`);
             return null;
