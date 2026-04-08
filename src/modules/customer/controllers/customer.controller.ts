@@ -21,7 +21,7 @@ import { CustomerQueryDto } from 'src/modules/customer/dto/customer-query.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
-import { CacheInterceptor } from '@nestjs/cache-manager';
+import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
@@ -55,6 +55,7 @@ export class CustomerController {
   @Get()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.CLIENTS, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
   @ApiOperation({ summary: 'Récupération de tous les clients' })
   findAll(@Query() query: CustomerQueryDto) {
     return this.customerService.findAll(query);
@@ -78,6 +79,7 @@ export class CustomerController {
   @Get(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.CLIENTS, Action.READ)
+  @CacheTTL(2 * 60 * 1000)
   @ApiOperation({ summary: 'Obtenir un client par ID' })
   findOne(@Param('id') id: string) {
     return this.customerService.findOne(id);
