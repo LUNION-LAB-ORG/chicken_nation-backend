@@ -84,13 +84,20 @@ export class TwilioService {
             return true;
         }
 
-        return await this.sendWhatsappMessage({
+        // SMS fallback (WhatsApp bloqué - erreur 63051)
+        return await this.sendSmsMessage({
             phoneNumber,
-            contentSid: this.twilioWhatsappTemplate.otp_template.sid,
-            contentVariables: JSON.stringify({
-                [this.twilioWhatsappTemplate.otp_template.variables[0].name]: otp
-            })
+            message: `Votre code de vérification Chicken Nation est : ${otp}\n\nCe code expire dans 5 minutes.`,
         });
+
+        // TODO: Rétablir WhatsApp après déblocage du compte
+        // return await this.sendWhatsappMessage({
+        //     phoneNumber,
+        //     contentSid: this.twilioWhatsappTemplate.otp_template.sid,
+        //     contentVariables: JSON.stringify({
+        //         [this.twilioWhatsappTemplate.otp_template.variables[0].name]: otp
+        //     })
+        // });
     }
 
     /**
@@ -104,28 +111,40 @@ export class TwilioService {
     }) {
         const env = this.configService.get<string>('NODE_ENV');
         if (env !== 'production') {
-            console.log(`[TrackingOrder] WhatsApp pour ${customerName} (${phoneNumber}) - Commande ${orderReference}`);
+            console.log(`[TrackingOrder] SMS pour ${customerName} (${phoneNumber}) - Commande ${orderReference}`);
             return true;
         }
 
-        const template = this.twilioWhatsappTemplate.tracking_order;
-
-        // 3 variables: {{1}}=nom, {{2}}=référence (body), {{3}}=référence (bouton URL)
+        // SMS fallback (WhatsApp bloqué - erreur 63051)
         try {
-            const result = await this.sendWhatsappMessage({
+            const name = customerName || "Client";
+            const result = await this.sendSmsMessage({
                 phoneNumber,
-                contentSid: template.sid,
-                contentVariables: JSON.stringify({
-                    "1": customerName || "Client",
-                    "2": orderReference || "N/A",
-                    "3": orderReference || "N/A",
-                }),
+                message: `Bonjour ${name} ! Votre commande ${orderReference} a bien été reçue. Merci pour votre confiance. - Chicken Nation`,
             });
             return result;
         } catch (error: any) {
-            console.error(`[TrackingOrder] Erreur envoi: ${error?.message || error}`);
+            console.error(`[TrackingOrder] Erreur envoi SMS: ${error?.message || error}`);
             return null;
         }
+
+        // TODO: Rétablir WhatsApp après déblocage du compte
+        // const template = this.twilioWhatsappTemplate.tracking_order;
+        // try {
+        //     const result = await this.sendWhatsappMessage({
+        //         phoneNumber,
+        //         contentSid: template.sid,
+        //         contentVariables: JSON.stringify({
+        //             "1": customerName || "Client",
+        //             "2": orderReference || "N/A",
+        //             "3": orderReference || "N/A",
+        //         }),
+        //     });
+        //     return result;
+        // } catch (error: any) {
+        //     console.error(`[TrackingOrder] Erreur envoi: ${error?.message || error}`);
+        //     return null;
+        // }
     }
 
     async sendSmsMessage({ phoneNumber, message }: { phoneNumber: string, message: string }): Promise<MessageInstance | null> {
