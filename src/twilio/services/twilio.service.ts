@@ -90,6 +90,19 @@ export class TwilioService {
         return value === 'true' || value === '1';
     }
 
+    /**
+     * Vérifie si l'envoi post-commande est activé via le setting `twilio_post_order_enabled`.
+     * Par défaut true si le setting n'existe pas.
+     */
+    private async isPostOrderEnabled(): Promise<boolean> {
+        const value = await this.settingsService.getOrEnv(
+            'twilio_post_order_enabled',
+            'TWILIO_POST_ORDER_ENABLED',
+            'true',
+        );
+        return value === 'true' || value === '1';
+    }
+
     async sendOtp({ phoneNumber, otp }: { phoneNumber: string, otp: string }) {
         const env = this.configService.get<string>('NODE_ENV');
         if (env !== 'production') {
@@ -133,6 +146,12 @@ export class TwilioService {
         if (env !== 'production') {
             console.log(`[TrackingOrder] Message pour ${customerName} (${phoneNumber}) - Commande ${orderReference}`);
             return true;
+        }
+
+        // Vérifier si l'envoi post-commande est activé
+        if (!(await this.isPostOrderEnabled())) {
+            console.log(`[TrackingOrder] Envoi post-commande désactivé, message ignoré pour ${phoneNumber}`);
+            return null;
         }
 
         const name = customerName || "Client";
