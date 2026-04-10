@@ -216,7 +216,7 @@ export class PushScheduledTask {
     if (notification.cron_expression) {
       try {
         const { CronExpressionParser } = require('cron-parser');
-        const interval = CronExpressionParser.parseExpression(notification.cron_expression, {
+        const interval = CronExpressionParser.parse(notification.cron_expression, {
           tz: notification.timezone ?? 'Africa/Abidjan',
         });
         return interval.next().toDate();

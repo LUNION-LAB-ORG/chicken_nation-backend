@@ -1407,7 +1407,7 @@ export class PushCampaignService {
     if (dto.cron_expression) {
       try {
         const { CronExpressionParser } = require('cron-parser');
-        const interval = CronExpressionParser.parseExpression(dto.cron_expression, {
+        const interval = CronExpressionParser.parse(dto.cron_expression, {
           tz: dto.timezone ?? 'Africa/Abidjan',
         });
         return interval.next().toDate();
