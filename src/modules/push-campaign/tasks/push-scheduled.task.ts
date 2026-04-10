@@ -210,19 +210,30 @@ export class PushScheduledTask {
   }
 
   private computeNextRun(notification: any): Date | null {
-    const now = new Date();
+    if (notification.schedule_type === 'once') return null;
 
+    // Utiliser le cron_expression pour calculer le vrai prochain run
+    if (notification.cron_expression) {
+      try {
+        const { CronExpressionParser } = require('cron-parser');
+        const interval = CronExpressionParser.parseExpression(notification.cron_expression, {
+          tz: notification.timezone ?? 'Africa/Abidjan',
+        });
+        return interval.next().toDate();
+      } catch (e) {
+        this.logger.warn(`Impossible de parser le cron "${notification.cron_expression}": ${e.message}`);
+      }
+    }
+
+    // Fallback si pas de cron_expression
+    const now = new Date();
     switch (notification.schedule_type) {
-      case 'once':
-        return null;
       case 'daily':
         return addDays(now, 1);
       case 'weekly':
         return addWeeks(now, 1);
       case 'monthly':
         return addMonths(now, 1);
-      case 'custom':
-        return addDays(now, 1);
       default:
         return null;
     }

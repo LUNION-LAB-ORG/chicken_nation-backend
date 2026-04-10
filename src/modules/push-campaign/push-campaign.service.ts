@@ -1402,7 +1402,20 @@ export class PushCampaignService {
     if (dto.schedule_type === 'once' && dto.scheduled_at) {
       return new Date(dto.scheduled_at);
     }
-    // For recurring, the CRON task will compute the next run
+
+    // Pour les récurrents avec cron_expression, calculer le vrai prochain run
+    if (dto.cron_expression) {
+      try {
+        const { CronExpressionParser } = require('cron-parser');
+        const interval = CronExpressionParser.parseExpression(dto.cron_expression, {
+          tz: dto.timezone ?? 'Africa/Abidjan',
+        });
+        return interval.next().toDate();
+      } catch (e) {
+        this.logger.warn(`Impossible de parser le cron "${dto.cron_expression}": ${e.message}`);
+      }
+    }
+
     if (dto.scheduled_at) return new Date(dto.scheduled_at);
     return new Date();
   }
