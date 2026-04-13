@@ -58,6 +58,7 @@ export class StatisticsClientsService {
     const customerIds = [...new Set(ordersInPeriod.map((o) => o.customer_id!))] as string[];
 
     // Segment counts (all customers, not just those who ordered in period)
+    // Filtre les commandes non-supprimées pour correspondre à la page Clients
     const allCustomers = await this.prisma.customer.findMany({
       where: { entity_status: 'ACTIVE' },
       select: {
@@ -65,14 +66,21 @@ export class StatisticsClientsService {
         first_name: true,
         last_name: true,
         email: true,
-        notification_settings: { select: { expo_push_token: true } },
-        _count: { select: { orders: true } },
+        notification_settings: { select: { expo_push_token: true, active: true } },
+        _count: {
+          select: {
+            orders: {
+              where: { entity_status: { not: 'DELETED' } },
+            },
+          },
+        },
       },
     });
     const totalAllCustomers = allCustomers.length;
-    const noAppClients = allCustomers.filter(
-      (c) => !c.notification_settings?.expo_push_token,
+    const appClients = allCustomers.filter(
+      (c) => c.notification_settings?.expo_push_token && c.notification_settings?.active,
     ).length;
+    const noAppClients = totalAllCustomers - appClients;
     const hasOrderedClients = allCustomers.filter((c) => c._count.orders > 0).length;
     const neverOrderedClients = allCustomers.filter((c) => c._count.orders === 0).length;
     const incompleteProfileClients = allCustomers.filter(
