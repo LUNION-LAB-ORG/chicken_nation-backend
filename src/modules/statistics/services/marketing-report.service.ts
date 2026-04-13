@@ -34,7 +34,8 @@ interface ReportData {
     revenue: number;
     isPromotion: boolean;
     promotionPrice: number | null;
-    price: number;
+    price: number;         // Prix unitaire réel (CA / quantité)
+    originalPrice: number; // Prix catalogue
   }>;
   reviews: {
     average: number;
@@ -60,7 +61,7 @@ export class MarketingReportService {
       status: query.status ?? OrderStatus.COMPLETED,
       paied: true,
       created_at: dateFilter,
-      ...(query.type && { type: query.type }),
+      type: query.type ?? OrderType.DELIVERY, // Focus livraison uniquement
       ...(query.auto !== undefined && { auto: query.auto }),
     };
 
@@ -195,13 +196,17 @@ export class MarketingReportService {
       })),
       topDishes: topDishesRaw.map((d) => {
         const dish = dishMap.get(d.dish_id);
+        const quantity = d._sum.quantity ?? 0;
+        const revenue = d._sum.amount ?? 0;
+        const actualUnitPrice = quantity > 0 ? Math.round(revenue / quantity) : 0;
         return {
           name: dish?.name ?? 'Plat inconnu',
-          quantity: d._sum.quantity ?? 0,
-          revenue: d._sum.amount ?? 0,
+          quantity,
+          revenue,
           isPromotion: dish?.is_promotion ?? false,
           promotionPrice: dish?.promotion_price ?? null,
-          price: dish?.price ?? 0,
+          price: actualUnitPrice, // Prix unitaire réel (CA / quantité)
+          originalPrice: dish?.price ?? 0, // Prix catalogue
         };
       }),
       reviews: {
@@ -245,7 +250,6 @@ export class MarketingReportService {
   private buildHtml(data: ReportData): string {
     const fmtPrice = (n: number) => new Intl.NumberFormat('fr-FR').format(Math.round(n));
     const totalSourceOrders = data.bySource.reduce((a, b) => a + b.orders, 0);
-    const totalTypeOrders = data.byType.reduce((a, b) => a + b.orders, 0);
 
     const stars = (rating: number) => {
       const full = Math.round(rating);
@@ -299,7 +303,7 @@ export class MarketingReportService {
 <body>
   <div class="header">
     <div>
-      <h1>Rapport Marketing — Chicken Nation</h1>
+      <h1>Rapport Marketing Livraison — Chicken Nation</h1>
       <div class="date">${data.dateLabel}</div>
     </div>
   </div>
@@ -356,52 +360,9 @@ export class MarketingReportService {
       </div>
     </div>
 
-    <div class="grid-2">
-      <!-- Par Type -->
-      <div class="section">
-        <div class="section-title">Répartition par Type</div>
-        <table>
-          <thead><tr><th>Type</th><th class="text-center">Commandes</th><th class="text-center">%</th><th class="text-right">CA</th></tr></thead>
-          <tbody>
-            ${data.byType.map((t) => {
-              const pct = totalTypeOrders > 0 ? Math.round((t.orders / totalTypeOrders) * 100) : 0;
-              return `
-              <tr>
-                <td>${t.label}</td>
-                <td class="text-center">${t.orders}</td>
-                <td class="text-center"><span class="pct-bar" style="width:${pct}px"></span>${pct}%</td>
-                <td class="text-right">${fmtPrice(t.revenue)} FCFA</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-
-      <!-- Avis Clients -->
-      <div class="section">
-        <div class="section-title">Avis Clients</div>
-        <div style="text-align:center; margin-bottom:12px;">
-          <div class="stars">${stars(data.reviews.average)}</div>
-          <div style="font-size:22px; font-weight:800; color:#F17922; margin-top:4px;">${data.reviews.average.toFixed(1)}/5</div>
-          <div style="font-size:11px; color:#6c757d;">${data.reviews.total} avis</div>
-        </div>
-        ${[5, 4, 3, 2, 1].map((n) => {
-          const count = data.reviews.distribution[n] || 0;
-          const pct = data.reviews.total > 0 ? Math.round((count / data.reviews.total) * 100) : 0;
-          return `
-          <div class="review-bar">
-            <span style="width:14px; text-align:center; font-weight:600;">${n}</span>
-            <span style="color:#F17922;">★</span>
-            <div class="review-bar-bg"><div class="review-bar-fill" style="width:${pct}%"></div></div>
-            <span style="width:30px; text-align:right; font-size:10px; color:#6c757d;">${count}</span>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>
-
     <!-- Top 10 Plats -->
     <div class="section">
-      <div class="section-title">Top 10 Plats Vendus</div>
+      <div class="section-title">Top 10 Plats Vendus (Livraison)</div>
       <table>
         <thead>
           <tr>
@@ -427,6 +388,31 @@ export class MarketingReportService {
           `).join('')}
         </tbody>
       </table>
+    </div>
+
+    <!-- Avis Clients -->
+    <div class="section">
+      <div class="section-title">Avis Clients</div>
+      <div style="display:flex; align-items:center; gap:30px;">
+        <div style="text-align:center;">
+          <div class="stars">${stars(data.reviews.average)}</div>
+          <div style="font-size:22px; font-weight:800; color:#F17922; margin-top:4px;">${data.reviews.average.toFixed(1)}/5</div>
+          <div style="font-size:11px; color:#6c757d;">${data.reviews.total} avis</div>
+        </div>
+        <div style="flex:1;">
+          ${[5, 4, 3, 2, 1].map((n) => {
+            const count = data.reviews.distribution[n] || 0;
+            const pct = data.reviews.total > 0 ? Math.round((count / data.reviews.total) * 100) : 0;
+            return `
+            <div class="review-bar">
+              <span style="width:14px; text-align:center; font-weight:600;">${n}</span>
+              <span style="color:#F17922;">★</span>
+              <div class="review-bar-bg"><div class="review-bar-fill" style="width:${pct}%"></div></div>
+              <span style="width:30px; text-align:right; font-size:10px; color:#6c757d;">${count}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
     </div>
   </div>
 
