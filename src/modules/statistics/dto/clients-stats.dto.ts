@@ -75,6 +75,21 @@ export class ClientsOverviewResponse {
 
   @ApiProperty({ description: 'Clients via Call Center (auto=false)' })
   callCenterClients: number;
+
+  @ApiProperty({ description: 'Total tous clients inscrits (actifs)' })
+  totalAllCustomers: number;
+
+  @ApiProperty({ description: 'Clients sans app (pas de expo_push_token)' })
+  noAppClients: number;
+
+  @ApiProperty({ description: 'Clients ayant au moins 1 commande' })
+  hasOrderedClients: number;
+
+  @ApiProperty({ description: 'Clients inscrits mais 0 commandes' })
+  neverOrderedClients: number;
+
+  @ApiProperty({ description: 'Clients avec profil incomplet (nom/prénom/email manquant)' })
+  incompleteProfileClients: number;
 }
 
 export class ClientAcquisitionDailyPoint {

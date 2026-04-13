@@ -57,12 +57,36 @@ export class StatisticsClientsService {
 
     const customerIds = [...new Set(ordersInPeriod.map((o) => o.customer_id!))] as string[];
 
+    // Segment counts (all customers, not just those who ordered in period)
+    const allCustomers = await this.prisma.customer.findMany({
+      where: { entity_status: 'ACTIVE' },
+      select: {
+        id: true,
+        first_name: true,
+        last_name: true,
+        email: true,
+        notification_settings: { select: { expo_push_token: true } },
+        _count: { select: { orders: true } },
+      },
+    });
+    const totalAllCustomers = allCustomers.length;
+    const noAppClients = allCustomers.filter(
+      (c) => !c.notification_settings?.expo_push_token,
+    ).length;
+    const hasOrderedClients = allCustomers.filter((c) => c._count.orders > 0).length;
+    const neverOrderedClients = allCustomers.filter((c) => c._count.orders === 0).length;
+    const incompleteProfileClients = allCustomers.filter(
+      (c) => !c.first_name || !c.last_name || !c.email,
+    ).length;
+
     if (customerIds.length === 0) {
       return {
         totalClients: 0, newClients: 0, recurringClients: 0,
         newClientsRate: 0, averageLtv: 0, averageLtvFormatted: '0 XOF',
         averageBasket: 0, averageBasketFormatted: '0 XOF',
         averageOrderFrequency: 0, appClients: 0, callCenterClients: 0,
+        totalAllCustomers, noAppClients, hasOrderedClients,
+        neverOrderedClients, incompleteProfileClients,
       };
     }
 
@@ -123,6 +147,11 @@ export class StatisticsClientsService {
       averageOrderFrequency,
       appClients: appCustomerIds.size,
       callCenterClients: callCustomerIds.size,
+      totalAllCustomers,
+      noAppClients,
+      hasOrderedClients,
+      neverOrderedClients,
+      incompleteProfileClients,
     };
   }
 
@@ -714,7 +743,7 @@ export class StatisticsClientsService {
     const totalClients = allCustomerIds.size;
 
     const items = Array.from(methodMap.entries()).map(([method, data]) => ({
-      method: method === 'ONLINE' ? 'En ligne' : 'Au restaurant',
+      method,
       clientCount: data.customers.size,
       orderCount: data.orderCount,
       percentage: totalClients > 0 ? Math.round((data.customers.size / totalClients) * 100) : 0,
