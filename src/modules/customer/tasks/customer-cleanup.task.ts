@@ -27,7 +27,6 @@ export class CustomerCleanupTask {
           OR: [
             { first_name: null },
             { last_name: null },
-            { email: null },
           ],
           orders: { none: {} },
         },

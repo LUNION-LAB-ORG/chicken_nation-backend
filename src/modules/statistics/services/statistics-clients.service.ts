@@ -76,7 +76,7 @@ export class StatisticsClientsService {
     const hasOrderedClients = allCustomers.filter((c) => c._count.orders > 0).length;
     const neverOrderedClients = allCustomers.filter((c) => c._count.orders === 0).length;
     const incompleteProfileClients = allCustomers.filter(
-      (c) => !c.first_name || !c.last_name || !c.email,
+      (c) => !c.first_name || !c.last_name,
     ).length;
 
     if (customerIds.length === 0) {
