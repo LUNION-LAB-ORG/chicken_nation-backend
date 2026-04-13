@@ -24,10 +24,8 @@ export class CustomerCleanupTask {
       // Identifier les clients à supprimer
       const toDelete = await this.prisma.customer.findMany({
         where: {
-          OR: [
-            { first_name: null },
-            { last_name: null },
-          ],
+          first_name: null,
+          last_name: null,
           orders: { none: {} },
         },
         select: { id: true, phone: true },
