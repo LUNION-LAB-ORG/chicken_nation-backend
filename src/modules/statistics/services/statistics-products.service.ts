@@ -139,7 +139,12 @@ export class StatisticsProductsService {
 
         const totalSold = item._sum.quantity ?? 0;
         const previousPeriodSold = prevMap.get(item.dish_id) ?? 0;
-        const revenue = revenueMap.get(item.dish_id) ?? 0;
+        // Prix unitaire = prix promo si le plat est en promotion, sinon prix normal
+        const unitPrice = (dish.is_promotion && dish.promotion_price != null)
+          ? dish.promotion_price
+          : dish.price;
+        // CA = prix unitaire × quantité
+        const revenue = unitPrice * totalSold;
         const percentage =
           totalSoldCurrentPeriod > 0
             ? Math.round((totalSold / totalSoldCurrentPeriod) * 100)
@@ -200,10 +205,16 @@ export class StatisticsProductsService {
       const cat = item.dish?.category;
       if (!cat) continue;
 
+      // Prix unitaire réel = prix promo si applicable, sinon prix normal
+      const unitPrice = (item.dish?.is_promotion && item.dish?.promotion_price != null)
+        ? item.dish.promotion_price
+        : (item.dish?.price ?? 0);
+      const lineRevenue = unitPrice * item.quantity;
+
       const existing = categoryMap.get(cat.id);
       if (existing) {
         existing.totalSold += item.quantity;
-        existing.revenue += item.amount;
+        existing.revenue += lineRevenue;
         existing.dishIds.add(item.dish_id);
       } else {
         categoryMap.set(cat.id, {
@@ -211,7 +222,7 @@ export class StatisticsProductsService {
           name: cat.name,
           image: cat.image ?? '',
           totalSold: item.quantity,
-          revenue: item.amount,
+          revenue: lineRevenue,
           dishIds: new Set([item.dish_id]),
         });
       }
@@ -355,16 +366,22 @@ export class StatisticsProductsService {
     for (const item of items) {
       const rest = item.order?.restaurant;
       if (!rest) continue;
+      // Prix unitaire réel
+      const unitPrice = (item.dish?.is_promotion && item.dish?.promotion_price != null)
+        ? item.dish.promotion_price
+        : (item.dish?.price ?? 0);
+      const lineRevenue = unitPrice * item.quantity;
+
       const existing = restaurantMap.get(rest.id);
       if (existing) {
         existing.totalSold += item.quantity;
-        existing.revenue += item.amount;
+        existing.revenue += lineRevenue;
       } else {
         restaurantMap.set(rest.id, {
           restaurantId: rest.id,
           restaurantName: rest.name,
           totalSold: item.quantity,
-          revenue: item.amount,
+          revenue: lineRevenue,
         });
       }
     }
@@ -503,12 +520,12 @@ export class StatisticsProductsService {
       created_at: buildDateFilter(dateRange),
     };
 
-    // Récupérer tous les OrderItems avec la date de commande
+    // Récupérer tous les OrderItems avec la date de commande et les infos plat
     const items = await this.prisma.orderItem.findMany({
       where: { order: baseOrderWhere },
       select: {
         quantity: true,
-        amount: true,
+        dish: { select: { price: true, promotion_price: true, is_promotion: true } },
         order: { select: { created_at: true } },
       },
     });
@@ -517,15 +534,20 @@ export class StatisticsProductsService {
     const dayMap = new Map<string, { totalQuantity: number; totalRevenue: number }>();
 
     for (const item of items) {
+      const unitPrice = (item.dish?.is_promotion && item.dish?.promotion_price != null)
+        ? item.dish.promotion_price
+        : (item.dish?.price ?? 0);
+      const lineRevenue = unitPrice * item.quantity;
+
       const day = format(item.order.created_at, 'yyyy-MM-dd');
       const existing = dayMap.get(day);
       if (existing) {
         existing.totalQuantity += item.quantity;
-        existing.totalRevenue += item.amount;
+        existing.totalRevenue += lineRevenue;
       } else {
         dayMap.set(day, {
           totalQuantity: item.quantity,
-          totalRevenue: item.amount,
+          totalRevenue: lineRevenue,
         });
       }
     }
@@ -567,22 +589,28 @@ export class StatisticsProductsService {
       created_at: buildDateFilter(dateRange),
     };
 
+    const dishSelect = { price: true, promotion_price: true, is_promotion: true };
+    const calcRevenue = (i: { quantity: number; dish: { price: number; promotion_price: number | null; is_promotion: boolean } | null }) => {
+      const up = (i.dish?.is_promotion && i.dish?.promotion_price != null) ? i.dish.promotion_price : (i.dish?.price ?? 0);
+      return up * i.quantity;
+    };
+
     // App (auto = true)
     const appItems = await this.prisma.orderItem.findMany({
       where: { order: { ...baseWhere, auto: true } },
-      select: { quantity: true, amount: true },
+      select: { quantity: true, dish: { select: dishSelect } },
     });
 
     // Call Center (auto = false)
     const ccItems = await this.prisma.orderItem.findMany({
       where: { order: { ...baseWhere, auto: false } },
-      select: { quantity: true, amount: true },
+      select: { quantity: true, dish: { select: dishSelect } },
     });
 
     const appSold = appItems.reduce((acc, i) => acc + i.quantity, 0);
-    const appRevenue = appItems.reduce((acc, i) => acc + i.amount, 0);
+    const appRevenue = appItems.reduce((acc, i) => acc + calcRevenue(i), 0);
     const callCenterSold = ccItems.reduce((acc, i) => acc + i.quantity, 0);
-    const callCenterRevenue = ccItems.reduce((acc, i) => acc + i.amount, 0);
+    const callCenterRevenue = ccItems.reduce((acc, i) => acc + calcRevenue(i), 0);
     const totalSold = appSold + callCenterSold;
 
     return {
@@ -610,14 +638,13 @@ export class StatisticsProductsService {
       created_at: buildDateFilter(dateRange),
     };
 
-    // Tous les OrderItems avec info promotion du plat
+    // Tous les OrderItems avec info promotion et prix du plat
     const items = await this.prisma.orderItem.findMany({
       where: { order: baseOrderWhere },
       select: {
         quantity: true,
-        amount: true,
         dish_id: true,
-        dish: { select: { is_promotion: true } },
+        dish: { select: { is_promotion: true, price: true, promotion_price: true } },
       },
     });
 
@@ -630,14 +657,19 @@ export class StatisticsProductsService {
     let regularRevenue = 0;
 
     for (const item of items) {
+      const unitPrice = (item.dish?.is_promotion && item.dish?.promotion_price != null)
+        ? item.dish.promotion_price
+        : (item.dish?.price ?? 0);
+      const lineRevenue = unitPrice * item.quantity;
+
       if (item.dish?.is_promotion) {
         promoDishesSeen.add(item.dish_id);
         promoTotalSold += item.quantity;
-        promoRevenue += item.amount;
+        promoRevenue += lineRevenue;
       } else {
         regularDishesSeen.add(item.dish_id);
         regularTotalSold += item.quantity;
-        regularRevenue += item.amount;
+        regularRevenue += lineRevenue;
       }
     }
 

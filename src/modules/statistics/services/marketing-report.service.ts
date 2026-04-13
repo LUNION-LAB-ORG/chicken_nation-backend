@@ -31,11 +31,10 @@ interface ReportData {
   topDishes: Array<{
     name: string;
     quantity: number;
-    revenue: number;
+    revenue: number;       // CA = unitPrice × quantity
     isPromotion: boolean;
     promotionPrice: number | null;
-    price: number;         // Prix unitaire réel (CA / quantité)
-    originalPrice: number; // Prix catalogue
+    unitPrice: number;     // Prix unitaire = promotion_price si promo, sinon price
   }>;
   reviews: {
     average: number;
@@ -197,16 +196,19 @@ export class MarketingReportService {
       topDishes: topDishesRaw.map((d) => {
         const dish = dishMap.get(d.dish_id);
         const quantity = d._sum.quantity ?? 0;
-        const revenue = d._sum.amount ?? 0;
-        const actualUnitPrice = quantity > 0 ? Math.round(revenue / quantity) : 0;
+        // Prix unitaire = prix promo si le plat est en promotion, sinon prix normal
+        const unitPrice = (dish?.is_promotion && dish?.promotion_price != null)
+          ? dish.promotion_price
+          : (dish?.price ?? 0);
+        // CA = prix unitaire × quantité vendues
+        const revenue = unitPrice * quantity;
         return {
           name: dish?.name ?? 'Plat inconnu',
           quantity,
           revenue,
           isPromotion: dish?.is_promotion ?? false,
           promotionPrice: dish?.promotion_price ?? null,
-          price: actualUnitPrice, // Prix unitaire réel (CA / quantité)
-          originalPrice: dish?.price ?? 0, // Prix catalogue
+          unitPrice,
         };
       }),
       reviews: {
@@ -382,7 +384,7 @@ export class MarketingReportService {
                 ${d.isPromotion ? `<span class="badge badge-promo">Promo ${d.promotionPrice ? fmtPrice(d.promotionPrice) + ' FCFA' : ''}</span>` : ''}
               </td>
               <td class="text-center">${d.quantity}</td>
-              <td class="text-right">${fmtPrice(d.price)} FCFA</td>
+              <td class="text-right">${fmtPrice(d.unitPrice)} FCFA</td>
               <td class="text-right">${fmtPrice(d.revenue)} FCFA</td>
             </tr>
           `).join('')}
