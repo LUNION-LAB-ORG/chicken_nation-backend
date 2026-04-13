@@ -9,6 +9,7 @@ import { CommentController } from './controllers/comment.controller';
 import { CommentService } from './services/comment.service';
 import { CustomerEvent } from './events/customer.event';
 import { NotificationSettingService } from './services/notification-setting.service';
+import { CustomerCleanupTask } from './tasks/customer-cleanup.task';
 // import { CustomerListenerService } from './listeners/customer-listener.service';
 
 @Module({
@@ -25,7 +26,8 @@ import { NotificationSettingService } from './services/notification-setting.serv
     FavoriteService,
     CommentService,
     CustomerEvent,
-    NotificationSettingService
+    NotificationSettingService,
+    CustomerCleanupTask,
     // CustomerListenerService
   ],
 })
