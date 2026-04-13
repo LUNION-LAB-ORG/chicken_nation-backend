@@ -30,7 +30,7 @@ export interface PreviousPeriod {
 export interface BaseStatsQuery {
   startDate?: string;
   endDate?: string;
-  period?: 'today' | 'week' | 'month' | 'last_month' | 'year';
+  period?: 'today' | 'yesterday' | 'week' | 'month' | 'last_month' | 'year';
   restaurantId?: string;
 }
 
@@ -70,6 +70,12 @@ export function parseDateRange(query: BaseStatsQuery): DateRange {
         startDate = startOfDay(now);
         endDate = endOfDay(now);
         break;
+      case 'yesterday': {
+        const yesterday = subDays(now, 1);
+        startDate = startOfDay(yesterday);
+        endDate = endOfDay(yesterday);
+        break;
+      }
       case 'week':
         startDate = startOfWeek(now, { weekStartsOn: 1 });
         endDate = endOfWeek(now, { weekStartsOn: 1 });
