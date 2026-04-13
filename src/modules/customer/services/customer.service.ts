@@ -201,9 +201,11 @@ export class CustomerService {
                 }]
               : []),
             {
-              AND: [
-                { OR: [{ first_name: null }, { first_name: '' }] },
-                { OR: [{ last_name: null }, { last_name: '' }] },
+              OR: [
+                { first_name: null },
+                { first_name: '' },
+                { last_name: null },
+                { last_name: '' },
               ],
             },
           ];
