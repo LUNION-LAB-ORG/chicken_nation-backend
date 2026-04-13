@@ -14,6 +14,7 @@ import {
   startOfYear,
   subDays,
   subMonths,
+  subWeeks,
 } from 'date-fns';
 import { Prisma } from '@prisma/client';
 
@@ -30,7 +31,7 @@ export interface PreviousPeriod {
 export interface BaseStatsQuery {
   startDate?: string;
   endDate?: string;
-  period?: 'today' | 'yesterday' | 'week' | 'month' | 'last_month' | 'year';
+  period?: 'today' | 'yesterday' | 'week' | 'last_week' | 'month' | 'last_month' | 'year';
   restaurantId?: string;
 }
 
@@ -80,6 +81,12 @@ export function parseDateRange(query: BaseStatsQuery): DateRange {
         startDate = startOfWeek(now, { weekStartsOn: 1 });
         endDate = endOfWeek(now, { weekStartsOn: 1 });
         break;
+      case 'last_week': {
+        const lastWeek = subWeeks(now, 1);
+        startDate = startOfWeek(lastWeek, { weekStartsOn: 1 });
+        endDate = endOfWeek(lastWeek, { weekStartsOn: 1 });
+        break;
+      }
       case 'last_month': {
         const lastMonth = subMonths(now, 1);
         startDate = startOfMonth(lastMonth);
