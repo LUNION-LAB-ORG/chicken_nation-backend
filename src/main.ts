@@ -48,9 +48,18 @@ async function bootstrap() {
   // Compression
   app.use(compression());
 
-  // CORS
+  // CORS — origins via env var CORS_ORIGINS (comma-separated), fallback à la liste historique
+  const corsOrigins = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
+    : [
+        'https://chicken-nation-backoffice.vercel.app',
+        'https://chicken-nation.com',
+        'https://www.chicken-nation.com',
+        'http://localhost:3000',
+        'http://localhost:4006',
+      ];
   app.enableCors({
-    origin: ['https://chicken-nation-backoffice.vercel.app', 'https://chicken-nation.com', 'https://www.chicken-nation.com', 'http://localhost:3000', 'http://localhost:4006'],
+    origin: corsOrigins,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
   });
