@@ -5,7 +5,7 @@ import { CreateOrderItemDto } from "src/modules/order/dto/create-order-item.dto"
 import { OrderType } from "src/modules/order/enums/order-type.enum";
 import { TypeTable } from "src/modules/order/enums/order-type-table.enum";
 import { parse, isValid } from 'date-fns';
-import { PaymentMethod } from "@prisma/client";
+import { DeliveryService, PaymentMethod } from "@prisma/client";
 
 export class CreateOrderDto {
     @ApiProperty({ description: "Type de commande", enum: OrderType })
@@ -128,4 +128,12 @@ export class CreateOrderDto {
     @IsNumber()
     @Type(() => Number)
     delivery_fee?: number;
+
+    @ApiPropertyOptional({
+        description: "Service de livraison (override). Si omis, le système choisit automatiquement selon la zone.",
+        enum: DeliveryService,
+    })
+    @IsOptional()
+    @IsEnum(DeliveryService)
+    delivery_service?: DeliveryService;
 }

@@ -30,6 +30,7 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
+import { MarkPaidCashDto } from 'src/modules/order/dto/mark-paid-cash.dto';
 import { QueryOrderCustomerDto, QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
 import { OrderUpdatedDto, UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
 import { OrderService } from 'src/modules/order/services/order.service';
@@ -83,6 +84,30 @@ export class OrderController {
   @ApiOperation({ summary: 'Rechercher toutes les commandes' })
   findAll(@Query() queryOrderDto: QueryOrderDto) {
     return this.orderService.findAll(queryOrderDto);
+  }
+
+  @Post(':id/mark-paid-cash')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE)
+  @ApiOperation({
+    summary: 'Caissière : encaisse le livreur pour une commande en espèce',
+    description:
+      'Marque Order.paied=true + paied_at=now et passe en COMPLETED. Uniquement pour payment_method=OFFLINE. Déclenche order:updated.',
+  })
+  @ApiBody({ type: MarkPaidCashDto })
+  markPaidCash(@Param('id') id: string, @Body() dto: MarkPaidCashDto) {
+    return this.orderService.markPaidCash(id, dto.amount);
+  }
+
+  @Get('/operations/active')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.READ)
+  @ApiOperation({
+    summary: 'Liste des commandes actives pour la page Opérations',
+    description: 'ACCEPTED, IN_PROGRESS, READY, PICKED_UP, COLLECTED — avec Delivery/Course si applicable.',
+  })
+  operationsActive(@Query('restaurantId') restaurantId?: string) {
+    return this.orderService.findActiveForOperations(restaurantId);
   }
 
   @Get('/customer')

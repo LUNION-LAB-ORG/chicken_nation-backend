@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsOptional, IsObject, IsBoolean, IsArray, MaxLength } from 'class-validator';
 
-export class CreateTemplateDto {
+export class CreateOneSignalTemplateDto {
   @ApiProperty({ description: 'Nom du template (max 128 chars)' })
   @IsString()
   @MaxLength(128)

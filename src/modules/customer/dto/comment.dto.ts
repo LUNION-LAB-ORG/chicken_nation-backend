@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsString, IsUUID, Max, Min, IsOptional } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsString, IsUUID, Max, Min, IsOptional, IsISO8601 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -129,4 +129,14 @@ export class GetCommentsQueryDto {
     @IsOptional()
     @IsUUID()
     restaurantId?: string;
+
+    @ApiProperty({ required: false, description: 'Date de début (ISO 8601, inclusive)' })
+    @IsOptional()
+    @IsISO8601()
+    date_from?: string;
+
+    @ApiProperty({ required: false, description: 'Date de fin (ISO 8601, inclusive)' })
+    @IsOptional()
+    @IsISO8601()
+    date_to?: string;
 }

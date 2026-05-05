@@ -126,13 +126,27 @@ export class TicketMessageService {
     }
 
 
-    async markMessagesAsRead(ticketId: string, type: 'USER' | 'CUSTOMER', authorId: string): Promise<boolean> {
-        this.logger.log(`Marquer les messages du ticket ${ticketId} comme lus`);
+    async markMessagesAsRead(
+        ticketId: string,
+        type: 'USER' | 'CUSTOMER' | 'DELIVERER',
+        authorId: string,
+    ): Promise<boolean> {
+        this.logger.log(`Marquer les messages du ticket ${ticketId} comme lus (par ${type})`);
+        // Marque comme lus tous les messages NON envoyés par cet auteur.
+        // Si je suis le livreur, marque comme lus tous les messages qui ne
+        // viennent PAS de moi (= messages staff).
+        const notMineFilter =
+            type === 'USER'
+                ? { authorUserId: { not: authorId } }
+                : type === 'CUSTOMER'
+                    ? { authorCustomerId: { not: authorId } }
+                    : { authorDelivererId: { not: authorId } };
+
         await this.prisma.ticketMessage.updateMany({
             where: {
                 ticketId,
                 isRead: false,
-                ...(type === 'USER' ? { authorUserId: { not: authorId } } : { authorCustomerId: { not: authorId } })
+                ...notMineFilter,
             },
             data: { isRead: true },
         });

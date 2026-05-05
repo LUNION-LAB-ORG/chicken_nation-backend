@@ -39,6 +39,16 @@ export class TicketService {
         image: true,
       },
     },
+    // P-chat livreur : inclure le demandeur livreur si présent
+    deliverer: {
+      select: {
+        id: true,
+        first_name: true,
+        last_name: true,
+        phone: true,
+        image: true,
+      },
+    },
     assignee: {
       select: this.userSelect,
     },
@@ -49,7 +59,21 @@ export class TicketService {
     },
     order: { select: { id: true, reference: true, restaurant_id: true } },
     category: { select: { id: true, name: true } },
-    _count: { select: { messages: { where: { isRead: false, authorCustomerId: { not: null } } } } },
+    // Compteur unread : messages NON lus envoyés par le client OU le livreur
+    // (= messages que le staff doit traiter).
+    _count: {
+      select: {
+        messages: {
+          where: {
+            isRead: false,
+            OR: [
+              { authorCustomerId: { not: null } },
+              { authorDelivererId: { not: null } },
+            ],
+          },
+        },
+      },
+    },
   }
 
   private buildWhereClause(filter: QueryTicketsDto, extraWhere?: Prisma.TicketThreadWhereInput): Prisma.TicketThreadWhereInput {
@@ -401,14 +425,23 @@ export class TicketService {
       code: ticket.code,
       status: ticket.status,
       priority: ticket.priority,
-      customer: {
+      customer: ticket.customer ? {
         id: ticket.customer.id,
-        name: `${ticket.customer.first_name} ${ticket.customer.last_name}`,
+        name: `${ticket.customer.first_name ?? ''} ${ticket.customer.last_name ?? ''}`.trim(),
         first_name: ticket.customer.first_name,
         last_name: ticket.customer.last_name,
         email: ticket.customer.email,
         image: ticket.customer.image,
-      },
+      } : null,
+      // P-chat livreur : retourner le demandeur livreur si présent
+      deliverer: ticket.deliverer ? {
+        id: ticket.deliverer.id,
+        name: `${ticket.deliverer.first_name ?? ''} ${ticket.deliverer.last_name ?? ''}`.trim(),
+        first_name: ticket.deliverer.first_name,
+        last_name: ticket.deliverer.last_name,
+        phone: ticket.deliverer.phone,
+        image: ticket.deliverer.image,
+      } : null,
       assignee: ticket.assignee && {
         id: ticket.assignee?.id,
         name: ticket.assignee ? ticket.assignee.fullname : null,
@@ -424,16 +457,16 @@ export class TicketService {
         role: participant.user.role,
       })),
       messages: ticket.messages,
-      order: {
-        id: ticket.order?.id,
-        reference: ticket.order?.reference,
-        restaurantId: ticket.order?.restaurant_id,
-      },
+      order: ticket.order ? {
+        id: ticket.order.id,
+        reference: ticket.order.reference,
+        restaurantId: ticket.order.restaurant_id,
+      } : null,
       category: ticket.category && {
         id: ticket.category.id,
         name: ticket.category.name,
       } || null,
       unreadCount: ticket._count?.messages ?? 0,
-    };
+    } as ResponseTicketDto;
   }
 }

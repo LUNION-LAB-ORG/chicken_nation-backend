@@ -10,6 +10,9 @@ import KeyvRedis from '@keyv/redis';
 import { CommonModule } from 'src/common/common.module';
 import { UsersModule } from 'src/modules/users/users.module';
 import { AuthModule } from 'src/modules/auth/auth.module';
+import { AuthDelivererModule } from 'src/modules/auth-deliverer/auth-deliverer.module';
+import { DeliverersModule } from 'src/modules/deliverers/deliverers.module';
+import { CourseModule } from 'src/modules/course/course.module';
 import { DatabaseModule } from 'src/database/database.module';
 import { RestaurantModule } from 'src/modules/restaurant/restaurant.module';
 import { MenuModule } from 'src/modules/menu/menu.module';
@@ -39,6 +42,7 @@ import { OnesignalModule } from 'src/modules/onesignal/onesignal.module';
 import { PushCampaignModule } from 'src/modules/push-campaign/push-campaign.module';
 import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
 import { RetentionCallbackModule } from 'src/modules/retention-callback/retention-callback.module';
+import { SchedulingModule } from 'src/modules/schedule/schedule.module';
 
 @Module({
   imports: [
@@ -52,7 +56,11 @@ import { RetentionCallbackModule } from 'src/modules/retention-callback/retentio
       isGlobal: true,
       useFactory: async () => ({
         ttl: 1000,
-        stores: [new KeyvRedis('redis://localhost:6379')],
+        stores: [
+          new KeyvRedis(
+            `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || '6379'}`,
+          ),
+        ],
       }),
     }),
     BullModule.forRoot({
@@ -62,11 +70,11 @@ import { RetentionCallbackModule } from 'src/modules/retention-callback/retentio
         backoff: { type: 'exponential', delay: 1000 },
       },
       connection: {
-        host: 'localhost',
-        port: 6379,
-        username: 'default',
-        password: '',
-        db: 0,
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT || '6379', 10),
+        username: process.env.REDIS_USERNAME || 'default',
+        password: process.env.REDIS_PASSWORD || '',
+        db: parseInt(process.env.REDIS_DB || '0', 10),
       },
     }),
 
@@ -76,6 +84,9 @@ import { RetentionCallbackModule } from 'src/modules/retention-callback/retentio
     CommonModule,
     UsersModule,
     AuthModule,
+    AuthDelivererModule,
+    DeliverersModule,
+    CourseModule,
     RestaurantModule,
     MenuModule,
     CustomerModule,
@@ -102,6 +113,7 @@ import { RetentionCallbackModule } from 'src/modules/retention-callback/retentio
     PushCampaignModule,
     PromoCodeModule,
     RetentionCallbackModule,
+    SchedulingModule,
   ],
 })
 export class AppModule { }

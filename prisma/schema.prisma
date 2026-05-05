@@ -44,8 +44,9 @@ enum OrderStatus {
 }
 
 enum DeliveryService {
-  TURBO // TURBO
-  FREE
+  TURBO           // Sous-traité à Turbo Delivery
+  FREE            // Legacy — livraison gratuite (compat historique)
+  CHICKEN_NATION  // Livreur interne Chicken Nation (module course)
 }
 
 enum PaiementMode {
@@ -86,6 +87,70 @@ enum UserRole {
   ASSISTANT_MANAGER // ASSISTANT GESTIONNAIRE
   CAISSIER // CAISSIER
   CUISINE // CUISINE
+}
+
+enum DelivererStatus {
+  PENDING_VALIDATION // Inscrit, docs uploadés, en attente de validation admin
+  ACTIVE // Validé par admin et opérationnel
+  SUSPENDED // Désactivé temporairement
+  REJECTED // Refusé par admin
+}
+
+enum VehiculeType {
+  MOTO // MOTO
+  VELO // VELO
+  VOITURE // VOITURE
+}
+
+enum Genre {
+  HOMME // HOMME
+  FEMME // FEMME
+}
+
+/// Statut de la demande globale de course (vue livreur : le batch entier)
+enum CourseStatut {
+  PENDING_ASSIGNMENT // Créée, recherche active d'un livreur
+  ACCEPTED // Livreur a accepté, en route vers le restaurant
+  AT_RESTAURANT // Livreur sur place, a donné le code de retrait
+  IN_DELIVERY // Colis récupérés, tournée des clients en cours
+  COMPLETED // Toutes les livraisons terminées (succès ou échecs)
+  CANCELLED // Annulée avant accomplissement
+  EXPIRED // Aucun livreur n'a accepté dans le délai imparti
+}
+
+/// Statut d'une livraison individuelle dans le batch d'une course
+enum DeliveryStatut {
+  PENDING // En attente — livreur pas encore parti vers ce client
+  IN_ROUTE // Livreur en route vers ce client
+  ARRIVED // Livreur arrivé à l'adresse
+  DELIVERED // Livrée avec succès (PIN validé ou preuve photo)
+  FAILED // Échec de livraison
+  CANCELLED // Annulée (order client annulée pendant la tournée)
+}
+
+/// Raisons standard d'échec d'une livraison
+enum DeliveryFailureReason {
+  CLIENT_ABSENT // Client injoignable à la porte
+  CLIENT_REFUSED // Client a refusé la commande
+  ADDRESS_NOT_FOUND // Adresse introuvable / fausse
+  CLIENT_UNREACHABLE // Téléphone client non joignable
+  WRONG_ORDER // Erreur de commande détectée sur place
+  OTHER // Motif libre (requiert failure_note)
+}
+
+/// État d'un regroupement d'Orders (batch) en attente de flush.
+enum CourseBatchStatus {
+  PENDING // En cours d'agrégation — d'autres orders peuvent encore rejoindre
+  FLUSHED // Course créée à partir de ce batch (flush réussi)
+  EXPIRED // Fenêtre écoulée avec 0 order (cas rare — batch vidé avant flush)
+}
+
+/// Statut d'une proposition envoyée à UN livreur (audit trail)
+enum CourseOfferStatus {
+  PENDING // Envoyée, en attente de réponse
+  ACCEPTED // Acceptée (devient la course active du livreur)
+  REFUSED // Refusée explicitement
+  EXPIRED // Pas de réponse dans le délai imparti
 }
 
 enum TypeTable {
@@ -169,7 +234,7 @@ model Address {
 
 model Category {
   id          String  @id @default(uuid()) @db.Uuid
-  reference   String? @db.VarChar @unique
+  reference   String? @unique @db.VarChar
   name        String  @db.VarChar
   description String? @db.VarChar
   image       String? @db.Text
@@ -250,12 +315,307 @@ model Customer {
 
   TicketThread TicketThread[]
 
-  Conversation Conversation[]
-  Voucher           Voucher[]
-  cardRequests      CardRequest[]
-  nationCards       NationCard[]
-  promo_code_usages      PromoCodeUsage[]
-  retentionCallbacks     RetentionCallback[]
+  Conversation       Conversation[]
+  Voucher            Voucher[]
+  cardRequests       CardRequest[]
+  nationCards        NationCard[]
+  promo_code_usages  PromoCodeUsage[]
+  retentionCallbacks RetentionCallback[]
+}
+
+// -------------------- Livreurs (deliverers) ------------------------------
+
+model Deliverer {
+  id String @id @default(uuid()) @db.Uuid
+
+  // Référence métier affichable (auto-générée : LIV-YYMMDD-XXXXX)
+  reference String @unique @db.VarChar(20)
+
+  // Authentification
+  phone      String  @unique @db.VarChar
+  password   String  @db.VarChar // hash bcrypt du code 4 chiffres
+  first_name String? @db.VarChar(255)
+  last_name  String? @db.VarChar(255)
+  email      String? @unique @db.VarChar
+  genre      Genre?
+  image      String? @db.Text // URL avatar S3
+
+  // Documents et véhicule (uploadés à l'inscription)
+  type_vehicule          VehiculeType?
+  piece_identite         String?       @db.Text // URL S3
+  permis_conduire        String?       @db.Text // URL S3
+  numero_permis          String?       @db.VarChar(100) // Numéro figurant sur le permis
+  numero_immatriculation String?       @db.VarChar(50) // Plaque d'immatriculation du véhicule
+
+  // Statut métier
+  status         DelivererStatus @default(PENDING_VALIDATION)
+  is_operational Boolean         @default(false) // calculé côté service
+
+  // Affectation
+  restaurant_id String?     @db.Uuid
+  restaurant    Restaurant? @relation(fields: [restaurant_id], references: [id], onDelete: SetNull)
+
+  // Courses (demandes) affectées à ce livreur
+  courses        Course[]
+  offer_attempts CourseOfferAttempt[]
+
+  // ── Module Schedule (P7 — créneaux & disponibilité) ────────────────────
+  // Affectations à des shifts d'un planning, jours de repos, check-ins matinaux.
+  schedule_assignments ShiftAssignment[]
+  rest_days            RestDay[]
+  presence_checks      DailyPresenceCheck[]
+
+  // Sessions
+  last_login_at DateTime?
+  refresh_token String?   @db.Text // hash du refresh token actif
+
+  // Suppression différée (RGPD + période de grâce 90j)
+  // Si non null : compte programmé pour suppression définitive à cette date.
+  // Pendant cette période, le user peut se reconnecter et restaurer son compte.
+  deletion_scheduled_at DateTime? @db.Timestamp(6)
+
+  // ── Géolocalisation temps réel ─────────────────────────────────────────
+  // Remontée par le mobile via POST /deliverer/me/location toutes les X sec
+  // (X = `deliverer.gps_update_interval_seconds` en settings, default 60s).
+  // Utilisée par le DelivererScoringService pour pondérer la distance
+  // au restaurant dans le choix du livreur à qui envoyer une offre.
+  last_location    Json?     // { lat: number, lng: number }
+  last_location_at DateTime? @db.Timestamp(6)
+  last_speed_kmh   Float?    // vitesse instantanée (m/s → km/h côté mobile)
+  last_heading_deg Float?    // direction 0-360° (bonus pour flèche map admin)
+
+  // ── File d'attente FIFO & pénalités ────────────────────────────────────
+  // `last_available_at` : timestamp d'entrée en queue (null = pas dispo).
+  // Le tri FIFO est `ORDER BY last_available_at ASC` — plus ancien = servi d'abord.
+  last_available_at DateTime? @db.Timestamp(6)
+
+  // Pause manuelle (bouton "Je prends une pause" côté mobile).
+  pause_until DateTime? @db.Timestamp(6)
+
+  // Pause forcée après N refus consécutifs en X min (auto_pause_*).
+  auto_pause_until DateTime? @db.Timestamp(6)
+
+  // Pénalité queue après un refus : descend de N positions pendant X min.
+  queue_penalty_until      DateTime? @db.Timestamp(6)
+  queue_penalty_positions  Int?      @default(0)
+
+  // Historique timestamps des derniers refus/expirations d'offres — JSON
+  // array de strings ISO. Utilisé pour compter les refus dans une fenêtre
+  // glissante (cf. auto_pause_refusals_window_min).
+  recent_refusals Json?
+
+  // ── Push notifications (Expo Push) ─────────────────────────────────────
+  // Token Expo enregistré au login mobile. Sert à `ExpoPushService` pour
+  // envoyer des notifications (nouveau message support, nouvelle course,
+  // auto-pause, etc.). Re-set à chaque login pour suivre les changements
+  // (re-install app, restore device, etc.).
+  expo_push_token String? @db.VarChar(255)
+
+  // ── Tickets support (P-chat livreur ↔ support) ─────────────────────────
+  // Le livreur peut ouvrir des tickets de support via l'app mobile, et
+  // recevoir des messages d'agents support depuis le backoffice.
+  support_tickets         TicketThread[]  @relation("DelivererTickets")
+  support_ticket_messages TicketMessage[] @relation("DelivererTicketMessages")
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([phone])
+  @@index([status])
+  @@index([restaurant_id])
+  @@index([deletion_scheduled_at])
+  @@index([last_available_at])
+  @@index([pause_until])
+  @@index([auto_pause_until])
+}
+
+// -------------------- Courses / Livraisons ---------------------------------
+// Modèle central qui représente la "demande de course" envoyée au livreur.
+// Une Course regroupe 1..N Delivery (livraisons individuelles).
+
+/// Demande de course = regroupement de livraisons proposées à un livreur.
+/// La `reference` sert aussi de code de retrait au restaurant.
+model Course {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Référence unique interne : CRS-YYMMDD-XXXXX (tracking + logs + URLs)
+  reference String @unique @db.VarChar(20)
+
+  /// Code de retrait à 3 chiffres donné au restaurant par le livreur.
+  /// NON unique : collisions possibles (1000 codes, tolérables à l'échelle d'un resto).
+  /// En cas de collision, le resto discrimine via le livreur et la commande.
+  pickup_code String @db.VarChar(3)
+
+  statut CourseStatut @default(PENDING_ASSIGNMENT)
+
+  /// Livreur affecté (null tant qu'aucun n'a accepté)
+  deliverer_id String?    @db.Uuid
+  deliverer    Deliverer? @relation(fields: [deliverer_id], references: [id], onDelete: SetNull)
+
+  /// Restaurant d'origine (toutes les livraisons partent du même resto)
+  restaurant_id String     @db.Uuid
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id])
+
+  /// Livraisons groupées dans cette demande (1..N)
+  deliveries Delivery[]
+
+  /// Historique des propositions envoyées aux livreurs
+  offer_attempts CourseOfferAttempt[]
+
+  /// Batch de regroupement d'origine (si la Course est issue du grouping auto).
+  /// Null si créée "en legacy" (1 order = 1 course sans batch).
+  batch CourseBatch?
+
+  // === Timeline ===
+  assigned_at      DateTime? @db.Timestamp(6) // livreur a accepté
+  at_restaurant_at DateTime? @db.Timestamp(6) // livreur arrivé au resto (GPS ou action manuelle)
+  picked_up_at     DateTime? @db.Timestamp(6) // code retrait donné, colis récupérés par la caissière
+  completed_at     DateTime? @db.Timestamp(6) // toutes livraisons terminées
+  cancelled_at     DateTime? @db.Timestamp(6)
+  cancelled_by     String?   @db.VarChar // "admin" | "deliverer" | "restaurant" | "system"
+  cancelled_reason String?   @db.VarChar
+
+  // === Mécanique d'affectation ===
+  /// Moment où l'offer PENDING actuelle expire
+  offer_expires_at DateTime? @db.Timestamp(6)
+  /// Cumul des livreurs ayant refusé (stat de difficulté)
+  refusal_count    Int       @default(0)
+
+  // === Financier ===
+  total_delivery_fee     Float
+  estimated_duration_min Int?
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([deliverer_id, statut])
+  @@index([restaurant_id, statut])
+  @@index([statut, offer_expires_at]) // utile pour le cron d'expiration
+}
+
+/// Une livraison individuelle dans le batch d'une course.
+/// 1 Delivery = 1 Order à livrer à 1 client.
+model Delivery {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Course (demande) à laquelle appartient cette livraison
+  course_id String @db.Uuid
+  course    Course @relation(fields: [course_id], references: [id], onDelete: Cascade)
+
+  /// Ordre dans la tournée (1, 2, 3…) — optimisation itinéraire
+  sequence_order Int
+
+  /// Order client livrée (relation 1-1)
+  order_id String @unique @db.Uuid
+  order    Order  @relation(fields: [order_id], references: [id])
+
+  statut DeliveryStatut @default(PENDING)
+
+  /// Code 4 chiffres donné au client via notification pour confirmer la réception.
+  delivery_pin String @db.VarChar(4)
+
+  // === Timeline par livraison ===
+  in_route_at  DateTime? @db.Timestamp(6) // livreur en route vers ce client
+  arrived_at   DateTime? @db.Timestamp(6) // livreur arrivé
+  delivered_at DateTime? @db.Timestamp(6) // PIN validé / preuve fournie
+  failed_at    DateTime? @db.Timestamp(6)
+
+  // === Échec ===
+  failure_reason DeliveryFailureReason?
+  failure_note   String?                @db.VarChar(500)
+
+  // === Preuve (fallback si client sans PIN) ===
+  proof_image String? @db.Text // key S3 sous chicken-nation/deliveries-proof/
+
+  // === Notation du client par le livreur (post-livraison, optionnel) ===
+  // Le livreur peut noter le client après une livraison (DELIVERED ou FAILED)
+  // pour signaler les comportements (ex: client agressif, lieu difficile,
+  // adresse fausse). Utilisé par les ops pour identifier les clients problématiques.
+  customer_rating      Int?      @db.SmallInt // 1-5
+  customer_rating_note String?   @db.VarChar(500)
+  customer_rated_at    DateTime? @db.Timestamp(6)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@unique([course_id, sequence_order]) // pas de doublon dans la tournée
+  @@index([course_id, statut])
+  @@index([order_id])
+  @@index([customer_rating]) // stats côté ops
+}
+
+/// Audit trail des propositions envoyées aux livreurs.
+/// - Permet le retry automatique après refus/timeout
+/// - Trace qui a refusé quoi pour stats
+model CourseOfferAttempt {
+  id String @id @default(uuid()) @db.Uuid
+
+  course_id String @db.Uuid
+  course    Course @relation(fields: [course_id], references: [id], onDelete: Cascade)
+
+  deliverer_id String    @db.Uuid
+  deliverer    Deliverer @relation(fields: [deliverer_id], references: [id])
+
+  status         CourseOfferStatus @default(PENDING)
+  offered_at     DateTime          @default(now()) @db.Timestamp(6)
+  expires_at     DateTime          @db.Timestamp(6) // offered_at + 30s
+  responded_at   DateTime?         @db.Timestamp(6)
+  refusal_reason String?           @db.VarChar(500)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([deliverer_id, status])
+  @@index([course_id])
+  @@index([status, expires_at]) // cron d'expiration
+
+  /// A1 Fix — Partial unique index ajouté via migration ciblée :
+  ///   CREATE UNIQUE INDEX "CourseOfferAttempt_pending_unique"
+  ///     ON "CourseOfferAttempt" ("course_id", "deliverer_id")
+  ///     WHERE "status" = 'PENDING';
+  /// Garantit qu'au plus UNE offer PENDING existe par couple
+  /// (course, deliverer) à un instant T. Les statuts terminaux
+  /// (ACCEPTED, REFUSED, EXPIRED) restent libres de doublons.
+  /// Prisma 6 ne supporte pas encore les WHERE clauses sur @@unique,
+  /// d'où la migration SQL brute (cf. 20260425101807_course_offer_pending_unique).
+}
+
+/// Regroupement intelligent de commandes en attente de création de Course.
+///
+/// Flow : quand une Order passe READY, `CourseGroupingService.tryGroupOrder(orderId)`
+/// attache l'order à un batch PENDING existant (même restaurant, compatible) ou
+/// en crée un nouveau avec TTL = `course.batch_window_seconds` (default 180 s).
+///
+/// Le batch est flush (→ Course créée) :
+///   - Immédiatement quand il atteint `course.max_orders_per_course`
+///   - Ou quand `expires_at` est dépassé (cron `CourseBatchTask` toutes les 10 s)
+///
+/// Un batch reste visible en DB même après flush pour audit / debug.
+model CourseBatch {
+  id            String @id @default(uuid()) @db.Uuid
+  restaurant_id String @db.Uuid
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  /// État courant du batch (PENDING → FLUSHED ou EXPIRED).
+  status CourseBatchStatus @default(PENDING)
+
+  /// Fenêtre de fermeture automatique : now + `course.batch_window_seconds`.
+  /// Le cron `CourseBatchTask` flush tous les batches PENDING dont `expires_at <= now`.
+  expires_at DateTime @db.Timestamp(6)
+
+  /// Commandes en attente dans ce batch (1..N via relation inverse `Order.batch`).
+  orders Order[]
+
+  /// Course créée au flush (null tant que PENDING ou EXPIRED sans flush).
+  course_id  String? @unique @db.Uuid
+  course     Course? @relation(fields: [course_id], references: [id], onDelete: SetNull)
+  flushed_at DateTime? @db.Timestamp(6)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([restaurant_id, status])
+  @@index([status, expires_at]) // cron de flush
 }
 
 // -------------------- Gestion des conversations ------------------------------
@@ -331,6 +691,11 @@ model TicketThread {
   customerId String?   @db.Uuid
   customer   Customer? @relation(fields: [customerId], references: [id])
 
+  // OU c'est un livreur qui contacte le support (P-chat livreur)
+  // Mutuellement exclusif avec customerId — un ticket vient d'UN seul demandeur.
+  delivererId String?    @db.Uuid
+  deliverer   Deliverer? @relation("DelivererTickets", fields: [delivererId], references: [id])
+
   // Catégorie du ticket
   categoryId String?         @db.Uuid
   category   TicketCategory? @relation(fields: [categoryId], references: [id])
@@ -361,6 +726,7 @@ model TicketThread {
   @@index([status, priority])
   @@index([assigneeId])
   @@index([customerId])
+  @@index([delivererId])
   @@index([fromConversationId])
 }
 
@@ -381,11 +747,14 @@ model TicketMessage {
   ticketId String       @db.Uuid
   ticket   TicketThread @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
-  // Les 2 authors ne peuvent etre null a la fois
+  // Les authors sont mutuellement exclusifs — exactement un des trois doit être non-null.
   authorUserId     String?   @db.Uuid
   authorUser       User?     @relation("TicketMsgAuthorUser", fields: [authorUserId], references: [id])
   authorCustomerId String?   @db.Uuid
   authorCustomer   Customer? @relation("TicketMsgAuthorCustomer", fields: [authorCustomerId], references: [id])
+  // Auteur livreur (P-chat livreur) — exclusif avec les 2 autres.
+  authorDelivererId String?    @db.Uuid
+  authorDeliverer   Deliverer? @relation("DelivererTicketMessages", fields: [authorDelivererId], references: [id])
 
   body      String
   meta      Json?
@@ -397,6 +766,7 @@ model TicketMessage {
   @@index([ticketId, createdAt])
   @@index([authorUserId])
   @@index([authorCustomerId])
+  @@index([authorDelivererId])
   @@index([isRead])
 }
 
@@ -450,7 +820,7 @@ model Dish {
   id String @id @default(uuid()) @db.Uuid
 
   name             String           @db.VarChar
-  reference        String?          @db.VarChar @unique
+  reference        String?          @unique @db.VarChar
   description      String?          @db.VarChar
   price            Float
   image            String?          @db.Text
@@ -555,22 +925,22 @@ model ScheduledNotification {
 }
 
 model PushCampaign {
-  id        String @id @default(uuid()) @db.Uuid
-  name      String @db.VarChar
-  title     String @db.VarChar
-  body      String @db.Text
+  id        String  @id @default(uuid()) @db.Uuid
+  name      String  @db.VarChar
+  title     String  @db.VarChar
+  body      String  @db.Text
   data      Json?
   image_url String? @db.VarChar
 
   // Ciblage
   target_type   String @db.VarChar // all | segment | filters | ids
-  target_config Json               // { segment?, filters?, ids? }
+  target_config Json // { segment?, filters?, ids? }
 
   // Stats
-  total_targeted Int @default(0)
-  total_sent     Int @default(0)
+  total_targeted  Int @default(0)
+  total_sent      Int @default(0)
   total_delivered Int @default(0)
-  total_failed   Int @default(0)
+  total_failed    Int @default(0)
 
   // Scheduling
   status       String    @default("sent") @db.VarChar // draft | sent | scheduled | failed
@@ -660,6 +1030,16 @@ model Order {
   user_id String? @db.Uuid
   user    User?   @relation(fields: [user_id], references: [id])
 
+  /// Livraison associée (null si type PICKUP/TABLE ou pas encore de Course créée).
+  /// Relation inverse : 1 Order → 0..1 Delivery (unique côté Delivery).
+  delivery Delivery?
+
+  /// Batch de regroupement en cours (null quand la Course est déjà créée OU
+  /// si l'order n'est pas encore passée READY). Permet au `CourseGroupingService`
+  /// de retrouver les orders d'un même batch pour décider l'ajout/flush.
+  batch_id String?      @db.Uuid
+  batch    CourseBatch? @relation(fields: [batch_id], references: [id], onDelete: SetNull)
+
   status           OrderStatus
   restaurant_id    String      @db.Uuid
   order_items      OrderItem[]
@@ -682,18 +1062,18 @@ model Order {
   promotion_usages PromotionUsage[]
   loyalty_points   LoyaltyPoint[]
 
-  entity_status EntityStatus   @default(ACTIVE)
-  accepted_at   DateTime?
-  prepared_at   DateTime?
-  ready_at      DateTime?
-  picked_up_at  DateTime?
-  collected_at  DateTime?
-  completed_at  DateTime?
-  cancelled_at  DateTime?
-  deleted_at    DateTime?
-  paied_at      DateTime?
-  created_at    DateTime       @default(now()) @db.Timestamp(6)
-  updated_at    DateTime       @default(now()) @db.Timestamp(6)
+  entity_status     EntityStatus     @default(ACTIVE)
+  accepted_at       DateTime?
+  prepared_at       DateTime?
+  ready_at          DateTime?
+  picked_up_at      DateTime?
+  collected_at      DateTime?
+  completed_at      DateTime?
+  cancelled_at      DateTime?
+  deleted_at        DateTime?
+  paied_at          DateTime?
+  created_at        DateTime         @default(now()) @db.Timestamp(6)
+  updated_at        DateTime         @default(now()) @db.Timestamp(6)
   Comment           Comment[]
   TicketThread      TicketThread[]
   Redemption        Redemption[]
@@ -747,16 +1127,21 @@ model Restaurant {
   apikey               String?               @db.VarChar
   dish_restaurants     DishRestaurant[]
   users                User[]
+  deliverers           Deliverer[]
+  courses              Course[]
+  course_batches       CourseBatch[]
   orders               Order[]
   restaurantPromotions RestaurantPromotion[]
+  /// Plannings de créneaux émis pour ce restaurant (P7).
+  schedule_plans       SchedulePlan[]
 
   // ================================
   // INTÉGRATION HUBRISE
   // ================================
-  hubrise_access_token     String? @db.Text     // Token OAuth HubRise
-  hubrise_location_id      String? @db.VarChar  // ID du location HubRise associé
-  hubrise_catalog_id       String? @db.VarChar  // ID du catalogue HubRise
-  hubrise_customer_list_id String? @db.VarChar  // ID de la liste de clients HubRise
+  hubrise_access_token     String? @db.Text // Token OAuth HubRise
+  hubrise_location_id      String? @db.VarChar // ID du location HubRise associé
+  hubrise_catalog_id       String? @db.VarChar // ID du catalogue HubRise
+  hubrise_customer_list_id String? @db.VarChar // ID de la liste de clients HubRise
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -800,16 +1185,16 @@ model User {
   last_login_at DateTime?
 
   // Relations conversations, tickets
-  TicketMessage     TicketMessage[]     @relation("TicketMsgAuthorUser")
-  TicketParticipant TicketParticipant[]
-  Message           Message[]           @relation("MessageAuthorUser")
-  ConversationUser  ConversationUser[]
-  TicketThread      TicketThread[]      @relation("TicketAssignee")
-  Voucher              Voucher[]
-  TicketUserSkill      TicketUserSkill[]   @relation("CategoryAgents")
-  orders               Order[]
-  promo_codes_created  PromoCode[]         @relation("promo_code_creator")
-  retentionCallbacks   RetentionCallback[] @relation("RetentionCallbacks")
+  TicketMessage       TicketMessage[]     @relation("TicketMsgAuthorUser")
+  TicketParticipant   TicketParticipant[]
+  Message             Message[]           @relation("MessageAuthorUser")
+  ConversationUser    ConversationUser[]
+  TicketThread        TicketThread[]      @relation("TicketAssignee")
+  Voucher             Voucher[]
+  TicketUserSkill     TicketUserSkill[]   @relation("CategoryAgents")
+  orders              Order[]
+  promo_codes_created PromoCode[]         @relation("promo_code_creator")
+  retentionCallbacks  RetentionCallback[] @relation("RetentionCallbacks")
 
   @@index([email, type])
 }
@@ -1045,25 +1430,25 @@ model Redemption {
 // ================================
 
 model PromoCode {
-  id                  String            @id @default(uuid()) @db.Uuid
-  code                String            @unique @db.VarChar
-  description         String?           @db.Text
+  id                  String           @id @default(uuid()) @db.Uuid
+  code                String           @unique @db.VarChar
+  description         String?          @db.Text
   discount_type       DiscountType
   discount_value      Float
-  min_order_amount    Float?            @default(0)
+  min_order_amount    Float?           @default(0)
   max_discount_amount Float?
   max_usage           Int?
-  max_usage_per_user  Int?              @default(1)
-  usage_count         Int               @default(0)
-  start_date          DateTime          @db.Timestamp(6)
-  expiration_date     DateTime          @db.Timestamp(6)
-  is_active           Boolean           @default(true)
-  restaurant_ids      String[]          @default([])
-  created_by          String?           @db.Uuid
-  creator             User?             @relation("promo_code_creator", fields: [created_by], references: [id])
-  created_at          DateTime          @default(now()) @db.Timestamp(6)
-  updated_at          DateTime          @updatedAt @db.Timestamp(6)
-  entity_status       EntityStatus      @default(ACTIVE)
+  max_usage_per_user  Int?             @default(1)
+  usage_count         Int              @default(0)
+  start_date          DateTime         @db.Timestamp(6)
+  expiration_date     DateTime         @db.Timestamp(6)
+  is_active           Boolean          @default(true)
+  restaurant_ids      String[]         @default([])
+  created_by          String?          @db.Uuid
+  creator             User?            @relation("promo_code_creator", fields: [created_by], references: [id])
+  created_at          DateTime         @default(now()) @db.Timestamp(6)
+  updated_at          DateTime         @updatedAt @db.Timestamp(6)
+  entity_status       EntityStatus     @default(ACTIVE)
   usages              PromoCodeUsage[]
 
   @@index([code])
@@ -1191,41 +1576,254 @@ enum RetentionCallbackStatus {
 }
 
 model RetentionCallbackReason {
-  id            String   @id @default(uuid()) @db.Uuid
-  name          String   @db.VarChar(255)
-  description   String?  @db.Text
-  is_active     Boolean  @default(true)
-  position      Int      @default(0)
+  id            String              @id @default(uuid()) @db.Uuid
+  name          String              @db.VarChar(255)
+  description   String?             @db.Text
+  is_active     Boolean             @default(true)
+  position      Int                 @default(0)
   callbacks     RetentionCallback[]
-  entity_status EntityStatus @default(ACTIVE)
-  created_at    DateTime @default(now()) @db.Timestamp(6)
-  updated_at    DateTime @default(now()) @db.Timestamp(6)
+  entity_status EntityStatus        @default(ACTIVE)
+  created_at    DateTime            @default(now()) @db.Timestamp(6)
+  updated_at    DateTime            @default(now()) @db.Timestamp(6)
 
   @@map("retention_callback_reasons")
 }
 
 model RetentionCallback {
-  id               String                  @id @default(uuid()) @db.Uuid
-  customer_id      String                  @db.Uuid
-  customer         Customer                @relation(fields: [customer_id], references: [id], onDelete: Cascade)
-  caller_user_id   String                  @db.Uuid
-  caller           User                    @relation("RetentionCallbacks", fields: [caller_user_id], references: [id])
-  reason_id        String?                 @db.Uuid
+  id               String                   @id @default(uuid()) @db.Uuid
+  customer_id      String                   @db.Uuid
+  customer         Customer                 @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  caller_user_id   String                   @db.Uuid
+  caller           User                     @relation("RetentionCallbacks", fields: [caller_user_id], references: [id])
+  reason_id        String?                  @db.Uuid
   reason           RetentionCallbackReason? @relation(fields: [reason_id], references: [id])
-  status           RetentionCallbackStatus @default(CALLED)
-  notes            String?                 @db.Text
-  called_at        DateTime                @default(now()) @db.Timestamp(6)
-  next_callback_at DateTime?               @db.Timestamp(6)
-  reconquered_at   DateTime?               @db.Timestamp(6)
-  parent_id        String?                 @db.Uuid
-  parent           RetentionCallback?      @relation("CallbackChain", fields: [parent_id], references: [id])
-  followups        RetentionCallback[]     @relation("CallbackChain")
-  entity_status    EntityStatus            @default(ACTIVE)
-  created_at       DateTime                @default(now()) @db.Timestamp(6)
-  updated_at       DateTime                @default(now()) @db.Timestamp(6)
+  status           RetentionCallbackStatus  @default(CALLED)
+  notes            String?                  @db.Text
+  called_at        DateTime                 @default(now()) @db.Timestamp(6)
+  next_callback_at DateTime?                @db.Timestamp(6)
+  reconquered_at   DateTime?                @db.Timestamp(6)
+  parent_id        String?                  @db.Uuid
+  parent           RetentionCallback?       @relation("CallbackChain", fields: [parent_id], references: [id])
+  followups        RetentionCallback[]      @relation("CallbackChain")
+  entity_status    EntityStatus             @default(ACTIVE)
+  created_at       DateTime                 @default(now()) @db.Timestamp(6)
+  updated_at       DateTime                 @default(now()) @db.Timestamp(6)
 
   @@index([customer_id])
   @@index([status])
   @@index([next_callback_at])
   @@map("retention_callbacks")
+}
+
+// ============================================================
+// MODULE SCHEDULE — créneaux & disponibilité livreurs (P7)
+// ============================================================
+//
+// Workflow général :
+//   1. ADMIN génère un plan (ex : 2 semaines) via la matrice livreur×jours.
+//   2. Le service `SchedulePlanningService` calcule automatiquement :
+//      - les jours de repos en rotation FIFO sur `rotation_cycle_weeks`
+//      - le nombre de slots matin/soir en fonction du volume estimé
+//        (`weekday_volume_multiplier`, `weekend_volume_multiplier`)
+//      - les `ShiftAssignment` (PROPOSED) pour chaque (livreur, jour, shift)
+//   3. ADMIN review et SEND → status=SENT, push WS aux livreurs.
+//   4. Chaque livreur ACCEPTE / REFUSE chaque jour proposé via mobile.
+//   5. À 8h chaque matin : push de check-in "Tu es opérationnel aujourd'hui ?"
+//      Réponse OUI / NON / pas de réponse (auto-CONFIRMED après X minutes).
+//   6. Le livreur peut ajouter / retirer un jour de repos pour LUI-MÊME
+//      depuis le mobile (n'impacte pas les autres livreurs du plan).
+//
+// Tous les paramètres (durée plans, rotation, shifts, volumes, deadlines)
+// sont dans `schedule.*` settings — voir `ScheduleSettingsHelper`.
+
+/// Statut d'un plan de planning au cours de son cycle de vie.
+enum SchedulePlanStatus {
+  DRAFT     // En cours d'édition par l'admin (auto-généré ou manuel)
+  SENT      // Envoyé aux livreurs, en attente de leurs confirmations
+  CONFIRMED // Tous les livreurs ont répondu (ou deadline passée + auto-CONFIRMED)
+  ARCHIVED  // Période passée, plan figé pour historique
+}
+
+/// Type de créneau journalier — 2 paliers seulement (matin/soir) pour rester simple.
+enum ShiftType {
+  MORNING // ex : 09h-15h
+  EVENING // ex : 15h-23h
+}
+
+/// Statut d'une affectation livreur ↔ shift.
+enum ShiftAssignmentStatus {
+  ASSIGNED   // Pré-affecté par l'algo, en attente de réponse livreur
+  CONFIRMED  // Livreur a confirmé sa présence (ou auto-CONFIRMED par deadline)
+  REFUSED    // Livreur a explicitement décliné le shift
+}
+
+/// Origine d'un jour de repos.
+enum RestDaySource {
+  AUTO              // Calculé par l'algo de rotation
+  MANUAL_DELIVERER  // Le livreur a ajouté ce repos lui-même via mobile
+  MANUAL_ADMIN      // L'admin a forcé ce repos (gestion exceptionnelle)
+}
+
+/// Réponse au check-in matinal de présence.
+enum PresenceCheckResponse {
+  PRESENT     // "Oui je suis op aujourd'hui"
+  ABSENT      // "Non je ne peux pas"
+  NO_RESPONSE // Pas de réponse → auto-CONFIRMED PRESENT (politique Q6=A)
+}
+
+/// Plan de créneaux pour un restaurant sur une période donnée.
+/// Émis par l'admin (manuellement ou auto-généré). Contient 1..N Shift.
+model SchedulePlan {
+  id String @id @default(uuid()) @db.Uuid
+
+  restaurant_id String     @db.Uuid
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  /// Période couverte par ce plan (inclus). Typiquement 2 semaines.
+  period_start DateTime @db.Date
+  period_end   DateTime @db.Date
+
+  status SchedulePlanStatus @default(DRAFT)
+
+  /// Snapshot du nombre de livreurs ayant CONFIRMED au moment du SEND →
+  /// permet de track le taux de confirmation sans recalcul.
+  confirmed_count Int @default(0)
+
+  /// Timestamps des transitions (audit + métriques).
+  sent_at      DateTime? @db.Timestamp(6)
+  confirmed_at DateTime? @db.Timestamp(6) // Quand toutes les réponses sont collectées
+  archived_at  DateTime? @db.Timestamp(6)
+
+  /// Shifts générés pour cette période (1 par jour × shift_type).
+  shifts Shift[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([restaurant_id, status])
+  @@index([period_start, period_end])
+}
+
+/// Créneau journalier dans un plan (matin OU soir, pour 1 jour donné).
+model Shift {
+  id String @id @default(uuid()) @db.Uuid
+
+  plan_id String       @db.Uuid
+  plan    SchedulePlan @relation(fields: [plan_id], references: [id], onDelete: Cascade)
+
+  /// Jour calendaire couvert par ce shift.
+  date DateTime @db.Date
+
+  type ShiftType
+
+  /// Heures d'ouverture du shift (HH:mm). Snapshots des settings au moment
+  /// de la génération du plan — un changement futur des settings n'altère
+  /// pas les plans déjà envoyés.
+  start_time String @db.VarChar(5) // ex : "09:00"
+  end_time   String @db.VarChar(5) // ex : "15:00"
+
+  /// Capacité maximale en livreurs sur ce shift.
+  /// Calculée par `SchedulePlanningService` selon le volume estimé.
+  max_slots Int
+
+  /// Affectations livreur ↔ shift (1..max_slots — l'algo n'en crée jamais plus).
+  assignments ShiftAssignment[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@unique([plan_id, date, type]) // 1 shift matin + 1 shift soir par jour max
+  @@index([plan_id])
+  @@index([date])
+}
+
+/// Affectation d'un livreur à un shift, avec son statut de confirmation.
+model ShiftAssignment {
+  id String @id @default(uuid()) @db.Uuid
+
+  shift_id String @db.Uuid
+  shift    Shift  @relation(fields: [shift_id], references: [id], onDelete: Cascade)
+
+  deliverer_id String    @db.Uuid
+  deliverer    Deliverer @relation(fields: [deliverer_id], references: [id], onDelete: Cascade)
+
+  status ShiftAssignmentStatus @default(ASSIGNED)
+
+  /// Timestamps des transitions (audit).
+  confirmed_at DateTime? @db.Timestamp(6)
+  refused_at   DateTime? @db.Timestamp(6)
+
+  /// Raison de refus (optionnelle, libre).
+  refusal_reason String? @db.VarChar(500)
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  /// Pas 2 affectations du même livreur sur le même shift.
+  @@unique([shift_id, deliverer_id])
+  @@index([deliverer_id, status])
+  @@index([shift_id])
+}
+
+/// Jour de repos d'un livreur. Peut être issu de l'algo (rotation FIFO),
+/// du livreur lui-même (toggle mobile), ou de l'admin (gestion exceptionnelle).
+///
+/// Les RestDay sont indépendants des plans : ils s'expriment au niveau livreur
+/// pour pouvoir évoluer en cours de plan (ex : le livreur retire son repos
+/// du mardi pour celui du mercredi).
+model RestDay {
+  id String @id @default(uuid()) @db.Uuid
+
+  deliverer_id String    @db.Uuid
+  deliverer    Deliverer @relation(fields: [deliverer_id], references: [id], onDelete: Cascade)
+
+  /// Jour de repos (date pure, pas de time).
+  date DateTime @db.Date
+
+  source RestDaySource @default(AUTO)
+
+  /// Raison libre (ex : "vacances", "maladie", "marriage cousin").
+  reason String? @db.VarChar(500)
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  /// Un livreur ne peut pas avoir 2 RestDay le même jour.
+  @@unique([deliverer_id, date])
+  @@index([date])
+}
+
+/// Réponse d'un livreur au check-in matinal "Tu es opérationnel aujourd'hui ?"
+///
+/// Push envoyé chaque jour à `daily_presence_check_hour` (default 8h).
+/// Si pas de réponse dans la fenêtre, auto-CONFIRMED PRESENT (Q6=A).
+/// Sert à détecter les absences silencieuses pour l'admin (compte rendu daily).
+model DailyPresenceCheck {
+  id String @id @default(uuid()) @db.Uuid
+
+  deliverer_id String    @db.Uuid
+  deliverer    Deliverer @relation(fields: [deliverer_id], references: [id], onDelete: Cascade)
+
+  /// Jour du check-in.
+  date DateTime @db.Date
+
+  response PresenceCheckResponse @default(NO_RESPONSE)
+
+  /// Timestamp de la réponse explicite. Null si NO_RESPONSE auto-CONFIRMED.
+  responded_at DateTime? @db.Timestamp(6)
+
+  /// Snapshot du shift principal du jour (pour stats sans rejoin).
+  shift_type ShiftType?
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  /// Un seul check-in par livreur par jour.
+  @@unique([deliverer_id, date])
+  @@index([date, response])
 }

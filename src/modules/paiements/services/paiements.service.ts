@@ -82,7 +82,18 @@ export class PaiementsService {
       ,
     };
   }
-  // Payer via backoffice
+  /**
+   * Enregistre un ou plusieurs paiements ajoutés par la caissière depuis le
+   * backoffice (liste de modes : CASH / Mobile Money / Carte / Wave…).
+   *
+   * Cascade sur l'Order :
+   *   - `paied_at = now`, `paied = true` dès qu'on a au moins un paiement.
+   *   - Si la somme des paiements **SUCCESS** (nouveaux + existants) couvre
+   *     le `order.amount` ET que la commande est déjà `COLLECTED` (livrée
+   *     mais pas encore encaissée), alors elle passe en `COMPLETED` avec
+   *     `completed_at = now`. Une commande partiellement payée reste en
+   *     `COLLECTED` (ou son statut initial si pas encore livrée).
+   */
   async addPaiement(
     req: Request,
     data: AddPaiementDto,
@@ -92,40 +103,66 @@ export class PaiementsService {
       throw new BadRequestException('Aucun paiement à ajouter');
     }
 
-    const paiements = items.map(async (item) => {
-      const uniqueRef = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-
-      return await this.create({
-        reference: uniqueRef,
-        amount: item.amount,
-        fees: 0,
-        total: item.amount,
-        mode: item.mode,
-        source: item.source,
-        status: PaiementStatus.SUCCESS,
-        order_id: item.order_id,
-        client_id: item.client_id,
-      })
-    })
-
-    // Mise a jour de la commande à payée
-    if (paiements.length == items.length) {
-      const result = await paiements[0]
-      if (result) {
-        await this.prisma.order.update({
-          where: { id: result.order?.id },
-          data: {
-            paied_at: result.paiement.created_at,
-            paied: true,
-          },
+    // Résoudre toutes les créations en parallèle — le bug précédent utilisait
+    // `items.map(async)` sans Promise.all, donc la vérification `length`
+    // portait sur un tableau de Promises, et seul paiements[0] était awaited.
+    const createdPaiements = await Promise.all(
+      items.map(async (item) => {
+        const uniqueRef = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        return this.create({
+          reference: uniqueRef,
+          amount: item.amount,
+          fees: 0,
+          total: item.amount,
+          mode: item.mode,
+          source: item.source,
+          status: PaiementStatus.SUCCESS,
+          order_id: item.order_id,
+          client_id: item.client_id,
         });
-      }
+      }),
+    );
+
+    const first = createdPaiements.find((r) => r?.order?.id);
+    if (!first?.order?.id) {
+      return { success: true, message: 'Paiement effectué avec succès' };
     }
+
+    const orderId = first.order.id;
+    const now = new Date();
+
+    // Recharger l'order + tous les paiements SUCCESS pour décider si le total
+    // est couvert (on ne peut pas se fier uniquement aux `items` entrants car
+    // il peut déjà y avoir eu des paiements partiels précédents).
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        paiements: { where: { status: PaiementStatus.SUCCESS } },
+      },
+    });
+    if (!order) {
+      return { success: true, message: 'Paiement effectué avec succès' };
+    }
+
+    const totalPaid = order.paiements.reduce((sum, p) => sum + (p.total ?? p.amount ?? 0), 0);
+    const isFullyPaid = totalPaid >= order.amount;
+    const shouldComplete = isFullyPaid && order.status === OrderStatus.COLLECTED;
+
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        paied_at: now,
+        paied: true,
+        ...(shouldComplete && {
+          status: OrderStatus.COMPLETED,
+          completed_at: now,
+        }),
+      },
+    });
 
     return {
       success: true,
-      message:
-        'Paiement effectué avec succès',
+      message: 'Paiement effectué avec succès',
     };
   }
 

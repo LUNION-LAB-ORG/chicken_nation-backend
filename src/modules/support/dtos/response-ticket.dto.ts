@@ -22,6 +22,27 @@ class ResponseTicketCustomerDto {
     last_name: string | null;
 }
 
+/** Demandeur livreur (P-chat livreur ↔ support). Mutuellement exclusif avec customer. */
+class ResponseTicketDelivererDto {
+    @ApiProperty()
+    id: string;
+
+    @ApiProperty()
+    name: string;
+
+    @ApiProperty({ required: false, nullable: true })
+    first_name: string | null;
+
+    @ApiProperty({ required: false, nullable: true })
+    last_name: string | null;
+
+    @ApiProperty({ required: false, nullable: true })
+    phone: string | null;
+
+    @ApiProperty({ required: false, nullable: true })
+    image: string | null;
+}
+
 class ResponseTicketRestaurantDto {
     @ApiProperty()
     id: string;
@@ -116,6 +137,10 @@ export class ResponseTicketDto {
     @IsOptional()
     customer: ResponseTicketCustomerDto | null;
 
+    @ApiProperty({ type: ResponseTicketDelivererDto, required: false, nullable: true })
+    @IsOptional()
+    deliverer: ResponseTicketDelivererDto | null;
+
     @ApiProperty({ type: ResponseTicketAssigneeDto, required: false, nullable: true })
     @IsOptional()
     assignee: ResponseTicketAssigneeDto | null;
@@ -126,8 +151,9 @@ export class ResponseTicketDto {
     @ApiProperty({ type: [ResponseTicketMessageDto] })
     messages: ResponseTicketMessageDto[];
 
-    @ApiProperty({ type: ResponseTicketOrderDto })
-    order: ResponseTicketOrderDto;
+    @ApiProperty({ type: ResponseTicketOrderDto, required: false, nullable: true })
+    @IsOptional()
+    order: ResponseTicketOrderDto | null;
 
     @ApiProperty()
     category: {

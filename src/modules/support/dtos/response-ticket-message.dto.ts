@@ -36,6 +36,17 @@ export class ResponseTicketMessageDto {
         image?: string | null;
     } | null;
 
+    /** Auteur livreur (P-chat livreur ↔ support). Mutuellement exclusif avec authorUser/authorCustomer. */
+    @ApiProperty({ required: false })
+    authorDeliverer?: {
+        id: string;
+        name: string;
+        first_name?: string | null;
+        last_name?: string | null;
+        phone?: string | null;
+        image?: string | null;
+    } | null;
+
     @ApiProperty()
     ticket: {
         id: string;
