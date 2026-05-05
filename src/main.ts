@@ -57,6 +57,7 @@ async function bootstrap() {
         'https://www.chicken-nation.com',
         'http://localhost:3000',
         'http://localhost:4006',
+        'https://chicken-nation-admin.vercel.app'
       ];
   app.enableCors({
     origin: corsOrigins,
