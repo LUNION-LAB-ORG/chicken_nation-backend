@@ -167,7 +167,10 @@ export class DeliverersService {
     if (deliverer.status === DelivererStatus.REJECTED) {
       throw new BadRequestException('Livreur déjà refusé');
     }
-    return this.transitionStatus(deliverer, DelivererStatus.REJECTED, reason);
+    const rejected = await this.transitionStatus(deliverer, DelivererStatus.REJECTED, reason);
+    // Push CRITIQUE — le livreur doit savoir immédiatement que sa candidature est refusée.
+    this.pushService.notifyAccountRejected({ delivererId: rejected.id, reason });
+    return rejected;
   }
 
   async suspend(id: string, reason?: string) {
@@ -175,7 +178,10 @@ export class DeliverersService {
     if (deliverer.status === DelivererStatus.SUSPENDED) {
       throw new BadRequestException('Livreur déjà suspendu');
     }
-    return this.transitionStatus(deliverer, DelivererStatus.SUSPENDED, reason);
+    const suspended = await this.transitionStatus(deliverer, DelivererStatus.SUSPENDED, reason);
+    // Push CRITIQUE — le livreur doit savoir qu'il ne peut plus recevoir de courses.
+    this.pushService.notifyAccountSuspended({ delivererId: suspended.id, reason });
+    return suspended;
   }
 
   async reactivate(id: string) {
@@ -183,7 +189,10 @@ export class DeliverersService {
     if (deliverer.status !== DelivererStatus.SUSPENDED) {
       throw new BadRequestException('Seuls les livreurs suspendus peuvent être réactivés');
     }
-    return this.transitionStatus(deliverer, DelivererStatus.ACTIVE);
+    const reactivated = await this.transitionStatus(deliverer, DelivererStatus.ACTIVE);
+    // Push CRITIQUE — bonne nouvelle, le livreur peut reprendre du service.
+    this.pushService.notifyAccountReactivated({ delivererId: reactivated.id });
+    return reactivated;
   }
 
   async assignRestaurant(id: string, dto: AssignRestaurantDto) {

@@ -16,9 +16,12 @@ export type DelivererPushType =
   | 'course_cancelled' // Course annulée
   | 'auto_paused' // Auto-pause déclenchée
   | 'account_activated' // Admin a validé ton compte
+  | 'account_rejected' // Admin a refusé la candidature
+  | 'account_suspended' // Admin a suspendu le compte
+  | 'account_reactivated' // Admin a réactivé le compte suspendu
   | 'plan_sent' // Nouveau planning à valider
   | 'presence_check' // Check-in matinal 8h
-  | 'new_ticket_message'; // Réponse support (déjà géré dans TicketMessageService)
+  | 'new_ticket_message'; // Réponse support
 
 interface NotifyInput {
   delivererId: string;
@@ -245,6 +248,43 @@ export class DelivererPushService {
       title: 'Check-in matinal',
       body: "Tu es opérationnel aujourd'hui ?",
       data: {},
+    });
+  }
+
+  notifyAccountRejected(input: { delivererId: string; reason?: string }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'account_rejected',
+      title: 'Candidature refusée',
+      body: input.reason
+        ? `Ta demande a été refusée : ${input.reason}`
+        : "Ta demande d'inscription a été refusée. Contacte le support pour plus d'informations.",
+      data: {},
+      critical: true,
+    });
+  }
+
+  notifyAccountSuspended(input: { delivererId: string; reason?: string }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'account_suspended',
+      title: 'Compte suspendu',
+      body: input.reason
+        ? `Ton compte a été suspendu : ${input.reason}`
+        : 'Ton compte a été suspendu. Contacte le support pour plus d\'informations.',
+      data: {},
+      critical: true,
+    });
+  }
+
+  notifyAccountReactivated(input: { delivererId: string }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'account_reactivated',
+      title: 'Compte réactivé ✅',
+      body: 'Ton compte est à nouveau actif. Tu peux recommencer à recevoir des courses.',
+      data: {},
+      critical: true,
     });
   }
 }
