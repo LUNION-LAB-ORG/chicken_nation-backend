@@ -23,4 +23,8 @@ export enum DelivererChannels {
   // Émis par AuthDelivererService.completeRegistration, écouté par
   // DelivererListenerService → email aux ADMIN actifs.
   DELIVERER_PENDING_VALIDATION = 'deliverer:pending-validation',
+
+  // Changement d'état dans la file FIFO (pause, reprise, disponible, indisponible).
+  // Déclenche un recalcul de rang chez tous les livreurs du même restaurant.
+  DELIVERER_QUEUE_CHANGED = 'deliverer:queue:changed',
 }

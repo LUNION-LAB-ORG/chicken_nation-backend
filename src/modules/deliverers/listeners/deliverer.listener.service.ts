@@ -9,6 +9,7 @@ import {
   DelivererAutoPausedPayload,
   DelivererOperationalChangedPayload,
   DelivererPendingValidationPayload,
+  DelivererQueueChangedPayload,
 } from '../events/deliverer.event';
 import { DelivererAdminNotificationService } from '../services/deliverer-admin-notification.service';
 import { DeliverersWebSocketService } from '../websockets/deliverers-websocket.service';
@@ -53,5 +54,10 @@ export class DelivererListenerService {
   async onPendingValidation(payload: DelivererPendingValidationPayload) {
     // Email aux admins → fire-and-forget (le service log les erreurs).
     void this.adminNotif.notifyNewDelivererPending(payload.deliverer as Deliverer);
+  }
+
+  @OnEvent(DelivererChannels.DELIVERER_QUEUE_CHANGED)
+  onQueueChanged(payload: DelivererQueueChangedPayload) {
+    this.wsService.emitQueueChanged(payload);
   }
 }

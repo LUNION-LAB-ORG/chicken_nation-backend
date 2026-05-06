@@ -26,6 +26,13 @@ export interface DelivererPendingValidationPayload {
   deliverer: Omit<Deliverer, 'password' | 'refresh_token'>;
 }
 
+export interface DelivererQueueChangedPayload {
+  /** Livreur dont l'état dans la file a changé (pause / reprise / dispo / indisponible). */
+  delivererId: string;
+  /** Restaurant de rattachement — permet de notifier tous les livreurs du même restaurant. */
+  restaurantId: string | null;
+}
+
 /**
  * Émetteur d'événements internes pour le cycle de vie du livreur.
  * Les listeners (WebSocket / notifications) sont déclarés en Phase 4.
@@ -52,5 +59,16 @@ export class DelivererEvent {
   /** I-admin : nouveau livreur a complété son inscription. */
   async pendingValidation(payload: DelivererPendingValidationPayload) {
     this.eventEmitter.emit(DelivererChannels.DELIVERER_PENDING_VALIDATION, payload);
+  }
+
+  /**
+   * Émis à chaque changement d'état dans la file FIFO (pause, reprise, disponible,
+   * indisponible). Tous les livreurs du même restaurant recalculent leur rang en temps réel.
+   */
+  queueChanged(delivererId: string, restaurantId: string | null) {
+    this.eventEmitter.emit(DelivererChannels.DELIVERER_QUEUE_CHANGED, {
+      delivererId,
+      restaurantId,
+    } satisfies DelivererQueueChangedPayload);
   }
 }

@@ -419,7 +419,7 @@ export class DeliverersService {
       ? new Date(Date.now() + dto.durationMinutes * 60 * 1000)
       : new Date('2099-12-31T23:59:59Z'); // pause indéfinie = date lointaine
 
-    return this.prisma.deliverer.update({
+    const updated = await this.prisma.deliverer.update({
       where: { id: delivererId },
       data: {
         pause_until: pauseUntil,
@@ -430,8 +430,14 @@ export class DeliverersService {
         id: true,
         pause_until: true,
         last_available_at: true,
+        restaurant_id: true,
       },
     });
+
+    // Notifie tous les livreurs du restaurant → recalcul du rang en temps réel
+    this.delivererEvent.queueChanged(updated.id, updated.restaurant_id);
+
+    return updated;
   }
 
   /**
@@ -440,7 +446,7 @@ export class DeliverersService {
    * appeler `markAvailable()` pour signifier « je reprends, je suis prêt ».
    */
   async resumeDeliverer(delivererId: string) {
-    return this.prisma.deliverer.update({
+    const updated = await this.prisma.deliverer.update({
       where: { id: delivererId },
       data: {
         pause_until: null,
@@ -450,8 +456,14 @@ export class DeliverersService {
         id: true,
         pause_until: true,
         auto_pause_until: true,
+        restaurant_id: true,
       },
     });
+
+    // Notifie tous les livreurs du restaurant → recalcul du rang en temps réel
+    this.delivererEvent.queueChanged(updated.id, updated.restaurant_id);
+
+    return updated;
   }
 
   /**
@@ -460,7 +472,7 @@ export class DeliverersService {
    * `last_available_at = now` → il se retrouve en queue de liste (FIFO ASC).
    */
   async markAvailable(delivererId: string) {
-    return this.prisma.deliverer.update({
+    const updated = await this.prisma.deliverer.update({
       where: { id: delivererId },
       data: {
         last_available_at: new Date(),
@@ -470,8 +482,14 @@ export class DeliverersService {
       select: {
         id: true,
         last_available_at: true,
+        restaurant_id: true,
       },
     });
+
+    // Notifie tous les livreurs du restaurant → recalcul du rang en temps réel
+    this.delivererEvent.queueChanged(updated.id, updated.restaurant_id);
+
+    return updated;
   }
 
   /**

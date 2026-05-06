@@ -56,7 +56,9 @@ export class CourseAdminController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: AssignDelivererDto,
   ) {
-    await this.offerService.offerToDeliverer(id, dto.deliverer_id);
+    // forceResend=true : si le livreur a déjà une offer PENDING, on ré-émet le WS
+    // plutôt que de silencer — l'admin veut s'assurer que la notif arrive.
+    await this.offerService.offerToDeliverer(id, dto.deliverer_id, false, true);
     return { success: true, message: 'Offer envoyée au livreur' };
   }
 

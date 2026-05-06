@@ -43,6 +43,7 @@ import { PushCampaignModule } from 'src/modules/push-campaign/push-campaign.modu
 import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
 import { RetentionCallbackModule } from 'src/modules/retention-callback/retention-callback.module';
 import { SchedulingModule } from 'src/modules/schedule/schedule.module';
+import { MapsModule } from 'src/modules/maps/maps.module';
 
 @Module({
   imports: [
@@ -114,6 +115,7 @@ import { SchedulingModule } from 'src/modules/schedule/schedule.module';
     PromoCodeModule,
     RetentionCallbackModule,
     SchedulingModule,
+    MapsModule,
   ],
 })
 export class AppModule { }

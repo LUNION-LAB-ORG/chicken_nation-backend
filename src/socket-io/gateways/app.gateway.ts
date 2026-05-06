@@ -9,7 +9,7 @@ import {
 } from '@nestjs/websockets';
 
 import { Server, Socket } from 'socket.io';
-import { EntityStatus } from '@prisma/client';
+import { EntityStatus, PresenceCheckResponse } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { ConnectedUser } from '../interfaces/app.gateway.interface';
@@ -90,6 +90,14 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Rejoindre les rooms
       await this.joinRooms(client, userInfo);
+
+      // Pour les livreurs : si un check de présence matinal est en attente de réponse
+      // aujourd'hui, le renvoyer immédiatement. Couvre le cas de reconnexion sur un
+      // autre appareil après que le cron (8h) ait déjà tourné sans que le livreur
+      // soit connecté.
+      if (userInfo.type === 'deliverer') {
+        void this.sendPendingPresenceCheck(client, userInfo.id);
+      }
 
       // this.logger.log(`Connexion: ${userInfo.type} ${userInfo.id} connecté (Socket: ${client.id})`);
     } catch (error) {
@@ -269,6 +277,44 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (userInfo.restaurantId) {
         await client.join(`restaurant_${userInfo.restaurantId}`);
       }
+    }
+  }
+
+  // ================================
+  // CHECK DE PRÉSENCE À LA CONNEXION
+  // ================================
+
+  /**
+   * Si un `DailyPresenceCheck` du jour est en attente de réponse (NO_RESPONSE),
+   * on l'émet directement sur le socket du livreur qui vient de se connecter.
+   *
+   * Couvre le cas de reconnexion tardive : le cron `dailyPresenceCheckPush` a
+   * déjà tourné (ex. 8h) mais le livreur était offline. À sa prochaine connexion
+   * (même sur un autre appareil), il reçoit quand même la question.
+   */
+  private async sendPendingPresenceCheck(client: Socket, delivererId: string) {
+    try {
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+
+      const check = await this.prisma.dailyPresenceCheck.findFirst({
+        where: {
+          deliverer_id: delivererId,
+          date: todayStart,
+          response: PresenceCheckResponse.NO_RESPONSE,
+        },
+        select: { date: true },
+      });
+
+      if (check) {
+        client.emit('schedule:presence-check:request', {
+          delivererId,
+          date: check.date.toISOString().substring(0, 10),
+          shiftType: null,
+        });
+      }
+    } catch {
+      // Silencieux — ne bloque pas la connexion WS
     }
   }
 

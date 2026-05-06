@@ -5,6 +5,7 @@ import { DelivererChannels } from '../enums/deliverer-channels';
 import {
   DelivererAutoPausedPayload,
   DelivererOperationalChangedPayload,
+  DelivererQueueChangedPayload,
 } from '../events/deliverer.event';
 
 /**
@@ -78,6 +79,27 @@ export class DeliverersWebSocketService {
       DelivererChannels.DELIVERER_AUTO_PAUSED,
       wsPayload,
     );
+  }
+
+  /**
+   * Notifie tous les livreurs du restaurant que la file FIFO a changé.
+   * Chaque livreur reçoit `deliverer:queue:changed` → invalide son cache `scoring-info`
+   * → re-fetch le rang mis à jour via REST.
+   */
+  emitQueueChanged(payload: DelivererQueueChangedPayload) {
+    const wsPayload = { delivererId: payload.delivererId, timestamp: new Date().toISOString() };
+
+    // Backoffice : rafraîchit le tableau de bord (positions/queue)
+    this.appGateway.emitToBackoffice(DelivererChannels.DELIVERER_QUEUE_CHANGED, wsPayload);
+
+    // Restaurant : notifie tous les livreurs de ce restaurant (via room `restaurant_{id}`)
+    if (payload.restaurantId) {
+      this.appGateway.emitToRestaurant(
+        payload.restaurantId,
+        DelivererChannels.DELIVERER_QUEUE_CHANGED,
+        wsPayload,
+      );
+    }
   }
 
   private buildMessage(payload: DelivererOperationalChangedPayload): string {

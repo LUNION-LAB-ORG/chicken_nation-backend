@@ -231,6 +231,7 @@ export class CourseOfferService {
 
   /** Ancien algo (avant P4) — conservé pour le shadow mode P6d. */
   private async findBestDelivererLegacy(restaurantId: string, excludedIds: string[]) {
+    const now = new Date();
     return this.prisma.deliverer.findFirst({
       where: {
         restaurant_id: restaurantId,
@@ -238,6 +239,11 @@ export class CourseOfferService {
         status: 'ACTIVE',
         entity_status: EntityStatus.ACTIVE,
         id: { notIn: excludedIds },
+        // Exclure les livreurs en pause manuelle ou en pause automatique (refus répétés)
+        AND: [
+          { OR: [{ pause_until: null }, { pause_until: { lt: now } }] },
+          { OR: [{ auto_pause_until: null }, { auto_pause_until: { lt: now } }] },
+        ],
         courses: {
           none: {
             statut: {
@@ -263,15 +269,23 @@ export class CourseOfferService {
    *   (livreur en fin de course imminente, restaurant proche). Diffusé au mobile
    *   pour afficher un badge explicatif "Chaînage" sur l'écran d'offre.
    */
+  /**
+   * @param forceResend `true` (admin force-assign) : si une offer PENDING existe déjà
+   * pour ce couple course+livreur, on ré-émet quand même le WS au lieu de silencer.
+   * Permet à l'admin de "relancer" la notification si le livreur n'a pas vu la première.
+   */
   async offerToDeliverer(
     courseId: string,
     delivererId: string,
     isChainBonus = false,
+    forceResend = false,
   ): Promise<void> {
     const { offerDurationSeconds } = await this.settings.load();
     const expiresAt = new Date(Date.now() + offerDurationSeconds * 1000);
 
     let course;
+    let wasExisting = false;
+
     try {
       course = await this.prisma.$transaction(async (tx) => {
         // Check intra-transaction : aucune offer PENDING pour ce couple.
@@ -287,10 +301,22 @@ export class CourseOfferService {
         });
 
         if (existing) {
-          this.logger.warn(
-            `offerToDeliverer SKIP : doublon évité (course=${courseId.slice(0, 8)}, deliverer=${delivererId.slice(0, 8)}, existing=${existing.id.slice(0, 8)})`,
+          if (!forceResend) {
+            this.logger.warn(
+              `offerToDeliverer SKIP : doublon évité (course=${courseId.slice(0, 8)}, deliverer=${delivererId.slice(0, 8)}, existing=${existing.id.slice(0, 8)})`,
+            );
+            return null;
+          }
+          // Admin force-assign : offer déjà PENDING → on ré-émet le WS sans créer de doublon
+          this.logger.log(
+            `offerToDeliverer RESEND (force) : offer PENDING existante re-notifiée (course=${courseId.slice(0, 8)}, deliverer=${delivererId.slice(0, 8)})`,
           );
-          return null;
+          wasExisting = true;
+          // Retourner le course complet pour ré-émettre l'event
+          return tx.course.findUnique({
+            where: { id: courseId },
+            include: COURSE_FULL_INCLUDE,
+          });
         }
 
         await tx.courseOfferAttempt.create({
@@ -327,7 +353,8 @@ export class CourseOfferService {
       course,
       deliverer_id: delivererId,
       offer_id: courseId, // simplification : on utilise course_id
-      expires_at: expiresAt,
+      // Pour un re-send : réutiliser l'expiry actuelle (non modifiée)
+      expires_at: wasExisting ? (course as any).offer_expires_at ?? expiresAt : expiresAt,
       is_chain_bonus: isChainBonus,
     });
 

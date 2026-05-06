@@ -95,7 +95,12 @@ export class ScheduleQueryService {
       this.prisma.shiftAssignment.findMany({
         where: {
           deliverer_id: delivererId,
-          shift: { date: { gte: fromDate, lte: toDate } },
+          shift: {
+            date: { gte: fromDate, lte: toDate },
+            // Seuls les plans envoyés ou confirmés sont visibles par le livreur.
+            // Les DRAFT restent invisibles tant que l'admin n'a pas publié.
+            plan: { status: { in: [SchedulePlanStatus.SENT, SchedulePlanStatus.CONFIRMED] } },
+          },
           shift_id: { not: undefined },
         },
         include: {
