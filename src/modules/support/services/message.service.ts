@@ -72,6 +72,7 @@ export class TicketMessageService {
                 where: { id: ticketId },
                 select: {
                     customerId: true,
+                    delivererId: true,
                     orderId: true,
                     order: { select: { restaurant_id: true } },
                 },
@@ -90,7 +91,14 @@ export class TicketMessageService {
         // Push notification au client si message vient du staff et n'est pas interne
         if (authorType === 'USER' && !internal && ticket?.customerId) {
             this.sendPushToCustomer(ticket.customerId, ticketId, body, ticket?.order?.restaurant_id).catch((err) =>
-                this.logger.warn(`Push notification ticket échouée: ${err.message}`),
+                this.logger.warn(`Push notification ticket client échouée: ${err.message}`),
+            );
+        }
+
+        // Push notification au livreur si message vient du staff et n'est pas interne
+        if (authorType === 'USER' && !internal && ticket?.delivererId) {
+            this.sendPushToDeliverer(ticket.delivererId, ticketId, body).catch((err) =>
+                this.logger.warn(`Push notification ticket livreur échouée: ${err.message}`),
             );
         }
 
@@ -126,13 +134,27 @@ export class TicketMessageService {
     }
 
 
-    async markMessagesAsRead(ticketId: string, type: 'USER' | 'CUSTOMER', authorId: string): Promise<boolean> {
-        this.logger.log(`Marquer les messages du ticket ${ticketId} comme lus`);
+    async markMessagesAsRead(
+        ticketId: string,
+        type: 'USER' | 'CUSTOMER' | 'DELIVERER',
+        authorId: string,
+    ): Promise<boolean> {
+        this.logger.log(`Marquer les messages du ticket ${ticketId} comme lus (par ${type})`);
+        // Marque comme lus tous les messages NON envoyés par cet auteur.
+        // Si je suis le livreur, marque comme lus tous les messages qui ne
+        // viennent PAS de moi (= messages staff).
+        const notMineFilter =
+            type === 'USER'
+                ? { authorUserId: { not: authorId } }
+                : type === 'CUSTOMER'
+                    ? { authorCustomerId: { not: authorId } }
+                    : { authorDelivererId: { not: authorId } };
+
         await this.prisma.ticketMessage.updateMany({
             where: {
                 ticketId,
                 isRead: false,
-                ...(type === 'USER' ? { authorUserId: { not: authorId } } : { authorCustomerId: { not: authorId } })
+                ...notMineFilter,
             },
             data: { isRead: true },
         });
@@ -140,6 +162,26 @@ export class TicketMessageService {
         this.supportWebSocketService.emitMessagesRead(ticketId);
 
         return true;
+    }
+
+    private async sendPushToDeliverer(delivererId: string, ticketId: string, body: string) {
+        const deliverer = await this.prisma.deliverer.findUnique({
+            where: { id: delivererId },
+            select: { expo_push_token: true },
+        });
+
+        if (!deliverer?.expo_push_token) return;
+
+        await this.expoPushService.sendPushNotifications({
+            tokens: [deliverer.expo_push_token],
+            title: 'Nouveau message support',
+            body: body?.substring(0, 150) || 'Nouveau message',
+            sound: 'default',
+            data: {
+                type: 'new_ticket_message',
+                ticketId,
+            },
+        });
     }
 
     private async sendPushToCustomer(customerId: string, ticketId: string, body: string, restaurantId?: string | null) {

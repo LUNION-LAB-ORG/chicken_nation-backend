@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsObject, IsOptional } from 'class-validator';
 
-export class UpdateUserDto {
+export class UpdateOneSignalUserDto {
   @ApiPropertyOptional({ description: 'Tags à mettre à jour (clé/valeur)' })
   @IsObject()
   @IsOptional()

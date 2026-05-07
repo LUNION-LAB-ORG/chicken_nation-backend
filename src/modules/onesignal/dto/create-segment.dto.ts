@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsOptional, IsArray, MaxLength, ArrayMinSize, ArrayMaxSize } from 'class-validator';
 
-export class CreateSegmentDto {
+export class CreateOneSignalSegmentDto {
   @ApiProperty({ description: 'Nom du segment (max 128 chars)' })
   @IsString()
   @MaxLength(128)

@@ -391,6 +391,18 @@ export class CommentService {
             };
         }
 
+        if (query.date_from || query.date_to) {
+            whereClause.created_at = {};
+            if (query.date_from) {
+                whereClause.created_at.gte = new Date(query.date_from);
+            }
+            if (query.date_to) {
+                const end = new Date(query.date_to);
+                end.setHours(23, 59, 59, 999);
+                whereClause.created_at.lte = end;
+            }
+        }
+
         const [comments, total] = await Promise.all([
             this.prisma.comment.findMany({
                 where: whereClause,

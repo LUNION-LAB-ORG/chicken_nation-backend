@@ -34,6 +34,11 @@ export class ExpoPushService {
                 badge: payload.badge,
                 priority: payload.priority || 'high',
                 channelId: payload.channelId || 'default',
+                // categoryId : permet à iOS/Android d'attacher les boutons
+                // d'action (ex: "Accepter" / "Refuser" pour new_course_offer).
+                // Le mobile doit avoir préalablement enregistré la catégorie
+                // via Notifications.setNotificationCategoryAsync.
+                categoryId: payload.categoryId,
             });
         }
 

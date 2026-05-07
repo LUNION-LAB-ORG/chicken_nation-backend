@@ -9,7 +9,7 @@ import {
 } from '@nestjs/websockets';
 
 import { Server, Socket } from 'socket.io';
-import { EntityStatus } from '@prisma/client';
+import { EntityStatus, PresenceCheckResponse } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { ConnectedUser } from '../interfaces/app.gateway.interface';
@@ -53,7 +53,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const token = (client.handshake.query.token as string) || '';
 
       // Récupérer le type d'utilisateur depuis les query params
-      const userType = client.handshake.query.type as 'user' | 'customer';
+      const userType = client.handshake.query.type as 'user' | 'customer' | 'deliverer';
 
       if (!token || !userType) {
         // Warning retiré pour éviter de polluer les logs en cas de spam
@@ -90,6 +90,14 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Rejoindre les rooms
       await this.joinRooms(client, userInfo);
+
+      // Pour les livreurs : si un check de présence matinal est en attente de réponse
+      // aujourd'hui, le renvoyer immédiatement. Couvre le cas de reconnexion sur un
+      // autre appareil après que le cron (8h) ait déjà tourné sans que le livreur
+      // soit connecté.
+      if (userInfo.type === 'deliverer') {
+        void this.sendPendingPresenceCheck(client, userInfo.id);
+      }
 
       // this.logger.log(`Connexion: ${userInfo.type} ${userInfo.id} connecté (Socket: ${client.id})`);
     } catch (error) {
@@ -128,7 +136,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
    */
   private async identifyUser(
     decoded: { sub: string },
-    type: 'user' | 'customer',
+    type: 'user' | 'customer' | 'deliverer',
   ): Promise<ConnectedUser | null> {
     if (!decoded.sub) return null;
 
@@ -175,6 +183,22 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
             type: 'user',
             userType: user.type,
             restaurantId: user.restaurant_id ?? undefined,
+            socketId: '',
+          };
+        }
+      } else if (type === 'deliverer') {
+        // Le livreur se connecte au WS même en PENDING_VALIDATION pour recevoir
+        // l'event deliverer.operational.changed dès qu'un admin le valide.
+        const deliverer = await this.prisma.deliverer.findUnique({
+          where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
+          select: { id: true, restaurant_id: true },
+        });
+
+        if (deliverer) {
+          result = {
+            id: deliverer.id,
+            type: 'deliverer',
+            restaurantId: deliverer.restaurant_id ?? undefined,
             socketId: '',
           };
         }
@@ -245,6 +269,52 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
         // Restaurant ne voit que ses données
         await client.join(`restaurant_${userInfo.restaurantId}`);
       }
+    } else if (userInfo.type === 'deliverer') {
+      // Room spécifique au livreur (pour events personnels : operational, courses)
+      await client.join(`deliverer_${userInfo.id}`);
+
+      // Si affecté à un restaurant, écoute aussi les events de son restaurant
+      if (userInfo.restaurantId) {
+        await client.join(`restaurant_${userInfo.restaurantId}`);
+      }
+    }
+  }
+
+  // ================================
+  // CHECK DE PRÉSENCE À LA CONNEXION
+  // ================================
+
+  /**
+   * Si un `DailyPresenceCheck` du jour est en attente de réponse (NO_RESPONSE),
+   * on l'émet directement sur le socket du livreur qui vient de se connecter.
+   *
+   * Couvre le cas de reconnexion tardive : le cron `dailyPresenceCheckPush` a
+   * déjà tourné (ex. 8h) mais le livreur était offline. À sa prochaine connexion
+   * (même sur un autre appareil), il reçoit quand même la question.
+   */
+  private async sendPendingPresenceCheck(client: Socket, delivererId: string) {
+    try {
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+
+      const check = await this.prisma.dailyPresenceCheck.findFirst({
+        where: {
+          deliverer_id: delivererId,
+          date: todayStart,
+          response: PresenceCheckResponse.NO_RESPONSE,
+        },
+        select: { date: true },
+      });
+
+      if (check) {
+        client.emit('schedule:presence-check:request', {
+          delivererId,
+          date: check.date.toISOString().substring(0, 10),
+          shiftType: null,
+        });
+      }
+    } catch {
+      // Silencieux — ne bloque pas la connexion WS
     }
   }
 
@@ -255,13 +325,23 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // Émettre à un utilisateur spécifique
   emitToUser<T>(
     userId: string,
-    userType: 'customer' | 'user',
+    userType: 'customer' | 'user' | 'deliverer',
     event: string,
     data: T,
   ) {
-    const room =
-      userType === 'customer' ? `customer_${userId}` : `user_${userId}`;
+    const prefixMap = { customer: 'customer', user: 'user', deliverer: 'deliverer' };
+    const room = `${prefixMap[userType]}_${userId}`;
     this.server.to(room).emit(event, data);
+  }
+
+  // Émettre à un livreur spécifique (alias sémantique)
+  emitToDeliverer<T>(delivererId: string, event: string, data: T) {
+    this.server.to(`deliverer_${delivererId}`).emit(event, data);
+  }
+
+  // Émettre à tous les livreurs
+  emitToAllDeliverers<T>(event: string, data: T) {
+    this.server.to('deliverers').emit(event, data);
   }
 
   // Émettre à tous les backoffice
@@ -275,7 +355,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   // Émettre à tous les utilisateurs d'un type
-  emitToUserType<T>(userType: 'customers' | 'users', event: string, data: T) {
+  emitToUserType<T>(userType: 'customers' | 'users' | 'deliverers', event: string, data: T) {
     this.server.to(userType).emit(event, data);
   }
 
@@ -324,7 +404,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   notifyUserTyping(
     conversationId: string,
     userId: string,
-    userType: 'user' | 'customer',
+    userType: 'user' | 'customer' | 'deliverer',
     isTyping: boolean,
     userName?: string,
   ) {
@@ -409,6 +489,8 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Parcourir toutes les conversations où cet utilisateur était en train d'écrire
     this.typingUsers.forEach((typingUsersSet, conversationId) => {
       if (typingUsersSet.has(userId)) {
+        // userType 'user' par défaut pour la compatibilité ; le cleanup n'utilise
+        // pas le type pour la logique, juste pour l'émission.
         this.notifyUserTyping(conversationId, userId, 'user', false);
       }
     });

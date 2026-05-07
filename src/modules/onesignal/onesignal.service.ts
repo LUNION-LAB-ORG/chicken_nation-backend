@@ -1,13 +1,13 @@
 import { Injectable, Logger, BadRequestException, HttpException } from '@nestjs/common';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { randomUUID } from 'crypto';
-import { CreateMessageDto } from './dto/create-message.dto';
+import { CreateOneSignalMessageDto } from './dto/create-message.dto';
 import { ViewMessagesQueryDto, ViewTemplatesQueryDto, ViewSegmentsQueryDto } from './dto/view-messages-query.dto';
-import { CreateTemplateDto } from './dto/create-template.dto';
-import { UpdateTemplateDto } from './dto/update-template.dto';
-import { CreateSegmentDto } from './dto/create-segment.dto';
-import { UpdateSegmentDto } from './dto/update-segment.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
+import { CreateOneSignalTemplateDto } from './dto/create-template.dto';
+import { UpdateOneSignalTemplateDto } from './dto/update-template.dto';
+import { CreateOneSignalSegmentDto } from './dto/create-segment.dto';
+import { UpdateOneSignalSegmentDto } from './dto/update-segment.dto';
+import { UpdateOneSignalUserDto } from './dto/update-user.dto';
 import { CreateAliasDto } from './dto/create-alias.dto';
 import { UpdateSubscriptionDto } from './dto/update-subscription.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -115,7 +115,7 @@ export class OnesignalService {
 
   // ── Messages ──
 
-  async createMessage(dto: CreateMessageDto) {
+  async createMessage(dto: CreateOneSignalMessageDto) {
     const { appId } = await this.getConfig();
     const body: Record<string, unknown> = {
       app_id: appId,
@@ -155,7 +155,7 @@ export class OnesignalService {
 
   // ── Templates ──
 
-  async createTemplate(dto: CreateTemplateDto) {
+  async createTemplate(dto: CreateOneSignalTemplateDto) {
     const { appId } = await this.getConfig();
     return this.request('POST', '/templates', { app_id: appId, ...dto });
   }
@@ -174,7 +174,7 @@ export class OnesignalService {
     return this.request('GET', `/templates/${templateId}?app_id=${appId}`);
   }
 
-  async updateTemplate(templateId: string, dto: UpdateTemplateDto) {
+  async updateTemplate(templateId: string, dto: UpdateOneSignalTemplateDto) {
     const { appId } = await this.getConfig();
     return this.request('PATCH', `/templates/${templateId}?app_id=${appId}`, { ...dto });
   }
@@ -195,12 +195,12 @@ export class OnesignalService {
     return this.request('GET', `/apps/${appId}/segments${qs}`);
   }
 
-  async createSegment(dto: CreateSegmentDto) {
+  async createSegment(dto: CreateOneSignalSegmentDto) {
     const { appId } = await this.getConfig();
     return this.request('POST', `/apps/${appId}/segments`, { ...dto });
   }
 
-  async updateSegment(segmentId: string, dto: UpdateSegmentDto) {
+  async updateSegment(segmentId: string, dto: UpdateOneSignalSegmentDto) {
     const { appId } = await this.getConfig();
     return this.request('PATCH', `/apps/${appId}/segments/${segmentId}`, { ...dto });
   }
@@ -335,7 +335,7 @@ export class OnesignalService {
   /**
    * Mettre à jour un utilisateur OneSignal (tags, properties).
    */
-  async updateUser(externalId: string, dto: UpdateUserDto) {
+  async updateUser(externalId: string, dto: UpdateOneSignalUserDto) {
     const { appId } = await this.getConfig();
     const body: Record<string, unknown> = {};
 

@@ -18,7 +18,7 @@ export enum TargetChannel {
   SMS = 'sms',
 }
 
-export class CreateMessageDto {
+export class CreateOneSignalMessageDto {
   // ── Canal ──
   @ApiPropertyOptional({ enum: TargetChannel })
   @IsOptional()

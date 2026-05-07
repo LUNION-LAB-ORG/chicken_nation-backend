@@ -7,6 +7,7 @@ export enum Modules {
   INVENTAIRE = 'inventory',
   RESTAURANTS = 'restaurants',
   PERSONNELS = 'personnel',
+  LIVREURS = 'livreurs',
   PROMOTIONS = 'promos',
   FIDELITE = 'loyalty',
   MESSAGES = 'inbox',

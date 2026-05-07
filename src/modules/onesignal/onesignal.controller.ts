@@ -17,15 +17,15 @@ import { OnesignalService } from './onesignal.service';
 import { OnesignalTagsTask } from './tasks/onesignal-tags.task';
 import { ScheduledNotificationService } from './scheduled-notification.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
-import { CreateMessageDto } from './dto/create-message.dto';
+import { CreateOneSignalMessageDto } from './dto/create-message.dto';
 import { ViewMessagesQueryDto, ViewTemplatesQueryDto, ViewSegmentsQueryDto } from './dto/view-messages-query.dto';
-import { CreateTemplateDto } from './dto/create-template.dto';
-import { UpdateTemplateDto } from './dto/update-template.dto';
-import { CreateSegmentDto } from './dto/create-segment.dto';
-import { UpdateSegmentDto } from './dto/update-segment.dto';
+import { CreateOneSignalTemplateDto } from './dto/create-template.dto';
+import { UpdateOneSignalTemplateDto } from './dto/update-template.dto';
+import { CreateOneSignalSegmentDto } from './dto/create-segment.dto';
+import { UpdateOneSignalSegmentDto } from './dto/update-segment.dto';
 import { CreateScheduledNotificationDto } from './dto/create-scheduled-notification.dto';
 import { UpdateScheduledNotificationDto } from './dto/update-scheduled-notification.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateOneSignalUserDto } from './dto/update-user.dto';
 import { CreateAliasDto } from './dto/create-alias.dto';
 import { UpdateSubscriptionDto } from './dto/update-subscription.dto';
 import { ViewUsersQueryDto } from './dto/view-users-query.dto';
@@ -46,7 +46,7 @@ export class OnesignalController {
 
   @Post('messages')
   @ApiOperation({ summary: 'Envoyer une notification (push/email/sms)' })
-  createMessage(@Body() dto: CreateMessageDto) {
+  createMessage(@Body() dto: CreateOneSignalMessageDto) {
     return this.onesignalService.createMessage(dto);
   }
 
@@ -81,7 +81,7 @@ export class OnesignalController {
 
   @Post('templates')
   @ApiOperation({ summary: 'Créer un template' })
-  createTemplate(@Body() dto: CreateTemplateDto) {
+  createTemplate(@Body() dto: CreateOneSignalTemplateDto) {
     return this.onesignalService.createTemplate(dto);
   }
 
@@ -99,7 +99,7 @@ export class OnesignalController {
 
   @Patch('templates/:id')
   @ApiOperation({ summary: 'Modifier un template' })
-  updateTemplate(@Param('id') id: string, @Body() dto: UpdateTemplateDto) {
+  updateTemplate(@Param('id') id: string, @Body() dto: UpdateOneSignalTemplateDto) {
     return this.onesignalService.updateTemplate(id, dto);
   }
 
@@ -119,13 +119,13 @@ export class OnesignalController {
 
   @Post('segments')
   @ApiOperation({ summary: 'Créer un segment' })
-  createSegment(@Body() dto: CreateSegmentDto) {
+  createSegment(@Body() dto: CreateOneSignalSegmentDto) {
     return this.onesignalService.createSegment(dto);
   }
 
   @Patch('segments/:id')
   @ApiOperation({ summary: 'Modifier un segment' })
-  updateSegment(@Param('id') id: string, @Body() dto: UpdateSegmentDto) {
+  updateSegment(@Param('id') id: string, @Body() dto: UpdateOneSignalSegmentDto) {
     return this.onesignalService.updateSegment(id, dto);
   }
 
@@ -202,7 +202,7 @@ export class OnesignalController {
   @ApiOperation({ summary: 'Modifier tags/properties d\'un utilisateur OneSignal' })
   updateUser(
     @Param('externalId') externalId: string,
-    @Body() dto: UpdateUserDto,
+    @Body() dto: UpdateOneSignalUserDto,
   ) {
     return this.onesignalService.updateUser(externalId, dto);
   }

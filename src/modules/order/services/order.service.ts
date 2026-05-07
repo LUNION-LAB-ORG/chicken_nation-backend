@@ -54,7 +54,8 @@ export class OrderService {
 
   async createv2(customer_id: string, createOrderDto: OrderCreateDto): Promise<Order> {
     const {
-      items, address, restaurant_id, delivery_fee, type, code_promo, date, fullname, phone, email, payment_method, points
+      items, address, restaurant_id, delivery_fee, type, code_promo, date, fullname, phone, email, payment_method, points,
+      delivery_service: overrideDeliveryService,
     } = createOrderDto;
 
     // 1. Gestion de la Date (Le format ISO géré par le nouveau DTO)
@@ -139,7 +140,8 @@ export class OrderService {
           reference: orderNumber,
           address: address ?? '',
           delivery_fee: Number(finalDeliveryFee),
-          delivery_service: delivery ? delivery.service : DeliveryService.TURBO,
+          // Override client/admin > auto-détection zone > fallback TURBO
+          delivery_service: overrideDeliveryService ?? (delivery ? delivery.service : DeliveryService.TURBO),
           zone_id: delivery?.zone_id,
           tax: Number(tax),
           discount: Number(discount),
@@ -227,6 +229,7 @@ export class OrderService {
       delivery_fee,
       points,
       user_id,
+      delivery_service: overrideDeliveryService,
       ...orderData
     } = createOrderDto;
 
@@ -372,7 +375,8 @@ export class OrderService {
           ...(payment && { paiements: { connect: { id: payment.id } } }),
           address: address ?? '',
           delivery_fee: delivery_fee ? delivery_fee : Number(deliveryFee),
-          delivery_service: delivery ? delivery.service : DeliveryService.TURBO,
+          // Override admin > auto-détection zone > fallback TURBO
+          delivery_service: overrideDeliveryService ?? (delivery ? delivery.service : DeliveryService.TURBO),
           zone_id: delivery ? delivery.zone_id : undefined,
           tax: Number(tax),
           discount: Number(discount),
@@ -646,6 +650,104 @@ export class OrderService {
   /**
    * Recherche et filtre les commandes
    */
+  /**
+   * Liste des commandes actives pour la page Opérations du backoffice.
+   * Retourne (sans pagination, non tri sortBy) toutes les commandes d'un resto
+   * dont le statut est en cours (ACCEPTED → IN_DELIVERY), avec la Course
+   * et le Delivery associé si présents (pour grouper par course côté UI).
+   */
+  async findActiveForOperations(restaurantId?: string): Promise<Order[]> {
+    const activeStatuses: OrderStatus[] = [
+      OrderStatus.ACCEPTED,
+      OrderStatus.IN_PROGRESS,
+      OrderStatus.READY,
+      OrderStatus.PICKED_UP,
+      OrderStatus.COLLECTED,
+    ];
+    return this.prisma.order.findMany({
+      where: {
+        status: { in: activeStatuses },
+        entity_status: { not: EntityStatus.DELETED },
+        ...(restaurantId && { restaurant_id: restaurantId }),
+      },
+      include: {
+        customer: {
+          select: { id: true, first_name: true, last_name: true, phone: true, email: true, image: true },
+        },
+        restaurant: { select: { id: true, name: true, image: true, address: true } },
+        order_items: { include: { dish: { select: { id: true, name: true, image: true, price: true } } } },
+        paiements: true,
+        delivery: {
+          include: {
+            course: {
+              include: {
+                deliverer: { select: { id: true, reference: true, first_name: true, last_name: true, phone: true, image: true } },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { created_at: 'desc' },
+    }) as unknown as Promise<Order[]>;
+  }
+
+  /**
+   * Caissière encaisse le livreur pour une commande en espèce (payment_method = OFFLINE).
+   * Cascade :
+   *   - Order.paied = true + paied_at = now
+   *   - Order.status → COMPLETED (si pas déjà) + completed_at
+   *   - Émet order:updated pour rafraîchir en temps réel le backoffice Opérations
+   *
+   * @throws BadRequestException si l'order est déjà payée ou n'est pas en OFFLINE.
+   */
+  async markPaidCash(id: string, amount?: number) {
+    const order = await this.prisma.order.findUnique({ where: { id } });
+    if (!order) throw new NotFoundException('Commande introuvable');
+    if (order.entity_status === EntityStatus.DELETED) {
+      throw new BadRequestException('Commande supprimée');
+    }
+    if (order.paied) {
+      throw new BadRequestException('Commande déjà payée');
+    }
+    if (order.payment_method !== PaymentMethod.OFFLINE) {
+      throw new BadRequestException(
+        'Cet endpoint n\'est utilisable que pour les commandes en espèce (OFFLINE)',
+      );
+    }
+
+    const now = new Date();
+    const isAlreadyCompleted = order.status === OrderStatus.COMPLETED;
+
+    const updated = await this.prisma.order.update({
+      where: { id },
+      data: {
+        paied: true,
+        paied_at: now,
+        ...(!isAlreadyCompleted && {
+          status: OrderStatus.COMPLETED,
+          completed_at: now,
+        }),
+      },
+      include: {
+        customer: true,
+        restaurant: true,
+        order_items: { include: { dish: true } },
+      },
+    });
+
+    // Log d'audit : si un montant est fourni et diffère du montant attendu
+    if (amount !== undefined && Math.abs(amount - updated.amount) > 0.01) {
+      this.logger.warn(
+        `Order ${updated.reference} : montant reçu ${amount} ≠ montant dû ${updated.amount}`,
+      );
+    }
+
+    // Event WebSocket pour que le drawer/cards se rafraîchissent côté backoffice
+    this.orderWebSocketService.emitOrderUpdated(updated as Order);
+
+    return updated;
+  }
+
   async findAll(filters: QueryOrderDto): Promise<QueryResponseDto<Order>> {
     const {
       reference,
