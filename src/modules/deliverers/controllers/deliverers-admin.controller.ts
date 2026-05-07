@@ -101,6 +101,12 @@ export class DeliverersAdminController {
     return this.deliverersService.reactivate(id);
   }
 
+  @ApiOperation({ summary: 'Forcer l\'activation sans documents (PENDING → ACTIVE, admin override)' })
+  @Patch(':id/force-activate')
+  async forceActivate(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.deliverersService.forceActivate(id);
+  }
+
   @ApiOperation({ summary: 'Affecter / réaffecter un restaurant au livreur' })
   @ApiBody({ type: AssignRestaurantDto })
   @Patch(':id/assign-restaurant')

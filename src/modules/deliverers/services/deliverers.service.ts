@@ -195,6 +195,35 @@ export class DeliverersService {
     return reactivated;
   }
 
+  /**
+   * Force l'activation d'un livreur en attente sans vérifier les documents.
+   * Réservé à l'admin — à utiliser quand le livreur n'a pas pu uploader ses docs
+   * via l'app mobile mais doit être opérationnel immédiatement.
+   */
+  async forceActivate(id: string) {
+    const deliverer = await this.getNonDeleted(id);
+
+    if (deliverer.status !== DelivererStatus.PENDING_VALIDATION) {
+      throw new BadRequestException('Seuls les comptes en attente peuvent être activés');
+    }
+
+    // Bypass du check document — l'admin prend la responsabilité
+    const activated = await this.transitionStatus(deliverer, DelivererStatus.ACTIVE);
+
+    const restaurant = activated.restaurant_id
+      ? await this.prisma.restaurant.findUnique({
+          where: { id: activated.restaurant_id },
+          select: { name: true },
+        })
+      : null;
+    this.pushService.notifyAccountActivated({
+      delivererId: activated.id,
+      restaurantName: restaurant?.name,
+    });
+
+    return activated;
+  }
+
   async assignRestaurant(id: string, dto: AssignRestaurantDto) {
     const deliverer = await this.getNonDeleted(id);
 
