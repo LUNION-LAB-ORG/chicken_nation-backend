@@ -171,4 +171,11 @@ export class ResponseTicketDto {
 
     @ApiProperty({ description: 'Nombre de messages non lus du client', default: 0 })
     unreadCount?: number;
+
+    @ApiProperty()
+    createdAt: Date;
+
+    @ApiProperty({ required: false })
+    @IsOptional()
+    updatedAt?: Date;
 }
