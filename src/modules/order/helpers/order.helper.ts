@@ -412,50 +412,42 @@ export class OrderHelper {
       long,
     );
 
-    // Vérifier si le restaurant est zone 4
-    if (distance <= 1) {
-      return {
-        montant: 500,
-        zone: `-1km de ${restaurant.name}`,
-        distance: Math.round(distance),
-        service: DeliveryService.TURBO,
-        zone_id: null,
-      };
-    } else if (distance > 1 && distance <= 2) {
-      return {
-        montant: 750,
-        zone: `1-2km de ${restaurant.name}`,
-        distance: Math.round(distance),
-        service: DeliveryService.TURBO,
-        zone_id: null,
-      };
-    } else if (distance > 2 && distance <= 3) {
+    // Grille de fallback des frais de livraison (utilisée si l'API Turbo ne répond pas)
+    if (distance <= 2) {
       return {
         montant: 1000,
-        zone: `2-3km de ${restaurant.name}`,
+        zone: `0-2km de ${restaurant.name}`,
         distance: Math.round(distance),
         service: DeliveryService.TURBO,
         zone_id: null,
       };
-    } else if (distance > 3 && distance <= 5) {
+    } else if (distance > 2 && distance <= 4) {
       return {
         montant: 1500,
-        zone: `3-5km de ${restaurant.name}`,
+        zone: `2-4km de ${restaurant.name}`,
+        distance: Math.round(distance),
+        service: DeliveryService.TURBO,
+        zone_id: null,
+      };
+    } else if (distance > 4 && distance <= 5) {
+      return {
+        montant: 2000,
+        zone: `4-5km de ${restaurant.name}`,
         distance: Math.round(distance),
         service: DeliveryService.TURBO,
         zone_id: null,
       };
     } else if (distance > 5 && distance <= 7) {
       return {
-        montant: 2000,
-        zone: `5-10km de ${restaurant.name}`,
+        montant: 2500,
+        zone: `5-7km de ${restaurant.name}`,
         distance: Math.round(distance),
         service: DeliveryService.TURBO,
         zone_id: null,
       };
     } else if (distance > 7 && distance <= 10) {
       return {
-        montant: 2500,
+        montant: 3000,
         zone: `7-10km de ${restaurant.name}`,
         distance: Math.round(distance),
         service: DeliveryService.TURBO,
@@ -463,16 +455,24 @@ export class OrderHelper {
       };
     } else if (distance > 10 && distance <= 12.5) {
       return {
-        montant: 2700,
+        montant: 3500,
         zone: `10-12.5km de ${restaurant.name}`,
         distance: Math.round(distance),
         service: DeliveryService.TURBO,
         zone_id: null,
       };
-    } else if (distance > 12.5 && distance <= 15) {
+    } else if (distance > 12.5 && distance <= 14) {
       return {
-        montant: 3500,
-        zone: `12.5-15km de ${restaurant.name}`,
+        montant: 4000,
+        zone: `12.5-14km de ${restaurant.name}`,
+        distance: Math.round(distance),
+        service: DeliveryService.TURBO,
+        zone_id: null,
+      };
+    } else if (distance > 14 && distance <= 16) {
+      return {
+        montant: 4500,
+        zone: `14-16km de ${restaurant.name}`,
         distance: Math.round(distance),
         service: DeliveryService.TURBO,
         zone_id: null,
@@ -480,8 +480,8 @@ export class OrderHelper {
     }
     else {
       return {
-        montant: 3500,
-        zone: `+15km de ${restaurant.name}`,
+        montant: 5000,
+        zone: `+16km de ${restaurant.name}`,
         distance: Math.round(distance),
         service: DeliveryService.TURBO,
         zone_id: null,
