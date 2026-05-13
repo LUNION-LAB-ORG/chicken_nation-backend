@@ -263,6 +263,8 @@ export class DelivererTicketsService {
                 name: ticket.category.name,
             } : null,
             unreadCount: ticket._count?.messages ?? 0,
+            createdAt: ticket.createdAt,
+            updatedAt: ticket.updatedAt,
         } as ResponseTicketDto;
     }
 }
