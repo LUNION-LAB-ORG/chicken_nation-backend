@@ -296,12 +296,25 @@ export class OrderV2Helper {
 
   // Appliquer un code promo ou un voucher
   // Retourne { discount, type } pour savoir quel type a été appliqué
-  async applyPromoCode(code?: string, customer_id?: string, netAmount?: number): Promise<{ discount: number; type: 'PROMO_CODE' | 'VOUCHER' | null; promoCodeId?: string }> {
+  // orderItems est requis pour appliquer correctement les codes promo ciblés
+  // (SPECIFIC_PRODUCTS / CATEGORIES) : la remise est calculée sur le subtotal
+  // des items éligibles uniquement.
+  async applyPromoCode(
+    code?: string,
+    customer_id?: string,
+    netAmount?: number,
+    orderItems?: { dish_id: string; quantity: number; price: number }[],
+  ): Promise<{ discount: number; type: 'PROMO_CODE' | 'VOUCHER' | null; promoCodeId?: string }> {
     if (!code || !customer_id || !netAmount) return { discount: 0, type: null };
 
     // 1. Essayer d'abord comme Code Promo (PromoCode)
     try {
-      const promoResult = await this.promoCodeService.applyPromoCode(code, customer_id, netAmount);
+      const promoResult = await this.promoCodeService.applyPromoCode(
+        code,
+        customer_id,
+        netAmount,
+        orderItems,
+      );
       if (promoResult.isValid && promoResult.discountAmount > 0) {
         return {
           discount: Math.min(promoResult.discountAmount, netAmount),

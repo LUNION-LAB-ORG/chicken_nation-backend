@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { DiscountType } from '@prisma/client';
+import { DiscountType, TargetType } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   IsArray,
@@ -10,6 +10,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Min,
 } from 'class-validator';
 
@@ -84,4 +85,31 @@ export class CreatePromoCodeDto {
   @IsArray()
   @IsString({ each: true })
   restaurant_ids?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Type de ciblage du code promo',
+    enum: TargetType,
+    default: TargetType.ALL_PRODUCTS,
+  })
+  @IsOptional()
+  @IsEnum(TargetType)
+  target_type?: TargetType;
+
+  @ApiPropertyOptional({
+    description: 'IDs des plats ciblés (utilisé si target_type = SPECIFIC_PRODUCTS)',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  targeted_dish_ids?: string[];
+
+  @ApiPropertyOptional({
+    description: 'IDs des catégories ciblées (utilisé si target_type = CATEGORIES)',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  targeted_category_ids?: string[];
 }
