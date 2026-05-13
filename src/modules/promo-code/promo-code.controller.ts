@@ -65,7 +65,12 @@ export class PromoCodeController {
   @ApiOperation({ summary: 'Appliquer un code promo (mobile)' })
   applyPromoCode(@Req() req: Request, @Body() dto: ApplyPromoCodeDto) {
     const customer = req.user as Customer;
-    return this.promoCodeService.applyPromoCode(dto.code, customer.id, dto.order_amount);
+    return this.promoCodeService.applyPromoCode(
+      dto.code,
+      customer.id,
+      dto.order_amount,
+      dto.order_items,
+    );
   }
 
   @Get('validate/:code')
