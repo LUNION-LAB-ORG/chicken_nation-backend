@@ -19,6 +19,9 @@ import { addDays, addMonths, addWeeks } from 'date-fns';
 export class PushScheduledTask {
   private readonly logger = new Logger(PushScheduledTask.name);
 
+  /** Empêche deux ticks de cron de se chevaucher dans le même process */
+  private running = false;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly expoPushService: ExpoPushService,
@@ -27,30 +30,63 @@ export class PushScheduledTask {
 
   @Cron('* * * * *')
   async processScheduledNotifications() {
-    const now = new Date();
+    // Permet de désigner UN seul backend comme cron worker en prod.
+    // Mettre DISABLE_PUSH_CRON=true sur les autres instances.
+    if (process.env.DISABLE_PUSH_CRON === 'true') return;
+    if (this.running) return;
+    this.running = true;
 
-    const dueNotifications = await this.prisma.scheduledNotification.findMany({
-      where: {
-        channel: 'expo_push',
-        active: true,
-        next_run_at: { lte: now },
-      },
-    });
+    try {
+      const now = new Date();
 
-    if (dueNotifications.length === 0) return;
+      const dueNotifications = await this.prisma.scheduledNotification.findMany({
+        where: {
+          channel: 'expo_push',
+          active: true,
+          next_run_at: { lte: now },
+        },
+      });
 
-    this.logger.log(
-      `${dueNotifications.length} notification(s) planifiée(s) à envoyer`,
-    );
+      if (dueNotifications.length === 0) return;
 
-    for (const notification of dueNotifications) {
-      try {
-        await this.processOne(notification, now);
-      } catch (error) {
-        this.logger.error(
-          `Erreur traitement notification ${notification.id}: ${error.message}`,
-        );
+      this.logger.log(
+        `${dueNotifications.length} notification(s) planifiée(s) à évaluer`,
+      );
+
+      for (const notification of dueNotifications) {
+        try {
+          // Claim atomique : on avance next_run_at AVANT d'envoyer.
+          // updateMany conditionné sur l'ancienne valeur = compare-and-swap
+          // Postgres → si une autre instance/tick a déjà claim, count=0 et on skip.
+          const plannedNext = this.computeNextRun(notification);
+          const claim = await this.prisma.scheduledNotification.updateMany({
+            where: {
+              id: notification.id,
+              active: true,
+              next_run_at: notification.next_run_at,
+            },
+            data: {
+              next_run_at: plannedNext,
+              ...(notification.schedule_type === 'once' ? { active: false } : {}),
+            },
+          });
+
+          if (claim.count === 0) {
+            this.logger.warn(
+              `"${notification.name}" déjà claim par une autre exécution — skip`,
+            );
+            continue;
+          }
+
+          await this.processOne(notification, now);
+        } catch (error) {
+          this.logger.error(
+            `Erreur traitement notification ${notification.id}: ${error.message}`,
+          );
+        }
       }
+    } finally {
+      this.running = false;
     }
   }
 
@@ -159,16 +195,13 @@ export class PushScheduledTask {
       },
     });
 
-    // Mettre à jour la notification planifiée
-    const nextRun = this.computeNextRun(notification);
-
+    // next_run_at + active déjà mis à jour atomiquement au moment du claim.
+    // Ici on ne fait que le bookkeeping post-envoi.
     await this.prisma.scheduledNotification.update({
       where: { id: notification.id },
       data: {
         last_sent_at: now,
         send_count: { increment: 1 },
-        next_run_at: nextRun,
-        ...(notification.schedule_type === 'once' ? { active: false } : {}),
       },
     });
 
