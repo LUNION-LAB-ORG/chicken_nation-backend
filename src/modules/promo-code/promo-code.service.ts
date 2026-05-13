@@ -1,5 +1,5 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
-import { DiscountType, Prisma, User } from '@prisma/client';
+import { DiscountType, Prisma, TargetType, User } from '@prisma/client';
 import type { Request } from 'express';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -21,7 +21,21 @@ const promoCodeInclude = {
       usages: true,
     },
   },
-};
+  promo_code_targeted_dishes: {
+    include: {
+      dish: {
+        select: { id: true, name: true, image: true, price: true, category_id: true },
+      },
+    },
+  },
+  promo_code_targeted_categories: {
+    include: {
+      category: {
+        select: { id: true, name: true, image: true },
+      },
+    },
+  },
+} satisfies Prisma.PromoCodeInclude;
 
 @Injectable()
 export class PromoCodeService {
@@ -74,23 +88,66 @@ export class PromoCodeService {
       );
     }
 
-    const promoCode = await this.prismaService.promoCode.create({
-      data: {
-        code: dto.code.toUpperCase().trim(),
-        description: dto.description,
-        discount_type: dto.discount_type,
-        discount_value: dto.discount_value,
-        min_order_amount: dto.min_order_amount ?? 0,
-        max_discount_amount: dto.max_discount_amount,
-        max_usage: dto.max_usage,
-        max_usage_per_user: dto.max_usage_per_user ?? 1,
-        start_date: startDate,
-        expiration_date: expirationDate,
-        is_active: dto.is_active ?? true,
-        restaurant_ids: dto.restaurant_ids ?? [],
-        created_by: userId,
-      },
-      include: promoCodeInclude,
+    // Validate targeting (parité avec le module Promotion)
+    const targetType = dto.target_type ?? TargetType.ALL_PRODUCTS;
+    const targetedDishIds = dto.targeted_dish_ids ?? [];
+    const targetedCategoryIds = dto.targeted_category_ids ?? [];
+
+    if (targetType === TargetType.SPECIFIC_PRODUCTS && targetedDishIds.length === 0) {
+      throw new HttpException(
+        'Vous devez sélectionner au moins un plat pour ce type de ciblage',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (targetType === TargetType.CATEGORIES && targetedCategoryIds.length === 0) {
+      throw new HttpException(
+        'Vous devez sélectionner au moins une catégorie pour ce type de ciblage',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const promoCode = await this.prismaService.$transaction(async (tx) => {
+      const created = await tx.promoCode.create({
+        data: {
+          code: dto.code.toUpperCase().trim(),
+          description: dto.description,
+          discount_type: dto.discount_type,
+          discount_value: dto.discount_value,
+          min_order_amount: dto.min_order_amount ?? 0,
+          max_discount_amount: dto.max_discount_amount,
+          max_usage: dto.max_usage,
+          max_usage_per_user: dto.max_usage_per_user ?? 1,
+          start_date: startDate,
+          expiration_date: expirationDate,
+          is_active: dto.is_active ?? true,
+          restaurant_ids: dto.restaurant_ids ?? [],
+          target_type: targetType,
+          created_by: userId,
+        },
+      });
+
+      if (targetType === TargetType.SPECIFIC_PRODUCTS && targetedDishIds.length > 0) {
+        await tx.promoCodeTargetedDish.createMany({
+          data: targetedDishIds.map((dish_id) => ({
+            promo_code_id: created.id,
+            dish_id,
+          })),
+        });
+      }
+
+      if (targetType === TargetType.CATEGORIES && targetedCategoryIds.length > 0) {
+        await tx.promoCodeTargetedCategory.createMany({
+          data: targetedCategoryIds.map((category_id) => ({
+            promo_code_id: created.id,
+            category_id,
+          })),
+        });
+      }
+
+      return tx.promoCode.findUniqueOrThrow({
+        where: { id: created.id },
+        include: promoCodeInclude,
+      });
     });
 
     this.logger.log({
@@ -256,11 +313,74 @@ export class PromoCodeService {
     if (dto.expiration_date !== undefined) updateData.expiration_date = new Date(dto.expiration_date);
     if (dto.is_active !== undefined) updateData.is_active = dto.is_active;
     if (dto.restaurant_ids !== undefined) updateData.restaurant_ids = dto.restaurant_ids;
+    if (dto.target_type !== undefined) updateData.target_type = dto.target_type;
 
-    const promoCode = await this.prismaService.promoCode.update({
-      where: { id },
-      data: updateData,
-      include: promoCodeInclude,
+    // Effective target_type pour validation et reset des liaisons
+    const effectiveTargetType = dto.target_type ?? existing.target_type;
+    const targetedDishIds = dto.targeted_dish_ids;
+    const targetedCategoryIds = dto.targeted_category_ids;
+
+    // Validation : si on bascule vers SPECIFIC_PRODUCTS/CATEGORIES sans liste explicite,
+    // on autorise tant qu'une liste existait déjà côté DB
+    if (
+      effectiveTargetType === TargetType.SPECIFIC_PRODUCTS &&
+      targetedDishIds !== undefined &&
+      targetedDishIds.length === 0
+    ) {
+      throw new HttpException(
+        'Vous devez sélectionner au moins un plat pour ce type de ciblage',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (
+      effectiveTargetType === TargetType.CATEGORIES &&
+      targetedCategoryIds !== undefined &&
+      targetedCategoryIds.length === 0
+    ) {
+      throw new HttpException(
+        'Vous devez sélectionner au moins une catégorie pour ce type de ciblage',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const promoCode = await this.prismaService.$transaction(async (tx) => {
+      await tx.promoCode.update({
+        where: { id },
+        data: updateData,
+      });
+
+      // Si target_type change ou si une nouvelle liste est fournie : reset + recréation.
+      // Si target_type passe à ALL_PRODUCTS, on purge toutes les liaisons.
+      if (dto.target_type !== undefined || targetedDishIds !== undefined) {
+        await tx.promoCodeTargetedDish.deleteMany({ where: { promo_code_id: id } });
+        if (
+          effectiveTargetType === TargetType.SPECIFIC_PRODUCTS &&
+          targetedDishIds &&
+          targetedDishIds.length > 0
+        ) {
+          await tx.promoCodeTargetedDish.createMany({
+            data: targetedDishIds.map((dish_id) => ({ promo_code_id: id, dish_id })),
+          });
+        }
+      }
+
+      if (dto.target_type !== undefined || targetedCategoryIds !== undefined) {
+        await tx.promoCodeTargetedCategory.deleteMany({ where: { promo_code_id: id } });
+        if (
+          effectiveTargetType === TargetType.CATEGORIES &&
+          targetedCategoryIds &&
+          targetedCategoryIds.length > 0
+        ) {
+          await tx.promoCodeTargetedCategory.createMany({
+            data: targetedCategoryIds.map((category_id) => ({ promo_code_id: id, category_id })),
+          });
+        }
+      }
+
+      return tx.promoCode.findUniqueOrThrow({
+        where: { id },
+        include: promoCodeInclude,
+      });
     });
 
     this.logger.log({
@@ -323,9 +443,18 @@ export class PromoCodeService {
     return promoCode;
   }
 
-  async applyPromoCode(code: string, customerId: string, orderAmount: number) {
+  async applyPromoCode(
+    code: string,
+    customerId: string,
+    orderAmount: number,
+    orderItems?: { dish_id: string; quantity: number; price: number }[],
+  ) {
     const promoCode = await this.prismaService.promoCode.findUnique({
       where: { code: code.toUpperCase().trim() },
+      include: {
+        promo_code_targeted_dishes: { select: { dish_id: true } },
+        promo_code_targeted_categories: { select: { category_id: true } },
+      },
     });
 
     if (!promoCode) {
@@ -382,17 +511,71 @@ export class PromoCodeService {
       );
     }
 
-    // Calculate discount
+    // Déterminer le montant éligible selon le ciblage.
+    // Pattern aligné sur PromotionService.calculateDiscount : la remise s'applique
+    // uniquement sur le sous-total des items éligibles.
+    let eligibleAmount = orderAmount;
+
+    if (promoCode.target_type !== TargetType.ALL_PRODUCTS) {
+      if (!orderItems || orderItems.length === 0) {
+        throw new HttpException(
+          'Ce code promo cible des produits spécifiques. Les détails de la commande sont requis.',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      const targetedDishIds = new Set(
+        promoCode.promo_code_targeted_dishes.map((t) => t.dish_id),
+      );
+      const targetedCategoryIds = new Set(
+        promoCode.promo_code_targeted_categories.map((t) => t.category_id),
+      );
+
+      // Pour CATEGORIES, charger les category_id des plats commandés en une requête
+      let dishCategoryMap = new Map<string, string>();
+      if (promoCode.target_type === TargetType.CATEGORIES) {
+        const dishes = await this.prismaService.dish.findMany({
+          where: { id: { in: orderItems.map((i) => i.dish_id) } },
+          select: { id: true, category_id: true },
+        });
+        dishCategoryMap = new Map(dishes.map((d) => [d.id, d.category_id]));
+      }
+
+      const eligibleItems = orderItems.filter((item) => {
+        if (promoCode.target_type === TargetType.SPECIFIC_PRODUCTS) {
+          return targetedDishIds.has(item.dish_id);
+        }
+        if (promoCode.target_type === TargetType.CATEGORIES) {
+          const categoryId = dishCategoryMap.get(item.dish_id);
+          return categoryId ? targetedCategoryIds.has(categoryId) : false;
+        }
+        return false;
+      });
+
+      if (eligibleItems.length === 0) {
+        throw new HttpException(
+          'Ce code promo ne s\'applique à aucun produit de votre commande',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      eligibleAmount = eligibleItems.reduce(
+        (sum, item) => sum + item.price * item.quantity,
+        0,
+      );
+    }
+
+    // Calculate discount sur le montant éligible
     let discountAmount: number;
 
     if (promoCode.discount_type === DiscountType.PERCENTAGE) {
-      discountAmount = (promoCode.discount_value / 100) * orderAmount;
+      discountAmount = (promoCode.discount_value / 100) * eligibleAmount;
       if (promoCode.max_discount_amount) {
         discountAmount = Math.min(discountAmount, promoCode.max_discount_amount);
       }
     } else {
       // FIXED_AMOUNT
-      discountAmount = Math.min(promoCode.discount_value, orderAmount);
+      discountAmount = Math.min(promoCode.discount_value, eligibleAmount);
     }
 
     discountAmount = Math.round(discountAmount);
@@ -406,6 +589,7 @@ export class PromoCodeService {
         discount_type: promoCode.discount_type,
         discount_value: promoCode.discount_value,
         description: promoCode.description,
+        target_type: promoCode.target_type,
       },
     };
   }

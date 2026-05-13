@@ -38,6 +38,8 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY package.json ./
 COPY prisma ./prisma
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
 
 # Régénérer le client Prisma pour l'OS du runner (debian-openssl-3.0.x).
 # L'image builder (Bun, Debian) peut produire une version différente.
@@ -49,4 +51,7 @@ RUN echo '{"compilerOptions":{"baseUrl":"./dist"}}' > tsconfig.json
 
 EXPOSE 3020
 
-CMD ["node", "-r", "tsconfig-paths/register", "dist/src/main.js"]
+# L'entrypoint applique les migrations Prisma puis démarre Nest.
+# Idempotent : ne fait rien si toutes les migrations sont déjà appliquées.
+# Cf. docker-entrypoint.sh pour les détails (lock SQL natif Prisma, SKIP_MIGRATIONS, etc.).
+ENTRYPOINT ["./docker-entrypoint.sh"]

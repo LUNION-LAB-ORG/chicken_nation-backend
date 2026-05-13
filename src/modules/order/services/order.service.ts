@@ -74,7 +74,20 @@ export class OrderService {
     // Ton algorithme ajusté !
     const { orderItems, netAmount, totalDishes } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails);
 
-    const promoResult = await this.orderHelperV2.applyPromoCode(code_promo, customerData.customer_id, netAmount);
+    // Pour le ciblage par plat/catégorie d'un code promo, on transmet la liste
+    // simplifiée des items (dish_id, quantity, prix unitaire). Le prix retenu est
+    // le prix unitaire du plat (avec promotion plat éventuelle), hors suppléments.
+    const promoItems = orderItems.map((oi) => ({
+      dish_id: oi.dish_id,
+      quantity: oi.quantity,
+      price: oi.dishPrice,
+    }));
+    const promoResult = await this.orderHelperV2.applyPromoCode(
+      code_promo,
+      customerData.customer_id,
+      netAmount,
+      promoItems,
+    );
     const promoDiscount = promoResult.discount;
 
     // Calculer le montant de réduction des points de fidélité

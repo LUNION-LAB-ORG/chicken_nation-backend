@@ -44,9 +44,9 @@ enum OrderStatus {
 }
 
 enum DeliveryService {
-  TURBO           // Sous-traité à Turbo Delivery
-  FREE            // Legacy — livraison gratuite (compat historique)
-  CHICKEN_NATION  // Livreur interne Chicken Nation (module course)
+  TURBO // Sous-traité à Turbo Delivery
+  FREE // Legacy — livraison gratuite (compat historique)
+  CHICKEN_NATION // Livreur interne Chicken Nation (module course)
 }
 
 enum PaiementMode {
@@ -243,10 +243,11 @@ model Category {
 
   dishes Dish[]
 
-  entity_status                 EntityStatus                @default(ACTIVE)
-  created_at                    DateTime                    @default(now()) @db.Timestamp(6)
-  updated_at                    DateTime                    @default(now()) @db.Timestamp(6)
-  promotion_targeted_categories PromotionTargetedCategory[]
+  entity_status                  EntityStatus                @default(ACTIVE)
+  created_at                     DateTime                    @default(now()) @db.Timestamp(6)
+  updated_at                     DateTime                    @default(now()) @db.Timestamp(6)
+  promotion_targeted_categories  PromotionTargetedCategory[]
+  promo_code_targeted_categories PromoCodeTargetedCategory[]
 }
 
 model CounterOtp {
@@ -379,10 +380,10 @@ model Deliverer {
   // (X = `deliverer.gps_update_interval_seconds` en settings, default 60s).
   // Utilisée par le DelivererScoringService pour pondérer la distance
   // au restaurant dans le choix du livreur à qui envoyer une offre.
-  last_location    Json?     // { lat: number, lng: number }
+  last_location    Json? // { lat: number, lng: number }
   last_location_at DateTime? @db.Timestamp(6)
-  last_speed_kmh   Float?    // vitesse instantanée (m/s → km/h côté mobile)
-  last_heading_deg Float?    // direction 0-360° (bonus pour flèche map admin)
+  last_speed_kmh   Float? // vitesse instantanée (m/s → km/h côté mobile)
+  last_heading_deg Float? // direction 0-360° (bonus pour flèche map admin)
 
   // ── File d'attente FIFO & pénalités ────────────────────────────────────
   // `last_available_at` : timestamp d'entrée en queue (null = pas dispo).
@@ -396,8 +397,8 @@ model Deliverer {
   auto_pause_until DateTime? @db.Timestamp(6)
 
   // Pénalité queue après un refus : descend de N positions pendant X min.
-  queue_penalty_until      DateTime? @db.Timestamp(6)
-  queue_penalty_positions  Int?      @default(0)
+  queue_penalty_until     DateTime? @db.Timestamp(6)
+  queue_penalty_positions Int?      @default(0)
 
   // Historique timestamps des derniers refus/expirations d'offres — JSON
   // array de strings ISO. Utilisé pour compter les refus dans une fenêtre
@@ -565,10 +566,6 @@ model CourseOfferAttempt {
 
   created_at DateTime @default(now()) @db.Timestamp(6)
 
-  @@index([deliverer_id, status])
-  @@index([course_id])
-  @@index([status, expires_at]) // cron d'expiration
-
   /// A1 Fix — Partial unique index ajouté via migration ciblée :
   ///   CREATE UNIQUE INDEX "CourseOfferAttempt_pending_unique"
   ///     ON "CourseOfferAttempt" ("course_id", "deliverer_id")
@@ -578,6 +575,10 @@ model CourseOfferAttempt {
   /// (ACCEPTED, REFUSED, EXPIRED) restent libres de doublons.
   /// Prisma 6 ne supporte pas encore les WHERE clauses sur @@unique,
   /// d'où la migration SQL brute (cf. 20260425101807_course_offer_pending_unique).
+
+  @@index([deliverer_id, status])
+  @@index([course_id])
+  @@index([status, expires_at]) // cron d'expiration
 }
 
 /// Regroupement intelligent de commandes en attente de création de Course.
@@ -592,8 +593,8 @@ model CourseOfferAttempt {
 ///
 /// Un batch reste visible en DB même après flush pour audit / debug.
 model CourseBatch {
-  id            String @id @default(uuid()) @db.Uuid
-  restaurant_id String @db.Uuid
+  id            String     @id @default(uuid()) @db.Uuid
+  restaurant_id String     @db.Uuid
   restaurant    Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
 
   /// État courant du batch (PENDING → FLUSHED ou EXPIRED).
@@ -607,8 +608,8 @@ model CourseBatch {
   orders Order[]
 
   /// Course créée au flush (null tant que PENDING ou EXPIRED sans flush).
-  course_id  String? @unique @db.Uuid
-  course     Course? @relation(fields: [course_id], references: [id], onDelete: SetNull)
+  course_id  String?   @unique @db.Uuid
+  course     Course?   @relation(fields: [course_id], references: [id], onDelete: SetNull)
   flushed_at DateTime? @db.Timestamp(6)
 
   created_at DateTime @default(now()) @db.Timestamp(6)
@@ -748,10 +749,10 @@ model TicketMessage {
   ticket   TicketThread @relation(fields: [ticketId], references: [id], onDelete: Cascade)
 
   // Les authors sont mutuellement exclusifs — exactement un des trois doit être non-null.
-  authorUserId     String?   @db.Uuid
-  authorUser       User?     @relation("TicketMsgAuthorUser", fields: [authorUserId], references: [id])
-  authorCustomerId String?   @db.Uuid
-  authorCustomer   Customer? @relation("TicketMsgAuthorCustomer", fields: [authorCustomerId], references: [id])
+  authorUserId      String?    @db.Uuid
+  authorUser        User?      @relation("TicketMsgAuthorUser", fields: [authorUserId], references: [id])
+  authorCustomerId  String?    @db.Uuid
+  authorCustomer    Customer?  @relation("TicketMsgAuthorCustomer", fields: [authorCustomerId], references: [id])
   // Auteur livreur (P-chat livreur) — exclusif avec les 2 autres.
   authorDelivererId String?    @db.Uuid
   authorDeliverer   Deliverer? @relation("DelivererTicketMessages", fields: [authorDelivererId], references: [id])
@@ -840,6 +841,9 @@ model Dish {
   // Relations promotions
   promotion_dishes          PromotionDish[]
   promotion_targeted_dishes PromotionTargetedDish[]
+
+  // Relations codes promo
+  promo_code_targeted_dishes PromoCodeTargetedDish[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -1444,6 +1448,7 @@ model PromoCode {
   expiration_date     DateTime         @db.Timestamp(6)
   is_active           Boolean          @default(true)
   restaurant_ids      String[]         @default([])
+  target_type         TargetType       @default(ALL_PRODUCTS)
   created_by          String?          @db.Uuid
   creator             User?            @relation("promo_code_creator", fields: [created_by], references: [id])
   created_at          DateTime         @default(now()) @db.Timestamp(6)
@@ -1451,8 +1456,35 @@ model PromoCode {
   entity_status       EntityStatus     @default(ACTIVE)
   usages              PromoCodeUsage[]
 
+  promo_code_targeted_dishes     PromoCodeTargetedDish[]
+  promo_code_targeted_categories PromoCodeTargetedCategory[]
+
   @@index([code])
   @@index([is_active, entity_status])
+}
+
+// Plats ciblés spécifiquement par un code promo
+model PromoCodeTargetedDish {
+  id            String @id @default(uuid()) @db.Uuid
+  promo_code_id String @db.Uuid
+  dish_id       String @db.Uuid
+
+  promo_code PromoCode @relation(fields: [promo_code_id], references: [id], onDelete: Cascade)
+  dish       Dish      @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+
+  @@unique([promo_code_id, dish_id])
+}
+
+// Catégories ciblées spécifiquement par un code promo
+model PromoCodeTargetedCategory {
+  id            String @id @default(uuid()) @db.Uuid
+  promo_code_id String @db.Uuid
+  category_id   String @db.Uuid
+
+  promo_code PromoCode @relation(fields: [promo_code_id], references: [id], onDelete: Cascade)
+  category   Category  @relation(fields: [category_id], references: [id], onDelete: Cascade)
+
+  @@unique([promo_code_id, category_id])
 }
 
 model PromoCodeUsage {
@@ -1638,10 +1670,10 @@ model RetentionCallback {
 
 /// Statut d'un plan de planning au cours de son cycle de vie.
 enum SchedulePlanStatus {
-  DRAFT     // En cours d'édition par l'admin (auto-généré ou manuel)
-  SENT      // Envoyé aux livreurs, en attente de leurs confirmations
+  DRAFT // En cours d'édition par l'admin (auto-généré ou manuel)
+  SENT // Envoyé aux livreurs, en attente de leurs confirmations
   CONFIRMED // Tous les livreurs ont répondu (ou deadline passée + auto-CONFIRMED)
-  ARCHIVED  // Période passée, plan figé pour historique
+  ARCHIVED // Période passée, plan figé pour historique
 }
 
 /// Type de créneau journalier — 2 paliers seulement (matin/soir) pour rester simple.
@@ -1652,22 +1684,22 @@ enum ShiftType {
 
 /// Statut d'une affectation livreur ↔ shift.
 enum ShiftAssignmentStatus {
-  ASSIGNED   // Pré-affecté par l'algo, en attente de réponse livreur
-  CONFIRMED  // Livreur a confirmé sa présence (ou auto-CONFIRMED par deadline)
-  REFUSED    // Livreur a explicitement décliné le shift
+  ASSIGNED // Pré-affecté par l'algo, en attente de réponse livreur
+  CONFIRMED // Livreur a confirmé sa présence (ou auto-CONFIRMED par deadline)
+  REFUSED // Livreur a explicitement décliné le shift
 }
 
 /// Origine d'un jour de repos.
 enum RestDaySource {
-  AUTO              // Calculé par l'algo de rotation
-  MANUAL_DELIVERER  // Le livreur a ajouté ce repos lui-même via mobile
-  MANUAL_ADMIN      // L'admin a forcé ce repos (gestion exceptionnelle)
+  AUTO // Calculé par l'algo de rotation
+  MANUAL_DELIVERER // Le livreur a ajouté ce repos lui-même via mobile
+  MANUAL_ADMIN // L'admin a forcé ce repos (gestion exceptionnelle)
 }
 
 /// Réponse au check-in matinal de présence.
 enum PresenceCheckResponse {
-  PRESENT     // "Oui je suis op aujourd'hui"
-  ABSENT      // "Non je ne peux pas"
+  PRESENT // "Oui je suis op aujourd'hui"
+  ABSENT // "Non je ne peux pas"
   NO_RESPONSE // Pas de réponse → auto-CONFIRMED PRESENT (politique Q6=A)
 }
 
