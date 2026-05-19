@@ -2053,9 +2053,13 @@ export class OrderService {
     // 📄 GÉNÉRATION DU PDF AVEC PUPPETEER
     let pdfBuffer: Uint8Array;
     try {
+      // PUPPETEER_EXECUTABLE_PATH est défini dans le Dockerfile sur le binaire
+      // Chromium système. En local sans cette variable, Puppeteer retombe sur
+      // le Chrome bundled qu'il télécharge.
       const browser = await puppeteer.launch({
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       });
       const page = await browser.newPage();
 
