@@ -14,6 +14,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { ConnectedUser } from '../interfaces/app.gateway.interface';
 import { Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 // Interface pour le cache
 interface CachedUser {
@@ -45,6 +46,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private prisma: PrismaService,
     private jwtService: JsonWebTokenService,
+    private eventEmitter: EventEmitter2,
   ) { }
 
   async handleConnection(client: Socket) {
@@ -97,6 +99,14 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // soit connecté.
       if (userInfo.type === 'deliverer') {
         void this.sendPendingPresenceCheck(client, userInfo.id);
+      }
+
+      // Pour les agents support (type='user') : émettre un event pour que le module
+      // support ré-enfile les tickets en attente sur ses catégories.
+      // Couvre le cas où la queue d'auto-assignation s'est épuisée avant que
+      // l'agent ne soit en ligne.
+      if (userInfo.type === 'user') {
+        this.eventEmitter.emit('user.online', { userId: userInfo.id });
       }
 
       // this.logger.log(`Connexion: ${userInfo.type} ${userInfo.id} connecté (Socket: ${client.id})`);

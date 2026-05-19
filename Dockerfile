@@ -15,10 +15,16 @@
 FROM oven/bun:1 AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
+# Skip le download du Chrome bundled de Puppeteer (~300 MB).
+# On utilise Chromium système installé dans le runtime stage.
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_SKIP_DOWNLOAD=true
 RUN bun install
 
 FROM oven/bun:1 AS builder
 WORKDIR /app
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_SKIP_DOWNLOAD=true
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN bunx prisma generate
@@ -29,10 +35,22 @@ FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# OpenSSL nécessaire pour Prisma (libssl)
+# OpenSSL pour Prisma (libssl), Chromium + libs/fonts pour Puppeteer
+# (rapport marketing quotidien + génération de PDF de commandes).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssl \
+    && apt-get install -y --no-install-recommends \
+        openssl \
+        chromium \
+        fonts-liberation \
+        libgbm1 \
+        libnss3 \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Puppeteer utilise Chromium système, pas son Chrome bundled.
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_SKIP_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules

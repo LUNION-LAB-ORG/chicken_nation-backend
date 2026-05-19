@@ -223,9 +223,13 @@ export class MarketingReportService {
     const data = await this.collectReportData(query);
     const html = this.buildHtml(data);
 
+    // PUPPETEER_EXECUTABLE_PATH est défini dans le Dockerfile sur le binaire
+    // Chromium système (/usr/bin/chromium). En local sans cette variable,
+    // Puppeteer retombe sur le Chrome bundled qu'il télécharge.
     const browser = await puppeteer.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
     });
 
     try {
