@@ -634,6 +634,11 @@ export class OrderService {
             in_route_at: true,
             arrived_at: true,
             delivered_at: true,
+            // Code 4 chiffres que le client dicte au livreur à la remise pour
+            // confirmer la réception (Delivery → DELIVERED). Exposé au client
+            // (il en est le destinataire) ; le livreur, lui, ne le voit jamais
+            // (son service `order-deliverer.service` a un select distinct).
+            delivery_pin: true,
             course: {
               select: {
                 id: true,
