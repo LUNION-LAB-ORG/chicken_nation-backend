@@ -49,6 +49,17 @@ export class LoyaltyController {
     return this.loyaltyService.getAllLoyaltyPoints(query);
   }
 
+  @Get('points/stats')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.FIDELITE, Action.READ)
+  @ApiOperation({ summary: 'Obtenir les statistiques globales de fidélité' })
+  @ApiOkResponse({
+    description: 'Statistiques globales de fidélité obtenues'
+  })
+  getLoyaltyStats() {
+    return this.loyaltyService.getLoyaltyStats();
+  }
+
   @Get('points/customer')
   @UseGuards(JwtCustomerAuthGuard)
   @ApiOperation({ summary: 'Obtenir les informations de fidélité' })

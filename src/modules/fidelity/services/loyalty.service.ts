@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { LoyaltyLevel, LoyaltyPointType, LoyaltyPointIsUsed, Customer, LoyaltyPoint, Prisma } from '@prisma/client';
+import { LoyaltyLevel, LoyaltyPointType, LoyaltyPointIsUsed, Customer, LoyaltyPoint, Prisma, EntityStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { AddLoyaltyPointDto } from '../dto/add-loyalty-point.dto';
 import { LoyaltyEvent } from '../events/loyalty.event';
@@ -658,5 +658,69 @@ export class LoyaltyService {
             created_at: point.created_at,
             reason: point.reason
         }));
+    }
+
+    /**
+     * Statistiques globales de fidélité (en-tête du tableau de bord backoffice).
+     *
+     * - points_distributed : total des points JAMAIS distribués (lifetime_points,
+     *   jamais décrémenté → fiable même après expiration ou rachat).
+     * - points_available  : points encore EN CIRCULATION (somme des total_points) ;
+     *   c'est l'engagement financier de l'entreprise envers ses clients.
+     * - points_redeemed   : points effectivement UTILISÉS sur des commandes (REDEEMED).
+     * - eligible_customers: clients atteignant le seuil minimum → peuvent utiliser
+     *   leurs points dès maintenant.
+     *
+     * La valeur en XOF de chaque agrégat est dérivée de config.point_value_in_xof.
+     * Les clients supprimés (entity_status = DELETED) sont exclus.
+     */
+    async getLoyaltyStats() {
+        const config = await this.getConfig();
+
+        const [customerAgg, eligibleCustomers, customersWithPoints, redeemedAgg] =
+            await Promise.all([
+                // Points distribués (lifetime) + en circulation (total) — clients actifs.
+                this.prisma.customer.aggregate({
+                    where: { entity_status: { not: EntityStatus.DELETED } },
+                    _sum: { total_points: true, lifetime_points: true },
+                }),
+                // Clients qui peuvent utiliser leurs points (seuil minimum atteint).
+                this.prisma.customer.count({
+                    where: {
+                        entity_status: { not: EntityStatus.DELETED },
+                        total_points: { gte: config.minimum_redemption_points },
+                    },
+                }),
+                // Clients ayant au moins 1 point en circulation.
+                this.prisma.customer.count({
+                    where: {
+                        entity_status: { not: EntityStatus.DELETED },
+                        total_points: { gt: 0 },
+                    },
+                }),
+                // Points effectivement rachetés (utilisés sur des commandes).
+                this.prisma.loyaltyPoint.aggregate({
+                    where: { type: LoyaltyPointType.REDEEMED },
+                    _sum: { points: true },
+                }),
+            ]);
+
+        const pointValue = config.point_value_in_xof;
+        const pointsDistributed = customerAgg._sum.lifetime_points ?? 0;
+        const pointsAvailable = customerAgg._sum.total_points ?? 0;
+        const pointsRedeemed = redeemedAgg._sum.points ?? 0;
+
+        return {
+            points_distributed: pointsDistributed,
+            points_distributed_xof: pointsDistributed * pointValue,
+            points_available: pointsAvailable,
+            points_available_xof: pointsAvailable * pointValue,
+            points_redeemed: pointsRedeemed,
+            points_redeemed_xof: pointsRedeemed * pointValue,
+            eligible_customers: eligibleCustomers,
+            customers_with_points: customersWithPoints,
+            minimum_redemption_points: config.minimum_redemption_points,
+            point_value_in_xof: pointValue,
+        };
     }
 }
