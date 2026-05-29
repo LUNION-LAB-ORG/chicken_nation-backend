@@ -870,11 +870,19 @@ export class OrderHelper {
 
   // Calculer le montant à payer avec les points
   async calculateLoyaltyFee(total_points: number, points: number) {
-    if (total_points < points || total_points < 100) return 0;
+    // Pas de points demandés → aucune réduction.
+    if (!points || points <= 0) return 0;
 
-    const amount = await this.loyaltyService.calculateAmountForPoints(points);
+    // La réduction n'est accordée QUE si la commande pourra réellement consommer
+    // ces points (mêmes préconditions que LoyaltyService.redeemPoints). Sinon on
+    // afficherait une réduction « fantôme » jamais déduite côté fidélité : c'est
+    // exactement la source du bug « le client garde ses points ». On aligne donc
+    // l'éligibilité de la remise sur le seuil configuré (minimum_redemption_points).
+    const config = await this.loyaltyService.getConfig();
+    if (points < config.minimum_redemption_points) return 0;
+    if (total_points < points) return 0;
 
-    return amount;
+    return this.loyaltyService.calculateAmountForPoints(points);
   }
 
   //Calculer le prix si promotion et création de l'utilisation de la promotion

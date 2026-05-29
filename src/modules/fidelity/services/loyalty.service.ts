@@ -243,8 +243,25 @@ export class LoyaltyService {
     }
 
     // Utiliser des points
-    async redeemPoints({ customer_id, points, reason }: Omit<AddLoyaltyPointDto, 'type' | 'order_id'>) {
+    async redeemPoints({ customer_id, points, reason, order_id }: Omit<AddLoyaltyPointDto, 'type'>) {
         const config = await this.getConfig();
+
+        // Idempotence : si cette commande a déjà consommé des points, on ne déduit
+        // pas une seconde fois (ré-acceptation, événement rejoué, double backend…).
+        // Le rachat reste ainsi lié à la commande et jamais dupliqué.
+        if (order_id) {
+            const existing = await this.prisma.loyaltyPoint.findFirst({
+                where: { order_id, type: LoyaltyPointType.REDEEMED },
+            });
+            if (existing) {
+                return {
+                    redemption_record: existing,
+                    used_points_details: [],
+                    total_points_used: existing.points,
+                    already_redeemed: true,
+                };
+            }
+        }
 
         if (points < config.minimum_redemption_points) {
             throw new BadRequestException(`Minimum ${config.minimum_redemption_points} points requis pour utiliser`);
@@ -365,6 +382,7 @@ export class LoyaltyService {
             const redemptionRecord = await tx.loyaltyPoint.create({
                 data: {
                     customer_id,
+                    order_id,
                     points,
                     type: LoyaltyPointType.REDEEMED,
                     reason,

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { EntityStatus, LoyaltyPointType, OrderStatus, OrderType } from '@prisma/client';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
@@ -9,6 +9,8 @@ import { ExpoPushService } from 'src/expo-push/expo-push.service';
 
 @Injectable()
 export class OrderListenerService {
+    private readonly logger = new Logger(OrderListenerService.name);
+
     constructor(
         private promotionService: PromotionService,
         private loyaltyService: LoyaltyService,
@@ -44,15 +46,22 @@ export class OrderListenerService {
             }
         }
 
-        // ⭐ UTILISATION DES POINTS
-        if (payload.order.points > 0) {
-            if (payload.order.status === OrderStatus.ACCEPTED) {
+        // ⭐ UTILISATION DES POINTS — commande créée déjà ACCEPTÉE (ex: commande staff).
+        // Idempotent + lié à la commande via order_id ; tracé en cas d'échec.
+        if (payload.order.points > 0 && payload.order.status === OrderStatus.ACCEPTED) {
+            try {
                 await this.loyaltyService.redeemPoints({
                     customer_id: payload.order.customer_id,
                     points: payload.order.points,
+                    order_id: payload.order.id,
                     reason: `🔥 ${payload.order.points} points utilisés pour la commande #${payload.order.reference}`,
                 });
                 isLoyaltyUsed = true;
+            } catch (error) {
+                this.logger.error(
+                    `Échec de la déduction des points fidélité (création) pour la commande ${payload.order.reference}: ${error?.message}`,
+                    error?.stack,
+                );
             }
         }
 
@@ -92,16 +101,24 @@ export class OrderListenerService {
            ✅ COMMANDE ACCEPTÉE → déduire les points et appliquer les promotions
         ========================= */
         if (payload.order.status === OrderStatus.ACCEPTED) {
-            // ⭐ DÉDUCTION DES POINTS DE FIDÉLITÉ
+            // ⭐ DÉDUCTION DES POINTS DE FIDÉLITÉ — commande client confirmée.
+            // C'est ICI que se joue la déduction des commandes client (créées PENDING
+            // puis acceptées). redeemPoints est idempotent par order_id : pas de double
+            // déduction si ACCEPTED est ré-émis. Non bloquant, mais on TRACE l'échec
+            // (avant : silencieux → la déduction échouait sans laisser de trace).
             if (payload.order.points > 0) {
                 try {
                     await this.loyaltyService.redeemPoints({
                         customer_id: payload.order.customer_id,
                         points: payload.order.points,
+                        order_id: payload.order.id,
                         reason: `🔥 ${payload.order.points} points utilisés pour la commande #${payload.order.reference}`,
                     });
                 } catch (error) {
-                    // Log but don't block — points will show in history regardless
+                    this.logger.error(
+                        `Échec de la déduction des points fidélité (acceptation) pour la commande ${payload.order.reference}: ${error?.message}`,
+                        error?.stack,
+                    );
                 }
             }
         }
