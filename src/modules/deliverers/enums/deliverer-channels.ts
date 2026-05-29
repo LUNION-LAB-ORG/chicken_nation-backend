@@ -30,7 +30,17 @@ export enum DelivererChannels {
 
   // Nouvelle position GPS remontée par le livreur (POST /deliverers/me/location).
   // ÉVÉNEMENT INTERNE uniquement (event-bus) — PAS un canal WS exposé tel quel.
-  // Écouté par le module course (DeliveryTrackingService) qui le relaie vers le
-  // ou les clients concernés via l'event WS `delivery:location` (suivi temps réel).
+  // Écouté par DEUX listeners :
+  //  1. module course (DeliveryTrackingService) → relaie `delivery:location` au(x)
+  //     client(s) de la course active (room `customer_{id}`).
+  //  2. DelivererListenerService → relaie `deliverer:location:live` au STAFF
+  //     (room `backoffice_all` + `restaurant_{id}`) pour la carte temps réel.
   DELIVERER_LOCATION_UPDATED = 'deliverer:location:updated',
+
+  // Position GPS live diffusée au STAFF (backoffice + restaurant) pour la carte
+  // temps réel des livreurs. Contrairement à DELIVERER_LOCATION_UPDATED (bus
+  // interne), ceci est un VRAI canal WebSocket auquel le backoffice s'abonne.
+  // Émis pour CHAQUE remontée GPS d'un livreur opérationnel (pas seulement en
+  // course) → la Carte Live admin voit glisser tous les livreurs en direct.
+  DELIVERER_LOCATION_LIVE = 'deliverer:location:live',
 }

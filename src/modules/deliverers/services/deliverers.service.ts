@@ -440,6 +440,7 @@ export class DeliverersService {
       },
       select: {
         id: true,
+        restaurant_id: true,
         last_location: true,
         last_location_at: true,
         last_speed_kmh: true,
@@ -447,11 +448,12 @@ export class DeliverersService {
       },
     });
 
-    // Suivi temps réel : relaie la position vers le(s) client(s) en cours de
-    // livraison par ce livreur. Le module course écoute cet event, résout les
-    // clients concernés (course IN_DELIVERY → deliveries non terminales) et
-    // émet `delivery:location` à chacun. Fire-and-forget : ne bloque pas la
-    // réponse REST au mobile.
+    // Suivi temps réel : relaie la position via l'event-bus interne. Deux
+    // listeners le consomment (fire-and-forget, ne bloque pas la réponse REST) :
+    //  1. module course → `delivery:location` au(x) client(s) de la course active.
+    //  2. DelivererListenerService → `deliverer:location:live` au staff
+    //     (backoffice + restaurant) pour la carte temps réel des livreurs.
+    // On transmet `restaurantId` pour cibler la room restaurant sans re-requête.
     this.delivererEvent.locationUpdated({
       delivererId,
       lat: dto.lat,
@@ -459,6 +461,7 @@ export class DeliverersService {
       heading: dto.heading ?? null,
       speedKmh: validatedSpeed,
       ts: now.toISOString(),
+      restaurantId: updated.restaurant_id ?? null,
     });
 
     return updated;

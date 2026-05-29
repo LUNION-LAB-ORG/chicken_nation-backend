@@ -4,6 +4,7 @@ import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { DelivererChannels } from '../enums/deliverer-channels';
 import {
   DelivererAutoPausedPayload,
+  DelivererLocationUpdatedPayload,
   DelivererOperationalChangedPayload,
   DelivererQueueChangedPayload,
 } from '../events/deliverer.event';
@@ -97,6 +98,47 @@ export class DeliverersWebSocketService {
       this.appGateway.emitToRestaurant(
         payload.restaurantId,
         DelivererChannels.DELIVERER_QUEUE_CHANGED,
+        wsPayload,
+      );
+    }
+  }
+
+  /**
+   * Diffuse la position GPS live d'un livreur au STAFF pour la carte temps réel.
+   * Émis à chaque ping GPS (haute fréquence). Le backoffice interpole (fait
+   * glisser) le marker entre deux pings, exactement comme l'app mobile.
+   *
+   * Deux cibles :
+   *  - `backoffice_all` : tous les admins (Carte Live, détail course, drawer).
+   *  - `restaurant_{id}` : le manager du restaurant de rattachement du livreur.
+   *
+   * Event-driven (relayé depuis DELIVERER_LOCATION_UPDATED) → aucun risque de
+   * double-émission malgré les 2 backends : l'instance qui reçoit le
+   * POST /me/location émet une seule fois et l'adaptateur Redis route vers
+   * l'instance où est connecté le client staff. Pas d'atomic-claim nécessaire
+   * (règle réservée aux @Cron).
+   */
+  emitLocationLive(payload: DelivererLocationUpdatedPayload) {
+    const wsPayload = {
+      delivererId: payload.delivererId,
+      lat: payload.lat,
+      lng: payload.lng,
+      heading: payload.heading,
+      speedKmh: payload.speedKmh,
+      ts: payload.ts,
+    };
+
+    // 1. Tous les admins backoffice
+    this.appGateway.emitToBackoffice(
+      DelivererChannels.DELIVERER_LOCATION_LIVE,
+      wsPayload,
+    );
+
+    // 2. Manager du restaurant de rattachement (si le livreur est affecté)
+    if (payload.restaurantId) {
+      this.appGateway.emitToRestaurant(
+        payload.restaurantId,
+        DelivererChannels.DELIVERER_LOCATION_LIVE,
         wsPayload,
       );
     }

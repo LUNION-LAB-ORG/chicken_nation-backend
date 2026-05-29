@@ -46,6 +46,12 @@ export interface DelivererLocationUpdatedPayload {
   speedKmh: number | null;
   /** Timestamp ISO de la remontée. */
   ts: string;
+  /**
+   * Restaurant de rattachement du livreur (null si non affecté). Permet au
+   * relais staff (`deliverer:location:live`) de cibler la room `restaurant_{id}`
+   * sans re-requêter la BDD à chaque ping GPS (haute fréquence).
+   */
+  restaurantId: string | null;
 }
 
 /**

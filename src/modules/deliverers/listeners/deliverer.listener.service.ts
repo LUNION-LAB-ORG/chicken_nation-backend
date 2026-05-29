@@ -7,6 +7,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { DelivererChannels } from '../enums/deliverer-channels';
 import {
   DelivererAutoPausedPayload,
+  DelivererLocationUpdatedPayload,
   DelivererOperationalChangedPayload,
   DelivererPendingValidationPayload,
   DelivererQueueChangedPayload,
@@ -59,5 +60,17 @@ export class DelivererListenerService {
   @OnEvent(DelivererChannels.DELIVERER_QUEUE_CHANGED)
   onQueueChanged(payload: DelivererQueueChangedPayload) {
     this.wsService.emitQueueChanged(payload);
+  }
+
+  /**
+   * Relaie chaque position GPS vers le STAFF (carte temps réel des livreurs).
+   * HAUTE FRÉQUENCE (~5-8s par livreur) → délégation directe au WS service,
+   * SANS aucun accès BDD (le `restaurantId` est déjà dans le payload). Le module
+   * course possède son propre @OnEvent sur ce même event pour relayer la
+   * position au client de la course active : les deux listeners coexistent.
+   */
+  @OnEvent(DelivererChannels.DELIVERER_LOCATION_UPDATED)
+  onLocationUpdated(payload: DelivererLocationUpdatedPayload) {
+    this.wsService.emitLocationLive(payload);
   }
 }
