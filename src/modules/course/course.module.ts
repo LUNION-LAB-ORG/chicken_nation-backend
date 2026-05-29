@@ -16,6 +16,7 @@ import { CourseGroupingService } from './services/course-grouping.service';
 import { CourseOfferService } from './services/course-offer.service';
 import { CourseQueryService } from './services/course-query.service';
 import { DeliveryActionService } from './services/delivery-action.service';
+import { DeliveryTrackingService } from './services/delivery-tracking.service';
 import { CourseBatchTask } from './tasks/course-batch.task';
 import { CourseTask } from './tasks/course.task';
 import { CourseWebSocketService } from './websockets/course-websocket.service';
@@ -33,6 +34,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     CourseQueryService,
     CourseGroupingService, // Phase P3 : regroupement intelligent
     DeliveryActionService,
+    DeliveryTrackingService, // Suivi temps réel côté client (position + statut livraison)
     // Events + WS
     CourseEvent,
     CourseWebSocketService,

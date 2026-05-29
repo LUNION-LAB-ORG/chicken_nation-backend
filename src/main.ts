@@ -8,6 +8,7 @@ import helmet from 'helmet';
 import { join } from 'path';
 import { PrismaExceptionFilter } from 'src/database/filters/prisma-exception.filter';
 import { AppModule } from './app.module';
+import { RedisIoAdapter } from './socket-io/adapters/redis-io.adapter';
 
 async function bootstrap() {
 
@@ -30,6 +31,14 @@ async function bootstrap() {
 
   // 🔹 Indique à Express de faire confiance à Nginx pour les headers IP
   app.set('trust proxy', true);
+
+  // 🔹 Adaptateur socket.io Redis : indispensable en multi-instances pour que
+  // les émissions WebSocket (ex: suivi de livraison `delivery:location`)
+  // traversent les instances. Sans ça, un client connecté à l'instance B ne
+  // reçoit pas un event émis depuis l'instance A. Doit être branché AVANT listen().
+  const redisIoAdapter = new RedisIoAdapter(app);
+  await redisIoAdapter.connectToRedis();
+  app.useWebSocketAdapter(redisIoAdapter);
 
   // injecter globalement ValidationPipe
   app.useGlobalPipes(

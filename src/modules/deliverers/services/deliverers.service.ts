@@ -429,11 +429,12 @@ export class DeliverersService {
       validatedSpeed = null;
     }
 
-    return this.prisma.deliverer.update({
+    const now = new Date();
+    const updated = await this.prisma.deliverer.update({
       where: { id: delivererId },
       data: {
         last_location: { lat: dto.lat, lng: dto.lng } as Prisma.InputJsonValue,
-        last_location_at: new Date(),
+        last_location_at: now,
         last_speed_kmh: validatedSpeed,
         last_heading_deg: dto.heading ?? null,
       },
@@ -445,6 +446,22 @@ export class DeliverersService {
         last_heading_deg: true,
       },
     });
+
+    // Suivi temps réel : relaie la position vers le(s) client(s) en cours de
+    // livraison par ce livreur. Le module course écoute cet event, résout les
+    // clients concernés (course IN_DELIVERY → deliveries non terminales) et
+    // émet `delivery:location` à chacun. Fire-and-forget : ne bloque pas la
+    // réponse REST au mobile.
+    this.delivererEvent.locationUpdated({
+      delivererId,
+      lat: dto.lat,
+      lng: dto.lng,
+      heading: dto.heading ?? null,
+      speedKmh: validatedSpeed,
+      ts: now.toISOString(),
+    });
+
+    return updated;
   }
 
   /**

@@ -27,4 +27,10 @@ export enum DelivererChannels {
   // Changement d'état dans la file FIFO (pause, reprise, disponible, indisponible).
   // Déclenche un recalcul de rang chez tous les livreurs du même restaurant.
   DELIVERER_QUEUE_CHANGED = 'deliverer:queue:changed',
+
+  // Nouvelle position GPS remontée par le livreur (POST /deliverers/me/location).
+  // ÉVÉNEMENT INTERNE uniquement (event-bus) — PAS un canal WS exposé tel quel.
+  // Écouté par le module course (DeliveryTrackingService) qui le relaie vers le
+  // ou les clients concernés via l'event WS `delivery:location` (suivi temps réel).
+  DELIVERER_LOCATION_UPDATED = 'deliverer:location:updated',
 }

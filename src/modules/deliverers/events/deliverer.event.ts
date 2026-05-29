@@ -33,6 +33,21 @@ export interface DelivererQueueChangedPayload {
   restaurantId: string | null;
 }
 
+export interface DelivererLocationUpdatedPayload {
+  /** Livreur qui vient de remonter sa position. */
+  delivererId: string;
+  /** Latitude WGS84. */
+  lat: number;
+  /** Longitude WGS84. */
+  lng: number;
+  /** Cap 0-360° (null si non fourni par le mobile). */
+  heading: number | null;
+  /** Vitesse km/h validée côté backend (null si aberrante ou non fournie). */
+  speedKmh: number | null;
+  /** Timestamp ISO de la remontée. */
+  ts: string;
+}
+
 /**
  * Émetteur d'événements internes pour le cycle de vie du livreur.
  * Les listeners (WebSocket / notifications) sont déclarés en Phase 4.
@@ -70,5 +85,14 @@ export class DelivererEvent {
       delivererId,
       restaurantId,
     } satisfies DelivererQueueChangedPayload);
+  }
+
+  /**
+   * Nouvelle position GPS du livreur. Émis à HAUTE FRÉQUENCE pendant une
+   * livraison active (toutes les ~5-8s côté mobile). Relayé par le module
+   * course vers le(s) client(s) concerné(s) pour le suivi temps réel.
+   */
+  locationUpdated(payload: DelivererLocationUpdatedPayload) {
+    this.eventEmitter.emit(DelivererChannels.DELIVERER_LOCATION_UPDATED, payload);
   }
 }

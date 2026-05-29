@@ -616,6 +616,43 @@ export class OrderService {
             address: true,
             phone: true,
             email: true,
+            latitude: true,
+            longitude: true,
+          },
+        },
+        // Suivi de livraison temps réel (app cliente) : présent uniquement pour
+        // les commandes livrées par un livreur interne Chicken Nation (le
+        // graphe Delivery → Course → Deliverer n'existe pas pour Turbo/PICKUP).
+        // L'app cliente s'en sert pour rendre la carte type Uber Eats : statut
+        // de la livraison, infos livreur (nom, photo, téléphone) et sa dernière
+        // position GPS connue (point de départ avant les pings WS live).
+        delivery: {
+          select: {
+            id: true,
+            statut: true,
+            sequence_order: true,
+            in_route_at: true,
+            arrived_at: true,
+            delivered_at: true,
+            course: {
+              select: {
+                id: true,
+                statut: true,
+                deliverer: {
+                  select: {
+                    id: true,
+                    first_name: true,
+                    last_name: true,
+                    phone: true,
+                    image: true,
+                    type_vehicule: true,
+                    last_location: true,
+                    last_location_at: true,
+                    last_heading_deg: true,
+                  },
+                },
+              },
+            },
           },
         },
       },
