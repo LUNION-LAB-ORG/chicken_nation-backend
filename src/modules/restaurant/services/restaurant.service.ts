@@ -133,7 +133,12 @@ export class RestaurantService {
   /**
    * Récupérer tous les restaurants
    */
-  async findAll(page = 1, limit = 10): Promise<QueryResponseDto<Restaurant>> {
+  async findAll(
+    page = 1,
+    limit = 10,
+  ): Promise<
+    QueryResponseDto<Restaurant & { rating: number; reviews_count: number; is_open: boolean }>
+  > {
     const skip = (page - 1) * limit;
 
     const [restaurants, total] = await Promise.all([
@@ -152,8 +157,39 @@ export class RestaurantService {
       }),
     ]);
 
+    // Enrichissement par resto : note moyenne + nb d'avis (à partir des avis
+    // rattachés aux commandes du restaurant) et statut ouvert/fermé (depuis le
+    // planning, même logique que le routage de livraison). Agrégats côté DB.
+    const data = await Promise.all(
+      restaurants.map(async (restaurant) => {
+        const reviews = await this.prisma.comment.aggregate({
+          where: { order: { restaurant_id: restaurant.id } },
+          _avg: { rating: true },
+          _count: { rating: true },
+        });
+
+        let is_open = false;
+        try {
+          const schedule = JSON.parse(restaurant.schedule?.toString() ?? '[]');
+          is_open = this.isRestaurantOpen(schedule);
+        } catch {
+          is_open = false;
+        }
+
+        return {
+          ...restaurant,
+          // Note arrondie à 1 décimale (0 si aucun avis).
+          rating: reviews._avg.rating
+            ? Math.round(reviews._avg.rating * 10) / 10
+            : 0,
+          reviews_count: reviews._count.rating,
+          is_open,
+        };
+      }),
+    );
+
     return {
-      data: restaurants,
+      data,
       meta: {
         total,
         page,

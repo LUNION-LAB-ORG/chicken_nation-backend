@@ -87,11 +87,17 @@ export class FavoriteService {
 
   async findByCustomer(customerId: string, page: number, limit: number): Promise<QueryResponseDto<Favorite>> {
 
+    // Exclure les favoris pointant vers un plat supprimé (entity_status DELETED) :
+    // l'app cliente ne doit plus jamais voir un plat retiré du catalogue, même
+    // s'il avait été mis en favori avant sa suppression.
+    const where = {
+      customer_id: customerId,
+      dish: { entity_status: EntityStatus.ACTIVE },
+    };
+
     const [favorites, count] = await Promise.all([
       this.prisma.favorite.findMany({
-        where: {
-          customer_id: customerId,
-        },
+        where,
         include: {
           dish: {
             include: {
@@ -105,11 +111,7 @@ export class FavoriteService {
         skip: (Number(page) - 1) * Number(limit),
         take: Number(limit),
       }),
-      this.prisma.favorite.count({
-        where: {
-          customer_id: customerId,
-        },
-      })
+      this.prisma.favorite.count({ where })
     ])
 
     return {
