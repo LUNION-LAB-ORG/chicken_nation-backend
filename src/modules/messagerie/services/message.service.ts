@@ -23,6 +23,13 @@ export class MessageService {
   private readonly logger = new Logger(MessageService.name);
   private readonly isDev = process.env.NODE_ENV !== 'production';
 
+  /**
+   * Fenêtre anti-doublon pour les messages texte identiques consécutifs (ms).
+   * Filet de sécurité serveur contre les double-taps et les anciennes versions de
+   * l'app mobile qui pouvaient renvoyer le même message en boucle.
+   */
+  private static readonly DUPLICATE_WINDOW_MS = 10_000;
+
   constructor(
     private readonly conversationsService: ConversationsService,
     private readonly prismaService: PrismaService,
@@ -161,6 +168,44 @@ export class MessageService {
     // If the conversation does not exist, throw an error
     if (!conversation) {
       throw new HttpException('Conversation not found', HttpStatus.NOT_FOUND);
+    }
+
+    // 🛡️ Garde anti-doublon (filet de sécurité serveur, indépendant de la version app)
+    // Si un message TEXTE identique du même auteur a déjà été créé dans la même
+    // conversation il y a moins de DUPLICATE_WINDOW_MS, on ne recrée rien : on renvoie
+    // le message existant SANS re-broadcaster ni re-notifier. On ne dédoublonne que le
+    // texte pur (pas d'image, pas de commande liée) pour ne jamais perdre un envoi légitime.
+    const authorId =
+      authType === 'user' ? (auth as User).id : (auth as Customer).id;
+
+    if (!image && !imageUrl && !orderId) {
+      const recentDuplicate = await this.prismaService.message.findFirst({
+        where: {
+          conversationId: conversation.id,
+          body,
+          ...(authType === 'user'
+            ? { authorUserId: authorId }
+            : { authorCustomerId: authorId }),
+          createdAt: {
+            gte: new Date(Date.now() - MessageService.DUPLICATE_WINDOW_MS),
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          authorUser: true,
+          authorCustomer: true,
+          conversation: {
+            select: { id: true, customerId: true, restaurantId: true },
+          },
+        },
+      });
+
+      if (recentDuplicate) {
+        this.logger.warn(
+          `Doublon ignoré (conversation ${conversation.id}, auteur ${authorId}): message texte identique créé il y a moins de ${MessageService.DUPLICATE_WINDOW_MS}ms`,
+        );
+        return this.mapMessagesField(recentDuplicate);
+      }
     }
 
     // Upload image to S3 if provided
