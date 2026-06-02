@@ -29,9 +29,14 @@ const DEFAULTS = {
   weekday_rest_days_per_deliverer: 1,
   /// `1` autorise le repos en weekend (sam/dim), `0` jamais.
   weekend_rest_allowed: 0,
+  /// Jours INTERDITS de repos (forte activité), séparés par des virgules.
+  /// Le repos n'est JAMAIS placé sur ces jours. Défaut : vendredi/samedi/dimanche.
+  /// Remplace `weekend_rest_allowed` (qui ne couvrait pas le vendredi).
+  no_rest_days: 'friday,saturday,sunday',
   /// Si UN SEUL livreur dans le restaurant : jour de repos forcé (string).
+  /// Doit être un jour AUTORISÉ (hors `no_rest_days`), sinon fallback automatique.
   /// Valeurs : 'monday' | 'tuesday' | … | 'sunday'
-  solo_deliverer_rest_day: 'sunday',
+  solo_deliverer_rest_day: 'monday',
   /// `1` permet au livreur de modifier ses jours de repos via mobile, `0` admin only.
   allow_rest_day_override: 1,
 
@@ -87,6 +92,7 @@ export interface IScheduleSettings {
   // B. Repos
   weekdayRestDaysPerDeliverer: number;
   weekendRestAllowed: boolean;
+  noRestDays: WeekDay[];
   soloDelivererRestDay: WeekDay;
   allowRestDayOverride: boolean;
 
@@ -129,6 +135,7 @@ export class ScheduleSettingsHelper {
       'schedule.rotation_cycle_weeks',
       'schedule.weekday_rest_days_per_deliverer',
       'schedule.weekend_rest_allowed',
+      'schedule.no_rest_days',
       'schedule.solo_deliverer_rest_day',
       'schedule.allow_rest_day_override',
       'schedule.shift_morning',
@@ -161,6 +168,10 @@ export class ScheduleSettingsHelper {
       weekendRestAllowed: this.toBoolean(
         map['schedule.weekend_rest_allowed'],
         DEFAULTS.weekend_rest_allowed,
+      ),
+      noRestDays: this.toWeekDayList(
+        map['schedule.no_rest_days'],
+        DEFAULTS.no_rest_days,
       ),
       soloDelivererRestDay: this.toWeekDay(
         map['schedule.solo_deliverer_rest_day'],
@@ -278,6 +289,27 @@ export class ScheduleSettingsHelper {
     if (VALID_WEEKDAYS.has(v as WeekDay)) return v as WeekDay;
     this.logger.warn(`Jour invalide "${raw}" → fallback ${fallback}`);
     return fallback;
+  }
+
+  /** Parse une liste de jours "monday,tuesday,…" → WeekDay[] (jours invalides ignorés). */
+  private toWeekDayList(raw: string | undefined, fallback: string): WeekDay[] {
+    const parse = (src: string): WeekDay[] =>
+      Array.from(
+        new Set(
+          src
+            .split(',')
+            .map((s) => s.trim().toLowerCase())
+            .filter((s): s is WeekDay => VALID_WEEKDAYS.has(s as WeekDay)),
+        ),
+      );
+    const days = raw && raw.trim() ? parse(raw) : [];
+    if (days.length === 0) {
+      if (raw && raw.trim()) {
+        this.logger.warn(`Liste de jours invalide "${raw}" → fallback ${fallback}`);
+      }
+      return parse(fallback);
+    }
+    return days;
   }
 
   /**

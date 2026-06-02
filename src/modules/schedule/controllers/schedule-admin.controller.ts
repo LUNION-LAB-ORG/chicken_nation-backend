@@ -18,6 +18,8 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
 
 import { GeneratePlanDto } from '../dto/generate-plan.dto';
+import { RegeneratePlanDto } from '../dto/regenerate-plan.dto';
+import { SetDelivererDayDto } from '../dto/set-deliverer-day.dto';
 import { SchedulePlanningService } from '../services/schedule-planning.service';
 import { ScheduleQueryService } from '../services/schedule-query.service';
 
@@ -102,6 +104,38 @@ export class ScheduleAdminController {
   @Delete('plans/:id')
   async deletePlan(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.planningService.deletePlan(id);
+  }
+
+  @ApiOperation({
+    summary: "Édite un jour d'un livreur sur un plan DRAFT (repos ↔ travail)",
+  })
+  @Patch('plans/:id/deliverers/:delivererId/day')
+  async setDelivererDay(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('delivererId', new ParseUUIDPipe()) delivererId: string,
+    @Body() dto: SetDelivererDayDto,
+  ) {
+    return this.planningService.setDelivererDayMode(
+      id,
+      delivererId,
+      new Date(dto.date),
+      dto.mode,
+    );
+  }
+
+  @ApiOperation({
+    summary: "Réédite les dates d'un plan (DRAFT/SENT) → régénère un nouveau plan DRAFT",
+  })
+  @Post('plans/:id/regenerate')
+  async regeneratePlan(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: RegeneratePlanDto,
+  ) {
+    return this.planningService.regeneratePlan(
+      id,
+      new Date(dto.periodStart),
+      dto.periodEnd ? new Date(dto.periodEnd) : undefined,
+    );
   }
 
   // ── Stats ────────────────────────────────────────────────────────────

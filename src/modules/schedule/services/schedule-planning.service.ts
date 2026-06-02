@@ -30,6 +30,11 @@ const WEEKDAY_NAMES: WeekDay[] = [
 
 const WEEKEND = new Set<WeekDay>(['saturday', 'sunday']);
 
+/** Ordre naturel des jours (lundi d'abord) — pour trouver le 1er jour de repos autorisé. */
+const ALL_WEEKDAYS: WeekDay[] = [
+  'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+];
+
 interface IGenerateInput {
   restaurantId: string;
   /** Date de début du plan (sera ramenée à 00:00 UTC). */
@@ -374,6 +379,142 @@ export class SchedulePlanningService {
     return { id: planId, deleted: true };
   }
 
+  /**
+   * ÉDITION ADMIN d'un jour : bascule un (livreur, jour) entre REPOS et TRAVAIL,
+   * en gardant la matrice cohérente (RestDay + ShiftAssignment).
+   *
+   * - `REST` : pose un RestDay MANUAL_ADMIN + retire les assignments du jour.
+   *   Refusé si le jour est dans `no_rest_days` (l'admin respecte la règle métier).
+   * - `WORK` : retire le RestDay + (re)crée les assignments matin/soir du jour.
+   *
+   * Autorisé uniquement sur un plan DRAFT (édition avant envoi).
+   */
+  async setDelivererDayMode(
+    planId: string,
+    delivererId: string,
+    dateInput: Date,
+    mode: 'REST' | 'WORK',
+  ): Promise<SchedulePlan> {
+    const plan = await this.prisma.schedulePlan.findUnique({ where: { id: planId } });
+    if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
+    if (plan.status !== SchedulePlanStatus.DRAFT) {
+      throw new BadRequestException(
+        `Seul un plan brouillon (DRAFT) peut être édité (statut actuel : ${plan.status})`,
+      );
+    }
+
+    const day = startOfDay(dateInput);
+    if (day < startOfDay(plan.period_start) || day > startOfDay(plan.period_end)) {
+      throw new BadRequestException('Date hors de la période du plan');
+    }
+
+    // Le livreur doit appartenir au restaurant du plan et être ACTIF.
+    const deliverer = await this.prisma.deliverer.findFirst({
+      where: {
+        id: delivererId,
+        restaurant_id: plan.restaurant_id,
+        status: DelivererStatus.ACTIVE,
+      },
+      select: { id: true },
+    });
+    if (!deliverer) {
+      throw new BadRequestException('Livreur introuvable ou non rattaché à ce restaurant');
+    }
+
+    if (mode === 'REST') {
+      // L'admin respecte la règle : pas de repos sur les jours interdits.
+      const settings = await this.settings.load();
+      const dayName = WEEKDAY_NAMES[day.getUTCDay()];
+      if (new Set<WeekDay>(settings.noRestDays).has(dayName)) {
+        throw new BadRequestException(
+          `Repos interdit le ${dayName} — jour de forte activité (no_rest_days).`,
+        );
+      }
+      await this.prisma.$transaction([
+        this.prisma.restDay.upsert({
+          where: { deliverer_id_date: { deliverer_id: delivererId, date: day } },
+          update: { source: RestDaySource.MANUAL_ADMIN },
+          create: { deliverer_id: delivererId, date: day, source: RestDaySource.MANUAL_ADMIN },
+        }),
+        this.prisma.shiftAssignment.deleteMany({
+          where: { deliverer_id: delivererId, shift: { plan_id: planId, date: day } },
+        }),
+      ]);
+    } else {
+      const shifts = await this.prisma.shift.findMany({
+        where: { plan_id: planId, date: day },
+        select: { id: true },
+      });
+      await this.prisma.$transaction([
+        this.prisma.restDay.deleteMany({ where: { deliverer_id: delivererId, date: day } }),
+        this.prisma.shiftAssignment.createMany({
+          data: shifts.map((s) => ({
+            shift_id: s.id,
+            deliverer_id: delivererId,
+            status: ShiftAssignmentStatus.ASSIGNED,
+          })),
+          skipDuplicates: true,
+        }),
+      ]);
+    }
+
+    this.logger.log(
+      `Plan ${planId.slice(0, 8)} : livreur ${delivererId.slice(0, 8)} → ${mode} le ${this.dateKey(day)}`,
+    );
+    return plan;
+  }
+
+  /**
+   * Réédite les DATES d'un plan : archive l'ancien, régénère un plan DRAFT pour la
+   * nouvelle période (mêmes règles : repos no_rest_days, etc.), puis supprime l'ancien.
+   * En cas d'échec de génération, l'ancien plan est RESTAURÉ → aucune perte de données.
+   * Autorisé sur DRAFT ou SENT (pas CONFIRMED/ARCHIVED).
+   */
+  async regeneratePlan(
+    planId: string,
+    periodStart: Date,
+    periodEnd?: Date,
+  ): Promise<SchedulePlan> {
+    const plan = await this.prisma.schedulePlan.findUnique({ where: { id: planId } });
+    if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
+    if (
+      plan.status === SchedulePlanStatus.CONFIRMED ||
+      plan.status === SchedulePlanStatus.ARCHIVED
+    ) {
+      throw new BadRequestException(
+        `Seul un plan brouillon ou envoyé peut être réédité (statut actuel : ${plan.status})`,
+      );
+    }
+
+    const previousStatus = plan.status;
+    // Archive temporaire : libère l'overlap-check + l'index unique le temps de régénérer.
+    await this.prisma.schedulePlan.update({
+      where: { id: planId },
+      data: { status: SchedulePlanStatus.ARCHIVED, archived_at: new Date() },
+    });
+
+    try {
+      const fresh = await this.generatePlan({
+        restaurantId: plan.restaurant_id,
+        periodStart,
+        periodEnd,
+      });
+      // Génération OK → l'ancien plan (archivé) est supprimé.
+      await this.prisma.schedulePlan.delete({ where: { id: planId } });
+      this.logger.log(
+        `Plan ${planId.slice(0, 8)} réédité → nouveau plan ${fresh.id.slice(0, 8)}`,
+      );
+      return fresh;
+    } catch (err) {
+      // Échec → RESTAURE l'ancien plan dans son état initial (aucune perte).
+      await this.prisma.schedulePlan.update({
+        where: { id: planId },
+        data: { status: previousStatus, archived_at: null },
+      });
+      throw err;
+    }
+  }
+
   // ============================================================
   // ALGORITHMES INTERNES
   // ============================================================
@@ -385,8 +526,8 @@ export class SchedulePlanningService {
    *     `restDayIndex = (i + s × repos_par_semaine) mod nbWeekdays`
    *
    * Garantit l'équité sur `rotation_cycle_weeks` semaines : chaque livreur
-   * passe par tous les jours possibles. Les weekends sont exclus sauf si
-   * `weekend_rest_allowed = true`.
+   * passe par tous les jours possibles. Les jours INTERDITS de repos
+   * (`no_rest_days`, défaut vendredi/samedi/dimanche) sont toujours exclus.
    */
   private computeRestDayDistribution(
     delivererIds: string[],
@@ -398,20 +539,27 @@ export class SchedulePlanningService {
 
     if (delivererIds.length === 0) return result;
 
-    // Cas particulier : 1 seul livreur
+    // Jours INTERDITS de repos (forte activité) — défaut vendredi/samedi/dimanche.
+    const noRestDays = new Set<WeekDay>(settings.noRestDays);
+
+    // Cas particulier : 1 seul livreur → repos forcé sur soloDelivererRestDay,
+    // SAUF si ce jour est interdit → fallback sur le 1er jour autorisé (lun→jeu).
     if (delivererIds.length === 1) {
+      const soloRestDay: WeekDay = noRestDays.has(settings.soloDelivererRestDay)
+        ? (ALL_WEEKDAYS.find((d) => !noRestDays.has(d)) ?? 'monday')
+        : settings.soloDelivererRestDay;
       const restSet = result.get(delivererIds[0])!;
       for (const day of days) {
         const dayName = WEEKDAY_NAMES[day.getDay()];
-        if (dayName === settings.soloDelivererRestDay) {
+        if (dayName === soloRestDay) {
           restSet.add(this.dateKey(day));
         }
       }
       return result;
     }
 
-    // Cas multi-livreurs : grouper les jours par semaine
-    const weeks = this.groupByWeek(days, settings.weekendRestAllowed);
+    // Cas multi-livreurs : grouper les jours par semaine (jours interdits exclus).
+    const weeks = this.groupByWeek(days, noRestDays);
     weeks.forEach((weekDays, weekIndex) => {
       delivererIds.forEach((delivererId, deliverIndex) => {
         // Combien de jours de repos pour ce livreur cette semaine
@@ -429,13 +577,13 @@ export class SchedulePlanningService {
     return result;
   }
 
-  private groupByWeek(days: Date[], includeWeekend: boolean): Date[][] {
+  private groupByWeek(days: Date[], noRestDays: Set<WeekDay>): Date[][] {
     const result: Date[][] = [];
     let currentWeek: Date[] = [];
     for (const day of days) {
       const dayName = WEEKDAY_NAMES[day.getDay()];
-      const isWeekend = WEEKEND.has(dayName);
-      if (isWeekend && !includeWeekend) continue;
+      // Exclure les jours INTERDITS de repos : non éligibles à la rotation.
+      if (noRestDays.has(dayName)) continue;
 
       // Nouveau lundi → nouvelle semaine
       if (currentWeek.length > 0 && day.getDay() === 1) {
