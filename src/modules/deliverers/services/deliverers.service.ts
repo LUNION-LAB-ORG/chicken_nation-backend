@@ -136,8 +136,13 @@ export class DeliverersService {
   async validate(id: string) {
     const deliverer = await this.getNonDeleted(id);
 
-    if (deliverer.status !== DelivererStatus.PENDING_VALIDATION) {
-      throw new BadRequestException('Seuls les comptes en attente peuvent être validés');
+    if (
+      deliverer.status !== DelivererStatus.PENDING_VALIDATION &&
+      deliverer.status !== DelivererStatus.REJECTED
+    ) {
+      throw new BadRequestException(
+        'Seuls les comptes en attente ou refusés peuvent être validés',
+      );
     }
     if (!deliverer.piece_identite || !deliverer.permis_conduire) {
       throw new BadRequestException('Documents obligatoires manquants');
@@ -171,6 +176,26 @@ export class DeliverersService {
     // Push CRITIQUE — le livreur doit savoir immédiatement que sa candidature est refusée.
     this.pushService.notifyAccountRejected({ delivererId: rejected.id, reason });
     return rejected;
+  }
+
+  /**
+   * Resoumission par le livreur lui-même après un refus : REJECTED → PENDING_VALIDATION.
+   * Le livreur a corrigé ses infos/documents ; sa demande repart dans la file de
+   * validation admin. Idempotent : exige le statut REJECTED en entrée (sinon BadRequest),
+   * ce qui empêche le spam PENDING→PENDING. Reste non-opérationnel jusqu'à validation admin.
+   */
+  async resubmit(id: string) {
+    const deliverer = await this.getNonDeleted(id);
+    if (deliverer.status !== DelivererStatus.REJECTED) {
+      throw new BadRequestException('Seule une demande refusée peut être resoumise');
+    }
+    if (!deliverer.piece_identite || !deliverer.permis_conduire) {
+      throw new BadRequestException(
+        'Documents obligatoires manquants — complétez votre profil avant de resoumettre',
+      );
+    }
+    // → PENDING_VALIDATION (le motif de refus est effacé par transitionStatus).
+    return this.transitionStatus(deliverer, DelivererStatus.PENDING_VALIDATION);
   }
 
   async suspend(id: string, reason?: string) {
@@ -385,6 +410,10 @@ export class DeliverersService {
         is_operational: willBeOperational,
         // Révoque les sessions si suspendu/refusé
         ...(newStatus !== DelivererStatus.ACTIVE && { refresh_token: null }),
+        // Motif de refus : persisté sur REJECTED, effacé sur toute autre transition
+        // (validation, resoumission, réactivation…).
+        rejection_reason:
+          newStatus === DelivererStatus.REJECTED ? (reason ?? null) : null,
       },
       include: { restaurant: { select: { id: true, name: true } } },
       omit: { password: true, refresh_token: true },

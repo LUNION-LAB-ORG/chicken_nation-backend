@@ -186,9 +186,10 @@ export class AuthDelivererService {
     if (deliverer.entity_status === EntityStatus.INACTIVE) {
       throw new UnauthorizedException('Compte livreur inactif');
     }
-    if (deliverer.status === DelivererStatus.REJECTED) {
-      throw new UnauthorizedException('Compte livreur refusé');
-    }
+    // NB : un livreur REJECTED PEUT se reconnecter — pour corriger ses infos/documents
+    // et resoumettre sa demande (POST /deliverers/me/resubmit). Il reste non-opérationnel
+    // (is_operational=false, status≠ACTIVE) → le moteur d'offre ne lui envoie aucune course.
+    // Seuls entity_status DELETED/INACTIVE (ci-dessus) bloquent réellement la connexion.
 
     const isPasswordValid = await bcrypt.compare(dto.password, deliverer.password);
     if (!isPasswordValid) {

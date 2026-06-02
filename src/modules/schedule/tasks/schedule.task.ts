@@ -50,6 +50,10 @@ export class ScheduleTask {
    */
   @Cron(CronExpression.EVERY_HOUR)
   async autoSendWeeklyPlans() {
+    // Double backend (migration) : sur l'instance SECONDAIRE, poser
+    // DISABLE_SCHEDULE_CRON=true pour éviter que les 2 instances génèrent en
+    // parallèle. La contrainte unique DB (migration) reste le filet ultime.
+    if (process.env.DISABLE_SCHEDULE_CRON === 'true') return;
     try {
       const settings = await this.settings.load();
       const now = new Date();
@@ -65,7 +69,9 @@ export class ScheduleTask {
         select: { id: true, name: true },
       });
 
-      const periodStart = startOfDay(addDays(now, 7)); // commence dans 7 jours
+      // Période suivante = LUNDI suivant (aligné sur le début de semaine),
+      // et non `now + 7j` qui héritait du jour de déclenchement du cron.
+      const periodStart = nextMondayUTC(now);
 
       for (const r of restaurants) {
         try {
@@ -361,5 +367,23 @@ function startOfDay(d: Date): Date {
 function addDays(d: Date, n: number): Date {
   const out = new Date(d);
   out.setUTCDate(out.getUTCDate() + n);
+  return out;
+}
+
+/**
+ * Renvoie le LUNDI de la semaine SUIVANTE (00:00 UTC) par rapport à `d`.
+ *
+ * Corrige le bug "vendredi + 7 = vendredi suivant" : le cron se déclenchant
+ * toujours le même jour (auto_send_day_of_week), un simple `addDays(now, 7)`
+ * héritait de ce jour. On recale donc systématiquement sur le lundi :
+ *   - lundi de la semaine COURANTE = d − ((getUTCDay()+6) % 7) jours
+ *     ( (dow+6)%7 vaut 0 le lundi, 1 le mardi, … 6 le dimanche )
+ *   - puis +7 pour viser la semaine SUIVANTE.
+ * Ex : vendredi 29 mai → lundi 1 juin.
+ */
+function nextMondayUTC(d: Date): Date {
+  const out = startOfDay(d);
+  const dow = out.getUTCDay(); // 0=dimanche … 6=samedi
+  out.setUTCDate(out.getUTCDate() - ((dow + 6) % 7) + 7);
   return out;
 }

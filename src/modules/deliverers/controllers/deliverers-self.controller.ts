@@ -45,6 +45,17 @@ export class DeliverersSelfController {
   }
 
   @ApiOperation({
+    summary: 'Resoumettre sa demande après un refus (REJECTED → PENDING_VALIDATION)',
+    description:
+      "Après correction de ses informations/documents, le livreur refusé resoumet " +
+      "sa candidature pour une nouvelle validation par un administrateur.",
+  })
+  @Post('resubmit')
+  async resubmit(@CurrentDeliverer() deliverer: Deliverer) {
+    return this.deliverersService.resubmit(deliverer.id);
+  }
+
+  @ApiOperation({
     summary: 'Vue scoring + queue + refus + pause du livreur connecté',
     description:
       "Agrège tous les champs calculés par le scoring P4 / queue P5 / chainage P6 : " +

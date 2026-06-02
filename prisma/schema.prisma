@@ -351,6 +351,9 @@ model Deliverer {
   // Statut métier
   status         DelivererStatus @default(PENDING_VALIDATION)
   is_operational Boolean         @default(false) // calculé côté service
+  // Motif du dernier refus (REJECTED). Posé au refus, effacé à la validation
+  // ou à la resoumission. Affiché au livreur (deli) et à l'admin (backoffice).
+  rejection_reason String? @db.Text
 
   // Affectation
   restaurant_id String?     @db.Uuid
@@ -1735,6 +1738,10 @@ model SchedulePlan {
 
   @@index([restaurant_id, status])
   @@index([period_start, period_end])
+  /// ⚠️ Index UNIQUE PARTIEL géré en SQL pur (Prisma ne l'exprime pas) :
+  ///   CREATE UNIQUE INDEX ... ON (restaurant_id, period_start) WHERE status <> 'ARCHIVED'
+  /// → au plus 1 plan non-archivé par (restaurant, date de début). Empêche les
+  /// doublons (course double-backend). Voir migration 20260602103000_schedule_plan_period_unique.
 }
 
 /// Créneau journalier dans un plan (matin OU soir, pour 1 jour donné).
