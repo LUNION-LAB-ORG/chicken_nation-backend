@@ -5,6 +5,7 @@ import {
   IsEmail,
   IsEnum,
   IsNotEmpty,
+  IsObject,
   IsOptional,
   Length,
   Matches,
@@ -74,6 +75,17 @@ export class CompleteRegistrationDto {
   @MaxLength(50)
   @Transform(({ value }) => value ? String(value).trim().toUpperCase() : undefined)
   numero_immatriculation?: string;
+
+  @ApiProperty({ description: "Lieu d'habitation (coordonnées) choisi par le livreur", required: false })
+  @IsOptional()
+  @IsObject()
+  home_location?: { lat: number; lng: number };
+
+  @ApiProperty({ description: "Adresse lisible du lieu d'habitation", required: false })
+  @IsOptional()
+  @MaxLength(500)
+  @Transform(({ value }) => (value ? String(value).trim() : undefined))
+  home_address?: string;
 
   @ApiProperty({ description: 'Code à 4 chiffres', example: '1234' })
   @IsNotEmpty()

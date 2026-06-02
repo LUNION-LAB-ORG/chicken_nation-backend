@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -93,6 +94,14 @@ export class ScheduleAdminController {
   @Patch('plans/:id/archive')
   async archivePlan(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.planningService.archivePlan(id);
+  }
+
+  @ApiOperation({
+    summary: 'Supprime définitivement un plan (DRAFT/SENT/ARCHIVED) — pour le régénérer',
+  })
+  @Delete('plans/:id')
+  async deletePlan(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.planningService.deletePlan(id);
   }
 
   // ── Stats ────────────────────────────────────────────────────────────

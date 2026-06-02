@@ -142,6 +142,9 @@ export class AuthDelivererService {
             permis_conduire: dto.permis_conduire,
             numero_permis: dto.numero_permis,
             numero_immatriculation: dto.numero_immatriculation,
+            // Lieu d'habitation (optionnel) — sert au tri par proximité côté admin.
+            home_location: dto.home_location ?? undefined,
+            home_address: dto.home_address ?? undefined,
             status: DelivererStatus.PENDING_VALIDATION,
             is_operational: false,
           },

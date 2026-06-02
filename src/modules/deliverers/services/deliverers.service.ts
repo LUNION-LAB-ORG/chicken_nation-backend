@@ -198,6 +198,25 @@ export class DeliverersService {
     return this.transitionStatus(deliverer, DelivererStatus.PENDING_VALIDATION);
   }
 
+  /**
+   * Définit le LIEU D'HABITATION (domicile) du livreur — distinct du GPS temps réel
+   * (`last_location`). Utilisé côté admin pour classer les restaurants par proximité.
+   */
+  async setHomeLocation(
+    id: string,
+    dto: { lat: number; lng: number; address?: string },
+  ) {
+    await this.getNonDeleted(id);
+    return this.prisma.deliverer.update({
+      where: { id },
+      data: {
+        home_location: { lat: dto.lat, lng: dto.lng },
+        home_address: dto.address ?? undefined,
+      },
+      omit: { password: true, refresh_token: true },
+    });
+  }
+
   async suspend(id: string, reason?: string) {
     const deliverer = await this.getNonDeleted(id);
     if (deliverer.status === DelivererStatus.SUSPENDED) {

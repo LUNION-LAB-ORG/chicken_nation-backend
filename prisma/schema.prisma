@@ -348,6 +348,12 @@ model Deliverer {
   numero_permis          String?       @db.VarChar(100) // Numéro figurant sur le permis
   numero_immatriculation String?       @db.VarChar(50) // Plaque d'immatriculation du véhicule
 
+  // ── Lieu d'habitation (choisi par le livreur à l'inscription) ──────────
+  // Optionnel. Sert à classer les restaurants par PROXIMITÉ côté admin
+  // (backoffice) pour faciliter l'affectation au restaurant le plus proche.
+  home_location Json?   // { lat: number, lng: number }
+  home_address  String? @db.Text
+
   // Statut métier
   status         DelivererStatus @default(PENDING_VALIDATION)
   is_operational Boolean         @default(false) // calculé côté service

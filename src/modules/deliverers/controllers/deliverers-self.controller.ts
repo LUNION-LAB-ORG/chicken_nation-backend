@@ -17,6 +17,7 @@ import { JwtDelivererAuthGuard } from 'src/modules/auth-deliverer/guards/jwt-del
 
 import { PauseDelivererDto } from '../dto/pause-deliverer.dto';
 import { RegisterExpoPushTokenDto } from '../dto/register-expo-push-token.dto';
+import { SetHomeLocationDto } from '../dto/set-home-location.dto';
 import { UpdateDelivererLocationDto } from '../dto/update-location.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { DelivererInfoService } from '../services/deliverer-info.service';
@@ -53,6 +54,15 @@ export class DeliverersSelfController {
   @Post('resubmit')
   async resubmit(@CurrentDeliverer() deliverer: Deliverer) {
     return this.deliverersService.resubmit(deliverer.id);
+  }
+
+  @ApiOperation({ summary: "Définir le lieu d'habitation (domicile) du livreur" })
+  @Post('home-location')
+  async setHomeLocation(
+    @CurrentDeliverer() deliverer: Deliverer,
+    @Body() dto: SetHomeLocationDto,
+  ) {
+    return this.deliverersService.setHomeLocation(deliverer.id, dto);
   }
 
   @ApiOperation({

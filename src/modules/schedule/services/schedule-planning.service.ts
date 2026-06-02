@@ -352,6 +352,28 @@ export class SchedulePlanningService {
     });
   }
 
+  /**
+   * Supprime DÉFINITIVEMENT un plan (et, par cascade, ses Shifts + ShiftAssignments).
+   * Autorisé pour DRAFT / SENT / ARCHIVED → permet de « supprimer et reprendre »
+   * (régénérer pour la même période). REFUSÉ pour CONFIRMED (utiliser archivePlan
+   * pour conserver l'historique des confirmations).
+   *
+   * NB : les RestDay AUTO ne sont pas supprimés ici (non rattachés au plan) ; ils
+   * sont ré-utilisés tels quels lors d'une régénération (createMany skipDuplicates).
+   */
+  async deletePlan(planId: string): Promise<{ id: string; deleted: true }> {
+    const plan = await this.prisma.schedulePlan.findUnique({ where: { id: planId } });
+    if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
+    if (plan.status === SchedulePlanStatus.CONFIRMED) {
+      throw new BadRequestException(
+        'Un plan confirmé ne peut pas être supprimé — archivez-le pour conserver l\'historique.',
+      );
+    }
+    await this.prisma.schedulePlan.delete({ where: { id: planId } });
+    this.logger.log(`Plan ${planId.slice(0, 8)} supprimé (statut ${plan.status})`);
+    return { id: planId, deleted: true };
+  }
+
   // ============================================================
   // ALGORITHMES INTERNES
   // ============================================================
