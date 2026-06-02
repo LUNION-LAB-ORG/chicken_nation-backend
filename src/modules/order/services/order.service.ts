@@ -14,6 +14,7 @@ import {
   OrderType,
   PaymentMethod,
   Prisma,
+  UserRole,
 } from '@prisma/client';
 import { format, startOfMonth, differenceInMinutes } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -514,9 +515,15 @@ export class OrderService {
     meta?: Record<string, any>,
   ) {
     const order = await this.findById(id);
-    //Meta peut contenir estimated_delivery_time, estimated_preparation_time, deliveryDriverId
-    // Valider la transition d'état
-    this.orderHelper.validateStatusTransition(order.type, order.status, status);
+    //Meta peut contenir estimated_delivery_time, estimated_preparation_time, deliveryDriverId, role
+    // Valider la transition d'état.
+    // Exception métier : un ADMIN peut ANNULER une commande QUEL QUE SOIT son état.
+    // Les autres rôles (et les clients) restent soumis aux règles de l'app
+    // (annulation uniquement depuis PENDING/ACCEPTED).
+    const isAdmin = meta?.role === UserRole.ADMIN;
+    this.orderHelper.validateStatusTransition(order.type, order.status, status, {
+      allowCancelFromAnyStatus: isAdmin,
+    });
 
     // Actions spécifiques selon le changement d'état
     await this.orderHelper.handleStatusSpecificActions(order, status, meta);

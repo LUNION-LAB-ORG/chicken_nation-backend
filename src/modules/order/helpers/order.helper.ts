@@ -665,9 +665,15 @@ export class OrderHelper {
     orderType: OrderType,
     currentStatus: OrderStatus,
     newStatus: OrderStatus,
+    options?: { allowCancelFromAnyStatus?: boolean },
   ) {
-    // Cas spécial : annulation — uniquement depuis PENDING ou ACCEPTED
+    // Cas spécial : annulation.
+    // - Règle standard (rôles non-admin + clients) : uniquement depuis PENDING ou ACCEPTED.
+    // - ADMIN (`allowCancelFromAnyStatus`) : peut annuler QUEL QUE SOIT l'état.
     if (newStatus === OrderStatus.CANCELLED) {
+      if (options?.allowCancelFromAnyStatus) {
+        return;
+      }
       if (
         ![
           OrderStatus.PENDING as string,

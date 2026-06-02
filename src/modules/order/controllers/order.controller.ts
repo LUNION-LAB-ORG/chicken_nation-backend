@@ -221,8 +221,13 @@ export class OrderController {
     @Param('id') id: string,
     @Body() body: { status: OrderStatus; meta?: Record<string, any> },
   ) {
-    const userId = (req.user as User).id;
-    return this.orderService.updateStatus(id, body.status, { ...body.meta, userId });
+    const user = req.user as User;
+    // On transmet le rôle : seul un ADMIN pourra annuler une commande déjà avancée.
+    return this.orderService.updateStatus(id, body.status, {
+      ...body.meta,
+      userId: user.id,
+      role: user.role,
+    });
   }
 
   @Patch(':id/client/status')
