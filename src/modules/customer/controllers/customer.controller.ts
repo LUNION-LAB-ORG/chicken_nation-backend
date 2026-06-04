@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Inject,
   Param,
   Patch,
   Post,
@@ -15,13 +16,15 @@ import {
 import { CustomerService } from 'src/modules/customer/services/customer.service';
 import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto';
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
+import { AdminUpdateCustomerDto } from 'src/modules/customer/dto/admin-update-customer.dto';
 import type { Request } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { CustomerQueryDto } from 'src/modules/customer/dto/customer-query.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
-import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
+import { CacheInterceptor, CacheTTL, CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
@@ -36,7 +39,8 @@ import { Customer } from '@prisma/client';
 @UseInterceptors(CacheInterceptor)
 export class CustomerController {
   constructor(private readonly customerService: CustomerService,
-    private readonly notificationSettingService: NotificationSettingService
+    private readonly notificationSettingService: NotificationSettingService,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) { }
 
   // CREATE CUSTOMER
@@ -108,6 +112,21 @@ export class CustomerController {
   @ApiOperation({ summary: 'Supprimer un client (par le client lui-même)' })
   remove(@Param('id') id: string) {
     return this.customerService.remove(id);
+  }
+
+  @Patch('admin/:id')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.CLIENTS, Action.UPDATE)
+  @ApiOperation({ summary: "Modifier les infos d'un client (admin uniquement)" })
+  async adminUpdate(
+    @Param('id') id: string,
+    @Body() dto: AdminUpdateCustomerDto,
+  ) {
+    const result = await this.customerService.adminUpdate(id, dto);
+    // Invalider le cache serveur du détail (GET /customer/:id, TTL 2 min) pour
+    // que la modification soit visible immédiatement côté backoffice.
+    await this.cacheManager.del(`/api/v1/customer/${id}`);
+    return result;
   }
 
   @Delete('admin/:id')

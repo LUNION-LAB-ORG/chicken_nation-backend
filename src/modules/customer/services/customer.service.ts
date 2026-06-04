@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto';
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
+import { AdminUpdateCustomerDto } from 'src/modules/customer/dto/admin-update-customer.dto';
 import { CustomerQueryDto } from '../dto/customer-query.dto';
 import { CustomerEvent } from '../events/customer.event';
 import { S3Service } from '../../../s3/s3.service';
@@ -470,6 +471,54 @@ export class CustomerService {
     }
 
     return updatedCustomer;
+  }
+
+  /**
+   * Modification des infos d'identité d'un client par un agent BACKOFFICE.
+   * Met à jour uniquement prénom / nom / email / téléphone. Vérifie l'existence
+   * du client puis l'unicité du téléphone et de l'email (en excluant le client
+   * courant). N'altère ni l'image, ni les paramètres de notification.
+   */
+  async adminUpdate(id: string, dto: AdminUpdateCustomerDto) {
+    const customer = await this.prisma.customer.findUnique({ where: { id } });
+    if (!customer) {
+      throw new NotFoundException('Client introuvable');
+    }
+
+    // Unicité du téléphone (hors client courant)
+    if (dto.phone && dto.phone !== customer.phone) {
+      const existing = await this.prisma.customer.findUnique({
+        where: { phone: dto.phone },
+      });
+      if (existing && existing.id !== id) {
+        throw new ConflictException(
+          `Un client avec le numéro de téléphone ${dto.phone} existe déjà`,
+        );
+      }
+    }
+
+    // Unicité de l'email (hors client courant)
+    if (dto.email && dto.email !== customer.email) {
+      const existing = await this.prisma.customer.findUnique({
+        where: { email: dto.email },
+      });
+      if (existing && existing.id !== id) {
+        throw new ConflictException(
+          `Un client avec l'email ${dto.email} existe déjà`,
+        );
+      }
+    }
+
+    return this.prisma.customer.update({
+      where: { id },
+      data: {
+        ...(dto.phone !== undefined && { phone: dto.phone }),
+        ...(dto.first_name !== undefined && { first_name: dto.first_name }),
+        ...(dto.last_name !== undefined && { last_name: dto.last_name }),
+        ...(dto.email !== undefined && { email: dto.email }),
+      },
+      include: { addresses: true },
+    });
   }
 
   async remove(id: string) {
