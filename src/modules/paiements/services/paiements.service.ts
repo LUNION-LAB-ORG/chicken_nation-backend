@@ -62,11 +62,14 @@ export class PaiementsService {
 
     // Mise a jour de la commande à payée
     if (result.order) {
+      const paymentAt = result.paiement.created_at;
       await this.prisma.order.update({
         where: { id: result.order.id },
         data: {
-          paied_at: result.paiement.created_at,
+          paied_at: paymentAt,
           paied: true,
+          // Paiement différé : ramène la commande "à aujourd'hui" (tri + filtre période)
+          ...this.buildPaymentDateAlignment(result.order, paymentAt),
         },
       });
     }
@@ -166,6 +169,27 @@ export class PaiementsService {
     };
   }
 
+  /**
+   * Aligne `created_at` sur l'instant du PAIEMENT lorsqu'une commande encore NON
+   * payée est payée (paiement différé : créée un jour, payée un autre). La commande
+   * remonte ainsi en tête de liste et tombe dans la bonne période de filtrage, car
+   * tout le tri/filtrage des commandes s'appuie sur `created_at`.
+   *
+   * L'instant de soumission initiale est préservé dans `submitted_at` (jamais écrasé).
+   * Renvoie un patch VIDE si la commande était déjà payée → idempotent (le webhook
+   * KKiaPay et le retour de l'app peuvent tirer plusieurs fois pour la même transaction).
+   */
+  private buildPaymentDateAlignment(
+    order: { paied: boolean; created_at: Date; submitted_at: Date | null },
+    paymentAt: Date,
+  ): { created_at?: Date; submitted_at?: Date } {
+    if (order.paied) return {};
+    return {
+      submitted_at: order.submitted_at ?? order.created_at,
+      created_at: paymentAt,
+    };
+  }
+
   // Lier un paiement à une commande
   async linkPaiementToOrder(
     data: CreatePaiementKkiapayDto & { customer_id: string },
@@ -196,13 +220,16 @@ export class PaiementsService {
     // Mise a jour de la commande à payée
     if (result.order) {
       const next_status = this.getOrderStatus(result.order.payment_method!, result.order.type, result.order.status);
+      const paymentAt = result.paiement.created_at;
       await this.prisma.order.update({
         where: { id: result.order.id },
         data: {
-          paied_at: result.paiement.created_at,
+          paied_at: paymentAt,
           paied: true,
           status: next_status,
           ...(next_status == OrderStatus.ACCEPTED && { accepted_at: new Date() }),
+          // Paiement différé : ramène la commande "à aujourd'hui" (tri + filtre période)
+          ...this.buildPaymentDateAlignment(result.order, paymentAt),
         },
       });
     }

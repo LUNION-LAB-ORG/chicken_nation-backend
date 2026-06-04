@@ -1085,6 +1085,11 @@ model Order {
   cancelled_at      DateTime?
   deleted_at        DateTime?
   paied_at          DateTime?
+  /// Instant de SOUMISSION initiale de la commande (création du panier, avant paiement).
+  /// Pour les paiements différés (commande créée un jour, payée un autre), `created_at`
+  /// est aligné sur l'instant du PAIEMENT afin que la commande remonte en tête de liste
+  /// et soit filtrée sur la bonne période. `submitted_at` conserve la création d'origine.
+  submitted_at      DateTime?        @db.Timestamp(6)
   created_at        DateTime         @default(now()) @db.Timestamp(6)
   updated_at        DateTime         @default(now()) @db.Timestamp(6)
   Comment           Comment[]
