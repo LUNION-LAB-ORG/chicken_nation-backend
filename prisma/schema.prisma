@@ -322,6 +322,7 @@ model Customer {
   nationCards        NationCard[]
   promo_code_usages  PromoCodeUsage[]
   retentionCallbacks RetentionCallback[]
+  prospects          Prospect[]
 }
 
 // -------------------- Livreurs (deliverers) ------------------------------
@@ -1166,6 +1167,7 @@ model Restaurant {
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 
   Conversation Conversation[]
+  prospects    Prospect[]
 }
 
 model Supplement {
@@ -1213,6 +1215,8 @@ model User {
   orders              Order[]
   promo_codes_created PromoCode[]         @relation("promo_code_creator")
   retentionCallbacks  RetentionCallback[] @relation("RetentionCallbacks")
+  prospects_created   Prospect[]          @relation("ProspectCreator")
+  prospect_calls      ProspectCall[]      @relation("ProspectCallAgent")
 
   @@index([email, type])
 }
@@ -1472,6 +1476,7 @@ model PromoCode {
 
   promo_code_targeted_dishes     PromoCodeTargetedDish[]
   promo_code_targeted_categories PromoCodeTargetedCategory[]
+  prospects                      Prospect[]
 
   @@index([code])
   @@index([is_active, entity_status])
@@ -1876,4 +1881,104 @@ model DailyPresenceCheck {
   /// Un seul check-in par livreur par jour.
   @@unique([deliverer_id, date])
   @@index([date, response])
+}
+
+// ============================================================
+// MODULE « BASE DE DONNÉES » — Captation & conversion Glovo/Yango
+// (SPEC-CN-BDD-001). Voir docs/BASE-DONNEES-PLAN.md
+// ============================================================
+
+enum ProspectPlatform {
+  GLOVO
+  YANGO
+}
+
+enum ProspectStatus {
+  NOUVEAU // saisi par le store
+  A_APPELER // entré dans la file J+1
+  JOINT // appel marqué « joint »
+  NON_JOIGNABLE // appel sans réponse (recyclable)
+  REFUS // client ne souhaite pas
+  COUPON_ENVOYE // coupon + lien app envoyés
+  INSCRIT // compte app créé (match téléphone)
+  CONVERTI // ≥ 1 commande directe
+}
+
+enum ProspectCallResult {
+  JOINT
+  NON_JOIGNABLE
+  REFUS
+}
+
+enum ProspectMessageKind {
+  DECOUVERTE
+  RELANCE_1
+  RELANCE_2_FIDELITE
+}
+
+/// Contact capté depuis Glovo/Yango par un store, à convertir en client direct.
+model Prospect {
+  id           String           @id @default(uuid()) @db.Uuid
+  platform     ProspectPlatform
+  name         String           @db.VarChar // nom / prénom / pseudo
+  order_number String           @db.VarChar // n° de commande Glovo/Yango
+  phone        String           @db.VarChar // numéro ivoirien (10 chiffres)
+  status       ProspectStatus   @default(NOUVEAU)
+
+  // Store de saisie (= Restaurant)
+  restaurant_id String     @db.Uuid
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id])
+
+  // Agent (caissier / manager) ayant saisi
+  created_by String? @db.Uuid
+  creator    User?   @relation("ProspectCreator", fields: [created_by], references: [id])
+
+  // Liens de conversion (remplis dans les phases suivantes)
+  customer_id   String?    @db.Uuid
+  customer      Customer?  @relation(fields: [customer_id], references: [id])
+  promo_code_id String?    @db.Uuid
+  promo_code    PromoCode? @relation(fields: [promo_code_id], references: [id])
+
+  called_at      DateTime?
+  coupon_sent_at DateTime?
+  registered_at  DateTime?
+  converted_at   DateTime?
+
+  calls    ProspectCall[]
+  messages ProspectMessage[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([phone])
+  @@index([restaurant_id, status, created_at])
+}
+
+/// Historique des appels du call center sur un prospect.
+model ProspectCall {
+  id          String             @id @default(uuid()) @db.Uuid
+  prospect_id String             @db.Uuid
+  prospect    Prospect           @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
+  agent_id    String?            @db.Uuid
+  agent       User?              @relation("ProspectCallAgent", fields: [agent_id], references: [id])
+  result      ProspectCallResult
+  rank        Int                @default(1)
+  note        String?            @db.VarChar
+  created_at  DateTime           @default(now()) @db.Timestamp(6)
+
+  @@index([prospect_id, created_at])
+}
+
+/// Historique des messages envoyés à un prospect (rang auto).
+model ProspectMessage {
+  id          String              @id @default(uuid()) @db.Uuid
+  prospect_id String              @db.Uuid
+  prospect    Prospect            @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
+  kind        ProspectMessageKind
+  rank        Int                 @default(1)
+  body        String              @db.Text
+  created_at  DateTime            @default(now()) @db.Timestamp(6)
+
+  @@index([prospect_id, created_at])
 }

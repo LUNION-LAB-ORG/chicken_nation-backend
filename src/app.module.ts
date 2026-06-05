@@ -41,6 +41,7 @@ import { SettingsModule } from 'src/modules/settings/settings.module';
 import { OnesignalModule } from 'src/modules/onesignal/onesignal.module';
 import { PushCampaignModule } from 'src/modules/push-campaign/push-campaign.module';
 import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
+import { ProspectModule } from 'src/modules/prospect/prospect.module';
 import { RetentionCallbackModule } from 'src/modules/retention-callback/retention-callback.module';
 import { SchedulingModule } from 'src/modules/schedule/schedule.module';
 import { MapsModule } from 'src/modules/maps/maps.module';
@@ -116,6 +117,7 @@ import { MapsModule } from 'src/modules/maps/maps.module';
     RetentionCallbackModule,
     SchedulingModule,
     MapsModule,
+    ProspectModule,
   ],
 })
 export class AppModule { }

@@ -30,6 +30,7 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.CLIENTS]: [Action.READ],
       [Modules.COMMANDES]: [Action.READ],
       [Modules.MARKETING]: [Action.CREATE, Action.READ, Action.UPDATE, Action.REPORT],
+      [Modules.BASE_DONNEES]: [Action.READ, Action.CREATE, Action.UPDATE, Action.EXPORT, Action.REPORT],
     },
   },
 
@@ -71,6 +72,9 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.COMMENTAIRES]: [Action.READ],
 
       [Modules.MESSAGES]: [Action.READ, Action.CREATE, Action.UPDATE],
+
+      // Call center : voit la file J+1, qualifie, envoie le coupon
+      [Modules.BASE_DONNEES]: [Action.READ, Action.UPDATE],
     },
   },
 
@@ -79,6 +83,8 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
     modules: {
       [Modules.DASHBOARD]: [Action.READ],
 
+      // Store : saisie de contacts uniquement
+      [Modules.BASE_DONNEES]: [Action.CREATE],
       [Modules.COMMANDES]: [Action.READ, Action.UPDATE, Action.UPDATE_FULL, Action.PRINT],
       [Modules.INVENTAIRE]: [Action.READ, Action.UPDATE],
       [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
@@ -91,6 +97,8 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
   [UserRole.ASSISTANT_MANAGER]: {
     modules: {
       [Modules.DASHBOARD]: [Action.READ],
+      // Store : saisie de contacts uniquement
+      [Modules.BASE_DONNEES]: [Action.CREATE],
       [Modules.COMMANDES]: [Action.READ, Action.UPDATE, Action.UPDATE_FULL, Action.PRINT],
       [Modules.INVENTAIRE]: [Action.READ, Action.UPDATE],
       [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
@@ -114,6 +122,9 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.CARD_NATION]: [Action.READ],
       [Modules.COMMENTAIRES]: [Action.READ],
       [Modules.MESSAGES]: [Action.READ, Action.CREATE, Action.UPDATE],
+
+      // Store : saisie de contacts uniquement
+      [Modules.BASE_DONNEES]: [Action.CREATE],
     },
   },
 
