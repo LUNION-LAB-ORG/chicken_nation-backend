@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { User } from '@prisma/client';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
@@ -11,6 +11,7 @@ import { ProspectService } from '../services/prospect.service';
 import { CreateProspectDto } from '../dto/create-prospect.dto';
 import { MarkCallDto } from '../dto/mark-call.dto';
 import { QueryProspectDto } from '../dto/query-prospect.dto';
+import { UpdateProspectSettingsDto } from '../dto/update-prospect-settings.dto';
 
 @ApiTags('Prospects (Base de Données)')
 @ApiBearerAuth()
@@ -59,6 +60,42 @@ export class ProspectController {
   @ApiOperation({ summary: 'Ventes générées attribuées' })
   sales(@Req() req: Request, @Query('restaurantId') restaurantId?: string) {
     return this.prospectService.getSales(req.user as User, restaurantId);
+  }
+
+  @Get('settings')
+  @RequirePermission(Modules.BASE_DONNEES, Action.READ)
+  @ApiOperation({ summary: 'Réglages du module (coupon, messages)' })
+  getSettings() {
+    return this.prospectService.getSettings();
+  }
+
+  @Put('settings')
+  @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
+  @ApiOperation({ summary: 'Mettre à jour les réglages' })
+  updateSettings(@Body() dto: UpdateProspectSettingsDto) {
+    return this.prospectService.updateSettings(dto);
+  }
+
+  @Get('export')
+  @RequirePermission(Modules.BASE_DONNEES, Action.EXPORT)
+  @ApiOperation({ summary: 'Export CSV (type=contacts|coupons|sales)' })
+  async export(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Query('type') type = 'contacts',
+    @Query('restaurantId') restaurantId?: string,
+  ) {
+    const csv = await this.prospectService.exportCsv(
+      req.user as User,
+      type,
+      restaurantId,
+    );
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="prospects-${type}.csv"`,
+    );
+    res.send('﻿' + csv); // BOM UTF-8 pour Excel
   }
 
   @Get()

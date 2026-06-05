@@ -23,6 +23,18 @@ import { TwilioService } from 'src/twilio/services/twilio.service';
 import { CreateProspectDto } from '../dto/create-prospect.dto';
 import { MarkCallDto } from '../dto/mark-call.dto';
 import { QueryProspectDto } from '../dto/query-prospect.dto';
+import { UpdateProspectSettingsDto } from '../dto/update-prospect-settings.dto';
+
+const DEFAULT_APP_LINK = 'https://chicken.turbodeliveryapp.com';
+
+const DEFAULT_MESSAGES: Record<ProspectMessageKind, string> = {
+  DECOUVERTE:
+    'Bonjour {nom} ! Merci de commander chez Chicken Nation 🍗 Commandez désormais en direct sur notre app et payez moins cher. Votre code promo {code_coupon} (valable {validite} jours). Lien : {lien_app}',
+  RELANCE_1:
+    "Re-bonjour {nom} ! Profitez encore de tarifs réduits sur l'app Chicken Nation : {lien_app}. Code {code_coupon} (valable {validite} jours).",
+  RELANCE_2_FIDELITE:
+    "{nom}, merci pour votre fidélité ! 🎁 Offre exclusive sur l'app : {lien_app}. Votre code {code_coupon} (valable {validite} jours).",
+};
 
 @Injectable()
 export class ProspectService {
@@ -605,6 +617,143 @@ export class ProspectService {
     };
   }
 
+  // ============================================================
+  // PHASE 4 — RÉGLAGES & EXPORTS
+  // ============================================================
+
+  /** Réglages courants du module (avec valeurs par défaut). */
+  async getSettings() {
+    const v = await this.settings.getMany([
+      'prospect.coupon_validity_days',
+      'prospect.coupon_discount_type',
+      'prospect.coupon_discount_value',
+      'prospect.app_link',
+      'prospect.msg.decouverte',
+      'prospect.msg.relance_1',
+      'prospect.msg.relance_2',
+    ]);
+    return {
+      coupon_validity_days:
+        Number(v['prospect.coupon_validity_days']) > 0
+          ? Number(v['prospect.coupon_validity_days'])
+          : 7,
+      coupon_discount_type:
+        v['prospect.coupon_discount_type'] === 'FIXED_AMOUNT'
+          ? 'FIXED_AMOUNT'
+          : 'PERCENTAGE',
+      coupon_discount_value:
+        Number(v['prospect.coupon_discount_value']) > 0
+          ? Number(v['prospect.coupon_discount_value'])
+          : 10,
+      app_link: v['prospect.app_link'] || DEFAULT_APP_LINK,
+      msg_decouverte: v['prospect.msg.decouverte'] || DEFAULT_MESSAGES.DECOUVERTE,
+      msg_relance_1: v['prospect.msg.relance_1'] || DEFAULT_MESSAGES.RELANCE_1,
+      msg_relance_2:
+        v['prospect.msg.relance_2'] || DEFAULT_MESSAGES.RELANCE_2_FIDELITE,
+    };
+  }
+
+  /** Met à jour les réglages (upsert dans `settings`). */
+  async updateSettings(dto: UpdateProspectSettingsDto) {
+    const set = async (k: string, val: string | undefined) => {
+      if (val !== undefined && val !== null) await this.settings.set(k, val);
+    };
+    await set(
+      'prospect.coupon_validity_days',
+      dto.coupon_validity_days != null ? String(dto.coupon_validity_days) : undefined,
+    );
+    await set('prospect.coupon_discount_type', dto.coupon_discount_type);
+    await set(
+      'prospect.coupon_discount_value',
+      dto.coupon_discount_value != null ? String(dto.coupon_discount_value) : undefined,
+    );
+    await set('prospect.app_link', dto.app_link);
+    await set('prospect.msg.decouverte', dto.msg_decouverte);
+    await set('prospect.msg.relance_1', dto.msg_relance_1);
+    await set('prospect.msg.relance_2', dto.msg_relance_2);
+    return this.getSettings();
+  }
+
+  /** Export CSV (contacts | coupons | sales). */
+  async exportCsv(
+    user: User,
+    type: string,
+    restaurantId?: string,
+  ): Promise<string> {
+    if (type === 'coupons') {
+      const rows = await this.getCoupons(user, restaurantId);
+      return this.toCsv(
+        ['Code', 'Contact', 'Plateforme', 'Emis le', 'Expire le', 'Store', 'Etat'],
+        rows.map((r) => [
+          r.code,
+          r.name,
+          r.platform,
+          this.csvDate(r.sent_at),
+          this.csvDate(r.expiration_date),
+          r.restaurant?.name ?? '',
+          r.state,
+        ]),
+      );
+    }
+    if (type === 'sales') {
+      const { data } = await this.getSales(user, restaurantId);
+      return this.toCsv(
+        ['Date', 'Client', 'Plateforme', 'Coupon', 'Store', 'Montant'],
+        data.map((r) => [
+          this.csvDate(r.date),
+          r.name,
+          r.platform,
+          r.coupon ?? '',
+          r.restaurant?.name ?? '',
+          String(r.amount),
+        ]),
+      );
+    }
+    // contacts (défaut)
+    const rows = await this.prisma.prospect.findMany({
+      where: {
+        entity_status: { not: EntityStatus.DELETED },
+        ...this.scopeFor(user, restaurantId),
+      },
+      include: { restaurant: { select: { name: true } } },
+      orderBy: { created_at: 'asc' },
+      take: 5000,
+    });
+    return this.toCsv(
+      ['Date', 'Plateforme', 'Nom', 'N commande', 'Telephone', 'Store', 'Statut'],
+      rows.map((p) => [
+        this.csvDate(p.created_at),
+        p.platform,
+        p.name,
+        p.order_number,
+        p.phone,
+        p.restaurant?.name ?? '',
+        p.status,
+      ]),
+    );
+  }
+
+  private csvDate(d?: Date | string | null): string {
+    if (!d) return '';
+    const date = typeof d === 'string' ? new Date(d) : d;
+    try {
+      return date.toISOString().slice(0, 16).replace('T', ' ');
+    } catch {
+      return '';
+    }
+  }
+
+  private csvCell(v: string): string {
+    const s = v == null ? '' : String(v);
+    return /[",;\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+
+  private toCsv(headers: string[], rows: string[][]): string {
+    return [headers, ...rows]
+      .map((r) => r.map((c) => this.csvCell(c)).join(';'))
+      .join('\n');
+  }
+
   // ---------- Helpers coupon / messages ----------
 
   private async getCouponConfig() {
@@ -620,7 +769,7 @@ export class ProspectService {
         ? DiscountType.FIXED_AMOUNT
         : DiscountType.PERCENTAGE;
     const discountValue = Number(value) > 0 ? Number(value) : 10;
-    const appLink = link || 'https://chicken.turbodeliveryapp.com';
+    const appLink = link || DEFAULT_APP_LINK;
     return { validityDays, discountType, discountValue, appLink };
   }
 
@@ -644,15 +793,7 @@ export class ProspectService {
       RELANCE_1: 'prospect.msg.relance_1',
       RELANCE_2_FIDELITE: 'prospect.msg.relance_2',
     };
-    const defaults: Record<ProspectMessageKind, string> = {
-      DECOUVERTE:
-        'Bonjour {nom} ! Merci de commander chez Chicken Nation 🍗 Commandez désormais en direct sur notre app et payez moins cher. Votre code promo {code_coupon} (valable {validite} jours). Lien : {lien_app}',
-      RELANCE_1:
-        "Re-bonjour {nom} ! Profitez encore de tarifs réduits sur l'app Chicken Nation : {lien_app}. Code {code_coupon} (valable {validite} jours).",
-      RELANCE_2_FIDELITE:
-        "{nom}, merci pour votre fidélité ! 🎁 Offre exclusive sur l'app : {lien_app}. Votre code {code_coupon} (valable {validite} jours).",
-    };
-    const tpl = (await this.settings.get(keyByKind[kind])) || defaults[kind];
+    const tpl = (await this.settings.get(keyByKind[kind])) || DEFAULT_MESSAGES[kind];
     return tpl
       .split('{nom}').join(vars.nom)
       .split('{code_coupon}').join(vars.code)
