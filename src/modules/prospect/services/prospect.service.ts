@@ -430,19 +430,21 @@ export class ProspectService {
       }),
     ]);
 
-    // Envoi best-effort (SMS) — ne bloque jamais le flux
-    try {
-      await this.twilio.sendSmsMessage({ phoneNumber: prospect.phone, message: body });
-    } catch (e) {
-      this.logger.warn(
-        `Envoi SMS coupon échoué pour ${prospect.phone}: ${(e as Error)?.message}`,
-      );
+    // Envoi SMS au format E.164 ivoirien (+225 + 10 chiffres). Ne bloque pas le flux.
+    const sms = await this.twilio.sendSmsMessage({
+      phoneNumber: this.toE164(prospect.phone),
+      message: body,
+    });
+    const smsSent = !!sms;
+    if (!smsSent) {
+      this.logger.warn(`SMS coupon NON envoyé pour ${prospect.phone}`);
     }
 
     return {
       prospect: updated,
       coupon: { code: promo.code, expiration_date: promo.expiration_date },
       message: body,
+      smsSent,
     };
   }
 
@@ -776,6 +778,12 @@ export class ProspectService {
   private generateCouponCode(): string {
     const rnd = Math.random().toString(36).slice(2, 8).toUpperCase();
     return `CN-${rnd}`;
+  }
+
+  /** Numéro ivoirien au format E.164 pour Twilio : 225 + 10 chiffres (le + est ajouté par formatNumber). */
+  private toE164(phone: string): string {
+    const d = (phone || '').replace(/\D/g, '').slice(-10);
+    return `225${d}`;
   }
 
   private kindForRank(rank: number): ProspectMessageKind {
