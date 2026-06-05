@@ -11,6 +11,7 @@ import {
   Prisma,
   ProspectCallResult,
   ProspectMessageKind,
+  ProspectPlatform,
   ProspectStatus,
   TargetType,
   User,
@@ -315,7 +316,14 @@ export class ProspectService {
       }),
       this.prisma.prospect.update({
         where: { id },
-        data: { status: nextStatus, called_at: new Date() },
+        data: {
+          status: nextStatus,
+          called_at: new Date(),
+          // Horodate le 1er « joint » (entonnoir « vérifiés »)
+          ...(dto.result === ProspectCallResult.JOINT && !prospect.joined_at
+            ? { joined_at: new Date() }
+            : {}),
+        },
         include: { restaurant: { select: { id: true, name: true } } },
       }),
     ]);
@@ -423,6 +431,177 @@ export class ProspectService {
       prospect: updated,
       coupon: { code: promo.code, expiration_date: promo.expiration_date },
       message: body,
+    };
+  }
+
+  // ============================================================
+  // PHASE 3 — ANALYTICS
+  // ============================================================
+
+  private scopeFor(user: User, restaurantId?: string): Prisma.ProspectWhereInput {
+    if (this.isStoreUser(user)) return { restaurant_id: user.restaurant_id! };
+    if (restaurantId) return { restaurant_id: restaurantId };
+    return {};
+  }
+
+  /** KPIs + entonnoir + répartition (cahier §4.1 / §8). */
+  async getStats(user: User, restaurantId?: string) {
+    const base: Prisma.ProspectWhereInput = {
+      entity_status: { not: EntityStatus.DELETED },
+      ...this.scopeFor(user, restaurantId),
+    };
+    const c = (where: Prisma.ProspectWhereInput) =>
+      this.prisma.prospect.count({ where: { ...base, ...where } });
+
+    const [
+      total,
+      verifies,
+      couponEnvoye,
+      inscrits,
+      convertis,
+      glovo,
+      yango,
+      couponsUsed,
+      caAgg,
+    ] = await Promise.all([
+      c({}),
+      c({ joined_at: { not: null } }),
+      c({ coupon_sent_at: { not: null } }),
+      c({ registered_at: { not: null } }),
+      c({ converted_at: { not: null } }),
+      c({ platform: ProspectPlatform.GLOVO }),
+      c({ platform: ProspectPlatform.YANGO }),
+      c({ promo_code_id: { not: null }, converted_at: { not: null } }),
+      this.prisma.prospect.aggregate({
+        where: { ...base, converted_at: { not: null } },
+        _sum: { first_order_amount: true },
+      }),
+    ]);
+    const ca = caAgg._sum.first_order_amount ?? 0;
+
+    const [byStoreRaw, convByStoreRaw] = await Promise.all([
+      this.prisma.prospect.groupBy({
+        by: ['restaurant_id'],
+        where: base,
+        _count: { _all: true },
+      }),
+      this.prisma.prospect.groupBy({
+        by: ['restaurant_id'],
+        where: { ...base, converted_at: { not: null } },
+        _count: { _all: true },
+      }),
+    ]);
+    const restos = await this.prisma.restaurant.findMany({
+      where: { id: { in: byStoreRaw.map((r) => r.restaurant_id) } },
+      select: { id: true, name: true },
+    });
+    const nameById = new Map(restos.map((r) => [r.id, r.name]));
+    const convById = new Map(
+      convByStoreRaw.map((r) => [r.restaurant_id, r._count._all]),
+    );
+    const by_store = byStoreRaw
+      .map((r) => ({
+        restaurant_id: r.restaurant_id,
+        name: nameById.get(r.restaurant_id) ?? '—',
+        total: r._count._all,
+        converted: convById.get(r.restaurant_id) ?? 0,
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    return {
+      total,
+      funnel: {
+        saisis: total,
+        verifies,
+        coupon_envoye: couponEnvoye,
+        inscrits,
+        convertis,
+      },
+      platform: { glovo, yango },
+      conversion_rate: total ? Math.round((convertis / total) * 100) : 0,
+      coupons: {
+        sent: couponEnvoye,
+        used: couponsUsed,
+        usage_rate: couponEnvoye
+          ? Math.round((couponsUsed / couponEnvoye) * 100)
+          : 0,
+      },
+      sales: {
+        count: convertis,
+        ca,
+        average: convertis ? Math.round(ca / convertis) : 0,
+      },
+      by_store,
+    };
+  }
+
+  /** Suivi des coupons émis (cahier §4.6). */
+  async getCoupons(user: User, restaurantId?: string) {
+    const rows = await this.prisma.prospect.findMany({
+      where: {
+        entity_status: { not: EntityStatus.DELETED },
+        promo_code_id: { not: null },
+        ...this.scopeFor(user, restaurantId),
+      },
+      include: {
+        restaurant: { select: { id: true, name: true } },
+        promo_code: { select: { code: true, expiration_date: true } },
+      },
+      orderBy: { coupon_sent_at: 'desc' },
+      take: 500,
+    });
+    const now = new Date();
+    return rows.map((p) => {
+      const used = !!p.converted_at;
+      const expired =
+        !used && p.promo_code?.expiration_date
+          ? p.promo_code.expiration_date < now
+          : false;
+      return {
+        id: p.id,
+        code: p.promo_code?.code ?? '—',
+        name: p.name,
+        platform: p.platform,
+        restaurant: p.restaurant,
+        sent_at: p.coupon_sent_at,
+        expiration_date: p.promo_code?.expiration_date ?? null,
+        state: used ? 'USED' : expired ? 'EXPIRED' : 'ACTIVE',
+      };
+    });
+  }
+
+  /** Ventes attribuées à l'opération (cahier §4.7). */
+  async getSales(user: User, restaurantId?: string) {
+    const rows = await this.prisma.prospect.findMany({
+      where: {
+        entity_status: { not: EntityStatus.DELETED },
+        converted_at: { not: null },
+        ...this.scopeFor(user, restaurantId),
+      },
+      include: {
+        restaurant: { select: { id: true, name: true } },
+        promo_code: { select: { code: true } },
+      },
+      orderBy: { converted_at: 'desc' },
+      take: 500,
+    });
+    const ca = rows.reduce((s, p) => s + (p.first_order_amount ?? 0), 0);
+    const data = rows.map((p) => ({
+      id: p.id,
+      name: p.name,
+      platform: p.platform,
+      restaurant: p.restaurant,
+      coupon: p.promo_code?.code ?? null,
+      amount: p.first_order_amount ?? 0,
+      date: p.converted_at,
+    }));
+    return {
+      data,
+      totals: {
+        count: rows.length,
+        ca,
+        average: rows.length ? Math.round(ca / rows.length) : 0,
+      },
     };
   }
 

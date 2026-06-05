@@ -40,6 +40,27 @@ export class ProspectController {
     return this.prospectService.getCallQueue(req.user as User, restaurantId);
   }
 
+  @Get('stats')
+  @RequirePermission(Modules.BASE_DONNEES, Action.READ)
+  @ApiOperation({ summary: 'KPIs + entonnoir + répartition (tableau de bord)' })
+  stats(@Req() req: Request, @Query('restaurantId') restaurantId?: string) {
+    return this.prospectService.getStats(req.user as User, restaurantId);
+  }
+
+  @Get('coupons')
+  @RequirePermission(Modules.BASE_DONNEES, Action.READ)
+  @ApiOperation({ summary: 'Suivi des coupons émis' })
+  coupons(@Req() req: Request, @Query('restaurantId') restaurantId?: string) {
+    return this.prospectService.getCoupons(req.user as User, restaurantId);
+  }
+
+  @Get('sales')
+  @RequirePermission(Modules.BASE_DONNEES, Action.READ)
+  @ApiOperation({ summary: 'Ventes générées attribuées' })
+  sales(@Req() req: Request, @Query('restaurantId') restaurantId?: string) {
+    return this.prospectService.getSales(req.user as User, restaurantId);
+  }
+
   @Get()
   @RequirePermission(Modules.BASE_DONNEES, Action.READ)
   @ApiOperation({ summary: 'Liste des contacts (admin), filtrable' })

@@ -1940,9 +1940,13 @@ model Prospect {
   promo_code    PromoCode? @relation(fields: [promo_code_id], references: [id])
 
   called_at      DateTime?
+  joined_at      DateTime? // 1er appel « joint » (pour l'entonnoir « vérifiés »)
   coupon_sent_at DateTime?
   registered_at  DateTime?
   converted_at   DateTime?
+  // Attribution de la 1ʳᵉ vente directe (dénormalisé pour les stats/ventes)
+  first_order_id     String? @db.Uuid
+  first_order_amount Float?
 
   calls    ProspectCall[]
   messages ProspectMessage[]
