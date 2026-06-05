@@ -24,8 +24,14 @@ export class CreateProspectDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   order_number: string;
 
-  @ApiProperty({ description: 'Téléphone ivoirien (10 chiffres)', example: '0700000000' })
-  @Transform(({ value }) => (typeof value === 'string' ? value.replace(/\D/g, '') : value))
+  @ApiProperty({ description: 'Téléphone ivoirien (10 chiffres, +225 accepté)', example: '0700000000' })
+  @Transform(({ value }) => {
+    if (typeof value !== 'string') return value;
+    let d = value.replace(/\D/g, '');
+    if (d.startsWith('00')) d = d.slice(2);
+    if (d.startsWith('225') && d.length === 13) d = d.slice(3); // +225 / 00225 → 10 chiffres locaux
+    return d;
+  })
   @Matches(/^\d{10}$/, { message: 'Le numéro de téléphone doit comporter 10 chiffres' })
   phone: string;
 

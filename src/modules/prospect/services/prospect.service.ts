@@ -391,7 +391,7 @@ export class ProspectService {
         start_date: now,
         expiration_date: expiration,
         is_active: true,
-        restaurant_ids: [prospect.restaurant_id],
+        restaurant_ids: [], // utilisable dans TOUS les restaurants Chicken Nation
         target_type: TargetType.ALL_PRODUCTS,
         created_by: user.id,
       },
