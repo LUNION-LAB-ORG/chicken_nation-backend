@@ -129,4 +129,11 @@ export class ProspectController {
   sendCoupon(@Req() req: Request, @Param('id') id: string) {
     return this.prospectService.sendCoupon(req.user as User, id);
   }
+
+  @Post(':id/coupon/resend')
+  @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
+  @ApiOperation({ summary: 'Renvoyer le SMS du coupon existant' })
+  resendCoupon(@Req() req: Request, @Param('id') id: string) {
+    return this.prospectService.resendCoupon(req.user as User, id);
+  }
 }

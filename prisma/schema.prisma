@@ -1982,6 +1982,7 @@ model ProspectMessage {
   kind        ProspectMessageKind
   rank        Int                 @default(1)
   body        String              @db.Text
+  sms_sent    Boolean             @default(false) // SMS réellement délivré par Twilio ?
   created_at  DateTime            @default(now()) @db.Timestamp(6)
 
   @@index([prospect_id, created_at])

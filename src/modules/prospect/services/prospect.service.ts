@@ -410,6 +410,16 @@ export class ProspectService {
       lien: cfg.appLink,
     });
 
+    // Envoi SMS (E.164 +225) AVANT d'enregistrer le message, pour tracer la délivrance.
+    const sms = await this.twilio.sendSmsMessage({
+      phoneNumber: this.toE164(prospect.phone),
+      message: body,
+    });
+    const smsSent = !!sms;
+    if (!smsSent) {
+      this.logger.warn(`SMS coupon NON envoyé pour ${prospect.phone}`);
+    }
+
     const [updated] = await this.prisma.$transaction([
       this.prisma.prospect.update({
         where: { id },
@@ -426,19 +436,9 @@ export class ProspectService {
         },
       }),
       this.prisma.prospectMessage.create({
-        data: { prospect_id: id, kind, rank, body },
+        data: { prospect_id: id, kind, rank, body, sms_sent: smsSent },
       }),
     ]);
-
-    // Envoi SMS au format E.164 ivoirien (+225 + 10 chiffres). Ne bloque pas le flux.
-    const sms = await this.twilio.sendSmsMessage({
-      phoneNumber: this.toE164(prospect.phone),
-      message: body,
-    });
-    const smsSent = !!sms;
-    if (!smsSent) {
-      this.logger.warn(`SMS coupon NON envoyé pour ${prospect.phone}`);
-    }
 
     return {
       prospect: updated,
@@ -446,6 +446,50 @@ export class ProspectService {
       message: body,
       smsSent,
     };
+  }
+
+  /** Renvoie le SMS du coupon EXISTANT (sans en générer un nouveau). */
+  async resendCoupon(user: User, id: string) {
+    const prospect = await this.prisma.prospect.findUnique({
+      where: { id },
+      include: { promo_code: { select: { code: true } } },
+    });
+    if (!prospect || prospect.entity_status === EntityStatus.DELETED) {
+      throw new NotFoundException('Contact introuvable');
+    }
+    if (this.isStoreUser(user) && prospect.restaurant_id !== user.restaurant_id) {
+      throw new ForbiddenException('Accès non autorisé à ce contact');
+    }
+    if (!prospect.promo_code_id || !prospect.promo_code) {
+      throw new BadRequestException('Aucun coupon à renvoyer pour ce contact.');
+    }
+
+    const cfg = await this.getCouponConfig();
+    const rank =
+      (await this.prisma.prospectMessage.count({ where: { prospect_id: id } })) +
+      1;
+    const kind = this.kindForRank(rank);
+    const body = await this.buildMessageBody(kind, {
+      nom: prospect.name,
+      code: prospect.promo_code.code,
+      validite: cfg.validityDays,
+      lien: cfg.appLink,
+    });
+
+    const sms = await this.twilio.sendSmsMessage({
+      phoneNumber: this.toE164(prospect.phone),
+      message: body,
+    });
+    const smsSent = !!sms;
+    if (!smsSent) {
+      this.logger.warn(`Renvoi SMS coupon NON envoyé pour ${prospect.phone}`);
+    }
+
+    await this.prisma.prospectMessage.create({
+      data: { prospect_id: id, kind, rank, body, sms_sent: smsSent },
+    });
+
+    return { smsSent, message: body, code: prospect.promo_code.code };
   }
 
   // ============================================================
