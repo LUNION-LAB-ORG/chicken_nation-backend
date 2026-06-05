@@ -416,9 +416,9 @@ export class ProspectService {
       message: body,
     });
     const smsSent = !!sms;
-    if (!smsSent) {
-      this.logger.warn(`SMS coupon NON envoyé pour ${prospect.phone}`);
-    }
+    this.logger.log(
+      `SMS coupon → to=${this.toE164(prospect.phone)} accepté=${smsSent} sid=${sms?.sid ?? '-'} statut=${sms?.status ?? '-'} errCode=${sms?.errorCode ?? '-'} errMsg=${sms?.errorMessage ?? '-'}`,
+    );
 
     const [updated] = await this.prisma.$transaction([
       this.prisma.prospect.update({
@@ -481,9 +481,9 @@ export class ProspectService {
       message: body,
     });
     const smsSent = !!sms;
-    if (!smsSent) {
-      this.logger.warn(`Renvoi SMS coupon NON envoyé pour ${prospect.phone}`);
-    }
+    this.logger.log(
+      `Renvoi SMS coupon → to=${this.toE164(prospect.phone)} accepté=${smsSent} sid=${sms?.sid ?? '-'} statut=${sms?.status ?? '-'} errCode=${sms?.errorCode ?? '-'} errMsg=${sms?.errorMessage ?? '-'}`,
+    );
 
     await this.prisma.prospectMessage.create({
       data: { prospect_id: id, kind, rank, body, sms_sent: smsSent },
