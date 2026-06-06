@@ -12,11 +12,14 @@ export class CreateProspectDto {
   @IsEnum(ProspectPlatform, { message: 'Plateforme invalide (GLOVO ou YANGO)' })
   platform: ProspectPlatform;
 
-  @ApiProperty({ description: 'Nom / prénom / pseudo utilisé pour la commande', example: 'Kouamé' })
+  @ApiPropertyOptional({
+    description: 'Nom / prénom / pseudo (optionnel — absent sur Yango)',
+    example: 'Kouamé',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'Le nom est obligatoire' })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  name: string;
+  name?: string;
 
   @ApiProperty({ description: 'Numéro de la commande Glovo/Yango', example: '101672547192' })
   @IsString()

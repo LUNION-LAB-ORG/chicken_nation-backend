@@ -70,7 +70,7 @@ export class ProspectService {
     return this.prisma.prospect.create({
       data: {
         platform: dto.platform,
-        name: dto.name,
+        name: dto.name?.trim() || 'Client', // Yango ne fournit pas de nom
         order_number: dto.order_number,
         phone: dto.phone,
         status: ProspectStatus.NOUVEAU,
@@ -846,8 +846,13 @@ export class ProspectService {
       RELANCE_2_FIDELITE: 'prospect.msg.relance_2',
     };
     const tpl = (await this.settings.get(keyByKind[kind])) || DEFAULT_MESSAGES[kind];
+    // Repli si pas de nom (cas Yango) : évite « Bonjour  ! »
+    const nom =
+      vars.nom && vars.nom.trim() && vars.nom.trim().toLowerCase() !== 'client'
+        ? vars.nom.trim()
+        : 'cher client';
     return tpl
-      .split('{nom}').join(vars.nom)
+      .split('{nom}').join(nom)
       .split('{code_coupon}').join(vars.code)
       .split('{validite}').join(String(vars.validite))
       .split('{lien_app}').join(vars.lien);
