@@ -677,6 +677,9 @@ export class ProspectService {
       'prospect.msg.decouverte',
       'prospect.msg.relance_1',
       'prospect.msg.relance_2',
+      'prospect.scan_engine',
+      'prospect.scan_api_key',
+      'prospect.scan_model',
     ]);
     return {
       coupon_validity_days:
@@ -696,6 +699,9 @@ export class ProspectService {
       msg_relance_1: v['prospect.msg.relance_1'] || DEFAULT_MESSAGES.RELANCE_1,
       msg_relance_2:
         v['prospect.msg.relance_2'] || DEFAULT_MESSAGES.RELANCE_2_FIDELITE,
+      scan_engine: v['prospect.scan_engine'] || 'TESSERACT',
+      scan_api_key: v['prospect.scan_api_key'] || '',
+      scan_model: v['prospect.scan_model'] || '',
     };
   }
 
@@ -717,6 +723,9 @@ export class ProspectService {
     await set('prospect.msg.decouverte', dto.msg_decouverte);
     await set('prospect.msg.relance_1', dto.msg_relance_1);
     await set('prospect.msg.relance_2', dto.msg_relance_2);
+    await set('prospect.scan_engine', dto.scan_engine);
+    await set('prospect.scan_api_key', dto.scan_api_key);
+    await set('prospect.scan_model', dto.scan_model);
     return this.getSettings();
   }
 

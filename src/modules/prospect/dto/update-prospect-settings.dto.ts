@@ -42,4 +42,20 @@ export class UpdateProspectSettingsDto {
   @IsOptional()
   @IsString()
   msg_relance_2?: string;
+
+  // --- Scan de commande (OCR / IA) ---
+  @ApiPropertyOptional({ enum: ['TESSERACT', 'GEMINI', 'OPENAI', 'ANTHROPIC'] })
+  @IsOptional()
+  @IsIn(['TESSERACT', 'GEMINI', 'OPENAI', 'ANTHROPIC'])
+  scan_engine?: string;
+
+  @ApiPropertyOptional({ description: "Clé API du moteur d'IA (vide pour Tesseract)" })
+  @IsOptional()
+  @IsString()
+  scan_api_key?: string;
+
+  @ApiPropertyOptional({ description: 'Modèle IA (optionnel, ex. gpt-4o-mini)' })
+  @IsOptional()
+  @IsString()
+  scan_model?: string;
 }

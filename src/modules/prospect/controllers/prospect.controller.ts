@@ -1,4 +1,20 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+  Req,
+  Res,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { User } from '@prisma/client';
@@ -8,6 +24,7 @@ import { RequirePermission } from 'src/modules/auth/decorators/user-require-perm
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { ProspectService } from '../services/prospect.service';
+import { ProspectScanService } from '../services/prospect-scan.service';
 import { CreateProspectDto } from '../dto/create-prospect.dto';
 import { MarkCallDto } from '../dto/mark-call.dto';
 import { QueryProspectDto } from '../dto/query-prospect.dto';
@@ -18,13 +35,29 @@ import { UpdateProspectSettingsDto } from '../dto/update-prospect-settings.dto';
 @Controller('prospects')
 @UseGuards(JwtAuthGuard, UserPermissionsGuard)
 export class ProspectController {
-  constructor(private readonly prospectService: ProspectService) {}
+  constructor(
+    private readonly prospectService: ProspectService,
+    private readonly scanService: ProspectScanService,
+  ) {}
 
   @Post()
   @RequirePermission(Modules.BASE_DONNEES, Action.CREATE)
   @ApiOperation({ summary: 'Saisir un nouveau contact Glovo/Yango (store)' })
   create(@Req() req: Request, @Body() dto: CreateProspectDto) {
     return this.prospectService.create(req.user as User, dto);
+  }
+
+  @Post('scan')
+  @RequirePermission(Modules.BASE_DONNEES, Action.CREATE)
+  @UseInterceptors(FileInterceptor('image'))
+  @ApiOperation({
+    summary: 'Scanner une capture de commande → champs préremplis (OCR/IA)',
+  })
+  scan(@UploadedFile() image: Express.Multer.File) {
+    if (!image) {
+      throw new BadRequestException('Image requise');
+    }
+    return this.scanService.scan(image.buffer, image.mimetype);
   }
 
   @Get('check-phone')

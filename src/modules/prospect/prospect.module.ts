@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ProspectController } from './controllers/prospect.controller';
 import { ProspectService } from './services/prospect.service';
+import { ProspectScanService } from './services/prospect-scan.service';
 import { ProspectListenerService } from './listeners/prospect-listener.service';
 
 /**
@@ -9,7 +10,7 @@ import { ProspectListenerService } from './listeners/prospect-listener.service';
  */
 @Module({
   controllers: [ProspectController],
-  providers: [ProspectService, ProspectListenerService],
+  providers: [ProspectService, ProspectScanService, ProspectListenerService],
   exports: [ProspectService],
 })
 export class ProspectModule {}
