@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { EntityStatus, OrderStatus, Prisma, SpiceLevel, User } from '@prisma/client';
 import type { Request } from 'express';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
@@ -310,21 +310,15 @@ export class DishService {
   async remove(id: string) {
     const dish = await this.findOne(id);
 
-    const orderItems = await this.prisma.orderItem.findMany({
-      where: { dish_id: id },
-    });
+    // Soft-delete : le plat passe en entity_status=DELETED, ses FK OrderItem restent
+    // valides (Dish reste en base). Inutile de bloquer si des commandes existent —
+    // c'est précisément le cas d'usage du soft-delete : retirer un plat du catalogue
+    // sans casser l'historique.
 
-    if (orderItems.length > 0) {
-      throw new BadRequestException(
-        `Vous ne pouvez pas supprimer le plat ${dish.name} car il est lié à ${orderItems.length} commandes`,
-      );
-    }
-
-    // Nettoyage des exclusions du plat
+    // Nettoyage des exclusions du plat (devenu invisible, plus de sens d'exclure)
     await this.prisma.dishExcludedRestaurant.deleteMany({ where: { dish_id: id } });
     await this.prisma.dishExcludedSupplement.deleteMany({ where: { dish_id: id } });
 
-    // Soft delete
     return this.prisma.dish.update({
       where: { id: dish.id },
       data: { entity_status: EntityStatus.DELETED },
