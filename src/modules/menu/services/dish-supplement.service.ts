@@ -7,7 +7,7 @@ export class DishSupplementService {
   constructor(private prisma: PrismaService) { }
 
   async create(createDishSupplementDto: CreateDishSupplementDto) {
-    return this.prisma.dishSupplement.create({
+    return this.prisma.dishExcludedSupplement.create({
       data: createDishSupplementDto,
       include: {
         dish: true,
@@ -17,7 +17,7 @@ export class DishSupplementService {
   }
 
   async findAll() {
-    return this.prisma.dishSupplement.findMany({
+    return this.prisma.dishExcludedSupplement.findMany({
       include: {
         dish: true,
         supplement: true,
@@ -26,7 +26,7 @@ export class DishSupplementService {
   }
 
   async remove(id: string) {
-    const dishSupplement = await this.prisma.dishSupplement.findUnique({
+    const dishSupplement = await this.prisma.dishExcludedSupplement.findUnique({
       where: { id },
     });
 
@@ -34,13 +34,13 @@ export class DishSupplementService {
       throw new NotFoundException(`Dish-Supplement non trouvé`);
     }
 
-    return this.prisma.dishSupplement.delete({
+    return this.prisma.dishExcludedSupplement.delete({
       where: { id },
     });
   }
 
   async removeByDishAndSupplement(dishId: string, supplementId: string) {
-    return this.prisma.dishSupplement.deleteMany({
+    return this.prisma.dishExcludedSupplement.deleteMany({
       where: {
         dish_id: dishId,
         supplement_id: supplementId,

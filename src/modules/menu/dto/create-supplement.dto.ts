@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { SupplementCategory } from '@prisma/client';
+import { SpiceLevel, SupplementCategory } from '@prisma/client';
 import { Transform } from 'class-transformer';
 import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
@@ -28,6 +28,15 @@ export class CreateSupplementDto {
     @IsNotEmpty()
     @IsEnum(SupplementCategory)
     category: SupplementCategory;
+
+    @ApiPropertyOptional({
+        enum: SpiceLevel,
+        description: 'Niveau épicé du supplément : ALWAYS (toujours), OPTIONAL (au choix), NEVER (jamais)',
+        example: SpiceLevel.NEVER,
+    })
+    @IsOptional()
+    @IsEnum(SpiceLevel)
+    spice_level?: SpiceLevel;
 
     @ApiPropertyOptional({ description: 'SKU HubRise pour la correspondance catalogue' })
     @IsOptional()

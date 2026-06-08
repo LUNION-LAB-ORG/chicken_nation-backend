@@ -182,13 +182,6 @@ export class OrderHelper {
         id: { in: dishIds },
         entity_status: EntityStatus.ACTIVE,
       },
-      include: {
-        dish_supplements: {
-          include: {
-            supplement: true,
-          },
-        },
-      },
     });
 
     if (dishes.length !== dishIds.length) {
@@ -291,8 +284,9 @@ export class OrderHelper {
           where: {
             id: { in: supplementIds },
             available: true,
-            dish_supplements: {
-              some: {
+            // Modèle exclusion : supplément autorisé = NON exclu de ce plat.
+            dish_excluded_supplements: {
+              none: {
                 dish_id: dish.id,
               },
             },
@@ -862,8 +856,8 @@ export class OrderHelper {
         order_items: {
           some: {
             dish: {
-              dish_restaurants: {
-                some: {
+              dish_excluded_restaurants: {
+                none: {
                   restaurant_id: restaurantId,
                 },
               },

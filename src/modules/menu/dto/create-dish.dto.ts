@@ -1,6 +1,7 @@
-import { IsBoolean, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { SpiceLevel } from '@prisma/client';
 
 export class CreateDishDto {
   @ApiProperty({ description: 'Nom du plat' })
@@ -32,11 +33,19 @@ export class CreateDishDto {
   @Transform(({ value }) => String(value).trim() == "true" ? true : false)
   is_promotion?: boolean = false;
 
-  @ApiPropertyOptional({ description: 'Est-ce que le plat est toujours épicé ?' })
+  @ApiPropertyOptional({ description: 'Est-ce que le plat est toujours épicé ? (déprécié : voir spice_level)' })
   @IsOptional()
   @IsBoolean()
   @Transform(({ value }) => String(value).trim() == "true" ? true : false)
   is_alway_epice?: boolean = false;
+
+  @ApiPropertyOptional({
+    description: 'Niveau épicé : ALWAYS (toujours épicé, badge), OPTIONAL (au choix du client), NEVER (jamais)',
+    enum: SpiceLevel,
+  })
+  @IsOptional()
+  @IsEnum(SpiceLevel)
+  spice_level?: SpiceLevel;
 
   @ApiPropertyOptional({ description: 'Prix de promotion du plat' })
   @IsOptional()
@@ -65,6 +74,25 @@ export class CreateDishDto {
   @IsOptional()
   @IsUUID(undefined, { each: true })
   supplement_ids?: string[];
+
+  // ===== Modèle "tout par défaut − exclusions" =====
+  // Par défaut un plat propose TOUS les suppléments et est vendu dans TOUS les
+  // restaurants. Ces listes contiennent les EXCLUSIONS (ce qu'on retire).
+  @ApiPropertyOptional({ description: "IDs des restaurants où le plat N'est PAS vendu (exclusions)", example: ['123'] })
+  @IsOptional()
+  @IsUUID(undefined, { each: true })
+  excluded_restaurant_ids?: string[];
+
+  @ApiPropertyOptional({ description: 'IDs des suppléments NON proposés par le plat (exclusions)', example: ['123'] })
+  @IsOptional()
+  @IsUUID(undefined, { each: true })
+  excluded_supplement_ids?: string[];
+
+  @ApiPropertyOptional({ description: "Remplacer entièrement les exclusions (même vides) lors d'un update" })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => String(value).trim() == "true" ? true : false)
+  manage_exclusions?: boolean;
 
   @ApiPropertyOptional({ description: "Si le plat est privée" })
   @IsOptional()

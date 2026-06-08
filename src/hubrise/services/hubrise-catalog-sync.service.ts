@@ -224,9 +224,9 @@ export class HubriseCatalogSyncService {
           select: { id: true },
         });
 
-        // Associer le plat au restaurant
-        await this.prisma.dishRestaurant.create({
-          data: {
+        // Associer le plat au restaurant = s'assurer qu'il N'est PAS exclu (modèle exclusion)
+        await this.prisma.dishExcludedRestaurant.deleteMany({
+          where: {
             dish_id: created.id,
             restaurant_id: restaurantId,
           },
@@ -303,7 +303,7 @@ export class HubriseCatalogSyncService {
     const dishes = await this.prisma.dish.findMany({
       where: {
         entity_status: EntityStatus.ACTIVE,
-        dish_restaurants: { some: { restaurant_id: restaurantId } },
+        dish_excluded_restaurants: { none: { restaurant_id: restaurantId } },
       },
       include: { category: { select: { reference: true } } },
     });
@@ -439,7 +439,7 @@ export class HubriseCatalogSyncService {
     const cnDishes = await this.prisma.dish.findMany({
       where: {
         entity_status: EntityStatus.ACTIVE,
-        dish_restaurants: { some: { restaurant_id: restaurantId } },
+        dish_excluded_restaurants: { none: { restaurant_id: restaurantId } },
       },
       select: { id: true, name: true, reference: true, price: true, category: { select: { name: true } } },
     });

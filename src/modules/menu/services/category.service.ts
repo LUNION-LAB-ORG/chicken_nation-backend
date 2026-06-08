@@ -89,13 +89,6 @@ export class CategoryService {
           orderBy: {
             created_at: 'desc',
           },
-          include: {
-            dish_supplements: {
-              include: {
-                supplement: true,
-              },
-            },
-          },
         },
       },
     });

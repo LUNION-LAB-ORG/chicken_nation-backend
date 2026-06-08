@@ -115,11 +115,6 @@ export class OrderV2Helper {
         id: { in: dishIds },
         entity_status: EntityStatus.ACTIVE,
       },
-      include: {
-        dish_supplements: {
-          include: { supplement: true },
-        },
-      },
     });
 
     if (dishes.length !== dishIds.length) {
@@ -156,7 +151,7 @@ export class OrderV2Helper {
       const availableDishesCount = await this.prisma.dish.count({
         where: {
           id: { in: dishIds },
-          dish_restaurants: { some: { restaurant_id: r.id } },
+          dish_excluded_restaurants: { none: { restaurant_id: r.id } },
         },
       });
 
@@ -205,7 +200,7 @@ export class OrderV2Helper {
     const availableDishesCount = await this.prisma.dish.count({
       where: {
         id: { in: dishIds },
-        dish_restaurants: { some: { restaurant_id: restaurant.id } },
+        dish_excluded_restaurants: { none: { restaurant_id: restaurant.id } },
       },
     });
 

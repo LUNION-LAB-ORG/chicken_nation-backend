@@ -210,7 +210,6 @@ export class RestaurantService {
       },
       include: {
         users: true,
-        dish_restaurants: true,
       },
     });
 

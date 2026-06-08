@@ -32,6 +32,6 @@ import { DishNotificationsTemplate } from './templates/dish-notifications.templa
     CategoryNotificationsTemplate,
     DishNotificationsTemplate,
   ],
-  exports: [DishRestaurantService],
+  exports: [DishRestaurantService, DishService],
 })
 export class MenuModule { }

@@ -32,6 +32,12 @@ enum OrderType {
   TABLE // TABLE
 }
 
+enum SpiceLevel {
+  ALWAYS // Toujours épicé (badge, aucun choix)
+  OPTIONAL // Au choix du client (toggle épicé / non épicé)
+  NEVER // Jamais épicé (aucun affichage)
+}
+
 enum OrderStatus {
   PENDING // EN ATTENTE
   CANCELLED // ANNULÉ
@@ -844,6 +850,7 @@ model Dish {
   image            String?          @db.Text
   is_promotion     Boolean          @default(false)
   is_alway_epice   Boolean          @default(false)
+  spice_level      SpiceLevel       @default(OPTIONAL)
   promotion_price  Float?
   category_id      String           @db.Uuid
   cooking_time     Int?             @db.Integer // en minutes
@@ -1184,6 +1191,7 @@ model Supplement {
   image            String?            @db.Text
   available        Boolean            @default(true)
   category         SupplementCategory
+  spice_level      SpiceLevel         @default(NEVER)
   hubrise_sku      String?            @unique @db.VarChar
   dish_excluded_supplements DishExcludedSupplement[]
 }

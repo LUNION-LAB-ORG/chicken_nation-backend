@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Dish, EntityStatus, OrderStatus, Prisma, User } from '@prisma/client';
+import { EntityStatus, OrderStatus, Prisma, SpiceLevel, User } from '@prisma/client';
 import type { Request } from 'express';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -29,13 +29,87 @@ export class DishService {
     });
   }
 
+  private normalizeIds(value?: string[] | string): string[] {
+    if (!value) return [];
+    return typeof value === 'string' ? [value] : value;
+  }
+
+  /**
+   * Modèle "tout par défaut − exclusions".
+   * Pour chaque plat, calcule l'effectif = (tous les suppléments / tous les restaurants
+   * actifs) MOINS les exclusions du plat, et renvoie ces ensembles sous les MÊMES champs
+   * `dish_supplements: [{ supplement }]` / `dish_restaurants: [{ restaurant }]` qu'avant
+   * (compatibilité apps). Joint aussi les ids exclus (pour le backoffice).
+   */
+  private async withEffective<T extends { id: string }>(dishes: T[]) {
+    if (dishes.length === 0) return [] as (T & {
+      dish_supplements: { supplement: unknown }[];
+      dish_restaurants: { restaurant: unknown }[];
+      excluded_supplement_ids: string[];
+      excluded_restaurant_ids: string[];
+    })[];
+
+    const dishIds = dishes.map((d) => d.id);
+    const [allSupplements, allRestaurants, exclSupp, exclResto] = await Promise.all([
+      this.prisma.supplement.findMany(),
+      this.prisma.restaurant.findMany({ where: { entity_status: EntityStatus.ACTIVE } }),
+      this.prisma.dishExcludedSupplement.findMany({ where: { dish_id: { in: dishIds } } }),
+      this.prisma.dishExcludedRestaurant.findMany({ where: { dish_id: { in: dishIds } } }),
+    ]);
+
+    const suppExclByDish = new Map<string, Set<string>>();
+    for (const e of exclSupp) {
+      let set = suppExclByDish.get(e.dish_id);
+      if (!set) { set = new Set(); suppExclByDish.set(e.dish_id, set); }
+      set.add(e.supplement_id);
+    }
+    const restoExclByDish = new Map<string, Set<string>>();
+    for (const e of exclResto) {
+      let set = restoExclByDish.get(e.dish_id);
+      if (!set) { set = new Set(); restoExclByDish.set(e.dish_id, set); }
+      set.add(e.restaurant_id);
+    }
+
+    return dishes.map((d) => {
+      const sExcl = suppExclByDish.get(d.id) ?? new Set<string>();
+      const rExcl = restoExclByDish.get(d.id) ?? new Set<string>();
+      return {
+        ...d,
+        dish_supplements: allSupplements
+          .filter((s) => !sExcl.has(s.id))
+          .map((supplement) => ({ supplement })),
+        dish_restaurants: allRestaurants
+          .filter((r) => !rExcl.has(r.id))
+          .map((restaurant) => ({ restaurant })),
+        excluded_supplement_ids: [...sExcl],
+        excluded_restaurant_ids: [...rExcl],
+      };
+    });
+  }
+
   async create(req: Request, createDishDto: CreateDishDto, image?: Express.Multer.File) {
     const user = req.user as User;
-    const { restaurant_ids, supplement_ids, ...dishData } = createDishDto;
+    // On retire les anciens champs (restaurant_ids/supplement_ids, désormais ignorés)
+    // et les nouvelles listes d'exclusions du payload destiné à la table Dish.
+    const {
+      restaurant_ids,
+      supplement_ids,
+      excluded_restaurant_ids,
+      excluded_supplement_ids,
+      manage_exclusions,
+      ...dishData
+    } = createDishDto;
+    void restaurant_ids;
+    void supplement_ids;
+    void manage_exclusions;
+
+    // Garde l'ancien booléen cohérent avec le nouvel état 3 valeurs (compat app/web).
+    if (dishData.spice_level !== undefined) {
+      dishData.is_alway_epice = dishData.spice_level === SpiceLevel.ALWAYS;
+    }
 
     const uploadResult = await this.uploadImage(image);
 
-    // Créer le plat de base
     const dish = await this.prisma.dish.create({
       data: {
         ...dishData,
@@ -45,40 +119,24 @@ export class DishService {
       },
     });
 
-    // Ajouter les restaurants si fournis
-    if (restaurant_ids) {
-      let restaurants = restaurant_ids;
-      if (typeof restaurant_ids === 'string') {
-        restaurants = [restaurant_ids];
-      }
-      await this.prisma.dishRestaurant.createMany({
-        data: restaurants.map((restaurant_id) => ({
-          dish_id: dish.id,
-          restaurant_id,
-        })),
+    // Enregistrer les exclusions (ce que le plat NE propose PAS / où il N'est PAS vendu)
+    const exclSupp = this.normalizeIds(excluded_supplement_ids);
+    if (exclSupp.length) {
+      await this.prisma.dishExcludedSupplement.createMany({
+        data: exclSupp.map((supplement_id) => ({ dish_id: dish.id, supplement_id })),
+        skipDuplicates: true,
+      });
+    }
+    const exclResto = this.normalizeIds(excluded_restaurant_ids);
+    if (exclResto.length) {
+      await this.prisma.dishExcludedRestaurant.createMany({
+        data: exclResto.map((restaurant_id) => ({ dish_id: dish.id, restaurant_id })),
+        skipDuplicates: true,
       });
     }
 
-    // Ajouter les suppléments si fournis
-    if (supplement_ids) {
-      let supplements = supplement_ids;
-      if (typeof supplement_ids === 'string') {
-        supplements = [supplement_ids];
-      }
-      await this.prisma.dishSupplement.createMany({
-        data: supplements.map((supplement_id) => ({
-          dish_id: dish.id,
-          supplement_id,
-        })),
-      });
-    }
-
-    // Émettre l'événement de création de plat
     this.dishEvent.createDish({
-      actor: {
-        ...user,
-        restaurant: null,
-      },
+      actor: { ...user, restaurant: null },
       dish,
     });
 
@@ -86,37 +144,23 @@ export class DishService {
   }
 
   async findAll(query: { all: boolean } = { all: false }) {
-    return this.prisma.dish.findMany({
+    const dishes = await this.prisma.dish.findMany({
       where: {
         private: query.all ? undefined : false,
         entity_status: EntityStatus.ACTIVE,
       },
-      include: {
-        category: true,
-        dish_restaurants: {
-          include: {
-            restaurant: true,
-          },
-        },
-        dish_supplements: {
-          include: {
-            supplement: true,
-          },
-        },
-      },
-      orderBy: {
-        name: 'asc',
-      },
+      include: { category: true },
+      orderBy: { name: 'asc' },
     });
+    return this.withEffective(dishes);
   }
 
-  async findMany(filter: QueryDishDto): Promise<QueryResponseDto<Dish>> {
+  async findMany(filter: QueryDishDto): Promise<QueryResponseDto<unknown>> {
     const { search, status, categoryId, minPrice, maxPrice, page = 1, limit = 10, sortBy = "name", sortOrder = "asc" } = filter;
 
     const where: Prisma.DishWhereInput = {
       entity_status: EntityStatus.ACTIVE,
     };
-    //  name ou description
     if (search) {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
@@ -130,43 +174,24 @@ export class DishService {
       where.category_id = categoryId;
     }
     if (minPrice) {
-      where.price = {
-        gte: minPrice,
-      };
+      where.price = { gte: minPrice };
     }
     if (maxPrice) {
-      where.price = {
-        lte: maxPrice,
-      };
+      where.price = { lte: maxPrice };
     }
 
-    const [count, dishes] = await Promise.all([
-      this.prisma.dish.count({
-        where,
-      }),
+    const [count, dishesRaw] = await Promise.all([
+      this.prisma.dish.count({ where }),
       this.prisma.dish.findMany({
         where,
-        include: {
-          category: true,
-          dish_restaurants: {
-            include: {
-              restaurant: true,
-            },
-          },
-          dish_supplements: {
-            include: {
-              supplement: true,
-            },
-          },
-        },
-        orderBy: {
-          // name: 'asc',
-          [sortBy]: sortOrder,
-        },
+        include: { category: true },
+        orderBy: { [sortBy]: sortOrder },
         skip: (page - 1) * limit,
         take: limit,
       }),
     ]);
+
+    const dishes = await this.withEffective(dishesRaw);
 
     return {
       data: dishes,
@@ -180,30 +205,13 @@ export class DishService {
   }
 
   async findOne(id: string, customerId?: string) {
-
-    const whereCondition = id.length > 10
-      ? { id }
-      : { reference: id };
+    const whereCondition = id.length > 10 ? { id } : { reference: id };
 
     const dish = await this.prisma.dish.findFirst({
       where: whereCondition,
       include: {
         category: true,
-        favorites: {
-          select: {
-            customer_id: true,
-          }
-        },
-        dish_restaurants: {
-          include: {
-            restaurant: true,
-          },
-        },
-        dish_supplements: {
-          include: {
-            supplement: true,
-          },
-        },
+        favorites: { select: { customer_id: true } },
       },
     });
 
@@ -211,39 +219,99 @@ export class DishService {
       throw new NotFoundException(`Plat non trouvée`);
     }
 
+    const [withEff] = await this.withEffective([dish]);
     const isFavorite = customerId ? dish.favorites.some((favorite) => favorite.customer_id === customerId) : false;
-    return { ...dish, isFavorite };
+    return { ...withEff, isFavorite };
+  }
+
+  /**
+   * Plats vendus dans un restaurant = plats actifs non privés qui NE sont PAS exclus
+   * de ce restaurant (avec leurs suppléments effectifs).
+   */
+  async findByRestaurant(restaurantId: string) {
+    const excluded = await this.prisma.dishExcludedRestaurant.findMany({
+      where: { restaurant_id: restaurantId },
+      select: { dish_id: true },
+    });
+    const excludedDishIds = excluded.map((e) => e.dish_id);
+
+    const dishes = await this.prisma.dish.findMany({
+      where: {
+        entity_status: EntityStatus.ACTIVE,
+        private: false,
+        ...(excludedDishIds.length ? { id: { notIn: excludedDishIds } } : {}),
+      },
+      include: { category: true },
+      orderBy: { name: 'asc' },
+    });
+
+    return this.withEffective(dishes);
   }
 
   async update(req: Request, id: string, updateDishDto: UpdateDishDto, image?: Express.Multer.File) {
     const user = req.user as User;
+    void user;
     const dish = await this.findOne(id);
 
     const uploadResult = await this.uploadImage(image);
 
+    const {
+      restaurant_ids,
+      supplement_ids,
+      excluded_restaurant_ids,
+      excluded_supplement_ids,
+      manage_exclusions,
+      ...dishData
+    } = updateDishDto;
+    void restaurant_ids;
+    void supplement_ids;
+
+    // Garde l'ancien booléen cohérent avec le nouvel état 3 valeurs (compat app/web).
+    if (dishData.spice_level !== undefined) {
+      dishData.is_alway_epice = dishData.spice_level === SpiceLevel.ALWAYS;
+    }
+
     const dishUpdated = await this.prisma.dish.update({
       where: { id: dish.id },
       data: {
-        ...updateDishDto,
-        image: uploadResult?.key ?? updateDishDto.image,
+        ...dishData,
+        image: uploadResult?.key ?? dishData.image,
       },
     });
 
-    // Émettre l'événement de mise à jour de plat
+    // Remplacement complet des exclusions si géré explicitement (manage_exclusions)
+    // ou si une liste est fournie. manage_exclusions permet aussi de TOUT effacer (liste vide).
+    if (manage_exclusions || excluded_supplement_ids !== undefined) {
+      const ids = this.normalizeIds(excluded_supplement_ids);
+      await this.prisma.dishExcludedSupplement.deleteMany({ where: { dish_id: dish.id } });
+      if (ids.length) {
+        await this.prisma.dishExcludedSupplement.createMany({
+          data: ids.map((supplement_id) => ({ dish_id: dish.id, supplement_id })),
+          skipDuplicates: true,
+        });
+      }
+    }
+    if (manage_exclusions || excluded_restaurant_ids !== undefined) {
+      const ids = this.normalizeIds(excluded_restaurant_ids);
+      await this.prisma.dishExcludedRestaurant.deleteMany({ where: { dish_id: dish.id } });
+      if (ids.length) {
+        await this.prisma.dishExcludedRestaurant.createMany({
+          data: ids.map((restaurant_id) => ({ dish_id: dish.id, restaurant_id })),
+          skipDuplicates: true,
+        });
+      }
+    }
+
     this.dishEvent.updateDish(dishUpdated);
 
-    return dishUpdated;
+    return this.findOne(dish.id);
   }
 
   async remove(id: string) {
-    // Vérifier si le plat existe
     const dish = await this.findOne(id);
 
-    // Vérifier si le plat est lié à des commandes
     const orderItems = await this.prisma.orderItem.findMany({
-      where: {
-        dish_id: id,
-      },
+      where: { dish_id: id },
     });
 
     if (orderItems.length > 0) {
@@ -252,26 +320,14 @@ export class DishService {
       );
     }
 
-    // Supprimer les relations avec les restaurants
-    await this.prisma.dishRestaurant.deleteMany({
-      where: {
-        dish_id: id,
-      },
-    });
+    // Nettoyage des exclusions du plat
+    await this.prisma.dishExcludedRestaurant.deleteMany({ where: { dish_id: id } });
+    await this.prisma.dishExcludedSupplement.deleteMany({ where: { dish_id: id } });
 
-    // Supprimer les relations avec les suppléments
-    await this.prisma.dishSupplement.deleteMany({
-      where: {
-        dish_id: id,
-      },
-    });
-
-    // Supprimer le plat (soft delete)
+    // Soft delete
     return this.prisma.dish.update({
       where: { id: dish.id },
-      data: {
-        entity_status: EntityStatus.DELETED,
-      },
+      data: { entity_status: EntityStatus.DELETED },
     });
   }
 
@@ -279,7 +335,6 @@ export class DishService {
     const dateLimit = new Date();
     dateLimit.setDate(dateLimit.getDate() - days);
 
-    // 1. Récupérer les IDs des commandes valides sur la période
     const recentOrders = await this.prisma.order.findMany({
       where: {
         created_at: { gte: dateLimit },
@@ -289,48 +344,32 @@ export class DishService {
     });
 
     const orderIds = recentOrders.map((order) => order.id);
-
     if (orderIds.length === 0) return [];
 
-    // 2. Agréger les quantités vendues pour ces commandes
     const popularItems = await this.prisma.orderItem.groupBy({
       by: ['dish_id'],
-      _sum: {
-        quantity: true,
-      },
-      where: {
-        order_id: { in: orderIds },
-      },
-      orderBy: {
-        _sum: { quantity: 'desc' },
-      },
+      _sum: { quantity: true },
+      where: { order_id: { in: orderIds } },
+      orderBy: { _sum: { quantity: 'desc' } },
       take: limit,
     });
 
     if (popularItems.length === 0) return [];
 
-    // 3. Récupérer les détails complets des plats populaires
     const dishIds = popularItems.map((item) => item.dish_id);
     const dishes = await this.prisma.dish.findMany({
       where: {
         id: { in: dishIds },
         entity_status: EntityStatus.ACTIVE,
       },
-      include: {
-        category: true,
-      },
+      include: { category: true },
     });
 
-    // 4. Réordonner les plats pour respecter le classement décroissant et formater le retour
     return popularItems
       .map((item) => {
         const dish = dishes.find((d) => d.id === item.dish_id);
         if (!dish) return null;
-
-        return {
-          ...dish,
-          total_sold: item._sum.quantity,
-        };
+        return { ...dish, total_sold: item._sum.quantity };
       })
       .filter(Boolean);
   }

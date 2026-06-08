@@ -7,7 +7,7 @@ export class DishRestaurantService {
   constructor(private prisma: PrismaService) { }
 
   async create(createDishRestaurantDto: CreateDishRestaurantDto) {
-    return this.prisma.dishRestaurant.create({
+    return this.prisma.dishExcludedRestaurant.create({
       data: createDishRestaurantDto,
       include: {
         dish: true,
@@ -17,7 +17,7 @@ export class DishRestaurantService {
   }
 
   async findAll() {
-    return this.prisma.dishRestaurant.findMany({
+    return this.prisma.dishExcludedRestaurant.findMany({
       include: {
         dish: true,
         restaurant: true,
@@ -26,7 +26,7 @@ export class DishRestaurantService {
   }
 
   async findByDish(dishId: string) {
-    return this.prisma.dishRestaurant.findMany({
+    return this.prisma.dishExcludedRestaurant.findMany({
       where: {
         dish_id: dishId,
       },
@@ -37,7 +37,7 @@ export class DishRestaurantService {
   }
 
   async findByRestaurant(restaurantId: string) {
-    return this.prisma.dishRestaurant.findMany({
+    return this.prisma.dishExcludedRestaurant.findMany({
       where: {
         restaurant_id: restaurantId,
       },
@@ -52,7 +52,7 @@ export class DishRestaurantService {
   }
 
   async remove(id: string) {
-    const dishRestaurant = await this.prisma.dishRestaurant.findUnique({
+    const dishRestaurant = await this.prisma.dishExcludedRestaurant.findUnique({
       where: { id },
     });
 
@@ -60,13 +60,13 @@ export class DishRestaurantService {
       throw new NotFoundException(`Dish-Restaurant non trouvé`);
     }
 
-    return this.prisma.dishRestaurant.delete({
+    return this.prisma.dishExcludedRestaurant.delete({
       where: { id },
     });
   }
 
   async removeByDishAndRestaurant(dishId: string, restaurantId: string) {
-    return this.prisma.dishRestaurant.deleteMany({
+    return this.prisma.dishExcludedRestaurant.deleteMany({
       where: {
         dish_id: dishId,
         restaurant_id: restaurantId,
