@@ -51,7 +51,7 @@ export class DishService {
 
     const dishIds = dishes.map((d) => d.id);
     const [allSupplements, allRestaurants, exclSupp, exclResto] = await Promise.all([
-      this.prisma.supplement.findMany(),
+      this.prisma.supplement.findMany({ where: { available: true } }),
       this.prisma.restaurant.findMany({ where: { entity_status: EntityStatus.ACTIVE } }),
       this.prisma.dishExcludedSupplement.findMany({ where: { dish_id: { in: dishIds } } }),
       this.prisma.dishExcludedRestaurant.findMany({ where: { dish_id: { in: dishIds } } }),

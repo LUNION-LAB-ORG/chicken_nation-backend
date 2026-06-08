@@ -73,7 +73,10 @@ export class OrderService {
 
 
     // Ton algorithme ajusté !
-    const { orderItems, netAmount, totalDishes } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails);
+    // On passe `type` pour faire respecter `available_order_types` côté serveur :
+    // un plat marqué "pas à livrer" ne doit pas pouvoir être commandé en DELIVERY
+    // même via payload direct.
+    const { orderItems, netAmount, totalDishes } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails, type);
 
     // Pour le ciblage par plat/catégorie d'un code promo, on transmet la liste
     // simplifiée des items (dish_id, quantity, prix unitaire). Le prix retenu est
@@ -1146,9 +1149,13 @@ export class OrderService {
         },
       });
 
-      // Calculer les détails de la commande
+      // Calculer les détails de la commande.
+      // skipExclusionCheck : on édite une commande existante — un supplément
+      // acheté légitimement avant d'être exclu du plat doit pouvoir être conservé.
       const { orderItems, netAmount } =
-        await this.orderHelper.calculateOrderDetails(items, dishes);
+        await this.orderHelper.calculateOrderDetails(items, dishes, {
+          skipExclusionCheck: true,
+        });
 
       orderItemsData = orderItems.map((item) => ({
         dish_id: item.dish_id,

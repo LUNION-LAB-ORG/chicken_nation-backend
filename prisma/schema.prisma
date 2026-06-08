@@ -851,6 +851,10 @@ model Dish {
   is_promotion     Boolean          @default(false)
   is_alway_epice   Boolean          @default(false)
   spice_level      SpiceLevel       @default(OPTIONAL)
+  available_order_types OrderType[]  @default([DELIVERY, PICKUP, TABLE])
+  // Créneau horaire de disponibilité « HH:mm » (NULL = toujours disponible)
+  available_from   String?          @db.VarChar
+  available_until  String?          @db.VarChar
   promotion_price  Float?
   category_id      String           @db.Uuid
   cooking_time     Int?             @db.Integer // en minutes
@@ -1192,6 +1196,7 @@ model Supplement {
   available        Boolean            @default(true)
   category         SupplementCategory
   spice_level      SpiceLevel         @default(NEVER)
+  available_order_types OrderType[]   @default([DELIVERY, PICKUP, TABLE])
   hubrise_sku      String?            @unique @db.VarChar
   dish_excluded_supplements DishExcludedSupplement[]
 }

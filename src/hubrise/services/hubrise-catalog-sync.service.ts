@@ -155,7 +155,8 @@ export class HubriseCatalogSyncService {
 
   /**
    * Synchronise les plats HubRise dans CN.
-   * Associe chaque plat à son restaurant via DishRestaurant.
+   * Modèle exclusion : s'assurer que chaque plat créé n'est PAS exclu de son
+   * restaurant (suppression de la ligne DishExcludedRestaurant le cas échéant).
    */
   private async syncDishes(
     dishes: MappedDish[],
@@ -303,6 +304,9 @@ export class HubriseCatalogSyncService {
     const dishes = await this.prisma.dish.findMany({
       where: {
         entity_status: EntityStatus.ACTIVE,
+        // Ne JAMAIS pousser les plats privés (menus internes) vers HubRise :
+        // ils deviendraient commandables sur les canaux externes (Deliveroo/UberEats).
+        private: false,
         dish_excluded_restaurants: { none: { restaurant_id: restaurantId } },
       },
       include: { category: { select: { reference: true } } },
@@ -436,9 +440,11 @@ export class HubriseCatalogSyncService {
     });
 
     // 3. Récupérer les plats CN du restaurant (sans référence ou avec référence)
+    // Idem pushCatalog : on n'expose pas les plats privés au matching HubRise.
     const cnDishes = await this.prisma.dish.findMany({
       where: {
         entity_status: EntityStatus.ACTIVE,
+        private: false,
         dish_excluded_restaurants: { none: { restaurant_id: restaurantId } },
       },
       select: { id: true, name: true, reference: true, price: true, category: { select: { name: true } } },

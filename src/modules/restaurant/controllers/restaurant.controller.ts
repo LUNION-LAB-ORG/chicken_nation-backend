@@ -22,7 +22,6 @@ import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
-import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
 import { DishService } from 'src/modules/menu/services/dish.service';
 import { CreateRestaurantDto } from 'src/modules/restaurant/dto/create-restaurant.dto';
 import { UpdateRestaurantDto } from 'src/modules/restaurant/dto/update-restaurant.dto';
@@ -35,7 +34,6 @@ import { RestaurantService } from 'src/modules/restaurant/services/restaurant.se
 export class RestaurantController {
   constructor(
     private readonly restaurantService: RestaurantService,
-    private readonly dishRestaurantService: DishRestaurantService,
     private readonly dishService: DishService,
   ) { }
 

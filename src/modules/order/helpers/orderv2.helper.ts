@@ -142,6 +142,11 @@ export class OrderV2Helper {
       apikey: string | null;
     }[] = [];
 
+    // Dédup : l'app crée une ligne distincte par (dish + epice + supplements),
+    // donc dishIds peut contenir le même dish_id plusieurs fois. Le count Prisma
+    // est distinct par défaut, il faut comparer à uniqueDishIds.length.
+    const uniqueDishIds = [...new Set(dishIds)];
+
     // b. Filtrer : Ouverts + Possèdent TOUS les plats
     for (const r of restaurants) {
       const schedule = JSON.parse(r.schedule?.toString() ?? '[]');
@@ -150,12 +155,12 @@ export class OrderV2Helper {
       // On compte si ce restaurant possède bien les X plats demandés
       const availableDishesCount = await this.prisma.dish.count({
         where: {
-          id: { in: dishIds },
+          id: { in: uniqueDishIds },
           dish_excluded_restaurants: { none: { restaurant_id: r.id } },
         },
       });
 
-      if (availableDishesCount === dishIds.length) {
+      if (availableDishesCount === uniqueDishIds.length) {
         eligibleRestaurants.push(r);
       }
     }
@@ -196,15 +201,19 @@ export class OrderV2Helper {
       throw new BadRequestException(`Le restaurant ${restaurant.name} est actuellement fermé.`);
     }
 
-    // Vérifier l'inventaire de ce restaurant spécifique
+    // Vérifier l'inventaire de ce restaurant spécifique.
+    // Dédup : dishIds peut contenir le même dish_id plusieurs fois (épicé / non-épicé,
+    // suppléments différents). Le count Prisma est distinct, on compare donc à
+    // uniqueDishIds.length pour éviter de bloquer à tort.
+    const uniqueDishIds = [...new Set(dishIds)];
     const availableDishesCount = await this.prisma.dish.count({
       where: {
-        id: { in: dishIds },
+        id: { in: uniqueDishIds },
         dish_excluded_restaurants: { none: { restaurant_id: restaurant.id } },
       },
     });
 
-    if (availableDishesCount !== dishIds.length) {
+    if (availableDishesCount !== uniqueDishIds.length) {
       throw new BadRequestException(`Le restaurant ${restaurant.name} ne dispose pas de tous les plats sélectionnés pour le moment.`);
     }
 
@@ -212,7 +221,7 @@ export class OrderV2Helper {
   }
 
   // Calculer les détails de la commande avec précision (Quantités + Suppléments)
-  async calculateOrderDetails(items: OrderItemDto[], dishes: Dish[]) {
+  async calculateOrderDetails(items: OrderItemDto[], dishes: Dish[], type?: OrderType) {
     let netAmount = 0;
     const orderItems: any[] = [];
 
@@ -221,6 +230,20 @@ export class OrderV2Helper {
 
       if (!dish) {
         throw new BadRequestException('Un ou plusieurs plats sont introuvables.');
+      }
+
+      // Bloquer côté serveur si le plat n'est pas disponible pour ce mode de commande
+      // (le garde-fou app est insuffisant : payload direct ou items legacy sans champ).
+      if (type && Array.isArray(dish.available_order_types) && dish.available_order_types.length > 0
+          && !dish.available_order_types.includes(type)) {
+        const labels: Partial<Record<OrderType, string>> = {
+          [OrderType.DELIVERY]: 'à livrer',
+          [OrderType.PICKUP]: 'à emporter',
+          [OrderType.TABLE]: 'sur place',
+        };
+        throw new BadRequestException(
+          `Le plat « ${dish.name} » n'est pas disponible ${labels[type] ?? 'pour ce mode de commande'}.`,
+        );
       }
 
       let supplementsTotal = 0;
@@ -234,6 +257,9 @@ export class OrderV2Helper {
           where: {
             id: { in: supplementIds },
             available: true,
+            // Modèle exclusion : un supplément ne peut être commandé pour un plat
+            // que s'il n'est PAS exclu de ce plat (parité avec la v1).
+            dish_excluded_supplements: { none: { dish_id: dish.id } },
           },
         });
 

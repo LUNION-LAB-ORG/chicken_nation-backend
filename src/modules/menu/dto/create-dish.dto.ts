@@ -1,7 +1,7 @@
-import { IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { SpiceLevel } from '@prisma/client';
+import { OrderType, SpiceLevel } from '@prisma/client';
 
 export class CreateDishDto {
   @ApiProperty({ description: 'Nom du plat' })
@@ -46,6 +46,34 @@ export class CreateDishDto {
   @IsOptional()
   @IsEnum(SpiceLevel)
   spice_level?: SpiceLevel;
+
+  @ApiPropertyOptional({
+    enum: OrderType,
+    isArray: true,
+    description: "Modes de commande où le plat est disponible (défaut : tous). DELIVERY absent = « Pas à livrer ».",
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'string') return value.split(',').map((v) => v.trim()).filter(Boolean);
+    return value;
+  })
+  @IsArray()
+  @IsEnum(OrderType, { each: true })
+  available_order_types?: OrderType[];
+
+  @ApiPropertyOptional({ description: "Heure de début de disponibilité « HH:mm » (vide/null = toujours dispo)" })
+  @IsOptional()
+  @Transform(({ value }) => (value === undefined || value === null || value === '' ? null : String(value).trim()))
+  @IsString()
+  available_from?: string | null;
+
+  @ApiPropertyOptional({ description: "Heure de fin de disponibilité « HH:mm » (vide/null = toujours dispo)" })
+  @IsOptional()
+  @Transform(({ value }) => (value === undefined || value === null || value === '' ? null : String(value).trim()))
+  @IsString()
+  available_until?: string | null;
 
   @ApiPropertyOptional({ description: 'Prix de promotion du plat' })
   @IsOptional()

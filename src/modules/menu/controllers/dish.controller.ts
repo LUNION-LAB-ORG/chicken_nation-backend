@@ -23,7 +23,6 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
 import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
-import { DishRestaurantService } from 'src/modules/menu/services/dish-restaurant.service';
 import { DishService } from 'src/modules/menu/services/dish.service';
 import { QueryDishDto } from '../dto/query-dish.dto';
 
@@ -34,7 +33,6 @@ import { QueryDishDto } from '../dto/query-dish.dto';
 export class DishController {
   constructor(
     private readonly dishService: DishService,
-    private readonly dishRestaurantService: DishRestaurantService,
   ) { }
 
   @Post()
@@ -108,13 +106,4 @@ export class DishController {
     return this.dishService.remove(id);
   }
 
-  @Get(':dishId/restaurants')
-  @ApiOperation({
-    summary: 'Récupération de tous les restaurants liés à un plat',
-  })
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.MENUS, Action.READ)
-  getAllRestaurantsByDish(@Param('dishId') dishId: string) {
-    return this.dishRestaurantService.findByDish(dishId);
-  }
 }

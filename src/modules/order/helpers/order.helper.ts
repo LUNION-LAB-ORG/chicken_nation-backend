@@ -215,7 +215,11 @@ export class OrderHelper {
   }
 
   // Calculer les détails de la commande
-  async calculateOrderDetails(items: CreateOrderDto['items'], dishes: Dish[]) {
+  async calculateOrderDetails(
+    items: CreateOrderDto['items'],
+    dishes: Dish[],
+    options: { skipExclusionCheck?: boolean } = {},
+  ) {
     let netAmount = 0;
 
     const orderItems: {
@@ -285,11 +289,17 @@ export class OrderHelper {
             id: { in: supplementIds },
             available: true,
             // Modèle exclusion : supplément autorisé = NON exclu de ce plat.
-            dish_excluded_supplements: {
-              none: {
-                dish_id: dish.id,
-              },
-            },
+            // En mode édition d'une commande existante, on saute ce filtre :
+            // un supplément acheté légitimement avant d'être exclu doit pouvoir être conservé.
+            ...(options.skipExclusionCheck
+              ? {}
+              : {
+                  dish_excluded_supplements: {
+                    none: {
+                      dish_id: dish.id,
+                    },
+                  },
+                }),
           },
         });
 
@@ -852,19 +862,7 @@ export class OrderHelper {
       }),
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
-      ...(restaurantId && {
-        order_items: {
-          some: {
-            dish: {
-              dish_excluded_restaurants: {
-                none: {
-                  restaurant_id: restaurantId,
-                },
-              },
-            },
-          },
-        },
-      }),
+      ...(restaurantId && { restaurant_id: restaurantId }),
     };
   }
 
