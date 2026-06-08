@@ -96,7 +96,7 @@ export class ProspectController {
   }
 
   @Get('settings')
-  @RequirePermission(Modules.BASE_DONNEES, Action.READ)
+  @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
   @ApiOperation({ summary: 'Réglages du module (coupon, messages)' })
   getSettings() {
     return this.prospectService.getSettings();
