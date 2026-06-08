@@ -6,6 +6,7 @@ import { PromotionService } from 'src/modules/fidelity/services/promotion.servic
 import { OrderChannels } from '../enums/order-channels';
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
 import { ExpoPushService } from 'src/expo-push/expo-push.service';
+import { UserPushService } from 'src/modules/users/services/user-push.service';
 
 @Injectable()
 export class OrderListenerService {
@@ -14,7 +15,8 @@ export class OrderListenerService {
     constructor(
         private promotionService: PromotionService,
         private loyaltyService: LoyaltyService,
-        private expoPushService: ExpoPushService
+        private expoPushService: ExpoPushService,
+        private userPushService: UserPushService,
     ) { }
 
     /* =========================================================
@@ -22,6 +24,20 @@ export class OrderListenerService {
     ========================================================= */
     @OnEvent(OrderChannels.ORDER_CREATED)
     async orderCreatedEventListener(payload: OrderCreatedEvent) {
+        // 🔔 Push notif aux staffs du restaurant — fire-and-forget,
+        // ne JAMAIS bloquer la mutation principale. La socket reste la source
+        // primaire de l'update temps réel ; le push est l'alerte "app fermée".
+        if (payload.order.restaurant_id) {
+            void this.userPushService.notifyRestaurant({
+                restaurantId: payload.order.restaurant_id,
+                type: 'new_order',
+                title: '🔔 Nouvelle commande',
+                body: `Cmde ${payload.order.reference} · ${Number(payload.order.amount ?? 0).toLocaleString('fr-FR')} F`,
+                critical: true,
+                data: { orderId: payload.order.id, reference: payload.order.reference },
+            });
+        }
+
         let isPromotionUsed = false;
         let isLoyaltyUsed = false;
 

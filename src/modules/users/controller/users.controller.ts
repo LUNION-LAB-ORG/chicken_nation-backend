@@ -33,7 +33,9 @@ import { UpdateUserPasswordDto } from 'src/modules/users/dto/update-user-passwor
 import { UpdateUserDto } from 'src/modules/users/dto/update-user.dto';
 import { UsersService } from 'src/modules/users/services/users.service';
 import { ResetUserPasswordResponseDto } from '../dto/reset-user-password.dto';
+import { RegisterUserExpoPushTokenDto } from '../dto/register-expo-push-token.dto';
 import { S3Service } from 'src/s3/s3.service';
+import { UserPushService } from '../services/user-push.service';
 
 @Controller('users')
 @UseInterceptors(CacheInterceptor)
@@ -41,7 +43,31 @@ export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly s3service: S3Service,
+    private readonly userPushService: UserPushService,
   ) {}
+
+  // ============================================================
+  // POST /users/me/expo-push-token (mobile staff — Chicken Nation Pro)
+  // ============================================================
+  @Post('me/expo-push-token')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: "Enregistre/actualise le token Expo Push du staff connecté",
+    description:
+      'Appelé par l\'app mobile au login (et lors de chaque renouvellement). ' +
+      'Permet ensuite au backend d\'envoyer des push notifications aux staffs ' +
+      'du restaurant (ex: nouvelle commande).',
+  })
+  @ApiBody({ type: RegisterUserExpoPushTokenDto })
+  @ApiOkResponse({ description: 'Token enregistré' })
+  async registerExpoPushToken(
+    @Req() req: Request,
+    @Body() dto: RegisterUserExpoPushTokenDto,
+  ) {
+    const userId = (req.user as { id: string }).id;
+    await this.userPushService.registerToken(userId, dto.token);
+    return { ok: true };
+  }
 
   private async uploadImage(image: Express.Multer.File) {
     if (!image) return null;

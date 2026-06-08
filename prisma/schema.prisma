@@ -811,20 +811,27 @@ model TicketUserSkill {
 
 // -------------------- Fin Gestion des conversations ------------------------------
 
-model DishRestaurant {
-  id            String     @id @default(uuid()) @db.Uuid
-  dish_id       String     @db.Uuid
-  restaurant_id String     @db.Uuid
-  dish          Dish       @relation(fields: [dish_id], references: [id], onDelete: Cascade)
-  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
-}
-
-model DishSupplement {
+// Modèle "tout par défaut − exclusions" : un plat propose TOUS les suppléments / est
+// vendu dans TOUS les restaurants, SAUF ceux listés ici comme exclus.
+// (Ces 2 tables sont les anciennes DishSupplement/DishRestaurant RENOMMÉES — cf. migration.)
+model DishExcludedSupplement {
   id            String     @id @default(uuid()) @db.Uuid
   dish_id       String     @db.Uuid
   supplement_id String     @db.Uuid
   dish          Dish       @relation(fields: [dish_id], references: [id], onDelete: Cascade)
   supplement    Supplement @relation(fields: [supplement_id], references: [id], onDelete: Cascade)
+
+  @@unique([dish_id, supplement_id])
+}
+
+model DishExcludedRestaurant {
+  id            String     @id @default(uuid()) @db.Uuid
+  dish_id       String     @db.Uuid
+  restaurant_id String     @db.Uuid
+  dish          Dish       @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@unique([dish_id, restaurant_id])
 }
 
 model Dish {
@@ -843,8 +850,8 @@ model Dish {
   private          Boolean          @default(false)
   hubrise_sku      String?          @unique @db.VarChar
   category         Category         @relation(fields: [category_id], references: [id], onDelete: Cascade)
-  dish_restaurants DishRestaurant[]
-  dish_supplements DishSupplement[]
+  dish_excluded_supplements DishExcludedSupplement[]
+  dish_excluded_restaurants DishExcludedRestaurant[]
   favorites        Favorite[]
   order_items      OrderItem[]
 
@@ -1144,7 +1151,7 @@ model Restaurant {
   email                String?               @db.VarChar
   schedule             Json?                 @db.Json
   apikey               String?               @db.VarChar
-  dish_restaurants     DishRestaurant[]
+  dish_excluded_restaurants DishExcludedRestaurant[]
   users                User[]
   deliverers           Deliverer[]
   courses              Course[]
@@ -1178,7 +1185,7 @@ model Supplement {
   available        Boolean            @default(true)
   category         SupplementCategory
   hubrise_sku      String?            @unique @db.VarChar
-  dish_supplements DishSupplement[]
+  dish_excluded_supplements DishExcludedSupplement[]
 }
 
 model User {
@@ -1195,6 +1202,11 @@ model User {
   role                UserRole
   restaurant_id       String?     @db.Uuid
   restaurant          Restaurant? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  // Token Expo Push (mobile staff Chicken Nation Pro). Mis à jour à chaque
+  // login mobile via POST /users/me/expo-push-token. NULL si pas encore loggé
+  // sur mobile ou si l'utilisateur a refusé les notifications.
+  expo_push_token String? @db.VarChar(255)
 
   // Relations promotions
   created_promotions Promotion[] @relation("CreatedBy")
