@@ -11,6 +11,7 @@ import { CategoryEvent } from 'src/modules/menu/events/category.event';
 import type { Request } from 'express';
 import { S3Service } from '../../../s3/s3.service';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
+import { DishService } from 'src/modules/menu/services/dish.service';
 
 @Injectable()
 export class CategoryService {
@@ -19,6 +20,7 @@ export class CategoryService {
     private categoryEvent: CategoryEvent,
     private readonly s3service: S3Service,
     private readonly generateDataService: GenerateDataService,
+    private readonly dishService: DishService,
   ) { }
 
   private async uploadImage(image?: Express.Multer.File) {
@@ -97,7 +99,11 @@ export class CategoryService {
       throw new NotFoundException(`Catégorie non trouvée`);
     }
 
-    return category;
+    // Populater chaque plat avec ses suppléments/restaurants effectifs (modèle exclusion)
+    // + excluded_supplement_ids / excluded_restaurant_ids. Sans ça, les consumers (modal
+    // création de commande, etc.) reçoivent des dishes "nus" sans dish_supplements.
+    const dishesWithEffective = await this.dishService.withEffective(category.dishes);
+    return { ...category, dishes: dishesWithEffective };
   }
 
   async update(

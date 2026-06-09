@@ -40,8 +40,11 @@ export class DishService {
    * actifs) MOINS les exclusions du plat, et renvoie ces ensembles sous les MÊMES champs
    * `dish_supplements: [{ supplement }]` / `dish_restaurants: [{ restaurant }]` qu'avant
    * (compatibilité apps). Joint aussi les ids exclus (pour le backoffice).
+   *
+   * Public : utilisé par CategoryService.findOne pour populater les dishes d'une catégorie
+   * avec leurs suppléments/restaurants effectifs.
    */
-  private async withEffective<T extends { id: string }>(dishes: T[]) {
+  async withEffective<T extends { id: string }>(dishes: T[]) {
     if (dishes.length === 0) return [] as (T & {
       dish_supplements: { supplement: unknown }[];
       dish_restaurants: { restaurant: unknown }[];
