@@ -173,7 +173,12 @@ export class ProspectService {
           restaurant: { select: { id: true, name: true } },
           creator: { select: { id: true, fullname: true } },
         },
-        orderBy: { created_at: 'asc' },
+        // Plus récents en premier (le backoffice attend la commande la plus
+        // fraîche en haut de table). L'ordre croissant existait pour le
+        // workflow Call Center (qui appelle le plus ancien d'abord) ; ce
+        // workflow utilise désormais le bucket `findCallQueue()` qui garde
+        // son propre tri ascendant — voir line ~227.
+        orderBy: { created_at: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -764,14 +769,14 @@ export class ProspectService {
         ]),
       );
     }
-    // contacts (défaut)
+    // contacts (défaut) — même ordre que la table : plus récents en premier.
     const rows = await this.prisma.prospect.findMany({
       where: {
         entity_status: { not: EntityStatus.DELETED },
         ...this.scopeFor(user, restaurantId),
       },
       include: { restaurant: { select: { name: true } } },
-      orderBy: { created_at: 'asc' },
+      orderBy: { created_at: 'desc' },
       take: 5000,
     });
     return this.toCsv(
