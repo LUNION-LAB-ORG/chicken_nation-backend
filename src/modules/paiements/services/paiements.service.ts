@@ -456,7 +456,13 @@ export class PaiementsService {
       updatePaiementDto.status ?? paiement.status,
     );
 
-    return this.prisma.paiement.update({
+    // Si l'amount change ou que le total change, recopier total = amount + fees
+    // (logique standard, sauf si l'appelant a explicitement fourni un total).
+    const nextAmount = updatePaiementDto.amount ?? paiement.amount;
+    const nextFees = updatePaiementDto.fees ?? paiement.fees ?? 0;
+    const nextTotal = updatePaiementDto.total ?? (nextAmount + nextFees);
+
+    const updated = await this.prisma.paiement.update({
       where: {
         id: paiement.id,
       },
@@ -466,16 +472,76 @@ export class PaiementsService {
         mode,
         status,
         source,
+        amount: nextAmount,
+        fees: nextFees,
+        total: nextTotal,
       },
     });
+
+    // Re-synchroniser le flag `paied` de la commande : un changement de montant
+    // ou de statut (SUCCESS → FAILED) peut faire basculer paied true ↔ false.
+    if (paiement.order_id) {
+      await this.recomputeOrderPaiedFlag(paiement.order_id);
+    }
+    // Si l'order_id a changé (rare), recomputer aussi l'ancienne et la nouvelle.
+    if (order?.id && order.id !== paiement.order_id) {
+      await this.recomputeOrderPaiedFlag(order.id);
+    }
+
+    return updated;
   }
 
   // Suppression d'un paiement
   async remove(paiementId: string) {
     const paiement = await this.findOne(paiementId);
-    return this.prisma.paiement.delete({
+    const result = await this.prisma.paiement.delete({
       where: {
         id: paiement.id,
+      },
+    });
+
+    // Re-synchroniser le flag `paied` de la commande après suppression
+    // (paiement retiré → potentiellement plus assez perçu → paied = false).
+    if (paiement.order_id) {
+      await this.recomputeOrderPaiedFlag(paiement.order_id);
+    }
+
+    return result;
+  }
+
+  /**
+   * Recalcule `order.paied` selon la somme actuelle des paiements SUCCESS.
+   * Appelé après update/remove de paiement (et après update d'amount commande
+   * côté OrderService — logique dupliquée pour éviter une dépendance circulaire
+   * Paiements ↔ Order). À garder synchronisé avec OrderService.recomputeOrderPaiedFlag.
+   */
+  private async recomputeOrderPaiedFlag(orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        paiements: { where: { status: PaiementStatus.SUCCESS } },
+      },
+    });
+    if (!order) return;
+    const totalPaid = order.paiements.reduce(
+      (sum, p) => sum + (p.total ?? p.amount ?? 0),
+      0,
+    );
+    const shouldBePaied = totalPaid >= order.amount;
+    if (shouldBePaied === order.paied) return;
+    const mostRecentSuccess = order.paiements.reduce<Date | null>(
+      (latest, p) => {
+        const at = p.created_at ?? null;
+        if (!at) return latest;
+        return !latest || at > latest ? at : latest;
+      },
+      null,
+    );
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        paied: shouldBePaied,
+        paied_at: shouldBePaied ? (order.paied_at ?? mostRecentSuccess ?? new Date()) : null,
       },
     });
   }

@@ -12,6 +12,7 @@ import {
   Order,
   OrderStatus,
   OrderType,
+  PaiementStatus,
   PaymentMethod,
   Prisma,
   UserRole,
@@ -1221,7 +1222,7 @@ export class OrderService {
       };
     }
 
-    const updatedOrder = await this.prisma.order.update({
+    let updatedOrder = await this.prisma.order.update({
       where: { id: order.id },
       data: updateData,
       include: {
@@ -1235,12 +1236,83 @@ export class OrderService {
       },
     });
 
+    // Si le montant a changé (recalcul des items, frais de livraison, etc.),
+    // re-synchroniser le flag `paied` selon la somme des paiements SUCCESS :
+    //  - amount augmenté > total perçu → paied = false (reste dû à encaisser)
+    //  - amount baissé sous le total perçu → paied = true (trop perçu existe en BD)
+    // Sans ce recompute, la commande modifiée garde son ancien `paied` et le drawer
+    // affiche un mauvais solde.
+    if (updateData.amount !== undefined) {
+      updatedOrder = await this.recomputeOrderPaiedFlag(updatedOrder.id);
+    }
+
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderUpdatedEvent(updatedOrder, updateOrderDto);
 
     // Émettre via WebSocket
     this.orderWebSocketService.emitOrderUpdated(updatedOrder);
     return updatedOrder;
+  }
+
+  /**
+   * Re-synchronise le flag `paied` d'une commande selon la somme actuelle de ses
+   * paiements SUCCESS. Utilisé après une modification d'amount (update commande)
+   * ou un changement de paiement (update/delete paiement).
+   *
+   * Règle : paied = (sum(SUCCESS paiements) >= order.amount)
+   * Si la commande devient payée et qu'elle n'avait pas de paied_at, on le pose
+   * sur le paiement SUCCESS le plus récent. Si elle redevient non-payée, on remet
+   * paied_at à null.
+   */
+  async recomputeOrderPaiedFlag(orderId: string) {
+    const fresh = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        paiements: { where: { status: PaiementStatus.SUCCESS } },
+      },
+    });
+    if (!fresh) {
+      throw new NotFoundException('Commande introuvable');
+    }
+    const totalPaid = fresh.paiements.reduce(
+      (sum, p) => sum + (p.total ?? p.amount ?? 0),
+      0,
+    );
+    const shouldBePaied = totalPaid >= fresh.amount;
+    if (shouldBePaied === fresh.paied) {
+      // Rien à changer — on renvoie tout de même la commande détaillée pour
+      // que l'appelant ait un objet à jour.
+      const refreshed = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        include: {
+          order_items: { include: { dish: true } },
+          paiements: true,
+          customer: true,
+        },
+      });
+      if (!refreshed) throw new NotFoundException('Commande introuvable');
+      return refreshed;
+    }
+    const mostRecentSuccess = fresh.paiements.reduce<Date | null>(
+      (latest, p) => {
+        const at = p.created_at ?? null;
+        if (!at) return latest;
+        return !latest || at > latest ? at : latest;
+      },
+      null,
+    );
+    return this.prisma.order.update({
+      where: { id: orderId },
+      data: {
+        paied: shouldBePaied,
+        paied_at: shouldBePaied ? (fresh.paied_at ?? mostRecentSuccess ?? new Date()) : null,
+      },
+      include: {
+        order_items: { include: { dish: true } },
+        paiements: true,
+        customer: true,
+      },
+    });
   }
 
   /**

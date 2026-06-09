@@ -1,12 +1,26 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { User, UserRole } from '@prisma/client';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { AddPaiementDto, CreatePaiementDto } from 'src/modules/paiements/dto/create-paiement.dto';
 import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
+import { UpdatePaiementDto } from 'src/modules/paiements/dto/update-paiement.dto';
 import { PaiementsService } from 'src/modules/paiements/services/paiements.service';
 import { CreatePaiementKkiapayDto } from '../dto/create-paiement-kkiapay.dto';
 
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
+
+/** Garde-fou commun aux endpoints d'édition/suppression de paiement : seul un
+ *  ADMIN peut corriger un paiement déjà enregistré (audit comptable, erreur de
+ *  saisie). Pour les autres rôles, on lève 403. */
+function assertAdmin(req: Request) {
+  const user = req.user as User | undefined;
+  if (user?.role !== UserRole.ADMIN) {
+    throw new ForbiddenException(
+      "Seul un administrateur peut modifier ou supprimer un paiement existant.",
+    );
+  }
+}
 
 @ApiTags('Paiements')
 @Controller('paiements')
@@ -57,9 +71,23 @@ export class PaiementsController {
     return this.paiementsService.findOne(id);
   }
 
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: "Modifier un paiement (admin uniquement). Recalcule order.paied." })
+  update(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() dto: UpdatePaiementDto,
+  ) {
+    assertAdmin(req);
+    return this.paiementsService.update(id, dto);
+  }
+
   @Delete(':id')
-  @ApiOperation({ summary: 'Supprimer un paiement' })
-  remove(@Param('id') id: string) {
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Supprimer un paiement (admin uniquement). Recalcule order.paied.' })
+  remove(@Req() req: Request, @Param('id') id: string) {
+    assertAdmin(req);
     return this.paiementsService.remove(id);
   }
 }
