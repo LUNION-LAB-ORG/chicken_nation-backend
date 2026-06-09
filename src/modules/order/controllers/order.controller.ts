@@ -21,7 +21,7 @@ import {
   ApiResponse,
   ApiTags
 } from '@nestjs/swagger';
-import { Customer, OrderStatus, User } from '@prisma/client';
+import { Customer, OrderStatus, User, UserRole } from '@prisma/client';
 import type { Request, Response } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
@@ -193,8 +193,16 @@ export class OrderController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.UPDATE)
   @ApiBody({ type: UpdateOrderDto })
-  update(@Param('id') id: string, @Body() updateOrderDto: UpdateOrderDto) {
-    return this.orderService.update(id, updateOrderDto);
+  update(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() updateOrderDto: UpdateOrderDto,
+  ) {
+    // ADMIN bypass : peut modifier une commande quel que soit son statut
+    // (COMPLETED, COLLECTED, CANCELLED inclus). Cf. order.service.ts:update().
+    const user = req.user as User;
+    const isAdmin = user?.role === UserRole.ADMIN;
+    return this.orderService.update(id, updateOrderDto, { skipStatusCheck: isAdmin });
   }
   @Patch(':id/client')
   @UseGuards(JwtCustomerAuthGuard)

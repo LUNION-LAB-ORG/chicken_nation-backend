@@ -1100,9 +1100,19 @@ export class OrderService {
     return updatedOrder;
   }
   /**
-   * Met à jour une commande
+   * Met à jour une commande.
+   *
+   * @param options.skipStatusCheck  Si `true`, la garde "statut modifiable" est
+   *   désactivée (réservé à l'admin : un admin peut corriger une commande
+   *   COMPLETED / COLLECTED / CANCELLED pour rectifier une erreur de saisie,
+   *   un audit comptable, etc.). Le controller met ce flag à `true` UNIQUEMENT
+   *   si le user JWT a le rôle ADMIN.
    */
-  async update(id: string, updateOrderDto: UpdateOrderDto) {
+  async update(
+    id: string,
+    updateOrderDto: UpdateOrderDto,
+    options: { skipStatusCheck?: boolean } = {},
+  ) {
     const order = await this.findById(id);
     // Extraire les champs qui ne sont pas des colonnes directes de la table Order
     const {
@@ -1119,11 +1129,14 @@ export class OrderService {
       ...rest
     } = updateOrderDto;
 
-    // Vérifier que la commande peut être modifiée
-    if (order.status !== OrderStatus.PENDING &&
+    // Vérifier que la commande peut être modifiée (admin peut bypasser)
+    if (
+      !options.skipStatusCheck &&
+      order.status !== OrderStatus.PENDING &&
       order.status !== OrderStatus.ACCEPTED &&
       order.status !== OrderStatus.IN_PROGRESS &&
-      order.status !== OrderStatus.READY) {
+      order.status !== OrderStatus.READY
+    ) {
       throw new ConflictException(
         'Seules les commandes en attente, acceptées, en préparation ou prêtes peuvent être modifiées',
       );
