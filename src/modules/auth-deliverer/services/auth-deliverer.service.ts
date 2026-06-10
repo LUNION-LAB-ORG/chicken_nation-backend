@@ -450,10 +450,10 @@ export class AuthDelivererService {
       throw new UnauthorizedException('Code OTP invalide ou expiré');
     }
 
-    const isVerified = await this.otpService.verify(otpToken.code);
-    if (!isVerified) {
-      throw new UnauthorizedException('Code OTP invalide');
-    }
+    // ⚠️ Pas de re-vérification HOTP via otpService : ce compteur global est
+    // partagé (tous les utilisateurs + les 2 backends sur la même base) et a
+    // bougé entre la génération et la saisie → faux « OTP invalide ». Le lookup
+    // ci-dessus (phone + code + expire) est la validation complète et correcte.
   }
 
   /**

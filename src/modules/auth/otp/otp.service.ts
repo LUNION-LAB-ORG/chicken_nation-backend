@@ -39,6 +39,11 @@ export class OtpService {
     const token = hotp.generate(this.secret, counter);
 
     // CREATE OTP TOKEN
+    // La source de vérité pour la vérification est CETTE ligne (phone + code +
+    // expire), lue par AuthService.verifyOtp. NE PAS revérifier le token via un
+    // hotp.verify() sur le compteur global : ce compteur est partagé par tous
+    // les utilisateurs (et les 2 backends sur la même base), donc il a bougé
+    // entre la génération et la saisie → faux « OTP invalide ».
     await this.prisma.otpToken.create({
       data: {
         code: token,
@@ -47,12 +52,27 @@ export class OtpService {
         expire: new Date(Date.now() + this.expiration),
       },
     });
-    
+
     return token;
   }
 
-  async verify(token: string) {
-    const counter = await this.prisma.counterOtp.findFirst();
-    return hotp.verify({ token, counter: counter?.counter ?? 1, secret: this.secret });
+  /**
+   * Anti-flood du renvoi d'OTP. Renvoie le nombre de SECONDES à attendre avant
+   * de pouvoir redemander un code pour ce numéro, ou 0 si on peut en envoyer un.
+   *
+   * On déduit l'instant de création du dernier OTP depuis `expire`
+   * (created_at = expire − this.expiration), car OtpToken n'a pas de created_at.
+   * Empêche : explosion de SMS Twilio + insertions + contention sur le compteur
+   * global quand des milliers de clients spamment « renvoyer le code ».
+   */
+  async getResendCooldownSeconds(phone: string, cooldownMs: number): Promise<number> {
+    const last = await this.prisma.otpToken.findFirst({
+      where: { phone },
+      orderBy: { expire: 'desc' },
+    });
+    if (!last) return 0;
+    const createdAt = last.expire.getTime() - this.expiration;
+    const remainingMs = createdAt + cooldownMs - Date.now();
+    return remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0;
   }
 }

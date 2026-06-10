@@ -58,6 +58,13 @@ export class AuthService {
     };
   }
 
+  // Délai minimum entre deux envois d'OTP pour un même numéro (anti-flood).
+  // Protège les coûts Twilio + la contention DB quand des milliers de clients
+  // spamment « renvoyer le code » (ou contournent le timer UI en revenant à
+  // l'écran téléphone / en relançant l'app). Aligné sur le timer de 30s de
+  // l'écran OTP mobile pour ne pas pénaliser le flux légitime.
+  private static readonly OTP_RESEND_COOLDOWN_MS = 30 * 1000;
+
   // LOGIN CUSTOMER
   async loginCustomer(phone: string) {
     let customer = await this.prisma.customer.findFirst({
@@ -69,6 +76,19 @@ export class AuthService {
 
     if (!customer) {
       customer = await this.prisma.customer.create({ data: { phone } });
+    }
+
+    // Anti-flood : si un code a été envoyé il y a moins de COOLDOWN, on refuse
+    // d'en générer/envoyer un nouveau (le précédent reste valide 5 min).
+    const wait = await this.otpService.getResendCooldownSeconds(
+      customer.phone,
+      AuthService.OTP_RESEND_COOLDOWN_MS,
+    );
+    if (wait > 0) {
+      throw new HttpException(
+        `Un code vient d'être envoyé. Réessayez dans ${wait} seconde${wait > 1 ? 's' : ''}.`,
+        429,
+      );
     }
 
     const otp = await this.otpService.generate(customer.phone);
@@ -83,6 +103,8 @@ export class AuthService {
 
   // VERIFY OTP
   async verifyOtp(data: VerifyOtpDto) {
+    // Validation COMPLÈTE et suffisante : le token stocké correspond-il au
+    // (téléphone + code) saisi, et n'est-il pas expiré ?
     const otpToken = await this.prisma.otpToken.findFirst({
       where: {
         code: data.otp,
@@ -93,8 +115,12 @@ export class AuthService {
 
     if (!otpToken) throw new UnauthorizedException('Code OTP invalide');
 
-    const isVerified = await this.otpService.verify(otpToken.code);
-    if (!isVerified) throw new UnauthorizedException('Code OTP invalide');
+    // ⚠️ NE PAS re-vérifier via otpService.verify() : ce HOTP recompare au
+    // COMPTEUR GLOBAL COURANT (partagé par tous les utilisateurs et incrémenté
+    // à chaque génération). Dès qu'un autre OTP est généré entre l'envoi et la
+    // saisie (autre client, re-demande, 2e backend sur la même base), le
+    // compteur a bougé → la recomparaison échoue et renvoie « OTP invalide »
+    // alors que le code stocké est correct. Le lookup ci-dessus suffit.
 
     const customer = await this.prisma.customer.findFirst({
       where: { phone: otpToken.phone, entity_status: { not: EntityStatus.DELETED } },
@@ -110,7 +136,9 @@ export class AuthService {
       data: { entity_status: EntityStatus.ACTIVE, last_login_at: new Date() },
     });
 
-
+    // Consommer les OTP de ce numéro (usage unique) : empêche la réutilisation
+    // du même code et purge les anciens codes encore valides pour ce téléphone.
+    await this.prisma.otpToken.deleteMany({ where: { phone: otpToken.phone } });
 
     return { ...rest, token };
   }
