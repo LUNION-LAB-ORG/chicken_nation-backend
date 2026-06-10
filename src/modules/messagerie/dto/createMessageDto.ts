@@ -1,11 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class CreateMessageDto {
-  @ApiPropertyOptional({ description: 'Contenu du message' })
+  // Optionnel pour permettre les messages "image seule" (le service exige
+  // body OU image — voir message.service.createMessage).
+  @ApiPropertyOptional({ description: 'Contenu du message (optionnel si une image est jointe)' })
   @IsString({ message: 'Le contenu du message doit être une chaîne de caractères' })
-  @IsNotEmpty({ message: 'Le contenu du message ne peut pas être vide' })
-  body: string;
+  @IsOptional()
+  body?: string;
 
   @ApiPropertyOptional({ description: 'URL de l\'image associée au message' })
   @IsString({ message: 'L\'URL de l\'image doit être une chaîne de caractères' })

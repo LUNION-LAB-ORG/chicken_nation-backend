@@ -142,11 +142,13 @@ export class MessageService {
 
     this.logger.debug(`createMessageDto: ${JSON.stringify(createMessageDto)}, conversation ${conversationId}`);
 
-    // Validate the message body
-    const { body, imageUrl = '', orderId = null } = createMessageDto;
-    if (!body || body.trim() === '') {
+    // Validate the message content : texte OU image (les messages "image seule"
+    // sont autorisés ; body est alors stocké vide).
+    const { imageUrl = '', orderId = null } = createMessageDto;
+    const body = createMessageDto.body?.trim() ?? '';
+    if (!body && !image && !imageUrl) {
       throw new HttpException(
-        'Message body is required and must be a non-empty string',
+        'Message body or image is required',
         HttpStatus.BAD_REQUEST
       );
     }
