@@ -16,6 +16,10 @@ import {
   UseInterceptors
 } from '@nestjs/common';
 import {
+  assertCanAccessRestaurant,
+  resolveRestaurantScope,
+} from '../helpers/restaurant-scope.helper';
+import {
   ApiBody,
   ApiOperation,
   ApiResponse,
@@ -106,8 +110,14 @@ export class OrderController {
     summary: 'Liste des commandes actives pour la page Opérations',
     description: 'ACCEPTED, IN_PROGRESS, READY, PICKED_UP, COLLECTED — avec Delivery/Course si applicable.',
   })
-  operationsActive(@Query('restaurantId') restaurantId?: string) {
-    return this.orderService.findActiveForOperations(restaurantId);
+  operationsActive(
+    @Req() req: Request,
+    @Query('restaurantId') restaurantId?: string,
+  ) {
+    // Cloisonnement : un user RESTAURANT est forcé à SON restaurant (le param
+    // est ignoré) ; un user BACKOFFICE filtre librement via l'onglet.
+    const scope = resolveRestaurantScope(req.user as User, restaurantId);
+    return this.orderService.findActiveForOperations(scope);
   }
 
   @Get('/customer')
@@ -124,8 +134,20 @@ export class OrderController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.DASHBOARD, Action.READ)
   @ApiOperation({ summary: 'Statistiques des commandes' })
-  getOrderStatistics(@Query() queryOrderDto: QueryOrderDto) {
-    return this.orderService.getOrderStatistics(queryOrderDto);
+  getOrderStatistics(
+    @Req() req: Request,
+    @Query() queryOrderDto: QueryOrderDto,
+  ) {
+    // Même cloisonnement que les opérations : un caissier ne voit QUE les stats
+    // de son restaurant, jamais celles du réseau.
+    const restaurantId = resolveRestaurantScope(
+      req.user as User,
+      queryOrderDto.restaurantId,
+    );
+    return this.orderService.getOrderStatistics({
+      ...queryOrderDto,
+      restaurantId,
+    });
   }
 
   @Get('/export-report-to-excel')
@@ -180,8 +202,15 @@ export class OrderController {
   @Get(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.READ)
-  findOne(@Param('id') id: string) {
-    return this.orderService.findById(id);
+  async findOne(@Req() req: Request, @Param('id') id: string) {
+    const order = await this.orderService.findById(id);
+    // Un user RESTAURANT ne peut pas ouvrir la commande d'un autre restaurant
+    // (même en devinant l'id). Le BACKOFFICE n'est pas restreint.
+    assertCanAccessRestaurant(
+      req.user as User,
+      (order as { restaurant_id?: string | null })?.restaurant_id,
+    );
+    return order;
   }
   @Get(':id/client')
   @UseGuards(JwtCustomerAuthGuard)
