@@ -256,11 +256,58 @@ export class TicketService {
     return this.mapTicketToDto(ticket);
   }
 
-  async createTicket(data: CreateTicketDto): Promise<ResponseTicketDto> {
+  /**
+   * Marque comme LUS les messages entrants (client / livreur) d'un ticket.
+   * Vide le badge "non lus" côté backoffice quand un agent ouvre le ticket.
+   */
+  async markMessagesAsRead(ticketId: string): Promise<{ success: boolean; updated: number }> {
+    const result = await this.prisma.ticketMessage.updateMany({
+      where: {
+        ticketId,
+        isRead: false,
+        OR: [
+          { authorCustomerId: { not: null } },
+          { authorDelivererId: { not: null } },
+        ],
+      },
+      data: { isRead: true },
+    });
+    return { success: true, updated: result.count };
+  }
+
+  async createTicket(
+    data: CreateTicketDto,
+    options?: { enforceSingleOpenCustomer?: boolean },
+  ): Promise<ResponseTicketDto> {
     // this.logger.log(`Création d'un ticket pour customer=${data.customerId}`);
 
     if (this.isDev) {
       // this.logger.debug(`Payload: ${JSON.stringify(data)}`);
+    }
+
+    // Règle métier : un client ne peut avoir qu'UN ticket "en cours" à la fois
+    // (OPEN ou IN_PROGRESS). S'il en a déjà un, on bloque la création et on
+    // renvoie le ticket existant pour que le mobile puisse l'afficher/rediriger.
+    if (options?.enforceSingleOpenCustomer && data.customerId) {
+      const existing = await this.prisma.ticketThread.findFirst({
+        where: {
+          customerId: data.customerId,
+          status: { in: ['OPEN', 'IN_PROGRESS'] },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, code: true, subject: true, status: true },
+      });
+      if (existing) {
+        throw new HttpException(
+          {
+            message:
+              'Vous avez déjà une demande en cours de traitement. Merci de patienter, notre équipe vous répond dans ce ticket.',
+            code: 'TICKET_ALREADY_OPEN',
+            existingTicket: existing,
+          },
+          409,
+        );
+      }
     }
 
     const { categoryId } = data;

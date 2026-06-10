@@ -56,11 +56,13 @@ export class TicketsController {
     return await this.ticketService.createTicket(createTicketDto);
   }
 
-  // Le client creer un ticket
+  // Le client creer un ticket (1 seul ticket "en cours" autorisé à la fois)
   @UseGuards(JwtCustomerAuthGuard) @Post('/customer')
   async createCustomerTicket(@Req() req, @Body() createTicketDto: CreateTicketDto) {
     createTicketDto.customerId = req.user.id;
-    return await this.ticketService.createTicket(createTicketDto);
+    return await this.ticketService.createTicket(createTicketDto, {
+      enforceSingleOpenCustomer: true,
+    });
   }
 
   @UseGuards(JwtAuthGuard) @Patch(':id')
@@ -76,5 +78,13 @@ export class TicketsController {
   @UseGuards(JwtAuthGuard) @Post(':id/close')
   async closeTicket(@Param('id') id: string) {
     return await this.ticketService.closeTicket(id);
+  }
+
+  // Le staff ouvre un ticket → marque comme lus les messages entrants
+  // (client / livreur) pour vider le badge "non lus". Appelé par le backoffice
+  // (TicketView) à l'ouverture.
+  @UseGuards(JwtAuthGuard) @Post(':id/messages/read')
+  async markMessagesRead(@Param('id') id: string) {
+    return await this.ticketService.markMessagesAsRead(id);
   }
 }
