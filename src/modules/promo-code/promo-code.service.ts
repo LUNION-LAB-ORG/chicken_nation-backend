@@ -659,6 +659,141 @@ export class PromoCodeService {
     return usage;
   }
 
+  /**
+   * Analytics détaillées d'un code promo (vue détail backoffice).
+   * Une seule lecture "slim" des usages, agrégats calculés côté serveur :
+   * KPIs, série par jour, répartition par heure / jour de semaine, top clients.
+   * Fuseau : la Côte d'Ivoire est en UTC+0 → heures UTC = heures locales.
+   */
+  async getAnalytics(id: string) {
+    const promoCode = await this.prismaService.promoCode.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!promoCode) {
+      throw new HttpException('Code promo introuvable', HttpStatus.NOT_FOUND);
+    }
+
+    const usages = await this.prismaService.promoCodeUsage.findMany({
+      where: { promo_code_id: id },
+      select: {
+        customer_id: true,
+        discount_amount: true,
+        created_at: true,
+        order: { select: { amount: true } },
+      },
+      orderBy: { created_at: 'asc' },
+    });
+
+    const totalUsages = usages.length;
+    const totalDiscount = usages.reduce((s, u) => s + (u.discount_amount ?? 0), 0);
+    const orderAmounts = usages
+      .map((u) => u.order?.amount)
+      .filter((a): a is number => typeof a === 'number');
+    const totalRevenue = orderAmounts.reduce((s, a) => s + a, 0);
+
+    // Agrégat par client (clients uniques, taux de réutilisation, top clients)
+    const byCustomer = new Map<string, { usages: number; discount: number }>();
+    for (const u of usages) {
+      const c = byCustomer.get(u.customer_id) ?? { usages: 0, discount: 0 };
+      c.usages += 1;
+      c.discount += u.discount_amount ?? 0;
+      byCustomer.set(u.customer_id, c);
+    }
+    const uniqueCustomers = byCustomer.size;
+    const repeatCustomers = [...byCustomer.values()].filter((c) => c.usages > 1).length;
+
+    // Séries temporelles
+    const byDay = new Map<string, { usages: number; discount: number }>();
+    const byHour: number[] = Array.from({ length: 24 }, () => 0);
+    const byWeekday: number[] = Array.from({ length: 7 }, () => 0); // 0 = dimanche
+    for (const u of usages) {
+      const d = new Date(u.created_at);
+      const day = d.toISOString().slice(0, 10);
+      const e = byDay.get(day) ?? { usages: 0, discount: 0 };
+      e.usages += 1;
+      e.discount += u.discount_amount ?? 0;
+      byDay.set(day, e);
+      byHour[d.getUTCHours()] += 1;
+      byWeekday[d.getUTCDay()] += 1;
+    }
+
+    // Top 5 clients (noms/téléphones récupérés en une requête)
+    const top = [...byCustomer.entries()]
+      .sort((a, b) => b[1].usages - a[1].usages || b[1].discount - a[1].discount)
+      .slice(0, 5);
+    const topInfos = top.length
+      ? await this.prismaService.customer.findMany({
+          where: { id: { in: top.map(([cid]) => cid) } },
+          select: { id: true, first_name: true, last_name: true, phone: true },
+        })
+      : [];
+    const infoById = new Map(topInfos.map((c) => [c.id, c]));
+
+    return {
+      kpis: {
+        total_usages: totalUsages,
+        unique_customers: uniqueCustomers,
+        orders_count: orderAmounts.length,
+        total_discount: totalDiscount,
+        total_revenue: totalRevenue,
+        avg_basket: orderAmounts.length ? totalRevenue / orderAmounts.length : 0,
+        avg_discount: totalUsages ? totalDiscount / totalUsages : 0,
+        repeat_rate: uniqueCustomers ? repeatCustomers / uniqueCustomers : 0,
+        first_usage_at: totalUsages ? usages[0].created_at : null,
+        last_usage_at: totalUsages ? usages[totalUsages - 1].created_at : null,
+      },
+      by_day: [...byDay.entries()].map(([date, v]) => ({ date, ...v })),
+      by_hour: byHour.map((count, hour) => ({ hour, usages: count })),
+      by_weekday: byWeekday.map((count, weekday) => ({ weekday, usages: count })),
+      top_customers: top.map(([cid, v]) => ({
+        customer_id: cid,
+        first_name: infoById.get(cid)?.first_name ?? null,
+        last_name: infoById.get(cid)?.last_name ?? null,
+        phone: infoById.get(cid)?.phone ?? null,
+        usages: v.usages,
+        total_discount: v.discount,
+      })),
+    };
+  }
+
+  /**
+   * Utilisations paginées d'un code promo (table "commandes" de la vue détail).
+   */
+  async getUsages(id: string, page = 1, limit = 10) {
+    const promoCode = await this.prismaService.promoCode.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!promoCode) {
+      throw new HttpException('Code promo introuvable', HttpStatus.NOT_FOUND);
+    }
+
+    const skip = (page - 1) * limit;
+    const [data, total] = await Promise.all([
+      this.prismaService.promoCodeUsage.findMany({
+        where: { promo_code_id: id },
+        include: {
+          customer: {
+            select: { id: true, first_name: true, last_name: true, phone: true },
+          },
+          order: {
+            select: { id: true, reference: true, amount: true, status: true },
+          },
+        },
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prismaService.promoCodeUsage.count({ where: { promo_code_id: id } }),
+    ]);
+
+    return {
+      data,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
   async getStats() {
     const now = new Date();
     const [activeCount, totalUsage, totalDiscountAmount, expiredCount] = await Promise.all([

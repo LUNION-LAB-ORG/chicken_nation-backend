@@ -10,6 +10,8 @@ import {
   Req,
   Query,
   ParseUUIDPipe,
+  DefaultValuePipe,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Customer } from '@prisma/client';
@@ -91,6 +93,26 @@ export class PromoCodeController {
   // ================================
   // ROUTES BACKOFFICE (staff)
   // ================================
+
+  @Get(':id/analytics')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PROMOTIONS, Action.READ)
+  @ApiOperation({ summary: "Analytics détaillées d'un code promo (KPIs, séries, top clients)" })
+  getAnalytics(@Param('id', ParseUUIDPipe) id: string) {
+    return this.promoCodeService.getAnalytics(id);
+  }
+
+  @Get(':id/usages')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PROMOTIONS, Action.READ)
+  @ApiOperation({ summary: "Utilisations paginées d'un code promo" })
+  getUsages(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+  ) {
+    return this.promoCodeService.getUsages(id, page, limit);
+  }
 
   @Get(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
