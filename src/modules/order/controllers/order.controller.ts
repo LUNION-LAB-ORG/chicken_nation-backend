@@ -1,4 +1,4 @@
-import { CacheInterceptor } from '@nestjs/cache-manager';
+import { UserScopedCacheInterceptor } from '../interceptors/user-scoped-cache.interceptor';
 import {
   Body,
   Controller,
@@ -45,7 +45,7 @@ import { OrderWebSocketService } from '../websockets/order-websocket.service';
 
 @ApiTags('Commandes')
 @Controller('orders')
-@UseInterceptors(CacheInterceptor)
+@UseInterceptors(UserScopedCacheInterceptor)
 export class OrderController {
   constructor(
     private readonly orderService: OrderService,
