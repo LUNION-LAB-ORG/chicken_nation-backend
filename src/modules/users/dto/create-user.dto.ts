@@ -66,4 +66,15 @@ export class CreateUserDto {
     required: true,
   })
   role: UserRole;
+
+  // RESTAURANT (obligatoire pour les rôles de point de vente)
+  @ApiProperty({
+    description:
+      "Restaurant de rattachement — requis pour un rôle point de vente (caissier, cuisine, manager, assistant).",
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (value ? String(value).trim() : value))
+  restaurant_id?: string;
 }

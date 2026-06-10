@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 
 import { CreateUserDto } from '../dto/create-user.dto';
 import { EntityStatus, User, UserType } from '@prisma/client';
+import { isStoreRole, resolveStaffType } from '../helpers/staff-type.helper';
 import type { Request } from 'express';
 import { PrismaService } from 'src/database/services/prisma.service';
 import * as bcrypt from 'bcryptjs';
@@ -40,12 +41,24 @@ export class UsersService {
     const salt = await bcrypt.genSalt();
     const hash = await bcrypt.hash(pass, salt);
 
+    // GARDE-FOU : le `type` découle TOUJOURS du rôle (jamais du client ni du
+    // créateur). Un rôle de point de vente exige un restaurant de rattachement.
+    const { restaurant_id, ...userData } = createUserDto;
+    const type = resolveStaffType(createUserDto.role);
+    const restaurantId = isStoreRole(createUserDto.role) ? restaurant_id : null;
+    if (isStoreRole(createUserDto.role) && !restaurantId) {
+      throw new BadRequestException(
+        'Un rôle de point de vente (caissier, cuisine, manager, assistant) doit être rattaché à un restaurant.',
+      );
+    }
+
     // Créer l'utilisateur
     const newUser = await this.prisma.user.create({
       data: {
-        ...createUserDto,
+        ...userData,
         password: hash,
-        type: UserType.BACKOFFICE,
+        type,
+        restaurant_id: restaurantId,
       },
       include: {
         restaurant: true,
@@ -81,13 +94,24 @@ export class UsersService {
     const salt = await bcrypt.genSalt();
     const hash = await bcrypt.hash(pass, salt);
 
+    // GARDE-FOU : type découlé du rôle. Restaurant = celui choisi (admin) sinon
+    // celui du créateur (manager qui ajoute un membre de SON restaurant).
+    const { restaurant_id, ...memberData } = createUserDto;
+    const type = resolveStaffType(createUserDto.role);
+    const restaurantId = restaurant_id ?? user.restaurant_id ?? null;
+    if (isStoreRole(createUserDto.role) && !restaurantId) {
+      throw new BadRequestException(
+        'Un rôle de point de vente (caissier, cuisine, manager, assistant) doit être rattaché à un restaurant.',
+      );
+    }
+
     // Créer l'utilisateur
     const newUser = await this.prisma.user.create({
       data: {
-        ...createUserDto,
+        ...memberData,
         password: hash,
-        restaurant_id: user.restaurant_id,
-        type: UserType.RESTAURANT,
+        restaurant_id: restaurantId,
+        type,
       },
       include: {
         restaurant: true,
