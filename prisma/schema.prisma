@@ -1531,19 +1531,31 @@ model PromoCodeTargetedCategory {
   @@unique([promo_code_id, category_id])
 }
 
+/// Statut d'un usage de code promo dans son cycle de vie :
+///  - INACTIVE : usage enregistré à la création de la commande (PENDING, non payée)
+///               → NE compte PAS dans usage_count / analytics.
+///  - ACTIVE   : la commande est devenue payée/ACCEPTED → l'usage est comptabilisé.
+/// Repasse INACTIVE si la commande est annulée (décompte).
+enum PromoCodeUsageStatus {
+  ACTIVE
+  INACTIVE
+}
+
 model PromoCodeUsage {
-  id              String    @id @default(uuid()) @db.Uuid
-  promo_code_id   String    @db.Uuid
-  promo_code      PromoCode @relation(fields: [promo_code_id], references: [id])
-  customer_id     String    @db.Uuid
-  customer        Customer  @relation(fields: [customer_id], references: [id])
-  order_id        String?   @db.Uuid
-  order           Order?    @relation(fields: [order_id], references: [id])
+  id              String               @id @default(uuid()) @db.Uuid
+  promo_code_id   String               @db.Uuid
+  promo_code      PromoCode            @relation(fields: [promo_code_id], references: [id])
+  customer_id     String               @db.Uuid
+  customer        Customer             @relation(fields: [customer_id], references: [id])
+  order_id        String?              @db.Uuid
+  order           Order?               @relation(fields: [order_id], references: [id])
   discount_amount Float
-  created_at      DateTime  @default(now()) @db.Timestamp(6)
+  status          PromoCodeUsageStatus @default(INACTIVE)
+  created_at      DateTime             @default(now()) @db.Timestamp(6)
 
   @@index([promo_code_id])
   @@index([customer_id])
+  @@index([order_id])
 }
 
 // ================================

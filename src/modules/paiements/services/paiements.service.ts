@@ -20,6 +20,7 @@ import { KkiapayService } from 'src/kkiapay/kkiapay.service';
 import { CreatePaiementKkiapayDto } from 'src/modules/paiements/dto/create-paiement-kkiapay.dto';
 import type { Request } from 'express';
 import { PaiementEvent } from 'src/modules/paiements/events/paiement.event';
+import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 
 @Injectable()
 export class PaiementsService {
@@ -27,6 +28,7 @@ export class PaiementsService {
     private readonly prisma: PrismaService,
     private readonly kkiapay: KkiapayService,
     private readonly paiementEvent: PaiementEvent,
+    private readonly promoCodeService: PromoCodeService,
   ) { }
 
   // Payer avec Kkiapay
@@ -151,7 +153,7 @@ export class PaiementsService {
     const isFullyPaid = totalPaid >= order.amount;
     const shouldComplete = isFullyPaid && order.status === OrderStatus.COLLECTED;
 
-    await this.prisma.order.update({
+    const updatedOrder = await this.prisma.order.update({
       where: { id: orderId },
       data: {
         paied_at: now,
@@ -162,6 +164,15 @@ export class PaiementsService {
         }),
       },
     });
+
+    // Paiement (backoffice) confirmé → comptabiliser l'usage du code promo.
+    // Idempotent (no-op si déjà ACTIVE) ; isolé.
+    try {
+      await this.promoCodeService.activateUsageForOrder(updatedOrder);
+    } catch (e) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      console.error(`Sync usage promo (addPaiement) échoué pour ${orderId}: ${(e as any)?.message}`);
+    }
 
     return {
       success: true,
@@ -221,7 +232,7 @@ export class PaiementsService {
     if (result.order) {
       const next_status = this.getOrderStatus(result.order.payment_method!, result.order.type, result.order.status);
       const paymentAt = result.paiement.created_at;
-      await this.prisma.order.update({
+      const updatedOrder = await this.prisma.order.update({
         where: { id: result.order.id },
         data: {
           paied_at: paymentAt,
@@ -232,6 +243,17 @@ export class PaiementsService {
           ...this.buildPaymentDateAlignment(result.order, paymentAt),
         },
       });
+
+      // Paiement confirmé → comptabiliser l'usage du code promo (usage_count++).
+      // Idempotent ; isolé pour ne jamais casser la confirmation du paiement.
+      if (next_status === OrderStatus.ACCEPTED) {
+        try {
+          await this.promoCodeService.activateUsageForOrder(updatedOrder);
+        } catch (e) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          console.error(`Sync usage promo (paiement KKiaPay) échoué pour ${updatedOrder.id}: ${(e as any)?.message}`);
+        }
+      }
     }
 
     return result.paiement;

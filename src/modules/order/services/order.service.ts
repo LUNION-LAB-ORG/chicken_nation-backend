@@ -482,6 +482,16 @@ export class OrderService {
       );
     }
 
+    // Commande backoffice créée directement ACCEPTED → comptabiliser l'usage
+    // du code promo (elle ne passe pas par une transition de statut ultérieure).
+    if (order.status === OrderStatus.ACCEPTED) {
+      try {
+        await this.promoCodeService.activateUsageForOrder(order);
+      } catch (e) {
+        this.logger.error(`Sync usage promo (create ACCEPTED) échoué pour ${order.id}: ${e?.message}`);
+      }
+    }
+
     return order;
   }
 
@@ -580,6 +590,20 @@ export class OrderService {
         restaurant: true,
       },
     });
+
+    // Cycle de vie de l'usage du code promo selon le statut :
+    //  - → ACCEPTED (paiement confirmé) : comptabilise l'usage (usage_count++)
+    //  - → CANCELLED : décompte l'usage (usage_count--)
+    // Idempotent côté PromoCodeService ; isolé pour ne jamais casser la maj statut.
+    try {
+      if (status === OrderStatus.ACCEPTED && order.status !== OrderStatus.ACCEPTED) {
+        await this.promoCodeService.activateUsageForOrder(updatedOrder);
+      } else if (status === OrderStatus.CANCELLED) {
+        await this.promoCodeService.deactivateUsageForOrder(order.id);
+      }
+    } catch (e) {
+      this.logger.error(`Sync usage promo (statut ${status}) échoué pour ${order.id}: ${e?.message}`);
+    }
 
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderStatusUpdatedEvent({
@@ -811,6 +835,15 @@ export class OrderService {
       this.logger.warn(
         `Order ${updated.reference} : montant reçu ${amount} ≠ montant dû ${updated.amount}`,
       );
+    }
+
+    // Encaissement cash confirmé → comptabiliser l'usage du code promo
+    // (cas où la commande OFFLINE n'est pas passée par une transition ACCEPTED).
+    // Idempotent ; isolé.
+    try {
+      await this.promoCodeService.activateUsageForOrder(updated);
+    } catch (e) {
+      this.logger.error(`Sync usage promo (markPaidCash) échoué pour ${updated.id}: ${e?.message}`);
     }
 
     // Event WebSocket pour que le drawer/cards se rafraîchissent côté backoffice
@@ -1101,6 +1134,12 @@ export class OrderService {
     // 🔊 Signal spécifique pour la tablette du restaurant
     if (status === OrderStatus.ACCEPTED) {
       this.orderWebSocketService.emitStatusUpdate(updatedOrder, order.status);
+      // Commande confirmée → comptabiliser l'usage du code promo.
+      try {
+        await this.promoCodeService.activateUsageForOrder(updatedOrder);
+      } catch (e) {
+        this.logger.error(`Sync usage promo (updateClient ACCEPTED) échoué pour ${order.id}: ${e?.message}`);
+      }
     }
 
     return updatedOrder;

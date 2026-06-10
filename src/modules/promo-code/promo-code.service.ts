@@ -1,5 +1,5 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
-import { DiscountType, Prisma, TargetType, User } from '@prisma/client';
+import { DiscountType, Prisma, PromoCodeUsageStatus, TargetType, User } from '@prisma/client';
 import type { Request } from 'express';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -18,7 +18,8 @@ const promoCodeInclude = {
   },
   _count: {
     select: {
-      usages: true,
+      // Ne compter que les usages ACTIFS (commandes payées/acceptées non annulées).
+      usages: { where: { status: PromoCodeUsageStatus.ACTIVE } },
     },
   },
   promo_code_targeted_dishes: {
@@ -228,6 +229,7 @@ export class PromoCodeService {
       include: {
         ...promoCodeInclude,
         usages: {
+          where: { status: PromoCodeUsageStatus.ACTIVE },
           include: {
             customer: {
               select: {
@@ -486,12 +488,13 @@ export class PromoCodeService {
       throw new HttpException('Ce code promo a atteint son nombre maximum d\'utilisations', HttpStatus.BAD_REQUEST);
     }
 
-    // Validate per-user usage limit
+    // Validate per-user usage limit (usages ACTIFS uniquement)
     if (promoCode.max_usage_per_user) {
       const userUsageCount = await this.prismaService.promoCodeUsage.count({
         where: {
           promo_code_id: promoCode.id,
           customer_id: customerId,
+          status: PromoCodeUsageStatus.ACTIVE,
         },
       });
 
@@ -627,36 +630,125 @@ export class PromoCodeService {
       }
     }
 
-    const [usage] = await this.prismaService.$transaction([
-      this.prismaService.promoCodeUsage.create({
-        data: {
-          promo_code_id: promoCodeId,
-          customer_id: customerId,
-          order_id: orderId,
-          discount_amount: discountAmount,
-        },
-      }),
-      this.prismaService.promoCode.update({
-        where: { id: promoCodeId },
-        data: { usage_count: { increment: 1 } },
-      }),
-    ]);
+    // On STAGE l'usage en INACTIVE (commande encore PENDING, non payée) : il
+    // capture le promo_code_id + order_id + le montant EXACT de la réduction,
+    // mais NE compte PAS encore (pas d'incrément usage_count). Il sera activé
+    // quand la commande passe ACCEPTED (cf. activateUsageForOrder).
+    const usage = await this.prismaService.promoCodeUsage.create({
+      data: {
+        promo_code_id: promoCodeId,
+        customer_id: customerId,
+        order_id: orderId,
+        discount_amount: discountAmount,
+        status: PromoCodeUsageStatus.INACTIVE,
+      },
+    });
 
     this.logger.log({
-      message: 'Utilisation de code promo enregistrée',
+      message: 'Usage de code promo staged (INACTIVE)',
       code: promoCode.code,
       customerId,
       discountAmount,
     });
 
-    this.appGateway.emitToBackoffice('promo_code:usage_recorded', {
-      promoCodeId,
-      customerId,
-      orderId,
-      discountAmount,
+    return usage;
+  }
+
+  /**
+   * Comptabilise le code promo d'une commande devenue payée / ACCEPTED.
+   *  - Si un usage a été stagé à la création → passe ACTIVE + usage_count++.
+   *  - Sinon, si la commande porte un code_promo (cas backoffice qui ne stage
+   *    pas à la création) → crée l'usage directement ACTIVE avec le montant de
+   *    réduction de la commande.
+   * Idempotent : no-op si l'usage est déjà ACTIVE ou s'il n'y a pas de code.
+   */
+  async activateUsageForOrder(order: {
+    id: string;
+    code_promo: string | null;
+    customer_id: string;
+    discount: number | null;
+  }) {
+    if (!order.code_promo) return;
+
+    const existing = await this.prismaService.promoCodeUsage.findFirst({
+      where: { order_id: order.id },
     });
 
-    return usage;
+    if (existing) {
+      if (existing.status === PromoCodeUsageStatus.ACTIVE) return; // déjà compté
+      await this.prismaService.$transaction([
+        this.prismaService.promoCodeUsage.update({
+          where: { id: existing.id },
+          data: { status: PromoCodeUsageStatus.ACTIVE },
+        }),
+        this.prismaService.promoCode.update({
+          where: { id: existing.promo_code_id },
+          data: { usage_count: { increment: 1 } },
+        }),
+      ]);
+      this.appGateway.emitToBackoffice('promo_code:usage_recorded', {
+        promoCodeId: existing.promo_code_id,
+        orderId: order.id,
+      });
+      return;
+    }
+
+    // Pas d'usage stagé : résoudre le code et créer directement ACTIVE.
+    const promo = await this.prismaService.promoCode.findFirst({
+      where: { code: order.code_promo },
+    });
+    if (!promo) return;
+    await this.prismaService.$transaction([
+      this.prismaService.promoCodeUsage.create({
+        data: {
+          promo_code_id: promo.id,
+          customer_id: order.customer_id,
+          order_id: order.id,
+          discount_amount: order.discount ?? 0,
+          status: PromoCodeUsageStatus.ACTIVE,
+        },
+      }),
+      this.prismaService.promoCode.update({
+        where: { id: promo.id },
+        data: { usage_count: { increment: 1 } },
+      }),
+    ]);
+    this.appGateway.emitToBackoffice('promo_code:usage_recorded', {
+      promoCodeId: promo.id,
+      orderId: order.id,
+    });
+  }
+
+  /**
+   * Décompte le code promo d'une commande ANNULÉE : tous les usages ACTIVE de
+   * cette commande repassent INACTIVE + usage_count--. Idempotent (no-op si
+   * aucun usage actif).
+   */
+  async deactivateUsageForOrder(orderId: string) {
+    const actives = await this.prismaService.promoCodeUsage.findMany({
+      where: { order_id: orderId, status: PromoCodeUsageStatus.ACTIVE },
+    });
+    if (actives.length === 0) return;
+
+    await this.prismaService.$transaction(
+      actives.flatMap((u) => [
+        this.prismaService.promoCodeUsage.update({
+          where: { id: u.id },
+          data: { status: PromoCodeUsageStatus.INACTIVE },
+        }),
+        this.prismaService.promoCode.update({
+          where: { id: u.promo_code_id },
+          data: { usage_count: { decrement: 1 } },
+        }),
+      ]),
+    );
+
+    for (const u of actives) {
+      this.appGateway.emitToBackoffice('promo_code:usage_reverted', {
+        promoCodeId: u.promo_code_id,
+        orderId,
+      });
+    }
   }
 
   /**
@@ -675,7 +767,7 @@ export class PromoCodeService {
     }
 
     const usages = await this.prismaService.promoCodeUsage.findMany({
-      where: { promo_code_id: id },
+      where: { promo_code_id: id, status: PromoCodeUsageStatus.ACTIVE },
       select: {
         customer_id: true,
         discount_amount: true,
@@ -770,9 +862,13 @@ export class PromoCodeService {
     }
 
     const skip = (page - 1) * limit;
+    const usageWhere = {
+      promo_code_id: id,
+      status: PromoCodeUsageStatus.ACTIVE,
+    };
     const [data, total] = await Promise.all([
       this.prismaService.promoCodeUsage.findMany({
-        where: { promo_code_id: id },
+        where: usageWhere,
         include: {
           customer: {
             select: { id: true, first_name: true, last_name: true, phone: true },
@@ -785,7 +881,7 @@ export class PromoCodeService {
         skip,
         take: limit,
       }),
-      this.prismaService.promoCodeUsage.count({ where: { promo_code_id: id } }),
+      this.prismaService.promoCodeUsage.count({ where: usageWhere }),
     ]);
 
     return {
@@ -805,9 +901,12 @@ export class PromoCodeService {
           start_date: { lte: now },
         },
       }),
-      this.prismaService.promoCodeUsage.count(),
+      this.prismaService.promoCodeUsage.count({
+        where: { status: PromoCodeUsageStatus.ACTIVE },
+      }),
       this.prismaService.promoCodeUsage.aggregate({
         _sum: { discount_amount: true },
+        where: { status: PromoCodeUsageStatus.ACTIVE },
       }),
       this.prismaService.promoCode.count({
         where: {
