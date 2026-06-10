@@ -163,6 +163,11 @@ export class OrderService {
           zone_id: delivery?.zone_id,
           tax: Number(tax),
           discount: Number(discount),
+          // Persister le code promo / voucher SAISI lorsqu'il a réellement
+          // appliqué une réduction (promoResult.type != null). Sans ça, le
+          // backoffice affichait « Réduction » sans en donner la raison
+          // (le détail/drawer lit order.code_promo → « Réduction · Code XXX »).
+          ...(promoResult.type && code_promo ? { code_promo } : {}),
           net_amount: Number(netAmount),
           amount: Number(totalAmount),
           date: finalDate,

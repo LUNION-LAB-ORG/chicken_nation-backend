@@ -608,6 +608,25 @@ export class PromoCodeService {
       throw new HttpException('Code promo introuvable', HttpStatus.NOT_FOUND);
     }
 
+    // Idempotence par (promo_code_id, order_id) : un même code ne peut être
+    // enregistré qu'UNE fois pour une commande donnée. Sans ça, on dédoublait
+    // l'usage (l'app appelle POST /promo-code/:id/record-usage ET createv2
+    // enregistre automatiquement → 2 lignes par commande, usage_count gonflé).
+    // Protège aussi contre un éventuel double backend pointant la même base.
+    if (orderId) {
+      const existing = await this.prismaService.promoCodeUsage.findFirst({
+        where: { promo_code_id: promoCodeId, order_id: orderId },
+      });
+      if (existing) {
+        this.logger.warn({
+          message: 'Usage de code promo déjà enregistré pour cette commande — ignoré (idempotence)',
+          code: promoCode.code,
+          orderId,
+        });
+        return existing;
+      }
+    }
+
     const [usage] = await this.prismaService.$transaction([
       this.prismaService.promoCodeUsage.create({
         data: {
