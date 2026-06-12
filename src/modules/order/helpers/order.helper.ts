@@ -6,6 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
+import { assertDishesAvailableNow } from 'src/common/utils/dish-availability.util';
 import {
   OrderStatus,
   OrderType,
@@ -189,6 +190,9 @@ export class OrderHelper {
         'Un ou plusieurs plats sont introuvables ou indisponibles',
       );
     }
+
+    // Créneau horaire de disponibilité : blocage serveur (l'app ne fait que masquer)
+    assertDishesAvailableNow(dishes);
 
     return dishes;
   }

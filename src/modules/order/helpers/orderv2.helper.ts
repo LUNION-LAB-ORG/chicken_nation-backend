@@ -14,6 +14,7 @@ import {
 } from '@prisma/client';
 import { JsonValue } from '@prisma/client/runtime/library';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
+import { assertDishesAvailableNow } from 'src/common/utils/dish-availability.util';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
@@ -120,6 +121,10 @@ export class OrderV2Helper {
     if (dishes.length !== dishIds.length) {
       throw new BadRequestException('Un ou plusieurs plats de votre commande n\'existent plus au catalogue.');
     }
+
+    // Créneau horaire de disponibilité : blocage serveur (l'app ne fait que masquer)
+    assertDishesAvailableNow(dishes);
+
     return dishes;
   }
 
