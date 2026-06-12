@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { OrderType } from '@prisma/client';
 
 /** Plat avec créneau de disponibilité optionnel (« HH:mm », null = toujours dispo). */
 interface DishWithWindow {
@@ -50,5 +51,36 @@ export function assertDishesAvailableNow(
     .join(', ');
   throw new BadRequestException(
     `Article(s) indisponible(s) à cette heure : ${details}. Retirez-le(s) du panier ou commandez pendant le créneau.`,
+  );
+}
+
+const ORDER_TYPE_LABELS: Record<OrderType, string> = {
+  [OrderType.DELIVERY]: 'en livraison',
+  [OrderType.PICKUP]: 'à emporter',
+  [OrderType.TABLE]: 'sur place',
+};
+
+/**
+ * Rejette la commande (400) si un plat ou un supplément n'est pas proposé pour
+ * le mode de commande choisi. Liste vide ou absente = disponible partout
+ * (sécurité : une donnée manquante ne bloque jamais la vente).
+ */
+export function assertOrderTypeAllowed(
+  entities: { name: string; available_order_types?: OrderType[] | null }[],
+  type: OrderType | null | undefined,
+  kind: 'plat' | 'supplément' = 'plat',
+): void {
+  if (!type) return;
+  const blocked = entities.filter(
+    (e) =>
+      Array.isArray(e.available_order_types) &&
+      e.available_order_types.length > 0 &&
+      !e.available_order_types.includes(type),
+  );
+  if (blocked.length === 0) return;
+
+  const names = blocked.map((e) => e.name).join(', ');
+  throw new BadRequestException(
+    `${kind === 'plat' ? 'Plat(s)' : 'Supplément(s)'} non disponible(s) ${ORDER_TYPE_LABELS[type]} : ${names}. Changez de mode de commande ou retirez-le(s) du panier.`,
   );
 }

@@ -14,7 +14,7 @@ import {
 } from '@prisma/client';
 import { JsonValue } from '@prisma/client/runtime/library';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
-import { assertDishesAvailableNow } from 'src/common/utils/dish-availability.util';
+import { assertDishesAvailableNow, assertOrderTypeAllowed } from 'src/common/utils/dish-availability.util';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
@@ -271,6 +271,9 @@ export class OrderV2Helper {
         if (dbSupplements.length !== item.supplements.length) {
           throw new BadRequestException('Un ou plusieurs suppléments sont invalides ou indisponibles pour ce plat.');
         }
+
+        // Mode de commande : suppléments compatibles avec le type choisi
+        assertOrderTypeAllowed(dbSupplements, type ?? null, 'supplément');
 
         // On associe chaque supplément demandé avec son prix en base de données
         for (const reqSupp of item.supplements) {

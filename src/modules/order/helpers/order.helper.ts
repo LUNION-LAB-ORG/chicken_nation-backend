@@ -6,7 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
-import { assertDishesAvailableNow } from 'src/common/utils/dish-availability.util';
+import { assertDishesAvailableNow, assertOrderTypeAllowed } from 'src/common/utils/dish-availability.util';
 import {
   OrderStatus,
   OrderType,
@@ -197,6 +197,25 @@ export class OrderHelper {
     return dishes;
   }
 
+  /**
+   * Vérifie que tous les plats sont bien vendus dans le restaurant choisi
+   * (modèle exclusion : un plat est vendu partout SAUF s'il est exclu).
+   */
+  async assertDishesSoldInRestaurant(restaurantId: string, dishIds: string[]) {
+    const uniqueDishIds = [...new Set(dishIds)];
+    const sellableCount = await this.prisma.dish.count({
+      where: {
+        id: { in: uniqueDishIds },
+        dish_excluded_restaurants: { none: { restaurant_id: restaurantId } },
+      },
+    });
+    if (sellableCount !== uniqueDishIds.length) {
+      throw new BadRequestException(
+        "Un ou plusieurs plats de votre panier ne sont pas disponibles dans ce restaurant. Choisissez un autre restaurant ou retirez-les.",
+      );
+    }
+  }
+
   // Valider l'adresse de livraison
   async validateAddress(address: string) {
     if (!address) {
@@ -222,8 +241,14 @@ export class OrderHelper {
   async calculateOrderDetails(
     items: CreateOrderDto['items'],
     dishes: Dish[],
-    options: { skipExclusionCheck?: boolean } = {},
+    options: { skipExclusionCheck?: boolean; orderType?: OrderType } = {},
   ) {
+    // Mode de commande : plats compatibles avec le type choisi (sauf édition
+    // d'une commande existante, où l'on ne re-bloque pas l'acquis).
+    if (!options.skipExclusionCheck && options.orderType) {
+      assertOrderTypeAllowed(dishes, options.orderType, 'plat');
+    }
+
     let netAmount = 0;
 
     const orderItems: {
@@ -311,6 +336,11 @@ export class OrderHelper {
           throw new BadRequestException(
             'Un ou plusieurs suppléments sont invalides pour ce plat',
           );
+        }
+
+        // Mode de commande : suppléments compatibles avec le type choisi
+        if (!options.skipExclusionCheck && options.orderType) {
+          assertOrderTypeAllowed(supplements, options.orderType, 'supplément');
         }
 
         supplementsData = supplements.map((s) => ({

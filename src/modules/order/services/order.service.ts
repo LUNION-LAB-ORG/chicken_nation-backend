@@ -273,9 +273,12 @@ export class OrderService {
       orderData.code_promo,
     );
 
-    // Calculer les montants et préparer les order items
+    // Calculer les montants et préparer les order items.
+    // orderType : fait respecter available_order_types (plats + suppléments) côté serveur.
     const { orderItems, netAmount, totalDishes } =
-      await this.orderHelper.calculateOrderDetails(items, dishesWithDetails);
+      await this.orderHelper.calculateOrderDetails(items, dishesWithDetails, {
+        orderType: orderData.type,
+      });
 
     //Calculer la promotion et la création de l'utilisation de la promotion
     const promotion = await this.orderHelper.calculatePromotionPrice(
@@ -331,6 +334,15 @@ export class OrderService {
         address,
       });
     }
+
+    // Modèle exclusion : tous les plats du panier doivent être vendus dans ce restaurant
+    if (restaurant) {
+      await this.orderHelper.assertDishesSoldInRestaurant(
+        restaurant.id,
+        items.map((item) => item.dish_id),
+      );
+    }
+
     // Montant frais de livraison
     const deliveryFee = delivery_fee || (delivery ? delivery?.montant : 0);
 
