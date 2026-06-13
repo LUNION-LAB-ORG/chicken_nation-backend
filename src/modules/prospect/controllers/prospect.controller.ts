@@ -70,8 +70,18 @@ export class ProspectController {
   @Get('call-queue')
   @RequirePermission(Modules.BASE_DONNEES, Action.READ)
   @ApiOperation({ summary: "File d'appels J+1 (call center)" })
-  callQueue(@Req() req: Request, @Query('restaurantId') restaurantId?: string) {
-    return this.prospectService.getCallQueue(req.user as User, restaurantId);
+  callQueue(
+    @Req() req: Request,
+    @Query('restaurantId') restaurantId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.prospectService.getCallQueue(
+      req.user as User,
+      restaurantId,
+      startDate,
+      endDate,
+    );
   }
 
   @Get('stats')

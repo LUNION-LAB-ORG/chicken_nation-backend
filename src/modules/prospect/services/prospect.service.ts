@@ -200,7 +200,12 @@ export class ProspectService {
    * à traiter (Nouveau / À appeler / Non joignable recyclable), du plus ancien au
    * plus récent. + indicateurs du jour.
    */
-  async getCallQueue(user: User, restaurantId?: string) {
+  async getCallQueue(
+    user: User,
+    restaurantId?: string,
+    startDate?: string,
+    endDate?: string,
+  ) {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
 
@@ -209,6 +214,19 @@ export class ProspectService {
       : restaurantId
         ? { restaurant_id: restaurantId }
         : {};
+
+    // Par défaut : tout le backlog J+1 et antérieur (créé avant aujourd'hui).
+    // Si l'agent fournit une plage de dates (rattrapage d'un jour raté), on
+    // cible précisément cette plage à la place — aujourd'hui inclus si voulu.
+    const createdAtFilter: Prisma.DateTimeFilter =
+      startDate || endDate
+        ? {
+            ...(startDate && { gte: new Date(startDate) }),
+            ...(endDate && {
+              lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
+            }),
+          }
+        : { lt: startOfToday };
 
     const where: Prisma.ProspectWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
@@ -219,7 +237,7 @@ export class ProspectService {
           ProspectStatus.NON_JOIGNABLE,
         ],
       },
-      created_at: { lt: startOfToday },
+      created_at: createdAtFilter,
       ...scope,
     };
 
