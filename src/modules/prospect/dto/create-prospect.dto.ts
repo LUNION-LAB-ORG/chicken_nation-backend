@@ -27,7 +27,7 @@ export class CreateProspectDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   order_number: string;
 
-  @ApiProperty({ description: 'Téléphone ivoirien (10 chiffres, +225 accepté)', example: '0700000000' })
+  @ApiProperty({ description: 'Téléphone : local (10 chiffres) ou international (6–15 chiffres, +225 accepté)', example: '0700000000' })
   @Transform(({ value }) => {
     if (typeof value !== 'string') return value;
     let d = value.replace(/\D/g, '');
@@ -35,7 +35,9 @@ export class CreateProspectDto {
     if (d.startsWith('225') && d.length === 13) d = d.slice(3); // +225 / 00225 → 10 chiffres locaux
     return d;
   })
-  @Matches(/^\d{10}$/, { message: 'Le numéro de téléphone doit comporter 10 chiffres' })
+  // Plage E.164 (6–15 chiffres) : on autorise les numéros non standard / étrangers,
+  // pas seulement les 10 chiffres ivoiriens (un client Glovo/Yango peut en avoir un).
+  @Matches(/^\d{6,15}$/, { message: 'Le numéro de téléphone doit comporter entre 6 et 15 chiffres' })
   phone: string;
 
   @ApiPropertyOptional({

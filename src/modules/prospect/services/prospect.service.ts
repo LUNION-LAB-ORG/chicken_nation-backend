@@ -87,7 +87,8 @@ export class ProspectService {
    */
   async checkPhone(user: User, phone: string) {
     const cleaned = (phone || '').replace(/\D/g, '');
-    if (cleaned.length !== 10) {
+    // Plage E.164 (6–15 chiffres) — aligné sur la validation de saisie.
+    if (cleaned.length < 6 || cleaned.length > 15) {
       return { exists: false, prospect: null };
     }
 
