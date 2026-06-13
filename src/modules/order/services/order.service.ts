@@ -580,6 +580,9 @@ export class OrderService {
         ...(status === OrderStatus.COLLECTED && { collected_at: new Date() }),
         ...(status === OrderStatus.COMPLETED && { completed_at: new Date() }),
         ...(status === OrderStatus.CANCELLED && { cancelled_at: new Date(), cancelled_by: meta?.userId, cancelled_reason: meta?.reason || '' }),
+        // Audit : dernier modificateur staff (meta.role n'est présent que sur le
+        // flux backoffice ; côté client `/client/status` il est absent → on n'écrase pas).
+        ...(meta?.role && meta?.userId ? { updated_by: meta.userId } : {}),
       },
       include: {
         order_items: {
@@ -660,6 +663,11 @@ export class OrderService {
         paiements: true,
         customer: true,
         promotion: true,
+        // Créateur de la commande (staff backoffice/caisse) — null si commande
+        // passée par le client depuis l'app. Affiché côté admin uniquement.
+        user: {
+          select: { id: true, fullname: true, email: true, role: true },
+        },
         restaurant: {
           select: {
             id: true,
@@ -719,7 +727,22 @@ export class OrderService {
       throw new NotFoundException(`Commande est introuvable`);
     }
 
-    return order;
+    // Résolution du dernier modificateur staff (champ simple `updated_by`, pas
+    // de relation Prisma — cf. schéma). Attaché sous `updated_by_user`.
+    let updated_by_user: {
+      id: string;
+      fullname: string;
+      email: string;
+      role: string;
+    } | null = null;
+    if (order.updated_by) {
+      updated_by_user = await this.prisma.user.findUnique({
+        where: { id: order.updated_by },
+        select: { id: true, fullname: true, email: true, role: true },
+      });
+    }
+
+    return { ...order, updated_by_user };
   }
 
   /**
@@ -1168,7 +1191,7 @@ export class OrderService {
   async update(
     id: string,
     updateOrderDto: UpdateOrderDto,
-    options: { skipStatusCheck?: boolean } = {},
+    options: { skipStatusCheck?: boolean; userId?: string } = {},
   ) {
     const order = await this.findById(id);
     // Extraire les champs qui ne sont pas des colonnes directes de la table Order
@@ -1252,6 +1275,8 @@ export class OrderService {
         rest?.estimated_preparation_time ?? '',
       ),
       updated_at: new Date(),
+      // Audit : staff ayant fait cette modification (transmis par le contrôleur).
+      ...(options.userId ? { updated_by: options.userId } : {}),
     };
 
     // Ajouter les relations si fournies

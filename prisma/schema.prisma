@@ -1080,6 +1080,9 @@ model Order {
   restaurant       Restaurant  @relation(fields: [restaurant_id], references: [id])
   cancelled_by     String?
   cancelled_reason String?
+  // Dernier membre du staff (User) ayant modifié la commande — audit backoffice.
+  // Champ simple (comme cancelled_by) : le nom est résolu côté service à la lecture.
+  updated_by       String?     @db.Uuid
 
   // ================================
   // INTÉGRATION HUBRISE

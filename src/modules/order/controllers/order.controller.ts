@@ -231,7 +231,10 @@ export class OrderController {
     // (COMPLETED, COLLECTED, CANCELLED inclus). Cf. order.service.ts:update().
     const user = req.user as User;
     const isAdmin = user?.role === UserRole.ADMIN;
-    return this.orderService.update(id, updateOrderDto, { skipStatusCheck: isAdmin });
+    return this.orderService.update(id, updateOrderDto, {
+      skipStatusCheck: isAdmin,
+      userId: user.id,
+    });
   }
   @Patch(':id/client')
   @UseGuards(JwtCustomerAuthGuard)
