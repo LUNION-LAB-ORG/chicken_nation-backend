@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 
 import { CreateUserDto } from '../dto/create-user.dto';
 import { EntityStatus, Prisma, User, UserRole, UserType } from '@prisma/client';
@@ -213,6 +213,60 @@ export class UsersService {
     const { password, ...rest } = newUser;
 
     return rest;
+  }
+
+  /**
+   * Mise à jour d'un membre CIBLÉ par son id (édition par l'admin, ou par
+   * l'utilisateur sur son propre profil). Contrairement à `update()` qui ne
+   * touchait QUE le compte connecté, celui-ci édite n'importe quel membre et
+   * re-dérive type/restaurant depuis le rôle (cohérence garantie).
+   */
+  async updateById(req: Request, id: string, updateUserDto: UpdateUserDto) {
+    const actor = req.user as User;
+    const target = await this.prisma.user.findUnique({ where: { id } });
+    if (!target) {
+      throw new NotFoundException('Utilisateur introuvable');
+    }
+    // Seul un ADMIN peut modifier un AUTRE membre ; chacun peut modifier le sien.
+    if (actor.role !== UserRole.ADMIN && actor.id !== id) {
+      throw new ForbiddenException(
+        "Vous n'avez pas les droits pour modifier ce membre.",
+      );
+    }
+
+    const { restaurant_id, role, ...rest } = updateUserDto;
+    const data: Prisma.UserUpdateInput = { ...rest };
+
+    if (role) {
+      data.role = role;
+      // Le type découle TOUJOURS du rôle ; un rôle point de vente exige un resto.
+      data.type = resolveStaffType(role);
+      if (isStoreRole(role)) {
+        const rid = restaurant_id ?? target.restaurant_id;
+        if (!rid) {
+          throw new BadRequestException(
+            'Un rôle de point de vente (caissier, cuisine, manager, assistant) doit être rattaché à un restaurant.',
+          );
+        }
+        data.restaurant = { connect: { id: rid } };
+      } else {
+        data.restaurant = { disconnect: true };
+      }
+    } else if (restaurant_id !== undefined) {
+      data.restaurant = restaurant_id
+        ? { connect: { id: restaurant_id } }
+        : { disconnect: true };
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data,
+      include: { restaurant: true },
+    });
+
+    await this.cacheManager.del('users');
+    const { password, ...out } = updated;
+    return out;
   }
 
   // UPDATE PASSWORD

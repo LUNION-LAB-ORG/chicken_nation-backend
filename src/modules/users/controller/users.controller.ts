@@ -221,6 +221,27 @@ export class UsersController {
     return this.usersService.resetPassword(req, user_id);
   }
 
+  // UPDATE MEMBER (par id) — admin édite n'importe quel membre, ou soi-même.
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PERSONNELS, Action.UPDATE)
+  @UseInterceptors(FileInterceptor('image'))
+  @ApiOperation({ summary: 'Mise à jour d’un membre ciblé (admin)' })
+  @ApiOkResponse({ description: 'Membre mis à jour avec succès' })
+  @ApiBody({ type: UpdateUserDto })
+  async updateById(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() updateUserDto: UpdateUserDto,
+    @UploadedFile() image: Express.Multer.File,
+  ) {
+    const result = await this.uploadImage(image);
+    return this.usersService.updateById(req, id, {
+      ...updateUserDto,
+      ...(result?.key ? { image: result.key } : {}),
+    });
+  }
+
   // PARTIAL DELETE
   @Delete()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
