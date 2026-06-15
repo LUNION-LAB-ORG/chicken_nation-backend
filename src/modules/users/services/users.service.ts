@@ -1,7 +1,7 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 
 import { CreateUserDto } from '../dto/create-user.dto';
-import { EntityStatus, User, UserType } from '@prisma/client';
+import { EntityStatus, Prisma, User, UserRole, UserType } from '@prisma/client';
 import { isStoreRole, resolveStaffType } from '../helpers/staff-type.helper';
 import type { Request } from 'express';
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -126,11 +126,16 @@ export class UsersService {
   }
 
   // FIND_ALL
-  async findAll() {
+  async findAll(filters?: { type?: UserType; restaurantId?: string }) {
+    // Sans filtre → TOUS les utilisateurs (backoffice + équipes restaurant).
+    // Avec `type` ou `restaurantId` → liste ciblée pour les onglets Personnel
+    // (Tous = aucun filtre / Back Office = type BACKOFFICE / resto = restaurantId).
+    const where: Prisma.UserWhereInput = {};
+    if (filters?.type) where.type = filters.type;
+    if (filters?.restaurantId) where.restaurant_id = filters.restaurantId;
+
     const users = await this.prisma.user.findMany({
-      where: {
-        type: UserType.BACKOFFICE,
-      },
+      where,
       include: {
         restaurant: true,
       },
@@ -143,6 +148,34 @@ export class UsersService {
     });
 
     return users;
+  }
+
+  /**
+   * Définit un manager comme « principal » de son restaurant (Restaurant.manager).
+   * Plusieurs managers peuvent être rattachés à un même restaurant ; un seul est
+   * principal. Réservé au backoffice (permission PERSONNELS/UPDATE).
+   */
+  async setPrincipalManager(req: Request, userId: string) {
+    void req;
+    const target = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!target) {
+      throw new NotFoundException('Utilisateur introuvable');
+    }
+    if (target.role !== UserRole.MANAGER || !target.restaurant_id) {
+      throw new BadRequestException(
+        'Seul un manager rattaché à un restaurant peut être défini comme principal.',
+      );
+    }
+    await this.prisma.restaurant.update({
+      where: { id: target.restaurant_id },
+      data: { manager: target.id },
+    });
+    await this.cacheManager.del('users');
+    return {
+      success: true,
+      restaurant_id: target.restaurant_id,
+      manager_id: target.id,
+    };
   }
 
   // DETAIL

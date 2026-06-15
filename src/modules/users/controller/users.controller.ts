@@ -7,11 +7,13 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { UserType } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBadRequestResponse,
@@ -155,8 +157,11 @@ export class UsersController {
   @ApiNotFoundResponse({
     description: 'Utilisateur non trouvé',
   })
-  findAll() {
-    return this.usersService.findAll();
+  findAll(
+    @Query('type') type?: UserType,
+    @Query('restaurantId') restaurantId?: string,
+  ) {
+    return this.usersService.findAll({ type, restaurantId });
   }
 
   // UPDATE USER
@@ -259,6 +264,16 @@ export class UsersController {
   })
   async restore(@Req() req: Request, @Param('id') id: string) {
     return this.usersService.restore(req, id);
+  }
+
+  // MANAGER PRINCIPAL
+  @Patch(':id/set-principal-manager')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PERSONNELS, Action.UPDATE)
+  @ApiOperation({ summary: 'Définir un manager comme principal de son restaurant' })
+  @ApiOkResponse({ description: 'Manager principal défini avec succès' })
+  setPrincipalManager(@Req() req: Request, @Param('id') id: string) {
+    return this.usersService.setPrincipalManager(req, id);
   }
 
   // DELETE
