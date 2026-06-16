@@ -67,6 +67,27 @@ export class ProspectService {
       );
     }
 
+    // Garde-fou : le MÊME client peut être saisi plusieurs fois (phone non
+    // unique), mais on empêche d'enregistrer DEUX FOIS exactement la même
+    // commande (même plateforme + même n° de commande dans ce restaurant).
+    const orderNumber = dto.order_number?.trim();
+    if (orderNumber) {
+      const dejaSaisie = await this.prisma.prospect.findFirst({
+        where: {
+          restaurant_id: restaurantId,
+          platform: dto.platform,
+          order_number: orderNumber,
+          entity_status: { not: EntityStatus.DELETED },
+        },
+        select: { id: true },
+      });
+      if (dejaSaisie) {
+        throw new BadRequestException(
+          `La commande ${dto.platform} n° ${orderNumber} a déjà été enregistrée.`,
+        );
+      }
+    }
+
     return this.prisma.prospect.create({
       data: {
         platform: dto.platform,
