@@ -250,16 +250,42 @@ export class ProspectService {
           }
         : { lt: startOfToday };
 
+    // Téléphones DÉJÀ TRAITÉS : un client qui a déjà reçu son coupon (ou s'est
+    // inscrit / converti) ne doit JAMAIS être rappelé, même si une nouvelle
+    // commande Glovo/Yango est captée pour son numéro (= nouveau prospect NOUVEAU).
+    // On collecte ces numéros et on les exclut de la file.
+    const traites = await this.prisma.prospect.findMany({
+      where: {
+        entity_status: { not: EntityStatus.DELETED },
+        status: {
+          in: [
+            ProspectStatus.COUPON_ENVOYE,
+            ProspectStatus.INSCRIT,
+            ProspectStatus.CONVERTI,
+          ],
+        },
+        ...scope,
+      },
+      select: { phone: true },
+      distinct: ['phone'],
+    });
+    const phonesTraites = traites.map((p) => p.phone);
+
     const where: Prisma.ProspectWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
+      // JOINT inclus : la carte reste visible APRÈS « joint » pour permettre
+      // l'envoi du coupon (sinon elle disparaissait avant le clic). Elle sort
+      // de la file dès que le coupon est envoyé (statut COUPON_ENVOYE).
       status: {
         in: [
           ProspectStatus.NOUVEAU,
           ProspectStatus.A_APPELER,
           ProspectStatus.NON_JOIGNABLE,
+          ProspectStatus.JOINT,
         ],
       },
       created_at: createdAtFilter,
+      ...(phonesTraites.length > 0 && { phone: { notIn: phonesTraites } }),
       ...scope,
     };
 
@@ -272,6 +298,25 @@ export class ProspectService {
       orderBy: { created_at: 'asc' },
       take: 200,
     });
+
+    // Déduplication par téléphone : 1 client = 1 carte, même s'il a passé
+    // PLUSIEURS commandes Glovo/Yango non encore traitées (sinon le même
+    // numéro apparaîtrait N fois et serait appelé N fois). On garde la carte
+    // JOINT si elle existe (coupon prêt à envoyer), sinon la plus ancienne
+    // (ordre d'appel FIFO).
+    const parPhone = new Map<string, (typeof queue)[number]>();
+    for (const item of queue) {
+      const existant = parPhone.get(item.phone);
+      if (!existant) {
+        parPhone.set(item.phone, item);
+      } else if (
+        item.status === ProspectStatus.JOINT &&
+        existant.status !== ProspectStatus.JOINT
+      ) {
+        parPhone.set(item.phone, item);
+      }
+    }
+    const dedupedQueue = Array.from(parPhone.values());
 
     const [joinedToday, couponsToday] = await Promise.all([
       this.prisma.prospect.count({
@@ -292,8 +337,8 @@ export class ProspectService {
     ]);
 
     return {
-      queue,
-      indicators: { toCall: queue.length, joinedToday, couponsToday },
+      queue: dedupedQueue,
+      indicators: { toCall: dedupedQueue.length, joinedToday, couponsToday },
     };
   }
 
