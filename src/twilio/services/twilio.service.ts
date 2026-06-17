@@ -40,18 +40,15 @@ export class TwilioService {
             ],
         },
         // Coupon d'acquisition Glovo/Yango (Call Center). Body {{1}}{{2}}{{3}}
-        // + bouton « Copier le code » {{4}} + bouton « Telecharger l'app » (URL fixe).
+        // + bouton « Telecharger l'app » (URL fixe, pas de variable). APPROVED.
         acquisition_coupon: {
             name: "acquisition_coupon",
-            sid: "HXed83b4b9949a7a828c96ae82f1c41902",
+            sid: "HXbac00f18d561d508091d5a0bb655273e",
             language: "fr",
             bodyVariables: [
                 { name: "1", description: "Nom du client" },
-                { name: "2", description: "Code promo (texte)" },
+                { name: "2", description: "Code promo" },
                 { name: "3", description: "Validite en jours" },
-            ],
-            buttonVariables: [
-                { name: "4", description: "Code promo (bouton Copier)" },
             ],
         },
     };
@@ -227,7 +224,6 @@ export class TwilioService {
                         "1": name || "Client",
                         "2": code,
                         "3": String(validityDays),
-                        "4": code,
                     }),
                 });
                 if (whatsappResult) return whatsappResult;
