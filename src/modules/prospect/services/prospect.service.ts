@@ -455,14 +455,17 @@ export class ProspectService {
       lien: cfg.appLink,
     });
 
-    // Envoi SMS (E.164 +225) AVANT d'enregistrer le message, pour tracer la délivrance.
-    const sms = await this.twilio.sendSmsMessage({
+    // Envoi WhatsApp (template acquisition_coupon) d'abord, repli SMS auto.
+    const sms = await this.twilio.sendCouponMessage({
       phoneNumber: this.toE164(prospect.phone),
-      message: body,
+      name: prospect.name,
+      code,
+      validityDays: cfg.validityDays,
+      smsBody: body,
     });
     const smsSent = !!sms;
     this.logger.log(
-      `SMS coupon → to=${this.toE164(prospect.phone)} accepté=${smsSent} sid=${sms?.sid ?? '-'} statut=${sms?.status ?? '-'} errCode=${sms?.errorCode ?? '-'} errMsg=${sms?.errorMessage ?? '-'}`,
+      `Coupon → to=${this.toE164(prospect.phone)} accepté=${smsSent} sid=${sms?.sid ?? '-'} statut=${sms?.status ?? '-'} errCode=${sms?.errorCode ?? '-'} errMsg=${sms?.errorMessage ?? '-'}`,
     );
 
     const [updated] = await this.prisma.$transaction([
@@ -521,13 +524,16 @@ export class ProspectService {
       lien: cfg.appLink,
     });
 
-    const sms = await this.twilio.sendSmsMessage({
+    const sms = await this.twilio.sendCouponMessage({
       phoneNumber: this.toE164(prospect.phone),
-      message: body,
+      name: prospect.name,
+      code: prospect.promo_code.code,
+      validityDays: cfg.validityDays,
+      smsBody: body,
     });
     const smsSent = !!sms;
     this.logger.log(
-      `Renvoi SMS coupon → to=${this.toE164(prospect.phone)} accepté=${smsSent} sid=${sms?.sid ?? '-'} statut=${sms?.status ?? '-'} errCode=${sms?.errorCode ?? '-'} errMsg=${sms?.errorMessage ?? '-'}`,
+      `Renvoi coupon → to=${this.toE164(prospect.phone)} accepté=${smsSent} sid=${sms?.sid ?? '-'} statut=${sms?.status ?? '-'} errCode=${sms?.errorCode ?? '-'} errMsg=${sms?.errorMessage ?? '-'}`,
     );
 
     await this.prisma.prospectMessage.create({

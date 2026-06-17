@@ -39,6 +39,21 @@ export class TwilioService {
                 { name: "1", description: "Reference de la commande (suffixe URL)" },
             ],
         },
+        // Coupon d'acquisition Glovo/Yango (Call Center). Body {{1}}{{2}}{{3}}
+        // + bouton « Copier le code » {{4}} + bouton « Telecharger l'app » (URL fixe).
+        acquisition_coupon: {
+            name: "acquisition_coupon",
+            sid: "HXed83b4b9949a7a828c96ae82f1c41902",
+            language: "fr",
+            bodyVariables: [
+                { name: "1", description: "Nom du client" },
+                { name: "2", description: "Code promo (texte)" },
+                { name: "3", description: "Validite en jours" },
+            ],
+            buttonVariables: [
+                { name: "4", description: "Code promo (bouton Copier)" },
+            ],
+        },
     };
 
     constructor(
@@ -187,6 +202,41 @@ export class TwilioService {
             console.error(`[TrackingOrder] Erreur envoi SMS: ${error?.message || error}`);
             return null;
         }
+    }
+
+    /**
+     * Envoie le message du coupon d'acquisition (Call Center).
+     * WhatsApp template `acquisition_coupon` d'abord (si activé), puis repli SMS.
+     * Tant que le template n'est pas approuvé par WhatsApp, l'envoi WhatsApp
+     * échoue silencieusement et on bascule sur le SMS → l'agent n'est jamais bloqué.
+     */
+    async sendCouponMessage({ phoneNumber, name, code, validityDays, smsBody }: {
+        phoneNumber: string;
+        name: string;
+        code: string;
+        validityDays: number;
+        smsBody: string;
+    }): Promise<MessageInstance | null> {
+        if (await this.isWhatsAppEnabled()) {
+            const template = this.twilioWhatsappTemplate.acquisition_coupon;
+            try {
+                const whatsappResult = await this.sendWhatsappMessage({
+                    phoneNumber,
+                    contentSid: template.sid,
+                    contentVariables: JSON.stringify({
+                        "1": name || "Client",
+                        "2": code,
+                        "3": String(validityDays),
+                        "4": code,
+                    }),
+                });
+                if (whatsappResult) return whatsappResult;
+            } catch (error: any) {
+                console.warn(`[Coupon] WhatsApp échoué: ${error?.message || error}`);
+            }
+            console.log(`[Coupon] Bascule sur SMS pour ${phoneNumber}`);
+        }
+        return await this.sendSmsMessage({ phoneNumber, message: smsBody });
     }
 
     async sendSmsMessage({ phoneNumber, message }: { phoneNumber: string, message: string }): Promise<MessageInstance | null> {
