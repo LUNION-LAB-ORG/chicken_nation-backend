@@ -843,30 +843,46 @@ export class StatisticsClientsService {
     query: ClientsStatsQueryDto,
   ): Promise<RevenueConcentrationResponse> {
     const dateRange = parseDateRange(query);
-    const restaurantFilter = buildRestaurantFilter(query.restaurantId);
+    const restaurantId = query.restaurantId ?? null;
 
-    const grouped = await this.prisma.order.groupBy({
-      by: ['customer_id'],
-      _sum: { net_amount: true },
-      where: {
-        ...restaurantFilter,
-        paied: true,
-        status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
-        created_at: buildDateFilter(dateRange),
-      },
-    });
+    // CA total par client sur la période, trié décroissant. Lu depuis la VUE
+    // MATÉRIALISÉE `mv_customer_revenue_daily` (pré-agrégée par client/resto/jour)
+    // → on évite de re-scanner toute la table Order. Bornes en 'yyyy-MM-dd' pour
+    // un cast ::date sans ambiguïté de fuseau. Repli sur l'agrégation live si la
+    // vue est indisponible (ex. avant 1ère migration) — mêmes chiffres.
+    let revenues: number[];
+    try {
+      const start = format(dateRange.startDate, 'yyyy-MM-dd');
+      const end = format(dateRange.endDate, 'yyyy-MM-dd');
+      const rows = await this.prisma.$queryRaw<{ revenue: number }[]>`
+        SELECT SUM(net_revenue)::double precision AS revenue
+        FROM "mv_customer_revenue_daily"
+        WHERE day >= ${start}::date
+          AND day <= ${end}::date
+          AND (${restaurantId}::uuid IS NULL OR restaurant_id = ${restaurantId}::uuid)
+        GROUP BY customer_id
+      `;
+      revenues = rows.map((r) => Number(r.revenue) || 0).sort((a, b) => b - a);
+    } catch {
+      const grouped = await this.prisma.order.groupBy({
+        by: ['customer_id'],
+        _sum: { net_amount: true },
+        where: {
+          ...buildRestaurantFilter(query.restaurantId),
+          paied: true,
+          status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+          created_at: buildDateFilter(dateRange),
+        },
+      });
+      revenues = grouped.map((g) => g._sum.net_amount ?? 0).sort((a, b) => b - a);
+    }
 
-    if (grouped.length === 0) {
+    if (revenues.length === 0) {
       return {
         top10Percentage: 0, top20Percentage: 0, top50Percentage: 0,
         totalRevenue: 0, totalClients: 0,
       };
     }
-
-    // Trier par CA décroissant
-    const revenues = grouped
-      .map((g) => g._sum.net_amount ?? 0)
-      .sort((a, b) => b - a);
 
     const totalRevenue = revenues.reduce((a, b) => a + b, 0);
     const totalClients = revenues.length;
