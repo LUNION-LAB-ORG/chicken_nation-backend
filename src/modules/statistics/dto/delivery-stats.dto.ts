@@ -139,3 +139,22 @@ export class DeliveryPerformanceResponse {
   @ApiProperty({ description: 'Retard maximum en minutes' })
   maxDelayMinutes: number;
 }
+
+// ─── Tableau de bord agrégé livraison ────────────────────────────────────────
+/**
+ * Réponse agrégée des stats livraison : 4 sous-stats en UNE réponse → le
+ * backoffice fait 1 requête au lieu de 4. (Les stats de courses, à part.)
+ */
+export class DeliveryDashboardResponse {
+  @ApiProperty({ type: DeliveryOverviewResponse })
+  overview: DeliveryOverviewResponse;
+
+  @ApiProperty({ type: DeliveryFeesBreakdownResponse })
+  feesBreakdown: DeliveryFeesBreakdownResponse;
+
+  @ApiProperty({ type: DeliveryByZoneResponse })
+  byZone: DeliveryByZoneResponse;
+
+  @ApiProperty({ type: DeliveryPerformanceResponse })
+  performance: DeliveryPerformanceResponse;
+}

@@ -27,11 +27,45 @@ import {
   SalesTrendDailyPoint,
   ChannelBreakdownResponse,
   PromotionPerformanceResponse,
+  ProductsDashboardResponse,
 } from '../dto/products-stats.dto';
 
 @Injectable()
 export class StatisticsProductsService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Tableau de bord produits AGRÉGÉ : Promise.all des 6 sous-stats partageant
+   * les mêmes filtres → le backoffice fait 1 requête au lieu de 6.
+   */
+  async getProductsDashboard(
+    query: ProductsStatsQueryDto,
+  ): Promise<ProductsDashboardResponse> {
+    const [
+      topProducts,
+      topCategories,
+      byRestaurant,
+      salesTrend,
+      channelBreakdown,
+      promotionPerf,
+    ] = await Promise.all([
+      this.getTopProducts({ ...query, limit: 10 }),
+      this.getTopCategories({ ...query, limit: 8 }),
+      this.getProductsByRestaurant(query),
+      this.getSalesTrend(query),
+      this.getChannelBreakdown(query),
+      this.getPromotionPerformance(query),
+    ]);
+
+    return {
+      topProducts,
+      topCategories,
+      byRestaurant,
+      salesTrend,
+      channelBreakdown,
+      promotionPerf,
+    };
+  }
 
   /**
    * Top produits vendus sur la période avec évolution vs période précédente.

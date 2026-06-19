@@ -324,3 +324,28 @@ export class PromotionPerformanceResponse {
   @ApiProperty({ description: '% du CA provenant des promos' })
   promoRevenueShare: number;
 }
+
+// ─── Tableau de bord agrégé produits ─────────────────────────────────────────
+/**
+ * Réponse agrégée des stats produits : 6 sous-stats en UNE réponse → le
+ * backoffice fait 1 requête au lieu de 6.
+ */
+export class ProductsDashboardResponse {
+  @ApiProperty({ type: TopProductsResponse })
+  topProducts: TopProductsResponse;
+
+  @ApiProperty({ type: TopCategoriesResponse })
+  topCategories: TopCategoriesResponse;
+
+  @ApiProperty({ type: ProductsByRestaurantResponse })
+  byRestaurant: ProductsByRestaurantResponse;
+
+  @ApiProperty({ type: SalesTrendResponse })
+  salesTrend: SalesTrendResponse;
+
+  @ApiProperty({ type: ChannelBreakdownResponse })
+  channelBreakdown: ChannelBreakdownResponse;
+
+  @ApiProperty({ type: PromotionPerformanceResponse })
+  promotionPerf: PromotionPerformanceResponse;
+}

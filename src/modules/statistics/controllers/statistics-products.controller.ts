@@ -20,6 +20,18 @@ export class StatisticsProductsController {
   constructor(private readonly productsService: StatisticsProductsService) {}
 
   /**
+   * GET /statistics/products/dashboard
+   * Tableau de bord AGRÉGÉ : top produits + top catégories + par restaurant +
+   * tendance ventes + canal + performance promo. 1 requête au lieu de 6.
+   */
+  @Get('dashboard')
+  @RequirePermission(Modules.DASHBOARD, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getProductsDashboard(@Query() query: ProductsStatsQueryDto) {
+    return this.productsService.getProductsDashboard(query);
+  }
+
+  /**
    * GET /statistics/products/top
    * Top produits par volume de vente sur la période.
    * Filtres : restaurantId, startDate, endDate, period, categoryId, limit

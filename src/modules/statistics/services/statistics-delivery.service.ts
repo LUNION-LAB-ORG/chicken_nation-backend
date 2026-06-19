@@ -17,11 +17,29 @@ import {
   DeliveryByZoneResponse,
   DeliveryByZoneItem,
   DeliveryPerformanceResponse,
+  DeliveryDashboardResponse,
 } from '../dto/delivery-stats.dto';
 
 @Injectable()
 export class StatisticsDeliveryService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Tableau de bord livraison AGRÉGÉ : Promise.all des 4 sous-stats partageant
+   * les mêmes filtres → le backoffice fait 1 requête au lieu de 4.
+   */
+  async getDeliveryDashboard(
+    query: DeliveryStatsQueryDto,
+  ): Promise<DeliveryDashboardResponse> {
+    const [overview, feesBreakdown, byZone, performance] = await Promise.all([
+      this.getDeliveryOverview(query),
+      this.getDeliveryFeesBreakdown(query),
+      this.getDeliveryByZone({ ...query, limit: 10 }),
+      this.getDeliveryPerformance(query),
+    ]);
+
+    return { overview, feesBreakdown, byZone, performance };
+  }
 
   /**
    * KPIs globaux livraison : total, frais, TURBO vs FREE, évolution.

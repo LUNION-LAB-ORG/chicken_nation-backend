@@ -17,6 +17,18 @@ export class StatisticsDeliveryController {
   constructor(private readonly deliveryService: StatisticsDeliveryService) {}
 
   /**
+   * GET /statistics/delivery/dashboard
+   * Tableau de bord AGRÉGÉ : overview + frais + par zone + performance.
+   * 1 requête au lieu de 4.
+   */
+  @Get('dashboard')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getDeliveryDashboard(@Query() query: DeliveryStatsQueryDto) {
+    return this.deliveryService.getDeliveryDashboard(query);
+  }
+
+  /**
    * GET /statistics/delivery/overview
    * Vue d'ensemble livraison : total commandes livraison, CA, frais de livraison perçus, panier moyen.
    * Filtres : restaurantId, startDate, endDate, period
