@@ -214,6 +214,13 @@ export class CustomerService {
       }
     }
 
+    // Filtre commun aux commandes "comptables" du client (payées, ou impayées
+    // mais non auto), hors supprimées. Réutilisé pour le compte ET la dernière.
+    const ordersFilter: Prisma.OrderWhereInput = {
+      OR: [{ AND: [{ paied: false }, { auto: false }] }, { paied: true }],
+      entity_status: { not: EntityStatus.DELETED },
+    };
+
     const [count, customers] = await Promise.all([
       this.prisma.customer.count({ where: whereClause }),
       this.prisma.customer.findMany({
@@ -227,21 +234,19 @@ export class CustomerService {
           notification_settings: {
             select: { expo_push_token: true, active: true },
           },
+          // PERF : la liste n'affiche que le TOTAL de commandes et la date de la
+          // dernière. On évitait de charger TOUTES les commandes de chaque client
+          // (sans `take` → des centaines de lignes × 10 clients/page = très lourd).
+          // → `_count` pour le total + `take: 1` pour la dernière. Le détail
+          // (findOne) garde les commandes complètes.
+          _count: {
+            select: { orders: { where: ordersFilter } },
+          },
           orders: {
-            where: {
-              OR: [
-                {
-                  AND: [{ paied: false }, { auto: false }],
-                },
-                {
-                  paied: true,
-                },
-              ],
-              entity_status: { not: EntityStatus.DELETED },
-            },
-            orderBy: {
-              created_at: 'desc',
-            },
+            where: ordersFilter,
+            orderBy: { created_at: 'desc' },
+            take: 1,
+            select: { id: true, created_at: true },
           },
         },
         orderBy: {
