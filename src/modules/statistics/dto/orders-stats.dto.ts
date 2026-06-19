@@ -489,3 +489,32 @@ export class InfluenceZonesResponse {
   @ApiProperty()
   center: { lat: number; lng: number };
 }
+
+// ─── Tableau de bord agrégé commandes ────────────────────────────────────────
+/**
+ * Réponse agrégée des stats commandes : regroupe en UNE réponse les 7
+ * sous-statistiques qui partagent les mêmes filtres → le backoffice fait 1
+ * requête au lieu de 7. (Les courbes à granularité et la carte restent séparées.)
+ */
+export class OrdersDashboardResponse {
+  @ApiProperty({ type: OrdersOverviewResponse })
+  overview: OrdersOverviewResponse;
+
+  @ApiProperty({ type: OrdersByChannelResponse })
+  byChannel: OrdersByChannelResponse;
+
+  @ApiProperty({ type: ProcessingTimeResponse })
+  processingTime: ProcessingTimeResponse;
+
+  @ApiProperty({ type: LateOrdersResponse })
+  lateOrders: LateOrdersResponse;
+
+  @ApiProperty({ type: RestaurantPunctualityResponse })
+  restaurantPunctuality: RestaurantPunctualityResponse;
+
+  @ApiProperty({ type: OrdersByRestaurantAndTypeResponse })
+  byRestaurantAndType: OrdersByRestaurantAndTypeResponse;
+
+  @ApiProperty({ type: OrdersByRestaurantAndSourceResponse })
+  byRestaurantAndSource: OrdersByRestaurantAndSourceResponse;
+}

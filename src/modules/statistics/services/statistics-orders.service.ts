@@ -41,6 +41,7 @@ import {
   RestaurantMetrics,
   RestaurantsLocationsResponse,
   InfluenceZonesResponse,
+  OrdersDashboardResponse,
 } from '../dto/orders-stats.dto';
 
 const STATUS_LABELS: Record<string, string> = {
@@ -63,6 +64,44 @@ const TYPE_LABELS: Record<string, string> = {
 @Injectable()
 export class StatisticsOrdersService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Tableau de bord commandes AGRÉGÉ : exécute en parallèle (Promise.all) les 7
+   * sous-stats partageant les mêmes filtres et renvoie un seul objet.
+   * → le backoffice fait 1 requête au lieu de 7. (Courbes à granularité et carte
+   * restent des requêtes séparées car pilotées par d'autres contrôles / lazy.)
+   */
+  async getOrdersDashboard(
+    query: OrdersStatsQueryDto,
+  ): Promise<OrdersDashboardResponse> {
+    const [
+      overview,
+      byChannel,
+      processingTime,
+      lateOrders,
+      restaurantPunctuality,
+      byRestaurantAndType,
+      byRestaurantAndSource,
+    ] = await Promise.all([
+      this.getOrdersOverview(query),
+      this.getOrdersByChannel(query),
+      this.getOrdersProcessingTime(query),
+      this.getLateOrders(query),
+      this.getRestaurantPunctuality(query),
+      this.getOrdersByRestaurantAndType(query),
+      this.getOrdersByRestaurantAndSource(query),
+    ]);
+
+    return {
+      overview,
+      byChannel,
+      processingTime,
+      lateOrders,
+      restaurantPunctuality,
+      byRestaurantAndType,
+      byRestaurantAndSource,
+    };
+  }
 
   /**
    * Vue globale commandes : total, CA, panier moyen, annulations, répartition statut/type.

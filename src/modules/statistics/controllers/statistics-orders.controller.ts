@@ -17,6 +17,19 @@ export class StatisticsOrdersController {
   constructor(private readonly ordersService: StatisticsOrdersService) {}
 
   /**
+   * GET /statistics/orders/dashboard
+   * Tableau de bord AGRÉGÉ : overview + by-channel + processing-time + late +
+   * restaurant-punctuality + by-restaurant-and-type + by-restaurant-and-source.
+   * → le backoffice fait 1 requête au lieu de 7.
+   */
+  @Get('dashboard')
+  @RequirePermission(Modules.COMMANDES, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getOrdersDashboard(@Query() query: OrdersStatsQueryDto) {
+    return this.ordersService.getOrdersDashboard(query);
+  }
+
+  /**
    * GET /statistics/orders/overview
    * Vue d'ensemble : total commandes, CA, panier moyen, tendance vs période précédente.
    * Filtres : restaurantId, startDate, endDate, period, type (DELIVERY|PICKUP|TABLE), channel (app|call)
