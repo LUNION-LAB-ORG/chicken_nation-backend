@@ -1,5 +1,7 @@
-import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
+import { CacheTTL } from '@nestjs/cache-manager';
 import { Controller, Get, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { UserScopedCacheInterceptor } from 'src/modules/order/interceptors/user-scoped-cache.interceptor';
+import { StatsRestaurantScopeGuard } from '../guards/restaurant-scope.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
@@ -19,7 +21,7 @@ import { StatisticsService } from '../services/statistics.service';
  *   - /statistics/marketing/*
  */
 @Controller('statistics')
-@UseInterceptors(CacheInterceptor)
+@UseInterceptors(UserScopedCacheInterceptor)
 export class StatisticsDashboardController {
   constructor(private readonly statisticsService: StatisticsService) {}
 
@@ -30,7 +32,7 @@ export class StatisticsDashboardController {
    * Filtres : restaurantId, startDate, endDate, period
    */
   @Get('dashboard')
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard, StatsRestaurantScopeGuard)
   @RequirePermission(Modules.DASHBOARD, Action.READ)
   @CacheTTL(5 * 60 * 1000)
   async getDashboardStats(@Query() query: GetStatsQueryDto): Promise<DashboardViewModel> {

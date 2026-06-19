@@ -8,6 +8,7 @@ import {
 import { Response } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { StatsRestaurantScopeGuard } from '../guards/restaurant-scope.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
@@ -47,7 +48,7 @@ export class MarketingReportQueryDto {
 }
 
 @Controller('statistics/marketing')
-@UseGuards(JwtAuthGuard, UserPermissionsGuard)
+@UseGuards(JwtAuthGuard, UserPermissionsGuard, StatsRestaurantScopeGuard)
 export class StatisticsMarketingReportController {
   constructor(private readonly reportService: MarketingReportService) {}
 

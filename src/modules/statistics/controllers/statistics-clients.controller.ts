@@ -1,5 +1,7 @@
 import { Controller, Get, Param, Query, UseGuards, UseInterceptors } from '@nestjs/common';
-import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
+import { CacheTTL } from '@nestjs/cache-manager';
+import { UserScopedCacheInterceptor } from 'src/modules/order/interceptors/user-scoped-cache.interceptor';
+import { StatsRestaurantScopeGuard } from '../guards/restaurant-scope.guard';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
@@ -9,8 +11,8 @@ import { StatisticsClientsService } from '../services/statistics-clients.service
 import { ClientsStatsQueryDto, InactiveClientsQueryDto } from '../dto/clients-stats.dto';
 
 @Controller('statistics/clients')
-@UseGuards(JwtAuthGuard, UserPermissionsGuard)
-@UseInterceptors(CacheInterceptor)
+@UseGuards(JwtAuthGuard, UserPermissionsGuard, StatsRestaurantScopeGuard)
+@UseInterceptors(UserScopedCacheInterceptor)
 export class StatisticsClientsController {
   constructor(private readonly clientsService: StatisticsClientsService) {}
 
