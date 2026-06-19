@@ -23,8 +23,10 @@ import { CustomerQueryDto } from 'src/modules/customer/dto/customer-query.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
-import { CacheInterceptor, CacheTTL, CACHE_MANAGER } from '@nestjs/cache-manager';
+import { CacheTTL, CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
+import { UserScopedCacheInterceptor } from 'src/modules/order/interceptors/user-scoped-cache.interceptor';
+import { RestaurantQueryScopeGuard } from 'src/common/guards/restaurant-query-scope.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
@@ -36,7 +38,7 @@ import { Customer } from '@prisma/client';
 @ApiTags('Customers')
 @ApiBearerAuth()
 @Controller('customer')
-@UseInterceptors(CacheInterceptor)
+@UseInterceptors(UserScopedCacheInterceptor)
 export class CustomerController {
   constructor(private readonly customerService: CustomerService,
     private readonly notificationSettingService: NotificationSettingService,
@@ -57,7 +59,7 @@ export class CustomerController {
   }
 
   @Get()
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard, RestaurantQueryScopeGuard)
   @RequirePermission(Modules.CLIENTS, Action.READ)
   @CacheTTL(5 * 60 * 1000)
   @ApiOperation({ summary: 'Récupération de tous les clients' })
