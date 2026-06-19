@@ -69,6 +69,14 @@ export class CategoryService {
         private: query.all ? undefined : false,
         entity_status: EntityStatus.ACTIVE,
       },
+      // Compte des plats ACTIFS par catégorie (même filtre que findOne) → le
+      // front n'a plus besoin de faire un GET /categories/:id PAR catégorie
+      // juste pour compter (N+1).
+      include: {
+        _count: {
+          select: { dishes: { where: { entity_status: EntityStatus.ACTIVE } } },
+        },
+      },
       orderBy: {
         name: 'asc',
       },
