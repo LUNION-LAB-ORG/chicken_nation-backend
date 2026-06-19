@@ -20,6 +20,7 @@ import { MarketingReportService } from './services/marketing-report.service';
 
 // Tasks
 import { MarketingReportTask } from './tasks/marketing-report.task';
+import { StatisticsWarmupTask } from './tasks/statistics-warmup.task';
 
 @Module({
   controllers: [
@@ -45,6 +46,7 @@ import { MarketingReportTask } from './tasks/marketing-report.task';
     MarketingReportService,
     // Tasks
     MarketingReportTask,
+    StatisticsWarmupTask,
   ],
   exports: [
     StatisticsService,

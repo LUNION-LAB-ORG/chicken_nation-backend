@@ -802,18 +802,23 @@ export class StatisticsOrdersService {
       }
     }
 
-    const points = [...coordCounts.values()].sort((a, b) => b.count - a.count);
+    const allPoints = [...coordCounts.values()].sort((a, b) => b.count - a.count);
     const totalOrders = orders.length;
-    const totalPoints = points.length;
+    const totalPoints = allPoints.length; // nombre RÉEL de zones (avant plafond)
 
-    // Calculer le centre moyen pour centrer la carte
+    // Plafond : on ne renvoie que les 500 zones les plus denses. La heatmap n'a
+    // pas besoin de milliers de points (payload + rendu client), et les zones les
+    // plus fréquentées suffisent visuellement.
+    const MAX_ZONES = 500;
+    const points = allPoints.slice(0, MAX_ZONES);
+
+    // Centre moyen pondéré calculé sur TOUTES les zones (plus précis).
     let centerLat = 6.3703; // Cotonou par défaut
     let centerLng = 2.3912;
-    if (points.length > 0) {
-      centerLat = points.reduce((acc, p) => acc + p.lat * p.count, 0) /
-        points.reduce((acc, p) => acc + p.count, 0);
-      centerLng = points.reduce((acc, p) => acc + p.lng * p.count, 0) /
-        points.reduce((acc, p) => acc + p.count, 0);
+    if (allPoints.length > 0) {
+      const totalWeight = allPoints.reduce((acc, p) => acc + p.count, 0);
+      centerLat = allPoints.reduce((acc, p) => acc + p.lat * p.count, 0) / totalWeight;
+      centerLng = allPoints.reduce((acc, p) => acc + p.lng * p.count, 0) / totalWeight;
     }
 
     return {

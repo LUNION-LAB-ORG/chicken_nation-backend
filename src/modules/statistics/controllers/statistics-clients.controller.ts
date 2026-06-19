@@ -15,6 +15,20 @@ export class StatisticsClientsController {
   constructor(private readonly clientsService: StatisticsClientsService) {}
 
   /**
+   * GET /statistics/clients/dashboard
+   * Tableau de bord AGRÉGÉ : renvoie en UNE réponse overview + acquisition +
+   * retention + top + by-zone + loyalty + payment-methods +
+   * revenue-concentration + basket-comparison.
+   * → le backoffice fait 1 requête au lieu de 9 (gros gain de latence).
+   */
+  @Get('dashboard')
+  @RequirePermission(Modules.CLIENTS, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
+  async getClientsDashboard(@Query() query: ClientsStatsQueryDto) {
+    return this.clientsService.getClientsDashboard(query);
+  }
+
+  /**
    * GET /statistics/clients/overview
    * Total clients, nouveaux vs récurrents, LTV, panier moyen, canaux (App/Call).
    * Filtres : restaurantId, startDate, endDate, period
@@ -69,6 +83,7 @@ export class StatisticsClientsController {
    */
   @Get('inactive')
   @RequirePermission(Modules.CLIENTS, Action.READ)
+  @CacheTTL(5 * 60 * 1000)
   async getInactiveClients(@Query() query: InactiveClientsQueryDto) {
     return this.clientsService.getInactiveClients(query);
   }

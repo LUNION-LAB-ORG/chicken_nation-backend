@@ -392,3 +392,39 @@ export class ClientAnalyticsProfileResponse {
   @ApiProperty({ description: 'Points de fidélité actuels' })
   loyaltyPoints: number;
 }
+
+// ─── Tableau de bord agrégé ──────────────────────────────────────────────────
+/**
+ * Réponse agrégée du tableau de bord clients : regroupe en UNE réponse les 9
+ * sous-statistiques qui partagent les mêmes filtres (overview, acquisition,
+ * rétention, top, zones, fidélité, paiement, concentration, panier).
+ * Permet au backoffice de ne faire qu'1 requête au lieu de 9.
+ */
+export class ClientsDashboardResponse {
+  @ApiProperty({ type: ClientsOverviewResponse })
+  overview: ClientsOverviewResponse;
+
+  @ApiProperty({ type: ClientsAcquisitionResponse })
+  acquisition: ClientsAcquisitionResponse;
+
+  @ApiProperty({ type: ClientsRetentionResponse })
+  retention: ClientsRetentionResponse;
+
+  @ApiProperty({ type: TopClientsResponse })
+  topClients: TopClientsResponse;
+
+  @ApiProperty({ type: ClientsByZoneResponse })
+  byZone: ClientsByZoneResponse;
+
+  @ApiProperty({ type: LoyaltyDistributionResponse })
+  loyalty: LoyaltyDistributionResponse;
+
+  @ApiProperty({ type: PaymentMethodDistributionResponse })
+  paymentMethods: PaymentMethodDistributionResponse;
+
+  @ApiProperty({ type: RevenueConcentrationResponse })
+  revenueConcentration: RevenueConcentrationResponse;
+
+  @ApiProperty({ type: BasketComparisonResponse })
+  basketComparison: BasketComparisonResponse;
+}

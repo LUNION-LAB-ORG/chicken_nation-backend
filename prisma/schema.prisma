@@ -1120,6 +1120,11 @@ model Order {
   promo_code_usages PromoCodeUsage[]
 
   @@index([reference, status, entity_status, customer_id])
+  // Index pour les agrégations statistiques (page Stats > Clients/Commandes) :
+  // groupBy/where sur restaurant_id + plage de dates, par client, et global par date.
+  @@index([restaurant_id, created_at])
+  @@index([customer_id, created_at])
+  @@index([created_at])
 }
 
 model OtpToken {

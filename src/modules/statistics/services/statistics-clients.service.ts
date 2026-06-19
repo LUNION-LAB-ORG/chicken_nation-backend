@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { OrderStatus, Prisma } from '@prisma/client';
 import {
   differenceInDays,
@@ -33,11 +35,84 @@ import {
   PaymentMethodDistributionResponse,
   RevenueConcentrationResponse,
   BasketComparisonResponse,
+  ClientsDashboardResponse,
 } from '../dto/clients-stats.dto';
+
+/** TTL du cache applicatif du tableau de bord clients agrégé (5 min). */
+const CLIENTS_DASHBOARD_TTL_MS = 5 * 60 * 1000;
 
 @Injectable()
 export class StatisticsClientsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
+  ) {}
+
+  /**
+   * Tableau de bord clients AGRÉGÉ : exécute en parallèle (Promise.all) les 9
+   * sous-statistiques qui partagent les mêmes filtres et renvoie un seul objet.
+   * → le backoffice fait 1 requête HTTP au lieu de 9.
+   *
+   * Cache applicatif à clé STABLE (dérivée des filtres) en plus du
+   * CacheInterceptor HTTP : il absorbe le coût des agrégations Postgres et peut
+   * être PRÉCHAUFFÉ par un cron (StatisticsWarmupTask) → même au premier accès
+   * après expiration, la réponse reste instantanée.
+   */
+  async getClientsDashboard(
+    query: ClientsStatsQueryDto,
+    forceRefresh = false,
+  ): Promise<ClientsDashboardResponse> {
+    const key = this.dashboardCacheKey(query);
+    if (!forceRefresh) {
+      const cached = await this.cache.get<ClientsDashboardResponse>(key);
+      if (cached) return cached;
+    }
+
+    const [
+      overview,
+      acquisition,
+      retention,
+      topClients,
+      byZone,
+      loyalty,
+      paymentMethods,
+      revenueConcentration,
+      basketComparison,
+    ] = await Promise.all([
+      this.getClientsOverview(query),
+      this.getClientsAcquisition(query),
+      this.getClientsRetention(query),
+      this.getTopClients({ ...query, limit: 10 }),
+      this.getClientsByZone({ ...query, limit: 10 }),
+      this.getLoyaltyDistribution(query),
+      this.getPaymentMethodDistribution(query),
+      this.getRevenueConcentration(query),
+      this.getBasketComparison(query),
+    ]);
+
+    const result: ClientsDashboardResponse = {
+      overview,
+      acquisition,
+      retention,
+      topClients,
+      byZone,
+      loyalty,
+      paymentMethods,
+      revenueConcentration,
+      basketComparison,
+    };
+    await this.cache.set(key, result, CLIENTS_DASHBOARD_TTL_MS);
+    return result;
+  }
+
+  /** Clé de cache stable du dashboard (indépendante de l'ordre des params). */
+  dashboardCacheKey(query: ClientsStatsQueryDto): string {
+    const restaurantId = query.restaurantId ?? 'all';
+    const period = query.period ?? 'none';
+    const startDate = query.startDate ?? '';
+    const endDate = query.endDate ?? '';
+    return `stats:clients:dashboard:${restaurantId}:${period}:${startDate}:${endDate}`;
+  }
 
   async getClientsOverview(query: ClientsStatsQueryDto): Promise<ClientsOverviewResponse> {
     const dateRange = parseDateRange(query);
