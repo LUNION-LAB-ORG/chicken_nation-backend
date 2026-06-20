@@ -20,7 +20,9 @@ import { MarketingReportService } from './services/marketing-report.service';
 
 // Tasks
 import { MarketingReportTask } from './tasks/marketing-report.task';
-import { StatisticsWarmupTask } from './tasks/statistics-warmup.task';
+// ⚠️ StatisticsWarmupTask SUPPRIMÉ : il lançait 9 agrégations lourdes (40-77s,
+// saturait les connexions Neon + bloquait l'event-loop) toutes les 4 min →
+// incident prod. Le cache se remplit à la demande, c'est suffisant.
 import { StatisticsMatviewTask } from './tasks/statistics-matview.task';
 
 @Module({
@@ -47,7 +49,6 @@ import { StatisticsMatviewTask } from './tasks/statistics-matview.task';
     MarketingReportService,
     // Tasks
     MarketingReportTask,
-    StatisticsWarmupTask,
     StatisticsMatviewTask,
   ],
   exports: [
