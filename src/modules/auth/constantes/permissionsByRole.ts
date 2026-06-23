@@ -73,8 +73,10 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
 
       [Modules.MESSAGES]: [Action.READ, Action.CREATE, Action.UPDATE],
 
-      // Call center : voit la file J+1, qualifie, envoie le coupon
-      [Modules.BASE_DONNEES]: [Action.READ, Action.UPDATE],
+      // Acquisition Glovo/Yango : le call center a les MÊMES droits que l'admin
+      // sur ce module (tableau de bord, contacts + fiche, vérification/file J+1,
+      // coupons, ventes, export, capture, suppression). Limité à BASE_DONNEES.
+      [Modules.BASE_DONNEES]: Object.values(Action),
     },
   },
 
