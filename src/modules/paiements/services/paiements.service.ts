@@ -228,12 +228,17 @@ export class PaiementsService {
       client_id: data.customer_id,
     });
 
-    // Mise a jour de la commande à payée
+    // Mise a jour de la commande à payée — CLAIM ATOMIQUE paied false→true.
+    // updateMany conditionné sur paied:false → un seul processeur "gagne" (count===1).
+    // Évite le double traitement d'un webhook KKiaPay rejoué OU reçu en parallèle
+    // (double backend) : promo + notif client ne tournent qu'UNE fois. justPaid remonte
+    // au listener pour ne déclencher les effets de bord que sur le 1er paiement réel.
+    let justPaid = false;
     if (result.order) {
       const next_status = this.getOrderStatus(result.order.payment_method!, result.order.type, result.order.status);
       const paymentAt = result.paiement.created_at;
-      const updatedOrder = await this.prisma.order.update({
-        where: { id: result.order.id },
+      const claim = await this.prisma.order.updateMany({
+        where: { id: result.order.id, paied: false },
         data: {
           paied_at: paymentAt,
           paied: true,
@@ -243,20 +248,22 @@ export class PaiementsService {
           ...this.buildPaymentDateAlignment(result.order, paymentAt),
         },
       });
+      justPaid = claim.count === 1;
 
-      // Paiement confirmé → comptabiliser l'usage du code promo (usage_count++).
-      // Idempotent ; isolé pour ne jamais casser la confirmation du paiement.
-      if (next_status === OrderStatus.ACCEPTED) {
+      // Paiement confirmé (1re fois) → comptabiliser l'usage du code promo (usage_count++).
+      // Isolé pour ne jamais casser la confirmation du paiement.
+      if (justPaid && next_status === OrderStatus.ACCEPTED) {
         try {
-          await this.promoCodeService.activateUsageForOrder(updatedOrder);
+          const updatedOrder = await this.prisma.order.findUnique({ where: { id: result.order.id } });
+          if (updatedOrder) await this.promoCodeService.activateUsageForOrder(updatedOrder);
         } catch (e) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          console.error(`Sync usage promo (paiement KKiaPay) échoué pour ${updatedOrder.id}: ${(e as any)?.message}`);
+          console.error(`Sync usage promo (paiement KKiaPay) échoué pour ${result.order.id}: ${(e as any)?.message}`);
         }
       }
     }
 
-    return result.paiement;
+    return { paiement: result.paiement, justPaid };
   }
 
   // Récupération des paiements succès libres

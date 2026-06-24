@@ -86,8 +86,9 @@ export class OrderController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.READ)
   @ApiOperation({ summary: 'Rechercher toutes les commandes' })
-  findAll(@Query() queryOrderDto: QueryOrderDto) {
-    return this.orderService.findAll(queryOrderDto);
+  findAll(@Req() req: Request, @Query() queryOrderDto: QueryOrderDto) {
+    // Le user du JWT pilote la visibilité PENDING (admin seul) côté service.
+    return this.orderService.findAll(queryOrderDto, req.user as User);
   }
 
   @Post(':id/mark-paid-cash')

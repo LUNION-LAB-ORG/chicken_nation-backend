@@ -15,6 +15,7 @@ import {
   PaiementStatus,
   PaymentMethod,
   Prisma,
+  User,
   UserRole,
 } from '@prisma/client';
 import { format, startOfMonth, differenceInMinutes } from 'date-fns';
@@ -765,7 +766,9 @@ export class OrderService {
           },
         },
         paiements: true,
-        customer: true,
+        // notification_settings : nécessaire pour pousser « Commande confirmée »
+        // au client au moment du paiement (cf. KkiapayOrderListenerService).
+        customer: { include: { notification_settings: true } },
         restaurant: true,
       },
     });
@@ -887,7 +890,7 @@ export class OrderService {
     return updated;
   }
 
-  async findAll(filters: QueryOrderDto): Promise<QueryResponseDto<Order>> {
+  async findAll(filters: QueryOrderDto, user?: User): Promise<QueryResponseDto<Order>> {
     const {
       reference,
       status,
@@ -947,6 +950,18 @@ export class OrderService {
         gte: startDate,
         lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
       };
+    }
+
+    // 🔒 Visibilité PENDING : seul l'ADMIN voit les commandes « en attente ».
+    // Pour tout autre rôle, on exclut PENDING via un AND de premier niveau : il se
+    // compose avec le filtre `status` explicite (un non-admin qui demande PENDING
+    // obtient un résultat vide) ET avec le bloc `auto` ci-dessus. Une commande payée
+    // en ligne passe TOUJOURS ACCEPTED → on ne masque jamais une commande payée.
+    if (user?.role !== UserRole.ADMIN) {
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        { status: { not: OrderStatus.PENDING } },
+      ];
     }
 
     const [orders, total] = await Promise.all([

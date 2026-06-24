@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { EntityStatus, LoyaltyPointType, OrderStatus, OrderType } from '@prisma/client';
+import { EntityStatus, LoyaltyPointType, OrderStatus, OrderType, PaymentMethod } from '@prisma/client';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
 import { PromotionService } from 'src/modules/fidelity/services/promotion.service';
 import { OrderChannels } from '../enums/order-channels';
@@ -81,8 +81,16 @@ export class OrderListenerService {
             }
         }
 
-        // 📲 NOTIFICATION
-        if (payload.expo_token) {
+        // 📲 NOTIFICATION CLIENT
+        // Pour une commande app payée EN LIGNE (auto + ONLINE), on NE notifie PAS à la
+        // création (PENDING/non payée) : le push « Commande confirmée » part au succès du
+        // paiement (cf. KkiapayOrderListenerService). Les commandes cash/app (OFFLINE) et
+        // staff conservent le comportement actuel (push à la création).
+        const isUnpaidOnlineAppOrder =
+            payload.order.auto === true &&
+            payload.order.payment_method === PaymentMethod.ONLINE &&
+            payload.order.paied !== true;
+        if (payload.expo_token && !isUnpaidOnlineAppOrder) {
             const promotionMessage = isPromotionUsed
                 ? "🎉 Une promotion a été appliquée à votre commande !"
                 : "";
