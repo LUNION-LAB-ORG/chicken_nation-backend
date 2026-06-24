@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { LoyaltyLevel, LoyaltyPointType, LoyaltyPointIsUsed, Customer, LoyaltyPoint, Prisma, EntityStatus } from '@prisma/client';
+import { LoyaltyLevel, LoyaltyPointType, LoyaltyPointIsUsed, Customer, LoyaltyPoint, Prisma, EntityStatus, OrderStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { AddLoyaltyPointDto } from '../dto/add-loyalty-point.dto';
 import { LoyaltyEvent } from '../events/loyalty.event';
@@ -426,6 +426,98 @@ export class LoyaltyService {
         });
 
         return payload;
+    }
+
+    /**
+     * Réconciliation des déductions de points MANQUÉES (fuite historique).
+     *
+     * Contexte : pendant longtemps la déduction n'était câblée que sur la transition
+     * ACCEPTED. Les commandes « À livrer » / Turbo « workflow manuel » atteignant TERMINÉE
+     * sans passer par ACCEPTED ont donc GAGNÉ des points sans jamais en CONSOMMER → soldes
+     * gonflés. Cette routine corrige l'historique.
+     *
+     * Cible : commandes COMPLETED avec `points > 0` SANS aucune ligne LoyaltyPoint REDEEMED.
+     * - dryRun (DÉFAUT) : ne mute RIEN. Renvoie le diagnostic (nb commandes, clients,
+     *   total de points à déduire, échantillon).
+     * - apply : appelle `redeemPoints` commande par commande. redeemPoints est idempotent
+     *   par order_id (re-jouable sans risque) et refuse de passer un solde négatif
+     *   (« Points insuffisants ») → les cas limites sont remontés en `failures`, jamais forcés.
+     *
+     * ⚠️ À lancer UNE SEULE FOIS, sur UN SEUL backend (cf. course double backend).
+     */
+    async reconcileRedemptions({
+        dryRun = true,
+        limit,
+    }: { dryRun?: boolean; limit?: number } = {}) {
+        const candidates = await this.prisma.order.findMany({
+            where: {
+                status: OrderStatus.COMPLETED,
+                points: { gt: 0 },
+                loyalty_points: { none: { type: LoyaltyPointType.REDEEMED } },
+            },
+            select: {
+                id: true,
+                reference: true,
+                customer_id: true,
+                points: true,
+            },
+            orderBy: { created_at: 'asc' }, // chronologique : FIFO de consommation cohérent
+            ...(limit ? { take: limit } : {}),
+        });
+
+        const totalPointsToDeduct = candidates.reduce((s, o) => s + o.points, 0);
+        const affectedCustomers = new Set(candidates.map((o) => o.customer_id)).size;
+
+        if (dryRun) {
+            return {
+                dry_run: true,
+                candidate_orders: candidates.length,
+                affected_customers: affectedCustomers,
+                total_points_to_deduct: totalPointsToDeduct,
+                sample: candidates.slice(0, 20).map((o) => ({
+                    reference: o.reference,
+                    customer_id: o.customer_id,
+                    points: o.points,
+                })),
+            };
+        }
+
+        const result = {
+            dry_run: false,
+            candidate_orders: candidates.length,
+            settled: 0,
+            already_redeemed: 0,
+            failed: 0,
+            points_deducted: 0,
+            failures: [] as { reference: string; customer_id: string; points: number; error: string }[],
+        };
+
+        for (const o of candidates) {
+            try {
+                const r: any = await this.redeemPoints({
+                    customer_id: o.customer_id,
+                    points: o.points,
+                    order_id: o.id,
+                    reason: `🔧 Réconciliation : ${o.points} points utilisés pour la commande #${o.reference} (déduction historique manquée)`,
+                });
+                if (r?.already_redeemed) {
+                    result.already_redeemed++;
+                } else {
+                    result.settled++;
+                    result.points_deducted += o.points;
+                }
+            } catch (error) {
+                result.failed++;
+                result.failures.push({
+                    reference: o.reference,
+                    customer_id: o.customer_id,
+                    points: o.points,
+                    error: error?.message ?? 'erreur inconnue',
+                });
+            }
+        }
+
+        return result;
     }
 
     // Obtenir les informations de fidélité d'un client

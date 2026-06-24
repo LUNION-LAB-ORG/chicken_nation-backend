@@ -143,6 +143,30 @@ export class OrderListenerService {
            ✅ COMMANDE TERMINÉE
         ========================= */
         if (payload.order.status === OrderStatus.COMPLETED) {
+            // ⭐ DÉDUCTION DES POINTS — FILET DE SÉCURITÉ À LA CLÔTURE.
+            // Beaucoup de commandes (« À livrer » / Turbo « workflow manuel ») atteignent
+            // TERMINÉE SANS jamais passer par ACCEPTED : le validateur autorise de sauter
+            // directement vers COMPLETED (order.helper validateStatusTransition). La déduction
+            // câblée sur ACCEPTED ne s'exécutait donc jamais pour elles, alors que le GAIN
+            // ci-dessous, lui, tourne → le solde ne faisait qu'augmenter.
+            // On déduit donc AUSSI ici. redeemPoints est idempotent par order_id : si ACCEPTED
+            // a déjà déduit, c'est un no-op (aucune double déduction).
+            if (payload.order.points > 0) {
+                try {
+                    await this.loyaltyService.redeemPoints({
+                        customer_id: payload.order.customer_id,
+                        points: payload.order.points,
+                        order_id: payload.order.id,
+                        reason: `🔥 ${payload.order.points} points utilisés pour la commande #${payload.order.reference}`,
+                    });
+                } catch (error) {
+                    this.logger.error(
+                        `Échec de la déduction des points fidélité (clôture) pour la commande ${payload.order.reference}: ${error?.message}`,
+                        error?.stack,
+                    );
+                }
+            }
+
             const pts = await this.loyaltyService.calculatePointsForOrder(
                 payload.order.net_amount
             );

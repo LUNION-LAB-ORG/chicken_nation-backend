@@ -140,4 +140,22 @@ export class LoyaltyController {
   expirePoints() {
     return this.loyaltyService.expirePoints();
   }
+
+  @Post('points/reconcile')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.FIDELITE, Action.UPDATE)
+  @ApiOperation({
+    summary:
+      'Réconcilier les déductions de points manquées (historique). Dry-run par défaut ; ?apply=true pour exécuter. À lancer une seule fois.',
+  })
+  @ApiOkResponse({ description: 'Diagnostic (dry-run) ou résultat de la réconciliation' })
+  reconcileRedemptions(
+    @Query('apply') apply?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.loyaltyService.reconcileRedemptions({
+      dryRun: apply !== 'true',
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
 }
