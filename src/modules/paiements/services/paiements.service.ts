@@ -59,7 +59,7 @@ export class PaiementsService {
       failure_message: transaction.failureMessage,
       order_id: createPaiementKkiapayDto?.orderId,
       client_id: customer.id,
-    });
+    }, { dedupeByReference: true });
 
 
     // Mise a jour de la commande à payée
@@ -226,7 +226,7 @@ export class PaiementsService {
       failure_message: transaction.failureMessage,
       order_id: data.orderId,
       client_id: data.customer_id,
-    });
+    }, { dedupeByReference: true });
 
     // Mise a jour de la commande à payée — CLAIM ATOMIQUE paied false→true.
     // updateMany conditionné sur paied:false → un seul processeur "gagne" (count===1).
@@ -349,7 +349,24 @@ export class PaiementsService {
   }
 
   // Création de paiement
-  async create(createPaiementDto: CreatePaiementDto) {
+  async create(
+    createPaiementDto: CreatePaiementDto,
+    opts?: { dedupeByReference?: boolean },
+  ) {
+    // Idempotence (KKiaPay) : un même transactionId (reference) ne doit créer qu'UN
+    // paiement, même si le webhook est rejoué ou reçu en parallèle (double backend).
+    // NON activé pour le cash (références PAY-… générées, non stables) → opt-in.
+    if (opts?.dedupeByReference && createPaiementDto.reference) {
+      const existing = await this.prisma.paiement.findFirst({
+        where: { reference: createPaiementDto.reference },
+      });
+      if (existing) {
+        const order = createPaiementDto.order_id
+          ? await this.prisma.order.findUnique({ where: { id: createPaiementDto.order_id } })
+          : null;
+        return { paiement: existing, order };
+      }
+    }
 
     // Vérification de la commande
     const order = await this.verifyOrder(
