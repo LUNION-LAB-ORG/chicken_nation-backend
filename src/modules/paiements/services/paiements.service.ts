@@ -22,6 +22,14 @@ import type { Request } from 'express';
 import { PaiementEvent } from 'src/modules/paiements/events/paiement.event';
 import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 
+/**
+ * Tolérance d'arrondi (FCFA) entre le cumul des paiements SUCCESS et le total de
+ * la commande. Absorbe l'écart de taxe app/back (≈ ±50 : l'app arrondit la taxe
+ * au plancher de 50, le back au plafond de 10). Au-delà, la commande n'est PAS
+ * considérée comme payée (paiement-jeton ou sous-paiement). cf. réconciliation KKiaPay.
+ */
+const PAYMENT_AMOUNT_TOLERANCE = 50;
+
 @Injectable()
 export class PaiementsService {
   constructor(
@@ -62,18 +70,34 @@ export class PaiementsService {
     }, { dedupeByReference: true });
 
 
-    // Mise a jour de la commande à payée
+    // Mise à jour de la commande à "payée" — UNIQUEMENT si la transaction est
+    // SUCCESS ET si le cumul des paiements SUCCESS couvre le total (pas d'acompte
+    // sur l'app mobile). Empêche qu'un paiement FAILED (famille Z) ou un paiement-
+    // jeton de 50 F (famille B) valide une commande. cf. réconciliation KKiaPay.
     if (result.order) {
-      const paymentAt = result.paiement.created_at;
-      await this.prisma.order.update({
-        where: { id: result.order.id },
-        data: {
-          paied_at: paymentAt,
-          paied: true,
-          // Paiement différé : ramène la commande "à aujourd'hui" (tri + filtre période)
-          ...this.buildPaymentDateAlignment(result.order, paymentAt),
-        },
-      });
+      const isSuccess = transaction.status === PaiementStatus.SUCCESS;
+      const totalSuccess = isSuccess
+        ? await this.sumSuccessPaiements(result.order.id)
+        : 0;
+      const covered = totalSuccess >= result.order.amount - PAYMENT_AMOUNT_TOLERANCE;
+      if (isSuccess && covered) {
+        const paymentAt = result.paiement.created_at;
+        await this.prisma.order.updateMany({
+          where: { id: result.order.id, paied: false }, // claim atomique anti-rejeu
+          data: {
+            paied_at: paymentAt,
+            paied: true,
+            // Paiement différé : ramène la commande "à aujourd'hui" (tri + filtre période)
+            ...this.buildPaymentDateAlignment(result.order, paymentAt),
+          },
+        });
+      } else {
+        console.warn(
+          `[Paiement KKiaPay] Commande ${result.order.reference} laissée NON payée ` +
+          `(statut=${transaction.status}, encaissé SUCCESS=${totalSuccess}/${result.order.amount}). ` +
+          `Paiement conservé pour audit.`,
+        );
+      }
     }
 
     return {
@@ -235,31 +259,46 @@ export class PaiementsService {
     // au listener pour ne déclencher les effets de bord que sur le 1er paiement réel.
     let justPaid = false;
     if (result.order) {
-      const next_status = this.getOrderStatus(result.order.payment_method!, result.order.type, result.order.status);
-      const paymentAt = result.paiement.created_at;
-      const claim = await this.prisma.order.updateMany({
-        where: { id: result.order.id, paied: false },
-        data: {
-          paied_at: paymentAt,
-          paied: true,
-          status: next_status,
-          ...(next_status == OrderStatus.ACCEPTED && { accepted_at: new Date() }),
-          // Paiement différé : ramène la commande "à aujourd'hui" (tri + filtre période)
-          ...this.buildPaymentDateAlignment(result.order, paymentAt),
-        },
-      });
-      justPaid = claim.count === 1;
+      // Ne confirmer la commande QUE si la transaction est SUCCESS ET si le cumul
+      // des paiements SUCCESS couvre le total (pas d'acompte app). Bloque les
+      // paiements FAILED (Z) et les paiements-jetons (B). cf. réconciliation KKiaPay.
+      const isSuccess = transaction.status === PaiementStatus.SUCCESS;
+      const totalSuccess = isSuccess
+        ? await this.sumSuccessPaiements(result.order.id)
+        : 0;
+      const covered = totalSuccess >= result.order.amount - PAYMENT_AMOUNT_TOLERANCE;
+      if (isSuccess && covered) {
+        const next_status = this.getOrderStatus(result.order.payment_method!, result.order.type, result.order.status);
+        const paymentAt = result.paiement.created_at;
+        const claim = await this.prisma.order.updateMany({
+          where: { id: result.order.id, paied: false },
+          data: {
+            paied_at: paymentAt,
+            paied: true,
+            status: next_status,
+            ...(next_status == OrderStatus.ACCEPTED && { accepted_at: new Date() }),
+            // Paiement différé : ramène la commande "à aujourd'hui" (tri + filtre période)
+            ...this.buildPaymentDateAlignment(result.order, paymentAt),
+          },
+        });
+        justPaid = claim.count === 1;
 
-      // Paiement confirmé (1re fois) → comptabiliser l'usage du code promo (usage_count++).
-      // Isolé pour ne jamais casser la confirmation du paiement.
-      if (justPaid && next_status === OrderStatus.ACCEPTED) {
-        try {
-          const updatedOrder = await this.prisma.order.findUnique({ where: { id: result.order.id } });
-          if (updatedOrder) await this.promoCodeService.activateUsageForOrder(updatedOrder);
-        } catch (e) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          console.error(`Sync usage promo (paiement KKiaPay) échoué pour ${result.order.id}: ${(e as any)?.message}`);
+        // Paiement confirmé (1re fois) → comptabiliser l'usage du code promo (usage_count++).
+        // Isolé pour ne jamais casser la confirmation du paiement.
+        if (justPaid && next_status === OrderStatus.ACCEPTED) {
+          try {
+            const updatedOrder = await this.prisma.order.findUnique({ where: { id: result.order.id } });
+            if (updatedOrder) await this.promoCodeService.activateUsageForOrder(updatedOrder);
+          } catch (e) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            console.error(`Sync usage promo (paiement KKiaPay) échoué pour ${result.order.id}: ${(e as any)?.message}`);
+          }
         }
+      } else {
+        console.warn(
+          `[Paiement KKiaPay] Commande ${result.order.reference} laissée NON payée ` +
+          `(statut=${transaction.status}, encaissé SUCCESS=${totalSuccess}/${result.order.amount}).`,
+        );
       }
     }
 
@@ -325,6 +364,13 @@ export class PaiementsService {
         failure_code: transaction.failureCode,
         failure_message: transaction.failureMessage,
       });
+
+      // Repropager le remboursement : si le cumul des paiements SUCCESS retombe
+      // sous le total, la commande repasse paied=false (corrige les commandes
+      // restées "payées" après un refund — famille Z-25 de la réconciliation KKiaPay).
+      if (paiement.order_id) {
+        await this.recomputeOrderPaiedFlag(paiement.order_id);
+      }
 
       // Émission de l'événement de paiement annulé
       this.paiementEvent.paiementAnnule(paiement);
@@ -555,6 +601,15 @@ export class PaiementsService {
     return result;
   }
 
+  /** Somme des paiements SUCCESS d'une commande (montant réellement encaissé). */
+  private async sumSuccessPaiements(orderId: string): Promise<number> {
+    const paiements = await this.prisma.paiement.findMany({
+      where: { order_id: orderId, status: PaiementStatus.SUCCESS },
+      select: { amount: true, total: true },
+    });
+    return paiements.reduce((s, p) => s + (p.total ?? p.amount ?? 0), 0);
+  }
+
   /**
    * Recalcule `order.paied` selon la somme actuelle des paiements SUCCESS.
    * Appelé après update/remove de paiement (et après update d'amount commande
@@ -573,7 +628,7 @@ export class PaiementsService {
       (sum, p) => sum + (p.total ?? p.amount ?? 0),
       0,
     );
-    const shouldBePaied = totalPaid >= order.amount;
+    const shouldBePaied = totalPaid >= order.amount - PAYMENT_AMOUNT_TOLERANCE;
     if (shouldBePaied === order.paied) return;
     const mostRecentSuccess = order.paiements.reduce<Date | null>(
       (latest, p) => {
