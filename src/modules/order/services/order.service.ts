@@ -1374,7 +1374,8 @@ export class OrderService {
       (sum, p) => sum + (p.total ?? p.amount ?? 0),
       0,
     );
-    const shouldBePaied = totalPaid >= fresh.amount;
+    // Tolérance d'arrondi taxe app/back (= PAYMENT_AMOUNT_TOLERANCE, cf. paiements.service)
+    const shouldBePaied = totalPaid >= fresh.amount - 50;
     if (shouldBePaied === fresh.paied) {
       // Rien à changer — on renvoie tout de même la commande détaillée pour
       // que l'appelant ait un objet à jour.
