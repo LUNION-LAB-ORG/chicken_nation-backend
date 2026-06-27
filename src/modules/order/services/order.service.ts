@@ -1726,6 +1726,7 @@ export class OrderService {
       { header: 'Frais de livraison (FCFA)', key: 'delivery_fee', width: 25 },
       { header: 'Taxe (FCFA)', key: 'tax', width: 15 },
       { header: 'Remise (FCFA)', key: 'discount', width: 15 },
+      { header: 'Montant payé (FCFA)', key: 'paid_amount', width: 20 },
       { header: 'Date', key: 'date', width: 15 },
       { header: 'Client', key: 'client', width: 25 },
       { header: 'Contact', key: 'contact', width: 15 },
@@ -1754,10 +1755,16 @@ export class OrderService {
     let totalFraisLivraison = 0;
     let totalTaxe = 0;
     let totalRemise = 0;
+    let totalPaye = 0;
 
     // Données
     orders.forEach((order) => {
       const montantNet = order.net_amount - order.discount;
+      // Montant réellement payé par le client = Σ paiements SUCCESS (cohérent avec
+      // le « Réellement perçu » du drawer). Les frais KKiaPay sont exclus.
+      const montantPaye = (order.paiements || [])
+        .filter((p) => p.status === 'SUCCESS')
+        .reduce((s, p) => s + (p.amount || 0), 0);
       const clientName =
         [order.customer.first_name, order.customer.last_name]
           .filter(Boolean)
@@ -1775,6 +1782,7 @@ export class OrderService {
         delivery_fee: order.delivery_fee,
         tax: order.tax,
         discount: order.discount,
+        paid_amount: montantPaye,
         date: format(new Date(order.created_at), 'dd/MM/yyyy HH:mm', { locale: fr }),
         client: clientName,
         contact: order.customer.phone || 'N/A',
@@ -1791,6 +1799,7 @@ export class OrderService {
       totalFraisLivraison += order.delivery_fee;
       totalTaxe += order.tax;
       totalRemise += order.discount;
+      totalPaye += montantPaye;
     });
 
     // Formatage des colonnes monétaires (nombres avec séparateur de milliers)
@@ -1801,6 +1810,7 @@ export class OrderService {
       'delivery_fee',
       'tax',
       'discount',
+      'paid_amount',
     ];
     currencyColumns.forEach((col) => {
       const column = worksheet.getColumn(col);
@@ -1817,6 +1827,7 @@ export class OrderService {
       delivery_fee: totalFraisLivraison,
       tax: totalTaxe,
       discount: totalRemise,
+      paid_amount: totalPaye,
       date: '',
       client: '',
       contact: '',
