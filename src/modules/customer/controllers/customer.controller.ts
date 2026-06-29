@@ -9,6 +9,8 @@ import {
   Post,
   Query,
   Req,
+  Res,
+  HttpStatus,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -17,7 +19,7 @@ import { CustomerService } from 'src/modules/customer/services/customer.service'
 import { CreateCustomerDto } from 'src/modules/customer/dto/create-customer.dto';
 import { UpdateCustomerDto } from 'src/modules/customer/dto/update-customer.dto';
 import { AdminUpdateCustomerDto } from 'src/modules/customer/dto/admin-update-customer.dto';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { CustomerQueryDto } from 'src/modules/customer/dto/customer-query.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -65,6 +67,23 @@ export class CustomerController {
   @ApiOperation({ summary: 'Récupération de tous les clients' })
   findAll(@Query() query: CustomerQueryDto) {
     return this.customerService.findAll(query);
+  }
+
+  // EXPORT EXCEL — déclaré AVANT @Get(':id') pour que la route statique gagne.
+  @Get('export')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard, RestaurantQueryScopeGuard)
+  @RequirePermission(Modules.CLIENTS, Action.READ)
+  @ApiOperation({ summary: 'Exporter les clients (Excel) selon les filtres courants' })
+  async exportCustomers(@Query() query: CustomerQueryDto, @Res() res: Response) {
+    const { buffer, filename } =
+      await this.customerService.exportCustomersToExcel(query);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.byteLength);
+    res.status(HttpStatus.OK).send(buffer);
   }
 
   @Get('/detail')
