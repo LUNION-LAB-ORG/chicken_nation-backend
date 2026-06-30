@@ -21,7 +21,6 @@ import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 import { TurboService } from 'src/turbo/services/turbo.service';
 import { OrderItemDto } from '../dto/order-create.dto';
-import { DeliveryFeeSettingsHelper } from './delivery-fee-settings.helper';
 
 @Injectable()
 export class OrderV2Helper {
@@ -30,7 +29,6 @@ export class OrderV2Helper {
   constructor(
     private prisma: PrismaService,
     private settingsService: SettingsService,
-    private readonly deliveryFeeSettings: DeliveryFeeSettingsHelper,
     private generateDataService: GenerateDataService,
     private restaurantService: RestaurantService,
     private readonly turboService: TurboService,
@@ -394,104 +392,8 @@ export class OrderV2Helper {
     }
   }
 
-  // Calculer les frais de livraison personnalisé
-  async calculeFraisLivraisonPersonnalise({ lat, long, restaurant }: {
-    lat: number, long: number, restaurant: {
-      name: string;
-      id: string;
-      latitude: number | null;
-      longitude: number | null;
-      schedule: JsonValue;
-    } | undefined
-  }): Promise<{
-    montant: number;
-    zone: string;
-    distance: number;
-    service: DeliveryService;
-    zone_id: string | null;
-  }> {
-    if (!restaurant) {
-      throw new BadRequestException('Aucun restaurant disponible');
-    }
-
-    // Calculer la distance entre le restaurant et l'adresse de livraison
-    const distance = this.generateDataService.haversineDistance(
-      restaurant.latitude ?? 0,
-      restaurant.longitude ?? 0,
-      lat,
-      long,
-    );
-
-    // Grille de fallback des frais de livraison (utilisée si l'API Turbo ne répond pas)
-    // Grille configurable distance→prix (réglage `delivery.fee_grid`).
-    const feeSettings = await this.deliveryFeeSettings.load();
-    return {
-      montant: this.deliveryFeeSettings.priceForDistance(feeSettings.grid, distance),
-      zone: this.deliveryFeeSettings.zoneLabel(feeSettings.grid, distance, restaurant.name),
-      distance: Math.round(distance),
-      service: DeliveryService.TURBO,
-      zone_id: null,
-    };
-  }
-
-  // Calculer les frais de livraison
-  async calculeFraisLivraison({ lat, long, restaurant }: {
-    lat: number, long: number, restaurant: {
-      name: string;
-      id: string;
-      latitude: number | null;
-      longitude: number | null;
-      schedule: JsonValue;
-      apikey: string | null;
-    } | undefined
-  }): Promise<{
-    montant: number;
-    zone: string;
-    distance: number;
-    service: DeliveryService;
-    zone_id: string | null;
-  }> {
-    if (!restaurant) {
-      throw new BadRequestException('Aucun restaurant disponible');
-    }
-    // Récupérer la configuration de frais de livraison
-    let config: {
-      montant: number;
-      zone: string;
-      distance: number;
-      service: DeliveryService;
-      zone_id: string | null;
-    } = await this.calculeFraisLivraisonPersonnalise({ lat, long, restaurant });
-
-    // Zones Turbo désactivées via les réglages → on garde la grille interne.
-    const feeSettings = await this.deliveryFeeSettings.load();
-    if (!feeSettings.turboZonesEnabled) {
-      return config;
-    }
-
-    // Récupérer les zones de livraison de turbo
-    const resultTurbo = await this.turboService.obtenirFraisLivraisonParRestaurant(restaurant.apikey ?? "", 0, 200);
-    const zones = resultTurbo ? resultTurbo.content : [];
-
-    if (zones.length === 0) {
-      return config;
-    }
-
-    // Récupérer la zone la plus proche
-    const zone = zones.reduce((prev, current) => {
-      const prevDistance = this.generateDataService.haversineDistance(prev.latitude, prev.longitude, lat, long);
-      const currentDistance = this.generateDataService.haversineDistance(current.latitude, current.longitude, lat, long);
-      return currentDistance < prevDistance ? current : prev;
-    }, zones[0]);
-
-    return {
-      montant: zone.prix,
-      distance: config.distance,
-      zone: restaurant.name + " - " + zone.name,
-      service: DeliveryService.TURBO,
-      zone_id: zone.id,
-    };
-  }
+  // ⚠️ Le calcul des frais de livraison vit désormais dans DeliveryFeeHelper
+  // (source de vérité unique) — OrderService l'appelle directement.
 
   // Déterminer le status à partir de la méthode de paiement, le type de commande et du paiement
   // Tous les types de commande paient en ligne (ONLINE)

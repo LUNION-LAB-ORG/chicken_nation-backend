@@ -33,6 +33,7 @@ import { OrderEvent } from '../events/order.event';
 import { OrderHelper } from '../helpers/order.helper';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
 import { OrderV2Helper } from '../helpers/orderv2.helper';
+import { DeliveryFeeHelper } from '../helpers/delivery-fee.helper';
 import { OrderCreateDto } from '../dto/order-create.dto';
 import * as puppeteer from 'puppeteer';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
@@ -47,6 +48,7 @@ export class OrderService {
     private generateDataService: GenerateDataService,
     private orderHelper: OrderHelper,
     private orderHelperV2: OrderV2Helper,
+    private readonly deliveryFeeHelper: DeliveryFeeHelper,
     private orderEvent: OrderEvent,
     private readonly orderWebSocketService: OrderWebSocketService,
     private voucherService: VoucherService,
@@ -118,7 +120,7 @@ export class OrderService {
       if (delivery_fee) {
         finalDeliveryFee = delivery_fee;
       } else {
-        delivery = await this.orderHelperV2.calculeFraisLivraison({
+        delivery = await this.deliveryFeeHelper.calculeFraisLivraison({
           lat: addressData.latitude,
           long: addressData.longitude,
           restaurant,
@@ -324,7 +326,7 @@ export class OrderService {
       });
       // Vérifier l'adresse
       const addressData = await this.orderHelper.validateAddress(address ?? '');
-      delivery = await this.orderHelper.calculeFraisLivraison({
+      delivery = await this.deliveryFeeHelper.calculeFraisLivraison({
         lat: addressData.latitude,
         long: addressData.longitude,
         restaurant,
@@ -2350,7 +2352,7 @@ export class OrderService {
       address: JSON.stringify({ latitude: body.lat, longitude: body.long }),
     });
 
-    return await this.orderHelper.calculeFraisLivraison({
+    return await this.deliveryFeeHelper.calculeFraisLivraison({
       lat: body.lat,
       long: body.long,
       restaurant,
