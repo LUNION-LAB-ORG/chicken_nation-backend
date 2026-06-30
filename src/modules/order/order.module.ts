@@ -18,6 +18,7 @@ import { TurboModule } from 'src/turbo/turbo.module';
 import { TurboListenerService } from './listeners/turbo.listener.service';
 import { KkiapayOrderListenerService } from './listeners/kkiapay-order.listener.service';
 import { OrderV2Helper } from './helpers/orderv2.helper';
+import { DeliveryFeeSettingsHelper } from './helpers/delivery-fee-settings.helper';
 import { ExpoPushModule } from 'src/expo-push/expo-push.module';
 import { VoucherModule } from 'src/modules/voucher/voucher.module';
 import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
@@ -42,6 +43,7 @@ import { UsersModule } from 'src/modules/users/users.module';
     OrderDelivererService,
     OrderHelper,
     OrderV2Helper,
+    DeliveryFeeSettingsHelper,
     OrderEvent,
     OrderListenerService,
     OrderTask,

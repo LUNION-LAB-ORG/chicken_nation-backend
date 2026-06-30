@@ -33,6 +33,7 @@ import { PromotionErrorKeys } from 'src/modules/fidelity/enums/promotion-error-k
 import { JsonValue } from '@prisma/client/runtime/library';
 import { TurboService } from 'src/turbo/services/turbo.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
+import { DeliveryFeeSettingsHelper } from './delivery-fee-settings.helper';
 
 @Injectable()
 export class OrderHelper {
@@ -41,6 +42,7 @@ export class OrderHelper {
   constructor(
     private prisma: PrismaService,
     private settingsService: SettingsService,
+    private readonly deliveryFeeSettings: DeliveryFeeSettingsHelper,
     private generateDataService: GenerateDataService,
     private paiementService: PaiementsService,
     private loyaltyService: LoyaltyService,
@@ -451,80 +453,15 @@ export class OrderHelper {
     );
 
     // Grille de fallback des frais de livraison (utilisée si l'API Turbo ne répond pas)
-    if (distance <= 2) {
-      return {
-        montant: 1000,
-        zone: `0-2km de ${restaurant.name}`,
-        distance: Math.round(distance),
-        service: DeliveryService.TURBO,
-        zone_id: null,
-      };
-    } else if (distance > 2 && distance <= 4) {
-      return {
-        montant: 1500,
-        zone: `2-4km de ${restaurant.name}`,
-        distance: Math.round(distance),
-        service: DeliveryService.TURBO,
-        zone_id: null,
-      };
-    } else if (distance > 4 && distance <= 5) {
-      return {
-        montant: 2000,
-        zone: `4-5km de ${restaurant.name}`,
-        distance: Math.round(distance),
-        service: DeliveryService.TURBO,
-        zone_id: null,
-      };
-    } else if (distance > 5 && distance <= 7) {
-      return {
-        montant: 2500,
-        zone: `5-7km de ${restaurant.name}`,
-        distance: Math.round(distance),
-        service: DeliveryService.TURBO,
-        zone_id: null,
-      };
-    } else if (distance > 7 && distance <= 10) {
-      return {
-        montant: 3000,
-        zone: `7-10km de ${restaurant.name}`,
-        distance: Math.round(distance),
-        service: DeliveryService.TURBO,
-        zone_id: null,
-      };
-    } else if (distance > 10 && distance <= 12.5) {
-      return {
-        montant: 3500,
-        zone: `10-12.5km de ${restaurant.name}`,
-        distance: Math.round(distance),
-        service: DeliveryService.TURBO,
-        zone_id: null,
-      };
-    } else if (distance > 12.5 && distance <= 14) {
-      return {
-        montant: 4000,
-        zone: `12.5-14km de ${restaurant.name}`,
-        distance: Math.round(distance),
-        service: DeliveryService.TURBO,
-        zone_id: null,
-      };
-    } else if (distance > 14 && distance <= 16) {
-      return {
-        montant: 4500,
-        zone: `14-16km de ${restaurant.name}`,
-        distance: Math.round(distance),
-        service: DeliveryService.TURBO,
-        zone_id: null,
-      };
-    }
-    else {
-      return {
-        montant: 5000,
-        zone: `+16km de ${restaurant.name}`,
-        distance: Math.round(distance),
-        service: DeliveryService.TURBO,
-        zone_id: null,
-      };
-    }
+    // Grille configurable distance→prix (réglage `delivery.fee_grid`).
+    const feeSettings = await this.deliveryFeeSettings.load();
+    return {
+      montant: this.deliveryFeeSettings.priceForDistance(feeSettings.grid, distance),
+      zone: this.deliveryFeeSettings.zoneLabel(feeSettings.grid, distance, restaurant.name),
+      distance: Math.round(distance),
+      service: DeliveryService.TURBO,
+      zone_id: null,
+    };
   }
 
   // Calculer les frais de livraison
@@ -555,6 +492,12 @@ export class OrderHelper {
       service: DeliveryService;
       zone_id: string | null;
     } = await this.calculeFraisLivraisonPersonnalise({ lat, long, restaurant });
+
+    // Zones Turbo désactivées via les réglages → on garde la grille interne.
+    const feeSettings = await this.deliveryFeeSettings.load();
+    if (!feeSettings.turboZonesEnabled) {
+      return config;
+    }
 
     // Récupérer les zones de livraison de turbo
     const resultTurbo = await this.turboService.obtenirFraisLivraisonParRestaurant(restaurant.apikey ?? "", 0, 200);
