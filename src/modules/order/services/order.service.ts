@@ -62,7 +62,7 @@ export class OrderService {
 
   async createv2(customer_id: string, createOrderDto: OrderCreateDto): Promise<Order> {
     const {
-      items, address, restaurant_id, delivery_fee, type, code_promo, date, fullname, phone, email, payment_method, points,
+      items, address, restaurant_id, type, code_promo, date, fullname, phone, email, payment_method, points,
       delivery_service: overrideDeliveryService,
     } = createOrderDto;
 
@@ -122,6 +122,8 @@ export class OrderService {
     let restaurant: any = null;
     let delivery: any = null;
     let finalDeliveryFee = 0;
+    let deliveryFeeBase = 0;   // frais de livraison PLEIN (avant offre) — bilan
+    let deliveryDiscount = 0;  // remise de l'offre appliquée sur le frais
 
     if (type === OrderType.DELIVERY) {
       // 📍 LIVRAISON : Attribution automatique selon la distance et le stock
@@ -129,21 +131,20 @@ export class OrderService {
       const addressData = await this.orderHelperV2.validateAddress(address);
 
       restaurant = await this.orderHelperV2.findEligibleDeliveryRestaurant(addressData, dishIds);
-      if (delivery_fee) {
-        finalDeliveryFee = delivery_fee;
-      } else {
-        delivery = await this.deliveryFeeHelper.calculeFraisLivraison({
-          lat: addressData.latitude,
-          long: addressData.longitude,
-          restaurant,
-          channel: 'APP',
-          orderAmount: netAmount,
-          customerId: customerData.customer_id,
-        });
-        finalDeliveryFee = delivery.montant;
-      }
-
-      finalDeliveryFee = delivery_fee ?? delivery.montant;
+      // Frais TOUJOURS calculé côté serveur (autoritaire) : on ne fait PAS confiance au
+      // delivery_fee envoyé par l'app (intégrité). On en tire le frais facturé + le frais
+      // PLEIN (avant offre) + la remise → bilan fiable, source unique.
+      delivery = await this.deliveryFeeHelper.calculeFraisLivraison({
+        lat: addressData.latitude,
+        long: addressData.longitude,
+        restaurant,
+        channel: 'APP',
+        orderAmount: netAmount,
+        customerId: customerData.customer_id,
+      });
+      finalDeliveryFee = delivery.montant;
+      deliveryFeeBase = delivery.original_montant ?? delivery.montant;
+      deliveryDiscount = delivery.discount ?? 0;
 
     } else {
       // 🛍️ EMPORTER & TABLE : Vérification stricte du choix du client
@@ -176,6 +177,8 @@ export class OrderService {
           reference: orderNumber,
           address: address ?? '',
           delivery_fee: Number(finalDeliveryFee),
+          delivery_fee_base: Number(deliveryFeeBase),
+          delivery_discount: Number(deliveryDiscount),
           // Override client/admin > auto-détection zone > fallback TURBO
           delivery_service: overrideDeliveryService ?? (delivery ? delivery.service : DeliveryService.TURBO),
           zone_id: delivery?.zone_id,
@@ -345,6 +348,8 @@ export class OrderService {
       distance: number;
       service: DeliveryService;
       zone_id: string | null;
+      original_montant?: number; // frais avant offre
+      discount?: number; // remise offre sur le frais
     } | null = null;
     // Récupérer le restaurant le plus proche
     let restaurant: {
@@ -385,8 +390,15 @@ export class OrderService {
       );
     }
 
-    // Montant frais de livraison
+    // Montant frais de livraison (override admin préservé si delivery_fee fourni).
     const deliveryFee = delivery_fee || (delivery ? delivery?.montant : 0);
+    // Frais PLEIN (avant offre) + remise, côté serveur → bilan fiable (call center inclus).
+    // Si l'admin FORCE un frais (override), on ne lui attribue PAS la remise d'une offre
+    // serveur : base = facturé, remise = 0 → invariant bilan (base = facturé + remise) préservé.
+    const deliveryFeeBase = delivery_fee
+      ? Number(deliveryFee)
+      : (delivery ? (delivery.original_montant ?? delivery.montant) : Number(deliveryFee));
+    const deliveryDiscount = delivery_fee ? 0 : (delivery?.discount ?? 0);
 
     // Vérifier le paiement
     const payment = await this.orderHelper.checkPayment(createOrderDto);
@@ -452,6 +464,8 @@ export class OrderService {
           ...(payment && { paiements: { connect: { id: payment.id } } }),
           address: address ?? '',
           delivery_fee: delivery_fee ? delivery_fee : Number(deliveryFee),
+          delivery_fee_base: Number(deliveryFeeBase),
+          delivery_discount: Number(deliveryDiscount),
           // Override admin > auto-détection zone > fallback TURBO
           delivery_service: overrideDeliveryService ?? (delivery ? delivery.service : DeliveryService.TURBO),
           zone_id: delivery ? delivery.zone_id : undefined,

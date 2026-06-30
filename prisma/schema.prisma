@@ -1036,6 +1036,8 @@ model Order {
   customer_id                String          @db.Uuid
   paied                      Boolean         @default(false)
   delivery_fee               Float
+  delivery_fee_base          Float           @default(0) // frais de livraison PLEIN (avant offre) — pour le bilan
+  delivery_discount          Float           @default(0) // remise de l'offre de livraison appliquée (base - facturé)
   delivery_service           DeliveryService @default(FREE)
   zone_id                    String?         @db.VarChar
   points                     Int             @default(0)
