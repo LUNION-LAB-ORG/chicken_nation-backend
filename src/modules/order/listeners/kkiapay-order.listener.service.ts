@@ -7,6 +7,8 @@ import { OrderEvent } from '../events/order.event';
 import { OrderService } from '../services/order.service';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
 import { ExpoPushService } from 'src/expo-push/expo-push.service';
+import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
+import { OrderStatus } from '@prisma/client';
 
 @Injectable()
 export class KkiapayOrderListenerService {
@@ -16,6 +18,7 @@ export class KkiapayOrderListenerService {
         private orderEvent: OrderEvent,
         private readonly orderWebSocketService: OrderWebSocketService,
         private readonly expoPushService: ExpoPushService,
+        private readonly notificationsSender: NotificationsSenderService,
     ) { }
 
     @OnEvent(KkiapayChannels.TRANSACTION_SUCCESS)
@@ -33,6 +36,10 @@ export class KkiapayOrderListenerService {
 
         // Webhook rejoué / commande déjà payée → aucun effet de bord en double.
         if (!justPaid) return;
+
+        // 🔔 CLOCHE staff resto — commande app payée EN LIGNE. linkPaiementToOrder a passé
+        // le statut à ACCEPTED ; on le force ici car l'objet `order` (pré-update) est encore PENDING.
+        void this.notificationsSender.sendOrderBell({ ...order, status: OrderStatus.ACCEPTED });
 
         const totalDishes = order.order_items.reduce(
             (sum, item) => sum + item.amount * item.quantity,

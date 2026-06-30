@@ -3,7 +3,7 @@ import { UsersService } from './services/users.service';
 import { UserPushService } from './services/user-push.service';
 import { UsersController } from './controller/users.controller';
 import { UserEvent } from './events/user.event';
-// import { UserListenerService } from './listeners/user-listener.service';
+import { UserListenerService } from './listeners/user-listener.service';
 import { UserNotificationsTemplate } from './templates/user-notifications.template';
 
 @Module({
@@ -12,7 +12,7 @@ import { UserNotificationsTemplate } from './templates/user-notifications.templa
   providers: [
     UsersService,
     UserPushService,
-    // UserListenerService,
+    UserListenerService,
     UserEvent,
     UserNotificationsTemplate,
   ],

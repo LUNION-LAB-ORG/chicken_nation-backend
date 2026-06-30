@@ -10,7 +10,12 @@ import {
   ParseUUIDPipe,
   HttpStatus,
   UseInterceptors,
+  UseGuards,
+  Req,
+  ForbiddenException,
 } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import type { Request } from 'express';
 import {
   ApiTags,
   ApiOperation,
@@ -33,10 +38,21 @@ import { CacheInterceptor } from '@nestjs/cache-manager';
 @ApiTags('🔔 Notifications')
 @ApiBearerAuth()
 @Controller('notifications')
+@UseGuards(AuthGuard(['jwt', 'jwt-customer']))
 @UseInterceptors(CacheInterceptor)
-
 export class NotificationsController {
   constructor(private readonly notificationService: NotificationsService) { }
+
+  /**
+   * Empêche un utilisateur de lire/vider les notifications d'un AUTRE : le path porte un
+   * userId, on le compare à l'identité du token (User OU Customer). 403 si différent.
+   */
+  private assertSelf(req: Request, userId: string) {
+    const principalId = (req.user as { id?: string } | undefined)?.id;
+    if (!principalId || principalId !== userId) {
+      throw new ForbiddenException('Accès non autorisé à ces notifications');
+    }
+  }
 
   @Post()
   @ApiOperation({
@@ -138,7 +154,8 @@ export class NotificationsController {
   @ApiOkResponse({
     description: 'Notifications de l\'utilisateur récupérées avec succès',
   })
-  async findByUser(@Query() query: Omit<QueryNotificationDto, 'userId' | 'target'>, @Param('userId', ParseUUIDPipe) userId: string, @Param('target') target: NotificationTarget) {
+  async findByUser(@Req() req: Request, @Query() query: Omit<QueryNotificationDto, 'userId' | 'target'>, @Param('userId', ParseUUIDPipe) userId: string, @Param('target') target: NotificationTarget) {
+    this.assertSelf(req, userId);
     return this.notificationService.findByUser(query, userId, target);
   }
 
@@ -161,9 +178,11 @@ export class NotificationsController {
     type: NotificationStatsDto,
   })
   async getStats(
+    @Req() req: Request,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Param('target') target: NotificationTarget,
   ) {
+    this.assertSelf(req, userId);
     return this.notificationService.getStatsByUser(userId, target);
   }
 
@@ -271,9 +290,11 @@ export class NotificationsController {
     },
   })
   async markAllAsRead(
+    @Req() req: Request,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Param('target') target: NotificationTarget,
   ) {
+    this.assertSelf(req, userId);
     return this.notificationService.markAllAsReadByUser(userId, target);
   }
 
@@ -324,9 +345,11 @@ export class NotificationsController {
     },
   })
   async removeAllByUser(
+    @Req() req: Request,
     @Param('userId', ParseUUIDPipe) userId: string,
     @Param('target') target: NotificationTarget,
   ) {
+    this.assertSelf(req, userId);
     return this.notificationService.removeAllByUser(userId, target);
   }
 }

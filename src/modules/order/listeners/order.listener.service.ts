@@ -7,6 +7,7 @@ import { OrderChannels } from '../enums/order-channels';
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
 import { ExpoPushService } from 'src/expo-push/expo-push.service';
 import { UserPushService } from 'src/modules/users/services/user-push.service';
+import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
 
 @Injectable()
 export class OrderListenerService {
@@ -17,6 +18,7 @@ export class OrderListenerService {
         private loyaltyService: LoyaltyService,
         private expoPushService: ExpoPushService,
         private userPushService: UserPushService,
+        private notificationsSender: NotificationsSenderService,
     ) { }
 
     /* =========================================================
@@ -36,6 +38,14 @@ export class OrderListenerService {
                 critical: true,
                 data: { orderId: payload.order.id, reference: payload.order.reference },
             });
+        }
+
+        // 🔔 CLOCHE staff resto — commandes ACTIONNABLES uniquement (status != PENDING) :
+        // commandes staff/cash dès la création (ACCEPTED). Les commandes app EN LIGNE sont
+        // notifiées au PAIEMENT (cf. KkiapayOrderListenerService) pour ne pas alerter sur un
+        // brouillon non payé.
+        if (payload.order.status !== OrderStatus.PENDING) {
+            void this.notificationsSender.sendOrderBell(payload.order);
         }
 
         let isPromotionUsed = false;
@@ -145,6 +155,16 @@ export class OrderListenerService {
                     );
                 }
             }
+
+            // 🔔 CLOCHE staff resto — la commande vient d'être ACCEPTÉE (client confirmé).
+            void this.notificationsSender.sendOrderBell(payload.order);
+        }
+
+        /* =========================
+           🍽️ COMMANDE PRÊTE → notifier le staff resto
+        ========================= */
+        if (payload.order.status === OrderStatus.READY) {
+            void this.notificationsSender.sendOrderBell(payload.order);
         }
 
         /* =========================

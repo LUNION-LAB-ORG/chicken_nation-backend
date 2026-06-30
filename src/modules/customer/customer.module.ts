@@ -10,7 +10,8 @@ import { CommentService } from './services/comment.service';
 import { CustomerEvent } from './events/customer.event';
 import { NotificationSettingService } from './services/notification-setting.service';
 import { CustomerCleanupTask } from './tasks/customer-cleanup.task';
-// import { CustomerListenerService } from './listeners/customer-listener.service';
+import { CustomerListenerService } from './listeners/customer-listener.service';
+import { CustomerNotificationsTemplate } from './templates/customer-notifications.template';
 
 @Module({
   imports: [],
@@ -28,7 +29,8 @@ import { CustomerCleanupTask } from './tasks/customer-cleanup.task';
     CustomerEvent,
     NotificationSettingService,
     CustomerCleanupTask,
-    // CustomerListenerService
+    CustomerListenerService,
+    CustomerNotificationsTemplate,
   ],
 })
 export class CustomerModule { }
