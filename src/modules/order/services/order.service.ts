@@ -1935,6 +1935,180 @@ export class OrderService {
 
 
   /**
+   * Export Excel des LIVRAISONS — pour le rapprochement avec Turbo (le prestataire).
+   * Une ligne par commande DELIVERY : frais plein / remise offre / facturé + infos
+   * livraison (service, zone, origine, destination, statut, livré le).
+   */
+  async exportDeliveriesToExcel(filters: QueryOrderDto, user?: User) {
+    const {
+      restaurantId,
+      startDate,
+      endDate,
+      status,
+      sortBy = 'created_at',
+      sortOrder = 'desc',
+    } = filters;
+
+    const where: Prisma.OrderWhereInput = {
+      entity_status: { not: EntityStatus.DELETED },
+      type: OrderType.DELIVERY,
+    };
+    if (restaurantId) where.restaurant_id = restaurantId;
+    if (status) where.status = status;
+    if (startDate && endDate) {
+      where.created_at = {
+        gte: startDate,
+        lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
+      };
+    }
+    // PENDING (brouillons app non payés) réservé à l'admin — cohérent avec findAll.
+    if (user?.role !== UserRole.ADMIN) {
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        { status: { not: OrderStatus.PENDING } },
+      ];
+    }
+
+    const orders = await this.prisma.order.findMany({
+      where,
+      include: {
+        customer: { select: { first_name: true, last_name: true, phone: true } },
+        restaurant: { select: { name: true } },
+        delivery: {
+          select: { statut: true, delivered_at: true, in_route_at: true, failure_reason: true },
+        },
+      },
+      orderBy: { [sortBy]: sortOrder },
+    });
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Livraisons');
+
+    worksheet.columns = [
+      { header: 'Date', key: 'date', width: 18 },
+      { header: 'Commande', key: 'reference', width: 20 },
+      { header: 'Frais de base (FCFA)', key: 'fee_base', width: 20 },
+      { header: 'Remise offre (FCFA)', key: 'fee_discount', width: 20 },
+      { header: 'Frais facturé (FCFA)', key: 'fee_billed', width: 20 },
+      { header: 'Service', key: 'service', width: 14 },
+      { header: 'Zone', key: 'zone', width: 18 },
+      { header: 'Restaurant', key: 'restaurant', width: 24 },
+      { header: 'Destination', key: 'destination', width: 32 },
+      { header: 'Client', key: 'client', width: 22 },
+      { header: 'Téléphone', key: 'phone', width: 16 },
+      { header: 'Statut livraison', key: 'delivery_status', width: 18 },
+      { header: 'Livré le', key: 'delivered_at', width: 18 },
+      { header: 'Source', key: 'source', width: 12 },
+      { header: 'Payée', key: 'paid', width: 10 },
+    ];
+
+    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF3B82F6' },
+    };
+    worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+
+    let totalBase = 0;
+    let totalDiscount = 0;
+    let totalBilled = 0;
+
+    orders.forEach((order) => {
+      // Order.address = JSON { title, address, street?, city?, longitude, latitude, note }
+      const addr = (order.address as any) || {};
+      const destination =
+        [addr.address, addr.note].filter(Boolean).join(' — ') || addr.title || 'N/A';
+      const clientName =
+        [order.customer?.first_name, order.customer?.last_name].filter(Boolean).join(' ') || 'N/A';
+      const base = order.delivery_fee_base ?? 0;
+      const discount = order.delivery_discount ?? 0;
+      const billed = order.delivery_fee ?? 0;
+
+      worksheet.addRow({
+        date: format(new Date(order.created_at), 'dd/MM/yyyy HH:mm', { locale: fr }),
+        reference: order.reference,
+        fee_base: base,
+        fee_discount: discount,
+        fee_billed: billed,
+        service: order.delivery_service,
+        zone: order.zone_id || '—',
+        restaurant: order.restaurant?.name || 'N/A',
+        destination,
+        client: clientName,
+        phone: order.customer?.phone || 'N/A',
+        delivery_status: order.delivery?.statut || order.status,
+        delivered_at: order.delivery?.delivered_at
+          ? format(new Date(order.delivery.delivered_at), 'dd/MM/yyyy HH:mm', { locale: fr })
+          : '',
+        source: order.auto ? 'Appli' : 'Téléphone',
+        paid: order.paied ? 'Oui' : 'Non',
+      });
+
+      totalBase += base;
+      totalDiscount += discount;
+      totalBilled += billed;
+    });
+
+    ['fee_base', 'fee_discount', 'fee_billed'].forEach((col) => {
+      const column = worksheet.getColumn(col);
+      column.numFmt = '#,##0';
+      column.alignment = { horizontal: 'right' };
+    });
+
+    const totalRow = worksheet.addRow({
+      date: '',
+      reference: 'TOTAL',
+      fee_base: totalBase,
+      fee_discount: totalDiscount,
+      fee_billed: totalBilled,
+      service: '',
+      zone: '',
+      restaurant: '',
+      destination: '',
+      client: '',
+      phone: '',
+      delivery_status: '',
+      delivered_at: '',
+      source: '',
+      paid: '',
+    });
+    totalRow.font = { bold: true };
+    totalRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE5E7EB' },
+    };
+
+    worksheet.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: true }, (cell) => {
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+          right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        };
+      });
+    });
+    worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber > 1 && rowNumber < worksheet.rowCount && rowNumber % 2 === 0) {
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFF9FAFB' },
+        };
+      }
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return {
+      buffer,
+      filename: `livraisons-turbo-${new Date().toISOString().split('T')[0]}.xlsx`,
+    };
+  }
+
+
+  /**
    * Export Excel pivot : Date × Restaurants → nb livraisons
    */
   async exportDeliveryPivotToExcel(filters: QueryOrderDto) {

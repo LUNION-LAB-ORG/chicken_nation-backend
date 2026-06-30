@@ -178,6 +178,19 @@ export class OrderController {
     res.status(HttpStatus.OK).send(buffer);
   }
 
+  @Get('/export-deliveries')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.DASHBOARD, Action.EXPORT)
+  @ApiOperation({ summary: 'Exporter les livraisons (frais base/remise/facturé + infos Turbo)' })
+  async exportDeliveries(@Req() req: Request, @Query() query: QueryOrderDto, @Res() res: Response) {
+    const { buffer, filename } = await this.orderService.exportDeliveriesToExcel(query, req.user as User);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.byteLength);
+
+    res.status(HttpStatus.OK).send(buffer);
+  }
+
   @Post('/refresh')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.READ)
