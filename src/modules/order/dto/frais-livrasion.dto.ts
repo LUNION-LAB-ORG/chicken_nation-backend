@@ -17,4 +17,10 @@ export class FraisLivraisonDto {
     @IsUUID()
     @IsOptional()
     restaurant_id?: string;
+
+    @ApiPropertyOptional({ description: "Sous-total (FCFA) — pour appliquer les offres conditionnées au montant" })
+    @IsOptional()
+    @IsNumber()
+    @Transform(({ value }) => (value === undefined || value === '' ? undefined : Number(value)))
+    order_amount?: number;
 }

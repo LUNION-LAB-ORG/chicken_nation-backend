@@ -2032,3 +2032,76 @@ model ProspectMessage {
 
   @@index([prospect_id, created_at])
 }
+
+// ════════════════════════════════════════════════════════════════════════
+//  OFFRES DE LIVRAISON (promotions sur le frais de livraison)
+// ════════════════════════════════════════════════════════════════════════
+
+enum DeliveryOfferType {
+  FREE_DELIVERY // Livraison gratuite
+  PERCENTAGE    // % de réduction sur le frais
+  FIXED_AMOUNT  // Montant fixe déduit du frais
+}
+
+enum DeliveryOfferChannel {
+  APP         // Commandes via l'app uniquement
+  CALL_CENTER // Commandes call center uniquement
+  BOTH        // Les deux
+}
+
+model DeliveryOffer {
+  id          String            @id @default(uuid()) @db.Uuid
+  name        String            @db.VarChar
+  description String?           @db.Text
+  type        DeliveryOfferType
+  value       Float             @default(0) // % (PERCENTAGE) ou FCFA (FIXED_AMOUNT) ; ignoré pour FREE_DELIVERY
+
+  // Conditions
+  min_order_amount Float?               @default(0)
+  channel          DeliveryOfferChannel @default(BOTH)
+  restaurant_ids   String[]             @default([]) // vide = tous les restaurants
+
+  // Ciblage fidélité (si aucun coché → tous les niveaux)
+  target_standard Boolean @default(false)
+  target_premium  Boolean @default(false)
+  target_gold     Boolean @default(false)
+
+  // Jours / créneaux (vide = tous les jours / toute la journée)
+  days_of_week String[] @default([]) // ex: ["saturday","sunday"] (minuscules)
+  time_start   String?  @db.VarChar  // "HH:mm"
+  time_end     String?  @db.VarChar  // "HH:mm"
+
+  // Période de validité
+  start_date      DateTime @db.Timestamp(6)
+  expiration_date DateTime @db.Timestamp(6)
+
+  // Limites d'usage
+  max_usage          Int? // global ; null = illimité
+  max_usage_per_user Int? @default(0) // par client ; 0/null = illimité
+  usage_count        Int  @default(0)
+
+  is_active Boolean @default(true)
+  priority  Int     @default(0) // départage si plusieurs offres matchent (plus haut = prioritaire)
+
+  created_by    String?      @db.Uuid
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @updatedAt @db.Timestamp(6)
+  entity_status EntityStatus @default(ACTIVE)
+
+  @@index([is_active, entity_status])
+  @@index([start_date, expiration_date])
+}
+
+model DeliveryOfferUsage {
+  id                String               @id @default(uuid()) @db.Uuid
+  delivery_offer_id String               @db.Uuid
+  customer_id       String               @db.Uuid
+  order_id          String?              @db.Uuid
+  discount_amount   Float                @default(0) // frais de livraison économisé
+  status            PromoCodeUsageStatus @default(INACTIVE) // ACTIVE = compte ; INACTIVE = attente paiement
+  created_at        DateTime             @default(now()) @db.Timestamp(6)
+
+  @@index([delivery_offer_id])
+  @@index([customer_id])
+  @@index([order_id])
+}

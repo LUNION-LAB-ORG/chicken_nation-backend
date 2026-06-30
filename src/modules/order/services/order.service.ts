@@ -34,6 +34,8 @@ import { OrderHelper } from '../helpers/order.helper';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
 import { OrderV2Helper } from '../helpers/orderv2.helper';
 import { DeliveryFeeHelper } from '../helpers/delivery-fee.helper';
+import { DeliveryOfferService } from 'src/modules/delivery-offer/services/delivery-offer.service';
+import { PromoCodeUsageStatus } from '@prisma/client';
 import { OrderCreateDto } from '../dto/order-create.dto';
 import * as puppeteer from 'puppeteer';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
@@ -49,6 +51,7 @@ export class OrderService {
     private orderHelper: OrderHelper,
     private orderHelperV2: OrderV2Helper,
     private readonly deliveryFeeHelper: DeliveryFeeHelper,
+    private readonly deliveryOfferService: DeliveryOfferService,
     private orderEvent: OrderEvent,
     private readonly orderWebSocketService: OrderWebSocketService,
     private voucherService: VoucherService,
@@ -133,6 +136,9 @@ export class OrderService {
           lat: addressData.latitude,
           long: addressData.longitude,
           restaurant,
+          channel: 'APP',
+          orderAmount: netAmount,
+          customerId: customerData.customer_id,
         });
         finalDeliveryFee = delivery.montant;
       }
@@ -231,6 +237,27 @@ export class OrderService {
         this.logger.error(`Erreur lors de l'enregistrement de l'usage du code ${code_promo}: ${error.message}`);
       }
     }
+    // Enregistrer l'usage de l'offre de livraison appliquée (pour les limites).
+    if (order && delivery?.offer_id) {
+      try {
+        await this.deliveryOfferService.recordUsage(
+          delivery.offer_id,
+          customerData.customer_id,
+          order.id,
+          Number(delivery.discount ?? 0),
+          PromoCodeUsageStatus.ACTIVE,
+        );
+        await this.prisma.deliveryOffer.update({
+          where: { id: delivery.offer_id },
+          data: { usage_count: { increment: 1 } },
+        });
+      } catch (error) {
+        this.logger.error(
+          `Erreur enregistrement usage offre livraison: ${error.message}`,
+        );
+      }
+    }
+
     // Envoyer l'événement de création de commande
     this.orderEvent.orderCreatedEvent({
       order,
@@ -339,6 +366,9 @@ export class OrderService {
         lat: addressData.latitude,
         long: addressData.longitude,
         restaurant,
+        channel: 'CALL_CENTER',
+        orderAmount: netAmount,
+        customerId: customerData.customer_id,
       });
     } else {
       restaurant = await this.orderHelper.getClosestRestaurant({
@@ -2365,6 +2395,8 @@ export class OrderService {
       lat: body.lat,
       long: body.long,
       restaurant,
+      channel: 'APP',
+      orderAmount: body.order_amount ?? 0,
     });
   }
 }

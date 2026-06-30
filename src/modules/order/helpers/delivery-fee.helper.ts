@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { DeliveryService } from '@prisma/client';
+import { DeliveryService, LoyaltyLevel } from '@prisma/client';
 import { JsonValue } from '@prisma/client/runtime/library';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { TurboService } from 'src/turbo/services/turbo.service';
+import { DeliveryOfferService } from 'src/modules/delivery-offer/services/delivery-offer.service';
 
 /**
  * Un palier de la grille de frais de livraison : tout trajet dont la distance
@@ -29,6 +30,11 @@ export interface DeliveryFeeResult {
   distance: number;
   service: DeliveryService;
   zone_id: string | null;
+  // Offre de livraison appliquée (le cas échéant)
+  offer_id?: string;
+  offer_name?: string;
+  original_montant?: number; // frais avant offre
+  discount?: number; // montant offert sur le frais
 }
 
 /** Grille par défaut = exactement l'ancienne grille hardcodée (comportement inchangé). */
@@ -72,6 +78,7 @@ export class DeliveryFeeHelper {
     private readonly settingsService: SettingsService,
     private readonly generateDataService: GenerateDataService,
     private readonly turboService: TurboService,
+    private readonly deliveryOfferService: DeliveryOfferService,
   ) {}
 
   // ───────────────────────────── Réglages ─────────────────────────────
@@ -233,6 +240,10 @@ export class DeliveryFeeHelper {
     lat,
     long,
     restaurant,
+    channel,
+    orderAmount,
+    loyaltyLevel,
+    customerId,
   }: {
     lat: number;
     long: number;
@@ -246,6 +257,11 @@ export class DeliveryFeeHelper {
           apikey: string | null;
         }
       | undefined;
+    /** Contexte d'application des offres (offres ignorées si channel/orderAmount absent). */
+    channel?: 'APP' | 'CALL_CENTER';
+    orderAmount?: number;
+    loyaltyLevel?: LoyaltyLevel | null;
+    customerId?: string | null;
   }): Promise<DeliveryFeeResult> {
     if (!restaurant) {
       throw new BadRequestException('Aucun restaurant disponible');
@@ -254,47 +270,65 @@ export class DeliveryFeeHelper {
     // Frais via la grille interne (toujours calculé, sert aussi de secours).
     const config = await this.calculeFraisLivraisonPersonnalise({ lat, long, restaurant });
 
-    // Zones Turbo désactivées via les réglages → on garde la grille interne.
+    let result: DeliveryFeeResult = config;
+
+    // Zones Turbo (si activées) : remplace la grille par la zone la plus proche.
     const feeSettings = await this.load();
-    if (!feeSettings.turboZonesEnabled) {
-      return config;
+    if (feeSettings.turboZonesEnabled) {
+      const resultTurbo = await this.turboService.obtenirFraisLivraisonParRestaurant(
+        restaurant.apikey ?? '',
+        0,
+        200,
+      );
+      const zones = resultTurbo ? resultTurbo.content : [];
+      if (zones.length > 0) {
+        const zone = zones.reduce((prev, current) => {
+          const prevDistance = this.generateDataService.haversineDistance(
+            prev.latitude,
+            prev.longitude,
+            lat,
+            long,
+          );
+          const currentDistance = this.generateDataService.haversineDistance(
+            current.latitude,
+            current.longitude,
+            lat,
+            long,
+          );
+          return currentDistance < prevDistance ? current : prev;
+        }, zones[0]);
+        result = {
+          montant: zone.prix,
+          distance: config.distance,
+          zone: restaurant.name + ' - ' + zone.name,
+          service: DeliveryService.TURBO,
+          zone_id: zone.id,
+        };
+      }
     }
 
-    // Récupérer les zones de livraison de Turbo.
-    const resultTurbo = await this.turboService.obtenirFraisLivraisonParRestaurant(
-      restaurant.apikey ?? '',
-      0,
-      200,
-    );
-    const zones = resultTurbo ? resultTurbo.content : [];
-
-    if (zones.length === 0) {
-      return config;
+    // Meilleure offre de livraison active (gratuite / % / fixe), si contexte fourni.
+    if (channel && orderAmount != null) {
+      const applicable = await this.deliveryOfferService.findApplicableOffer({
+        baseFee: result.montant,
+        restaurantId: restaurant.id,
+        channel,
+        orderAmount,
+        loyaltyLevel,
+        customerId: customerId ?? null,
+      });
+      if (applicable) {
+        result = {
+          ...result,
+          montant: applicable.newFee,
+          original_montant: result.montant,
+          discount: applicable.discount,
+          offer_id: applicable.offer.id,
+          offer_name: applicable.offer.name,
+        };
+      }
     }
 
-    // Zone Turbo la plus proche (centre de zone le plus proche du client).
-    const zone = zones.reduce((prev, current) => {
-      const prevDistance = this.generateDataService.haversineDistance(
-        prev.latitude,
-        prev.longitude,
-        lat,
-        long,
-      );
-      const currentDistance = this.generateDataService.haversineDistance(
-        current.latitude,
-        current.longitude,
-        lat,
-        long,
-      );
-      return currentDistance < prevDistance ? current : prev;
-    }, zones[0]);
-
-    return {
-      montant: zone.prix,
-      distance: config.distance,
-      zone: restaurant.name + ' - ' + zone.name,
-      service: DeliveryService.TURBO,
-      zone_id: zone.id,
-    };
+    return result;
   }
 }

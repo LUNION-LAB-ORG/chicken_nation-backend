@@ -23,6 +23,7 @@ import { ExpoPushModule } from 'src/expo-push/expo-push.module';
 import { VoucherModule } from 'src/modules/voucher/voucher.module';
 import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
 import { UsersModule } from 'src/modules/users/users.module';
+import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { UsersModule } from 'src/modules/users/users.module';
     VoucherModule,
     PromoCodeModule,
     UsersModule,
+    DeliveryOfferModule,
   ],
   controllers: [OrderController, OrderDelivererController],
   providers: [
