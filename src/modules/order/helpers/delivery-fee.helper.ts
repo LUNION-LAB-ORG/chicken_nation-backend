@@ -90,6 +90,34 @@ export class DeliveryFeeHelper {
     };
   }
 
+  /**
+   * Livraison désactivée pour les commandes de l'APP (réglage temporaire
+   * backoffice). Respecte `delivery.app_disabled_until` : passé cette date,
+   * réactivation automatique. N'affecte QUE createv2 (app), jamais le call center.
+   */
+  async isAppDeliveryDisabled(): Promise<{ disabled: boolean; message: string }> {
+    const map = await this.settingsService.getMany([
+      'delivery.app_disabled',
+      'delivery.app_disabled_until',
+      'delivery.app_disabled_message',
+    ]);
+    if (!this.toBoolean(map['delivery.app_disabled'], 0)) {
+      return { disabled: false, message: '' };
+    }
+    const untilRaw = map['delivery.app_disabled_until'];
+    if (untilRaw && untilRaw.trim() !== '') {
+      const until = new Date(untilRaw);
+      if (!Number.isNaN(until.getTime()) && new Date() >= until) {
+        // Période écoulée → livraison réactivée automatiquement.
+        return { disabled: false, message: '' };
+      }
+    }
+    const message =
+      (map['delivery.app_disabled_message'] || '').trim() ||
+      'La livraison est temporairement indisponible. Choisissez « À emporter » ou réessayez plus tard.';
+    return { disabled: true, message };
+  }
+
   /** Prix (FCFA) pour une distance (km) selon la grille. */
   priceForDistance(grid: IDeliveryFeeTier[], distanceKm: number): number {
     const sorted = this.sortGrid(grid);

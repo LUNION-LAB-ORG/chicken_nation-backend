@@ -63,6 +63,15 @@ export class OrderService {
       delivery_service: overrideDeliveryService,
     } = createOrderDto;
 
+    // 🚫 Livraison désactivée pour l'app (réglage backoffice temporaire).
+    // createv2 = chemin EXCLUSIF de l'app → ne bloque jamais le call center.
+    if (type === OrderType.DELIVERY) {
+      const block = await this.deliveryFeeHelper.isAppDeliveryDisabled();
+      if (block.disabled) {
+        throw new BadRequestException(block.message);
+      }
+    }
+
     // 1. Gestion de la Date (Le format ISO géré par le nouveau DTO)
     let finalDate = date && typeof date === 'string' ? new Date(date) : new Date();
 
