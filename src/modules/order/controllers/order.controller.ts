@@ -319,16 +319,4 @@ export class OrderController {
   async getReceiptPdf(@Param('id') id: string, @Res() res: Response) {
     await this.receiptsService.generateReceiptPdf(id, res);
   }
-
-  @Get('export/restaurant-pdf')
-  async exportRestaurantPdf(@Query() query: QueryOrderDto, @Res() res: Response) {
-    const result = await this.orderService.exportRestaurantOrdersToPDF(query);
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${result.filename}"`,
-      'Content-Length': result.buffer.length,
-    });
-
-    res.send(result.buffer);
-  }
 }
