@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { EntityStatus, OrderStatus, OrderType, Prisma } from '@prisma/client';
+import { EntityStatus, LoyaltyPointType, OrderStatus, Prisma } from '@prisma/client';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import * as puppeteer from 'puppeteer';
@@ -7,210 +7,463 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import {
   parseDateRange,
   buildRestaurantFilter,
-  formatCurrency,
   buildDateFilter,
-  DateRange,
 } from '../helpers/statistics.helper';
+import { StatisticsOrdersService } from './statistics-orders.service';
+import { StatisticsProductsService } from './statistics-products.service';
+import { StatisticsClientsService } from './statistics-clients.service';
+import { StatisticsDeliveryService } from './statistics-delivery.service';
+import { StatisticsMarketingService } from './statistics-marketing.service';
 
 export interface MarketingReportQuery {
   restaurantId?: string;
   startDate?: string;
   endDate?: string;
   period?: 'today' | 'week' | 'month' | 'last_month' | 'year';
-  type?: OrderType;
-  status?: OrderStatus;
+  // Conservés pour la rétrocompatibilité du DTO, volontairement ignorés :
+  // le rapport est GLOBAL (tous types, tous canaux) par conception.
+  type?: string;
+  status?: string;
   auto?: boolean;
 }
 
+// Libellés métier des types de commande (source unique du rapport).
+const TYPE_LABELS: Record<string, string> = {
+  DELIVERY: 'Livraison',
+  PICKUP: 'À emporter',
+  TABLE: 'Sur place',
+};
+// Ordre d'affichage stable des types.
+const TYPE_ORDER = ['DELIVERY', 'PICKUP', 'TABLE'];
+
+const CHANNEL_LABELS: Record<string, string> = {
+  APP: 'Application',
+  CALL_CENTER: 'Call Center',
+  MIXED: 'Mixte',
+};
+const LEVEL_LABELS: Record<string, string> = {
+  STANDARD: 'Standard',
+  PREMIUM: 'Premium',
+  GOLD: 'Gold',
+};
+
 interface ReportData {
-  dateLabel: string;
-  kpis: { totalOrders: number; averageBasket: number };
-  byRestaurant: Array<{ name: string; orders: number; revenue: number }>;
-  bySource: Array<{ source: string; orders: number; revenue: number }>;
-  byType: Array<{ type: string; label: string; orders: number; revenue: number }>;
-  topDishes: Array<{
-    name: string;
-    quantity: number;
-    revenue: number;       // CA = unitPrice × quantity
-    isPromotion: boolean;
-    promotionPrice: number | null;
-    unitPrice: number;     // Prix unitaire = promotion_price si promo, sinon price
-  }>;
-  reviews: {
-    average: number;
-    total: number;
-    distribution: Record<number, number>;
+  meta: { dateLabel: string; scopeLabel: string; generatedAt: string };
+  overview: {
+    netRevenue: number;
+    totalOrders: number;
+    averageBasket: number;
+    cancellationRate: number;
+    cancelledOrders: number;
+    evolution: string;
   };
+  byType: Array<{
+    label: string;
+    orders: number;
+    revenue: number;
+    percentage: number;
+    averageBasket: number;
+  }>;
+  channel: {
+    app: { orders: number; revenue: number; averageBasket: number; newRate: number; percentage: number };
+    call: { orders: number; revenue: number; averageBasket: number; newRate: number; percentage: number };
+  };
+  byRestaurant: {
+    items: Array<{
+      name: string;
+      appOrders: number;
+      callOrders: number;
+      totalOrders: number;
+      revenue: number;
+      percentage: number;
+    }>;
+    totalApp: number;
+    totalCall: number;
+    totalOrders: number;
+    totalRevenue: number;
+  };
+  products: {
+    top: Array<{ name: string; category: string; sold: number; revenue: number; evolution: string }>;
+    categories: Array<{ name: string; sold: number; revenue: number; percentage: number }>;
+    promoShare: number;
+    promoRevenue: number;
+    promoSold: number;
+    regularRevenue: number;
+  };
+  clients: {
+    total: number;
+    newClients: number;
+    recurringClients: number;
+    newRate: number;
+    averageLtv: number;
+    averageFrequency: number;
+    newBasket: number;
+    recurringBasket: number;
+    top10Share: number;
+    top20Share: number;
+    top: Array<{ name: string; orders: number; spent: number; channel: string; level: string }>;
+  };
+  finance: {
+    discount: number;
+    deliveryFee: number;
+    tax: number;
+    ttc: number;
+    ht: number;
+  };
+  loyalty: { earned: number; redeemed: number; expired: number; bonus: number };
+  payment: {
+    online: { orders: number; revenue: number };
+    offline: { orders: number; revenue: number };
+  };
+  delivery: {
+    totalDeliveries: number;
+    feesCollected: number;
+    averageFee: number;
+    turboPercentage: number;
+    freePercentage: number;
+    averageMinutes: number;
+    onTimeRate: number;
+    topZones: Array<{ zone: string; orders: number; revenue: number; percentage: number }>;
+  };
+  promos: Array<{
+    title: string;
+    usageCount: number;
+    uniqueUsers: number;
+    totalDiscount: number;
+    revenueGenerated: number;
+  }>;
+  reviews: { average: number; total: number; distribution: Record<number, number> };
 }
 
 @Injectable()
 export class MarketingReportService {
   private readonly logger = new Logger(MarketingReportService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ordersService: StatisticsOrdersService,
+    private readonly productsService: StatisticsProductsService,
+    private readonly clientsService: StatisticsClientsService,
+    private readonly deliveryService: StatisticsDeliveryService,
+    private readonly marketingService: StatisticsMarketingService,
+  ) {}
 
   async collectReportData(query: MarketingReportQuery): Promise<ReportData> {
     const dateRange = parseDateRange(query);
     const restaurantFilter = buildRestaurantFilter(query.restaurantId);
     const dateFilter = buildDateFilter(dateRange);
 
+    // Filtres communs à toutes les sous-requêtes réutilisées : le rapport est
+    // volontairement TOUS TYPES (DELIVERY + PICKUP + TABLE) et tous canaux.
+    const subQuery = {
+      restaurantId: query.restaurantId,
+      startDate: query.startDate,
+      endDate: query.endDate,
+      period: query.period,
+    };
+
+    // Base de calcul pour les requêtes d'appoint (bilan financier / paiement) :
+    // aligné sur le reste du module (net_amount, statuts terminaux, payée).
     const baseWhere: Prisma.OrderWhereInput = {
       ...restaurantFilter,
       entity_status: { not: EntityStatus.DELETED },
-      status: query.status ?? OrderStatus.COMPLETED,
+      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
       paied: true,
       created_at: dateFilter,
-      type: query.type ?? OrderType.DELIVERY, // Focus livraison uniquement
-      ...(query.auto !== undefined && { auto: query.auto }),
+    };
+
+    // Avis : Comment n'a pas de restaurant_id direct, on passe par la commande.
+    const reviewWhere: Prisma.CommentWhereInput = {
+      entity_status: EntityStatus.ACTIVE,
+      created_at: dateFilter,
+      ...(query.restaurantId ? { order: { restaurant_id: query.restaurantId } } : {}),
     };
 
     const [
-      kpiData,
-      restaurantData,
-      sourceData,
-      typeData,
-      topDishesRaw,
+      overviewRaw,
+      channelRaw,
+      restaurantSourceRaw,
+      topProductsRaw,
+      topCategoriesRaw,
+      promoPerfRaw,
+      clientsRaw,
+      basketRaw,
+      concentrationRaw,
+      topClientsRaw,
+      deliveryRaw,
+      promoUsageRaw,
+      financeAgg,
+      loyaltyRaw,
+      paymentRaw,
       reviewsAggregate,
       reviewsDistribution,
+      allRestaurants,
     ] = await Promise.all([
-      // 1. KPIs
+      this.ordersService.getOrdersOverview(subQuery),
+      this.ordersService.getOrdersByChannel(subQuery),
+
+      // Détail par restaurant : ventilé App/Call Center + CA net, scopé au
+      // restaurant si demandé (getOrdersByRestaurantAndSource ignore le
+      // restaurantId et ne renvoie pas le CA, donc requête dédiée ici).
+      this.prisma.order.groupBy({
+        by: ['restaurant_id', 'auto'],
+        _count: { _all: true },
+        _sum: { net_amount: true },
+        where: baseWhere,
+      }),
+
+      this.productsService.getTopProducts({ ...subQuery, limit: 8 }),
+      this.productsService.getTopCategories({ ...subQuery, limit: 6 }),
+      this.productsService.getPromotionPerformance(subQuery),
+      this.clientsService.getClientsOverview(subQuery),
+      this.clientsService.getBasketComparison(subQuery),
+      this.clientsService.getRevenueConcentration(subQuery),
+      this.clientsService.getTopClients({ ...subQuery, limit: 5 }),
+      this.deliveryService.getDeliveryDashboard({ ...subQuery, limit: 5 }),
+      this.marketingService.getPromoUsage(subQuery),
+
+      // (A) Bilan financier tous-types : remises, frais livraison, taxe, TTC.
+      // amount = net_amount - discount + tax + delivery_fee (cf. order.service).
       this.prisma.order.aggregate({
-        _count: { _all: true },
-        _sum: { amount: true },
+        _sum: {
+          net_amount: true,
+          amount: true,
+          discount: true,
+          tax: true,
+          delivery_fee: true,
+        },
         where: baseWhere,
       }),
 
-      // 2. Par restaurant
-      this.prisma.order.groupBy({
-        by: ['restaurant_id'],
-        _count: { _all: true },
-        _sum: { amount: true },
-        where: baseWhere,
-        orderBy: { _sum: { amount: 'desc' } },
-      }),
-
-      // 3. Par source
-      this.prisma.order.groupBy({
-        by: ['auto'],
-        _count: { _all: true },
-        _sum: { amount: true },
-        where: baseWhere,
-      }),
-
-      // 4. Par type
-      this.prisma.order.groupBy({
+      // (B) Fidélité : points émis vs consommés vs expirés sur la période.
+      this.prisma.loyaltyPoint.groupBy({
         by: ['type'],
-        _count: { _all: true },
-        _sum: { amount: true },
-        where: baseWhere,
-      } as any),
-
-      // 5. Top 10 plats
-      this.prisma.orderItem.groupBy({
-        by: ['dish_id'],
-        _sum: { quantity: true, amount: true },
-        where: { order: baseWhere },
-        orderBy: { _sum: { quantity: 'desc' } },
-        take: 10,
+        _sum: { points: true },
+        where: {
+          created_at: dateFilter,
+          ...(query.restaurantId ? { order: { restaurant_id: query.restaurantId } } : {}),
+        },
       }),
 
-      // 6. Avis — moyenne + count
+      // (C) Paiement : part du CA en ligne vs au comptoir.
+      this.prisma.order.groupBy({
+        by: ['payment_method'],
+        _count: { _all: true },
+        _sum: { net_amount: true },
+        where: baseWhere,
+      }),
+
+      // Avis : moyenne + total (scopés restaurant).
       this.prisma.comment.aggregate({
         _avg: { rating: true },
         _count: { _all: true },
-        where: {
-          entity_status: EntityStatus.ACTIVE,
-          created_at: dateFilter,
-        },
+        where: reviewWhere,
       }),
 
-      // 7. Avis — distribution par note
+      // Avis : distribution par note.
       this.prisma.comment.groupBy({
         by: ['rating'],
         _count: { _all: true },
-        where: {
-          entity_status: EntityStatus.ACTIVE,
-          created_at: dateFilter,
-        },
+        where: reviewWhere,
       }),
+
+      // Noms des restaurants (détail par restaurant + libellé de périmètre).
+      this.prisma.restaurant.findMany({ select: { id: true, name: true } }),
     ]);
 
-    // Résoudre les noms de restaurants
-    const restaurantIds = restaurantData.map((r) => r.restaurant_id);
-    const restaurants = await this.prisma.restaurant.findMany({
-      where: { id: { in: restaurantIds } },
-      select: { id: true, name: true },
-    });
-    const restaurantMap = new Map(restaurants.map((r) => [r.id, r.name]));
-
-    // Résoudre les noms de plats
-    const dishIds = topDishesRaw.map((d) => d.dish_id);
-    const dishes = await this.prisma.dish.findMany({
-      where: { id: { in: dishIds } },
-      select: { id: true, name: true, price: true, promotion_price: true, is_promotion: true },
-    });
-    const dishMap = new Map(dishes.map((d) => [d.id, d]));
-
-    const totalOrders = kpiData._count._all;
-    const totalRevenue = kpiData._sum.amount ?? 0;
-
-    const typeLabels: Record<string, string> = {
-      DELIVERY: 'Livraison',
-      PICKUP: 'Emporter',
-      TABLE: 'Sur place',
+    // --- Détail par restaurant : App / Call Center + CA net (scopé) ---
+    const restaurantMap = new Map(allRestaurants.map((r) => [r.id, r.name]));
+    const restoAgg = new Map<
+      string,
+      { name: string; appOrders: number; callOrders: number; totalOrders: number; revenue: number }
+    >();
+    for (const row of restaurantSourceRaw) {
+      const id = row.restaurant_id;
+      if (!restoAgg.has(id)) {
+        restoAgg.set(id, {
+          name: restaurantMap.get(id) ?? 'Inconnu',
+          appOrders: 0,
+          callOrders: 0,
+          totalOrders: 0,
+          revenue: 0,
+        });
+      }
+      const e = restoAgg.get(id)!;
+      const count = row._count._all;
+      if (row.auto === true) e.appOrders += count;
+      else e.callOrders += count;
+      e.totalOrders += count;
+      e.revenue += row._sum.net_amount ?? 0;
+    }
+    const restoItems = [...restoAgg.values()].sort((a, b) => b.revenue - a.revenue);
+    const totalRestoRevenue = restoItems.reduce((s, r) => s + r.revenue, 0);
+    const byRestaurant = {
+      items: restoItems.map((r) => ({
+        name: r.name,
+        appOrders: r.appOrders,
+        callOrders: r.callOrders,
+        totalOrders: r.totalOrders,
+        revenue: r.revenue,
+        percentage:
+          totalRestoRevenue > 0 ? Math.round((r.revenue / totalRestoRevenue) * 1000) / 10 : 0,
+      })),
+      totalApp: restoItems.reduce((s, r) => s + r.appOrders, 0),
+      totalCall: restoItems.reduce((s, r) => s + r.callOrders, 0),
+      totalOrders: restoItems.reduce((s, r) => s + r.totalOrders, 0),
+      totalRevenue: totalRestoRevenue,
     };
 
-    const dateLabel = `${format(dateRange.startDate, 'dd/MM/yyyy', { locale: fr })} — ${format(dateRange.endDate, 'dd/MM/yyyy', { locale: fr })}`;
+    // Part App/Call sur l'ensemble (répartition par source).
+    const channelTotalOrders =
+      channelRaw.app.totalOrders + channelRaw.callCenter.totalOrders;
+    const channelPct = (n: number) =>
+      channelTotalOrders > 0 ? Math.round((n / channelTotalOrders) * 1000) / 10 : 0;
 
-    // Distribution avis
+    // --- Répartition par type (cœur du rapport) ---
+    const byType = [...overviewRaw.byType]
+      .sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type))
+      .map((t) => ({
+        label: TYPE_LABELS[t.type] ?? t.type,
+        orders: t.count,
+        revenue: t.revenue,
+        percentage: t.percentage,
+        averageBasket: t.count > 0 ? Math.round(t.revenue / t.count) : 0,
+      }));
+
+    // --- Paiement : ONLINE (défaut) vs OFFLINE ---
+    const payment = { online: { orders: 0, revenue: 0 }, offline: { orders: 0, revenue: 0 } };
+    for (const row of paymentRaw) {
+      const bucket = row.payment_method === 'OFFLINE' ? payment.offline : payment.online;
+      bucket.orders += row._count._all;
+      bucket.revenue += row._sum.net_amount ?? 0;
+    }
+
+    // --- Fidélité ---
+    const loyalty = { earned: 0, redeemed: 0, expired: 0, bonus: 0 };
+    for (const row of loyaltyRaw) {
+      const points = row._sum.points ?? 0;
+      if (row.type === LoyaltyPointType.EARNED) loyalty.earned = points;
+      else if (row.type === LoyaltyPointType.REDEEMED) loyalty.redeemed = points;
+      else if (row.type === LoyaltyPointType.EXPIRED) loyalty.expired = points;
+      else if (row.type === LoyaltyPointType.BONUS) loyalty.bonus = points;
+    }
+
+    // --- Avis : distribution 1..5 ---
     const distribution: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     for (const r of reviewsDistribution) {
       const rating = Math.round(r.rating);
-      if (rating >= 1 && rating <= 5) {
-        distribution[rating] = r._count._all;
-      }
+      if (rating >= 1 && rating <= 5) distribution[rating] = r._count._all;
     }
 
+    const dateLabel = `du ${format(dateRange.startDate, 'dd/MM/yyyy', { locale: fr })} au ${format(
+      dateRange.endDate,
+      'dd/MM/yyyy',
+      { locale: fr },
+    )}`;
+
     return {
-      dateLabel,
-      kpis: {
-        totalOrders,
-        averageBasket: totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0,
+      meta: {
+        dateLabel,
+        scopeLabel: query.restaurantId
+          ? (restaurantMap.get(query.restaurantId) ?? 'Restaurant')
+          : 'Tous les restaurants',
+        generatedAt: format(new Date(), "dd/MM/yyyy 'à' HH:mm", { locale: fr }),
       },
-      byRestaurant: restaurantData.map((r) => ({
-        name: restaurantMap.get(r.restaurant_id) ?? 'Inconnu',
-        orders: r._count._all,
-        revenue: r._sum.amount ?? 0,
+      overview: {
+        netRevenue: overviewRaw.totalRevenue,
+        totalOrders: overviewRaw.totalOrders,
+        averageBasket: overviewRaw.averageBasket,
+        cancellationRate: overviewRaw.cancellationRate,
+        cancelledOrders: overviewRaw.cancelledOrders,
+        evolution: overviewRaw.evolution,
+      },
+      byType,
+      channel: {
+        app: {
+          orders: channelRaw.app.totalOrders,
+          revenue: channelRaw.app.revenue,
+          averageBasket: channelRaw.app.averageBasket,
+          newRate: channelRaw.app.newClientsRate,
+          percentage: channelPct(channelRaw.app.totalOrders),
+        },
+        call: {
+          orders: channelRaw.callCenter.totalOrders,
+          revenue: channelRaw.callCenter.revenue,
+          averageBasket: channelRaw.callCenter.averageBasket,
+          newRate: channelRaw.callCenter.newClientsRate,
+          percentage: channelPct(channelRaw.callCenter.totalOrders),
+        },
+      },
+      byRestaurant,
+      products: {
+        top: topProductsRaw.items.map((p) => ({
+          name: p.name,
+          category: p.categoryName,
+          sold: p.totalSold,
+          revenue: p.revenue,
+          evolution: p.evolution ?? '',
+        })),
+        categories: topCategoriesRaw.items.map((c) => ({
+          name: c.name,
+          sold: c.totalSold,
+          revenue: c.revenue,
+          percentage: c.percentage,
+        })),
+        promoShare: promoPerfRaw.promoRevenueShare,
+        promoRevenue: promoPerfRaw.promoRevenue,
+        promoSold: promoPerfRaw.promoTotalSold,
+        regularRevenue: promoPerfRaw.regularRevenue,
+      },
+      clients: {
+        total: clientsRaw.totalClients,
+        newClients: clientsRaw.newClients,
+        recurringClients: clientsRaw.recurringClients,
+        newRate: clientsRaw.newClientsRate,
+        averageLtv: clientsRaw.averageLtv,
+        averageFrequency: clientsRaw.averageOrderFrequency,
+        newBasket: basketRaw.newClientsBasket,
+        recurringBasket: basketRaw.recurringClientsBasket,
+        top10Share: concentrationRaw.top10Percentage,
+        top20Share: concentrationRaw.top20Percentage,
+        top: topClientsRaw.items.map((c) => ({
+          name: c.fullname,
+          orders: c.ordersInPeriod,
+          spent: c.totalSpent,
+          channel: CHANNEL_LABELS[c.preferredChannel] ?? c.preferredChannel,
+          level: LEVEL_LABELS[c.loyaltyLevel] ?? c.loyaltyLevel,
+        })),
+      },
+      finance: {
+        discount: financeAgg._sum.discount ?? 0,
+        deliveryFee: financeAgg._sum.delivery_fee ?? 0,
+        tax: financeAgg._sum.tax ?? 0,
+        ttc: financeAgg._sum.amount ?? 0,
+        ht: (financeAgg._sum.amount ?? 0) - (financeAgg._sum.tax ?? 0),
+      },
+      loyalty,
+      payment,
+      delivery: {
+        totalDeliveries: deliveryRaw.overview.totalDeliveries,
+        feesCollected: deliveryRaw.overview.totalFeesCollected,
+        averageFee: deliveryRaw.overview.averageFee,
+        turboPercentage: deliveryRaw.overview.turboPercentage,
+        freePercentage: deliveryRaw.overview.freePercentage,
+        averageMinutes: deliveryRaw.performance.averageDeliveryMinutes,
+        onTimeRate: deliveryRaw.performance.onTimeRate,
+        topZones: deliveryRaw.byZone.items.slice(0, 5).map((z) => ({
+          zone: z.zone,
+          orders: z.orderCount,
+          revenue: z.revenue,
+          percentage: z.percentage,
+        })),
+      },
+      promos: promoUsageRaw.items.slice(0, 5).map((p) => ({
+        title: p.title,
+        usageCount: p.usageCount,
+        uniqueUsers: p.uniqueUsers,
+        totalDiscount: p.totalDiscount,
+        revenueGenerated: p.revenueGenerated,
       })),
-      bySource: sourceData.map((s) => ({
-        source: s.auto ? 'Application' : 'Call Center',
-        orders: s._count._all,
-        revenue: s._sum.amount ?? 0,
-      })),
-      byType: typeData.map((t) => ({
-        type: t.type,
-        label: typeLabels[t.type] ?? t.type,
-        orders: (t._count as any)?._all ?? 0,
-        revenue: (t._sum as any)?.amount ?? 0,
-      })),
-      topDishes: topDishesRaw.map((d) => {
-        const dish = dishMap.get(d.dish_id);
-        const quantity = d._sum.quantity ?? 0;
-        // Prix unitaire = prix promo si le plat est en promotion, sinon prix normal
-        const unitPrice = (dish?.is_promotion && dish?.promotion_price != null)
-          ? dish.promotion_price
-          : (dish?.price ?? 0);
-        // CA = prix unitaire × quantité vendues
-        const revenue = unitPrice * quantity;
-        return {
-          name: dish?.name ?? 'Plat inconnu',
-          quantity,
-          revenue,
-          isPromotion: dish?.is_promotion ?? false,
-          promotionPrice: dish?.promotion_price ?? null,
-          unitPrice,
-        };
-      }),
       reviews: {
         average: reviewsAggregate._avg.rating ?? 0,
         total: reviewsAggregate._count._all,
@@ -239,7 +492,7 @@ export class MarketingReportService {
       const pdfBuffer = await page.pdf({
         format: 'A4',
         landscape: true,
-        margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' },
+        margin: { top: '9mm', right: '9mm', bottom: '9mm', left: '9mm' },
         printBackground: true,
       });
 
@@ -254,13 +507,50 @@ export class MarketingReportService {
   }
 
   private buildHtml(data: ReportData): string {
-    const fmtPrice = (n: number) => new Intl.NumberFormat('fr-FR').format(Math.round(n));
-    const totalSourceOrders = data.bySource.reduce((a, b) => a + b.orders, 0);
+    const fmt = (n: number) => new Intl.NumberFormat('fr-FR').format(Math.round(n || 0));
+    const money = (n: number) => `${fmt(n)} FCFA`;
+    const pctv = (n: number) => `${(n ?? 0).toFixed(1).replace(/\.0$/, '')}%`;
+    // Échappe les chaînes issues de la base (noms clients/plats/promos/restaurants
+    // saisis librement) avant injection dans le HTML rendu par Chromium :
+    // évite qu'un nom comme "</td><script>" casse la mise en page ou s'exécute.
+    const esc = (s: string) => {
+      const m: Record<string, string> = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      };
+      return String(s ?? '').replace(/[&<>"']/g, (c) => m[c]);
+    };
+    const emptyRow = (cols: number) =>
+      `<tr><td colspan="${cols}" class="muted text-center">Aucune donnée sur la période</td></tr>`;
+
+    // Badge d'évolution coloré à partir d'une chaîne "+12.3%" / "-4.1%" / "0.0%".
+    const evo = (s: string) => {
+      if (!s) return '';
+      const neg = s.trim().startsWith('-');
+      const zero = /^[+-]?0(\.0+)?%$/.test(s.trim());
+      const cls = zero ? 'evo-flat' : neg ? 'evo-down' : 'evo-up';
+      const arrow = zero ? '' : neg ? '▼ ' : '▲ ';
+      return `<span class="evo ${cls}">${arrow}${s}</span>`;
+    };
 
     const stars = (rating: number) => {
       const full = Math.round(rating);
-      return '★'.repeat(full) + '☆'.repeat(5 - full);
+      return '★'.repeat(full) + '☆'.repeat(Math.max(0, 5 - full));
     };
+
+    // Couleurs par type pour les barres de répartition.
+    const typeColors: Record<string, string> = {
+      Livraison: '#F17922',
+      'À emporter': '#F4A259',
+      'Sur place': '#F6C177',
+    };
+
+    const totalPayment = data.payment.online.orders + data.payment.offline.orders;
+    const onlinePct = totalPayment > 0 ? (data.payment.online.orders / totalPayment) * 100 : 0;
+    const offlinePct = totalPayment > 0 ? (data.payment.offline.orders / totalPayment) * 100 : 0;
 
     return `<!DOCTYPE html>
 <html lang="fr">
@@ -268,162 +558,477 @@ export class MarketingReportService {
   <meta charset="UTF-8">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1a1a1a; background: #fff; font-size: 12px; }
-    .header { background: linear-gradient(135deg, #F17922, #e06816); color: #fff; padding: 20px 30px; display: flex; justify-content: space-between; align-items: center; }
-    .header h1 { font-size: 22px; font-weight: 700; }
-    .header .date { font-size: 13px; opacity: 0.9; }
-    .content { padding: 20px 30px; }
-    .section { margin-bottom: 22px; }
-    .section-title { font-size: 14px; font-weight: 700; color: #F17922; margin-bottom: 10px; border-bottom: 2px solid #F17922; padding-bottom: 4px; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1f2430; background: #fff; font-size: 11.5px; line-height: 1.4; }
 
-    .kpi-grid { display: flex; gap: 16px; margin-bottom: 22px; }
-    .kpi-card { flex: 1; background: #f8f9fa; border-radius: 10px; padding: 16px; text-align: center; border: 1px solid #e9ecef; }
-    .kpi-value { font-size: 28px; font-weight: 800; color: #F17922; }
-    .kpi-label { font-size: 11px; color: #6c757d; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .header { background: linear-gradient(135deg, #F17922, #d94f00); color: #fff; padding: 18px 26px; display: flex; justify-content: space-between; align-items: flex-end; }
+    .header h1 { font-size: 21px; font-weight: 800; letter-spacing: 0.2px; }
+    .header .sub { font-size: 12px; opacity: 0.95; margin-top: 3px; }
+    .header .scope { text-align: right; font-size: 12px; opacity: 0.95; }
+    .header .scope strong { display: block; font-size: 14px; }
 
-    table { width: 100%; border-collapse: collapse; font-size: 11px; }
-    th { background: #f8f9fa; color: #495057; font-weight: 600; text-align: left; padding: 8px 10px; border-bottom: 2px solid #dee2e6; }
-    td { padding: 7px 10px; border-bottom: 1px solid #f0f0f0; }
-    tr:hover td { background: #fff8f2; }
+    .content { padding: 16px 26px 6px; }
+    .section { margin-bottom: 16px; page-break-inside: avoid; }
+    .section-title { font-size: 13px; font-weight: 800; color: #d94f00; margin-bottom: 9px; padding-bottom: 4px; border-bottom: 2px solid #f1d9c6; display: flex; align-items: center; gap: 6px; }
+    .section-title .emoji { font-size: 13px; }
+    .note { font-size: 10px; color: #8a93a2; font-weight: 500; }
+
+    .page-break { page-break-before: always; }
+
+    /* KPI cards */
+    .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .kpi-card { background: #faf7f4; border: 1px solid #efe6dd; border-radius: 10px; padding: 13px 15px; }
+    .kpi-value { font-size: 22px; font-weight: 800; color: #d94f00; }
+    .kpi-value .unit { font-size: 12px; font-weight: 700; color: #b06a3a; }
+    .kpi-label { font-size: 10px; color: #6c757d; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
+    .kpi-foot { margin-top: 6px; font-size: 10px; color: #8a93a2; }
+
+    .evo { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px; }
+    .evo-up { background: #e6f4ec; color: #1e8e5a; }
+    .evo-down { background: #fdecea; color: #c0392b; }
+    .evo-flat { background: #eef1f4; color: #6c757d; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+    th { background: #f6f7f9; color: #556; font-weight: 700; text-align: left; padding: 6px 9px; border-bottom: 1.5px solid #e3e7ec; }
+    td { padding: 6px 9px; border-bottom: 1px solid #f1f3f5; }
     .text-right { text-align: right; }
     .text-center { text-align: center; }
-
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; }
-    .badge-promo { background: #fff3cd; color: #856404; }
-    .badge-app { background: #d4edda; color: #155724; }
-    .badge-call { background: #d1ecf1; color: #0c5460; }
+    .muted { color: #8a93a2; }
+    .rank { color: #b06a3a; font-weight: 800; width: 20px; }
+    tfoot .total-row td { border-top: 2px solid #e0d6ca; border-bottom: none; background: #faf7f4; color: #d94f00; }
 
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
 
-    .stars { color: #F17922; font-size: 14px; letter-spacing: 2px; }
-    .review-bar { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-    .review-bar-fill { height: 8px; background: #F17922; border-radius: 4px; }
-    .review-bar-bg { flex: 1; height: 8px; background: #e9ecef; border-radius: 4px; overflow: hidden; }
+    .card { background: #fff; border: 1px solid #eceff2; border-radius: 10px; padding: 12px 14px; }
+    .card-title { font-size: 11px; font-weight: 700; color: #445; margin-bottom: 8px; }
 
-    .footer { text-align: center; color: #adb5bd; font-size: 10px; padding: 12px; border-top: 1px solid #e9ecef; margin-top: 10px; }
+    /* Barres de répartition */
+    .bar-row { display: grid; grid-template-columns: 96px 1fr 92px; align-items: center; gap: 10px; margin: 7px 0; }
+    .bar-label { font-size: 11px; font-weight: 700; color: #2a2f3a; }
+    .bar-track { background: #eef1f4; border-radius: 6px; height: 16px; overflow: hidden; }
+    .bar-fill { height: 16px; border-radius: 6px; }
+    .bar-meta { text-align: right; font-size: 10.5px; color: #556; }
+    .bar-meta strong { color: #1f2430; }
 
-    .pct-bar { display: inline-block; height: 6px; background: #F17922; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
+    /* Encarts chiffres */
+    .stat-line { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #eef1f4; font-size: 11px; }
+    .stat-line:last-child { border-bottom: none; }
+    .stat-line .k { color: #6c757d; }
+    .stat-line .v { font-weight: 700; color: #1f2430; }
+
+    .badge { display: inline-block; padding: 1px 7px; border-radius: 8px; font-size: 9.5px; font-weight: 700; }
+    .badge-app { background: #e6f4ec; color: #1e8e5a; }
+    .badge-call { background: #e7f0fb; color: #2b6cb0; }
+    .badge-gold { background: #fdf3d6; color: #9a7008; }
+    .badge-premium { background: #efe9fb; color: #6b46c1; }
+    .badge-standard { background: #eef1f4; color: #556; }
+
+    .stars { color: #F17922; font-size: 15px; letter-spacing: 2px; }
+    .review-bar { display: flex; align-items: center; gap: 7px; margin: 3px 0; }
+    .review-fill { height: 8px; background: #F17922; border-radius: 4px; }
+    .review-bg { flex: 1; height: 8px; background: #eef1f4; border-radius: 4px; overflow: hidden; }
+
+    .callout { background: #faf7f4; border: 1px solid #efe6dd; border-radius: 9px; padding: 10px 12px; text-align: center; }
+    .callout .big { font-size: 18px; font-weight: 800; color: #d94f00; }
+    .callout .lab { font-size: 10px; color: #6c757d; margin-top: 2px; }
+
+    .footer { text-align: center; color: #aab2bd; font-size: 9.5px; padding: 10px 26px; border-top: 1px solid #eef1f4; }
+    .footer .method { color: #8a93a2; margin-top: 3px; }
   </style>
 </head>
 <body>
   <div class="header">
     <div>
-      <h1>Rapport Marketing Livraison — Chicken Nation</h1>
-      <div class="date">${data.dateLabel}</div>
+      <h1>Rapport Marketing Chicken Nation</h1>
+      <div class="sub">Vue complète, tous types de commande ${data.meta.dateLabel}</div>
+    </div>
+    <div class="scope">
+      <strong>${esc(data.meta.scopeLabel)}</strong>
+      Généré le ${data.meta.generatedAt}
     </div>
   </div>
 
   <div class="content">
-    <!-- KPIs -->
-    <div class="kpi-grid">
-      <div class="kpi-card">
-        <div class="kpi-value">${fmtPrice(data.kpis.totalOrders)}</div>
-        <div class="kpi-label">Commandes</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-value">${fmtPrice(data.kpis.averageBasket)} <span style="font-size:14px">FCFA</span></div>
-        <div class="kpi-label">Panier moyen</div>
-      </div>
-    </div>
 
-    <div class="grid-2">
-      <!-- Par Restaurant -->
-      <div class="section">
-        <div class="section-title">Répartition par Restaurant</div>
-        <table>
-          <thead><tr><th>Restaurant</th><th class="text-center">Commandes</th><th class="text-right">CA</th></tr></thead>
-          <tbody>
-            ${data.byRestaurant.map((r) => `
-              <tr>
-                <td>${r.name}</td>
-                <td class="text-center">${r.orders}</td>
-                <td class="text-right">${fmtPrice(r.revenue)} FCFA</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-
-      <!-- Par Source -->
-      <div class="section">
-        <div class="section-title">Répartition par Source</div>
-        <table>
-          <thead><tr><th>Source</th><th class="text-center">Commandes</th><th class="text-center">%</th><th class="text-right">CA</th></tr></thead>
-          <tbody>
-            ${data.bySource.map((s) => {
-              const pct = totalSourceOrders > 0 ? Math.round((s.orders / totalSourceOrders) * 100) : 0;
-              return `
-              <tr>
-                <td><span class="badge ${s.source === 'Application' ? 'badge-app' : 'badge-call'}">${s.source}</span></td>
-                <td class="text-center">${s.orders}</td>
-                <td class="text-center"><span class="pct-bar" style="width:${pct}px"></span>${pct}%</td>
-                <td class="text-right">${fmtPrice(s.revenue)} FCFA</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Top 10 Plats -->
+    <!-- 1. Vue d'ensemble -->
     <div class="section">
-      <div class="section-title">Top 10 Plats Vendus (Livraison)</div>
-      <table>
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Plat</th>
-            <th class="text-center">Quantité</th>
-            <th class="text-right">Prix unitaire</th>
-            <th class="text-right">CA généré</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${data.topDishes.map((d, i) => `
+      <div class="section-title"><span class="emoji">💰</span> Vue d'ensemble</div>
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-value">${fmt(data.overview.netRevenue)} <span class="unit">FCFA</span></div>
+          <div class="kpi-label">Chiffre d'affaires net</div>
+          <div class="kpi-foot">${evo(data.overview.evolution)} vs période précédente</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-value">${fmt(data.overview.totalOrders)}</div>
+          <div class="kpi-label">Commandes servies</div>
+          <div class="kpi-foot">Livrées et retirées</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-value">${fmt(data.overview.averageBasket)} <span class="unit">FCFA</span></div>
+          <div class="kpi-label">Panier moyen</div>
+          <div class="kpi-foot">CA net par commande</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-value">${pctv(data.overview.cancellationRate)}</div>
+          <div class="kpi-label">Taux d'annulation</div>
+          <div class="kpi-foot">${fmt(data.overview.cancelledOrders)} commandes annulées</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Répartition par type (coeur) -->
+    <div class="section">
+      <div class="section-title">Répartition par type de commande</div>
+      <div class="grid-2">
+        <div>
+          <div class="note" style="margin-bottom:8px;">Part en nombre de commandes servies</div>
+          ${
+            data.byType.length > 0
+              ? data.byType
+                  .map(
+                    (t) => `
+            <div class="bar-row">
+              <div class="bar-label">${t.label}</div>
+              <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, t.percentage).toFixed(1)}%; background:${typeColors[t.label] ?? '#F17922'};"></div></div>
+              <div class="bar-meta"><strong>${pctv(t.percentage)}</strong></div>
+            </div>`,
+                  )
+                  .join('')
+              : `<div class="note">Aucune donnée sur la période</div>`
+          }
+        </div>
+        <div>
+          <table>
+            <thead>
+              <tr><th>Type</th><th class="text-center">Commandes</th><th class="text-right">CA net</th><th class="text-right">Panier moyen</th></tr>
+            </thead>
+            <tbody>
+              ${
+                data.byType.length > 0
+                  ? data.byType
+                      .map(
+                        (t) => `
+                <tr>
+                  <td><strong>${t.label}</strong></td>
+                  <td class="text-center">${fmt(t.orders)}</td>
+                  <td class="text-right">${money(t.revenue)}</td>
+                  <td class="text-right">${money(t.averageBasket)}</td>
+                </tr>`,
+                      )
+                      .join('')
+                  : emptyRow(4)
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. Source & Restaurants -->
+    <div class="section">
+      <div class="section-title">Répartition par source et détail par restaurant</div>
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-title">Répartition par source (Application vs Call Center)</div>
+        <table>
+          <thead><tr><th>Source</th><th class="text-center">Commandes</th><th class="text-center">Part</th><th class="text-right">CA net</th><th class="text-right">Panier</th><th class="text-right">Nouveaux</th></tr></thead>
+          <tbody>
             <tr>
-              <td>${i + 1}</td>
-              <td>
-                ${d.name}
-                ${d.isPromotion ? `<span class="badge badge-promo">Promo ${d.promotionPrice ? fmtPrice(d.promotionPrice) + ' FCFA' : ''}</span>` : ''}
-              </td>
-              <td class="text-center">${d.quantity}</td>
-              <td class="text-right">${fmtPrice(d.unitPrice)} FCFA</td>
-              <td class="text-right">${fmtPrice(d.revenue)} FCFA</td>
+              <td><span class="badge badge-app">Application</span></td>
+              <td class="text-center">${fmt(data.channel.app.orders)}</td>
+              <td class="text-center">${pctv(data.channel.app.percentage)}</td>
+              <td class="text-right">${money(data.channel.app.revenue)}</td>
+              <td class="text-right">${money(data.channel.app.averageBasket)}</td>
+              <td class="text-right">${pctv(data.channel.app.newRate)}</td>
             </tr>
-          `).join('')}
-        </tbody>
-      </table>
+            <tr>
+              <td><span class="badge badge-call">Call Center</span></td>
+              <td class="text-center">${fmt(data.channel.call.orders)}</td>
+              <td class="text-center">${pctv(data.channel.call.percentage)}</td>
+              <td class="text-right">${money(data.channel.call.revenue)}</td>
+              <td class="text-right">${money(data.channel.call.averageBasket)}</td>
+              <td class="text-right">${pctv(data.channel.call.newRate)}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note" style="margin-top:6px;">« Part » = part des commandes servies. « Nouveaux » = commandes de clients acquis sur la période.</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Détail par restaurant (commandes par source et CA net)</div>
+        <table>
+          <thead><tr><th>Restaurant</th><th class="text-center">Application</th><th class="text-center">Call Center</th><th class="text-center">Total cmd.</th><th class="text-right">CA net</th><th class="text-center">Part CA</th></tr></thead>
+          <tbody>
+            ${
+              data.byRestaurant.items.length > 0
+                ? data.byRestaurant.items
+                    .map(
+                      (r) => `
+            <tr>
+              <td>${esc(r.name)}</td>
+              <td class="text-center">${fmt(r.appOrders)}</td>
+              <td class="text-center">${fmt(r.callOrders)}</td>
+              <td class="text-center">${fmt(r.totalOrders)}</td>
+              <td class="text-right">${money(r.revenue)}</td>
+              <td class="text-center">${pctv(r.percentage)}</td>
+            </tr>`,
+                    )
+                    .join('')
+                : emptyRow(6)
+            }
+          </tbody>
+          <tfoot>
+            <tr class="total-row">
+              <td><strong>TOTAL</strong></td>
+              <td class="text-center"><strong>${fmt(data.byRestaurant.totalApp)}</strong></td>
+              <td class="text-center"><strong>${fmt(data.byRestaurant.totalCall)}</strong></td>
+              <td class="text-center"><strong>${fmt(data.byRestaurant.totalOrders)}</strong></td>
+              <td class="text-right"><strong>${money(data.byRestaurant.totalRevenue)}</strong></td>
+              <td class="text-center"><strong>100%</strong></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     </div>
 
-    <!-- Avis Clients -->
+    <!-- 4. Produits -->
+    <div class="section page-break">
+      <div class="section-title"><span class="emoji">🍗</span> Produits</div>
+      <div class="grid-2">
+        <div>
+          <div class="card-title">Top plats vendus (tous types)</div>
+          <table>
+            <thead><tr><th class="rank">#</th><th>Plat</th><th>Catégorie</th><th class="text-center">Vendus</th><th class="text-right">CA</th><th class="text-right">Évol.</th></tr></thead>
+            <tbody>
+              ${
+                data.products.top.length > 0
+                  ? data.products.top
+                      .map(
+                        (p, i) => `
+                <tr>
+                  <td class="rank">${i + 1}</td>
+                  <td><strong>${esc(p.name)}</strong></td>
+                  <td class="muted">${esc(p.category)}</td>
+                  <td class="text-center">${fmt(p.sold)}</td>
+                  <td class="text-right">${money(p.revenue)}</td>
+                  <td class="text-right">${evo(p.evolution)}</td>
+                </tr>`,
+                      )
+                      .join('')
+                  : emptyRow(6)
+              }
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <div class="card-title">Meilleures catégories</div>
+          <table>
+            <thead><tr><th>Catégorie</th><th class="text-center">Vendus</th><th class="text-right">CA</th><th class="text-center">Part</th></tr></thead>
+            <tbody>
+              ${
+                data.products.categories.length > 0
+                  ? data.products.categories
+                      .map(
+                        (c) => `
+                <tr>
+                  <td><strong>${esc(c.name)}</strong></td>
+                  <td class="text-center">${fmt(c.sold)}</td>
+                  <td class="text-right">${money(c.revenue)}</td>
+                  <td class="text-center">${pctv(c.percentage)}</td>
+                </tr>`,
+                      )
+                      .join('')
+                  : emptyRow(4)
+              }
+            </tbody>
+          </table>
+          <div class="callout" style="margin-top:12px;">
+            <div class="big">${pctv(data.products.promoShare)}</div>
+            <div class="lab">du CA produits réalisé sur des plats en promotion (${fmt(data.products.promoSold)} unités promo)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. Clients -->
     <div class="section">
-      <div class="section-title">Avis Clients</div>
-      <div style="display:flex; align-items:center; gap:30px;">
-        <div style="text-align:center;">
+      <div class="section-title"><span class="emoji">👥</span> Clients</div>
+      <div class="grid-3" style="margin-bottom:12px;">
+        <div class="callout">
+          <div class="big">${fmt(data.clients.newClients)} / ${fmt(data.clients.recurringClients)}</div>
+          <div class="lab">Nouveaux / récurrents actifs (${pctv(data.clients.newRate)} de nouveaux)</div>
+        </div>
+        <div class="callout">
+          <div class="big">${money(data.clients.newBasket)} / ${money(data.clients.recurringBasket)}</div>
+          <div class="lab">Panier moyen nouveaux / récurrents</div>
+        </div>
+        <div class="callout">
+          <div class="big">${pctv(data.clients.top10Share)}</div>
+          <div class="lab">du CA généré par les 10% meilleurs clients (top 20% : ${pctv(data.clients.top20Share)})</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Indicateurs clients</div>
+          <div class="stat-line"><span class="k">Clients actifs sur la période</span><span class="v">${fmt(data.clients.total)}</span></div>
+          <div class="stat-line"><span class="k">Valeur vie moyenne (LTV)</span><span class="v">${money(data.clients.averageLtv)}</span></div>
+          <div class="stat-line"><span class="k">Fréquence de commande moyenne</span><span class="v">${data.clients.averageFrequency.toFixed(1)} / client</span></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Meilleurs clients</div>
+          <table>
+            <thead><tr><th>Client</th><th class="text-center">Cmd.</th><th class="text-right">Dépensé</th><th class="text-center">Canal</th><th class="text-center">Niveau</th></tr></thead>
+            <tbody>
+              ${
+                data.clients.top.length > 0
+                  ? data.clients.top
+                      .map(
+                        (c) => `
+                <tr>
+                  <td>${esc(c.name)}</td>
+                  <td class="text-center">${fmt(c.orders)}</td>
+                  <td class="text-right">${money(c.spent)}</td>
+                  <td class="text-center muted">${esc(c.channel)}</td>
+                  <td class="text-center">${esc(c.level)}</td>
+                </tr>`,
+                      )
+                      .join('')
+                  : emptyRow(5)
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. Marketing & coûts -->
+    <div class="section">
+      <div class="section-title">Marketing et coûts</div>
+      <div class="grid-3">
+        <div class="card">
+          <div class="card-title">Promotions les plus utilisées</div>
+          <table>
+            <thead><tr><th>Promotion</th><th class="text-center">Usages</th><th class="text-right">Remise</th></tr></thead>
+            <tbody>
+              ${
+                data.promos.length > 0
+                  ? data.promos
+                      .map(
+                        (p) => `
+                <tr>
+                  <td><strong>${esc(p.title)}</strong><div class="note">${fmt(p.uniqueUsers)} clients · ${money(p.revenueGenerated)} de CA</div></td>
+                  <td class="text-center">${fmt(p.usageCount)}</td>
+                  <td class="text-right">${money(p.totalDiscount)}</td>
+                </tr>`,
+                      )
+                      .join('')
+                  : `<tr><td colspan="3" class="muted text-center">Aucune promotion utilisée sur la période</td></tr>`
+              }
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <div class="card-title">Bilan financier</div>
+          <div class="stat-line"><span class="k">Total remises accordées</span><span class="v">${money(data.finance.discount)}</span></div>
+          <div class="stat-line"><span class="k">Total frais de livraison</span><span class="v">${money(data.finance.deliveryFee)}</span></div>
+          <div class="stat-line"><span class="k">Taxe collectée</span><span class="v">${money(data.finance.tax)}</span></div>
+          <div class="stat-line"><span class="k">Total HT (hors taxe)</span><span class="v">${money(data.finance.ht)}</span></div>
+          <div class="stat-line"><span class="k">Total TTC (encaissé)</span><span class="v">${money(data.finance.ttc)}</span></div>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="emoji">⭐</span> Points de fidélité</div>
+          <div class="stat-line"><span class="k">Points émis (gagnés)</span><span class="v">${fmt(data.loyalty.earned)}</span></div>
+          <div class="stat-line"><span class="k">Points consommés</span><span class="v">${fmt(data.loyalty.redeemed)}</span></div>
+          <div class="stat-line"><span class="k">Points bonus</span><span class="v">${fmt(data.loyalty.bonus)}</span></div>
+          <div class="stat-line"><span class="k">Points expirés</span><span class="v">${fmt(data.loyalty.expired)}</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 7. Livraison & Paiement -->
+    <div class="section">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title"><span class="emoji">🛵</span> Livraison</div>
+          <div class="grid-2" style="gap:10px; margin-bottom:8px;">
+            <div class="stat-line"><span class="k">Livraisons</span><span class="v">${fmt(data.delivery.totalDeliveries)}</span></div>
+            <div class="stat-line"><span class="k">Frais collectés</span><span class="v">${money(data.delivery.feesCollected)}</span></div>
+            <div class="stat-line"><span class="k">Frais moyen</span><span class="v">${money(data.delivery.averageFee)}</span></div>
+            <div class="stat-line"><span class="k">Turbo / gratuit</span><span class="v">${pctv(data.delivery.turboPercentage)} / ${pctv(data.delivery.freePercentage)}</span></div>
+            <div class="stat-line"><span class="k">Temps moyen</span><span class="v">${Math.round(data.delivery.averageMinutes)} min</span></div>
+            <div class="stat-line"><span class="k">Ponctualité</span><span class="v">${pctv(data.delivery.onTimeRate)}</span></div>
+          </div>
+          <div class="card-title" style="margin-top:6px;">Meilleures zones</div>
+          <table>
+            <thead><tr><th>Zone</th><th class="text-center">Livraisons</th><th class="text-right">CA</th><th class="text-center">Part</th></tr></thead>
+            <tbody>
+              ${
+                data.delivery.topZones.length > 0
+                  ? data.delivery.topZones
+                      .map(
+                        (z) => `
+                <tr><td>${esc(z.zone)}</td><td class="text-center">${fmt(z.orders)}</td><td class="text-right">${money(z.revenue)}</td><td class="text-center">${pctv(z.percentage)}</td></tr>`,
+                      )
+                      .join('')
+                  : `<tr><td colspan="4" class="muted text-center">Pas de donnée de zone</td></tr>`
+              }
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <div class="card-title"><span class="emoji">💳</span> Mode de paiement</div>
+          <div class="bar-row">
+            <div class="bar-label">En ligne</div>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, onlinePct).toFixed(1)}%; background:#1e8e5a;"></div></div>
+            <div class="bar-meta"><strong>${pctv(onlinePct)}</strong></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">Au comptoir</div>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, offlinePct).toFixed(1)}%; background:#2b6cb0;"></div></div>
+            <div class="bar-meta"><strong>${pctv(offlinePct)}</strong></div>
+          </div>
+          <table style="margin-top:8px;">
+            <thead><tr><th>Mode</th><th class="text-center">Commandes</th><th class="text-right">CA net</th></tr></thead>
+            <tbody>
+              <tr><td><strong>En ligne</strong></td><td class="text-center">${fmt(data.payment.online.orders)}</td><td class="text-right">${money(data.payment.online.revenue)}</td></tr>
+              <tr><td><strong>Au comptoir</strong></td><td class="text-center">${fmt(data.payment.offline.orders)}</td><td class="text-right">${money(data.payment.offline.revenue)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 8. Avis clients -->
+    <div class="section">
+      <div class="section-title">Satisfaction et avis clients</div>
+      <div style="display:flex; align-items:center; gap:34px;">
+        <div style="text-align:center; min-width:120px;">
           <div class="stars">${stars(data.reviews.average)}</div>
-          <div style="font-size:22px; font-weight:800; color:#F17922; margin-top:4px;">${data.reviews.average.toFixed(1)}/5</div>
-          <div style="font-size:11px; color:#6c757d;">${data.reviews.total} avis</div>
+          <div style="font-size:22px; font-weight:800; color:#d94f00; margin-top:4px;">${data.reviews.average.toFixed(1)}/5</div>
+          <div class="note">${fmt(data.reviews.total)} avis sur la période</div>
         </div>
         <div style="flex:1;">
-          ${[5, 4, 3, 2, 1].map((n) => {
-            const count = data.reviews.distribution[n] || 0;
-            const pct = data.reviews.total > 0 ? Math.round((count / data.reviews.total) * 100) : 0;
-            return `
+          ${[5, 4, 3, 2, 1]
+            .map((n) => {
+              const count = data.reviews.distribution[n] || 0;
+              const p = data.reviews.total > 0 ? Math.round((count / data.reviews.total) * 100) : 0;
+              return `
             <div class="review-bar">
-              <span style="width:14px; text-align:center; font-weight:600;">${n}</span>
+              <span style="width:12px; text-align:center; font-weight:700;">${n}</span>
               <span style="color:#F17922;">★</span>
-              <div class="review-bar-bg"><div class="review-bar-fill" style="width:${pct}%"></div></div>
-              <span style="width:30px; text-align:right; font-size:10px; color:#6c757d;">${count}</span>
+              <div class="review-bg"><div class="review-fill" style="width:${p}%"></div></div>
+              <span class="note" style="width:52px; text-align:right;">${fmt(count)} (${p}%)</span>
             </div>`;
-          }).join('')}
+            })
+            .join('')}
         </div>
       </div>
     </div>
+
   </div>
 
   <div class="footer">
-    Rapport généré automatiquement par Chicken Nation — ${format(new Date(), "dd/MM/yyyy 'à' HH:mm", { locale: fr })}
+    Rapport généré automatiquement par Chicken Nation, le ${data.meta.generatedAt}.
+    <div class="method">CA net = chiffre d'affaires produits hors taxe et frais de livraison. Périmètre : commandes livrées et retirées (payées), tous types confondus.</div>
   </div>
 </body>
 </html>`;

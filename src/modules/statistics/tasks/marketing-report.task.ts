@@ -17,7 +17,7 @@ export class MarketingReportTask {
   ) {}
 
   /**
-   * Tous les jours à 10h30 — envoie le rapport marketing des données J-1
+   * Tous les jours à 10h30 : envoie le rapport marketing des données J-1
    */
   @Cron('30 10 * * *')
   async sendDailyMarketingReport() {
@@ -57,7 +57,7 @@ export class MarketingReportTask {
       // Envoyer par email
       await this.emailService.sendMail({
         to: emails,
-        subject: `📊 Rapport Marketing Chicken Nation — ${dateStr}`,
+        subject: `Rapport Marketing Chicken Nation du ${dateStr}`,
         html: `
           <div style="font-family: 'Segoe UI', Tahoma, sans-serif; max-width: 600px; margin: 0 auto;">
             <div style="background: linear-gradient(135deg, #F17922, #e06816); padding: 24px; border-radius: 12px 12px 0 0;">
@@ -68,10 +68,10 @@ export class MarketingReportTask {
               <p style="color: #495057; font-size: 14px; line-height: 1.6;">
                 Bonjour,<br><br>
                 Veuillez trouver ci-joint le rapport marketing de la journée du <strong>${dateStr}</strong>.<br>
-                Ce rapport contient les données de commandes, les plats les plus vendus, la répartition par restaurant, source et type, ainsi que les avis clients.
+                Ce rapport couvre tous les types de commande (livraison, à emporter, sur place) : chiffre d'affaires, répartition par type et par canal, produits, clients, promotions, livraison, fidélité et satisfaction.
               </p>
               <p style="color: #6c757d; font-size: 12px; margin-top: 20px;">
-                — Chicken Nation, rapport automatique
+                Chicken Nation, rapport automatique
               </p>
             </div>
           </div>
