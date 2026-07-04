@@ -12,7 +12,6 @@ import {
 import { StatisticsOrdersService } from './statistics-orders.service';
 import { StatisticsProductsService } from './statistics-products.service';
 import { StatisticsClientsService } from './statistics-clients.service';
-import { StatisticsDeliveryService } from './statistics-delivery.service';
 
 export interface MarketingReportQuery {
   restaurantId?: string;
@@ -34,17 +33,6 @@ const TYPE_LABELS: Record<string, string> = {
 };
 // Ordre d'affichage stable des types.
 const TYPE_ORDER = ['DELIVERY', 'PICKUP', 'TABLE'];
-
-const CHANNEL_LABELS: Record<string, string> = {
-  APP: 'Application',
-  CALL_CENTER: 'Call Center',
-  MIXED: 'Mixte',
-};
-const LEVEL_LABELS: Record<string, string> = {
-  STANDARD: 'Standard',
-  PREMIUM: 'Premium',
-  GOLD: 'Gold',
-};
 
 interface ReportData {
   meta: { dateLabel: string; scopeLabel: string; generatedAt: string };
@@ -85,17 +73,13 @@ interface ReportData {
     top: Array<{ name: string; category: string; sold: number; revenue: number; evolution: string }>;
   };
   clients: {
-    total: number;
     newClients: number;
     recurringClients: number;
     newRate: number;
-    averageLtv: number;
-    averageFrequency: number;
     newBasket: number;
     recurringBasket: number;
     top10Share: number;
     top20Share: number;
-    top: Array<{ name: string; orders: number; spent: number; channel: string; level: string }>;
   };
   finance: {
     discount: number;
@@ -103,16 +87,6 @@ interface ReportData {
     tax: number;
     ttc: number;
     ht: number;
-  };
-  delivery: {
-    totalDeliveries: number;
-    feesCollected: number;
-    averageFee: number;
-    turboPercentage: number;
-    freePercentage: number;
-    averageMinutes: number;
-    onTimeRate: number;
-    topZones: Array<{ zone: string; orders: number; revenue: number; percentage: number }>;
   };
 }
 
@@ -125,7 +99,6 @@ export class MarketingReportService {
     private readonly ordersService: StatisticsOrdersService,
     private readonly productsService: StatisticsProductsService,
     private readonly clientsService: StatisticsClientsService,
-    private readonly deliveryService: StatisticsDeliveryService,
   ) {}
 
   async collectReportData(query: MarketingReportQuery): Promise<ReportData> {
@@ -159,8 +132,6 @@ export class MarketingReportService {
       clientsRaw,
       basketRaw,
       concentrationRaw,
-      topClientsRaw,
-      deliveryRaw,
       financeAgg,
       allRestaurants,
     ] = await Promise.all([
@@ -181,8 +152,6 @@ export class MarketingReportService {
       this.clientsService.getClientsOverview(subQuery),
       this.clientsService.getBasketComparison(subQuery),
       this.clientsService.getRevenueConcentration(subQuery),
-      this.clientsService.getTopClients({ ...subQuery, limit: 5 }),
-      this.deliveryService.getDeliveryDashboard({ ...subQuery, limit: 5 }),
 
       // Bilan financier tous-types : remises, frais livraison, taxe, TTC.
       // amount = net_amount - discount + tax + delivery_fee (cf. order.service).
@@ -309,23 +278,13 @@ export class MarketingReportService {
         })),
       },
       clients: {
-        total: clientsRaw.totalClients,
         newClients: clientsRaw.newClients,
         recurringClients: clientsRaw.recurringClients,
         newRate: clientsRaw.newClientsRate,
-        averageLtv: clientsRaw.averageLtv,
-        averageFrequency: clientsRaw.averageOrderFrequency,
         newBasket: basketRaw.newClientsBasket,
         recurringBasket: basketRaw.recurringClientsBasket,
         top10Share: concentrationRaw.top10Percentage,
         top20Share: concentrationRaw.top20Percentage,
-        top: topClientsRaw.items.map((c) => ({
-          name: c.fullname,
-          orders: c.ordersInPeriod,
-          spent: c.totalSpent,
-          channel: CHANNEL_LABELS[c.preferredChannel] ?? c.preferredChannel,
-          level: LEVEL_LABELS[c.loyaltyLevel] ?? c.loyaltyLevel,
-        })),
       },
       finance: {
         discount: financeAgg._sum.discount ?? 0,
@@ -333,21 +292,6 @@ export class MarketingReportService {
         tax: financeAgg._sum.tax ?? 0,
         ttc: financeAgg._sum.amount ?? 0,
         ht: (financeAgg._sum.amount ?? 0) - (financeAgg._sum.tax ?? 0),
-      },
-      delivery: {
-        totalDeliveries: deliveryRaw.overview.totalDeliveries,
-        feesCollected: deliveryRaw.overview.totalFeesCollected,
-        averageFee: deliveryRaw.overview.averageFee,
-        turboPercentage: deliveryRaw.overview.turboPercentage,
-        freePercentage: deliveryRaw.overview.freePercentage,
-        averageMinutes: deliveryRaw.performance.averageDeliveryMinutes,
-        onTimeRate: deliveryRaw.performance.onTimeRate,
-        topZones: deliveryRaw.byZone.items.slice(0, 5).map((z) => ({
-          zone: z.zone,
-          orders: z.orderCount,
-          revenue: z.revenue,
-          percentage: z.percentage,
-        })),
       },
     };
   }
@@ -430,8 +374,9 @@ export class MarketingReportService {
     .header .scope strong { display: block; font-size: 14px; }
 
     .content { padding: 16px 26px 6px; }
-    .section { margin-bottom: 16px; }
-    .section-title { font-size: 13px; font-weight: 800; color: #d94f00; margin-bottom: 9px; padding-bottom: 4px; border-bottom: 2px solid #f1d9c6; display: flex; align-items: center; gap: 6px; page-break-after: avoid; }
+    .section { margin-bottom: 12px; }
+    .section.break-before { page-break-before: always; }
+    .section-title { font-size: 13px; font-weight: 800; color: #d94f00; margin-bottom: 7px; padding-bottom: 4px; border-bottom: 2px solid #f1d9c6; display: flex; align-items: center; gap: 6px; page-break-after: avoid; }
     .note { font-size: 10px; color: #8a93a2; font-weight: 500; }
 
     .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
@@ -449,8 +394,8 @@ export class MarketingReportService {
     .evo-flat { background: #eef1f4; color: #6c757d; }
 
     table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
-    th { background: #f6f7f9; color: #556; font-weight: 700; text-align: left; padding: 6px 9px; border-bottom: 1.5px solid #e3e7ec; }
-    td { padding: 6px 9px; border-bottom: 1px solid #f1f3f5; }
+    th { background: #f6f7f9; color: #556; font-weight: 700; text-align: left; padding: 5px 9px; border-bottom: 1.5px solid #e3e7ec; }
+    td { padding: 5px 9px; border-bottom: 1px solid #f1f3f5; }
     tr { page-break-inside: avoid; }
     .rank { color: #b06a3a; font-weight: 800; width: 20px; }
     tfoot .total-row td { border-top: 2px solid #e0d6ca; border-bottom: none; background: #faf7f4; color: #d94f00; }
@@ -458,16 +403,10 @@ export class MarketingReportService {
     .text-center { text-align: center; }
     .muted { color: #8a93a2; }
 
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
 
     .card { background: #fff; border: 1px solid #eceff2; border-radius: 10px; padding: 12px 14px; }
     .card-title { font-size: 11px; font-weight: 700; color: #445; margin-bottom: 8px; }
-
-    .stat-line { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #eef1f4; font-size: 11px; }
-    .stat-line:last-child { border-bottom: none; }
-    .stat-line .k { color: #6c757d; }
-    .stat-line .v { font-weight: 700; color: #1f2430; }
 
     .badge { display: inline-block; padding: 1px 7px; border-radius: 8px; font-size: 9.5px; font-weight: 700; }
     .badge-app { background: #e6f4ec; color: #1e8e5a; }
@@ -497,7 +436,7 @@ export class MarketingReportService {
 
     <!-- 1. Vue d'ensemble -->
     <div class="section">
-      <div class="section-title"><span>💰</span> Vue d'ensemble</div>
+      <div class="section-title">Vue d'ensemble</div>
       <div class="kpi-grid">
         <div class="kpi-card">
           <div class="kpi-value">${fmt(data.overview.netRevenue)} <span class="unit">FCFA</span></div>
@@ -550,151 +489,44 @@ export class MarketingReportService {
       </table>
     </div>
 
-    <!-- 3. Détail par restaurant puis répartition par source -->
+    <!-- 3. Détail par restaurant (page 1) -->
     <div class="section">
-      <div class="section-title">Détail par restaurant et répartition par source</div>
-      <div class="card" style="margin-bottom:14px;">
-        <div class="card-title">Détail par restaurant (commandes par source et CA net)</div>
-        <table>
-          <thead><tr><th>Restaurant</th><th class="text-center">Application</th><th class="text-center">Call Center</th><th class="text-center">Total cmd.</th><th class="text-right">CA net</th><th class="text-center">Part CA</th></tr></thead>
-          <tbody>
-            ${
-              data.byRestaurant.items.length > 0
-                ? data.byRestaurant.items
-                    .map(
-                      (r) => `
-            <tr>
-              <td>${esc(r.name)}</td>
-              <td class="text-center">${fmt(r.appOrders)}</td>
-              <td class="text-center">${fmt(r.callOrders)}</td>
-              <td class="text-center">${fmt(r.totalOrders)}</td>
-              <td class="text-right">${money(r.revenue)}</td>
-              <td class="text-center">${pctv(r.percentage)}</td>
-            </tr>`,
-                    )
-                    .join('')
-                : emptyRow(6)
-            }
-          </tbody>
-          <tfoot>
-            <tr class="total-row">
-              <td><strong>TOTAL</strong></td>
-              <td class="text-center"><strong>${fmt(data.byRestaurant.totalApp)}</strong></td>
-              <td class="text-center"><strong>${fmt(data.byRestaurant.totalCall)}</strong></td>
-              <td class="text-center"><strong>${fmt(data.byRestaurant.totalOrders)}</strong></td>
-              <td class="text-right"><strong>${money(data.byRestaurant.totalRevenue)}</strong></td>
-              <td class="text-center"><strong>100%</strong></td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-      <div class="card">
-        <div class="card-title">Répartition par source (Application vs Call Center)</div>
-        <table>
-          <thead><tr><th>Source</th><th class="text-center">Commandes</th><th class="text-center">Part</th><th class="text-right">CA net</th><th class="text-right">Panier</th><th class="text-right">Nouveaux</th></tr></thead>
-          <tbody>
-            <tr>
-              <td><span class="badge badge-app">Application</span></td>
-              <td class="text-center">${fmt(data.channel.app.orders)}</td>
-              <td class="text-center">${pctv(data.channel.app.percentage)}</td>
-              <td class="text-right">${money(data.channel.app.revenue)}</td>
-              <td class="text-right">${money(data.channel.app.averageBasket)}</td>
-              <td class="text-right">${pctv(data.channel.app.newRate)}</td>
-            </tr>
-            <tr>
-              <td><span class="badge badge-call">Call Center</span></td>
-              <td class="text-center">${fmt(data.channel.call.orders)}</td>
-              <td class="text-center">${pctv(data.channel.call.percentage)}</td>
-              <td class="text-right">${money(data.channel.call.revenue)}</td>
-              <td class="text-right">${money(data.channel.call.averageBasket)}</td>
-              <td class="text-right">${pctv(data.channel.call.newRate)}</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="note" style="margin-top:6px;">« Part » = part des commandes servies. « Nouveaux » = commandes de clients acquis sur la période.</div>
-      </div>
-    </div>
-
-    <!-- 4. Produits -->
-    <div class="section">
-      <div class="section-title"><span>🍗</span> Produits</div>
-      <div class="card-title">Top plats vendus (tous types)</div>
+      <div class="section-title">Détail par restaurant</div>
       <table>
-        <thead><tr><th class="rank">#</th><th>Plat</th><th>Catégorie</th><th class="text-center">Vendus</th><th class="text-right">CA</th><th class="text-right">Évol.</th></tr></thead>
+        <thead><tr><th>Restaurant</th><th class="text-center">Application</th><th class="text-center">Call Center</th><th class="text-center">Total cmd.</th><th class="text-right">CA net</th><th class="text-center">Part CA</th></tr></thead>
         <tbody>
           ${
-            data.products.top.length > 0
-              ? data.products.top
+            data.byRestaurant.items.length > 0
+              ? data.byRestaurant.items
                   .map(
-                    (p, i) => `
+                    (r) => `
           <tr>
-            <td class="rank">${i + 1}</td>
-            <td><strong>${esc(p.name)}</strong></td>
-            <td class="muted">${esc(p.category)}</td>
-            <td class="text-center">${fmt(p.sold)}</td>
-            <td class="text-right">${money(p.revenue)}</td>
-            <td class="text-right">${evo(p.evolution)}</td>
+            <td>${esc(r.name)}</td>
+            <td class="text-center">${fmt(r.appOrders)}</td>
+            <td class="text-center">${fmt(r.callOrders)}</td>
+            <td class="text-center">${fmt(r.totalOrders)}</td>
+            <td class="text-right">${money(r.revenue)}</td>
+            <td class="text-center">${pctv(r.percentage)}</td>
           </tr>`,
                   )
                   .join('')
               : emptyRow(6)
           }
         </tbody>
+        <tfoot>
+          <tr class="total-row">
+            <td><strong>TOTAL</strong></td>
+            <td class="text-center"><strong>${fmt(data.byRestaurant.totalApp)}</strong></td>
+            <td class="text-center"><strong>${fmt(data.byRestaurant.totalCall)}</strong></td>
+            <td class="text-center"><strong>${fmt(data.byRestaurant.totalOrders)}</strong></td>
+            <td class="text-right"><strong>${money(data.byRestaurant.totalRevenue)}</strong></td>
+            <td class="text-center"><strong>100%</strong></td>
+          </tr>
+        </tfoot>
       </table>
     </div>
 
-    <!-- 5. Clients -->
-    <div class="section">
-      <div class="section-title"><span>👥</span> Clients</div>
-      <div class="grid-3" style="margin-bottom:12px;">
-        <div class="callout">
-          <div class="big">${fmt(data.clients.newClients)} / ${fmt(data.clients.recurringClients)}</div>
-          <div class="lab">Nouveaux / récurrents actifs (${pctv(data.clients.newRate)} de nouveaux)</div>
-        </div>
-        <div class="callout">
-          <div class="big">${money(data.clients.newBasket)} / ${money(data.clients.recurringBasket)}</div>
-          <div class="lab">Panier moyen nouveaux / récurrents</div>
-        </div>
-        <div class="callout">
-          <div class="big">${pctv(data.clients.top10Share)}</div>
-          <div class="lab">du CA généré par les 10% meilleurs clients (top 20% : ${pctv(data.clients.top20Share)})</div>
-        </div>
-      </div>
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title">Indicateurs clients</div>
-          <div class="stat-line"><span class="k">Clients actifs sur la période</span><span class="v">${fmt(data.clients.total)}</span></div>
-          <div class="stat-line"><span class="k">Valeur vie moyenne (LTV)</span><span class="v">${money(data.clients.averageLtv)}</span></div>
-          <div class="stat-line"><span class="k">Fréquence de commande moyenne</span><span class="v">${data.clients.averageFrequency.toFixed(1)} / client</span></div>
-        </div>
-        <div class="card">
-          <div class="card-title">Meilleurs clients</div>
-          <table>
-            <thead><tr><th>Client</th><th class="text-center">Cmd.</th><th class="text-right">Dépensé</th><th class="text-center">Canal</th><th class="text-center">Niveau</th></tr></thead>
-            <tbody>
-              ${
-                data.clients.top.length > 0
-                  ? data.clients.top
-                      .map(
-                        (c) => `
-                <tr>
-                  <td>${esc(c.name)}</td>
-                  <td class="text-center">${fmt(c.orders)}</td>
-                  <td class="text-right">${money(c.spent)}</td>
-                  <td class="text-center muted">${esc(c.channel)}</td>
-                  <td class="text-center">${esc(c.level)}</td>
-                </tr>`,
-                      )
-                      .join('')
-                  : emptyRow(5)
-              }
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- 6. Bilan financier -->
+    <!-- 4. Bilan financier (fin de page 1, avant source) -->
     <div class="section">
       <div class="section-title">Bilan financier</div>
       <div class="fin-grid">
@@ -722,36 +554,76 @@ export class MarketingReportService {
       <div class="note" style="margin-top:6px;">TTC = HT + taxe. Total encaissé, produits et frais de livraison compris, remises déduites.</div>
     </div>
 
-    <!-- 7. Livraison -->
+    <!-- 5. Répartition par source (page 2) -->
+    <div class="section break-before">
+      <div class="section-title">Répartition par source</div>
+      <table>
+        <thead><tr><th>Source</th><th class="text-center">Commandes</th><th class="text-center">Part</th><th class="text-right">CA net</th><th class="text-right">Panier</th><th class="text-right">Nouveaux</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="badge badge-app">Application</span></td>
+            <td class="text-center">${fmt(data.channel.app.orders)}</td>
+            <td class="text-center">${pctv(data.channel.app.percentage)}</td>
+            <td class="text-right">${money(data.channel.app.revenue)}</td>
+            <td class="text-right">${money(data.channel.app.averageBasket)}</td>
+            <td class="text-right">${pctv(data.channel.app.newRate)}</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-call">Call Center</span></td>
+            <td class="text-center">${fmt(data.channel.call.orders)}</td>
+            <td class="text-center">${pctv(data.channel.call.percentage)}</td>
+            <td class="text-right">${money(data.channel.call.revenue)}</td>
+            <td class="text-right">${money(data.channel.call.averageBasket)}</td>
+            <td class="text-right">${pctv(data.channel.call.newRate)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="note" style="margin-top:6px;">« Part » = part des commandes servies. « Nouveaux » = commandes de clients acquis sur la période.</div>
+    </div>
+
+    <!-- 6. Produits -->
     <div class="section">
-      <div class="section-title"><span>🛵</span> Livraison</div>
-      <div class="grid-2">
-        <div class="card">
-          <div class="card-title">Indicateurs de livraison</div>
-          <div class="stat-line"><span class="k">Livraisons</span><span class="v">${fmt(data.delivery.totalDeliveries)}</span></div>
-          <div class="stat-line"><span class="k">Frais collectés</span><span class="v">${money(data.delivery.feesCollected)}</span></div>
-          <div class="stat-line"><span class="k">Frais moyen</span><span class="v">${money(data.delivery.averageFee)}</span></div>
-          <div class="stat-line"><span class="k">Turbo / gratuit</span><span class="v">${pctv(data.delivery.turboPercentage)} / ${pctv(data.delivery.freePercentage)}</span></div>
-          <div class="stat-line"><span class="k">Temps moyen de livraison</span><span class="v">${Math.round(data.delivery.averageMinutes)} min</span></div>
-          <div class="stat-line"><span class="k">Ponctualité</span><span class="v">${pctv(data.delivery.onTimeRate)}</span></div>
+      <div class="section-title">Produits</div>
+      <div class="card-title">Top plats vendus (tous types)</div>
+      <table>
+        <thead><tr><th class="rank">#</th><th>Plat</th><th>Catégorie</th><th class="text-center">Vendus</th><th class="text-right">CA</th><th class="text-right">Évol.</th></tr></thead>
+        <tbody>
+          ${
+            data.products.top.length > 0
+              ? data.products.top
+                  .map(
+                    (p, i) => `
+          <tr>
+            <td class="rank">${i + 1}</td>
+            <td><strong>${esc(p.name)}</strong></td>
+            <td class="muted">${esc(p.category)}</td>
+            <td class="text-center">${fmt(p.sold)}</td>
+            <td class="text-right">${money(p.revenue)}</td>
+            <td class="text-right">${evo(p.evolution)}</td>
+          </tr>`,
+                  )
+                  .join('')
+              : emptyRow(6)
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 7. Clients -->
+    <div class="section">
+      <div class="section-title">Clients</div>
+      <div class="grid-3">
+        <div class="callout">
+          <div class="big">${fmt(data.clients.newClients)} / ${fmt(data.clients.recurringClients)}</div>
+          <div class="lab">Nouveaux / récurrents actifs (${pctv(data.clients.newRate)} de nouveaux)</div>
         </div>
-        <div class="card">
-          <div class="card-title">Meilleures zones de livraison</div>
-          <table>
-            <thead><tr><th>Zone</th><th class="text-center">Livraisons</th><th class="text-right">CA</th><th class="text-center">Part</th></tr></thead>
-            <tbody>
-              ${
-                data.delivery.topZones.length > 0
-                  ? data.delivery.topZones
-                      .map(
-                        (z) => `
-                <tr><td>${esc(z.zone)}</td><td class="text-center">${fmt(z.orders)}</td><td class="text-right">${money(z.revenue)}</td><td class="text-center">${pctv(z.percentage)}</td></tr>`,
-                      )
-                      .join('')
-                  : `<tr><td colspan="4" class="muted text-center">Pas de donnée de zone</td></tr>`
-              }
-            </tbody>
-          </table>
+        <div class="callout">
+          <div class="big">${money(data.clients.newBasket)} / ${money(data.clients.recurringBasket)}</div>
+          <div class="lab">Panier moyen nouveaux / récurrents</div>
+        </div>
+        <div class="callout">
+          <div class="big">${pctv(data.clients.top10Share)}</div>
+          <div class="lab">du CA généré par les 10% meilleurs clients (top 20% : ${pctv(data.clients.top20Share)})</div>
         </div>
       </div>
     </div>
