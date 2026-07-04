@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { EntityStatus, LoyaltyPointType, OrderStatus, Prisma } from '@prisma/client';
+import { EntityStatus, OrderStatus, Prisma } from '@prisma/client';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import * as puppeteer from 'puppeteer';
@@ -13,7 +13,6 @@ import { StatisticsOrdersService } from './statistics-orders.service';
 import { StatisticsProductsService } from './statistics-products.service';
 import { StatisticsClientsService } from './statistics-clients.service';
 import { StatisticsDeliveryService } from './statistics-delivery.service';
-import { StatisticsMarketingService } from './statistics-marketing.service';
 
 export interface MarketingReportQuery {
   restaurantId?: string;
@@ -84,11 +83,6 @@ interface ReportData {
   };
   products: {
     top: Array<{ name: string; category: string; sold: number; revenue: number; evolution: string }>;
-    categories: Array<{ name: string; sold: number; revenue: number; percentage: number }>;
-    promoShare: number;
-    promoRevenue: number;
-    promoSold: number;
-    regularRevenue: number;
   };
   clients: {
     total: number;
@@ -110,11 +104,6 @@ interface ReportData {
     ttc: number;
     ht: number;
   };
-  loyalty: { earned: number; redeemed: number; expired: number; bonus: number };
-  payment: {
-    online: { orders: number; revenue: number };
-    offline: { orders: number; revenue: number };
-  };
   delivery: {
     totalDeliveries: number;
     feesCollected: number;
@@ -125,14 +114,6 @@ interface ReportData {
     onTimeRate: number;
     topZones: Array<{ zone: string; orders: number; revenue: number; percentage: number }>;
   };
-  promos: Array<{
-    title: string;
-    usageCount: number;
-    uniqueUsers: number;
-    totalDiscount: number;
-    revenueGenerated: number;
-  }>;
-  reviews: { average: number; total: number; distribution: Record<number, number> };
 }
 
 @Injectable()
@@ -145,7 +126,6 @@ export class MarketingReportService {
     private readonly productsService: StatisticsProductsService,
     private readonly clientsService: StatisticsClientsService,
     private readonly deliveryService: StatisticsDeliveryService,
-    private readonly marketingService: StatisticsMarketingService,
   ) {}
 
   async collectReportData(query: MarketingReportQuery): Promise<ReportData> {
@@ -153,8 +133,7 @@ export class MarketingReportService {
     const restaurantFilter = buildRestaurantFilter(query.restaurantId);
     const dateFilter = buildDateFilter(dateRange);
 
-    // Filtres communs à toutes les sous-requêtes réutilisées : le rapport est
-    // volontairement TOUS TYPES (DELIVERY + PICKUP + TABLE) et tous canaux.
+    // Filtres communs : le rapport est volontairement TOUS TYPES et tous canaux.
     const subQuery = {
       restaurantId: query.restaurantId,
       startDate: query.startDate,
@@ -162,8 +141,8 @@ export class MarketingReportService {
       period: query.period,
     };
 
-    // Base de calcul pour les requêtes d'appoint (bilan financier / paiement) :
-    // aligné sur le reste du module (net_amount, statuts terminaux, payée).
+    // Base des requêtes d'appoint : aligné sur le reste du module
+    // (net_amount, statuts terminaux, payée).
     const baseWhere: Prisma.OrderWhereInput = {
       ...restaurantFilter,
       entity_status: { not: EntityStatus.DELETED },
@@ -172,31 +151,17 @@ export class MarketingReportService {
       created_at: dateFilter,
     };
 
-    // Avis : Comment n'a pas de restaurant_id direct, on passe par la commande.
-    const reviewWhere: Prisma.CommentWhereInput = {
-      entity_status: EntityStatus.ACTIVE,
-      created_at: dateFilter,
-      ...(query.restaurantId ? { order: { restaurant_id: query.restaurantId } } : {}),
-    };
-
     const [
       overviewRaw,
       channelRaw,
       restaurantSourceRaw,
       topProductsRaw,
-      topCategoriesRaw,
-      promoPerfRaw,
       clientsRaw,
       basketRaw,
       concentrationRaw,
       topClientsRaw,
       deliveryRaw,
-      promoUsageRaw,
       financeAgg,
-      loyaltyRaw,
-      paymentRaw,
-      reviewsAggregate,
-      reviewsDistribution,
       allRestaurants,
     ] = await Promise.all([
       this.ordersService.getOrdersOverview(subQuery),
@@ -213,20 +178,16 @@ export class MarketingReportService {
       }),
 
       this.productsService.getTopProducts({ ...subQuery, limit: 8 }),
-      this.productsService.getTopCategories({ ...subQuery, limit: 6 }),
-      this.productsService.getPromotionPerformance(subQuery),
       this.clientsService.getClientsOverview(subQuery),
       this.clientsService.getBasketComparison(subQuery),
       this.clientsService.getRevenueConcentration(subQuery),
       this.clientsService.getTopClients({ ...subQuery, limit: 5 }),
       this.deliveryService.getDeliveryDashboard({ ...subQuery, limit: 5 }),
-      this.marketingService.getPromoUsage(subQuery),
 
-      // (A) Bilan financier tous-types : remises, frais livraison, taxe, TTC.
+      // Bilan financier tous-types : remises, frais livraison, taxe, TTC.
       // amount = net_amount - discount + tax + delivery_fee (cf. order.service).
       this.prisma.order.aggregate({
         _sum: {
-          net_amount: true,
           amount: true,
           discount: true,
           tax: true,
@@ -235,41 +196,20 @@ export class MarketingReportService {
         where: baseWhere,
       }),
 
-      // (B) Fidélité : points émis vs consommés vs expirés sur la période.
-      this.prisma.loyaltyPoint.groupBy({
-        by: ['type'],
-        _sum: { points: true },
-        where: {
-          created_at: dateFilter,
-          ...(query.restaurantId ? { order: { restaurant_id: query.restaurantId } } : {}),
-        },
-      }),
-
-      // (C) Paiement : part du CA en ligne vs au comptoir.
-      this.prisma.order.groupBy({
-        by: ['payment_method'],
-        _count: { _all: true },
-        _sum: { net_amount: true },
-        where: baseWhere,
-      }),
-
-      // Avis : moyenne + total (scopés restaurant).
-      this.prisma.comment.aggregate({
-        _avg: { rating: true },
-        _count: { _all: true },
-        where: reviewWhere,
-      }),
-
-      // Avis : distribution par note.
-      this.prisma.comment.groupBy({
-        by: ['rating'],
-        _count: { _all: true },
-        where: reviewWhere,
-      }),
-
       // Noms des restaurants (détail par restaurant + libellé de périmètre).
       this.prisma.restaurant.findMany({ select: { id: true, name: true } }),
     ]);
+
+    // --- Répartition par type (cœur du rapport) ---
+    const byType = [...overviewRaw.byType]
+      .sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type))
+      .map((t) => ({
+        label: TYPE_LABELS[t.type] ?? t.type,
+        orders: t.count,
+        revenue: t.revenue,
+        percentage: t.percentage,
+        averageBasket: t.count > 0 ? Math.round(t.revenue / t.count) : 0,
+      }));
 
     // --- Détail par restaurant : App / Call Center + CA net (scopé) ---
     const restaurantMap = new Map(allRestaurants.map((r) => [r.id, r.name]));
@@ -319,42 +259,6 @@ export class MarketingReportService {
     const channelPct = (n: number) =>
       channelTotalOrders > 0 ? Math.round((n / channelTotalOrders) * 1000) / 10 : 0;
 
-    // --- Répartition par type (cœur du rapport) ---
-    const byType = [...overviewRaw.byType]
-      .sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type))
-      .map((t) => ({
-        label: TYPE_LABELS[t.type] ?? t.type,
-        orders: t.count,
-        revenue: t.revenue,
-        percentage: t.percentage,
-        averageBasket: t.count > 0 ? Math.round(t.revenue / t.count) : 0,
-      }));
-
-    // --- Paiement : ONLINE (défaut) vs OFFLINE ---
-    const payment = { online: { orders: 0, revenue: 0 }, offline: { orders: 0, revenue: 0 } };
-    for (const row of paymentRaw) {
-      const bucket = row.payment_method === 'OFFLINE' ? payment.offline : payment.online;
-      bucket.orders += row._count._all;
-      bucket.revenue += row._sum.net_amount ?? 0;
-    }
-
-    // --- Fidélité ---
-    const loyalty = { earned: 0, redeemed: 0, expired: 0, bonus: 0 };
-    for (const row of loyaltyRaw) {
-      const points = row._sum.points ?? 0;
-      if (row.type === LoyaltyPointType.EARNED) loyalty.earned = points;
-      else if (row.type === LoyaltyPointType.REDEEMED) loyalty.redeemed = points;
-      else if (row.type === LoyaltyPointType.EXPIRED) loyalty.expired = points;
-      else if (row.type === LoyaltyPointType.BONUS) loyalty.bonus = points;
-    }
-
-    // --- Avis : distribution 1..5 ---
-    const distribution: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-    for (const r of reviewsDistribution) {
-      const rating = Math.round(r.rating);
-      if (rating >= 1 && rating <= 5) distribution[rating] = r._count._all;
-    }
-
     const dateLabel = `du ${format(dateRange.startDate, 'dd/MM/yyyy', { locale: fr })} au ${format(
       dateRange.endDate,
       'dd/MM/yyyy',
@@ -403,16 +307,6 @@ export class MarketingReportService {
           revenue: p.revenue,
           evolution: p.evolution ?? '',
         })),
-        categories: topCategoriesRaw.items.map((c) => ({
-          name: c.name,
-          sold: c.totalSold,
-          revenue: c.revenue,
-          percentage: c.percentage,
-        })),
-        promoShare: promoPerfRaw.promoRevenueShare,
-        promoRevenue: promoPerfRaw.promoRevenue,
-        promoSold: promoPerfRaw.promoTotalSold,
-        regularRevenue: promoPerfRaw.regularRevenue,
       },
       clients: {
         total: clientsRaw.totalClients,
@@ -440,8 +334,6 @@ export class MarketingReportService {
         ttc: financeAgg._sum.amount ?? 0,
         ht: (financeAgg._sum.amount ?? 0) - (financeAgg._sum.tax ?? 0),
       },
-      loyalty,
-      payment,
       delivery: {
         totalDeliveries: deliveryRaw.overview.totalDeliveries,
         feesCollected: deliveryRaw.overview.totalFeesCollected,
@@ -456,18 +348,6 @@ export class MarketingReportService {
           revenue: z.revenue,
           percentage: z.percentage,
         })),
-      },
-      promos: promoUsageRaw.items.slice(0, 5).map((p) => ({
-        title: p.title,
-        usageCount: p.usageCount,
-        uniqueUsers: p.uniqueUsers,
-        totalDiscount: p.totalDiscount,
-        revenueGenerated: p.revenueGenerated,
-      })),
-      reviews: {
-        average: reviewsAggregate._avg.rating ?? 0,
-        total: reviewsAggregate._count._all,
-        distribution,
       },
     };
   }
@@ -510,9 +390,8 @@ export class MarketingReportService {
     const fmt = (n: number) => new Intl.NumberFormat('fr-FR').format(Math.round(n || 0));
     const money = (n: number) => `${fmt(n)} FCFA`;
     const pctv = (n: number) => `${(n ?? 0).toFixed(1).replace(/\.0$/, '')}%`;
-    // Échappe les chaînes issues de la base (noms clients/plats/promos/restaurants
-    // saisis librement) avant injection dans le HTML rendu par Chromium :
-    // évite qu'un nom comme "</td><script>" casse la mise en page ou s'exécute.
+    // Échappe les chaînes issues de la base (noms clients/plats/restaurants
+    // saisis librement) avant injection dans le HTML rendu par Chromium.
     const esc = (s: string) => {
       const m: Record<string, string> = {
         '&': '&amp;',
@@ -536,22 +415,6 @@ export class MarketingReportService {
       return `<span class="evo ${cls}">${arrow}${s}</span>`;
     };
 
-    const stars = (rating: number) => {
-      const full = Math.round(rating);
-      return '★'.repeat(full) + '☆'.repeat(Math.max(0, 5 - full));
-    };
-
-    // Couleurs par type pour les barres de répartition.
-    const typeColors: Record<string, string> = {
-      Livraison: '#F17922',
-      'À emporter': '#F4A259',
-      'Sur place': '#F6C177',
-    };
-
-    const totalPayment = data.payment.online.orders + data.payment.offline.orders;
-    const onlinePct = totalPayment > 0 ? (data.payment.online.orders / totalPayment) * 100 : 0;
-    const offlinePct = totalPayment > 0 ? (data.payment.offline.orders / totalPayment) * 100 : 0;
-
     return `<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -567,17 +430,15 @@ export class MarketingReportService {
     .header .scope strong { display: block; font-size: 14px; }
 
     .content { padding: 16px 26px 6px; }
-    .section { margin-bottom: 16px; page-break-inside: avoid; }
-    .section-title { font-size: 13px; font-weight: 800; color: #d94f00; margin-bottom: 9px; padding-bottom: 4px; border-bottom: 2px solid #f1d9c6; display: flex; align-items: center; gap: 6px; }
-    .section-title .emoji { font-size: 13px; }
+    .section { margin-bottom: 16px; }
+    .section-title { font-size: 13px; font-weight: 800; color: #d94f00; margin-bottom: 9px; padding-bottom: 4px; border-bottom: 2px solid #f1d9c6; display: flex; align-items: center; gap: 6px; page-break-after: avoid; }
     .note { font-size: 10px; color: #8a93a2; font-weight: 500; }
 
-    .page-break { page-break-before: always; }
-
-    /* KPI cards */
     .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .fin-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
     .kpi-card { background: #faf7f4; border: 1px solid #efe6dd; border-radius: 10px; padding: 13px 15px; }
     .kpi-value { font-size: 22px; font-weight: 800; color: #d94f00; }
+    .kpi-value.sm { font-size: 17px; }
     .kpi-value .unit { font-size: 12px; font-weight: 700; color: #b06a3a; }
     .kpi-label { font-size: 10px; color: #6c757d; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
     .kpi-foot { margin-top: 6px; font-size: 10px; color: #8a93a2; }
@@ -590,11 +451,12 @@ export class MarketingReportService {
     table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
     th { background: #f6f7f9; color: #556; font-weight: 700; text-align: left; padding: 6px 9px; border-bottom: 1.5px solid #e3e7ec; }
     td { padding: 6px 9px; border-bottom: 1px solid #f1f3f5; }
+    tr { page-break-inside: avoid; }
+    .rank { color: #b06a3a; font-weight: 800; width: 20px; }
+    tfoot .total-row td { border-top: 2px solid #e0d6ca; border-bottom: none; background: #faf7f4; color: #d94f00; }
     .text-right { text-align: right; }
     .text-center { text-align: center; }
     .muted { color: #8a93a2; }
-    .rank { color: #b06a3a; font-weight: 800; width: 20px; }
-    tfoot .total-row td { border-top: 2px solid #e0d6ca; border-bottom: none; background: #faf7f4; color: #d94f00; }
 
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
@@ -602,15 +464,6 @@ export class MarketingReportService {
     .card { background: #fff; border: 1px solid #eceff2; border-radius: 10px; padding: 12px 14px; }
     .card-title { font-size: 11px; font-weight: 700; color: #445; margin-bottom: 8px; }
 
-    /* Barres de répartition */
-    .bar-row { display: grid; grid-template-columns: 96px 1fr 92px; align-items: center; gap: 10px; margin: 7px 0; }
-    .bar-label { font-size: 11px; font-weight: 700; color: #2a2f3a; }
-    .bar-track { background: #eef1f4; border-radius: 6px; height: 16px; overflow: hidden; }
-    .bar-fill { height: 16px; border-radius: 6px; }
-    .bar-meta { text-align: right; font-size: 10.5px; color: #556; }
-    .bar-meta strong { color: #1f2430; }
-
-    /* Encarts chiffres */
     .stat-line { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed #eef1f4; font-size: 11px; }
     .stat-line:last-child { border-bottom: none; }
     .stat-line .k { color: #6c757d; }
@@ -619,14 +472,6 @@ export class MarketingReportService {
     .badge { display: inline-block; padding: 1px 7px; border-radius: 8px; font-size: 9.5px; font-weight: 700; }
     .badge-app { background: #e6f4ec; color: #1e8e5a; }
     .badge-call { background: #e7f0fb; color: #2b6cb0; }
-    .badge-gold { background: #fdf3d6; color: #9a7008; }
-    .badge-premium { background: #efe9fb; color: #6b46c1; }
-    .badge-standard { background: #eef1f4; color: #556; }
-
-    .stars { color: #F17922; font-size: 15px; letter-spacing: 2px; }
-    .review-bar { display: flex; align-items: center; gap: 7px; margin: 3px 0; }
-    .review-fill { height: 8px; background: #F17922; border-radius: 4px; }
-    .review-bg { flex: 1; height: 8px; background: #eef1f4; border-radius: 4px; overflow: hidden; }
 
     .callout { background: #faf7f4; border: 1px solid #efe6dd; border-radius: 9px; padding: 10px 12px; text-align: center; }
     .callout .big { font-size: 18px; font-weight: 800; color: #d94f00; }
@@ -652,7 +497,7 @@ export class MarketingReportService {
 
     <!-- 1. Vue d'ensemble -->
     <div class="section">
-      <div class="section-title"><span class="emoji">💰</span> Vue d'ensemble</div>
+      <div class="section-title"><span>💰</span> Vue d'ensemble</div>
       <div class="kpi-grid">
         <div class="kpi-card">
           <div class="kpi-value">${fmt(data.overview.netRevenue)} <span class="unit">FCFA</span></div>
@@ -677,83 +522,38 @@ export class MarketingReportService {
       </div>
     </div>
 
-    <!-- 2. Répartition par type (coeur) -->
+    <!-- 2. Répartition par type -->
     <div class="section">
       <div class="section-title">Répartition par type de commande</div>
-      <div class="grid-2">
-        <div>
-          <div class="note" style="margin-bottom:8px;">Part en nombre de commandes servies</div>
+      <table>
+        <thead>
+          <tr><th>Type</th><th class="text-center">Commandes</th><th class="text-center">Part</th><th class="text-right">CA net</th><th class="text-right">Panier moyen</th></tr>
+        </thead>
+        <tbody>
           ${
             data.byType.length > 0
               ? data.byType
                   .map(
                     (t) => `
-            <div class="bar-row">
-              <div class="bar-label">${t.label}</div>
-              <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, t.percentage).toFixed(1)}%; background:${typeColors[t.label] ?? '#F17922'};"></div></div>
-              <div class="bar-meta"><strong>${pctv(t.percentage)}</strong></div>
-            </div>`,
+          <tr>
+            <td><strong>${t.label}</strong></td>
+            <td class="text-center">${fmt(t.orders)}</td>
+            <td class="text-center">${pctv(t.percentage)}</td>
+            <td class="text-right">${money(t.revenue)}</td>
+            <td class="text-right">${money(t.averageBasket)}</td>
+          </tr>`,
                   )
                   .join('')
-              : `<div class="note">Aucune donnée sur la période</div>`
+              : emptyRow(5)
           }
-        </div>
-        <div>
-          <table>
-            <thead>
-              <tr><th>Type</th><th class="text-center">Commandes</th><th class="text-right">CA net</th><th class="text-right">Panier moyen</th></tr>
-            </thead>
-            <tbody>
-              ${
-                data.byType.length > 0
-                  ? data.byType
-                      .map(
-                        (t) => `
-                <tr>
-                  <td><strong>${t.label}</strong></td>
-                  <td class="text-center">${fmt(t.orders)}</td>
-                  <td class="text-right">${money(t.revenue)}</td>
-                  <td class="text-right">${money(t.averageBasket)}</td>
-                </tr>`,
-                      )
-                      .join('')
-                  : emptyRow(4)
-              }
-            </tbody>
-          </table>
-        </div>
-      </div>
+        </tbody>
+      </table>
     </div>
 
-    <!-- 3. Source & Restaurants -->
+    <!-- 3. Détail par restaurant puis répartition par source -->
     <div class="section">
-      <div class="section-title">Répartition par source et détail par restaurant</div>
+      <div class="section-title">Détail par restaurant et répartition par source</div>
       <div class="card" style="margin-bottom:14px;">
-        <div class="card-title">Répartition par source (Application vs Call Center)</div>
-        <table>
-          <thead><tr><th>Source</th><th class="text-center">Commandes</th><th class="text-center">Part</th><th class="text-right">CA net</th><th class="text-right">Panier</th><th class="text-right">Nouveaux</th></tr></thead>
-          <tbody>
-            <tr>
-              <td><span class="badge badge-app">Application</span></td>
-              <td class="text-center">${fmt(data.channel.app.orders)}</td>
-              <td class="text-center">${pctv(data.channel.app.percentage)}</td>
-              <td class="text-right">${money(data.channel.app.revenue)}</td>
-              <td class="text-right">${money(data.channel.app.averageBasket)}</td>
-              <td class="text-right">${pctv(data.channel.app.newRate)}</td>
-            </tr>
-            <tr>
-              <td><span class="badge badge-call">Call Center</span></td>
-              <td class="text-center">${fmt(data.channel.call.orders)}</td>
-              <td class="text-center">${pctv(data.channel.call.percentage)}</td>
-              <td class="text-right">${money(data.channel.call.revenue)}</td>
-              <td class="text-right">${money(data.channel.call.averageBasket)}</td>
-              <td class="text-right">${pctv(data.channel.call.newRate)}</td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="note" style="margin-top:6px;">« Part » = part des commandes servies. « Nouveaux » = commandes de clients acquis sur la période.</div>
-      </div>
-      <div class="card">
         <div class="card-title">Détail par restaurant (commandes par source et CA net)</div>
         <table>
           <thead><tr><th>Restaurant</th><th class="text-center">Application</th><th class="text-center">Call Center</th><th class="text-center">Total cmd.</th><th class="text-right">CA net</th><th class="text-center">Part CA</th></tr></thead>
@@ -788,70 +588,64 @@ export class MarketingReportService {
           </tfoot>
         </table>
       </div>
+      <div class="card">
+        <div class="card-title">Répartition par source (Application vs Call Center)</div>
+        <table>
+          <thead><tr><th>Source</th><th class="text-center">Commandes</th><th class="text-center">Part</th><th class="text-right">CA net</th><th class="text-right">Panier</th><th class="text-right">Nouveaux</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-app">Application</span></td>
+              <td class="text-center">${fmt(data.channel.app.orders)}</td>
+              <td class="text-center">${pctv(data.channel.app.percentage)}</td>
+              <td class="text-right">${money(data.channel.app.revenue)}</td>
+              <td class="text-right">${money(data.channel.app.averageBasket)}</td>
+              <td class="text-right">${pctv(data.channel.app.newRate)}</td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-call">Call Center</span></td>
+              <td class="text-center">${fmt(data.channel.call.orders)}</td>
+              <td class="text-center">${pctv(data.channel.call.percentage)}</td>
+              <td class="text-right">${money(data.channel.call.revenue)}</td>
+              <td class="text-right">${money(data.channel.call.averageBasket)}</td>
+              <td class="text-right">${pctv(data.channel.call.newRate)}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note" style="margin-top:6px;">« Part » = part des commandes servies. « Nouveaux » = commandes de clients acquis sur la période.</div>
+      </div>
     </div>
 
     <!-- 4. Produits -->
-    <div class="section page-break">
-      <div class="section-title"><span class="emoji">🍗</span> Produits</div>
-      <div class="grid-2">
-        <div>
-          <div class="card-title">Top plats vendus (tous types)</div>
-          <table>
-            <thead><tr><th class="rank">#</th><th>Plat</th><th>Catégorie</th><th class="text-center">Vendus</th><th class="text-right">CA</th><th class="text-right">Évol.</th></tr></thead>
-            <tbody>
-              ${
-                data.products.top.length > 0
-                  ? data.products.top
-                      .map(
-                        (p, i) => `
-                <tr>
-                  <td class="rank">${i + 1}</td>
-                  <td><strong>${esc(p.name)}</strong></td>
-                  <td class="muted">${esc(p.category)}</td>
-                  <td class="text-center">${fmt(p.sold)}</td>
-                  <td class="text-right">${money(p.revenue)}</td>
-                  <td class="text-right">${evo(p.evolution)}</td>
-                </tr>`,
-                      )
-                      .join('')
-                  : emptyRow(6)
-              }
-            </tbody>
-          </table>
-        </div>
-        <div>
-          <div class="card-title">Meilleures catégories</div>
-          <table>
-            <thead><tr><th>Catégorie</th><th class="text-center">Vendus</th><th class="text-right">CA</th><th class="text-center">Part</th></tr></thead>
-            <tbody>
-              ${
-                data.products.categories.length > 0
-                  ? data.products.categories
-                      .map(
-                        (c) => `
-                <tr>
-                  <td><strong>${esc(c.name)}</strong></td>
-                  <td class="text-center">${fmt(c.sold)}</td>
-                  <td class="text-right">${money(c.revenue)}</td>
-                  <td class="text-center">${pctv(c.percentage)}</td>
-                </tr>`,
-                      )
-                      .join('')
-                  : emptyRow(4)
-              }
-            </tbody>
-          </table>
-          <div class="callout" style="margin-top:12px;">
-            <div class="big">${pctv(data.products.promoShare)}</div>
-            <div class="lab">du CA produits réalisé sur des plats en promotion (${fmt(data.products.promoSold)} unités promo)</div>
-          </div>
-        </div>
-      </div>
+    <div class="section">
+      <div class="section-title"><span>🍗</span> Produits</div>
+      <div class="card-title">Top plats vendus (tous types)</div>
+      <table>
+        <thead><tr><th class="rank">#</th><th>Plat</th><th>Catégorie</th><th class="text-center">Vendus</th><th class="text-right">CA</th><th class="text-right">Évol.</th></tr></thead>
+        <tbody>
+          ${
+            data.products.top.length > 0
+              ? data.products.top
+                  .map(
+                    (p, i) => `
+          <tr>
+            <td class="rank">${i + 1}</td>
+            <td><strong>${esc(p.name)}</strong></td>
+            <td class="muted">${esc(p.category)}</td>
+            <td class="text-center">${fmt(p.sold)}</td>
+            <td class="text-right">${money(p.revenue)}</td>
+            <td class="text-right">${evo(p.evolution)}</td>
+          </tr>`,
+                  )
+                  .join('')
+              : emptyRow(6)
+          }
+        </tbody>
+      </table>
     </div>
 
     <!-- 5. Clients -->
     <div class="section">
-      <div class="section-title"><span class="emoji">👥</span> Clients</div>
+      <div class="section-title"><span>👥</span> Clients</div>
       <div class="grid-3" style="margin-bottom:12px;">
         <div class="callout">
           <div class="big">${fmt(data.clients.newClients)} / ${fmt(data.clients.recurringClients)}</div>
@@ -900,64 +694,49 @@ export class MarketingReportService {
       </div>
     </div>
 
-    <!-- 6. Marketing & coûts -->
+    <!-- 6. Bilan financier -->
     <div class="section">
-      <div class="section-title">Marketing et coûts</div>
-      <div class="grid-3">
-        <div class="card">
-          <div class="card-title">Promotions les plus utilisées</div>
-          <table>
-            <thead><tr><th>Promotion</th><th class="text-center">Usages</th><th class="text-right">Remise</th></tr></thead>
-            <tbody>
-              ${
-                data.promos.length > 0
-                  ? data.promos
-                      .map(
-                        (p) => `
-                <tr>
-                  <td><strong>${esc(p.title)}</strong><div class="note">${fmt(p.uniqueUsers)} clients · ${money(p.revenueGenerated)} de CA</div></td>
-                  <td class="text-center">${fmt(p.usageCount)}</td>
-                  <td class="text-right">${money(p.totalDiscount)}</td>
-                </tr>`,
-                      )
-                      .join('')
-                  : `<tr><td colspan="3" class="muted text-center">Aucune promotion utilisée sur la période</td></tr>`
-              }
-            </tbody>
-          </table>
+      <div class="section-title">Bilan financier</div>
+      <div class="fin-grid">
+        <div class="kpi-card">
+          <div class="kpi-value sm">${money(data.finance.discount)}</div>
+          <div class="kpi-label">Total remises</div>
         </div>
-        <div class="card">
-          <div class="card-title">Bilan financier</div>
-          <div class="stat-line"><span class="k">Total remises accordées</span><span class="v">${money(data.finance.discount)}</span></div>
-          <div class="stat-line"><span class="k">Total frais de livraison</span><span class="v">${money(data.finance.deliveryFee)}</span></div>
-          <div class="stat-line"><span class="k">Taxe collectée</span><span class="v">${money(data.finance.tax)}</span></div>
-          <div class="stat-line"><span class="k">Total HT (hors taxe)</span><span class="v">${money(data.finance.ht)}</span></div>
-          <div class="stat-line"><span class="k">Total TTC (encaissé)</span><span class="v">${money(data.finance.ttc)}</span></div>
+        <div class="kpi-card">
+          <div class="kpi-value sm">${money(data.finance.deliveryFee)}</div>
+          <div class="kpi-label">Total frais livraison</div>
         </div>
-        <div class="card">
-          <div class="card-title"><span class="emoji">⭐</span> Points de fidélité</div>
-          <div class="stat-line"><span class="k">Points émis (gagnés)</span><span class="v">${fmt(data.loyalty.earned)}</span></div>
-          <div class="stat-line"><span class="k">Points consommés</span><span class="v">${fmt(data.loyalty.redeemed)}</span></div>
-          <div class="stat-line"><span class="k">Points bonus</span><span class="v">${fmt(data.loyalty.bonus)}</span></div>
-          <div class="stat-line"><span class="k">Points expirés</span><span class="v">${fmt(data.loyalty.expired)}</span></div>
+        <div class="kpi-card">
+          <div class="kpi-value sm">${money(data.finance.tax)}</div>
+          <div class="kpi-label">Taxe collectée</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-value sm">${money(data.finance.ht)}</div>
+          <div class="kpi-label">Total HT (hors taxe)</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-value sm">${money(data.finance.ttc)}</div>
+          <div class="kpi-label">Total TTC (encaissé)</div>
         </div>
       </div>
+      <div class="note" style="margin-top:6px;">TTC = HT + taxe. Total encaissé, produits et frais de livraison compris, remises déduites.</div>
     </div>
 
-    <!-- 7. Livraison & Paiement -->
+    <!-- 7. Livraison -->
     <div class="section">
+      <div class="section-title"><span>🛵</span> Livraison</div>
       <div class="grid-2">
         <div class="card">
-          <div class="card-title"><span class="emoji">🛵</span> Livraison</div>
-          <div class="grid-2" style="gap:10px; margin-bottom:8px;">
-            <div class="stat-line"><span class="k">Livraisons</span><span class="v">${fmt(data.delivery.totalDeliveries)}</span></div>
-            <div class="stat-line"><span class="k">Frais collectés</span><span class="v">${money(data.delivery.feesCollected)}</span></div>
-            <div class="stat-line"><span class="k">Frais moyen</span><span class="v">${money(data.delivery.averageFee)}</span></div>
-            <div class="stat-line"><span class="k">Turbo / gratuit</span><span class="v">${pctv(data.delivery.turboPercentage)} / ${pctv(data.delivery.freePercentage)}</span></div>
-            <div class="stat-line"><span class="k">Temps moyen</span><span class="v">${Math.round(data.delivery.averageMinutes)} min</span></div>
-            <div class="stat-line"><span class="k">Ponctualité</span><span class="v">${pctv(data.delivery.onTimeRate)}</span></div>
-          </div>
-          <div class="card-title" style="margin-top:6px;">Meilleures zones</div>
+          <div class="card-title">Indicateurs de livraison</div>
+          <div class="stat-line"><span class="k">Livraisons</span><span class="v">${fmt(data.delivery.totalDeliveries)}</span></div>
+          <div class="stat-line"><span class="k">Frais collectés</span><span class="v">${money(data.delivery.feesCollected)}</span></div>
+          <div class="stat-line"><span class="k">Frais moyen</span><span class="v">${money(data.delivery.averageFee)}</span></div>
+          <div class="stat-line"><span class="k">Turbo / gratuit</span><span class="v">${pctv(data.delivery.turboPercentage)} / ${pctv(data.delivery.freePercentage)}</span></div>
+          <div class="stat-line"><span class="k">Temps moyen de livraison</span><span class="v">${Math.round(data.delivery.averageMinutes)} min</span></div>
+          <div class="stat-line"><span class="k">Ponctualité</span><span class="v">${pctv(data.delivery.onTimeRate)}</span></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Meilleures zones de livraison</div>
           <table>
             <thead><tr><th>Zone</th><th class="text-center">Livraisons</th><th class="text-right">CA</th><th class="text-center">Part</th></tr></thead>
             <tbody>
@@ -973,53 +752,6 @@ export class MarketingReportService {
               }
             </tbody>
           </table>
-        </div>
-        <div class="card">
-          <div class="card-title"><span class="emoji">💳</span> Mode de paiement</div>
-          <div class="bar-row">
-            <div class="bar-label">En ligne</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, onlinePct).toFixed(1)}%; background:#1e8e5a;"></div></div>
-            <div class="bar-meta"><strong>${pctv(onlinePct)}</strong></div>
-          </div>
-          <div class="bar-row">
-            <div class="bar-label">Au comptoir</div>
-            <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, offlinePct).toFixed(1)}%; background:#2b6cb0;"></div></div>
-            <div class="bar-meta"><strong>${pctv(offlinePct)}</strong></div>
-          </div>
-          <table style="margin-top:8px;">
-            <thead><tr><th>Mode</th><th class="text-center">Commandes</th><th class="text-right">CA net</th></tr></thead>
-            <tbody>
-              <tr><td><strong>En ligne</strong></td><td class="text-center">${fmt(data.payment.online.orders)}</td><td class="text-right">${money(data.payment.online.revenue)}</td></tr>
-              <tr><td><strong>Au comptoir</strong></td><td class="text-center">${fmt(data.payment.offline.orders)}</td><td class="text-right">${money(data.payment.offline.revenue)}</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- 8. Avis clients -->
-    <div class="section">
-      <div class="section-title">Satisfaction et avis clients</div>
-      <div style="display:flex; align-items:center; gap:34px;">
-        <div style="text-align:center; min-width:120px;">
-          <div class="stars">${stars(data.reviews.average)}</div>
-          <div style="font-size:22px; font-weight:800; color:#d94f00; margin-top:4px;">${data.reviews.average.toFixed(1)}/5</div>
-          <div class="note">${fmt(data.reviews.total)} avis sur la période</div>
-        </div>
-        <div style="flex:1;">
-          ${[5, 4, 3, 2, 1]
-            .map((n) => {
-              const count = data.reviews.distribution[n] || 0;
-              const p = data.reviews.total > 0 ? Math.round((count / data.reviews.total) * 100) : 0;
-              return `
-            <div class="review-bar">
-              <span style="width:12px; text-align:center; font-weight:700;">${n}</span>
-              <span style="color:#F17922;">★</span>
-              <div class="review-bg"><div class="review-fill" style="width:${p}%"></div></div>
-              <span class="note" style="width:52px; text-align:right;">${fmt(count)} (${p}%)</span>
-            </div>`;
-            })
-            .join('')}
         </div>
       </div>
     </div>
