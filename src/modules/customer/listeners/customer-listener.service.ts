@@ -18,21 +18,41 @@ export class CustomerListenerService {
 
     @OnEvent(CUSTOMER_EVENTS.CUSTOMER_CREATED)
     async customerCreatedEventListener(payload: { customer: any }) {
-        // Récupérer les administrateurs/backoffice
+        // Récupérer les administrateurs/backoffice — en respectant la préférence
+        // in-app de chaque membre (opt-out => ni persistance ni socket).
         const admins = await this.notificationRecipientService.getAllUsersByBackofficeAndRole();
-        const adminsFiltered = admins.filter((u) => u.email !== payload.customer.email);
+        const adminsFiltered = admins.filter(
+            (u) => u.email !== payload.customer.email && u.in_app_notifications_enabled !== false,
+        );
 
         // Préparer destinataire client
         const customerRecipient = this.notificationRecipientService.mapCustomerToNotificationRecipient(payload.customer);
 
         // Notifications aux admins
-        const notificationsAdmin = await this.notificationsService.sendNotificationToMultiple(
-            this.customerNotificationsTemplate.NEW_CUSTOMER,
-            { actor: customerRecipient, recipients: adminsFiltered, data: payload },
-            NotificationType.SYSTEM
-        );
-        for (const admin of adminsFiltered) {
-            this.notificationsWebSocketService.emitNotification(notificationsAdmin[0], admin, true);
+        if (adminsFiltered.length > 0) {
+            const fullname = `${payload.customer.first_name ?? ''} ${payload.customer.last_name ?? ''}`.trim();
+            const notificationsAdmin = await this.notificationsService.sendNotificationToMultiple(
+                this.customerNotificationsTemplate.NEW_CUSTOMER,
+                {
+                    actor: customerRecipient,
+                    recipients: adminsFiltered,
+                    data: payload,
+                    // Persisté dans Notification.data → payload de navigation du front
+                    // (clic cloche → page Clients filtrée sur ce client).
+                    meta: {
+                        kind: 'new_customer',
+                        customer_id: payload.customer.id,
+                        search: fullname || payload.customer.phone || '',
+                    },
+                },
+                NotificationType.SYSTEM
+            );
+            // Emit CIBLÉ par admin (1 notification ↔ 1 destinataire). L'ancien code
+            // broadcastait `group=true` DANS la boucle → la room backoffice recevait
+            // N fois le même event (doublons visuels + N bips).
+            notificationsAdmin.forEach((notif, i) => {
+                this.notificationsWebSocketService.emitNotification(notif, adminsFiltered[i]);
+            });
         }
 
         // Notification au client

@@ -171,6 +171,9 @@ export class OrderListenerService {
            ✅ COMMANDE TERMINÉE
         ========================= */
         if (payload.order.status === OrderStatus.COMPLETED) {
+            // 🔔 CLOCHE staff — commande terminée (état important).
+            void this.notificationsSender.sendOrderBell(payload.order);
+
             // ⭐ DÉDUCTION DES POINTS — FILET DE SÉCURITÉ À LA CLÔTURE.
             // Beaucoup de commandes (« À livrer » / Turbo « workflow manuel ») atteignent
             // TERMINÉE SANS jamais passer par ACCEPTED : le validateur autorise de sauter
@@ -234,6 +237,11 @@ export class OrderListenerService {
         /* =========================
            ❌ COMMANDE ANNULÉE
         ========================= */
+        if (payload.order.status === OrderStatus.CANCELLED) {
+            // 🔔 CLOCHE staff — annulation (état important), même sans expo_token client.
+            void this.notificationsSender.sendOrderBell(payload.order);
+        }
+
         if (
             payload.order.status === OrderStatus.CANCELLED &&
             payload.expo_token

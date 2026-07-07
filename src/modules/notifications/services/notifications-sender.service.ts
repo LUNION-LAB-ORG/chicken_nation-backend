@@ -58,19 +58,31 @@ export class NotificationsSenderService {
     }
 
     /**
-     * Notification CLOCHE « commande » au staff du restaurant (caisse / manager /
-     * assistant-manager). Réutilise les contenus riches par statut de
-     * getOrderNotificationContent. Persiste 1 ligne/destinataire + diffuse en temps
-     * réel à la room du restaurant (event `notification:new` → cloche + bip).
+     * Notification CLOCHE « commande » au staff : équipe du restaurant (caisse /
+     * manager / assistant-manager) + back office (admins, call center…).
+     * Réutilise les contenus riches par statut de getOrderNotificationContent.
+     * Persiste 1 ligne/destinataire + émet en temps réel CIBLÉ par membre
+     * (`notification:new` → cloche + bip), en respectant la préférence
+     * in_app_notifications_enabled de chacun.
      * `order` doit porter : id, reference, status, amount, restaurant_id, restaurant?.name,
      * fullname, payment_method.
      */
     async sendOrderBell(order: any) {
         if (!order?.restaurant_id) return;
 
-        const recipients = await this.notificationRecipientService.getAllUsersByRestaurantAndRole(
-            order.restaurant_id,
-            [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+        const [restoUsers, backofficeUsers] = await Promise.all([
+            this.notificationRecipientService.getAllUsersByRestaurantAndRole(
+                order.restaurant_id,
+                [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+            ),
+            this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+        ]);
+
+        // Dédupe + respect de la préférence in-app de chaque membre.
+        const byId = new Map<string, NotificationRecipient>();
+        for (const r of [...restoUsers, ...backofficeUsers]) byId.set(r.id, r);
+        const recipients = [...byId.values()].filter(
+            (r) => r.in_app_notifications_enabled !== false,
         );
         if (recipients.length === 0) return;
 
@@ -100,12 +112,17 @@ export class NotificationsSenderService {
                 actor: recipients[0],
                 recipients,
                 data: order,
-                meta: { order_id: order.id, reference: order.reference, status: order.status },
+                // Persisté dans Notification.data → payload de navigation du front
+                // (clic cloche → page Commandes filtrée sur la référence).
+                meta: { kind: 'order', order_id: order.id, reference: order.reference, status: order.status },
             },
             NotificationType.ORDER,
         );
-        // group=true → broadcast à la room restaurant_{id} (le client invalide sur notification:new).
-        this.notificationsWebSocketService.emitNotification(notifications[0], recipients[0], true);
+        // Emit CIBLÉ par membre (1 notification ↔ 1 destinataire) : seuls les
+        // opt-in reçoivent le socket, contrairement à un broadcast de room.
+        notifications.forEach((notif, i) => {
+            this.notificationsWebSocketService.emitNotification(notif, recipients[i]);
+        });
     }
 
     /**
