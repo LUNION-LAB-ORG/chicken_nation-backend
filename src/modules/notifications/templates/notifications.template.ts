@@ -30,4 +30,13 @@ export class NotificationsTemplate {
         iconBgColor: (ctx) => notificationIcons.joice.color,
         showChevron: false
     };
+
+    // MESSAGERIE - Nouveau message client, pour le staff (backoffice + restaurant)
+    static NEW_MESSAGE_STAFF: NotificationTemplate<{ senderName: string; preview: string; conversationId: string; }> = {
+        title: (ctx) => `💬 Nouveau message de ${ctx.data.senderName}`,
+        message: (ctx) => ctx.data.preview,
+        icon: () => notificationIcons.progress.url,
+        iconBgColor: () => notificationIcons.progress.color,
+        showChevron: true,
+    };
 }

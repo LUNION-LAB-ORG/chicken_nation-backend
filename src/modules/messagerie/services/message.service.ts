@@ -17,6 +17,7 @@ import { MessageWebSocketService } from '../websockets/message-websocket.service
 import { ConversationsService } from './conversations.service';
 import { S3Service } from '../../../s3/s3.service';
 import { ExpoPushService } from '../../../expo-push/expo-push.service';
+import { NotificationsSenderService } from '../../notifications/services/notifications-sender.service';
 
 @Injectable()
 export class MessageService {
@@ -36,6 +37,7 @@ export class MessageService {
     private readonly messageWebSocketService: MessageWebSocketService,
     private readonly s3service: S3Service,
     private readonly expoPushService: ExpoPushService,
+    private readonly notificationsSenderService: NotificationsSenderService,
   ) { }
 
   private async uploadImage(image?: Express.Multer.File) {
@@ -312,6 +314,21 @@ export class MessageService {
       this.sendPushToCustomer(customerId, mappedMessage, restaurantId).catch((err) =>
         this.logger.warn(`Push notification échouée: ${err.message}`),
       );
+    }
+
+    // Notifier le STAFF (cloche in-app + email) quand le message vient d'un CLIENT
+    // (sens ENTRANT). Non bloquant ; filtré par préférence côté sender.
+    if (authType === 'customer') {
+      this.notificationsSenderService
+        .notifyStaffNewMessage({
+          conversationId: message.conversationId,
+          restaurantId,
+          customerId,
+          preview: mappedMessage.body ?? '',
+        })
+        .catch((err) =>
+          this.logger.warn(`Notif staff « nouveau message » échouée: ${err.message}`),
+        );
     }
 
     // Map the created message to ResponseMessageDto format

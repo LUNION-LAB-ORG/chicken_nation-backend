@@ -152,7 +152,9 @@ export class NotificationRecipientService {
             email: user?.email ?? undefined,
             phone: user?.phone ?? undefined,
             restaurant_id: user.restaurant_id ?? undefined,
-            restaurant_name: user.restaurant?.name ?? undefined
+            restaurant_name: user.restaurant?.name ?? undefined,
+            email_notifications_enabled: user.email_notifications_enabled,
+            in_app_notifications_enabled: user.in_app_notifications_enabled,
         };
     }
 }

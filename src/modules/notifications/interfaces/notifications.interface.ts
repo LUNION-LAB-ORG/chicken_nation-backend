@@ -12,6 +12,9 @@ export interface NotificationRecipient {
     total_points?: number;
     restaurant_id?: string;
     restaurant_name?: string;
+    // Préférences de notification du staff (undefined pour un customer).
+    email_notifications_enabled?: boolean;
+    in_app_notifications_enabled?: boolean;
 }
 
 export interface NotificationContext<T> {

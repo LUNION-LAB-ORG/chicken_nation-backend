@@ -1231,6 +1231,12 @@ model User {
   // sur mobile ou si l'utilisateur a refusé les notifications.
   expo_push_token String? @db.VarChar(255)
 
+  // Préférences de notification du staff (backoffice + resto). Chaque membre
+  // peut couper les alertes email et/ou in-app (cloche + toast) le concernant.
+  // Modifiables dans son profil perso ET par l'admin (module Personnel).
+  email_notifications_enabled  Boolean @default(true)
+  in_app_notifications_enabled Boolean @default(true)
+
   // Relations promotions
   created_promotions Promotion[] @relation("CreatedBy")
 

@@ -1,7 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, MaxLength, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, MaxLength, IsOptional, IsString, IsBoolean } from 'class-validator';
+
+// Multipart (FormData) envoie des strings "true"/"false" : on parse en booléen.
+// IMPORTANT : renvoyer `undefined` quand le champ est absent, sinon on écraserait
+// la préférence à `false` sur toute mise à jour qui ne l'inclut pas.
+const toOptionalBoolean = ({ value }: { value: unknown }) =>
+  value === undefined || value === null ? undefined : value === true || value === 'true';
 
 export class CreateUserDto {
   // FULLNAME
@@ -77,4 +83,25 @@ export class CreateUserDto {
   @IsString()
   @Transform(({ value }) => (value ? String(value).trim() : value))
   restaurant_id?: string;
+
+  // PRÉFÉRENCES DE NOTIFICATION
+  @ApiProperty({
+    description: 'Recevoir les alertes par email',
+    required: false,
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(toOptionalBoolean)
+  email_notifications_enabled?: boolean;
+
+  @ApiProperty({
+    description: 'Recevoir les notifications in-app (cloche + toast)',
+    required: false,
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  @Transform(toOptionalBoolean)
+  in_app_notifications_enabled?: boolean;
 }
