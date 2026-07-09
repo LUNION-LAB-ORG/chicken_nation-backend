@@ -18,6 +18,7 @@ export class DeeplinkHelper {
         { platform: searchTerms },
         { userAgent: searchTerms },
         { ip: searchTerms },
+        { targetLabel: searchTerms },
       ];
     }
 
@@ -29,6 +30,9 @@ export class DeeplinkHelper {
       // Pour une recherche exacte de l'IP, utilisez simplement where.ip = query.ip;
       // Pour une recherche partielle (ex: par sous-réseau), utilisez 'contains' :
       where.ip = { contains: query.ip };
+    }
+    if (query.type) {
+      where.type = query.type;
     }
 
     // 3. Filtrage temporel (Plage de Dates)

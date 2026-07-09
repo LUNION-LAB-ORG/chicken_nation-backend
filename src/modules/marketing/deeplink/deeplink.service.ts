@@ -51,6 +51,7 @@ export class DeeplinkService {
       monthAndroidClicks,
       totalIosClicks,
       monthIosClicks,
+      clicksByType,
     ] = await Promise.all([
       // Nombre total de clics
       this.prisma.appClick.count(),
@@ -106,7 +107,18 @@ export class DeeplinkService {
           },
         },
       }),
+
+      // Répartition des clics par type de cible
+      this.prisma.appClick.groupBy({
+        by: ['type'],
+        _count: { _all: true },
+      }),
     ]);
+
+    // Répartition par type (les lignes sans type comptent sous "unknown"), triée par count décroissant
+    const byType = clicksByType
+      .map((g) => ({ type: g.type ?? 'unknown', count: g._count._all }))
+      .sort((a, b) => b.count - a.count);
 
     return {
       total: {
@@ -122,6 +134,7 @@ export class DeeplinkService {
         allTime: totalIosClicks,
         currentMonth: monthIosClicks,
       },
+      byType,
     };
   }
 

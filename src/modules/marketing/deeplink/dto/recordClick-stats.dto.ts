@@ -34,6 +34,20 @@ export class TotalClicksStats {
   last24Hours: number;
 }
 
+export class TypeClicksStats {
+  @ApiProperty({
+    description: 'Type de cible du deeplink (ou "unknown" si non renseigné)',
+    example: 'dish',
+  })
+  type: string;
+
+  @ApiProperty({
+    description: 'Nombre de clics pour ce type de cible',
+    example: 120,
+  })
+  count: number;
+}
+
 export class RecordClickStatsDto {
   @ApiProperty({
     description: 'Statistiques globales des clics',
@@ -52,4 +66,10 @@ export class RecordClickStatsDto {
     type: PlatformClicksStats,
   })
   ios: PlatformClicksStats;
+
+  @ApiProperty({
+    description: 'Répartition des clics par type de cible (triée par nombre décroissant)',
+    type: [TypeClicksStats],
+  })
+  byType: TypeClicksStats[];
 }

@@ -1578,12 +1578,15 @@ model PromoCodeUsage {
 // # Analytics App Click
 // ================================
 model AppClick {
-  id        Int      @id @default(autoincrement())
-  platform  String?
-  userAgent String?
-  ip        String?
-  referer   String?
-  createdAt DateTime @default(now())
+  id          Int      @id @default(autoincrement())
+  platform    String?
+  userAgent   String?
+  ip          String?
+  referer     String?
+  type        String?
+  targetId    String?
+  targetLabel String?
+  createdAt   DateTime @default(now())
 }
 
 // CARTE NATION

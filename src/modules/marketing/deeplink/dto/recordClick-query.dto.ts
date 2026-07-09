@@ -48,6 +48,12 @@ export class RecordClickQueryDto {
     @Transform(({ value }) => String(value).trim())
     ip?: string;
 
+    @ApiPropertyOptional({ description: 'Filtre exact sur le type de cible du deeplink (home, dish, category, order, voucher, loyalty, nation_card)' })
+    @IsOptional()
+    @IsString()
+    @Transform(({ value }) => String(value).trim())
+    type?: string;
+
     // --- 4. Filtrage Temporel (Plage de Dates) ---
 
     @ApiPropertyOptional({

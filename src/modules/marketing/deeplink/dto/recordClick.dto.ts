@@ -25,4 +25,22 @@ export class RecordClickDto {
     @IsOptional()
     @Transform(({ value }) => String(value).trim())
     referer?: string
+
+    @ApiPropertyOptional({ description: 'Le type de cible du deeplink (home, dish, category, order, voucher, loyalty, nation_card)' })
+    @IsString()
+    @IsOptional()
+    @Transform(({ value }) => String(value).trim())
+    type?: string;
+
+    @ApiPropertyOptional({ description: "L'identifiant de la cible du deeplink (id du plat, de la catégorie, etc.)" })
+    @IsString()
+    @IsOptional()
+    @Transform(({ value }) => String(value).trim())
+    targetId?: string;
+
+    @ApiPropertyOptional({ description: "Le libellé lisible de la cible du deeplink" })
+    @IsString()
+    @IsOptional()
+    @Transform(({ value }) => String(value).trim())
+    targetLabel?: string;
 }
