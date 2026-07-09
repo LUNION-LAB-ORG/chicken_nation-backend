@@ -31,7 +31,14 @@ export class DeeplinkHelper {
       // Pour une recherche partielle (ex: par sous-réseau), utilisez 'contains' :
       where.ip = { contains: query.ip };
     }
-    if (query.type) {
+    if (query.type === 'home') {
+      // « Accueil » englobe aussi les clics anciens non catégorisés (type null) :
+      // un deeplink sans cible précise = simple ouverture de l'app.
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        { OR: [{ type: 'home' }, { type: null }] },
+      ];
+    } else if (query.type) {
       where.type = query.type;
     }
 
