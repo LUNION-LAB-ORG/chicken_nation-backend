@@ -31,6 +31,9 @@ export class DeeplinkController {
     return this.deeplinkService.recordClick({
       platform: body.platform,
       userAgent: body.userAgent,
+      type: body.type,
+      targetId: body.targetId,
+      targetLabel: body.targetLabel,
       ip,
       referer,
     });
