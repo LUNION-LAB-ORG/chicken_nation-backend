@@ -33,109 +33,29 @@ export class DeeplinkService {
    * Récupère les statistiques des clics
    * @returns Les statistiques des clics
    */
-  async getClicksStats(): Promise<RecordClickStatsDto> {
-    const now = new Date();
+  async getClicksStats(query: RecordClickQueryDto = {}): Promise<RecordClickStatsDto> {
+    // Les KPIs respectent EXACTEMENT les mêmes filtres que la liste
+    // (période, type de deeplink, recherche…) → cohérence page entière.
+    const where = this.DeeplinkHelper.buildClickWhereClause(query);
 
-    // Date de début du mois en cours (1er jour à 00:00:00)
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
-    // Date il y a 24h
-    const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-    // Récupérer toutes les statistiques en parallèle pour optimiser les performances
-    const [
-      totalClicks,
-      monthClicks,
-      last24HoursClicks,
-      totalAndroidClicks,
-      monthAndroidClicks,
-      totalIosClicks,
-      monthIosClicks,
-      clicksByType,
-    ] = await Promise.all([
-      // Nombre total de clics
-      this.prisma.appClick.count(),
-
-      // Nombre de clics du mois en cours
-      this.prisma.appClick.count({
-        where: {
-          createdAt: {
-            gte: startOfMonth,
-          },
-        },
-      }),
-
-      // Nombre de clics dans les dernières 24h
-      this.prisma.appClick.count({
-        where: {
-          createdAt: {
-            gte: last24Hours,
-          },
-        },
-      }),
-
-      // Nombre total de clics Android
-      this.prisma.appClick.count({
-        where: {
-          platform: 'android',
-        },
-      }),
-
-      // Nombre de clics Android du mois en cours
-      this.prisma.appClick.count({
-        where: {
-          platform: 'android',
-          createdAt: {
-            gte: startOfMonth,
-          },
-        },
-      }),
-
-      // Nombre total de clics iOS
-      this.prisma.appClick.count({
-        where: {
-          platform: 'ios',
-        },
-      }),
-
-      // Nombre de clics iOS du mois en cours
-      this.prisma.appClick.count({
-        where: {
-          platform: 'ios',
-          createdAt: {
-            gte: startOfMonth,
-          },
-        },
-      }),
-
-      // Répartition des clics par type de cible
+    const [total, android, ios, web, clicksByType] = await Promise.all([
+      this.prisma.appClick.count({ where }),
+      this.prisma.appClick.count({ where: { ...where, platform: 'android' } }),
+      this.prisma.appClick.count({ where: { ...where, platform: 'ios' } }),
+      this.prisma.appClick.count({ where: { ...where, platform: 'web' } }),
       this.prisma.appClick.groupBy({
         by: ['type'],
+        where,
         _count: { _all: true },
       }),
     ]);
 
-    // Répartition par type (les lignes sans type comptent sous "unknown"), triée par count décroissant
+    // Répartition par type (lignes sans type = "unknown"), triée par count décroissant.
     const byType = clicksByType
       .map((g) => ({ type: g.type ?? 'unknown', count: g._count._all }))
       .sort((a, b) => b.count - a.count);
 
-    return {
-      total: {
-        allTime: totalClicks,
-        currentMonth: monthClicks,
-        last24Hours: last24HoursClicks,
-      },
-      android: {
-        allTime: totalAndroidClicks,
-        currentMonth: monthAndroidClicks,
-      },
-      ios: {
-        allTime: totalIosClicks,
-        currentMonth: monthIosClicks,
-      },
-      byType,
-    };
+    return { total, android, ios, web, byType };
   }
 
   /**

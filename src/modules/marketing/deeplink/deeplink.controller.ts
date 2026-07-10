@@ -57,8 +57,7 @@ export class DeeplinkController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.MARKETING, Action.EXPORT)
   @ApiOperation({ summary: 'Récupère les statistiques des clics' })
-  async getClicksStats() {
-    const count = await this.deeplinkService.getClicksStats();
-    return count;
+  async getClicksStats(@Query() query: RecordClickQueryDto) {
+    return this.deeplinkService.getClicksStats(query);
   }
 }
