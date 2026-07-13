@@ -6,6 +6,14 @@ import { CreateRewardCampaignDto } from '../dto/create-reward-campaign.dto';
 
 type CampaignRow = Prisma.RewardCampaignGetPayload<object>;
 
+/** Funnel d'impact d'une campagne. `null` = non suivi (GIFT). */
+type CampaignMetrics = {
+  scratched: number;
+  redeemed: number | null;
+  revenue: number | null;
+  discount_cost: number | null;
+};
+
 /**
  * Campagnes « Envoyer un cadeau » (Reward v2).
  *
@@ -180,30 +188,190 @@ export class RewardCampaignService {
     throw new BadRequestException('Type de campagne non supporté.');
   }
 
-  /** Compteur de récompenses grattées par campagne (suivi). */
-  private async scratchedCounts(campaignIds: string[]): Promise<Map<string, number>> {
-    if (campaignIds.length === 0) return new Map();
-    const grouped = await this.prisma.reward.groupBy({
+  /**
+   * Funnel d'impact par campagne : distribué → GRATTÉ → UTILISÉ → CA généré.
+   *
+   * « Utilisé » et « CA » traversent la comptabilité réelle (pas juste le grattage) :
+   *  - VOUCHER : reward grattée → `voucher_id` (payload) → Redemption(s) → commande.
+   *  - PROMO_CODE : usages du code (PromoCodeUsage) par les destinataires depuis
+   *    `sent_at` → commande. Destinataires = `target_config.ids` (ciblage liste) ;
+   *    pour « tous », on n'impose pas de filtre client (le code est partagé, donc
+   *    l'attribution retenue = usages du code après l'envoi — heuristique standard).
+   *  - GIFT : aucun instrument numérique → `null` (utilisation non suivie côté système).
+   *
+   * Batch BORNÉ (≈ requêtes constantes quel que soit le nombre de campagnes) :
+   * 1 groupBy grattés + 1 findMany rewards-voucher + 1 redemptions + 1 usages +
+   * 1 findMany codes + 1 findMany commandes. Aucun N+1.
+   */
+  private async computeCampaignMetrics(
+    campaigns: CampaignRow[],
+  ): Promise<Map<string, CampaignMetrics>> {
+    const result = new Map<string, CampaignMetrics>();
+    if (campaigns.length === 0) return result;
+
+    const ids = campaigns.map((c) => c.id);
+    const byType = (t: RewardType) => campaigns.filter((c) => c.type === t);
+
+    // 1) Grattés (tous types) — 1 groupBy.
+    const scratchedGrouped = await this.prisma.reward.groupBy({
       by: ['campaign_id'],
-      where: { campaign_id: { in: campaignIds }, status: RewardStatus.SCRATCHED },
+      where: { campaign_id: { in: ids }, status: RewardStatus.SCRATCHED },
       _count: { _all: true },
     });
-    return new Map(grouped.map((g) => [g.campaign_id as string, g._count._all]));
+    const scratchedMap = new Map<string, number>(
+      scratchedGrouped.map((g) => [g.campaign_id as string, g._count._all]),
+    );
+    for (const c of campaigns) {
+      const gift = c.type === RewardType.GIFT;
+      // GIFT : utilisation/CA/coût non suivis (null) ; sinon on part de 0.
+      result.set(c.id, {
+        scratched: scratchedMap.get(c.id) ?? 0,
+        redeemed: gift ? null : 0,
+        revenue: gift ? null : 0,
+        discount_cost: gift ? null : 0,
+      });
+    }
+
+    // Collecte des commandes touchées → 1 seule résolution du CA à la fin.
+    const orderIds = new Set<string>();
+    const campaignOrders = new Map<string, Set<string>>();
+    const linkOrder = (cid: string, oid?: string | null) => {
+      if (!oid) return;
+      orderIds.add(oid);
+      if (!campaignOrders.has(cid)) campaignOrders.set(cid, new Set());
+      campaignOrders.get(cid)!.add(oid);
+    };
+
+    // 2) VOUCHER : rewards grattées → voucher_id → redemptions.
+    const voucherCampaigns = byType(RewardType.VOUCHER);
+    if (voucherCampaigns.length > 0) {
+      const scratchedRewards = await this.prisma.reward.findMany({
+        where: {
+          campaign_id: { in: voucherCampaigns.map((c) => c.id) },
+          type: RewardType.VOUCHER,
+          status: RewardStatus.SCRATCHED,
+        },
+        select: { campaign_id: true, payload: true },
+      });
+      const voucherToCampaign = new Map<string, string>();
+      for (const r of scratchedRewards) {
+        const vid = (r.payload as Record<string, any> | null)?.voucher_id;
+        if (vid && r.campaign_id) voucherToCampaign.set(vid, r.campaign_id);
+      }
+      const voucherIds = [...voucherToCampaign.keys()];
+      if (voucherIds.length > 0) {
+        const redemptions = await this.prisma.redemption.findMany({
+          where: { voucher_id: { in: voucherIds }, entity_status: EntityStatus.ACTIVE },
+          select: { voucher_id: true, order_id: true, amount: true },
+        });
+        const redeemedVouchers = new Map<string, Set<string>>();
+        for (const red of redemptions) {
+          const cid = voucherToCampaign.get(red.voucher_id);
+          if (!cid) continue;
+          const m = result.get(cid)!;
+          m.discount_cost = (m.discount_cost ?? 0) + (red.amount ?? 0);
+          if (!redeemedVouchers.has(cid)) redeemedVouchers.set(cid, new Set());
+          redeemedVouchers.get(cid)!.add(red.voucher_id);
+          linkOrder(cid, red.order_id);
+        }
+        for (const [cid, set] of redeemedVouchers) result.get(cid)!.redeemed = set.size;
+      }
+    }
+
+    // 3) PROMO_CODE : usages du code par les destinataires depuis l'envoi.
+    const promoCampaigns = byType(RewardType.PROMO_CODE);
+    if (promoCampaigns.length > 0) {
+      const codes = [
+        ...new Set(
+          promoCampaigns
+            .map((c) => (c.payload as Record<string, any> | null)?.code)
+            .filter((c): c is string => !!c),
+        ),
+      ];
+      const promos = codes.length
+        ? await this.prisma.promoCode.findMany({
+            where: { code: { in: codes } },
+            select: { id: true, code: true },
+          })
+        : [];
+      const codeToPromoId = new Map(promos.map((p) => [p.code, p.id]));
+      const promoIds = promos.map((p) => p.id);
+      if (promoIds.length > 0) {
+        const usages = await this.prisma.promoCodeUsage.findMany({
+          where: { promo_code_id: { in: promoIds }, order_id: { not: null } },
+          select: {
+            promo_code_id: true,
+            customer_id: true,
+            order_id: true,
+            discount_amount: true,
+            created_at: true,
+          },
+        });
+        for (const c of promoCampaigns) {
+          const promoId = codeToPromoId.get((c.payload as Record<string, any> | null)?.code);
+          if (!promoId) continue;
+          const since = c.sent_at ? new Date(c.sent_at).getTime() : 0;
+          // Ciblage liste → filtre sur les destinataires ; « tous » → pas de filtre client.
+          const recipients =
+            c.target_type === 'ids'
+              ? new Set<string>(((c.target_config as Record<string, any> | null)?.ids as string[]) ?? [])
+              : null;
+          const m = result.get(c.id)!;
+          const redeemedCustomers = new Set<string>();
+          for (const u of usages) {
+            if (u.promo_code_id !== promoId) continue;
+            if (recipients && !recipients.has(u.customer_id)) continue;
+            if (since && u.created_at.getTime() < since) continue;
+            redeemedCustomers.add(u.customer_id);
+            m.discount_cost = (m.discount_cost ?? 0) + (u.discount_amount ?? 0);
+            linkOrder(c.id, u.order_id);
+          }
+          m.redeemed = redeemedCustomers.size;
+        }
+      }
+    }
+
+    // 4) CA net des commandes touchées (VOUCHER + PROMO) — 1 requête.
+    if (orderIds.size > 0) {
+      const orders = await this.prisma.order.findMany({
+        where: { id: { in: [...orderIds] } },
+        select: { id: true, net_amount: true },
+      });
+      const orderNet = new Map(orders.map((o) => [o.id, o.net_amount ?? 0]));
+      for (const [cid, set] of campaignOrders) {
+        let sum = 0;
+        for (const oid of set) sum += orderNet.get(oid) ?? 0;
+        result.get(cid)!.revenue = sum;
+      }
+    }
+
+    return result;
+  }
+
+  private withMetrics(campaign: CampaignRow, metrics?: CampaignMetrics) {
+    const m = metrics ?? { scratched: 0, redeemed: null, revenue: null, discount_cost: null };
+    return {
+      ...campaign,
+      scratched_count: m.scratched,
+      redeemed_count: m.redeemed,
+      revenue: m.revenue,
+      discount_cost: m.discount_cost,
+    };
   }
 
   async listCampaigns() {
     const campaigns = await this.prisma.rewardCampaign.findMany({
       orderBy: { created_at: 'desc' },
     });
-    const scratched = await this.scratchedCounts(campaigns.map((c) => c.id));
-    return campaigns.map((c) => ({ ...c, scratched_count: scratched.get(c.id) ?? 0 }));
+    const metrics = await this.computeCampaignMetrics(campaigns);
+    return campaigns.map((c) => this.withMetrics(c, metrics.get(c.id)));
   }
 
   async getCampaign(id: string) {
     const campaign = await this.prisma.rewardCampaign.findUnique({ where: { id } });
     if (!campaign) throw new NotFoundException('Campagne introuvable');
-    const scratched = await this.scratchedCounts([id]);
-    return { ...campaign, scratched_count: scratched.get(id) ?? 0 };
+    const metrics = await this.computeCampaignMetrics([campaign]);
+    return this.withMetrics(campaign, metrics.get(id));
   }
 
   /** Annule une campagne encore PROGRAMMÉE (non distribuée). */
