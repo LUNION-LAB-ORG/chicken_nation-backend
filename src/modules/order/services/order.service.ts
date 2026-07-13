@@ -1105,21 +1105,31 @@ export class OrderService {
       }),
     };
 
+    // Les brouillons app (auto:true, PENDING) sont masqués par défaut, SAUF si un
+    // ADMIN les demande EXPLICITEMENT via status=PENDING (il peut alors les voir).
+    const adminWantsPending =
+      user?.role === UserRole.ADMIN && status === OrderStatus.PENDING;
+
     if (filters.auto === undefined) {
-      where.OR = [
-        { auto: false },
-        {
-          AND: [
-            { auto: true },
-            { status: { not: OrderStatus.PENDING } } // N'affiche pas les brouillons de l'appli
-          ]
-        }
-      ];
+      if (!adminWantsPending) {
+        where.OR = [
+          { auto: false },
+          {
+            AND: [
+              { auto: true },
+              { status: { not: OrderStatus.PENDING } } // N'affiche pas les brouillons de l'appli
+            ]
+          }
+        ];
+      }
+      // adminWantsPending : pas de bloc OR → where.status=PENDING laisse passer les brouillons.
     }
     // Si on filtre explicitement pour l'appli (ex: stats spécifiques)
     else if (filters.auto === true) {
       where.auto = true;
-      where.status = { not: OrderStatus.PENDING }; // Le call center ne voit que les acceptées
+      if (!adminWantsPending) {
+        where.status = { not: OrderStatus.PENDING }; // Le call center ne voit que les acceptées
+      }
     }
     // Si on filtre explicitement pour le Call Center
     else if (filters.auto === false) {
@@ -2087,8 +2097,12 @@ export class OrderService {
         lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
       };
     }
-    // PENDING (brouillons app non payés) réservé à l'admin — cohérent avec findAll.
-    if (user?.role !== UserRole.ADMIN) {
+    // PENDING (brouillons app non payés) : EXCLU de l'export, SAUF si un ADMIN le
+    // demande EXPLICITEMENT via status=PENDING. Un export SANS filtre n'en contient
+    // jamais (exigence : « pas dans l'exportation sans filtrage »). Cohérent avec findAll.
+    const adminWantsPending =
+      user?.role === UserRole.ADMIN && status === OrderStatus.PENDING;
+    if (!adminWantsPending) {
       where.AND = [
         ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
         { status: { not: OrderStatus.PENDING } },
