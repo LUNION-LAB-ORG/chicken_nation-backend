@@ -55,63 +55,86 @@ export class VoucherService {
 
   async create(req: Request, createVoucherDto: CreateVoucherDto) {
     const userId = (req.user as User).id;
-
-    this.logger.log({
-      message: 'Voucher creation initiated',
-      amount: createVoucherDto.initialAmount,
-      expiryDate: createVoucherDto.expiresAt,
-    });
+    const { initialAmount, customerId, expiresAt = null } = createVoucherDto;
 
     this.logger.debug({
-      message: 'Request details',
+      message: 'Voucher creation (admin route)',
       ip: req.ip,
       userAgent: req.headers['user-agent'],
       data: createVoucherDto,
     });
 
-    const { initialAmount, customerId, expiresAt = null } = createVoucherDto;
+    const voucher = await this.createForCustomer({
+      customerId,
+      amount: initialAmount,
+      createdBy: userId,
+      expiresAt,
+    });
+    return this.mapToDto(voucher);
+  }
 
-    // Validation: montant initial doit être positif
-    if (initialAmount <= 0) {
+  /**
+   * SOURCE UNIQUE de création d'un bon d'achat — utilisée par la route admin ET
+   * par le grattage d'un reward VOUCHER (couche fidélité). Valide, persiste (avec
+   * retry sur collision de code), émet le WS `voucher:created` (client +
+   * backoffice) et la notification in-app. Retourne l'entité (avec relations).
+   *
+   * `createdBy` = un User (FK) : l'admin pour la route, l'admin AUTEUR de la
+   * campagne pour le grattage (le client, lui, n'est pas un User).
+   */
+  async createForCustomer(params: {
+    customerId: string;
+    amount: number;
+    createdBy: string;
+    expiresAt?: Date | string | null;
+  }): Promise<VoucherWithRelations> {
+    const { customerId, amount, createdBy } = params;
+    const expiresAt = params.expiresAt ? new Date(params.expiresAt) : null;
+
+    if (amount <= 0) {
       throw new HttpException('Le montant initial doit être supérieur à 0', HttpStatus.BAD_REQUEST);
     }
-
-    // Validation: date d'expiration ne peut pas être dans le passé
-    if (expiresAt && new Date(expiresAt) < new Date()) {
-      throw new HttpException('La date d\'expiration ne peut pas être dans le passé', HttpStatus.BAD_REQUEST);
+    if (expiresAt && expiresAt < new Date()) {
+      throw new HttpException("La date d'expiration ne peut pas être dans le passé", HttpStatus.BAD_REQUEST);
     }
 
-    const voucher = await this.prismaService.voucher.create({
-      data: {
-        initial_amount: initialAmount,
-        remaining_amount: initialAmount,
-        customer_id: customerId,
-        expires_at: expiresAt,
-        code: this.generateVoucherCode(),
-        created_by: userId,
-      },
-      include: this.include,
-    });
+    // Création avec retry : le code est unique, on régénère en cas de collision.
+    let voucher: VoucherWithRelations | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        voucher = await this.prismaService.voucher.create({
+          data: {
+            initial_amount: amount,
+            remaining_amount: amount,
+            customer_id: customerId,
+            expires_at: expiresAt,
+            code: this.generateVoucherCode(),
+            created_by: createdBy,
+          },
+          include: this.include,
+        });
+        break;
+      } catch (e: any) {
+        if (e?.code === 'P2002' && attempt < 2) continue; // code déjà pris → retry
+        throw e;
+      }
+    }
+    if (!voucher) {
+      throw new HttpException('Génération du bon impossible', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
 
-    this.logger.log({
-      message: 'Voucher successfully created',
-      userId,
-      amount: createVoucherDto.initialAmount,
-      expiryDate: createVoucherDto.expiresAt,
-    });
+    this.logger.log({ message: 'Voucher créé', voucherId: voucher.id, customerId, amount, createdBy });
 
     const dto = this.mapToDto(voucher);
-
     // WebSocket: notifier le client et le backoffice
     this.appGateway.emitToUser(voucher.customer_id, 'customer', 'voucher:created', dto);
     this.appGateway.emitToBackoffice('voucher:created', dto);
-
     // Notification in-app pour le client
     this.sendVoucherNotification(voucher).catch((err) =>
       this.logger.error({ message: 'Failed to send voucher notification', error: err.message }),
     );
 
-    return dto;
+    return voucher;
   }
 
   private async sendVoucherNotification(voucher: VoucherWithRelations) {

@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { RewardStatus, RewardType } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { VoucherService } from 'src/modules/voucher/voucher.service';
 
 /**
  * Récompenses « à gratter » — couche CÉLÉBRATION au-dessus de la comptabilité.
@@ -14,7 +15,10 @@ import { PrismaService } from 'src/database/services/prisma.service';
 export class RewardService {
     private readonly logger = new Logger(RewardService.name);
 
-    constructor(private prisma: PrismaService) { }
+    constructor(
+        private prisma: PrismaService,
+        private readonly voucherService: VoucherService,
+    ) { }
 
     /**
      * Crée la récompense « points gagnés » d'une commande.
@@ -109,12 +113,13 @@ export class RewardService {
             const amount = Number(payload?.amount ?? 0);
             const createdBy = reward.campaign?.created_by;
             if (amount > 0 && createdBy) {
-                const voucher = await this.createVoucherForReward(
-                    customer_id,
+                // Source unique de création (WS + notif in-app identiques à la route admin).
+                const voucher = await this.voucherService.createForCustomer({
+                    customerId: customer_id,
                     amount,
                     createdBy,
-                    reward.expires_at ?? null,
-                );
+                    expiresAt: reward.expires_at ?? null,
+                });
                 payload = { ...payload, code: voucher.code, voucher_id: voucher.id };
                 await this.prisma.reward.update({ where: { id: reward_id }, data: { payload } });
             }
@@ -128,43 +133,6 @@ export class RewardService {
                 ? { id: reward.id, type: reward.type, payload, reason: reward.reason }
                 : undefined,
         };
-    }
-
-    /** Génère un code voucher unique (format CNV-YYMMDD-XXXXXX). */
-    private generateVoucherCode(): string {
-        const d = new Date();
-        const y = d.getFullYear().toString().slice(-2);
-        const m = (d.getMonth() + 1).toString().padStart(2, '0');
-        const day = d.getDate().toString().padStart(2, '0');
-        const rnd = Math.random().toString(36).slice(2, 8).toUpperCase();
-        return `CNV-${y}${m}${day}-${rnd}`;
-    }
-
-    /** Crée le Voucher d'un reward VOUCHER au grattage (retry sur collision de code). */
-    private async createVoucherForReward(
-        customer_id: string,
-        amount: number,
-        created_by: string,
-        expires_at: Date | null,
-    ) {
-        for (let attempt = 0; attempt < 3; attempt++) {
-            try {
-                return await this.prisma.voucher.create({
-                    data: {
-                        initial_amount: amount,
-                        remaining_amount: amount,
-                        customer_id,
-                        code: this.generateVoucherCode(),
-                        created_by,
-                        expires_at,
-                    },
-                });
-            } catch (e: any) {
-                if (e?.code === 'P2002' && attempt < 2) continue; // code déjà pris → retry
-                throw e;
-            }
-        }
-        throw new Error('Génération du code voucher impossible');
     }
 
     /**
