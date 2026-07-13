@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { LoyaltyLevel, RewardType } from '@prisma/client';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsIn,
@@ -56,4 +57,14 @@ export class CreateRewardCampaignDto {
   @IsOptional()
   @IsDateString()
   expires_at?: string;
+
+  @ApiProperty({
+    required: false,
+    description:
+      "Ignorer le capping anti-fatigue : envoyer même aux clients ayant reçu un " +
+      'cadeau récemment (dans la fenêtre de cooldown). Réservé aux campagnes exceptionnelles.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  ignore_capping?: boolean;
 }

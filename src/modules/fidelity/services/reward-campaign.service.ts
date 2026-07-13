@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { EntityStatus, Prisma, RewardStatus, RewardType } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { ExpoPushService } from 'src/expo-push/expo-push.service';
+import { SettingsService } from 'src/modules/settings/settings.service';
 import { CreateRewardCampaignDto } from '../dto/create-reward-campaign.dto';
 
 type CampaignRow = Prisma.RewardCampaignGetPayload<object>;
@@ -29,6 +30,7 @@ export class RewardCampaignService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly expoPushService: ExpoPushService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   async createCampaign(dto: CreateRewardCampaignDto, adminId: string) {
@@ -45,6 +47,7 @@ export class RewardCampaignService {
     const targetConfig: Record<string, unknown> = {
       ...(dto.target_type === 'ids' ? { ids: dto.ids } : {}),
       ...(dto.loyalty_level ? { loyalty_level: dto.loyalty_level } : {}),
+      ...(dto.ignore_capping ? { ignore_capping: true } : {}),
     };
 
     const scheduledAt = dto.scheduled_at ? new Date(dto.scheduled_at) : null;
@@ -80,8 +83,22 @@ export class RewardCampaignService {
    * Appelé en immédiat (createCampaign) OU par le cron (campagne programmée).
    */
   async dispatch(campaign: CampaignRow) {
-    const config = (campaign.target_config ?? {}) as { ids?: string[]; loyalty_level?: string };
-    const customerIds = await this.resolveCustomerIds(campaign.target_type, config);
+    const config = (campaign.target_config ?? {}) as {
+      ids?: string[];
+      loyalty_level?: string;
+      ignore_capping?: boolean;
+    };
+    let customerIds = await this.resolveCustomerIds(campaign.target_type, config);
+
+    // Capping anti-fatigue : on n'envoie PAS un nouveau cadeau à un client qui en a
+    // déjà reçu un récemment (cooldown configurable). Contournable par campagne
+    // (ignore_capping) pour les opérations exceptionnelles.
+    let skippedCapping = 0;
+    if (!config.ignore_capping && customerIds.length > 0) {
+      const kept = await this.applyCapping(customerIds);
+      skippedCapping = customerIds.length - kept.length;
+      customerIds = kept;
+    }
 
     if (customerIds.length > 0) {
       await this.prisma.reward.createMany({
@@ -102,9 +119,55 @@ export class RewardCampaignService {
 
     await this.prisma.rewardCampaign.update({
       where: { id: campaign.id },
-      data: { status: 'sent', sent_at: new Date(), total_targeted: customerIds.length },
+      data: {
+        status: 'sent',
+        sent_at: new Date(),
+        total_targeted: customerIds.length,
+        // Trace le capping pour le suivi (pas de colonne dédiée → target_config).
+        ...(skippedCapping > 0
+          ? { target_config: { ...config, skipped_capping: skippedCapping } as Prisma.InputJsonValue }
+          : {}),
+      },
     });
-    this.logger.log(`Campagne ${campaign.id} envoyée à ${customerIds.length} client(s).`);
+    this.logger.log(
+      `Campagne ${campaign.id} envoyée à ${customerIds.length} client(s)` +
+        (skippedCapping > 0 ? `, ${skippedCapping} ignoré(s) (capping anti-fatigue).` : '.'),
+    );
+  }
+
+  /**
+   * Fenêtre de cooldown (jours) entre deux cadeaux pour un même client. Réglage
+   * backoffice `reward.capping.cooldown_days` (défaut 7). `0` = capping désactivé.
+   */
+  private async getCappingCooldownDays(): Promise<number> {
+    const raw = await this.settingsService.get('reward.capping.cooldown_days');
+    // Absent/vide → défaut 7 j (⚠️ Number(null)===0 : ne PAS laisser un réglage
+    // manquant désactiver silencieusement le capping). `0` explicite = désactivé.
+    if (raw === null || raw.trim() === '') return 7;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : 7;
+  }
+
+  /**
+   * Retire les clients ayant reçu une récompense DE CAMPAGNE (campaign_id non nul)
+   * dans la fenêtre de cooldown → anti-sur-sollicitation. Les points gagnés sur
+   * commande (campaign_id nul) ne comptent PAS.
+   */
+  private async applyCapping(customerIds: string[]): Promise<string[]> {
+    const cooldownDays = await this.getCappingCooldownDays();
+    if (cooldownDays <= 0) return customerIds;
+    const since = new Date(Date.now() - cooldownDays * 24 * 60 * 60 * 1000);
+    const recent = await this.prisma.reward.findMany({
+      where: {
+        customer_id: { in: customerIds },
+        campaign_id: { not: null },
+        created_at: { gte: since },
+      },
+      select: { customer_id: true },
+      distinct: ['customer_id'],
+    });
+    const capped = new Set(recent.map((r) => r.customer_id));
+    return customerIds.filter((id) => !capped.has(id));
   }
 
   private async resolveCustomerIds(
