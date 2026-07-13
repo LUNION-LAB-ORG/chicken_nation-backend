@@ -215,7 +215,9 @@ export class NotificationsSenderService {
             });
             await this.emailService
                 .sendMail({
-                    to: emailRecipients.map((r) => r.email as string),
+                    // BCC : un seul envoi groupé, destinataires staff masqués les uns
+                    // des autres (pas de fuite d'emails entre collègues).
+                    bcc: emailRecipients.map((r) => r.email as string),
                     subject: `Nouveau message de ${senderName}`,
                     html,
                 })

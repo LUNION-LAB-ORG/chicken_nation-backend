@@ -3,7 +3,11 @@ import * as nodemailer from 'nodemailer';
 import { SettingsService } from 'src/modules/settings/settings.service';
 
 interface SendMailOptions {
-  to: string[];
+  /** Destinataires visibles. Optionnel : si absent (envoi 100 % BCC), on met
+   *  l'expéditeur en `to` pour rester valide côté SMTP. */
+  to?: string[];
+  /** Destinataires MASQUÉS (les uns des autres) — pour un envoi groupé staff. */
+  bcc?: string[];
   subject: string;
   html: string;
   attachments?: Array<{
@@ -73,11 +77,18 @@ export class EmailService {
       ? (config.google_email_sender || 'Chicken Nation <andersonkouadio0118@gmail.com>')
       : (config.email_sender || 'Chicken Nation <info@chicken-nation.com>');
 
+    // Envoi groupé : les destinataires BCC sont masqués les uns des autres. Si aucun
+    // `to` explicite, on met l'expéditeur en `to` (SMTP exige au moins un destinataire).
+    const toList = options.to && options.to.length > 0 ? options.to.join(', ') : from;
+    const bccList = options.bcc && options.bcc.length > 0 ? options.bcc.join(', ') : undefined;
+    const audit = bccList ? `to:${toList} · bcc:${options.bcc!.length} dest.` : toList;
+
     try {
       const transporter = await this.createTransporter();
       const info = await transporter.sendMail({
         from,
-        to: options.to.join(', '),
+        to: toList,
+        ...(bccList ? { bcc: bccList } : {}),
         subject: options.subject,
         html: options.html,
         attachments: options.attachments?.map((a) => ({
@@ -87,9 +98,9 @@ export class EmailService {
         })),
       });
 
-      this.logger.log(`Email envoyé avec succès: ${info.messageId} → ${options.to.join(', ')}`);
+      this.logger.log(`Email envoyé avec succès: ${info.messageId} → ${audit}`);
     } catch (error) {
-      this.logger.error(`Erreur d'envoi email à ${options.to.join(', ')}: ${error.message}`);
+      this.logger.error(`Erreur d'envoi email à ${audit}: ${error.message}`);
       throw error;
     }
   }
