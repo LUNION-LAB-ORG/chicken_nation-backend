@@ -89,13 +89,13 @@ export class OrderService {
     // Cadeaux (GIFT) : valider les lignes-cadeau AVANT le calcul (appartenance, gratté,
     // non expiré, plat correspondant). On récupère les index → pricing à 0 fr +
     // claim atomique dans la transaction. La consommation réelle se fait dans la txn.
-    const giftLines = await this.validateGiftLines(items, customerData.customer_id);
+    const gifts = await this.validateGiftLines(items, customerData.customer_id);
 
     // Ton algorithme ajusté !
     // On passe `type` pour faire respecter `available_order_types` côté serveur :
     // un plat marqué "pas à livrer" ne doit pas pouvoir être commandé en DELIVERY
     // même via payload direct.
-    const { orderItems, netAmount, totalDishes } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails, type, new Set(giftLines.keys()));
+    const { orderItems, netAmount, totalDishes } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails, type, gifts.dishLineIndexes, gifts.suppByLine);
 
     // Pour le ciblage par plat/catégorie d'un code promo, on transmet la liste
     // simplifiée des items (dish_id, quantity, prix unitaire). Le prix retenu est
@@ -223,7 +223,7 @@ export class OrderService {
       // Consommer les cadeaux : claim ATOMIQUE SCRATCHED→CONSUMED lié à CETTE commande.
       // Si un cadeau a été utilisé entre-temps (course concurrente / autre commande),
       // count===0 → on annule TOUTE la commande (rollback) → exactly-once garanti.
-      for (const { reward_id } of giftLines.values()) {
+      for (const reward_id of gifts.rewardIds) {
         const claim = await prisma.reward.updateMany({
           where: {
             id: reward_id,
@@ -309,32 +309,59 @@ export class OrderService {
   }
 
   /**
-   * Valide les lignes-cadeau d'une commande app : chaque item portant un `reward_id`
-   * doit correspondre à un cadeau GIFT du client, GRATTÉ, non expiré, non déjà
-   * consommé, et dont le plat offert (payload.dish_id) correspond au dish_id de la
-   * ligne. Renvoie index-de-ligne → { reward_id } pour (a) le pricing à 0 fr et
-   * (b) le claim atomique dans la txn. Ici on ne fait QUE valider (aucune écriture).
+   * Valide les lignes-cadeau d'une commande app. Deux formes :
+   *  - PLAT offert : un item porte `reward_id` → sa ligne est facturée 0 fr.
+   *  - SUPPLÉMENT offert : un supplément d'une ligne porte `reward_id` → ce
+   *    supplément est facturé 0 fr (rattaché au plat de sa ligne).
+   * Chaque reward doit être un GIFT du client, GRATTÉ, non expiré, non consommé, et
+   * dont l'article (payload) correspond (plat↔dish_id / supplément↔supplement_id).
+   * Renvoie de quoi (a) pricer à 0 et (b) consommer atomiquement dans la txn.
+   * Ici on ne fait QUE valider (aucune écriture).
    */
   private async validateGiftLines(
     items: OrderItemDto[],
     customer_id: string,
-  ): Promise<Map<number, { reward_id: string }>> {
-    const giftLines = new Map<number, { reward_id: string }>();
+  ): Promise<{
+    dishLineIndexes: Set<number>;
+    suppByLine: Map<number, Set<string>>;
+    rewardIds: string[];
+  }> {
+    const dishGifts: { index: number; reward_id: string }[] = [];
+    const suppGifts: { index: number; supplementId: string; reward_id: string }[] = [];
     const seen = new Set<string>();
-    for (let i = 0; i < items.length; i++) {
-      const rid = items[i].reward_id;
-      if (!rid) continue;
+    const claim = (rid: string) => {
       if (seen.has(rid)) {
         throw new BadRequestException('Un même cadeau ne peut pas être utilisé deux fois.');
       }
       seen.add(rid);
-      giftLines.set(i, { reward_id: rid });
-    }
-    if (giftLines.size === 0) return giftLines;
+    };
 
-    // Règle métier : un cadeau ne peut pas constituer une commande à lui seul — il
-    // doit accompagner au moins un article payant (pas de commande 100 % cadeau).
-    if (giftLines.size === items.length) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.reward_id) {
+        claim(item.reward_id);
+        dishGifts.push({ index: i, reward_id: item.reward_id });
+      }
+      for (const s of item.supplements ?? []) {
+        if (s.reward_id) {
+          claim(s.reward_id);
+          suppGifts.push({ index: i, supplementId: s.id, reward_id: s.reward_id });
+        }
+      }
+    }
+
+    const dishLineIndexes = new Set(dishGifts.map((g) => g.index));
+    const suppByLine = new Map<number, Set<string>>();
+    for (const g of suppGifts) {
+      if (!suppByLine.has(g.index)) suppByLine.set(g.index, new Set());
+      suppByLine.get(g.index)!.add(g.supplementId);
+    }
+
+    if (seen.size === 0) return { dishLineIndexes, suppByLine, rewardIds: [] };
+
+    // Règle métier : pas de commande 100 % cadeau (au moins un plat payant). Un
+    // supplément offert s'attache à un plat → il ne peut pas exister sans plat.
+    if (dishLineIndexes.size === items.length) {
       throw new BadRequestException(
         'Un cadeau ne peut pas être commandé seul — ajoutez au moins un article à votre panier.',
       );
@@ -346,9 +373,7 @@ export class OrderService {
     });
     const byId = new Map(rewards.map((r) => [r.id, r]));
     const now = Date.now();
-
-    for (const [index, { reward_id }] of giftLines) {
-      const reward = byId.get(reward_id);
+    const ensureValid = (reward: (typeof rewards)[number] | undefined) => {
       if (!reward) throw new BadRequestException('Cadeau introuvable.');
       if (reward.status === RewardStatus.CONSUMED) {
         throw new BadRequestException('Ce cadeau a déjà été utilisé.');
@@ -359,12 +384,26 @@ export class OrderService {
       if (reward.expires_at && reward.expires_at.getTime() < now) {
         throw new BadRequestException('Ce cadeau a expiré.');
       }
-      const giftDishId = (reward.payload as Record<string, any> | null)?.dish_id;
-      if (!giftDishId || giftDishId !== items[index].dish_id) {
+    };
+
+    for (const g of dishGifts) {
+      const reward = byId.get(g.reward_id);
+      ensureValid(reward);
+      const p = (reward!.payload as Record<string, any> | null) ?? {};
+      if ((p.item_type && p.item_type !== 'DISH') || !p.dish_id || p.dish_id !== items[g.index].dish_id) {
         throw new BadRequestException('Le plat ne correspond pas au cadeau offert.');
       }
     }
-    return giftLines;
+    for (const g of suppGifts) {
+      const reward = byId.get(g.reward_id);
+      ensureValid(reward);
+      const p = (reward!.payload as Record<string, any> | null) ?? {};
+      if (p.item_type !== 'SUPPLEMENT' || !p.supplement_id || p.supplement_id !== g.supplementId) {
+        throw new BadRequestException('Le supplément ne correspond pas au cadeau offert.');
+      }
+    }
+
+    return { dishLineIndexes, suppByLine, rewardIds: [...seen] };
   }
 
   /**

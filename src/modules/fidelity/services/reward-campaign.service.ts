@@ -218,9 +218,28 @@ export class RewardCampaignService {
     payload: Record<string, any>,
   ): Promise<Record<string, any>> {
     if (type === RewardType.GIFT) {
-      // Un cadeau référence un PLAT précis du menu (le client l'ajoutera au panier
-      // à 0 fr). On snapshotte nom/prix/image : le prix = coût du cadeau (funnel #1),
-      // le nom/image survivent à une évolution ultérieure du plat.
+      // Cadeau = un PLAT ou un SUPPLÉMENT précis, ajouté au panier à 0 fr. On
+      // snapshotte nom/prix/image (prix = coût du cadeau pour le funnel #1).
+      // Supplément : rattaché à un plat du panier au moment de la commande.
+      if (payload.supplement_id) {
+        const supp = await this.prisma.supplement.findUnique({
+          where: { id: payload.supplement_id },
+        });
+        if (!supp || supp.available === false) {
+          throw new BadRequestException('Supplément introuvable ou indisponible.');
+        }
+        return {
+          item_type: 'SUPPLEMENT',
+          supplement_id: supp.id,
+          label:
+            typeof payload.label === 'string' && payload.label.trim()
+              ? payload.label.trim()
+              : supp.name,
+          name: supp.name,
+          price: supp.price,
+          ...(supp.image ? { image: supp.image } : {}),
+        };
+      }
       const dishId = payload.dish_id;
       if (!dishId || typeof dishId !== 'string') {
         throw new BadRequestException('Sélectionnez le plat offert (dish_id).');

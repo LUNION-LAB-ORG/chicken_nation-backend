@@ -226,7 +226,7 @@ export class OrderV2Helper {
   }
 
   // Calculer les détails de la commande avec précision (Quantités + Suppléments)
-  async calculateOrderDetails(items: OrderItemDto[], dishes: Dish[], type?: OrderType, giftIndexes?: Set<number>) {
+  async calculateOrderDetails(items: OrderItemDto[], dishes: Dish[], type?: OrderType, giftIndexes?: Set<number>, giftSuppByLine?: Map<number, Set<string>>) {
     let netAmount = 0;
     const orderItems: any[] = [];
 
@@ -279,19 +279,23 @@ export class OrderV2Helper {
         // Mode de commande : suppléments compatibles avec le type choisi
         assertOrderTypeAllowed(dbSupplements, type ?? null, 'supplément');
 
+        // Suppléments OFFERTS sur cette ligne (GIFT validé côté service) → 0 fr.
+        const giftSupps = giftSuppByLine?.get(i);
         // On associe chaque supplément demandé avec son prix en base de données
         for (const reqSupp of item.supplements) {
           const dbSupp = dbSupplements.find(s => s.id === reqSupp.id);
           if (dbSupp) {
+            const isGiftSupp = giftSupps?.has(reqSupp.id) ?? false;
+            const unit = isGiftSupp ? 0 : dbSupp.price; // cadeau → 0 fr
+            const qty = isGiftSupp ? 1 : reqSupp.quantity; // cadeau → quantité 1
             supplementsData.push({
               id: dbSupp.id,
               name: dbSupp.name,
-              price: dbSupp.price,
-              quantity: reqSupp.quantity,
+              price: unit,
+              quantity: qty,
               category: dbSupp.category,
             });
-            // Calcul : Prix du supplément * quantité de ce supplément
-            supplementsTotal += (dbSupp.price * reqSupp.quantity);
+            supplementsTotal += (unit * qty);
           }
         }
       }

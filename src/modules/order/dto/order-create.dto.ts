@@ -9,6 +9,15 @@ export class SupplementItemDto {
     id: string;
     @IsNumber()
     quantity: number;
+
+    @ApiPropertyOptional({
+        description:
+            "ID d'une récompense GIFT (supplément) à utiliser sur ce supplément : il est " +
+            "facturé 0 fr (validé/consommé côté serveur). Le supplément doit correspondre au cadeau.",
+    })
+    @IsOptional()
+    @IsUUID()
+    reward_id?: string;
 }
 
 export class OrderItemDto {

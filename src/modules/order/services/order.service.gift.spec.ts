@@ -24,9 +24,11 @@ const gift = (reward_id: string, dish_id = 'dish-gift') => ({
 });
 
 const run = (service: OrderService, items: any[], customerId = 'cust-1') =>
-  (service as any).validateGiftLines(items, customerId) as Promise<
-    Map<number, { reward_id: string }>
-  >;
+  (service as any).validateGiftLines(items, customerId) as Promise<{
+    dishLineIndexes: Set<number>;
+    suppByLine: Map<number, Set<string>>;
+    rewardIds: string[];
+  }>;
 
 const scratched = (id: string, dish_id = 'dish-gift', expires_at: Date | null = null) => ({
   id,
@@ -35,11 +37,26 @@ const scratched = (id: string, dish_id = 'dish-gift', expires_at: Date | null = 
   payload: { dish_id },
 });
 
+// Cadeau supplément : sur une ligne-plat payante, un supplément porte reward_id.
+const giftSupp = (reward_id: string, dish_id = 'dish-paid', supplement_id = 'supp-1') => ({
+  dish_id,
+  quantity: 1,
+  epice: false,
+  supplements: [{ id: supplement_id, quantity: 1, reward_id }],
+});
+const scratchedSupp = (id: string, supplement_id = 'supp-1') => ({
+  id,
+  status: RewardStatus.SCRATCHED,
+  expires_at: null,
+  payload: { item_type: 'SUPPLEMENT', supplement_id },
+});
+
 describe('OrderService.validateGiftLines', () => {
   it('aucune ligne-cadeau → map vide, aucun accès à Reward', async () => {
     const { service, prisma } = makeService([]);
     const res = await run(service, [paid(), paid()]);
-    expect(res.size).toBe(0);
+    expect(res.dishLineIndexes.size).toBe(0);
+    expect(res.rewardIds).toHaveLength(0);
     expect(prisma.reward.findMany).not.toHaveBeenCalled();
   });
 
@@ -83,16 +100,31 @@ describe('OrderService.validateGiftLines', () => {
     await expect(run(service, [paid(), gift('r1', 'dish-gift')])).rejects.toThrow(/ne correspond pas/i);
   });
 
-  it('cadeau valide accompagné d’un article payant → map { index → reward_id }', async () => {
+  it('cadeau valide accompagné d’un article payant → ligne-cadeau + rewardId', async () => {
     const { service } = makeService([scratched('r1', 'dish-gift')]);
     const res = await run(service, [paid(), gift('r1', 'dish-gift')]);
-    expect(res.size).toBe(1);
-    expect(res.get(1)).toEqual({ reward_id: 'r1' });
+    expect(res.dishLineIndexes.has(1)).toBe(true);
+    expect(res.rewardIds).toEqual(['r1']);
   });
 
   it('cadeau non expiré (expires_at futur) → accepté', async () => {
     const { service } = makeService([scratched('r1', 'dish-gift', new Date(Date.now() + 60_000))]);
     const res = await run(service, [paid(), gift('r1', 'dish-gift')]);
-    expect(res.size).toBe(1);
+    expect(res.dishLineIndexes.has(1)).toBe(true);
+  });
+
+  it('supplément-cadeau valide (sur un plat payant) → suppByLine + rewardId', async () => {
+    const { service } = makeService([scratchedSupp('rs1', 'supp-1')]);
+    const res = await run(service, [giftSupp('rs1', 'dish-paid', 'supp-1')]);
+    expect(res.dishLineIndexes.size).toBe(0); // pas une ligne-cadeau (plat payant)
+    expect(res.suppByLine.get(0)?.has('supp-1')).toBe(true);
+    expect(res.rewardIds).toEqual(['rs1']);
+  });
+
+  it('supplément-cadeau ne correspondant pas au cadeau → rejeté', async () => {
+    const { service } = makeService([scratchedSupp('rs1', 'AUTRE-supp')]);
+    await expect(run(service, [giftSupp('rs1', 'dish-paid', 'supp-1')])).rejects.toThrow(
+      /supplément ne correspond pas/i,
+    );
   });
 });
