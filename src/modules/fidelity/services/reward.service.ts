@@ -137,7 +137,9 @@ export class RewardService {
 
         if (reward && reward.type === RewardType.VOUCHER) {
             const amount = Number(payload?.amount ?? 0);
-            const createdBy = reward.campaign?.created_by;
+            // created_by : campagne « Envoyer un cadeau » OU injecté dans le payload
+            // (récompense de parrainage — sans campagne).
+            const createdBy = reward.campaign?.created_by ?? (payload?.created_by as string | undefined);
             if (amount > 0 && createdBy) {
                 // Source unique de création (WS + notif in-app identiques à la route admin).
                 const voucher = await this.voucherService.createForCustomer({

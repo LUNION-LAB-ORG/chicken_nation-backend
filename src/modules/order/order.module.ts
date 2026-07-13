@@ -22,6 +22,7 @@ import { DeliveryFeeHelper } from './helpers/delivery-fee.helper';
 import { ExpoPushModule } from 'src/expo-push/expo-push.module';
 import { VoucherModule } from 'src/modules/voucher/voucher.module';
 import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
+import { ReferralModule } from 'src/modules/referral/referral.module';
 import { UsersModule } from 'src/modules/users/users.module';
 import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.module';
 
@@ -35,6 +36,7 @@ import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.m
     TurboModule,
     ExpoPushModule,
     VoucherModule,
+    ReferralModule,
     PromoCodeModule,
     UsersModule,
     DeliveryOfferModule,

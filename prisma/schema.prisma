@@ -226,6 +226,12 @@ enum RewardStatus {
   CONSUMED // GIFT ajouté à une commande et facturé à 0 fr → utilisé (order_id + consumed_at)
 }
 
+enum ReferralStatus {
+  PENDING // Filleul inscrit avec le code — en attente de sa 1ère commande payée
+  REWARDED // 1ère commande payée du filleul → parrain récompensé
+  CANCELLED // Annulé (anti-abus / réservé)
+}
+
 enum TicketStatus {
   OPEN // OUVERT
   IN_PROGRESS // EN COURS
@@ -326,6 +332,9 @@ model Customer {
   promotion_usages      PromotionUsage[]
   loyalty_level_history LoyaltyLevelHistory[]
   rewards               Reward[]
+  referral_code         String?               @unique @db.VarChar // code de parrainage partageable
+  referrals_made        Referral[]            @relation("Referrer") // filleuls parrainés
+  referral_received     Referral?             @relation("Referee") // parrainage reçu (1 max)
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -1458,6 +1467,29 @@ model Reward {
   @@index([customer_id, status])
   @@index([order_id])
   @@index([campaign_id, status])
+}
+
+/// Parrainage : un parrain (referrer) invite un filleul (referee) via son
+/// referral_code. Créé à l'inscription du filleul avec le code ; passe REWARDED
+/// à sa 1ère commande payée (le parrain reçoit alors sa carte à gratter).
+model Referral {
+  id                 String         @id @default(uuid()) @db.Uuid
+  referrer_id        String         @db.Uuid // parrain
+  referee_id         String         @unique @db.Uuid // filleul — parrainé UNE seule fois
+  referral_code      String         @db.VarChar // code utilisé (snapshot)
+  status             ReferralStatus @default(PENDING)
+  qualifying_order_id String?       @db.Uuid // 1ère commande payée ayant qualifié
+  welcome_voucher_id String?        @db.Uuid // bon de bienvenue du filleul
+  parrain_reward_id  String?        @db.Uuid // récompense (Reward) du parrain
+  qualified_at       DateTime?      @db.Timestamp(6)
+  created_at         DateTime       @default(now()) @db.Timestamp(6)
+  updated_at         DateTime       @default(now()) @db.Timestamp(6)
+
+  referrer Customer @relation("Referrer", fields: [referrer_id], references: [id])
+  referee  Customer @relation("Referee", fields: [referee_id], references: [id])
+
+  @@index([referrer_id, status])
+  @@index([status])
 }
 
 // Campagne « Envoyer un cadeau » : distribue des Reward (GIFT | VOUCHER | PROMO_CODE)
