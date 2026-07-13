@@ -21,6 +21,8 @@ export interface IDeliveryFeeSettings {
   turboZonesEnabled: boolean;
   /** Grille distance→prix (paliers), configurable depuis le backoffice. */
   grid: IDeliveryFeeTier[];
+  /** Service de livraison par défaut des commandes auto (indépendant des PRIX). */
+  defaultService: DeliveryService;
 }
 
 /** Résultat d'un calcul de frais de livraison. */
@@ -53,12 +55,14 @@ export const DELIVERY_FEE_DEFAULT_GRID: IDeliveryFeeTier[] = [
 const DEFAULTS = {
   turbo_zones_enabled: 1,
   fee_grid: JSON.stringify(DELIVERY_FEE_DEFAULT_GRID),
+  default_service: DeliveryService.TURBO,
 };
 
 /** Clés `settings` (préfixe `delivery.`). */
 export const DELIVERY_FEE_SETTING_KEYS = {
   turboZonesEnabled: 'delivery.turbo_zones_enabled',
   feeGrid: 'delivery.fee_grid',
+  defaultService: 'delivery.default_service',
 } as const;
 
 /**
@@ -87,6 +91,7 @@ export class DeliveryFeeHelper {
     const map = await this.settingsService.getMany([
       DELIVERY_FEE_SETTING_KEYS.turboZonesEnabled,
       DELIVERY_FEE_SETTING_KEYS.feeGrid,
+      DELIVERY_FEE_SETTING_KEYS.defaultService,
     ]);
     return {
       turboZonesEnabled: this.toBoolean(
@@ -94,7 +99,17 @@ export class DeliveryFeeHelper {
         DEFAULTS.turbo_zones_enabled,
       ),
       grid: this.toGrid(map[DELIVERY_FEE_SETTING_KEYS.feeGrid]),
+      defaultService: this.toService(map[DELIVERY_FEE_SETTING_KEYS.defaultService]),
     };
+  }
+
+  /** Parse le service par défaut (réglage `delivery.default_service`) → enum valide, sinon TURBO. */
+  private toService(raw?: string): DeliveryService {
+    const v = raw?.trim();
+    if (v && (Object.values(DeliveryService) as string[]).includes(v)) {
+      return v as DeliveryService;
+    }
+    return DEFAULTS.default_service;
   }
 
   /**
@@ -227,7 +242,7 @@ export class DeliveryFeeHelper {
       montant: this.priceForDistance(feeSettings.grid, distance),
       zone: this.zoneLabel(feeSettings.grid, distance, restaurant.name),
       distance: Math.round(distance),
-      service: DeliveryService.TURBO,
+      service: feeSettings.defaultService,
       zone_id: null,
     };
   }
@@ -301,7 +316,7 @@ export class DeliveryFeeHelper {
           montant: zone.prix,
           distance: config.distance,
           zone: restaurant.name + ' - ' + zone.name,
-          service: DeliveryService.TURBO,
+          service: feeSettings.defaultService,
           zone_id: zone.id,
         };
       }
