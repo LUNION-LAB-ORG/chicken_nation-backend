@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { EntityStatus, LoyaltyPointType, OrderStatus, OrderType, PaymentMethod } from '@prisma/client';
+import { EntityStatus, OrderStatus, OrderType, PaymentMethod } from '@prisma/client';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
+import { RewardService } from 'src/modules/fidelity/services/reward.service';
 import { PromotionService } from 'src/modules/fidelity/services/promotion.service';
 import { OrderChannels } from '../enums/order-channels';
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
@@ -16,6 +17,7 @@ export class OrderListenerService {
     constructor(
         private promotionService: PromotionService,
         private loyaltyService: LoyaltyService,
+        private rewardService: RewardService,
         private expoPushService: ExpoPushService,
         private userPushService: UserPushService,
         private notificationsSender: NotificationsSenderService,
@@ -198,30 +200,15 @@ export class OrderListenerService {
                 }
             }
 
-            const pts = await this.loyaltyService.calculatePointsForOrder(
-                payload.order.net_amount
-            );
-
-            const isPointsEarned = pts > 0;
-
-            if (isPointsEarned) {
-                await this.loyaltyService.addPoints({
-                    customer_id: payload.order.customer_id,
-                    points: pts,
-                    type: LoyaltyPointType.EARNED,
-                    reason: `🎉 ${pts} points gagnés grâce à votre commande`,
-                    order_id: payload.order.id,
-                });
-            }
+            // ⭐ GAIN DE POINTS : AUCUN gain à la clôture. SEULES les commandes APP
+            // gagnent des points, au PAIEMENT en ligne (KkiapayOrderListenerService).
+            // Les commandes non-app (POS / staff / Turbo) ne gagnent PAS de fidélité.
 
             if (payload.expo_token) {
                 this.expoPushService.sendPushNotifications({
                     tokens: [payload.expo_token],
                     title: "🎉 Merci pour votre commande !",
-                    body: `Votre expérience compte pour nous ❤️ ${isPointsEarned
-                        ? `Bonne nouvelle : vous avez gagné ${pts} points fidélité ⭐`
-                        : ""
-                        }`,
+                    body: `Votre expérience compte pour nous ❤️`,
                     data: { order_id: payload.order.id },
                     subtitle: "À très vite chez Chick Nation 🍗",
                     sound: "default",
@@ -240,6 +227,47 @@ export class OrderListenerService {
         if (payload.order.status === OrderStatus.CANCELLED) {
             // 🔔 CLOCHE staff — annulation (état important), même sans expo_token client.
             void this.notificationsSender.sendOrderBell(payload.order);
+
+            // ⭐ RÉVOCATION — on retire les points GAGNÉS pour cette commande annulée.
+            // No-op si aucun point gagné (commande non payée / non-app). Idempotent.
+            // Non bloquant : on trace l'échec sans casser le flux d'annulation.
+            void this.loyaltyService
+                .revokeEarnedPointsForOrder(
+                    payload.order.id,
+                    `Commande #${payload.order.reference} annulée — points retirés`,
+                )
+                .catch((error) =>
+                    this.logger.error(
+                        `Échec révocation des points (annulation) pour la commande ${payload.order.reference}: ${error?.message}`,
+                        error?.stack,
+                    ),
+                );
+
+            // 🎫 Révoque aussi la récompense « à gratter » non encore grattée
+            // (la carte ne doit plus s'afficher pour une commande annulée).
+            void this.rewardService
+                .revokeForOrder(
+                    payload.order.id,
+                    `Commande #${payload.order.reference} annulée`,
+                )
+                .catch((error) =>
+                    this.logger.error(
+                        `Échec révocation de la récompense (annulation) pour la commande ${payload.order.reference}: ${error?.message}`,
+                        error?.stack,
+                    ),
+                );
+
+            // 🎁 Restaure les cadeaux (GIFT) qui avaient été AJOUTÉS à cette commande
+            // à 0 fr : ils redeviennent utilisables (le client ne doit pas perdre son
+            // cadeau parce que la commande a été annulée). No-op si aucun.
+            void this.rewardService
+                .restoreConsumedGiftsForOrder(payload.order.id)
+                .catch((error) =>
+                    this.logger.error(
+                        `Échec restauration des cadeaux (annulation) pour la commande ${payload.order.reference}: ${error?.message}`,
+                        error?.stack,
+                    ),
+                );
         }
 
         if (

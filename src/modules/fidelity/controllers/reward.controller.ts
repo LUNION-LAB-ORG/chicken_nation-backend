@@ -24,6 +24,15 @@ export class RewardController {
         return this.rewardService.getPendingRewards(customerId);
     }
 
+    @Get('redeemable-gifts')
+    @UseGuards(JwtCustomerAuthGuard)
+    @ApiOperation({ summary: 'Cadeaux (GIFT) du client, grattés et utilisables au panier (0 fr)' })
+    @ApiOkResponse({ description: 'Cadeaux à ajouter au panier' })
+    getRedeemableGifts(@Req() req: Request) {
+        const customerId = (req.user as Customer).id;
+        return this.rewardService.getRedeemableGifts(customerId);
+    }
+
     @Post(':id/scratch')
     @UseGuards(JwtCustomerAuthGuard)
     @ApiOperation({ summary: 'Marquer une récompense comme grattée (idempotent)' })

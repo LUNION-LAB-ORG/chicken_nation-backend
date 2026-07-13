@@ -35,8 +35,8 @@ import { OrderWebSocketService } from '../websockets/order-websocket.service';
 import { OrderV2Helper } from '../helpers/orderv2.helper';
 import { DeliveryFeeHelper } from '../helpers/delivery-fee.helper';
 import { DeliveryOfferService } from 'src/modules/delivery-offer/services/delivery-offer.service';
-import { PromoCodeUsageStatus } from '@prisma/client';
-import { OrderCreateDto } from '../dto/order-create.dto';
+import { PromoCodeUsageStatus, RewardType, RewardStatus } from '@prisma/client';
+import { OrderCreateDto, OrderItemDto } from '../dto/order-create.dto';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 import { TwilioService } from 'src/twilio/services/twilio.service';
@@ -86,12 +86,16 @@ export class OrderService {
     const dishIds = items.map((item) => item.dish_id);
     const dishesWithDetails = await this.orderHelperV2.getDishesWithDetails(dishIds);
 
+    // Cadeaux (GIFT) : valider les lignes-cadeau AVANT le calcul (appartenance, gratté,
+    // non expiré, plat correspondant). On récupère les index → pricing à 0 fr +
+    // claim atomique dans la transaction. La consommation réelle se fait dans la txn.
+    const giftLines = await this.validateGiftLines(items, customerData.customer_id);
 
     // Ton algorithme ajusté !
     // On passe `type` pour faire respecter `available_order_types` côté serveur :
     // un plat marqué "pas à livrer" ne doit pas pouvoir être commandé en DELIVERY
     // même via payload direct.
-    const { orderItems, netAmount, totalDishes } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails, type);
+    const { orderItems, netAmount, totalDishes } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails, type, new Set(giftLines.keys()));
 
     // Pour le ciblage par plat/catégorie d'un code promo, on transmet la liste
     // simplifiée des items (dish_id, quantity, prix unitaire). Le prix retenu est
@@ -164,7 +168,7 @@ export class OrderService {
     const next_status = this.orderHelperV2.getOrderStatus(payment_method ?? PaymentMethod.OFFLINE, type);
     // 6. Sauvegarde en Base de données
     const order = await this.prisma.$transaction(async (prisma) => {
-      return await prisma.order.create({
+      const created = await prisma.order.create({
         data: {
           type,
           fullname: customerData.fullname,
@@ -215,6 +219,31 @@ export class OrderService {
           paiements: true,
         },
       });
+
+      // Consommer les cadeaux : claim ATOMIQUE SCRATCHED→CONSUMED lié à CETTE commande.
+      // Si un cadeau a été utilisé entre-temps (course concurrente / autre commande),
+      // count===0 → on annule TOUTE la commande (rollback) → exactly-once garanti.
+      for (const { reward_id } of giftLines.values()) {
+        const claim = await prisma.reward.updateMany({
+          where: {
+            id: reward_id,
+            customer_id: customerData.customer_id,
+            type: RewardType.GIFT,
+            status: RewardStatus.SCRATCHED,
+          },
+          data: {
+            status: RewardStatus.CONSUMED,
+            order_id: created.id,
+            consumed_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+        if (claim.count === 0) {
+          throw new BadRequestException('Ce cadeau a déjà été utilisé.');
+        }
+      }
+
+      return created;
     });
 
     // Enregistrer l'usage du code promo ou voucher
@@ -277,6 +306,57 @@ export class OrderService {
     this.orderWebSocketService.emitOrderCreated(order);
 
     return order;
+  }
+
+  /**
+   * Valide les lignes-cadeau d'une commande app : chaque item portant un `reward_id`
+   * doit correspondre à un cadeau GIFT du client, GRATTÉ, non expiré, non déjà
+   * consommé, et dont le plat offert (payload.dish_id) correspond au dish_id de la
+   * ligne. Renvoie index-de-ligne → { reward_id } pour (a) le pricing à 0 fr et
+   * (b) le claim atomique dans la txn. Ici on ne fait QUE valider (aucune écriture).
+   */
+  private async validateGiftLines(
+    items: OrderItemDto[],
+    customer_id: string,
+  ): Promise<Map<number, { reward_id: string }>> {
+    const giftLines = new Map<number, { reward_id: string }>();
+    const seen = new Set<string>();
+    for (let i = 0; i < items.length; i++) {
+      const rid = items[i].reward_id;
+      if (!rid) continue;
+      if (seen.has(rid)) {
+        throw new BadRequestException('Un même cadeau ne peut pas être utilisé deux fois.');
+      }
+      seen.add(rid);
+      giftLines.set(i, { reward_id: rid });
+    }
+    if (giftLines.size === 0) return giftLines;
+
+    const rewards = await this.prisma.reward.findMany({
+      where: { id: { in: [...seen] }, customer_id, type: RewardType.GIFT },
+      select: { id: true, status: true, expires_at: true, payload: true },
+    });
+    const byId = new Map(rewards.map((r) => [r.id, r]));
+    const now = Date.now();
+
+    for (const [index, { reward_id }] of giftLines) {
+      const reward = byId.get(reward_id);
+      if (!reward) throw new BadRequestException('Cadeau introuvable.');
+      if (reward.status === RewardStatus.CONSUMED) {
+        throw new BadRequestException('Ce cadeau a déjà été utilisé.');
+      }
+      if (reward.status !== RewardStatus.SCRATCHED) {
+        throw new BadRequestException("Ce cadeau doit d'abord être gratté.");
+      }
+      if (reward.expires_at && reward.expires_at.getTime() < now) {
+        throw new BadRequestException('Ce cadeau a expiré.');
+      }
+      const giftDishId = (reward.payload as Record<string, any> | null)?.dish_id;
+      if (!giftDishId || giftDishId !== items[index].dish_id) {
+        throw new BadRequestException('Le plat ne correspond pas au cadeau offert.');
+      }
+    }
+    return giftLines;
   }
 
   /**

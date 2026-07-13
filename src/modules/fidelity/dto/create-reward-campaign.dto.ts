@@ -14,7 +14,7 @@ import {
 /**
  * Création d'une campagne « Envoyer un cadeau ».
  * Le `payload` est validé/enrichi côté service selon le `type` :
- *   GIFT       → { label, image? }
+ *   GIFT       → { dish_id, label? }  (le service vérifie le plat et snapshotte nom/prix/image)
  *   VOUCHER    → { amount }
  *   PROMO_CODE → { code }   (le service vérifie le PromoCode et snapshotte la remise)
  */

@@ -74,6 +74,32 @@ export class RewardService {
     }
 
     /**
+     * Cadeaux (GIFT) « à utiliser » du client : grattés (révélés) mais pas encore
+     * consommés et non expirés. Le client peut les ajouter à son panier à 0 fr.
+     * VOUCHER/PROMO n'apparaissent PAS ici : leur instrument est déjà produit au
+     * grattage (bon créé / code révélé) — ils ne se « consomment » pas via le panier.
+     */
+    async getRedeemableGifts(customer_id: string) {
+        return this.prisma.reward.findMany({
+            where: {
+                customer_id,
+                type: RewardType.GIFT,
+                status: RewardStatus.SCRATCHED,
+                OR: [{ expires_at: null }, { expires_at: { gt: new Date() } }],
+            },
+            orderBy: { created_at: 'desc' },
+            select: {
+                id: true,
+                type: true,
+                payload: true,
+                reason: true,
+                expires_at: true,
+                created_at: true,
+            },
+        });
+    }
+
+    /**
      * Marque une récompense comme GRATTÉE — claim ATOMIQUE (updateMany conditionné
      * par le statut PENDING) : idempotent, et cloisonné par customer_id (le client
      * ne peut gratter que SES récompenses).
@@ -150,6 +176,30 @@ export class RewardService {
         });
         if (res.count > 0) {
             this.logger.log(`Reward(s) révoqué(s) pour la commande ${order_id}: ${res.count}`);
+        }
+        return res;
+    }
+
+    /**
+     * Restaure les cadeaux (GIFT) CONSUMED sur une commande ANNULÉE : ils repassent
+     * SCRATCHED (réutilisables) et sont détachés de la commande (order_id/consumed_at
+     * remis à null). Sinon le client perdrait injustement son cadeau si la commande
+     * est annulée. Atomique, idempotent, no-op si aucun cadeau consommé.
+     * NB : on ne touche PAS `reason` (garde le libellé de campagne pour le ré-affichage) ;
+     * un cadeau expiré entre-temps ne réapparaîtra pas (filtre d'expiration côté lecture).
+     */
+    async restoreConsumedGiftsForOrder(order_id: string) {
+        const res = await this.prisma.reward.updateMany({
+            where: { order_id, type: RewardType.GIFT, status: RewardStatus.CONSUMED },
+            data: {
+                status: RewardStatus.SCRATCHED,
+                order_id: null,
+                consumed_at: null,
+                updated_at: new Date(),
+            },
+        });
+        if (res.count > 0) {
+            this.logger.log(`Cadeau(x) restauré(s) après annulation (commande ${order_id}): ${res.count}`);
         }
         return res;
     }

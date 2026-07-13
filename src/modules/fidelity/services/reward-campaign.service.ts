@@ -155,10 +155,25 @@ export class RewardCampaignService {
     payload: Record<string, any>,
   ): Promise<Record<string, any>> {
     if (type === RewardType.GIFT) {
-      if (!payload.label || typeof payload.label !== 'string') {
-        throw new BadRequestException('Un libellé (label) est requis pour un cadeau.');
+      // Un cadeau référence un PLAT précis du menu (le client l'ajoutera au panier
+      // à 0 fr). On snapshotte nom/prix/image : le prix = coût du cadeau (funnel #1),
+      // le nom/image survivent à une évolution ultérieure du plat.
+      const dishId = payload.dish_id;
+      if (!dishId || typeof dishId !== 'string') {
+        throw new BadRequestException('Sélectionnez le plat offert (dish_id).');
       }
-      return { label: payload.label, ...(payload.image ? { image: payload.image } : {}) };
+      const dish = await this.prisma.dish.findUnique({ where: { id: dishId } });
+      if (!dish || dish.entity_status === EntityStatus.DELETED) {
+        throw new BadRequestException('Plat introuvable ou indisponible.');
+      }
+      return {
+        item_type: 'DISH',
+        dish_id: dish.id,
+        label: typeof payload.label === 'string' && payload.label.trim() ? payload.label.trim() : dish.name,
+        name: dish.name,
+        price: dish.price,
+        ...(dish.image ? { image: dish.image } : {}),
+      };
     }
 
     if (type === RewardType.VOUCHER) {
@@ -221,14 +236,13 @@ export class RewardCampaignService {
     const scratchedMap = new Map<string, number>(
       scratchedGrouped.map((g) => [g.campaign_id as string, g._count._all]),
     );
+    // Tous les types sont désormais suivis (GIFT via CONSUMED, cf. rédemption panier).
     for (const c of campaigns) {
-      const gift = c.type === RewardType.GIFT;
-      // GIFT : utilisation/CA/coût non suivis (null) ; sinon on part de 0.
       result.set(c.id, {
         scratched: scratchedMap.get(c.id) ?? 0,
-        redeemed: gift ? null : 0,
-        revenue: gift ? null : 0,
-        discount_cost: gift ? null : 0,
+        redeemed: 0,
+        revenue: 0,
+        discount_cost: 0,
       });
     }
 
@@ -331,7 +345,30 @@ export class RewardCampaignService {
       }
     }
 
-    // 4) CA net des commandes touchées (VOUCHER + PROMO) — 1 requête.
+    // 3bis) GIFT : cadeaux CONSUMED (ajoutés à une commande à 0 fr). redeemed =
+    // nombre consommé ; coût = Σ prix snapshot du plat offert ; CA = net_amount de
+    // la commande sur laquelle le cadeau a été utilisé (part payante attribuée).
+    const giftCampaigns = byType(RewardType.GIFT);
+    if (giftCampaigns.length > 0) {
+      const consumed = await this.prisma.reward.findMany({
+        where: {
+          campaign_id: { in: giftCampaigns.map((c) => c.id) },
+          type: RewardType.GIFT,
+          status: RewardStatus.CONSUMED,
+        },
+        select: { campaign_id: true, order_id: true, payload: true },
+      });
+      for (const r of consumed) {
+        if (!r.campaign_id) continue;
+        const m = result.get(r.campaign_id)!;
+        m.redeemed = (m.redeemed ?? 0) + 1;
+        m.discount_cost =
+          (m.discount_cost ?? 0) + Number((r.payload as Record<string, any> | null)?.price ?? 0);
+        linkOrder(r.campaign_id, r.order_id);
+      }
+    }
+
+    // 4) CA net des commandes touchées (VOUCHER + PROMO + GIFT) — 1 requête.
     if (orderIds.size > 0) {
       const orders = await this.prisma.order.findMany({
         where: { id: { in: [...orderIds] } },

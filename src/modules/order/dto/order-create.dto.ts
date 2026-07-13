@@ -34,6 +34,15 @@ export class OrderItemDto {
     @Transform(({ value }) => String(value).trim() == "true" ? true : false)
     @IsBoolean()
     epice: boolean;
+
+    @ApiPropertyOptional({
+        description:
+            "ID d'une récompense GIFT à utiliser sur cette ligne : le plat est facturé à 0 fr " +
+            "(validé et consommé côté serveur). Le dish_id doit correspondre au plat du cadeau.",
+    })
+    @IsOptional()
+    @IsUUID()
+    reward_id?: string;
 }
 
 export class OrderCreateDto {

@@ -226,11 +226,15 @@ export class OrderV2Helper {
   }
 
   // Calculer les détails de la commande avec précision (Quantités + Suppléments)
-  async calculateOrderDetails(items: OrderItemDto[], dishes: Dish[], type?: OrderType) {
+  async calculateOrderDetails(items: OrderItemDto[], dishes: Dish[], type?: OrderType, giftIndexes?: Set<number>) {
     let netAmount = 0;
     const orderItems: any[] = [];
 
-    for (const item of items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      // Ligne-cadeau (GIFT déjà validé côté service) : facturée à 0 fr, quantité 1,
+      // sans suppléments. Le plat reste validé (existence + available_order_types).
+      const isGift = giftIndexes?.has(i) ?? false;
       const dish = dishes.find((d) => d.id === item.dish_id);
 
       if (!dish) {
@@ -254,8 +258,8 @@ export class OrderV2Helper {
       let supplementsTotal = 0;
       const supplementsData: any[] = [];
 
-      // 1. Gestion des suppléments avec prise en compte de la QUANTITÉ
-      if (item.supplements && item.supplements.length > 0) {
+      // 1. Gestion des suppléments avec prise en compte de la QUANTITÉ (ignorés pour un cadeau)
+      if (!isGift && item.supplements && item.supplements.length > 0) {
         const supplementIds = item.supplements.map(s => s.id);
 
         const dbSupplements = await this.prisma.supplement.findMany({
@@ -292,21 +296,26 @@ export class OrderV2Helper {
         }
       }
 
-      // 2. Calcul du prix de base du plat (gestion de la promotion)
-      const dishBasePrice = (dish.is_promotion && dish.promotion_price !== null)
-        ? dish.promotion_price
-        : dish.price;
+      // 2. Prix de base du plat — 0 fr pour un cadeau, sinon prix (promotion plat éventuelle).
+      const dishBasePrice = isGift
+        ? 0
+        : (dish.is_promotion && dish.promotion_price !== null)
+          ? dish.promotion_price
+          : dish.price;
 
-      // 3. Prix unitaire global (Prix unitaire * Quantité de plats commandés)
-      const singleItemTotal = dishBasePrice * item.quantity;
+      // 3. Quantité — forcée à 1 pour un cadeau (on n'offre pas N plats sur une ligne-cadeau).
+      const quantity = isGift ? 1 : item.quantity;
 
-      // 4. Prix total pour cette ligne (Prix global du plat + Prix des suppléments)
+      // 4. Prix unitaire global (Prix unitaire * Quantité)
+      const singleItemTotal = dishBasePrice * quantity;
+
+      // 5. Prix total pour cette ligne (Prix global du plat + Prix des suppléments) → 0 pour un cadeau
       const lineTotal = singleItemTotal + supplementsTotal;
       netAmount += lineTotal;
 
       orderItems.push({
         dish_id: item.dish_id,
-        quantity: item.quantity,
+        quantity,
         amount: singleItemTotal,
         dishPrice: dishBasePrice,
         supplementsPrice: supplementsTotal,
