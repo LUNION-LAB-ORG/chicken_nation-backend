@@ -488,7 +488,8 @@ export class SchedulePlanningService {
    *   Refusé si le jour est dans `no_rest_days` (l'admin respecte la règle métier).
    * - `WORK` : retire le RestDay + (re)crée les assignments matin/soir du jour.
    *
-   * Autorisé uniquement sur un plan DRAFT (édition avant envoi).
+   * Autorisé sur tout plan NON archivé (y compris SENT/CONFIRMED — ajustement d'un
+   * planning en cours).
    */
   async setDelivererDayMode(
     planId: string,
@@ -498,10 +499,11 @@ export class SchedulePlanningService {
   ): Promise<SchedulePlan> {
     const plan = await this.prisma.schedulePlan.findUnique({ where: { id: planId } });
     if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
-    if (plan.status !== SchedulePlanStatus.DRAFT) {
-      throw new BadRequestException(
-        `Seul un plan brouillon (DRAFT) peut être édité (statut actuel : ${plan.status})`,
-      );
+    // Édition autorisée sur tout plan NON archivé (DRAFT/SENT/CONFIRMED) : l'admin
+    // peut ajuster un planning en cours. Sur un plan confirmé, la modification
+    // s'applique immédiatement (les assignments recréés repartent en ASSIGNED).
+    if (plan.status === SchedulePlanStatus.ARCHIVED) {
+      throw new BadRequestException('Un plan archivé ne peut plus être édité.');
     }
 
     const day = startOfDay(dateInput);
