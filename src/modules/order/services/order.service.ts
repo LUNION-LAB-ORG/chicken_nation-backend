@@ -332,6 +332,14 @@ export class OrderService {
     }
     if (giftLines.size === 0) return giftLines;
 
+    // Règle métier : un cadeau ne peut pas constituer une commande à lui seul — il
+    // doit accompagner au moins un article payant (pas de commande 100 % cadeau).
+    if (giftLines.size === items.length) {
+      throw new BadRequestException(
+        'Un cadeau ne peut pas être commandé seul — ajoutez au moins un article à votre panier.',
+      );
+    }
+
     const rewards = await this.prisma.reward.findMany({
       where: { id: { in: [...seen] }, customer_id, type: RewardType.GIFT },
       select: { id: true, status: true, expires_at: true, payload: true },
