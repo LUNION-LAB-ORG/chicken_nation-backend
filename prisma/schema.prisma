@@ -209,6 +209,21 @@ enum LoyaltyPointIsUsed {
   PARTIAL // PARTIEL
 }
 
+// ── Récompenses « à gratter » (couche célébration, AU-DESSUS de la compta) ──
+// Le type est extensible : POINTS aujourd'hui, codes promo / bons / cadeaux demain.
+enum RewardType {
+  POINTS // Points de fidélité (payload: { points })
+  PROMO_CODE // Code promo offert (payload: { code, ... })
+  VOUCHER // Bon d'achat (payload: { code, amount })
+  GIFT // Cadeau libre (payload: { label, image, ... })
+}
+
+enum RewardStatus {
+  PENDING // À gratter (affichée par l'app)
+  SCRATCHED // Grattée — ne plus JAMAIS réafficher (gate serveur)
+  REVOKED // Révoquée (ex: commande annulée avant grattage)
+}
+
 enum TicketStatus {
   OPEN // OUVERT
   IN_PROGRESS // EN COURS
@@ -308,6 +323,7 @@ model Customer {
   loyalty_points        LoyaltyPoint[]
   promotion_usages      PromotionUsage[]
   loyalty_level_history LoyaltyLevelHistory[]
+  rewards               Reward[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -1098,6 +1114,7 @@ model Order {
   promotion        Promotion?       @relation(fields: [promotion_id], references: [id])
   promotion_usages PromotionUsage[]
   loyalty_points   LoyaltyPoint[]
+  rewards          Reward[]
 
   entity_status     EntityStatus     @default(ACTIVE)
   accepted_at       DateTime?
@@ -1410,6 +1427,66 @@ model LoyaltyPoint {
 
   @@index([customer_id, type])
   @@index([expires_at])
+}
+
+// Récompense « à gratter » — couche CÉLÉBRATION, ne remplace AUCUN registre
+// comptable (LoyaltyPoint/Voucher/PromoCodeUsage restent la source de vérité).
+// `order_id` optionnel : une récompense peut être liée à une commande (gain au
+// paiement) ou non (bonus admin, campagne, cadeau).
+model Reward {
+  id          String       @id @default(uuid()) @db.Uuid
+  customer_id String       @db.Uuid
+  type        RewardType
+  status      RewardStatus @default(PENDING)
+  payload     Json // Contenu selon le type (ex: { points: 25 })
+  reason      String?      @db.Text // Libellé (ex: commande #REF, campagne X)
+  order_id    String?      @db.Uuid
+  campaign_id String?      @db.Uuid // Campagne « Envoyer un cadeau » (null si issu d'une commande)
+  scratched_at DateTime?   @db.Timestamp(6)
+  expires_at  DateTime?    @db.Timestamp(6)
+
+  customer Customer        @relation(fields: [customer_id], references: [id])
+  order    Order?          @relation(fields: [order_id], references: [id])
+  campaign RewardCampaign? @relation(fields: [campaign_id], references: [id])
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([customer_id, status])
+  @@index([order_id])
+  @@index([campaign_id, status])
+}
+
+// Campagne « Envoyer un cadeau » : distribue des Reward (GIFT | VOUCHER | PROMO_CODE)
+// à un client, une liste, ou tous (avec filtre niveau fidélité), immédiatement ou
+// à une date programmée. Modèle aligné sur PushCampaign (statut/ciblage en String).
+model RewardCampaign {
+  id      String     @id @default(uuid()) @db.Uuid
+  name    String     @db.VarChar // Libellé de campagne (sert de `reason` sur chaque Reward)
+  type    RewardType // GIFT | VOUCHER | PROMO_CODE (POINTS réservé aux commandes)
+  payload Json // Contenu-modèle : GIFT{label,image?} · VOUCHER{amount} · PROMO_CODE{code,discount_type,discount_value,description?}
+
+  // Ciblage : all | ids   (config: { ids?: string[], loyalty_level?: LoyaltyLevel })
+  target_type   String @db.VarChar
+  target_config Json
+
+  expires_at DateTime? @db.Timestamp(6) // Expiration appliquée à chaque Reward distribué
+
+  // Stats
+  total_targeted Int @default(0)
+
+  // Programmation : scheduled | sending | sent | cancelled | failed
+  status       String    @default("sent") @db.VarChar
+  scheduled_at DateTime? @db.Timestamp(6)
+  sent_at      DateTime? @db.Timestamp(6)
+
+  created_by String   @db.VarChar // id de l'admin (utilisé comme Voucher.created_by au grattage)
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  rewards Reward[]
+
+  @@index([status, scheduled_at])
 }
 
 // Historique des changements de niveau de fidélité

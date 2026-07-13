@@ -3,6 +3,11 @@ import { PromotionService } from './services/promotion.service';
 import { PromotionController } from './controllers/promotion.controller';
 import { LoyaltyService } from './services/loyalty.service';
 import { LoyaltyController } from './controllers/loyalty.controller';
+import { RewardService } from './services/reward.service';
+import { RewardController } from './controllers/reward.controller';
+import { RewardCampaignService } from './services/reward-campaign.service';
+import { RewardCampaignController } from './controllers/reward-campaign.controller';
+import { RewardCampaignTask } from './tasks/reward-campaign.task';
 import { PromotionListenerService } from './listeners/promotion-listener.service';
 import { LoyaltyListenerService } from './listeners/loyalty-listener.service';
 import { LoyaltyEvent } from './events/loyalty.event';
@@ -12,18 +17,21 @@ import { PromotionNotificationsTemplate } from './templates/promotion-notificati
 import { LoyaltyNotificationsTemplate } from './templates/loyalty-notifications.template';
 
 @Module({
-    controllers: [PromotionController, LoyaltyController],
+    controllers: [PromotionController, LoyaltyController, RewardController, RewardCampaignController],
     providers: [
         PromotionService,
         LoyaltyService,
+        RewardService,
+        RewardCampaignService,
         LoyaltyEvent,
         PromotionEvent,
         PromotionListenerService,
         LoyaltyListenerService,
         PromotionNotificationsTemplate,
         LoyaltyNotificationsTemplate,
-        LoyaltyTask
+        LoyaltyTask,
+        RewardCampaignTask
     ],
-    exports: [PromotionService, LoyaltyService, PromotionEvent, LoyaltyEvent],
+    exports: [PromotionService, LoyaltyService, RewardService, RewardCampaignService, PromotionEvent, LoyaltyEvent],
 })
 export class FidelityModule { }
