@@ -124,6 +124,18 @@ export class ScheduleAdminController {
   }
 
   @ApiOperation({
+    summary:
+      'Ajoute un livreur (rattaché après coup) à un plan existant — DRAFT/SENT/CONFIRMED',
+  })
+  @Post('plans/:id/deliverers/:delivererId')
+  async addDeliverer(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('delivererId', new ParseUUIDPipe()) delivererId: string,
+  ) {
+    return this.planningService.addDelivererToPlan(id, delivererId);
+  }
+
+  @ApiOperation({
     summary: "Réédite les dates d'un plan (DRAFT/SENT) → régénère un nouveau plan DRAFT",
   })
   @Post('plans/:id/regenerate')

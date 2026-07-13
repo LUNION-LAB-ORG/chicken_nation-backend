@@ -274,6 +274,107 @@ export class SchedulePlanningService {
   }
 
   /**
+   * Ajout INCRÉMENTAL d'un livreur à un plan existant (cas : un livreur est
+   * rattaché au restaurant APRÈS la génération du plan). On PRÉSERVE le plan et
+   * toutes les affectations/confirmations existantes — on n'ajoute QUE le nouveau
+   * livreur à ses shifts (hors ses jours de repos, calculés indépendamment).
+   * Autorisé sur DRAFT/SENT/CONFIRMED (pas ARCHIVED). Idempotent (skipDuplicates).
+   */
+  async addDelivererToPlan(planId: string, delivererId: string): Promise<{ added: number }> {
+    const plan = await this.prisma.schedulePlan.findUnique({
+      where: { id: planId },
+      select: {
+        id: true,
+        restaurant_id: true,
+        status: true,
+        period_start: true,
+        period_end: true,
+      },
+    });
+    if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
+    if (plan.status === SchedulePlanStatus.ARCHIVED) {
+      throw new BadRequestException('Un plan archivé ne peut plus être modifié.');
+    }
+
+    // Le livreur doit être ACTIVE et rattaché au restaurant du plan.
+    const deliverer = await this.prisma.deliverer.findFirst({
+      where: {
+        id: delivererId,
+        restaurant_id: plan.restaurant_id,
+        status: DelivererStatus.ACTIVE,
+        entity_status: EntityStatus.ACTIVE,
+      },
+      select: { id: true },
+    });
+    if (!deliverer) {
+      throw new BadRequestException(
+        'Livreur introuvable, inactif, ou non rattaché au restaurant de ce plan.',
+      );
+    }
+
+    // Déjà présent dans ce plan ? → rien à faire.
+    const already = await this.prisma.shiftAssignment.findFirst({
+      where: { deliverer_id: delivererId, shift: { plan_id: planId } },
+      select: { id: true },
+    });
+    if (already) {
+      throw new BadRequestException('Ce livreur est déjà présent dans ce planning.');
+    }
+
+    // Shifts du plan + jours de repos du NOUVEAU livreur (rotation calculée pour lui
+    // seul → n'altère pas la distribution des livreurs déjà planifiés).
+    const shifts = await this.prisma.shift.findMany({
+      where: { plan_id: planId },
+      select: { id: true, date: true },
+    });
+    const settings = await this.settings.load();
+    const days = this.enumerateDays(plan.period_start, plan.period_end);
+    const restSet =
+      this.computeRestDayDistribution([delivererId], days, settings).get(delivererId) ??
+      new Set<string>();
+
+    const assignments = shifts
+      .filter((s) => !restSet.has(this.dateKey(s.date)))
+      .map((s) => ({
+        shift_id: s.id,
+        deliverer_id: delivererId,
+        status: ShiftAssignmentStatus.ASSIGNED,
+      }));
+    const restDays = [...restSet].map((key) => ({
+      deliverer_id: delivererId,
+      date: this.parseKey(key),
+      source: RestDaySource.AUTO,
+    }));
+
+    await this.prisma.$transaction(async (tx) => {
+      if (assignments.length > 0) {
+        await tx.shiftAssignment.createMany({ data: assignments, skipDuplicates: true });
+      }
+      if (restDays.length > 0) {
+        await tx.restDay.createMany({ data: restDays, skipDuplicates: true });
+      }
+    });
+
+    // Plan déjà envoyé/confirmé → prévenir le nouveau livreur qu'il a un planning.
+    if (
+      plan.status === SchedulePlanStatus.SENT ||
+      plan.status === SchedulePlanStatus.CONFIRMED
+    ) {
+      this.pushService.notifyPlanSent({
+        delivererId,
+        periodStart: plan.period_start.toISOString().substring(0, 10),
+        periodEnd: plan.period_end.toISOString().substring(0, 10),
+        planId,
+      });
+    }
+
+    this.logger.log(
+      `Livreur ${delivererId.slice(0, 8)} ajouté au plan ${planId.slice(0, 8)} : ${assignments.length} shift(s).`,
+    );
+    return { added: assignments.length };
+  }
+
+  /**
    * Transition DRAFT → SENT : verrouille le plan, démarre la deadline d'acceptation.
    * À ce stade, les shifts sont visibles côté livreur mobile.
    *
