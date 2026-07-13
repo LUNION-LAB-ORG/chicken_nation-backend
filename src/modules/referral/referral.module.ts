@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ReferralService } from './referral.service';
 import { ReferralController } from './referral.controller';
+import { ReferralAdminController } from './referral-admin.controller';
 import { VoucherModule } from '../voucher/voucher.module';
 
 /**
@@ -10,7 +11,7 @@ import { VoucherModule } from '../voucher/voucher.module';
  */
 @Module({
   imports: [VoucherModule],
-  controllers: [ReferralController],
+  controllers: [ReferralController, ReferralAdminController],
   providers: [ReferralService],
   exports: [ReferralService],
 })

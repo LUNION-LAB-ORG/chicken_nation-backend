@@ -168,6 +168,52 @@ export class ReferralService {
     return { referral_code, total_referred: pending + rewarded, pending, rewarded };
   }
 
+  // ── Admin (back office) ───────────────────────────────────────────────────
+
+  /** Stats globales de parrainage (tous clients confondus). */
+  async getGlobalStats() {
+    const grouped = await this.prisma.referral.groupBy({ by: ['status'], _count: { _all: true } });
+    const counts: Partial<Record<ReferralStatus, number>> = {};
+    for (const g of grouped) counts[g.status] = g._count._all;
+    const pending = counts[ReferralStatus.PENDING] ?? 0;
+    const rewarded = counts[ReferralStatus.REWARDED] ?? 0;
+    const cancelled = counts[ReferralStatus.CANCELLED] ?? 0;
+    return { total: pending + rewarded + cancelled, pending, rewarded, cancelled };
+  }
+
+  /** Configuration courante du parrainage (réglages + défauts effectifs). */
+  async getConfig() {
+    const welcome_amount = await this.getWelcomeAmount();
+    const parrain = await this.getParrainRewardConfig();
+    const created_by = (await this.settingsService.get('reward.referral.created_by')) ?? null;
+    return { welcome_amount, parrain, created_by };
+  }
+
+  /** Met à jour la configuration du parrainage (réglages). */
+  async setConfig(dto: {
+    welcome_amount?: number;
+    parrain?: { type: RewardType; payload: Record<string, any>; expires_in_days?: number };
+    created_by?: string | null;
+  }) {
+    if (dto.welcome_amount !== undefined) {
+      if (!(dto.welcome_amount > 0)) {
+        throw new BadRequestException('Le montant du bon de bienvenue doit être positif.');
+      }
+      await this.settingsService.set('reward.referral.welcome_amount', String(dto.welcome_amount));
+    }
+    if (dto.parrain !== undefined) {
+      if (!dto.parrain.type || !dto.parrain.payload) {
+        throw new BadRequestException('Récompense parrain invalide (type + payload requis).');
+      }
+      await this.settingsService.setJson('reward.referral.parrain', dto.parrain);
+    }
+    if (dto.created_by !== undefined) {
+      if (dto.created_by) await this.settingsService.set('reward.referral.created_by', dto.created_by);
+      else await this.settingsService.delete('reward.referral.created_by');
+    }
+    return this.getConfig();
+  }
+
   // ── Récompense du parrain (carte à gratter configurable) ──────────────────
 
   private async createParrainReward(referrerId: string) {
