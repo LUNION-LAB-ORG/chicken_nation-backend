@@ -169,6 +169,23 @@ export class LoyaltyService {
             throw new NotFoundException('Client non trouvé');
         }
 
+        // Idempotence : une commande (order_id) ne GAGNE des points qu'une seule
+        // fois — événement rejoué, double backend, ou double câblage
+        // (création PENDING puis COMPLETED). Sans ce garde-fou, le solde
+        // gonflerait à chaque ré-émission. Les gains sans order_id (bonus manuel)
+        // ne sont pas concernés.
+        if (order_id) {
+            const existing = await this.prisma.loyaltyPoint.findFirst({
+                where: {
+                    order_id,
+                    type: { in: [LoyaltyPointType.EARNED, LoyaltyPointType.BONUS] },
+                },
+            });
+            if (existing) {
+                return existing;
+            }
+        }
+
         return await this.prisma.$transaction(async (tx) => {
             // Ajouter les points
             const loyaltyPoint = await tx.loyaltyPoint.create({
@@ -426,6 +443,68 @@ export class LoyaltyService {
         });
 
         return payload;
+    }
+
+    /**
+     * Révoque les points GAGNÉS (EARNED) d'une commande — typiquement à son
+     * ANNULATION. On ne reprend que la part ENCORE DISPONIBLE (`points - points_used`) :
+     * si le client a déjà dépensé une partie, on ne peut pas la reprendre. Le record
+     * EARNED passe en EXPIRED (retiré des points disponibles) avec le motif d'annulation.
+     * Idempotent : une 2e passe ne trouve plus de EARNED actif pour la commande.
+     * `lifetime_points` n'est PAS décrémenté (évite un déclassement de niveau).
+     */
+    async revokeEarnedPointsForOrder(order_id: string, reason: string) {
+        const earnedPoints = await this.prisma.loyaltyPoint.findMany({
+            where: {
+                order_id,
+                type: LoyaltyPointType.EARNED,
+                is_used: { in: [LoyaltyPointIsUsed.NO, LoyaltyPointIsUsed.PARTIAL] },
+            },
+        });
+
+        if (earnedPoints.length === 0) {
+            return { revoked_records: 0, points_revoked: 0 };
+        }
+
+        let pointsRevoked = 0;
+        let customer_id: string | null = null;
+
+        for (const point of earnedPoints) {
+            const remaining = point.points - (point.points_used || 0);
+            if (remaining <= 0) continue;
+            customer_id = point.customer_id;
+
+            await this.prisma.$transaction(async (tx) => {
+                await tx.loyaltyPoint.update({
+                    where: { id: point.id },
+                    data: {
+                        type: LoyaltyPointType.EXPIRED,
+                        is_used: LoyaltyPointIsUsed.YES,
+                        reason,
+                    },
+                });
+                await tx.customer.update({
+                    where: { id: point.customer_id },
+                    data: { total_points: { decrement: remaining } },
+                });
+            });
+
+            pointsRevoked += remaining;
+        }
+
+        // WebSocket : rafraîchir le solde côté client + backoffice.
+        if (customer_id && pointsRevoked > 0) {
+            this.appGateway.emitToUser(customer_id, 'customer', 'loyalty:points_redeemed', {
+                pointsUsed: pointsRevoked,
+                reason,
+            });
+            this.appGateway.emitToBackoffice('loyalty:points_redeemed', {
+                customerId: customer_id,
+                pointsUsed: pointsRevoked,
+            });
+        }
+
+        return { revoked_records: earnedPoints.length, points_revoked: pointsRevoked };
     }
 
     /**
