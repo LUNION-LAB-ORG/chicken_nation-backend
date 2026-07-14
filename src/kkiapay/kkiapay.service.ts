@@ -75,7 +75,11 @@ export class KkiapayService {
         // Exemple de traitement : selon l'event on met à jour la base de données, etc.
         if (payload.event === 'transaction.success') {
             this.logger.log(`Transaction successful: ${payload.transactionId}`);
-            this.eventEmitter.kkiapayTransactionSuccessEvent(payload);
+            // AWAIT (pas fire-and-forget) : emitAsync propage tout rejet du listener
+            // (ex : erreur transitoire Neon relancée par le processeur) → le worker
+            // BullMQ voit l'échec et retente. Le chemin critique de paiement est ainsi
+            // synchrone à l'ack du job.
+            await this.eventEmitter.kkiapayTransactionSuccessEvent(payload);
 
         } else if (payload.event === 'transaction.failed') {
             this.logger.warn(`Transaction failed: ${payload.transactionId} – ${payload.failureCode} / ${payload.failureMessage}`);

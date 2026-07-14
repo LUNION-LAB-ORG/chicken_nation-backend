@@ -82,6 +82,12 @@ export class PaiementsService {
       const covered = totalSuccess >= result.order.amount - PAYMENT_AMOUNT_TOLERANCE;
       if (isSuccess && covered) {
         const paymentAt = result.paiement.created_at;
+        // TODO(§3a) : unifier ce chemin app-confirm avec linkPaiementToOrder pour qu'il
+        // fasse aussi avancer le statut (PENDING → ACCEPTED) et déclenche les effets de
+        // bord (points, cloche, push). Aujourd'hui il ne pose QUE paied=true : le statut
+        // reste PENDING jusqu'au webhook (dont linkPaiementToOrder claim désormais bien
+        // sur status:PENDING) ou au cron de réconciliation. Laissé tel quel volontairement
+        // (unifier ici change la valeur de retour de l'endpoint /paiements/pay — risqué).
         await this.prisma.order.updateMany({
           where: { id: result.order.id, paied: false }, // claim atomique anti-rejeu
           data: {
@@ -252,12 +258,21 @@ export class PaiementsService {
       client_id: data.customer_id,
     }, { dedupeByReference: true });
 
-    // Mise a jour de la commande à payée — CLAIM ATOMIQUE paied false→true.
-    // updateMany conditionné sur paied:false → un seul processeur "gagne" (count===1).
-    // Évite le double traitement d'un webhook KKiaPay rejoué OU reçu en parallèle
-    // (double backend) : promo + notif client ne tournent qu'UNE fois. justPaid remonte
-    // au listener pour ne déclencher les effets de bord que sur le 1er paiement réel.
+    // Mise a jour de la commande à payée — CLAIM ATOMIQUE sur la TRANSITION de statut
+    // PENDING → ACCEPTED (et non plus sur paied:false). Raisons (§3a) :
+    //   • Une commande confirmée d'abord côté app (payWithKkiapay pose paied=true SANS
+    //     changer le statut) reste PENDING : gater sur paied:false la « bloquait » alors
+    //     qu'elle doit encore avancer. Gater sur status:PENDING la fait bien avancer.
+    //   • Un rejeu / double backend / commande déjà avancée (≠ PENDING) → count=0 →
+    //     justPaid=false → aucun effet de bord one-time en double, aucune régression.
+    // `isPaid` (SUCCESS ET couvert) remonte séparément de justPaid : le listener rejoue
+    // les effets IDEMPOTENTS (points, parrainage) même sur retry (justPaid=false), et ne
+    // garde derrière justPaid que les effets STRICTEMENT one-time (cloche, push, WS).
     let justPaid = false;
+    let isPaid = false;
+    // Motif lisible d'un paiement NON abouti — remonté à l'appelant (confirmation
+    // manuelle admin) pour un 4xx explicite. `undefined` si isPaid=true.
+    let notPaidReason: string | undefined;
     if (result.order) {
       // Ne confirmer la commande QUE si la transaction est SUCCESS ET si le cumul
       // des paiements SUCCESS couvre le total (pas d'acompte app). Bloque les
@@ -267,11 +282,15 @@ export class PaiementsService {
         ? await this.sumSuccessPaiements(result.order.id)
         : 0;
       const covered = totalSuccess >= result.order.amount - PAYMENT_AMOUNT_TOLERANCE;
-      if (isSuccess && covered) {
+      isPaid = isSuccess && covered;
+      if (!isPaid) {
+        notPaidReason = !isSuccess ? 'KKiaPay: statut non SUCCESS' : 'montant non couvert';
+      }
+      if (isPaid) {
         const next_status = this.getOrderStatus(result.order.payment_method!, result.order.type, result.order.status);
         const paymentAt = result.paiement.created_at;
         const claim = await this.prisma.order.updateMany({
-          where: { id: result.order.id, paied: false },
+          where: { id: result.order.id, status: OrderStatus.PENDING }, // claim la transition, pas paied
           data: {
             paied_at: paymentAt,
             paied: true,
@@ -302,7 +321,7 @@ export class PaiementsService {
       }
     }
 
-    return { paiement: result.paiement, justPaid };
+    return { paiement: result.paiement, justPaid, isPaid, notPaidReason };
   }
 
   // Récupération des paiements succès libres
@@ -710,12 +729,13 @@ export class PaiementsService {
     return status;
   }
 
-  // Déterminer le status à partir de la méthode de paiement, le type de commande et du paiement
-  private getOrderStatus(paymentMethod: PaymentMethod, orderType: OrderType, oldStatus: OrderStatus) {
-    if (paymentMethod === PaymentMethod.ONLINE && orderType === OrderType.DELIVERY) {
-      return OrderStatus.ACCEPTED;
-    }
-
-    return OrderStatus.ACCEPTED;
+  // Statut cible d'une commande au moment du paiement.
+  // SEULE une commande PENDING devient ACCEPTED. Une commande déjà avancée
+  // (ACCEPTED/IN_PROGRESS/READY…) n'est JAMAIS rétrogradée : un webhook tardif ou
+  // rejoué ne doit pas renvoyer une commande en préparation vers ACCEPTED.
+  // (Les paramètres méthode/type sont conservés pour la signature des appelants ;
+  // l'ancienne double branche renvoyait ACCEPTED dans les deux cas → morte.)
+  private getOrderStatus(_paymentMethod: PaymentMethod, _orderType: OrderType, oldStatus: OrderStatus): OrderStatus {
+    return oldStatus === OrderStatus.PENDING ? OrderStatus.ACCEPTED : oldStatus;
   }
 }

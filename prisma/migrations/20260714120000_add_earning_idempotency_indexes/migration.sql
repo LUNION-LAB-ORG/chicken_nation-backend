@@ -1,0 +1,34 @@
+-- Idempotence COMPTABLE au niveau BASE pour le gain de points d'une commande.
+--
+-- Contexte : les effets « gagnés » (LoyaltyPoint EARNED/BONUS + Reward POINTS) sont
+-- désormais rejoués à CHAQUE traitement d'un paiement abouti (retry BullMQ après un
+-- blip Neon, double backend, futur cron de réconciliation). L'idempotence était
+-- jusqu'ici seulement APPLICATIVE (find-then-create) : sous concurrence réelle, deux
+-- exécutions simultanées pour la même commande peuvent toutes deux ne rien trouver
+-- puis créer → double-crédit. Ces index UNIQUES PARTIELS transforment le garde-fou
+-- en contrainte DB : au plus UNE ligne « gagnée » par commande. Le code applicatif
+-- (loyalty.addPoints / reward.createPointsReward) rattrape la violation P2002 en
+-- renvoyant la ligne existante → la contrainte est un filet, pas un crash.
+--
+-- Partiel (WHERE …) car :
+--   • LoyaltyPoint porte aussi les REDEEMED / EXPIRED (order_id peut se répéter,
+--     et order_id est nullable pour les bonus manuels) → on ne verrouille QUE les
+--     types créditeurs EARNED/BONUS liés à une commande.
+--   • Reward porte GIFT / PROMO_CODE / VOUCHER et des récompenses de campagne
+--     (order_id null) → on ne verrouille QUE le Reward POINTS d'une commande.
+-- Prisma ne sait pas exprimer un index unique PARTIEL dans schema.prisma → SQL brut
+-- (cf. commentaires ajoutés aux modèles LoyaltyPoint / Reward).
+--
+-- Idempotent (IF NOT EXISTS) pour rester sûr face au drift Neon / double backend.
+--
+-- ⚠️ INDEX LoyaltyPoint DIFFÉRÉ : un pré-check prod (14/07) a révélé 10+ commandes
+-- avec des LoyaltyPoint EARNED/BONUS EN DOUBLE (séquelle de la course double-backend).
+-- CREATE UNIQUE INDEX échouerait donc et BLOQUERAIT le déploiement (migrations auto).
+-- On ne pose ici QUE l'index Reward (0 doublon vérifié). L'index LoyaltyPoint sera posé
+-- dans une migration ultérieure, APRÈS une déduplication maîtrisée des points (toucher
+-- aux soldes clients = décision métier). Le garde-fou applicatif (find-then-create +
+-- catch P2002 déjà en place, dormant tant que l'index n'existe pas) reste actif ;
+-- côté webhook, BullMQ sérialise déjà par jobId (pas de concurrence réelle).
+CREATE UNIQUE INDEX IF NOT EXISTS "Reward_order_id_points_unique"
+  ON "Reward" ("order_id")
+  WHERE "type" = 'POINTS' AND "order_id" IS NOT NULL;

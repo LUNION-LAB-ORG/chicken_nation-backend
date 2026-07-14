@@ -935,7 +935,26 @@ export class OrderService {
       throw new BadRequestException('La référence de la commande est requis');
     }
 
-    const order = await this.prisma.order.findFirst({
+    const order = await this.findByReferenceOrNull(reference);
+
+    if (!order) {
+      throw new NotFoundException(`Commande est introuvable`);
+    }
+
+    return order;
+  }
+
+  /**
+   * Variante NON-LEVANTE de findByReference : renvoie `null` si la commande
+   * n'existe pas (au lieu de lever NotFound). Indispensable au traitement webhook
+   * KKiaPay pour distinguer une commande INCONNUE (erreur permanente → ack sans
+   * retry) d'une erreur DB TRANSITOIRE (Neon → à relancer). Ne PAS confondre avec
+   * une erreur d'infra : ici un `null` = référence absente, pas un blip réseau.
+   */
+  async findByReferenceOrNull(reference: string) {
+    if (!reference) return null;
+
+    return this.prisma.order.findFirst({
       where: {
         reference,
         entity_status: { not: EntityStatus.DELETED },
@@ -953,12 +972,6 @@ export class OrderService {
         restaurant: true,
       },
     });
-
-    if (!order) {
-      throw new NotFoundException(`Commande est introuvable`);
-    }
-
-    return order;
   }
 
   /**

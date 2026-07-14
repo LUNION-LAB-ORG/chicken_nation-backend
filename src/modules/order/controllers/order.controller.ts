@@ -33,6 +33,10 @@ import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
+import { ConfirmPaymentDto } from 'src/modules/order/dto/confirm-payment.dto';
+import { KkiapayOrderListenerService } from '../listeners/kkiapay-order.listener.service';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { MarkPaidCashDto } from 'src/modules/order/dto/mark-paid-cash.dto';
 import { QueryOrderCustomerDto, QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
@@ -51,6 +55,7 @@ export class OrderController {
     private readonly orderService: OrderService,
     private readonly receiptsService: ReceiptsService,
     private readonly orderWebSocketService: OrderWebSocketService,
+    private readonly kkiapayOrderListenerService: KkiapayOrderListenerService,
   ) { }
 
   @Post()
@@ -102,6 +107,43 @@ export class OrderController {
   @ApiBody({ type: MarkPaidCashDto })
   markPaidCash(@Param('id') id: string, @Body() dto: MarkPaidCashDto) {
     return this.orderService.markPaidCash(id, dto.amount);
+  }
+
+  @Post(':id/confirm-payment')
+  @UseGuards(JwtAuthGuard, UserRolesGuard)
+  // ADMIN STRICTEMENT : confirmer un paiement en ligne à la main est sensible
+  // (déclenche points/récompense/parrainage). Même schéma de garde que les autres
+  // routes admin-only du repo (cf. DeliverersAdminController).
+  @UserRoles(UserRole.ADMIN)
+  @ApiOperation({
+    summary: 'Admin : confirmer manuellement un paiement KKiaPay resté PENDING',
+    description:
+      'Rejoue le MÊME chemin que le webhook : re-vérifie la transaction auprès de ' +
+      'KKiaPay (verifyTransaction) et ne confirme QUE si SUCCESS + montant couvert, ' +
+      'puis passe la commande PENDING→ACCEPTED, enregistre le paiement et crédite ' +
+      'points/récompense/parrainage. Idempotent. Aucun « force » : impossible de ' +
+      'marquer payé sans un verify KKiaPay positif.',
+  })
+  @ApiBody({ type: ConfirmPaymentDto })
+  @ApiResponse({ status: 201, description: 'Paiement confirmé ({ confirmed, order, paiement })' })
+  @ApiResponse({ status: 400, description: 'Commande non ONLINE / déjà traitée, ou verify KKiaPay négatif (motif dans message)' })
+  @ApiResponse({ status: 404, description: 'Commande introuvable' })
+  async confirmPayment(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() dto: ConfirmPaymentDto,
+  ) {
+    const result = await this.kkiapayOrderListenerService.confirmPaymentManually(
+      id,
+      dto.transactionId,
+    );
+    // Cloisonnement resto (no-op pour un ADMIN, de type BACKOFFICE) — cohérent avec
+    // les autres endpoints « détail par id ». La garde de rôle reste la barrière réelle.
+    assertCanAccessRestaurant(
+      req.user as User,
+      (result.order as { restaurant_id?: string | null })?.restaurant_id,
+    );
+    return result;
   }
 
   @Get('/operations/active')

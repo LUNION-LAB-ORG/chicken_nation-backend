@@ -1438,6 +1438,11 @@ model LoyaltyPoint {
 
   @@index([customer_id, type])
   @@index([expires_at])
+  // Idempotence comptable DIFFÉRÉE : l'index UNIQUE PARTIEL sur order_id
+  // (WHERE type IN ('EARNED','BONUS')) n'est PAS encore posé — un pré-check prod (14/07)
+  // a trouvé des points EN DOUBLE (séquelle double-backend) qui le feraient échouer.
+  // À poser après déduplication maîtrisée des points (décision métier). Garde-fou
+  // applicatif entre-temps : find-then-create + catch P2002 (dormant sans l'index).
 }
 
 // Récompense « à gratter » — couche CÉLÉBRATION, ne remplace AUCUN registre
@@ -1467,6 +1472,11 @@ model Reward {
   @@index([customer_id, status])
   @@index([order_id])
   @@index([campaign_id, status])
+  // Idempotence comptable — contrainte DB non exprimable par Prisma (index UNIQUE
+  // PARTIEL) posée en SQL brut dans la migration 20260714120000_add_earning_idempotency_indexes :
+  //   CREATE UNIQUE INDEX "Reward_order_id_points_unique" ON "Reward"(order_id)
+  //     WHERE type = 'POINTS' AND order_id IS NOT NULL;
+  // Empêche un 2e Reward POINTS pour la même commande sous concurrence.
 }
 
 /// Parrainage : un parrain (referrer) invite un filleul (referee) via son

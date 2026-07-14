@@ -31,6 +31,29 @@ export class SettingsService {
   }
 
   /**
+   * Variante RÉSILIENTE de getOrEnv : env-first et ne LÈVE JAMAIS.
+   *
+   * L'env gagne (cas normal → aucune requête DB), sinon on tente la table Settings
+   * en avalant toute erreur (ex : Neon injoignable P1001) et on retombe sur la
+   * valeur par défaut. À utiliser pour les vérifications qui ne doivent PAS dépendre
+   * de la disponibilité de la base (ex : secret de webhook KKiaPay) — un blip Neon
+   * ne doit jamais transformer une vérif de secret en 500.
+   */
+  async getOrEnvSafe(settingKey: string, envKey: string, defaultValue = ''): Promise<string> {
+    const envVal = this.configService.get<string>(envKey);
+    if (envVal) return envVal;
+    try {
+      const dbVal = await this.get(settingKey);
+      if (dbVal) return dbVal;
+    } catch (e) {
+      this.logger.warn(
+        `getOrEnvSafe(${settingKey}) : DB injoignable, fallback env/défaut : ${(e as any)?.message}`,
+      );
+    }
+    return defaultValue;
+  }
+
+  /**
    * Récupère plusieurs clés depuis Settings avec fallback sur .env via ConfigService.
    * @param mapping - Record<settingKey, envKey>
    */

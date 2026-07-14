@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { RewardStatus, RewardType } from '@prisma/client';
+import { Prisma, RewardStatus, RewardType } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
 
@@ -42,15 +42,33 @@ export class RewardService {
         });
         if (existing) return existing;
 
-        return this.prisma.reward.create({
-            data: {
-                customer_id,
-                type: RewardType.POINTS,
-                payload: { points },
-                reason,
-                order_id,
-            },
-        });
+        try {
+            return await this.prisma.reward.create({
+                data: {
+                    customer_id,
+                    type: RewardType.POINTS,
+                    payload: { points },
+                    reason,
+                    order_id,
+                },
+            });
+        } catch (error) {
+            // Filet d'idempotence DB : l'index unique partiel Reward(order_id)
+            // WHERE type='POINTS' (migration 20260714120000) bloque un 2e Reward
+            // POINTS pour la même commande sous concurrence (retry / double backend)
+            // que le find-then-create ne couvre pas seul. P2002 → NO-OP : on renvoie
+            // le Reward existant. Toute autre erreur est propagée.
+            if (
+                error instanceof Prisma.PrismaClientKnownRequestError &&
+                error.code === 'P2002'
+            ) {
+                const raced = await this.prisma.reward.findFirst({
+                    where: { order_id, type: RewardType.POINTS },
+                });
+                if (raced) return raced;
+            }
+            throw error;
+        }
     }
 
     /** Récompenses à gratter du client (non expirées), plus récentes d'abord. */

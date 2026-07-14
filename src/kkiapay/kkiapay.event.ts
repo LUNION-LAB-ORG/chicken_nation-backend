@@ -12,10 +12,15 @@ export class KkiapayEvent {
   ) { }
 
   /**
-   * Émet un événement de succès de transaction
+   * Émet un événement de succès de transaction et ATTEND ses listeners.
+   *
+   * emitAsync attend la résolution de tous les handlers @OnEvent et propage leur
+   * rejet éventuel. C'est ce qui rend le traitement du paiement synchrone à l'ack
+   * du job BullMQ : une erreur transitoire relancée par le listener remonte jusqu'au
+   * worker, qui retente.
    */
   async kkiapayTransactionSuccessEvent(payload: KkiapayWebhookDto) {
-    this.eventEmitter.emit(
+    await this.eventEmitter.emitAsync(
       KkiapayChannels.TRANSACTION_SUCCESS,
       payload
     );

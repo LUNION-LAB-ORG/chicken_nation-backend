@@ -186,55 +186,80 @@ export class LoyaltyService {
             }
         }
 
-        return await this.prisma.$transaction(async (tx) => {
-            // Ajouter les points
-            const loyaltyPoint = await tx.loyaltyPoint.create({
-                data: {
-                    customer_id,
+        try {
+            return await this.prisma.$transaction(async (tx) => {
+                // Ajouter les points
+                const loyaltyPoint = await tx.loyaltyPoint.create({
+                    data: {
+                        customer_id,
+                        points,
+                        type,
+                        reason,
+                        order_id,
+                        expires_at: new Date(Date.now() + config.points_expiration_days! * 24 * 60 * 60 * 1000)
+                    }
+                });
+
+                // Mettre à jour les points du client
+
+                await tx.customer.update({
+                    where: { id: customer_id },
+                    data: {
+                        total_points: { increment: points },
+                        lifetime_points: { increment: points }
+                    }
+                });
+
+
+                // Vérifier et mettre à jour le niveau de fidélité
+                await this.updateCustomerLoyaltyLevel(customer, tx);
+
+                // Evenement d'ajout de points
+                this.loyaltyEvent.addPointsEvent({
+                    customer,
+                    points,
+                });
+
+                // WebSocket: notifier le client de ses nouveaux points
+                this.appGateway.emitToUser(customer_id, 'customer', 'loyalty:points_added', {
                     points,
                     type,
                     reason,
-                    order_id,
-                    expires_at: new Date(Date.now() + config.points_expiration_days! * 24 * 60 * 60 * 1000)
-                }
+                    newTotal: customer.total_points + points,
+                });
+                this.appGateway.emitToBackoffice('loyalty:points_added', {
+                    customerId: customer_id,
+                    points,
+                    type,
+                    reason,
+                });
+
+                return loyaltyPoint;
             });
-
-            // Mettre à jour les points du client
-
-            await tx.customer.update({
-                where: { id: customer_id },
-                data: {
-                    total_points: { increment: points },
-                    lifetime_points: { increment: points }
-                }
-            });
-
-
-            // Vérifier et mettre à jour le niveau de fidélité
-            await this.updateCustomerLoyaltyLevel(customer, tx);
-
-            // Evenement d'ajout de points
-            this.loyaltyEvent.addPointsEvent({
-                customer,
-                points,
-            });
-
-            // WebSocket: notifier le client de ses nouveaux points
-            this.appGateway.emitToUser(customer_id, 'customer', 'loyalty:points_added', {
-                points,
-                type,
-                reason,
-                newTotal: customer.total_points + points,
-            });
-            this.appGateway.emitToBackoffice('loyalty:points_added', {
-                customerId: customer_id,
-                points,
-                type,
-                reason,
-            });
-
-            return loyaltyPoint;
-        });
+        } catch (error) {
+            // FILET D'IDEMPOTENCE au niveau DB : l'index unique partiel
+            // LoyaltyPoint(order_id) WHERE type IN ('EARNED','BONUS') (migration
+            // 20260714120000) empêche un double-crédit sous concurrence (retry
+            // BullMQ, double backend, futur cron de réconciliation) que le
+            // find-then-create applicatif ci-dessus ne couvre pas seul. Une
+            // violation P2002 signifie « déjà crédité » → NO-OP : on renvoie la
+            // ligne existante (la transaction a été ANNULÉE, donc aucun incrément
+            // parasite sur le client). Toute autre erreur est propagée.
+            if (
+                order_id &&
+                error instanceof Prisma.PrismaClientKnownRequestError &&
+                error.code === 'P2002'
+            ) {
+                const existing = await this.prisma.loyaltyPoint.findFirst({
+                    where: {
+                        order_id,
+                        type: { in: [LoyaltyPointType.EARNED, LoyaltyPointType.BONUS] },
+                    },
+                });
+                if (existing) return existing;
+            }
+            throw error;
+        }
     }
 
     // Calculer les points pour une commande
