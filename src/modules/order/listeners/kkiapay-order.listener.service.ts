@@ -247,23 +247,24 @@ export class KkiapayOrderListenerService {
             earnedPoints = 0;
         }
 
-        // 🤝 PARRAINAGE — 1re commande payée du filleul → carte à gratter du parrain.
-        // Idempotent (claim atomique PENDING→REWARDED), no-op sans parrainage en attente.
-        // Effet COMPTABLE → awaité et relancé sur erreur transitoire (même garantie que
-        // les points : le retry BullMQ finit par qualifier le parrainage). Erreur
-        // non-transitoire avalée (best-effort).
+        // 🤝 PARRAINAGE — accrual monétaire (Phase 5) au paiement d'une commande du filleul.
+        // ENGLOBE la qualification (carte à gratter parrain + PRIME à la 1re commande) ET la
+        // COMMISSION (% du CA dans la fenêtre). Idempotent (claim atomique PENDING→REWARDED +
+        // unique (source_order_id,type)), no-op sans parrainage. Effet COMPTABLE → awaité et
+        // relancé sur erreur transitoire (le retry BullMQ finit par accréditer sans doublon).
+        // Erreur non-transitoire avalée (best-effort).
         try {
-            await this.referralService.qualifyReferralForPaidOrder(order.customer_id, order.id);
+            await this.referralService.accrueForPaidOrder(order.customer_id, order.id);
         } catch (error) {
             if (this.isTransientDbError(error)) {
                 this.logger.warn(
-                    `Erreur DB transitoire à la qualification parrainage (commande ${order.reference}) — ` +
+                    `Erreur DB transitoire à l'accrual parrainage (commande ${order.reference}) — ` +
                     `relance pour retry BullMQ.`,
                 );
                 throw error;
             }
             this.logger.error(
-                `Échec qualification parrainage (commande ${order.reference}): ${(error as any)?.message}`,
+                `Échec accrual parrainage (commande ${order.reference}): ${(error as any)?.message}`,
                 (error as any)?.stack,
             );
         }

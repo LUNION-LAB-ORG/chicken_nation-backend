@@ -5,6 +5,7 @@ import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
 import { RewardService } from 'src/modules/fidelity/services/reward.service';
 import { ScratchEngineService } from 'src/modules/fidelity/services/scratch-engine.service';
 import { PromotionService } from 'src/modules/fidelity/services/promotion.service';
+import { ReferralService } from 'src/modules/referral/referral.service';
 import { OrderChannels } from '../enums/order-channels';
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
 import { ExpoPushService } from 'src/expo-push/expo-push.service';
@@ -23,6 +24,7 @@ export class OrderListenerService {
         private expoPushService: ExpoPushService,
         private userPushService: UserPushService,
         private notificationsSender: NotificationsSenderService,
+        private referralService: ReferralService,
     ) { }
 
     /* =========================================================
@@ -241,6 +243,18 @@ export class OrderListenerService {
                 .catch((error) =>
                     this.logger.error(
                         `Échec révocation des points (annulation) pour la commande ${payload.order.reference}: ${error?.message}`,
+                        error?.stack,
+                    ),
+                );
+
+            // 🤝 RÉVOCATION des gains PARRAINAGE (prime/commission) liés à la commande
+            // annulée : on ne rémunère pas un ambassadeur sur une commande annulée.
+            // PENDING/PAYABLE → CANCELLED ; un gain déjà PAYÉ est juste signalé (log).
+            void this.referralService
+                .revokeEarningsForCancelledOrder(payload.order.id)
+                .catch((error) =>
+                    this.logger.error(
+                        `Échec révocation des gains parrainage (annulation) pour la commande ${payload.order.reference}: ${error?.message}`,
                         error?.stack,
                     ),
                 );

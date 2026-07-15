@@ -232,6 +232,20 @@ enum ReferralStatus {
   CANCELLED // Annulé (anti-abus / réservé)
 }
 
+// Parrainage — volet MONÉTAIRE (Phase 5). Nature d'un gain de l'ambassadeur.
+enum ReferralEarningType {
+  PRIME // Prime fixe versée à la 1ère commande qualifiante du filleul (RG-11)
+  COMMISSION // % du CA de CHAQUE commande payée du filleul dans la fenêtre (défaut 90 j)
+}
+
+// Cycle de vie d'un gain d'ambassadeur (versement V1 = marquage manuel admin).
+enum ReferralEarningStatus {
+  PENDING // Acquis, pas encore éligible au versement
+  PAYABLE // Éligible au versement (seuil atteint ou passage manuel admin)
+  PAID // Versé (marquage manuel : paid_by / paid_at)
+  CANCELLED // Annulé (commande annulée / revue anti-fraude)
+}
+
 enum TicketStatus {
   OPEN // OUVERT
   IN_PROGRESS // EN COURS
@@ -1594,7 +1608,39 @@ model Referral {
   referrer Customer @relation("Referrer", fields: [referrer_id], references: [id])
   referee  Customer @relation("Referee", fields: [referee_id], references: [id])
 
+  earnings ReferralEarning[]
+
   @@index([referrer_id, status])
+  @@index([status])
+}
+
+// Parrainage — VOLET MONÉTAIRE (Phase 5). Registre COMPTABLE des gains de
+// l'ambassadeur (parrain) : PRIME fixe à la qualification du filleul + COMMISSION
+// (% du CA) sur chaque commande payée du filleul dans la fenêtre. Ne remplace PAS
+// le système Reward (carte à gratter parrain) : c'est une couche financière à part,
+// versée manuellement au back office (V1, marquage admin). Idempotence par
+// (source_order_id, type) : une commande ne génère qu'UNE prime ET/OU qu'une commission.
+model ReferralEarning {
+  id              String                @id @default(uuid()) @db.Uuid
+  referral_id     String                @db.Uuid // lien Referral parrain→filleul
+  referrer_id     String                @db.Uuid // parrain (ambassadeur) — bénéficiaire du gain
+  referee_id      String                @db.Uuid // filleul générateur du gain
+  type            ReferralEarningType
+  source_order_id String?               @db.Uuid // commande à l'origine du gain (clé d'idempotence)
+  amount          Int // Montant en FCFA (entier)
+  status          ReferralEarningStatus @default(PENDING)
+  note            String?               @db.Text // Note admin (versement / annulation / revue)
+  paid_by         String?               @db.Uuid // User admin ayant marqué PAID
+  paid_at         DateTime?             @db.Timestamp(6)
+  created_at      DateTime              @default(now()) @db.Timestamp(6)
+  updated_at      DateTime              @default(now()) @updatedAt @db.Timestamp(6)
+
+  referral Referral @relation(fields: [referral_id], references: [id])
+
+  // Idempotence : au plus 1 PRIME et 1 COMMISSION par commande source.
+  @@unique([source_order_id, type])
+  @@index([referrer_id, status])
+  @@index([referral_id])
   @@index([status])
 }
 

@@ -33,6 +33,14 @@ export class ReferralController {
     return this.referralService.getReferralStats(customerId);
   }
 
+  @Get('wallet')
+  @ApiOperation({ summary: 'Wallet ambassadeur : filleuls (masqués), ventes, gains, soldes' })
+  @ApiOkResponse({ description: 'Tableau de bord monétaire du parrain (Phase 5)' })
+  getWallet(@Req() req: Request) {
+    const customerId = (req.user as Customer).id;
+    return this.referralService.getAmbassadorDashboard(customerId);
+  }
+
   @Post('apply')
   @ApiOperation({ summary: 'Appliquer un code de parrainage (filleul, à l’inscription)' })
   @ApiOkResponse({ description: 'Parrainage créé + bon de bienvenue crédité' })
