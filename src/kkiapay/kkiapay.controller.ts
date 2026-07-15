@@ -31,7 +31,8 @@ export class KkiapayController {
      *
      * 1. Vérifie le secret via un lecteur env-first Neon-indépendant (§2) → 403 si invalide.
      * 2. Enfile le payload brut dans BullMQ (Redis) avec un jobId idempotent
-     *    `event:transactionId` → répond 200. Le traitement DB awaité se fait dans le
+     *    `event_transactionId` (assaini, sans ':' interdit par BullMQ) → répond 200.
+     *    Le traitement DB awaité se fait dans le
      *    worker (KkiapayWebhookConsumer), qui retente sur erreur transitoire.
      * 3. Si l'enfilement échoue (Redis injoignable) → 503 pour que KKiaPay RETENTE.
      *    On ne renvoie JAMAIS 200 sur erreur (sinon paiement perdu sans retry).
@@ -57,9 +58,12 @@ export class KkiapayController {
         try {
             // jobId idempotent : un même event/transaction ne s'enfile pas deux fois
             // tant que le job existe. Le traitement est de toute façon idempotent.
-            await this.webhooksQueue.add('event', body, {
-                jobId: `${body.event}:${body.transactionId}`,
-            });
+            // ⚠️ BullMQ INTERDIT le caractère ':' dans un custom jobId
+            // (Error: Custom Id cannot contain :) : avec un séparateur ':' l'enfilement
+            // throw à CHAQUE webhook → 503 → aucun paiement web n'est jamais traité.
+            // On assainit donc le jobId (on ne garde que [a-zA-Z0-9_.-]).
+            const jobId = `${body.event}_${body.transactionId}`.replace(/[^a-zA-Z0-9_.-]/g, '');
+            await this.webhooksQueue.add('event', body, { jobId });
             return response.status(HttpStatus.OK).send({ received: true });
         } catch (err) {
             // Redis injoignable → 503 pour que KKiaPay retente (NE PAS avaler en 200).
