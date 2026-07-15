@@ -26,12 +26,12 @@ import { subHours } from 'date-fns';
  *  - total_spent       : montant total dépensé (FCFA)
  *  - last_order_days   : nombre de jours depuis la dernière commande
  *  - loyalty_points    : points de fidélité actuels
- *  - loyalty_level     : niveau de fidélité (STANDARD / PREMIUM / GOLD)
+ *  - loyalty_level     : niveau de fidélité (STANDARD / VIP / VVIP)
  *  - first_name        : prénom
  *  - last_name         : nom
  *  - city              : ville (depuis la dernière adresse)
  *  - birthday          : date d'anniversaire (MM-DD)
- *  - is_vip            : client GOLD = VIP
+ *  - is_vip            : client VVIP = VIP
  *  - favorite_restaurant : nom du restaurant le plus commandé
  */
 @Injectable()
@@ -326,7 +326,7 @@ export class OnesignalTagsTask {
     // 3 tags marketing (limité par le plan OneSignal gratuit)
     // - orders         → Fréquence (combien de commandes)
     // - total_spent    → Montant (valeur du client en FCFA)
-    // - loyalty_level  → Niveau fidélité (STANDARD / PREMIUM / GOLD)
+    // - loyalty_level  → Niveau fidélité (STANDARD / VIP / VVIP)
     const tags: Record<string, string | number> = {
       orders: orderCount,
       total_spent: totalSpent,

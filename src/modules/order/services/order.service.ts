@@ -74,6 +74,18 @@ export class OrderService {
       }
     }
 
+    // RG-02 — NON-CUMUL des avantages : sur une même commande le client utilise
+    // SOIT ses points de fidélité, SOIT un seul coupon (code promo / bon d'achat),
+    // jamais les deux. Blocage serveur (l'UI bloque aussi en amont). `code_promo`
+    // ne porte qu'UN code → la contrainte « un seul coupon » est structurelle.
+    const wantsPoints = (points ?? 0) > 0;
+    const wantsCoupon = typeof code_promo === 'string' && code_promo.trim() !== '';
+    if (wantsPoints && wantsCoupon) {
+      throw new BadRequestException(
+        'Non-cumul : utilisez soit vos points, soit un coupon, pas les deux',
+      );
+    }
+
     // 1. Gestion de la Date (Le format ISO géré par le nouveau DTO)
     let finalDate = date && typeof date === 'string' ? new Date(date) : new Date();
 
@@ -423,6 +435,16 @@ export class OrderService {
       delivery_service: overrideDeliveryService,
       ...orderData
     } = createOrderDto;
+
+    // RG-02 non-cumul (chemin staff/call-center, comme createv2) : une commande
+    // utilise SOIT les points, SOIT un seul coupon — jamais les deux.
+    const wantsPoints = (points ?? 0) > 0;
+    const wantsCoupon = typeof orderData.code_promo === 'string' && orderData.code_promo.trim() !== '';
+    if (wantsPoints && wantsCoupon) {
+      throw new BadRequestException(
+        'Non-cumul : utilisez soit vos points, soit un coupon, pas les deux',
+      );
+    }
 
     const customerId = user_id ? undefined : (req.user as Customer).id;
     // Identifier le client ou créer à partir des données

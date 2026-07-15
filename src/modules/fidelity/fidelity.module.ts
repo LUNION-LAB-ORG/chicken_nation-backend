@@ -13,6 +13,7 @@ import { LoyaltyListenerService } from './listeners/loyalty-listener.service';
 import { LoyaltyEvent } from './events/loyalty.event';
 import { PromotionEvent } from './events/promotion.event';
 import { LoyaltyTask } from './tasks/loyalty.task';
+import { LoyaltyStatusResetTask } from './tasks/loyalty-status-reset.task';
 import { PromotionNotificationsTemplate } from './templates/promotion-notifications.template';
 import { LoyaltyNotificationsTemplate } from './templates/loyalty-notifications.template';
 import { VoucherModule } from '../voucher/voucher.module';
@@ -32,6 +33,7 @@ import { VoucherModule } from '../voucher/voucher.module';
         PromotionNotificationsTemplate,
         LoyaltyNotificationsTemplate,
         LoyaltyTask,
+        LoyaltyStatusResetTask,
         RewardCampaignTask
     ],
     exports: [PromotionService, LoyaltyService, RewardService, RewardCampaignService, PromotionEvent, LoyaltyEvent],

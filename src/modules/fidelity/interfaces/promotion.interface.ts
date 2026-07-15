@@ -3,7 +3,7 @@ import { Customer, Promotion, Prisma } from '@prisma/client';
 export interface PromotionFilter {
   status?: string;
   visibility?: 'PUBLIC' | 'PRIVATE';
-  customer_loyalty_level?: 'STANDARD' | 'PREMIUM' | 'GOLD';
+  customer_loyalty_level?: 'STANDARD' | 'VIP' | 'VVIP';
   target_type?: 'ALL_PRODUCTS' | 'SPECIFIC_PRODUCTS' | 'CATEGORIES';
   active_only?: boolean;
 }
@@ -24,8 +24,8 @@ export interface DiscountCalculation {
 export interface LoyaltyStats {
   total_customers_by_level: {
     STANDARD: number;
-    PREMIUM: number;
-    GOLD: number;
+    VIP: number;
+    VVIP: number;
   };
   points_distributed_this_month: number;
   points_redeemed_this_month: number;

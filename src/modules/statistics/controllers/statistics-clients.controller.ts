@@ -104,7 +104,7 @@ export class StatisticsClientsController {
 
   /**
    * GET /statistics/clients/loyalty-distribution
-   * Répartition par niveau fidélité (STANDARD / PREMIUM / GOLD) avec CA moyen.
+   * Répartition par niveau fidélité (STANDARD / VIP / VVIP) avec CA moyen.
    */
   @Get('loyalty-distribution')
   @RequirePermission(Modules.CLIENTS, Action.READ)

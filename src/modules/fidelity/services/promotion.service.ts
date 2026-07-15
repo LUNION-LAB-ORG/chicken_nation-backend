@@ -122,7 +122,7 @@ export class PromotionService {
       throw new PromotionException({
         key: PromotionErrorKeys.PROMOTION_MISSING_LOYALTY_LEVELS,
         message:
-          'Vous devez sélectionner au moins un niveau de fidélité pour ce type de promotion, exemple : standard, premium, gold',
+          'Vous devez sélectionner au moins un niveau de fidélité pour ce type de promotion, exemple : standard, VIP, VVIP',
       });
     }
 
@@ -491,9 +491,9 @@ export class PromotionService {
             const isTargetedByLoyalty =
               (customer.loyalty_level === LoyaltyLevel.STANDARD &&
                 promotion.target_standard) ||
-              (customer.loyalty_level === LoyaltyLevel.PREMIUM &&
+              (customer.loyalty_level === LoyaltyLevel.VIP &&
                 promotion.target_premium) ||
-              (customer.loyalty_level === LoyaltyLevel.GOLD &&
+              (customer.loyalty_level === LoyaltyLevel.VVIP &&
                 promotion.target_gold);
             if (!isTargetedByLoyalty) return false;
           }
@@ -927,9 +927,9 @@ export class PromotionService {
       switch (customer_loyalty_level) {
         case LoyaltyLevel.STANDARD:
           return promo.target_standard;
-        case LoyaltyLevel.PREMIUM:
+        case LoyaltyLevel.VIP:
           return promo.target_premium;
-        case LoyaltyLevel.GOLD:
+        case LoyaltyLevel.VVIP:
           return promo.target_gold;
         default:
           return false;
@@ -1304,8 +1304,8 @@ export class PromotionService {
 
       const hasAccess =
         (customer.loyalty_level === 'STANDARD' && promotion.target_standard) ||
-        (customer.loyalty_level === 'PREMIUM' && promotion.target_premium) ||
-        (customer.loyalty_level === 'GOLD' && promotion.target_gold);
+        (customer.loyalty_level === 'VIP' && promotion.target_premium) ||
+        (customer.loyalty_level === 'VVIP' && promotion.target_gold);
 
       if (!hasAccess) {
         return {

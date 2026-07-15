@@ -186,7 +186,7 @@ export class TopClientItem {
   @ApiProperty({ description: 'Canal préféré', enum: ['APP', 'CALL_CENTER', 'MIXED'] })
   preferredChannel: string;
 
-  @ApiProperty({ description: 'Niveau fidélité', enum: ['STANDARD', 'PREMIUM', 'GOLD'] })
+  @ApiProperty({ description: 'Niveau fidélité', enum: ['STANDARD', 'VIP', 'VVIP'] })
   loyaltyLevel: string;
 }
 
@@ -263,7 +263,7 @@ export class ClientsByZoneResponse {
 // ─── Nouveaux KPIs ──────────────────────────────────────────────────────────
 
 export class LoyaltyLevelItem {
-  @ApiProperty({ description: 'Niveau fidélité (STANDARD, PREMIUM, GOLD)' })
+  @ApiProperty({ description: 'Niveau fidélité (STANDARD, VIP, VVIP)' })
   level: string;
 
   @ApiProperty()

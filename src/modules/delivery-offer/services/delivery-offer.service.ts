@@ -222,8 +222,8 @@ export class DeliveryOfferService {
         const lvl = await resolveLoyalty();
         const ok =
           (lvl === LoyaltyLevel.STANDARD && offer.target_standard) ||
-          (lvl === LoyaltyLevel.PREMIUM && offer.target_premium) ||
-          (lvl === LoyaltyLevel.GOLD && offer.target_gold);
+          (lvl === LoyaltyLevel.VIP && offer.target_premium) ||
+          (lvl === LoyaltyLevel.VVIP && offer.target_gold);
         if (!ok) continue;
       }
       // Jours de la semaine

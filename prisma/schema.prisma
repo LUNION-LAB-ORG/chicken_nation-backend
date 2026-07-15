@@ -167,8 +167,8 @@ enum TypeTable {
 
 enum LoyaltyLevel {
   STANDARD // STANDARD
-  PREMIUM // PREMIUM
-  GOLD // GOLD
+  VIP // VIP (ex-PREMIUM)
+  VVIP // VVIP (ex-GOLD)
 }
 
 enum DiscountType {
@@ -323,8 +323,9 @@ model Customer {
   // SYSTÈME DE FIDÉLITÉ INTÉGRÉ
   // ================================
   loyalty_level     LoyaltyLevel?
-  total_points      Int           @default(0) // Points actuels disponibles
-  lifetime_points   Int           @default(0) // Total des points gagnés depuis l'inscription
+  total_points      Int           @default(0) // Points actuels disponibles (dépensables)
+  lifetime_points   Int           @default(0) // Total des points gagnés depuis l'inscription (cumul historique)
+  status_points     Int           @default(0) // Compteur ANNUEL de points EARNED → sert de base au calcul du NIVEAU (réinitialisé chaque année, cf. loyalty-status-reset.task.ts)
   last_level_update DateTime?     @db.Timestamp(6)
 
   // Relations fidélité
@@ -1559,10 +1560,12 @@ model LoyaltyConfig {
   minimum_redemption_points Int    @default(100) // Pour 100 points, on peut acheter un plat de 2000 XOF
   point_value_in_xof        Float  @default(20) // 1 point = 20 XOF
 
-  // Seuils pour les niveaux de fidélité
+  // Seuils pour les niveaux de fidélité (comparés à status_points, compteur annuel)
+  // NB : les CHAMPS gardent leurs noms historiques premium_threshold/gold_threshold
+  // (compat backoffice/config JSON) mais correspondent désormais aux niveaux VIP/VVIP.
   standard_threshold Int @default(300) // 300 points pour Standard
-  premium_threshold  Int @default(700) // 700 points pour Premium
-  gold_threshold     Int @default(1000) // 1000 points pour Gold
+  premium_threshold  Int @default(700) // 700 points pour VIP (ex-Premium)
+  gold_threshold     Int @default(1000) // 1000 points pour VVIP (ex-Gold)
 
   is_active  Boolean  @default(false)
   created_at DateTime @default(now()) @db.Timestamp(6)

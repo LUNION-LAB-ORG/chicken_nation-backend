@@ -25,7 +25,7 @@ export class LoyaltyService {
             if (data.standard_threshold >= data.premium_threshold ||
                 data.premium_threshold >= data.gold_threshold) {
                 throw new BadRequestException(
-                    'Les seuils doivent être croissants: Standard < Premium < Gold'
+                    'Les seuils doivent être croissants: Standard < VIP < VVIP'
                 );
             }
         }
@@ -200,13 +200,19 @@ export class LoyaltyService {
                     }
                 });
 
-                // Mettre à jour les points du client
-
+                // Mettre à jour les points du client.
+                // status_points (compteur ANNUEL adossé au NIVEAU) n'est incrémenté
+                // QUE pour les gains de commande (EARNED). Les BONUS de palier (et
+                // autres crédits manuels) ne comptent PAS pour le statut — sinon le
+                // bonus attribué à un changement de niveau ferait cascader les niveaux.
                 await tx.customer.update({
                     where: { id: customer_id },
                     data: {
                         total_points: { increment: points },
-                        lifetime_points: { increment: points }
+                        lifetime_points: { increment: points },
+                        ...(type === LoyaltyPointType.EARNED
+                            ? { status_points: { increment: points } }
+                            : {}),
                     }
                 });
 
@@ -650,16 +656,17 @@ export class LoyaltyService {
         let nextLevel: LoyaltyLevel | null = null;
         let pointsToNextLevel = 0;
 
+        // Le NIVEAU est adossé au compteur ANNUEL status_points (pas lifetime_points).
         switch (customer.loyalty_level) {
             case LoyaltyLevel.STANDARD:
-                nextLevel = LoyaltyLevel.PREMIUM;
-                pointsToNextLevel = config.premium_threshold - customer.lifetime_points;
+                nextLevel = LoyaltyLevel.VIP;
+                pointsToNextLevel = config.premium_threshold - customer.status_points;
                 break;
-            case LoyaltyLevel.PREMIUM:
-                nextLevel = LoyaltyLevel.GOLD;
-                pointsToNextLevel = config.gold_threshold - customer.lifetime_points;
+            case LoyaltyLevel.VIP:
+                nextLevel = LoyaltyLevel.VVIP;
+                pointsToNextLevel = config.gold_threshold - customer.status_points;
                 break;
-            case LoyaltyLevel.GOLD:
+            case LoyaltyLevel.VVIP:
                 nextLevel = null;
                 pointsToNextLevel = 0;
                 break;
@@ -707,68 +714,127 @@ export class LoyaltyService {
     private async updateCustomerLoyaltyLevel(customer: Customer, tx: any) {
         const config = await this.getConfig();
 
+        // Re-lecture DANS la transaction : le `customer` reçu en argument est
+        // capturé AVANT l'incrément (addPoints) → il porte des compteurs périmés.
+        // On lit l'état frais pour décider le niveau sur le status_points À JOUR.
+        const fresh = await tx.customer.findUnique({
+            where: { id: customer.id },
+            select: {
+                id: true,
+                loyalty_level: true,
+                status_points: true,
+                total_points: true,
+                lifetime_points: true,
+            },
+        });
+        if (!fresh) return;
+
+        // Le NIVEAU est calculé sur le compteur ANNUEL status_points.
         let newLevel: LoyaltyLevel | null = null;
 
-        if (customer.lifetime_points >= config.gold_threshold) {
-            newLevel = LoyaltyLevel.GOLD;
-        } else if (customer.lifetime_points >= config.premium_threshold) {
-            newLevel = LoyaltyLevel.PREMIUM;
-        } else if (customer.lifetime_points >= config.standard_threshold) {
+        if (fresh.status_points >= config.gold_threshold) {
+            newLevel = LoyaltyLevel.VVIP;
+        } else if (fresh.status_points >= config.premium_threshold) {
+            newLevel = LoyaltyLevel.VIP;
+        } else if (fresh.status_points >= config.standard_threshold) {
             newLevel = LoyaltyLevel.STANDARD;
         }
 
-        if (newLevel && newLevel !== customer.loyalty_level) {
-            // Mettre à jour le niveau du client
-            await tx.customer.update({
-                where: { id: customer.id },
-                data: {
-                    loyalty_level: newLevel,
-                    last_level_update: new Date()
-                }
-            });
+        if (newLevel && newLevel !== fresh.loyalty_level) {
+            // Ordre des niveaux : distingue une MONTÉE d'une rétrogradation (ex. après
+            // un relèvement des seuils en config). Le bonus + la célébration level_up ne
+            // se déclenchent QUE sur une progression réelle ; le niveau, lui, est ajusté
+            // dans les deux sens et l'historique tracé.
+            const levelRank = (lvl: LoyaltyLevel | null): number =>
+                lvl === LoyaltyLevel.VVIP ? 3
+                    : lvl === LoyaltyLevel.VIP ? 2
+                        : lvl === LoyaltyLevel.STANDARD ? 1
+                            : 0;
+            const isUpgrade = levelRank(newLevel) > levelRank(fresh.loyalty_level);
 
-            // Enregistrer l'historique
-            await tx.loyaltyLevelHistory.create({
-                data: {
-                    customer_id: customer.id,
-                    previous_level: customer.loyalty_level,
-                    new_level: newLevel,
-                    points_at_time: customer.lifetime_points,
-                    reason: 'Mise à jour automatique basée sur les points accumulés'
-                }
-            });
-            // Attribuer des points bonus pour le nouveau niveau
+            // Montant du bonus de palier à CRÉDITER réellement — UNIQUEMENT en montée.
             let bonusPoints = 0;
-            switch (newLevel) {
-                case LoyaltyLevel.STANDARD:
-                    bonusPoints = 100;
-                    break;
-                case LoyaltyLevel.PREMIUM:
-                    bonusPoints = 150;
-                    break;
-                case LoyaltyLevel.GOLD:
-                    bonusPoints = 200;
-                    break;
+            if (isUpgrade) {
+                switch (newLevel) {
+                    case LoyaltyLevel.STANDARD:
+                        bonusPoints = 100;
+                        break;
+                    case LoyaltyLevel.VIP:
+                        bonusPoints = 150;
+                        break;
+                    case LoyaltyLevel.VVIP:
+                        bonusPoints = 200;
+                        break;
+                }
             }
 
-            // Evenement de niveau atteint
-            this.loyaltyEvent.levelUpEvent({
-                customer,
-                new_level: newLevel,
-                bonus_points: bonusPoints
+            // Mettre à jour le niveau du client + CRÉDITER le bonus de palier.
+            // Le bonus alimente total_points (dépensable) et lifetime_points (cumul)
+            // mais PAS status_points → il ne fait pas cascader les niveaux (pas de
+            // récursion : on ne rappelle pas updateCustomerLoyaltyLevel ici).
+            await tx.customer.update({
+                where: { id: fresh.id },
+                data: {
+                    loyalty_level: newLevel,
+                    last_level_update: new Date(),
+                    ...(bonusPoints > 0
+                        ? {
+                            total_points: { increment: bonusPoints },
+                            lifetime_points: { increment: bonusPoints },
+                        }
+                        : {}),
+                }
             });
 
-            // WebSocket: notifier le client de son changement de niveau
-            this.appGateway.emitToUser(customer.id, 'customer', 'loyalty:level_up', {
-                previousLevel: customer.loyalty_level,
-                newLevel,
-                bonusPoints,
+            // Enregistrer le crédit du bonus dans le ledger (registre comptable).
+            if (bonusPoints > 0) {
+                await tx.loyaltyPoint.create({
+                    data: {
+                        customer_id: fresh.id,
+                        order_id: null,
+                        points: bonusPoints,
+                        type: LoyaltyPointType.BONUS,
+                        reason: `Bonus palier ${newLevel}`,
+                        expires_at: new Date(
+                            Date.now() + config.points_expiration_days! * 24 * 60 * 60 * 1000,
+                        ),
+                    },
+                });
+            }
+
+            // Historique : on trace TOUT changement de niveau (montée ET ajustement).
+            await tx.loyaltyLevelHistory.create({
+                data: {
+                    customer_id: fresh.id,
+                    previous_level: fresh.loyalty_level,
+                    new_level: newLevel,
+                    points_at_time: fresh.status_points,
+                    reason: isUpgrade
+                        ? 'Montée de niveau (points de statut)'
+                        : 'Ajustement de niveau (points de statut)',
+                }
             });
-            this.appGateway.emitToBackoffice('loyalty:level_up', {
-                customerId: customer.id,
-                previousLevel: customer.loyalty_level,
-                newLevel,
-            });
+
+            // Célébration (event + WS level_up) : UNIQUEMENT sur une montée réelle
+            // — pas sur une rétrogradation (ex. relèvement des seuils en config).
+            if (isUpgrade) {
+                this.loyaltyEvent.levelUpEvent({
+                    customer,
+                    new_level: newLevel,
+                    bonus_points: bonusPoints
+                });
+
+                this.appGateway.emitToUser(customer.id, 'customer', 'loyalty:level_up', {
+                    previousLevel: fresh.loyalty_level,
+                    newLevel,
+                    bonusPoints,
+                });
+                this.appGateway.emitToBackoffice('loyalty:level_up', {
+                    customerId: fresh.id,
+                    previousLevel: fresh.loyalty_level,
+                    newLevel,
+                });
+            }
         }
     }
 

@@ -723,7 +723,7 @@ export class StatisticsClientsService {
   // =========================================================================
 
   /**
-   * Répartition des clients par niveau de fidélité (STANDARD / PREMIUM / GOLD).
+   * Répartition des clients par niveau de fidélité (STANDARD / VIP / VVIP).
    */
   async getLoyaltyDistribution(
     query: ClientsStatsQueryDto,
@@ -768,7 +768,7 @@ export class StatisticsClientsService {
     }
 
     const totalClients = customers.length;
-    const items = ['STANDARD', 'PREMIUM', 'GOLD']
+    const items = ['STANDARD', 'VIP', 'VVIP']
       .map((level) => {
         const data = levelMap.get(level) ?? { count: 0, totalRevenue: 0 };
         return {

@@ -121,7 +121,7 @@ export class PromotionListenerService {
                 }
             });
         } else {
-            const targetedCustomers = allCustomers.filter(c => payload.promotion.target_standard && c.loyalty_level === LoyaltyLevel.STANDARD || payload.promotion.target_premium && c.loyalty_level === LoyaltyLevel.PREMIUM || payload.promotion.target_gold && c.loyalty_level === LoyaltyLevel.GOLD);
+            const targetedCustomers = allCustomers.filter(c => payload.promotion.target_standard && c.loyalty_level === LoyaltyLevel.STANDARD || payload.promotion.target_premium && c.loyalty_level === LoyaltyLevel.VIP || payload.promotion.target_gold && c.loyalty_level === LoyaltyLevel.VVIP);
             const notificationDataCustomers = {
                 actor: actorRecipient,
                 recipients: targetedCustomers,

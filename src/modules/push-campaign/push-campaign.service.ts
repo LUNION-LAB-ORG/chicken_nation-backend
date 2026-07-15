@@ -256,8 +256,8 @@ export class PushCampaignService {
       this.countNewCustomers(7),
       this.countByOrdersMin(5),
       this.countBigSpenders(50000),
-      this.countByLoyalty('GOLD'),
-      this.countByLoyalty('PREMIUM'),
+      this.countByLoyalty('VVIP'),
+      this.countByLoyalty('VIP'),
     ]);
 
     const segments: any[] = [
@@ -493,10 +493,10 @@ export class PushCampaignService {
         return this.getCustomerIdsByTotalSpent(50000);
 
       case 'gold':
-        return this.getCustomerIdsByLoyalty('GOLD');
+        return this.getCustomerIdsByLoyalty('VVIP');
 
       case 'premium':
-        return this.getCustomerIdsByLoyalty('PREMIUM');
+        return this.getCustomerIdsByLoyalty('VIP');
 
       default: {
         // city_<cityName>
@@ -1249,7 +1249,7 @@ export class PushCampaignService {
     { key: 'last_name', label: 'Nom', example: 'Koné' },
     { key: 'phone', label: 'Téléphone', example: '+22507...' },
     { key: 'city', label: 'Ville', example: 'Abidjan' },
-    { key: 'loyalty_level', label: 'Niveau fidélité', example: 'GOLD' },
+    { key: 'loyalty_level', label: 'Niveau fidélité', example: 'VVIP' },
     { key: 'total_points', label: 'Points fidélité', example: '1500' },
   ];
 

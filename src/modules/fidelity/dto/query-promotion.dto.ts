@@ -79,14 +79,14 @@ export class QueryPromotionDto {
     @Transform(({ value }) => Boolean(value))
     target_standard?: boolean;
 
-    @ApiPropertyOptional({ description: 'Filtrer par niveau premium' })
+    @ApiPropertyOptional({ description: 'Filtrer par niveau VIP (ex-premium)' })
     @IsOptional()
     @Type(() => Boolean)
     @IsBoolean()
     @Transform(({ value }) => Boolean(value))
     target_premium?: boolean;
 
-    @ApiPropertyOptional({ description: 'Filtrer par niveau gold' })
+    @ApiPropertyOptional({ description: 'Filtrer par niveau VVIP (ex-gold)' })
     @IsOptional()
     @Type(() => Boolean)
     @IsBoolean()

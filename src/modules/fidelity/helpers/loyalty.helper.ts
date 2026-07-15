@@ -9,17 +9,17 @@ export class LoyaltyHelper {
           'Accès aux promotions publiques',
           'Programme de parrainage'
         ];
-      case LoyaltyLevel.PREMIUM:
+      case LoyaltyLevel.VIP:
         return [
           'Tous les avantages Standard',
-          'Accès aux promotions Premium',
+          'Accès aux promotions VIP',
           '10% de points bonus sur les commandes',
           'Support client prioritaire'
         ];
-      case LoyaltyLevel.GOLD:
+      case LoyaltyLevel.VVIP:
         return [
-          'Tous les avantages Premium',
-          'Accès aux promotions Gold exclusives',
+          'Tous les avantages VIP',
+          'Accès aux promotions VVIP exclusives',
           '20% de points bonus sur les commandes',
           'Livraison gratuite',
           'Invitations aux événements spéciaux'
@@ -33,9 +33,9 @@ export class LoyaltyHelper {
     switch (level) {
       case LoyaltyLevel.STANDARD:
         return '#6B7280'; // Gris
-      case LoyaltyLevel.PREMIUM:
+      case LoyaltyLevel.VIP:
         return '#8B5CF6'; // Violet
-      case LoyaltyLevel.GOLD:
+      case LoyaltyLevel.VVIP:
         return '#F59E0B'; // Doré
       default:
         return '#6B7280';
