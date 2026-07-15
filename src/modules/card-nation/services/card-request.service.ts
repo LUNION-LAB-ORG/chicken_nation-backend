@@ -1,26 +1,47 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { CardRequestStatus, NationCardStatus, Prisma } from '@prisma/client';
+import { CardRequestStatus, LoyaltyLevel, NationCardStatus, Prisma, ProfileType } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { SettingsService } from 'src/modules/settings/settings.service';
 import { CardRequestQueryDto, NationCardQueryDto } from '../dtos/card-query.dto';
 import { CreateCardRequestDto } from '../dtos/create-card-request.dto';
 import { ReviewCardRequestDto } from '../dtos/review-card-request.dto';
 import { CardGenerationService } from './card-generation.service';
+import { CardNotificationService } from './card-notification.service';
 import { S3Service } from 'src/s3/s3.service';
 
 @Injectable()
 export class CardRequestService {
+  private readonly logger = new Logger(CardRequestService.name);
+
+  // Réglage backoffice : false = V1 (déclaratif, émission auto sans justificatif),
+  // true = V2 (justificatif étudiant obligatoire + revue admin). Défaut V1.
+  static readonly SETTING_REQUIRE_JUSTIFICATIF = 'card.require_justificatif';
 
   constructor(
     private prisma: PrismaService,
     private cardGenerationService: CardGenerationService,
+    private readonly cardNotificationService: CardNotificationService,
+    private readonly settingsService: SettingsService,
     private readonly s3service: S3Service
   ) { }
+
+  /** Lit le réglage card.require_justificatif (défaut false = V1). */
+  private async isJustificatifRequired(): Promise<boolean> {
+    const value = await this.settingsService.get(
+      CardRequestService.SETTING_REQUIRE_JUSTIFICATIF,
+    );
+    return value === 'true' || value === '1';
+  }
 
   /**
    * Créer une demande de carte (depuis l'app mobile)
    */
-  async createRequest(customerId: string, createDto: CreateCardRequestDto, file: Express.Multer.File) {
+  async createRequest(
+    customerId: string,
+    createDto: CreateCardRequestDto,
+    file?: Express.Multer.File,
+  ) {
     // Vérifier si une demande en attente existe déjà
     const existingRequest = await this.prisma.cardRequest.findFirst({
       where: {
@@ -47,24 +68,74 @@ export class CardRequestService {
       throw new ConflictException('Vous possédez déjà une carte Nation active');
     }
 
-    // Créer la demande
+    // Mise à jour du client si date de naissance renseignée (sert au numéro de carte).
+    if (createDto.birth_day) {
+      await this.prisma.customer.update({
+        where: { id: customerId },
+        data: { birth_day: createDto.birth_day },
+      });
+    }
 
-    // upload S3
-    const result = await this.s3service.uploadFile({
-      buffer: file.buffer,
-      path: "chicken-nation/carte-etudiant",
-      originalname: file.originalname,
-      mimetype: file.mimetype
-    })
+    const requireJustificatif = await this.isJustificatifRequired();
+    const isStudent = createDto.profile_type === ProfileType.ETUDIANT;
 
-    // creation
+    /* ============================================================
+       V2 — Mode justificatif (réglage card.require_justificatif=true) :
+       institution + justificatif obligatoires → revue admin EXISTANTE.
+    ============================================================ */
+    if (requireJustificatif) {
+      if (!createDto.institution) {
+        throw new BadRequestException("Le nom de l'établissement est requis");
+      }
+      if (!file) {
+        throw new BadRequestException('Le justificatif étudiant est requis');
+      }
+
+      const result = await this.s3service.uploadFile({
+        buffer: file.buffer,
+        path: 'chicken-nation/carte-etudiant',
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+      });
+
+      const cardRequest = await this.prisma.cardRequest.create({
+        data: {
+          customer_id: customerId,
+          nickname: createDto.nickname,
+          profile_type: createDto.profile_type,
+          institution: createDto.institution,
+          student_card_file_url: result?.key ?? '',
+          status: CardRequestStatus.PENDING,
+        },
+        include: {
+          customer: {
+            select: { id: true, first_name: true, last_name: true, phone: true, email: true },
+          },
+        },
+      });
+
+      return {
+        success: true,
+        mode: 'V2',
+        message: 'Votre demande de carte Nation a été soumise et sera examinée',
+        data: cardRequest,
+      };
+    }
+
+    /* ============================================================
+       V1 — Mode déclaratif (défaut) : émission AUTO immédiate, sans
+       justificatif. La demande est créée directement APPROVED et la
+       carte est générée dans la foulée (statut ACTIVE).
+    ============================================================ */
     const cardRequest = await this.prisma.cardRequest.create({
       data: {
         customer_id: customerId,
         nickname: createDto.nickname,
-        institution: createDto.institution,
-        student_card_file_url: result?.key ?? "",
-        status: CardRequestStatus.PENDING,
+        profile_type: createDto.profile_type,
+        institution: createDto.institution ?? null,
+        student_card_file_url: null,
+        status: CardRequestStatus.APPROVED,
+        reviewed_at: new Date(),
       },
       include: {
         customer: {
@@ -74,24 +145,25 @@ export class CardRequestService {
             last_name: true,
             phone: true,
             email: true,
+            birth_day: true,
+            loyalty_level: true,
           },
         },
       },
     });
-    // mise à jour du client si date de naissance renseignée
-    if (createDto.birth_day) {
-      await this.prisma.customer.update({
-        where: { id: customerId },
-        data: {
-          birth_day: createDto.birth_day,
-        },
-      });
-    }
+
+    const card = await this.generateCard(cardRequest);
+
+    // Notification (cloche + WS + push Expo) — best-effort, ne bloque pas l'émission.
+    this.cardNotificationService
+      .notifyCardReady(customerId, card.level)
+      .catch((e) => this.logger.warn(`notifyCardReady échouée : ${e?.message}`));
 
     return {
       success: true,
-      message: 'Votre demande de carte Nation a été soumise avec succès',
-      data: cardRequest,
+      mode: 'V1',
+      message: 'Votre Carte de la Nation a été émise avec succès',
+      data: { request: cardRequest, card },
     };
   }
 
@@ -115,10 +187,15 @@ export class CardRequestService {
   }
 
   /**
-   * Obtenir la carte Nation du client
+   * Obtenir la carte Nation du client, enrichie du niveau, du marqueur ETUDIANT
+   * et de la progression vers le niveau suivant.
+   *
+   * Régénération PARESSEUSE : si le snapshot `level`/`is_student` de la carte ne
+   * correspond plus au niveau courant du client (ex. après le reset annuel du
+   * status_points, non couvert par le listener level-up), on régénère l'image ici.
    */
   async getMyCard(customerId: string) {
-    const card = await this.prisma.nationCard.findFirst({
+    let card = await this.prisma.nationCard.findFirst({
       where: {
         customer_id: customerId,
         status: NationCardStatus.ACTIVE,
@@ -130,11 +207,14 @@ export class CardRequestService {
             last_name: true,
             phone: true,
             email: true,
+            loyalty_level: true,
+            status_points: true,
           },
         },
         card_request: {
           select: {
             institution: true,
+            profile_type: true,
             reviewed_at: true,
             created_at: true,
           },
@@ -146,7 +226,59 @@ export class CardRequestService {
       throw new NotFoundException('Vous n\'avez pas encore de carte Nation active');
     }
 
-    return card;
+    // Régénération paresseuse best-effort (couvre le reset annuel).
+    if (card.level !== (card.customer.loyalty_level ?? null)) {
+      try {
+        const regenerated = await this.regenerateActiveCard(customerId);
+        if (regenerated) {
+          card = { ...card, ...regenerated } as typeof card;
+        }
+      } catch (e) {
+        this.logger.warn(`Régénération paresseuse carte échouée : ${(e as Error)?.message}`);
+      }
+    }
+
+    const progression = await this.getLevelProgression(
+      card.customer.loyalty_level ?? null,
+      card.customer.status_points ?? 0,
+    );
+
+    return {
+      ...card,
+      level: card.level,
+      is_student: card.is_student,
+      progression,
+    };
+  }
+
+  /**
+   * Calcule la progression de fidélité (niveau courant + prochain palier).
+   * Lit les seuils depuis LoyaltyConfig sans dépendre du module fidelity (évite
+   * un cycle de modules). Indépendant du niveau actuel : le prochain palier est
+   * déterminé par le premier seuil au-dessus de status_points.
+   */
+  private async getLevelProgression(level: LoyaltyLevel | null, statusPoints: number) {
+    const config = await this.prisma.loyaltyConfig.findFirst({ where: { is_active: true } });
+    const thresholds = {
+      STANDARD: config?.standard_threshold ?? 300,
+      VIP: config?.premium_threshold ?? 700,
+      VVIP: config?.gold_threshold ?? 1000,
+    };
+
+    const ladder: Array<{ level: LoyaltyLevel; points: number }> = [
+      { level: LoyaltyLevel.STANDARD, points: thresholds.STANDARD },
+      { level: LoyaltyLevel.VIP, points: thresholds.VIP },
+      { level: LoyaltyLevel.VVIP, points: thresholds.VVIP },
+    ];
+    const next = ladder.find((l) => statusPoints < l.points);
+
+    return {
+      current_level: level,
+      status_points: statusPoints,
+      next_level: next?.level ?? null,
+      points_to_next_level: next ? Math.max(0, next.points - statusPoints) : 0,
+      thresholds,
+    };
   }
 
   /**
@@ -272,9 +404,12 @@ export class CardRequestService {
       },
     });
 
-    // Si approuvée, générer la carte
+    // Si approuvée, générer la carte + notifier (best-effort).
     if (reviewDto.status === CardRequestStatus.APPROVED) {
-      await this.generateCard(updatedRequest);
+      const card = await this.generateCard(updatedRequest);
+      this.cardNotificationService
+        .notifyCardReady(updatedRequest.customer_id, card.level)
+        .catch((e) => this.logger.warn(`notifyCardReady échouée : ${e?.message}`));
     }
 
 
@@ -288,10 +423,14 @@ export class CardRequestService {
   }
 
   /**
-   * Génère une carte Nation après approbation
+   * Génère une carte Nation après approbation.
+   * Snapshot le niveau de fidélité (thème couleur) + le marqueur ETUDIANT.
    */
   private async generateCard(requestCard: any) {
     try {
+      const level: LoyaltyLevel | null = requestCard.customer.loyalty_level ?? null;
+      const isStudent = requestCard.profile_type === ProfileType.ETUDIANT;
+
       const cardNumber = this.cardGenerationService.generateCardNumber(requestCard.customer.birth_day);
       const qrCodeValue = this.cardGenerationService.generateQRValue(
         cardNumber,
@@ -305,9 +444,10 @@ export class CardRequestService {
         cardNumber,
         qrCodeValue,
         requestCard.nickname,
+        { level, is_student: isStudent },
       );
 
-      await this.prisma.nationCard.create({
+      return await this.prisma.nationCard.create({
         data: {
           customer_id: requestCard.customer_id,
           card_request_id: requestCard.id,
@@ -315,13 +455,59 @@ export class CardRequestService {
           card_number: cardNumber,
           qr_code_value: qrCodeValue,
           card_image_url: cardImagePath,
+          level,
+          is_student: isStudent,
           status: NationCardStatus.ACTIVE,
         },
       });
 
     } catch (error) {
+      this.logger.error(`Erreur génération carte : ${(error as Error)?.message}`, (error as Error)?.stack);
       throw new BadRequestException('Erreur lors de la génération de la carte');
     }
+  }
+
+  /**
+   * Régénère l'image de la carte ACTIVE d'un client pour refléter son niveau de
+   * fidélité courant (thème couleur) et son marqueur ETUDIANT. Réutilise le
+   * numéro de carte et le QR existants (identité inchangée). No-op si rien n'a
+   * changé. Retourne la carte (mise à jour ou inchangée), ou null s'il n'y en a pas.
+   */
+  async regenerateActiveCard(customerId: string, newLevel?: LoyaltyLevel | null) {
+    const card = await this.prisma.nationCard.findFirst({
+      where: { customer_id: customerId, status: NationCardStatus.ACTIVE },
+      include: {
+        customer: { select: { first_name: true, last_name: true, loyalty_level: true } },
+        card_request: { select: { profile_type: true } },
+      },
+    });
+    if (!card) return null;
+
+    // Niveau cible : celui porté par l'event de level-up (FIABLE même si la transaction
+    // loyalty n'est pas encore commitée → sinon on relirait l'ancien niveau et la régén
+    // serait un no-op). En régénération paresseuse (getMyCard), newLevel est absent → on
+    // prend le niveau courant en base.
+    const level: LoyaltyLevel | null =
+      newLevel !== undefined ? newLevel : (card.customer.loyalty_level ?? null);
+    const isStudent = card.card_request.profile_type === ProfileType.ETUDIANT;
+
+    // Rien à régénérer : le snapshot est déjà à jour.
+    if (card.level === level && card.is_student === isStudent) return card;
+
+    const firstName = (card.customer.first_name || '').split(' ')[0];
+    const newImage = await this.cardGenerationService.generateCardImage(
+      firstName,
+      card.customer.last_name || '',
+      card.card_number,
+      card.qr_code_value,
+      card.nickname ?? undefined,
+      { level, is_student: isStudent },
+    );
+
+    return this.prisma.nationCard.update({
+      where: { id: card.id },
+      data: { level, is_student: isStudent, card_image_url: newImage },
+    });
   }
 
   /**

@@ -1798,13 +1798,24 @@ enum NationCardStatus {
   REVOKED
 }
 
+// Profil DECLARATIF de la demande de carte (Phase 3).
+// V1 : sans justificatif → le client déclare simplement son profil.
+enum ProfileType {
+  ETUDIANT
+  PROFESSIONNEL
+}
+
 model CardRequest {
   id                    String            @id @default(uuid()) @db.Uuid
   customer_id           String            @db.Uuid
   customer              Customer          @relation(fields: [customer_id], references: [id], onDelete: Cascade)
   nickname              String?           @db.VarChar(100)
-  institution           String            @db.VarChar(255)
-  student_card_file_url String            @db.Text
+  // Profil déclaratif (V1). Marqueur ETUDIANT indépendant du niveau de fidélité.
+  profile_type          ProfileType       @default(ETUDIANT)
+  // institution / justificatif : requis UNIQUEMENT en mode V2 (card.require_justificatif=true).
+  // Nullable depuis la Phase 3 (V1 déclaratif sans justificatif).
+  institution           String?           @db.VarChar(255)
+  student_card_file_url String?           @db.Text
   status                CardRequestStatus @default(PENDING)
   rejection_reason      String?           @db.Text
   reviewed_by           String?           @db.Uuid
@@ -1829,6 +1840,11 @@ model NationCard {
   card_number     String           @unique @db.VarChar(50)
   qr_code_value   String           @unique @db.Text
   card_image_url  String           @db.Text
+  // Snapshot du niveau de fidélité au moment de la (re)génération de l'image.
+  // Pilote le thème couleur de la carte (Standard/VIP/VVIP). Nullable = pas encore snapshoté.
+  level           LoyaltyLevel?
+  // Marqueur ETUDIANT (liseré/badge jaune sur la carte), indépendant du niveau.
+  is_student      Boolean          @default(false)
   status          NationCardStatus @default(ACTIVE)
   created_at      DateTime         @default(now()) @db.Timestamp(6)
   updated_at      DateTime         @updatedAt @db.Timestamp(6)

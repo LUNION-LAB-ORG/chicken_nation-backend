@@ -1,8 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { LoyaltyLevel } from '@prisma/client';
 import { createCanvas, loadImage } from 'canvas';
 import * as QRCode from 'qrcode';
 import { S3Service } from 'src/s3/s3.service';
 import { v4 as uuidv4 } from 'uuid';
+
+/** Options de thème passées à la génération d'image (Phase 3). */
+export interface CardImageThemeOptions {
+  /** Niveau de fidélité snapshoté → pilote la couleur d'accent de la carte. */
+  level?: LoyaltyLevel | null;
+  /** Marqueur ETUDIANT → ajoute un liseré/badge jaune par-dessus. */
+  is_student?: boolean;
+}
 
 @Injectable()
 export class CardGenerationService {
@@ -12,7 +21,20 @@ export class CardGenerationService {
   private readonly CARD_WIDTH = 1536;
   private readonly CARD_HEIGHT = 1024;
 
+  // Thème couleur par niveau (généré par dessin canvas, sans asset externe).
+  private readonly STUDENT_COLOR = '#FFD24C'; // liseré / badge ETUDIANT (jaune)
+  private readonly LEVEL_THEME: Record<LoyaltyLevel, { color: string; label: string }> = {
+    STANDARD: { color: '#F17922', label: 'STANDARD' }, // orange
+    VIP: { color: '#D4AF37', label: 'VIP' }, // or
+    VVIP: { color: '#C0392B', label: 'VVIP' }, // rouge
+  };
+
   constructor(private readonly s3service: S3Service) { }
+
+  /** Résout le thème (couleur + libellé) pour un niveau donné (défaut STANDARD). */
+  private resolveTheme(level?: LoyaltyLevel | null): { color: string; label: string } {
+    return (level && this.LEVEL_THEME[level]) || this.LEVEL_THEME.STANDARD;
+  }
 
   /**
    * Génère le code affiché sur la carte
@@ -47,9 +69,13 @@ export class CardGenerationService {
     displayCode: string,
     qrValue: string,
     nickname?: string,
+    theme?: CardImageThemeOptions,
   ): Promise<string> {
     const canvas = createCanvas(this.CARD_WIDTH, this.CARD_HEIGHT);
     const ctx = canvas.getContext('2d');
+
+    const { color: accentColor, label: levelLabel } = this.resolveTheme(theme?.level);
+    const isStudent = theme?.is_student === true;
 
     /* =====================================================
        🖼️ FOND OFFICIEL (COVER) AVEC COINS ARRONDIS
@@ -67,12 +93,41 @@ export class CardGenerationService {
     this.drawImageCover(ctx, bg);
 
     /* =====================================================
+       🎨 THÈME COULEUR PAR NIVEAU (bordure d'accent)
+       + LISERÉ JAUNE ÉTUDIANT (par-dessus, si applicable)
+    ====================================================== */
+    // Bordure d'accent au niveau (orange / or / rouge).
+    ctx.save();
+    ctx.strokeStyle = accentColor;
+    ctx.lineWidth = 20;
+    this.createRoundedRectPath(ctx, 22, 22, this.CARD_WIDTH - 44, this.CARD_HEIGHT - 44, 30);
+    ctx.stroke();
+    // Liseré jaune ETUDIANT, en retrait de la bordure de niveau.
+    if (isStudent) {
+      ctx.strokeStyle = this.STUDENT_COLOR;
+      ctx.lineWidth = 10;
+      this.createRoundedRectPath(ctx, 48, 48, this.CARD_WIDTH - 96, this.CARD_HEIGHT - 96, 24);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    /* =====================================================
        🏷️ TITRE "CARTE NATION"
     ====================================================== */
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 80px Arial';
     ctx.textAlign = 'left';
     ctx.fillText('CARTE DE LA NATION', 80, 160);
+
+    /* =====================================================
+       🥇 BADGE NIVEAU (pilule colorée) + BADGE ÉTUDIANT
+    ====================================================== */
+    this.drawPill(ctx, 80, 210, levelLabel, accentColor, '#ffffff');
+    if (isStudent) {
+      // Décalé à droite du badge niveau.
+      const levelPillWidth = this.pillWidth(ctx, levelLabel);
+      this.drawPill(ctx, 80 + levelPillWidth + 24, 210, 'ÉTUDIANT', this.STUDENT_COLOR, '#1A1A1A');
+    }
 
     /* =====================================================
        🐔 LOGO (AGRANDI - EN HAUT À DROITE)
@@ -169,6 +224,47 @@ export class CardGenerationService {
 
     this.logger.log(`Carte Nation générée : ${fileName}`);
     return result?.key || '';
+  }
+
+  /* =====================================================
+     🧩 UTIL — PILL (badge arrondi coloré)
+  ====================================================== */
+  private readonly PILL_FONT = 'bold 44px Arial';
+  private readonly PILL_PAD_X = 34;
+  private readonly PILL_HEIGHT = 74;
+
+  /** Largeur totale d'une pilule pour un libellé (pour enchaîner les badges). */
+  private pillWidth(ctx: any, label: string): number {
+    ctx.save();
+    ctx.font = this.PILL_FONT;
+    const textWidth = ctx.measureText(label).width;
+    ctx.restore();
+    return textWidth + this.PILL_PAD_X * 2;
+  }
+
+  /** Dessine une pilule remplie (badge) avec texte centré verticalement. */
+  private drawPill(
+    ctx: any,
+    x: number,
+    y: number,
+    label: string,
+    bgColor: string,
+    textColor: string,
+  ) {
+    const width = this.pillWidth(ctx, label);
+    const height = this.PILL_HEIGHT;
+
+    ctx.save();
+    ctx.fillStyle = bgColor;
+    this.createRoundedRectPath(ctx, x, y, width, height, height / 2);
+    ctx.fill();
+
+    ctx.fillStyle = textColor;
+    ctx.font = this.PILL_FONT;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x + this.PILL_PAD_X, y + height / 2 + 2);
+    ctx.restore();
   }
 
   /* =====================================================

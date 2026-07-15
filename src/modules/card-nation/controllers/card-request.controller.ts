@@ -1,4 +1,3 @@
-import { CacheInterceptor } from '@nestjs/cache-manager';
 import {
   Body,
   Controller,
@@ -18,8 +17,10 @@ import { CardRequestService } from '../services/card-request.service';
 
 @ApiTags('Carte Nation - Client')
 @ApiBearerAuth()
+// PAS de CacheInterceptor global ici : /my-card et /my-request sont PROPRES À CHAQUE
+// client (auth par Bearer, URL identique pour tous) → un cache par URL servirait la
+// carte d'un client à un autre (fuite de données).
 @Controller('card-nation')
-@UseInterceptors(CacheInterceptor)
 export class CardRequestController {
   constructor(private readonly cardRequestService: CardRequestService) { }
 
