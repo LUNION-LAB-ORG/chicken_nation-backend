@@ -1141,9 +1141,11 @@ export class OrderService {
     };
 
     // Les brouillons app (auto:true, PENDING) sont masqués par défaut, SAUF si un
-    // ADMIN les demande EXPLICITEMENT via status=PENDING (il peut alors les voir).
+    // ADMIN ou le CALL CENTER les demande EXPLICITEMENT via status=PENDING : ces
+    // rôles peuvent voir les commandes en attente de paiement (ex : suivi client).
     const adminWantsPending =
-      user?.role === UserRole.ADMIN && status === OrderStatus.PENDING;
+      (user?.role === UserRole.ADMIN || user?.role === UserRole.CALL_CENTER) &&
+      status === OrderStatus.PENDING;
 
     if (filters.auto === undefined) {
       if (!adminWantsPending) {
@@ -1163,7 +1165,7 @@ export class OrderService {
     else if (filters.auto === true) {
       where.auto = true;
       if (!adminWantsPending) {
-        where.status = { not: OrderStatus.PENDING }; // Le call center ne voit que les acceptées
+        where.status = { not: OrderStatus.PENDING }; // Sans demande explicite de PENDING par un rôle habilité → pas de brouillons
       }
     }
     // Si on filtre explicitement pour le Call Center
