@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AdhesionController } from './adhesion.controller';
 import { AdhesionService } from './adhesion.service';
+import { CardNationModule } from 'src/modules/card-nation/card-nation.module';
 
 /**
  * Tunnel d'adhésion (Phase 4).
@@ -8,6 +9,7 @@ import { AdhesionService } from './adhesion.service';
  * TwilioModule @Global). ThrottlerModule est enregistré dans AppModule.
  */
 @Module({
+  imports: [CardNationModule], // réutilise CardRequestService pour émettre la carte à l'adhésion
   controllers: [AdhesionController],
   providers: [AdhesionService],
   exports: [AdhesionService],

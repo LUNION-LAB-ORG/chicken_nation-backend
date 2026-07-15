@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { TwilioService } from 'src/twilio/services/twilio.service';
+import { CardRequestService } from 'src/modules/card-nation/services/card-request.service';
 import { CreateAdhesionDto } from './dto/create-adhesion.dto';
 
 /**
@@ -31,6 +32,7 @@ export class AdhesionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly twilioService: TwilioService,
+    private readonly cardRequestService: CardRequestService,
   ) {}
 
   async register(dto: CreateAdhesionDto) {
@@ -49,7 +51,7 @@ export class AdhesionService {
         ? { whatsapp_opt_in: true, whatsapp_opt_in_at: now }
         : { whatsapp_opt_in: false, whatsapp_opt_in_at: null };
 
-    await this.prisma.customer.upsert({
+    const customer = await this.prisma.customer.upsert({
       where: { phone },
       // À la création : on pose nom + profil + opt-in.
       create: {
@@ -69,6 +71,25 @@ export class AdhesionService {
         ...optInData,
       },
     });
+
+    // 💳 GÉNÉRATION AUTO DE LA CARTE (V1 déclaratif) — BEST-EFFORT. Le profil étant
+    // connu, on émet directement la Carte de la Nation : le WhatsApp « carte prête »
+    // devient exact et, à la connexion, l'app affiche la carte sans aucune étape.
+    // createRequest gère les gardes : no-op (ConflictException) si le client a déjà
+    // une carte/demande ; en mode V2 (justificatif requis) l'appel échoue et est avalé
+    // → la carte se prendra alors dans l'app. N'échoue JAMAIS l'adhésion.
+    try {
+      await this.cardRequestService.createRequest(customer.id, {
+        profile_type: dto.profile_type,
+        nickname: firstName || undefined,
+      });
+    } catch (error: any) {
+      this.logger.log(
+        `[Adhesion] Carte non générée à l'adhésion (best-effort) pour ${phone} : ${
+          error?.message || error
+        }`,
+      );
+    }
 
     // Envoi du template WhatsApp « carte prête » — BEST-EFFORT (ne bloque jamais
     // l'adhésion). Dégrade proprement si le template Meta n'est pas approuvé.
