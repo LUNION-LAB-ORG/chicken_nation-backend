@@ -59,7 +59,7 @@ export class TwilioService {
         // Body attendu {{1}}=prenom ; bouton URL STATIQUE (deep link), sans variable.
         card_ready: {
             name: "card_ready",
-            sid: "", // TODO(P0): renseigner le contentSid Meta approuve ici ou via setting
+            sid: "HXe9862c82d4f61ef109794e98dd41ba37", // template Meta APPROUVE (carte_nation, MARKETING, fr) — surchargeable via setting twilio_card_ready_template_sid / env
             language: "fr",
             bodyVariables: [
                 { name: "1", description: "Prenom du client" },
