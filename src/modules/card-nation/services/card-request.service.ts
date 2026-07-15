@@ -9,21 +9,31 @@ import { ReviewCardRequestDto } from '../dtos/review-card-request.dto';
 import { CardGenerationService } from './card-generation.service';
 import { CardNotificationService } from './card-notification.service';
 import { S3Service } from 'src/s3/s3.service';
+import { TwilioService } from 'src/twilio/services/twilio.service';
 
 @Injectable()
 export class CardRequestService {
   private readonly logger = new Logger(CardRequestService.name);
 
-  // Réglage backoffice : false = V1 (déclaratif, émission auto sans justificatif),
-  // true = V2 (justificatif étudiant obligatoire + revue admin). Défaut V1.
+  // Réglage backoffice : false = V1 (déclaratif, sans justificatif),
+  // true = V2 (justificatif étudiant obligatoire). Défaut V1.
+  // Dans les DEUX cas la demande est créée en PENDING et validée au backoffice.
   static readonly SETTING_REQUIRE_JUSTIFICATIF = 'card.require_justificatif';
+
+  /**
+   * URL de partage / deep link CANONIQUE (page smart-redirect app/store).
+   * ⚠️ `www.` ET le préfixe `/fr/` sont OBLIGATOIRES.
+   */
+  private static readonly CANONICAL_DEEP_LINK =
+    'https://www.chicken-nation.com/fr/app-mobile/deep-link';
 
   constructor(
     private prisma: PrismaService,
     private cardGenerationService: CardGenerationService,
     private readonly cardNotificationService: CardNotificationService,
     private readonly settingsService: SettingsService,
-    private readonly s3service: S3Service
+    private readonly s3service: S3Service,
+    private readonly twilioService: TwilioService,
   ) { }
 
   /** Lit le réglage card.require_justificatif (défaut false = V1). */
@@ -77,12 +87,20 @@ export class CardRequestService {
     }
 
     const requireJustificatif = await this.isJustificatifRequired();
-    const isStudent = createDto.profile_type === ProfileType.ETUDIANT;
 
     /* ============================================================
-       V2 — Mode justificatif (réglage card.require_justificatif=true) :
-       institution + justificatif obligatoires → revue admin EXISTANTE.
+       La Carte de la Nation N'EST PLUS émise automatiquement. Quel que
+       soit le mode, on crée UNIQUEMENT une demande en statut PENDING.
+       C'est le BACKOFFICE qui valide (reviewRequest → APPROVED) et c'est
+       CETTE validation qui génère la carte + envoie « carte prête ».
+
+       - V2 (card.require_justificatif=true) : institution + justificatif
+         obligatoires (uploadés sur S3).
+       - V1 (défaut) : déclaratif, sans justificatif ni institution requis.
     ============================================================ */
+    let cardRequest;
+    let mode: 'V1' | 'V2';
+
     if (requireJustificatif) {
       if (!createDto.institution) {
         throw new BadRequestException("Le nom de l'établissement est requis");
@@ -98,7 +116,7 @@ export class CardRequestService {
         mimetype: file.mimetype,
       });
 
-      const cardRequest = await this.prisma.cardRequest.create({
+      cardRequest = await this.prisma.cardRequest.create({
         data: {
           customer_id: customerId,
           nickname: createDto.nickname,
@@ -113,57 +131,37 @@ export class CardRequestService {
           },
         },
       });
-
-      return {
-        success: true,
-        mode: 'V2',
-        message: 'Votre demande de carte Nation a été soumise et sera examinée',
-        data: cardRequest,
-      };
-    }
-
-    /* ============================================================
-       V1 — Mode déclaratif (défaut) : émission AUTO immédiate, sans
-       justificatif. La demande est créée directement APPROVED et la
-       carte est générée dans la foulée (statut ACTIVE).
-    ============================================================ */
-    const cardRequest = await this.prisma.cardRequest.create({
-      data: {
-        customer_id: customerId,
-        nickname: createDto.nickname,
-        profile_type: createDto.profile_type,
-        institution: createDto.institution ?? null,
-        student_card_file_url: null,
-        status: CardRequestStatus.APPROVED,
-        reviewed_at: new Date(),
-      },
-      include: {
-        customer: {
-          select: {
-            id: true,
-            first_name: true,
-            last_name: true,
-            phone: true,
-            email: true,
-            birth_day: true,
-            loyalty_level: true,
+      mode = 'V2';
+    } else {
+      cardRequest = await this.prisma.cardRequest.create({
+        data: {
+          customer_id: customerId,
+          nickname: createDto.nickname,
+          profile_type: createDto.profile_type,
+          institution: createDto.institution ?? null,
+          student_card_file_url: null,
+          status: CardRequestStatus.PENDING,
+        },
+        include: {
+          customer: {
+            select: { id: true, first_name: true, last_name: true, phone: true, email: true },
           },
         },
-      },
-    });
+      });
+      mode = 'V1';
+    }
 
-    const card = await this.generateCard(cardRequest);
-
-    // Notification (cloche + WS + push Expo) — best-effort, ne bloque pas l'émission.
+    // Accusé de réception « demande reçue » — PUSH + cloche best-effort (ne
+    // bloque jamais la création). PAS de « carte prête » ici (validation only).
     this.cardNotificationService
-      .notifyCardReady(customerId, card.level)
-      .catch((e) => this.logger.warn(`notifyCardReady échouée : ${e?.message}`));
+      .notifyRequestReceived(customerId)
+      .catch((e) => this.logger.warn(`notifyRequestReceived échouée : ${e?.message}`));
 
     return {
       success: true,
-      mode: 'V1',
-      message: 'Votre Carte de la Nation a été émise avec succès',
-      data: { request: cardRequest, card },
+      mode,
+      message: 'Votre demande de carte a bien été reçue',
+      data: { request: cardRequest },
     };
   }
 
@@ -404,12 +402,27 @@ export class CardRequestService {
       },
     });
 
-    // Si approuvée, générer la carte + notifier (best-effort).
+    // Si approuvée : générer la carte + notifier. C'est le SEUL endroit d'où
+    // part « carte prête » (push/cloche/WS + WhatsApp). Best-effort.
     if (reviewDto.status === CardRequestStatus.APPROVED) {
       const card = await this.generateCard(updatedRequest);
+
       this.cardNotificationService
         .notifyCardReady(updatedRequest.customer_id, card.level)
         .catch((e) => this.logger.warn(`notifyCardReady échouée : ${e?.message}`));
+
+      // Template WhatsApp Meta « carte prête » (best-effort) — UNIQUEMENT à la
+      // validation. Dégrade proprement si le template n'est pas approuvé.
+      const phone = updatedRequest.customer?.phone;
+      if (phone) {
+        this.twilioService
+          .sendCardReady({
+            phoneNumber: phone,
+            firstName: (updatedRequest.customer?.first_name || 'Client').split(' ')[0],
+            deepLink: CardRequestService.CANONICAL_DEEP_LINK,
+          })
+          .catch((e) => this.logger.warn(`sendCardReady (WhatsApp) échoué : ${e?.message}`));
+      }
     }
 
 

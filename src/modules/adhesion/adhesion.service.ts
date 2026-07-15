@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { TwilioService } from 'src/twilio/services/twilio.service';
 import { CardRequestService } from 'src/modules/card-nation/services/card-request.service';
 import { CreateAdhesionDto } from './dto/create-adhesion.dto';
 
@@ -10,8 +9,9 @@ import { CreateAdhesionDto } from './dto/create-adhesion.dto';
  *
  * Objectif : le visiteur laisse nom + téléphone + profil déclaratif ; on
  * crée/retrouve son Customer (idempotent par téléphone), on enregistre son
- * consentement WhatsApp, puis on lui envoie (best-effort) le template WhatsApp
- * « carte prête » contenant le deep link.
+ * consentement WhatsApp, puis on crée (best-effort) une DEMANDE de carte PENDING.
+ * La carte — et le WhatsApp « carte prête » — sont émis à la VALIDATION backoffice
+ * (pas ici) : la carte n'est jamais auto-émise.
  *
  * RG-07 : AUCUNE session n'est créée ici. Le client se connectera ensuite dans
  * l'app par OTP sur le MÊME numéro → il retombe sur le compte déjà pré-créé.
@@ -22,16 +22,8 @@ import { CreateAdhesionDto } from './dto/create-adhesion.dto';
 export class AdhesionService {
   private readonly logger = new Logger(AdhesionService.name);
 
-  /**
-   * URL de partage / deep link CANONIQUE (page smart-redirect app/store).
-   * ⚠️ `www.` ET le préfixe `/fr/` sont OBLIGATOIRES.
-   */
-  private static readonly CANONICAL_DEEP_LINK =
-    'https://www.chicken-nation.com/fr/app-mobile/deep-link';
-
   constructor(
     private readonly prisma: PrismaService,
-    private readonly twilioService: TwilioService,
     private readonly cardRequestService: CardRequestService,
   ) {}
 
@@ -72,12 +64,11 @@ export class AdhesionService {
       },
     });
 
-    // 💳 GÉNÉRATION AUTO DE LA CARTE (V1 déclaratif) — BEST-EFFORT. Le profil étant
-    // connu, on émet directement la Carte de la Nation : le WhatsApp « carte prête »
-    // devient exact et, à la connexion, l'app affiche la carte sans aucune étape.
+    // 💳 DEMANDE DE CARTE (V1 déclaratif) — BEST-EFFORT. On crée une demande en
+    // statut PENDING : la carte N'EST PLUS émise ici. C'est le backoffice qui la
+    // validera (et c'est à la validation que part le WhatsApp « carte prête »).
     // createRequest gère les gardes : no-op (ConflictException) si le client a déjà
-    // une carte/demande ; en mode V2 (justificatif requis) l'appel échoue et est avalé
-    // → la carte se prendra alors dans l'app. N'échoue JAMAIS l'adhésion.
+    // une carte/demande en cours. N'échoue JAMAIS l'adhésion.
     try {
       await this.cardRequestService.createRequest(customer.id, {
         profile_type: dto.profile_type,
@@ -85,23 +76,7 @@ export class AdhesionService {
       });
     } catch (error: any) {
       this.logger.log(
-        `[Adhesion] Carte non générée à l'adhésion (best-effort) pour ${phone} : ${
-          error?.message || error
-        }`,
-      );
-    }
-
-    // Envoi du template WhatsApp « carte prête » — BEST-EFFORT (ne bloque jamais
-    // l'adhésion). Dégrade proprement si le template Meta n'est pas approuvé.
-    try {
-      await this.twilioService.sendCardReady({
-        phoneNumber: phone,
-        firstName: firstName || 'Client',
-        deepLink: AdhesionService.CANONICAL_DEEP_LINK,
-      });
-    } catch (error: any) {
-      this.logger.warn(
-        `[Adhesion] Envoi WhatsApp « carte prête » échoué (best-effort): ${
+        `[Adhesion] Demande de carte non créée à l'adhésion (best-effort) pour ${phone} : ${
           error?.message || error
         }`,
       );

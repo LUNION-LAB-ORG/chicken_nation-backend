@@ -35,6 +35,23 @@ export class CardNotificationService {
     return level ? CardNotificationService.LEVEL_LABEL[level] ?? null : null;
   }
 
+  /**
+   * Notifie la RÉCEPTION d'une demande de carte (cloche + WS + push) — AVANT
+   * toute validation backoffice. La carte n'est PAS encore émise ici.
+   */
+  async notifyRequestReceived(customerId: string): Promise<void> {
+    await this.dispatch(
+      customerId,
+      CardNotificationsTemplate.CARD_REQUEST_RECEIVED,
+      null,
+      {
+        title: '📨 Demande de carte reçue',
+        body: 'Ta demande de carte est bien reçue, on la valide très vite.',
+        data: { type: 'card_nation_request_received' },
+      },
+    );
+  }
+
   /** Notifie l'émission d'une carte (cloche + WS + push). */
   async notifyCardReady(customerId: string, level?: LoyaltyLevel | null): Promise<void> {
     await this.dispatch(
@@ -66,8 +83,8 @@ export class CardNotificationService {
 
   /**
    * Mutualise l'envoi : notification cloche persistée + WS temps réel + push Expo.
-   * TODO(P0 externe, hors scope P3) : envoyer aussi le template WhatsApp Meta
-   *   « carte prête » (à faire approuver côté Meta Business) via Twilio.
+   * Le WhatsApp « carte prête » (template Meta approuvé) part séparément à la VALIDATION
+   * backoffice (card-request.service.reviewRequest → twilioService.sendCardReady).
    */
   private async dispatch(
     customerId: string,

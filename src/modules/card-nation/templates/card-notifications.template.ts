@@ -6,6 +6,16 @@ import { NotificationTemplate } from 'src/modules/notifications/interfaces/notif
  * Le push Expo est envoyé séparément (cf. CardNotificationService).
  */
 export class CardNotificationsTemplate {
+  // Demande de carte reçue (accusé de réception — AVANT validation backoffice)
+  static CARD_REQUEST_RECEIVED: NotificationTemplate<{ first_name?: string | null; level?: string | null }> = {
+    title: () => '📨 Demande de carte reçue',
+    message: (ctx) =>
+      `Merci ${ctx.data.first_name ?? 'cher client'} ! Ta demande de Carte de la Nation est bien reçue, on la valide très vite.`,
+    icon: () => notificationIcons.joice.url,
+    iconBgColor: () => notificationIcons.joice.color,
+    showChevron: true,
+  };
+
   // Carte émise / prête
   static CARD_READY: NotificationTemplate<{ first_name?: string | null; level?: string | null }> = {
     title: () => '🎉 Votre Carte de la Nation est prête !',
