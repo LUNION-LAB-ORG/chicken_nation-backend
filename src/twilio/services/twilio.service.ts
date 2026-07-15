@@ -56,7 +56,7 @@ export class TwilioService {
         // SID depuis le setting `twilio_card_ready_template_sid` (ou l'env
         // TWILIO_CARD_READY_TEMPLATE_SID). Tant qu'il est vide, l'envoi WhatsApp
         // est ignore proprement (log) et l'adhesion reussit quand meme.
-        // Body attendu {{1}}=prenom ; bouton URL = deep link (variable {{1}}).
+        // Body attendu {{1}}=prenom ; bouton URL STATIQUE (deep link), sans variable.
         card_ready: {
             name: "card_ready",
             sid: "", // TODO(P0): renseigner le contentSid Meta approuve ici ou via setting
@@ -64,9 +64,7 @@ export class TwilioService {
             bodyVariables: [
                 { name: "1", description: "Prenom du client" },
             ],
-            buttonVariables: [
-                { name: "1", description: "Deep link (URL de partage app)" },
-            ],
+            buttonVariables: [],
         },
     };
 
@@ -292,11 +290,10 @@ export class TwilioService {
             return await this.sendWhatsappMessage({
                 phoneNumber,
                 contentSid,
-                // {{1}} body = prénom ; {{1}} bouton = deep link (suffixe/URL selon
-                // la config du template approuvé). On fournit les deux clés.
+                // Template « carte prête » : {{1}} = prénom (body). Le bouton est une
+                // URL STATIQUE dans le template (deep link) → aucune variable à passer.
                 contentVariables: JSON.stringify({
                     "1": firstName || 'Client',
-                    "2": deepLink,
                 }),
             });
         } catch (error: any) {
