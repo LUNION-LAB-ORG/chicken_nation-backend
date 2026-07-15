@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Req,
@@ -46,14 +47,14 @@ export class ComboAdminController {
   @Get(':id')
   @RequirePermission(Modules.FIDELITE, Action.READ)
   @ApiOperation({ summary: "Détail d'une partie" })
-  get(@Param('id') id: string) {
+  get(@Param('id', ParseUUIDPipe) id: string) {
     return this.comboAdminService.get(id);
   }
 
   @Get(':id/participations')
   @RequirePermission(Modules.FIDELITE, Action.READ)
   @ApiOperation({ summary: 'Participations (tentatives) + gagnants d\'une partie' })
-  participations(@Param('id') id: string) {
+  participations(@Param('id', ParseUUIDPipe) id: string) {
     return this.comboAdminService.participations(id);
   }
 
@@ -67,21 +68,21 @@ export class ComboAdminController {
   @Patch(':id')
   @RequirePermission(Modules.FIDELITE, Action.UPDATE)
   @ApiOperation({ summary: 'Mettre à jour une partie (tant que non réglée)' })
-  update(@Param('id') id: string, @Body() dto: UpdateComboGameDto) {
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateComboGameDto) {
     return this.comboAdminService.update(id, dto);
   }
 
   @Delete(':id')
   @RequirePermission(Modules.FIDELITE, Action.DELETE)
   @ApiOperation({ summary: 'Supprimer (ou clôturer si déjà jouée) une partie' })
-  remove(@Param('id') id: string) {
+  remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.comboAdminService.remove(id);
   }
 
   @Post(':id/settle')
   @RequirePermission(Modules.FIDELITE, Action.UPDATE)
   @ApiOperation({ summary: 'Déclencher manuellement le règlement (tirage) d\'une partie clôturée' })
-  settle(@Param('id') id: string) {
+  settle(@Param('id', ParseUUIDPipe) id: string) {
     return this.comboService.settleGame(id);
   }
 }

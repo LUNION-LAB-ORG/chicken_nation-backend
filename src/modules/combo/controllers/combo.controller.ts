@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { Customer } from '@prisma/client';
@@ -26,14 +26,14 @@ export class ComboController {
   @Post(':id/attempt')
   @ApiOperation({ summary: 'Soumettre une combinaison (essais bornés RG-10)' })
   @ApiOkResponse({ description: '{ correct, attempts_left }' })
-  attempt(@Req() req: Request, @Param('id') id: string, @Body() dto: SubmitAttemptDto) {
+  attempt(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SubmitAttemptDto) {
     return this.comboService.submitAttempt((req.user as Customer).id, id, dto.answer);
   }
 
   @Get(':id/result')
   @ApiOperation({ summary: "Résultat d'une partie réglée : a-t-il gagné ?" })
   @ApiOkResponse({ description: '{ settled, won, reward_id }' })
-  result(@Req() req: Request, @Param('id') id: string) {
+  result(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
     return this.comboService.getResult((req.user as Customer).id, id);
   }
 }
