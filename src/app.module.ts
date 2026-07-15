@@ -33,6 +33,7 @@ import { VoucherModule } from 'src/modules/voucher/voucher.module';
 import { TurboModule } from 'src/turbo/turbo.module';
 import { AppMobileModule } from 'src/modules/marketing/app-mobile/app-mobile.module';
 import { CardNationModule } from 'src/modules/card-nation/card-nation.module';
+import { ComboModule } from 'src/modules/combo/combo.module';
 import { S3Module } from 'src/s3/s3.module';
 import { NewsModule } from 'src/modules/marketing/news/news.module';
 import { ExpoPushModule } from 'src/expo-push/expo-push.module';
@@ -116,6 +117,7 @@ import { AdhesionModule } from 'src/modules/adhesion/adhesion.module';
     ReferralModule,
     TurboModule,
     CardNationModule,
+    ComboModule,
     S3Module,
     DeeplinkModule,
     NewsModule,

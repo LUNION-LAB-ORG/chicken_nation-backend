@@ -71,6 +71,38 @@ export class RewardService {
         }
     }
 
+    /**
+     * Crée une récompense GIFT (plat offert) PENDING — cadeau « à gratter » qui,
+     * une fois révélé, devient récupérable au panier à 0 fr (RG-03). Réutilisé par
+     * le module Combo (lot d'un gagnant tiré au sort) : la distribution passe
+     * TOUJOURS par le système Reward, jamais par un canal parallèle.
+     *
+     * `payload` = snapshot GIFT déjà validé/enrichi à la config (item_type, dish_id,
+     * name, price, image?) — même forme que RewardCampaignService.buildPayload(GIFT).
+     */
+    async createGiftReward({
+        customer_id,
+        payload,
+        reason,
+        expires_at,
+    }: {
+        customer_id: string;
+        payload: Record<string, any>;
+        reason?: string;
+        expires_at?: Date | null;
+    }) {
+        return this.prisma.reward.create({
+            data: {
+                customer_id,
+                type: RewardType.GIFT,
+                payload: payload as Prisma.InputJsonValue,
+                reason,
+                expires_at: expires_at ?? null,
+                status: RewardStatus.PENDING,
+            },
+        });
+    }
+
     /** Récompenses à gratter du client (non expirées), plus récentes d'abord. */
     async getPendingRewards(customer_id: string) {
         return this.prisma.reward.findMany({

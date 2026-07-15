@@ -1676,6 +1676,81 @@ model RewardCampaign {
   @@index([status, scheduled_at])
 }
 
+// ── COMBO MYSTÈRE (Phase 6) ─────────────────────────────────────────────────
+// Jeu-concours : le client doit reconstituer une COMBINAISON secrète d'items du
+// menu réel (ex. plat + accompagnement + sauce). Essais BORNÉS (RG-10 : plafond
+// strict par compte et par partie, 3 par défaut, horodatés). À la clôture, un
+// TIRAGE AU SORT désigne N gagnants (winners_count) parmi TOUTES les bonnes
+// réponses → coût borné. Chaque gagnant reçoit une RÉCOMPENSE EXISTANTE
+// (Reward GIFT = plat offert récupérable au panier à 0 fr, EXCLUSIF app, RG-03) :
+// on NE réinvente PAS la distribution, on réutilise le système Reward.
+enum ComboGameStatus {
+  SCHEDULED // Programmé (avant starts_at)
+  OPEN // Ouvert au jeu (fenêtre active : starts_at ≤ now < ends_at)
+  CLOSED // Fenêtre terminée — en attente de règlement (tirage)
+  SETTLED // Réglé — gagnants tirés au sort et récompensés
+}
+
+model ComboGame {
+  id          String  @id @default(uuid()) @db.Uuid
+  title       String  @db.VarChar
+  description String? @db.Text
+  clues       Json // Liste d'indices révélés progressivement (string[])
+  solution    Json // Combinaison-solution : [{ type: 'DISH'|'SUPPLEMENT', id }] (ordre indifférent)
+  starts_at   DateTime @db.Timestamp(6)
+  ends_at     DateTime @db.Timestamp(6)
+
+  max_attempts  Int @default(3) // RG-10 : plafond STRICT d'essais / compte / partie
+  winners_count Int @default(1) // Nb de gagnants tirés au sort (borne le coût)
+
+  prize Json // Spec de récompense (snapshot config) : { reward_type: 'GIFT', payload: { item_type, dish_id, name, price, image? } }
+
+  status     ComboGameStatus @default(SCHEDULED)
+  settled_at DateTime?       @db.Timestamp(6)
+  created_by String?         @db.VarChar // id de l'admin créateur
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  attempts ComboAttempt[]
+  winners  ComboWinner[]
+
+  @@index([status, starts_at])
+  @@index([status, ends_at])
+}
+
+// Journal des tentatives — support de RG-10 (comptage/plafond) + horodatage
+// anti-triche + base du tirage (bonnes réponses distinctes à la clôture).
+model ComboAttempt {
+  id            String   @id @default(uuid()) @db.Uuid
+  combo_game_id String   @db.Uuid
+  customer_id   String   @db.Uuid
+  answer        Json // Combinaison proposée : [{ type, id }]
+  is_correct    Boolean  @default(false)
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+
+  game ComboGame @relation(fields: [combo_game_id], references: [id], onDelete: Cascade)
+
+  @@index([combo_game_id, customer_id]) // Comptage des essais (RG-10)
+  @@index([combo_game_id, is_correct]) // Sélection des bonnes réponses (tirage)
+}
+
+// Gagnant tiré au sort. UNIQUE (combo_game_id, customer_id) = idempotence du
+// règlement : un même client ne peut gagner qu'une fois une partie, même si le
+// settle est rejoué (double backend / retry).
+model ComboWinner {
+  id            String   @id @default(uuid()) @db.Uuid
+  combo_game_id String   @db.Uuid
+  customer_id   String   @db.Uuid
+  reward_id     String?  @db.Uuid // Reward GIFT créé pour ce gagnant (null si création échouée — audité)
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+
+  game ComboGame @relation(fields: [combo_game_id], references: [id], onDelete: Cascade)
+
+  @@unique([combo_game_id, customer_id])
+  @@index([combo_game_id])
+}
+
 // Historique des changements de niveau de fidélité
 model LoyaltyLevelHistory {
   id             String        @id @default(uuid()) @db.Uuid
