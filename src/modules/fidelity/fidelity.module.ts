@@ -7,6 +7,9 @@ import { RewardService } from './services/reward.service';
 import { RewardController } from './controllers/reward.controller';
 import { RewardCampaignService } from './services/reward-campaign.service';
 import { RewardCampaignController } from './controllers/reward-campaign.controller';
+import { ScratchEngineService } from './services/scratch-engine.service';
+import { ScratchLotService } from './services/scratch-lot.service';
+import { ScratchLotController } from './controllers/scratch-lot.controller';
 import { RewardCampaignTask } from './tasks/reward-campaign.task';
 import { PromotionListenerService } from './listeners/promotion-listener.service';
 import { LoyaltyListenerService } from './listeners/loyalty-listener.service';
@@ -20,12 +23,14 @@ import { VoucherModule } from '../voucher/voucher.module';
 
 @Module({
     imports: [VoucherModule],
-    controllers: [PromotionController, LoyaltyController, RewardController, RewardCampaignController],
+    controllers: [PromotionController, LoyaltyController, RewardController, RewardCampaignController, ScratchLotController],
     providers: [
         PromotionService,
         LoyaltyService,
         RewardService,
         RewardCampaignService,
+        ScratchEngineService,
+        ScratchLotService,
         LoyaltyEvent,
         PromotionEvent,
         PromotionListenerService,
@@ -36,6 +41,6 @@ import { VoucherModule } from '../voucher/voucher.module';
         LoyaltyStatusResetTask,
         RewardCampaignTask
     ],
-    exports: [PromotionService, LoyaltyService, RewardService, RewardCampaignService, PromotionEvent, LoyaltyEvent],
+    exports: [PromotionService, LoyaltyService, RewardService, RewardCampaignService, ScratchEngineService, PromotionEvent, LoyaltyEvent],
 })
 export class FidelityModule { }

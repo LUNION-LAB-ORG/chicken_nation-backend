@@ -3,6 +3,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { EntityStatus, OrderStatus, OrderType, PaymentMethod } from '@prisma/client';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
 import { RewardService } from 'src/modules/fidelity/services/reward.service';
+import { ScratchEngineService } from 'src/modules/fidelity/services/scratch-engine.service';
 import { PromotionService } from 'src/modules/fidelity/services/promotion.service';
 import { OrderChannels } from '../enums/order-channels';
 import { OrderCreatedEvent } from '../interfaces/order-event.interface';
@@ -18,6 +19,7 @@ export class OrderListenerService {
         private promotionService: PromotionService,
         private loyaltyService: LoyaltyService,
         private rewardService: RewardService,
+        private scratchEngineService: ScratchEngineService,
         private expoPushService: ExpoPushService,
         private userPushService: UserPushService,
         private notificationsSender: NotificationsSenderService,
@@ -244,15 +246,19 @@ export class OrderListenerService {
                 );
 
             // 🎫 Révoque aussi la récompense « à gratter » non encore grattée
-            // (la carte ne doit plus s'afficher pour une commande annulée).
+            // (la carte ne doit plus s'afficher pour une commande annulée). PUIS
+            // restitue le stock du gros lot Gratte & Gagne éventuellement tiré mais
+            // NON gratté (restoreStockForCancelledOrder ne rend le stock que si le
+            // Reward est bien passé REVOKED → enchaîné APRÈS la révocation).
             void this.rewardService
                 .revokeForOrder(
                     payload.order.id,
                     `Commande #${payload.order.reference} annulée`,
                 )
+                .then(() => this.scratchEngineService.restoreStockForCancelledOrder(payload.order.id))
                 .catch((error) =>
                     this.logger.error(
-                        `Échec révocation de la récompense (annulation) pour la commande ${payload.order.reference}: ${error?.message}`,
+                        `Échec révocation/restitution Gratte & Gagne (annulation) pour la commande ${payload.order.reference}: ${error?.message}`,
                         error?.stack,
                     ),
                 );

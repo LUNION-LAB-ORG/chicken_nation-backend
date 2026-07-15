@@ -10,6 +10,7 @@ import { ExpoPushService } from 'src/expo-push/expo-push.service';
 import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
 import { RewardService } from 'src/modules/fidelity/services/reward.service';
+import { ScratchEngineService } from 'src/modules/fidelity/services/scratch-engine.service';
 import { ReferralService } from 'src/modules/referral/referral.service';
 import { OrderStatus, LoyaltyPointType, PaymentMethod } from '@prisma/client';
 
@@ -54,6 +55,7 @@ export class KkiapayOrderListenerService {
         private readonly notificationsSender: NotificationsSenderService,
         private readonly loyaltyService: LoyaltyService,
         private readonly rewardService: RewardService,
+        private readonly scratchEngineService: ScratchEngineService,
         private readonly referralService: ReferralService,
     ) { }
 
@@ -203,15 +205,27 @@ export class KkiapayOrderListenerService {
                         reason: `🎁 ${earnedPoints} points gagnés pour la commande #${order.reference}`,
                         order_id: order.id,
                     });
-                    // 🎫 Récompense « à gratter » (couche célébration). Idempotent par order_id.
-                    await this.rewardService.createPointsReward({
-                        customer_id: order.customer_id,
-                        points: earnedPoints,
-                        order_id: order.id,
-                        reason: `Commande #${order.reference}`,
-                    });
                 }
             }
+
+            // 🎫 GRATTE & GAGNE — HORS du garde `earnedPoints > 0` : TOUTE commande payée
+            // doit pouvoir tirer un GROS LOT bonus, même à 0 point de base (le lot PLANCHER
+            // createPointsReward(0) est alors un simple no-op). Le grattage est le CANAL DE
+            // PRÉSENTATION des points de base (lot PLANCHER, coût enveloppe 0) et RAREMENT
+            // d'un gros lot « en plus » (coût compté dans l'enveloppe). Le moteur crée le(s)
+            // Reward « à gratter » (idempotent par order_id : un seul ScratchDraw par
+            // commande) ; les points de base (addPoints) NE sont JAMAIS modifiés. Reste dans
+            // le bloc EFFETS IDEMPOTENTS : rejoué au retry, erreurs transitoires relancées.
+            await this.scratchEngineService.drawForOrder({
+                order: {
+                    id: order.id,
+                    customer_id: order.customer_id,
+                    net_amount: order.net_amount,
+                    reference: order.reference,
+                    customer: { loyalty_level: order.customer?.loyalty_level ?? null },
+                },
+                earnedPoints,
+            });
         } catch (error) {
             // GARANTIE COMPTABLE : une erreur DB TRANSITOIRE (Neon P1001…) survenue
             // APRÈS le claim PENDING→ACCEPTED (justPaid déjà consommé) perdrait

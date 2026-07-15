@@ -357,6 +357,7 @@ model Customer {
   promo_code_usages  PromoCodeUsage[]
   retentionCallbacks RetentionCallback[]
   prospects          Prospect[]
+  scratch_draws      ScratchDraw[]
 }
 
 // -------------------- Livreurs (deliverers) ------------------------------
@@ -386,15 +387,15 @@ model Deliverer {
   // ── Lieu d'habitation (choisi par le livreur à l'inscription) ──────────
   // Optionnel. Sert à classer les restaurants par PROXIMITÉ côté admin
   // (backoffice) pour faciliter l'affectation au restaurant le plus proche.
-  home_location Json?   // { lat: number, lng: number }
+  home_location Json? // { lat: number, lng: number }
   home_address  String? @db.Text
 
   // Statut métier
-  status         DelivererStatus @default(PENDING_VALIDATION)
-  is_operational Boolean         @default(false) // calculé côté service
+  status           DelivererStatus @default(PENDING_VALIDATION)
+  is_operational   Boolean         @default(false) // calculé côté service
   // Motif du dernier refus (REJECTED). Posé au refus, effacé à la validation
   // ou à la resoumission. Affiché au livreur (deli) et à l'admin (backoffice).
-  rejection_reason String? @db.Text
+  rejection_reason String?         @db.Text
 
   // Affectation
   restaurant_id String?     @db.Uuid
@@ -871,28 +872,28 @@ model DishExcludedRestaurant {
 model Dish {
   id String @id @default(uuid()) @db.Uuid
 
-  name             String           @db.VarChar
-  reference        String?          @unique @db.VarChar
-  description      String?          @db.VarChar
-  price            Float
-  image            String?          @db.Text
-  is_promotion     Boolean          @default(false)
-  is_alway_epice   Boolean          @default(false)
-  spice_level      SpiceLevel       @default(OPTIONAL)
-  available_order_types OrderType[]  @default([DELIVERY, PICKUP, TABLE])
+  name                      String                   @db.VarChar
+  reference                 String?                  @unique @db.VarChar
+  description               String?                  @db.VarChar
+  price                     Float
+  image                     String?                  @db.Text
+  is_promotion              Boolean                  @default(false)
+  is_alway_epice            Boolean                  @default(false)
+  spice_level               SpiceLevel               @default(OPTIONAL)
+  available_order_types     OrderType[]              @default([DELIVERY, PICKUP, TABLE])
   // Créneau horaire de disponibilité « HH:mm » (NULL = toujours disponible)
-  available_from   String?          @db.VarChar
-  available_until  String?          @db.VarChar
-  promotion_price  Float?
-  category_id      String           @db.Uuid
-  cooking_time     Int?             @db.Integer // en minutes
-  private          Boolean          @default(false)
-  hubrise_sku      String?          @unique @db.VarChar
-  category         Category         @relation(fields: [category_id], references: [id], onDelete: Cascade)
+  available_from            String?                  @db.VarChar
+  available_until           String?                  @db.VarChar
+  promotion_price           Float?
+  category_id               String                   @db.Uuid
+  cooking_time              Int?                     @db.Integer // en minutes
+  private                   Boolean                  @default(false)
+  hubrise_sku               String?                  @unique @db.VarChar
+  category                  Category                 @relation(fields: [category_id], references: [id], onDelete: Cascade)
   dish_excluded_supplements DishExcludedSupplement[]
   dish_excluded_restaurants DishExcludedRestaurant[]
-  favorites        Favorite[]
-  order_items      OrderItem[]
+  favorites                 Favorite[]
+  order_items               OrderItem[]
 
   // Relations promotions
   promotion_dishes          PromotionDish[]
@@ -1127,6 +1128,7 @@ model Order {
   promotion_usages PromotionUsage[]
   loyalty_points   LoyaltyPoint[]
   rewards          Reward[]
+  scratch_draws    ScratchDraw[]
 
   entity_status     EntityStatus     @default(ACTIVE)
   accepted_at       DateTime?
@@ -1190,26 +1192,26 @@ model Paiement {
 model Restaurant {
   id String @id @default(uuid()) @db.Uuid
 
-  name                 String                @db.VarChar
-  manager              String                @db.Uuid
-  description          String?               @db.VarChar
-  image                String?               @db.Text
-  address              String?               @db.VarChar
-  latitude             Float?
-  longitude            Float?
-  phone                String?               @db.VarChar
-  email                String?               @db.VarChar
-  schedule             Json?                 @db.Json
-  apikey               String?               @db.VarChar
+  name                      String                   @db.VarChar
+  manager                   String                   @db.Uuid
+  description               String?                  @db.VarChar
+  image                     String?                  @db.Text
+  address                   String?                  @db.VarChar
+  latitude                  Float?
+  longitude                 Float?
+  phone                     String?                  @db.VarChar
+  email                     String?                  @db.VarChar
+  schedule                  Json?                    @db.Json
+  apikey                    String?                  @db.VarChar
   dish_excluded_restaurants DishExcludedRestaurant[]
-  users                User[]
-  deliverers           Deliverer[]
-  courses              Course[]
-  course_batches       CourseBatch[]
-  orders               Order[]
-  restaurantPromotions RestaurantPromotion[]
+  users                     User[]
+  deliverers                Deliverer[]
+  courses                   Course[]
+  course_batches            CourseBatch[]
+  orders                    Order[]
+  restaurantPromotions      RestaurantPromotion[]
   /// Plannings de créneaux émis pour ce restaurant (P7).
-  schedule_plans       SchedulePlan[]
+  schedule_plans            SchedulePlan[]
 
   // ================================
   // INTÉGRATION HUBRISE
@@ -1228,15 +1230,15 @@ model Restaurant {
 }
 
 model Supplement {
-  id               String             @id @default(uuid()) @db.Uuid
-  name             String             @db.VarChar
-  price            Float
-  image            String?            @db.Text
-  available        Boolean            @default(true)
-  category         SupplementCategory
-  spice_level      SpiceLevel         @default(NEVER)
-  available_order_types OrderType[]   @default([DELIVERY, PICKUP, TABLE])
-  hubrise_sku      String?            @unique @db.VarChar
+  id                        String                   @id @default(uuid()) @db.Uuid
+  name                      String                   @db.VarChar
+  price                     Float
+  image                     String?                  @db.Text
+  available                 Boolean                  @default(true)
+  category                  SupplementCategory
+  spice_level               SpiceLevel               @default(NEVER)
+  available_order_types     OrderType[]              @default([DELIVERY, PICKUP, TABLE])
+  hubrise_sku               String?                  @unique @db.VarChar
   dish_excluded_supplements DishExcludedSupplement[]
 }
 
@@ -1436,14 +1438,14 @@ model LoyaltyPoint {
 
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
-
-  @@index([customer_id, type])
-  @@index([expires_at])
   // Idempotence comptable DIFFÉRÉE : l'index UNIQUE PARTIEL sur order_id
   // (WHERE type IN ('EARNED','BONUS')) n'est PAS encore posé — un pré-check prod (14/07)
   // a trouvé des points EN DOUBLE (séquelle double-backend) qui le feraient échouer.
   // À poser après déduplication maîtrisée des points (décision métier). Garde-fou
   // applicatif entre-temps : find-then-create + catch P2002 (dormant sans l'index).
+
+  @@index([customer_id, type])
+  @@index([expires_at])
 }
 
 // Récompense « à gratter » — couche CÉLÉBRATION, ne remplace AUCUN registre
@@ -1451,17 +1453,17 @@ model LoyaltyPoint {
 // `order_id` optionnel : une récompense peut être liée à une commande (gain au
 // paiement) ou non (bonus admin, campagne, cadeau).
 model Reward {
-  id          String       @id @default(uuid()) @db.Uuid
-  customer_id String       @db.Uuid
-  type        RewardType
-  status      RewardStatus @default(PENDING)
-  payload     Json // Contenu selon le type (ex: { points: 25 })
-  reason      String?      @db.Text // Libellé (ex: commande #REF, campagne X)
-  order_id    String?      @db.Uuid
-  campaign_id String?      @db.Uuid // Campagne « Envoyer un cadeau » (null si issu d'une commande)
-  scratched_at DateTime?   @db.Timestamp(6)
-  consumed_at DateTime?    @db.Timestamp(6) // GIFT : ajouté à une commande à 0 fr
-  expires_at  DateTime?    @db.Timestamp(6)
+  id           String       @id @default(uuid()) @db.Uuid
+  customer_id  String       @db.Uuid
+  type         RewardType
+  status       RewardStatus @default(PENDING)
+  payload      Json // Contenu selon le type (ex: { points: 25 })
+  reason       String?      @db.Text // Libellé (ex: commande #REF, campagne X)
+  order_id     String?      @db.Uuid
+  campaign_id  String?      @db.Uuid // Campagne « Envoyer un cadeau » (null si issu d'une commande)
+  scratched_at DateTime?    @db.Timestamp(6)
+  consumed_at  DateTime?    @db.Timestamp(6) // GIFT : ajouté à une commande à 0 fr
+  expires_at   DateTime?    @db.Timestamp(6)
 
   customer Customer        @relation(fields: [customer_id], references: [id])
   order    Order?          @relation(fields: [order_id], references: [id])
@@ -1469,32 +1471,99 @@ model Reward {
 
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
-
-  @@index([customer_id, status])
-  @@index([order_id])
-  @@index([campaign_id, status])
   // Idempotence comptable — contrainte DB non exprimable par Prisma (index UNIQUE
   // PARTIEL) posée en SQL brut dans la migration 20260714120000_add_earning_idempotency_indexes :
   //   CREATE UNIQUE INDEX "Reward_order_id_points_unique" ON "Reward"(order_id)
   //     WHERE type = 'POINTS' AND order_id IS NOT NULL;
   // Empêche un 2e Reward POINTS pour la même commande sous concurrence.
+
+  scratch_draws ScratchDraw[]
+
+  @@index([customer_id, status])
+  @@index([order_id])
+  @@index([campaign_id, status])
+}
+
+// ── Gratte & Gagne (moteur) ────────────────────────────────────────────────
+// Le grattage est un CANAL DE PRÉSENTATION du Reward existant, PAS la récompense
+// en soi. Chaque commande app payée donne UN grattage : au minimum le lot PLANCHER
+// (révélation des points de base déjà crédités par addPoints, coût enveloppe = 0)
+// et RAREMENT un GROS LOT « en plus » (coût = unit_cost, compté dans l'enveloppe).
+//
+// Un ScratchLot décrit un lot possible ; le tirage pondéré (ScratchEngineService)
+// choisit un lot par commande en tenant la cible d'enveloppe (surcoût moyen ciblé
+// = % du panier). Les points de base NE sont JAMAIS modifiés par ce moteur.
+model ScratchLot {
+  id          String     @id @default(uuid()) @db.Uuid
+  label       String     @db.VarChar
+  reward_type RewardType // POINTS | GIFT | VOUCHER | PROMO_CODE
+  // Contenu-modèle recopié dans le Reward produit :
+  //   POINTS     { points }
+  //   GIFT       { dish_id, quantity? }  (enrichi comme les campagnes : nom/prix/image)
+  //   VOUCHER    { amount }
+  //   PROMO_CODE { code, ... }
+  payload     Json
+
+  weight        Int           @default(1) // Poids de tirage (proba relative, > 0)
+  unit_cost     Int           @default(0) // Coût réel FCFA du SURCOÛT (compté dans l'enveloppe)
+  min_cart      Int           @default(0) // RG-09 : panier minimum (order.amount) pour être éligible
+  frequency_cap Int? // Nb max de fois qu'un même client peut gagner CE lot sur la fenêtre (null = illimité)
+  stock         Int? // Stock total (null = illimité)
+  stock_used    Int           @default(0)
+  level_min     LoyaltyLevel? // Niveau de fidélité minimum requis (null = tous)
+
+  is_floor Boolean @default(false) // Lot PLANCHER = révélation des points de base (un seul attendu, unit_cost=0)
+  active   Boolean @default(true)
+
+  scratch_draws ScratchDraw[]
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([active, is_floor])
+  @@index([reward_type])
+}
+
+// Journal des tirages — audit + comptabilité d'enveloppe (fenêtre glissante sur
+// `cost`) + application des plafonds de fréquence (compte par client/lot).
+model ScratchDraw {
+  id             String  @id @default(uuid()) @db.Uuid
+  order_id       String  @unique @db.Uuid // 1 tirage par commande (idempotence du moteur)
+  customer_id    String  @db.Uuid
+  scratch_lot_id String? @db.Uuid // null si plancher servi sans lot configuré (fallback legacy)
+  reward_id      String? @db.Uuid
+  cost           Int     @default(0) // 0 pour le plancher ; unit_cost du lot pour un gros lot
+  // Horodatage de restitution du stock (annulation) — idempotence PAR TIRAGE : un
+  // event CANCELLED rejoué ne re-décrémente pas stock_used (claim atomique sur NULL).
+  restored_at    DateTime? @db.Timestamp(6)
+
+  order    Order       @relation(fields: [order_id], references: [id])
+  customer Customer    @relation(fields: [customer_id], references: [id])
+  lot      ScratchLot? @relation(fields: [scratch_lot_id], references: [id])
+  reward   Reward?     @relation(fields: [reward_id], references: [id])
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([customer_id, created_at])
+  @@index([scratch_lot_id, created_at])
+  @@index([created_at])
 }
 
 /// Parrainage : un parrain (referrer) invite un filleul (referee) via son
 /// referral_code. Créé à l'inscription du filleul avec le code ; passe REWARDED
 /// à sa 1ère commande payée (le parrain reçoit alors sa carte à gratter).
 model Referral {
-  id                 String         @id @default(uuid()) @db.Uuid
-  referrer_id        String         @db.Uuid // parrain
-  referee_id         String         @unique @db.Uuid // filleul — parrainé UNE seule fois
-  referral_code      String         @db.VarChar // code utilisé (snapshot)
-  status             ReferralStatus @default(PENDING)
-  qualifying_order_id String?       @db.Uuid // 1ère commande payée ayant qualifié
-  welcome_voucher_id String?        @db.Uuid // bon de bienvenue du filleul
-  parrain_reward_id  String?        @db.Uuid // récompense (Reward) du parrain
-  qualified_at       DateTime?      @db.Timestamp(6)
-  created_at         DateTime       @default(now()) @db.Timestamp(6)
-  updated_at         DateTime       @default(now()) @db.Timestamp(6)
+  id                  String         @id @default(uuid()) @db.Uuid
+  referrer_id         String         @db.Uuid // parrain
+  referee_id          String         @unique @db.Uuid // filleul — parrainé UNE seule fois
+  referral_code       String         @db.VarChar // code utilisé (snapshot)
+  status              ReferralStatus @default(PENDING)
+  qualifying_order_id String?        @db.Uuid // 1ère commande payée ayant qualifié
+  welcome_voucher_id  String?        @db.Uuid // bon de bienvenue du filleul
+  parrain_reward_id   String?        @db.Uuid // récompense (Reward) du parrain
+  qualified_at        DateTime?      @db.Timestamp(6)
+  created_at          DateTime       @default(now()) @db.Timestamp(6)
+  updated_at          DateTime       @default(now()) @db.Timestamp(6)
 
   referrer Customer @relation("Referrer", fields: [referrer_id], references: [id])
   referee  Customer @relation("Referee", fields: [referee_id], references: [id])
@@ -1932,13 +2001,13 @@ model SchedulePlan {
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
-
-  @@index([restaurant_id, status])
-  @@index([period_start, period_end])
   /// ⚠️ Index UNIQUE PARTIEL géré en SQL pur (Prisma ne l'exprime pas) :
   ///   CREATE UNIQUE INDEX ... ON (restaurant_id, period_start) WHERE status <> 'ARCHIVED'
   /// → au plus 1 plan non-archivé par (restaurant, date de début). Empêche les
   /// doublons (course double-backend). Voir migration 20260602103000_schedule_plan_period_unique.
+
+  @@index([restaurant_id, status])
+  @@index([period_start, period_end])
 }
 
 /// Créneau journalier dans un plan (matin OU soir, pour 1 jour donné).
@@ -2120,13 +2189,13 @@ model Prospect {
   promo_code_id String?    @db.Uuid
   promo_code    PromoCode? @relation(fields: [promo_code_id], references: [id])
 
-  called_at      DateTime?
-  joined_at      DateTime? // 1er appel « joint » (pour l'entonnoir « vérifiés »)
-  coupon_sent_at DateTime?
-  registered_at  DateTime?
-  converted_at   DateTime?
+  called_at          DateTime?
+  joined_at          DateTime? // 1er appel « joint » (pour l'entonnoir « vérifiés »)
+  coupon_sent_at     DateTime?
+  registered_at      DateTime?
+  converted_at       DateTime?
   // Attribution de la 1ʳᵉ vente directe (dénormalisé pour les stats/ventes)
-  first_order_id     String? @db.Uuid
+  first_order_id     String?   @db.Uuid
   first_order_amount Float?
 
   calls    ProspectCall[]
@@ -2175,14 +2244,14 @@ model ProspectMessage {
 
 enum DeliveryOfferType {
   FREE_DELIVERY // Livraison gratuite
-  PERCENTAGE    // % de réduction sur le frais
-  FIXED_AMOUNT  // Montant fixe déduit du frais
+  PERCENTAGE // % de réduction sur le frais
+  FIXED_AMOUNT // Montant fixe déduit du frais
 }
 
 enum DeliveryOfferChannel {
-  APP         // Commandes via l'app uniquement
+  APP // Commandes via l'app uniquement
   CALL_CENTER // Commandes call center uniquement
-  BOTH        // Les deux
+  BOTH // Les deux
 }
 
 model DeliveryOffer {
@@ -2204,8 +2273,8 @@ model DeliveryOffer {
 
   // Jours / créneaux (vide = tous les jours / toute la journée)
   days_of_week String[] @default([]) // ex: ["saturday","sunday"] (minuscules)
-  time_start   String?  @db.VarChar  // "HH:mm"
-  time_end     String?  @db.VarChar  // "HH:mm"
+  time_start   String?  @db.VarChar // "HH:mm"
+  time_end     String?  @db.VarChar // "HH:mm"
 
   // Période de validité
   start_date      DateTime @db.Timestamp(6)
