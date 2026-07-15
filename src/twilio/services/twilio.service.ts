@@ -51,6 +51,23 @@ export class TwilioService {
                 { name: "3", description: "Validite en jours" },
             ],
         },
+        // Tunnel d'adhesion (Phase 4) — « votre carte est prete » + deep link.
+        // ⚠️ P0 EXTERNE : le contentSid Meta n'est PAS encore approuve. On lit le
+        // SID depuis le setting `twilio_card_ready_template_sid` (ou l'env
+        // TWILIO_CARD_READY_TEMPLATE_SID). Tant qu'il est vide, l'envoi WhatsApp
+        // est ignore proprement (log) et l'adhesion reussit quand meme.
+        // Body attendu {{1}}=prenom ; bouton URL = deep link (variable {{1}}).
+        card_ready: {
+            name: "card_ready",
+            sid: "", // TODO(P0): renseigner le contentSid Meta approuve ici ou via setting
+            language: "fr",
+            bodyVariables: [
+                { name: "1", description: "Prenom du client" },
+            ],
+            buttonVariables: [
+                { name: "1", description: "Deep link (URL de partage app)" },
+            ],
+        },
     };
 
     constructor(
@@ -233,6 +250,59 @@ export class TwilioService {
             console.log(`[Coupon] Bascule sur SMS pour ${phoneNumber}`);
         }
         return await this.sendSmsMessage({ phoneNumber, message: smsBody });
+    }
+
+    /**
+     * Tunnel d'adhésion (Phase 4) — envoie le template WhatsApp « carte prête »
+     * avec le deep link. BEST-EFFORT : ne jette JAMAIS, renvoie null en cas
+     * d'échec ou de template non approuvé (l'adhésion ne doit pas échouer).
+     *
+     * ⚠️ P0 EXTERNE : le contentSid Meta n'est pas encore approuvé. On le lit
+     * depuis le setting `twilio_card_ready_template_sid` (fallback env
+     * TWILIO_CARD_READY_TEMPLATE_SID, puis la valeur en dur du template). Tant
+     * qu'il est vide, on log et on sort proprement (dégradation propre).
+     */
+    async sendCardReady({ phoneNumber, firstName, deepLink }: {
+        phoneNumber: string;
+        firstName: string;
+        deepLink: string;
+    }): Promise<MessageInstance | null> {
+        try {
+            if (!(await this.isWhatsAppEnabled())) {
+                console.log(`[CardReady] WhatsApp désactivé, envoi ignoré pour ${phoneNumber}`);
+                return null;
+            }
+
+            // Résolution du contentSid : setting DB → env → valeur en dur du template.
+            const contentSid = await this.settingsService.getOrEnv(
+                'twilio_card_ready_template_sid',
+                'TWILIO_CARD_READY_TEMPLATE_SID',
+                this.twilioWhatsappTemplate.card_ready.sid,
+            );
+
+            if (!contentSid) {
+                // TODO(P0): template Meta « carte prête » pas encore approuvé.
+                console.warn(
+                    `[CardReady] contentSid absent (template Meta non approuvé). ` +
+                    `Envoi WhatsApp ignoré pour ${phoneNumber}. Deep link=${deepLink}`,
+                );
+                return null;
+            }
+
+            return await this.sendWhatsappMessage({
+                phoneNumber,
+                contentSid,
+                // {{1}} body = prénom ; {{1}} bouton = deep link (suffixe/URL selon
+                // la config du template approuvé). On fournit les deux clés.
+                contentVariables: JSON.stringify({
+                    "1": firstName || 'Client',
+                    "2": deepLink,
+                }),
+            });
+        } catch (error: any) {
+            console.warn(`[CardReady] Échec best-effort: ${error?.message || error}`);
+            return null;
+        }
     }
 
     async sendSmsMessage({ phoneNumber, message }: { phoneNumber: string, message: string }): Promise<MessageInstance | null> {

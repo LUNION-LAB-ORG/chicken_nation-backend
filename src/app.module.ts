@@ -4,6 +4,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { BullModule } from '@nestjs/bullmq';
+import { ThrottlerModule } from '@nestjs/throttler';
 import KeyvRedis from '@keyv/redis';
 
 // Modules internes
@@ -47,10 +48,17 @@ import { ProspectModule } from 'src/modules/prospect/prospect.module';
 import { RetentionCallbackModule } from 'src/modules/retention-callback/retention-callback.module';
 import { SchedulingModule } from 'src/modules/schedule/schedule.module';
 import { MapsModule } from 'src/modules/maps/maps.module';
+import { AdhesionModule } from 'src/modules/adhesion/adhesion.module';
 
 @Module({
   imports: [
     EventEmitterModule.forRoot({}),
+
+    // Rate limiting (ThrottlerGuard). Défaut global doux (garde-fou) ; les
+    // endpoints publics sensibles (adhésion) posent leur propre @Throttle.
+    ThrottlerModule.forRoot([
+      { name: 'default', ttl: 60_000, limit: 60 },
+    ]),
 
     // Modules utilitaires
     JsonWebTokenModule,
@@ -122,6 +130,7 @@ import { MapsModule } from 'src/modules/maps/maps.module';
     SchedulingModule,
     MapsModule,
     ProspectModule,
+    AdhesionModule,
   ],
 })
 export class AppModule { }

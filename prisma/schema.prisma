@@ -314,6 +314,16 @@ model Customer {
   birth_day             DateTime?            @db.Date
   email                 String?              @unique @db.VarChar
   image                 String?              @db.Text
+
+  // ================================
+  // TUNNEL D'ADHÉSION (Phase 4) — pré-inscription silencieuse depuis le site
+  // ================================
+  // Consentement WhatsApp recueilli au moment de l'adhésion (conformité opt-in).
+  whatsapp_opt_in    Boolean   @default(false)
+  whatsapp_opt_in_at DateTime? @db.Timestamp(6) // horodatage du consentement (preuve)
+  // Profil DÉCLARATIF choisi à l'adhésion (avant toute demande de carte / login).
+  // Sert de valeur par défaut à la 1re CardRequest. Nullable = jamais déclaré.
+  profile_type       ProfileType?
   addresses             Address[]
   favorites             Favorite[]
   orders                Order[]
@@ -1166,6 +1176,22 @@ model OtpToken {
   phone   String   @db.VarChar
   counter Int?
   expire  DateTime @db.Timestamp(6)
+}
+
+// Durcissement OTP (audit) : plafond de tentatives de VÉRIFICATION par numéro
+// + lockout temporaire. Le nombre d'échecs est compté par fenêtre glissante
+// (window_start) ; au-delà du plafond, `locked_until` bloque toute vérif pour
+// ce numéro pendant un délai. Persisté en DB (et non en mémoire) pour rester
+// robuste au double backend sur la même base et aux redémarrages.
+model OtpVerificationAttempt {
+  id           String    @id @default(uuid()) @db.Uuid
+  phone        String    @unique @db.VarChar
+  failed_count Int       @default(0)
+  window_start DateTime  @default(now()) @db.Timestamp(6)
+  locked_until DateTime? @db.Timestamp(6)
+  updated_at   DateTime  @updatedAt @db.Timestamp(6)
+
+  @@index([phone])
 }
 
 model Paiement {
