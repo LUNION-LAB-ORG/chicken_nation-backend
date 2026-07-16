@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CardRequestService } from 'src/modules/card-nation/services/card-request.service';
@@ -27,7 +27,13 @@ export class AdhesionService {
     private readonly cardRequestService: CardRequestService,
   ) {}
 
-  async register(dto: CreateAdhesionDto) {
+  async register(dto: CreateAdhesionDto, photo?: Express.Multer.File) {
+    // Photo OBLIGATOIRE (contrôle backoffice). On refuse l'adhésion sans photo
+    // AVANT de créer/mettre à jour le Customer (échec propre, rien de partiel).
+    if (!photo?.buffer) {
+      throw new BadRequestException('La photo est requise');
+    }
+
     const phone = this.normalizePhone(dto.phone);
     const now = new Date();
 
@@ -70,11 +76,16 @@ export class AdhesionService {
     // createRequest gère les gardes : no-op (ConflictException) si le client a déjà
     // une carte/demande en cours. N'échoue JAMAIS l'adhésion.
     try {
-      await this.cardRequestService.createRequest(customer.id, {
-        profile_type: dto.profile_type,
-        nickname: firstName || undefined,
-        institution: dto.establishment,
-      });
+      await this.cardRequestService.createRequest(
+        customer.id,
+        {
+          profile_type: dto.profile_type,
+          nickname: firstName || undefined,
+          institution: dto.establishment,
+        },
+        undefined,
+        { file: photo },
+      );
     } catch (error: any) {
       this.logger.log(
         `[Adhesion] Demande de carte non créée à l'adhésion (best-effort) pour ${phone} : ${

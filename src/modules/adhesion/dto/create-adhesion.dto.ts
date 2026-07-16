@@ -69,6 +69,8 @@ export class CreateAdhesionDto {
     description: "Consentement à recevoir des messages WhatsApp (opt-in)",
     example: true,
   })
+  // multipart/form-data : les booléens arrivent en string ("true"/"false").
+  @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   whatsapp_opt_in: boolean;
 }

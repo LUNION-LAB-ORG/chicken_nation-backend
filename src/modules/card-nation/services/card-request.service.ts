@@ -45,12 +45,67 @@ export class CardRequestService {
   }
 
   /**
+   * Upload la photo du titulaire sur S3 → renvoie sa clé (ou null si absente/échec).
+   * Accepte un fichier multipart (app) OU un data-URL base64 (site adhésion JSON).
+   */
+  private async uploadPhoto(
+    input?: { file?: Express.Multer.File; base64?: string },
+  ): Promise<string | null> {
+    let buffer: Buffer | undefined;
+    let mimetype = 'image/jpeg';
+    let originalname = 'card-photo.jpg';
+
+    if (input?.file?.buffer) {
+      buffer = input.file.buffer;
+      mimetype = input.file.mimetype || mimetype;
+      originalname = input.file.originalname || originalname;
+    } else if (input?.base64) {
+      const decoded = this.decodeBase64Image(input.base64);
+      if (decoded) {
+        buffer = decoded.buffer;
+        mimetype = decoded.mimetype;
+        originalname = decoded.originalname;
+      }
+    }
+
+    if (!buffer || buffer.length === 0) return null;
+
+    const result = await this.s3service.uploadFile({
+      buffer,
+      path: 'chicken-nation/card-requests',
+      originalname,
+      mimetype,
+    });
+    return result?.key ?? null;
+  }
+
+  /** Décode un data-URL base64 (`data:image/...;base64,...`) ou du base64 brut. */
+  private decodeBase64Image(
+    dataUrl: string,
+  ): { buffer: Buffer; mimetype: string; originalname: string } | null {
+    const raw = (dataUrl || '').trim();
+    if (!raw) return null;
+    const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s.exec(raw);
+    const mimetype = match ? match[1] : 'image/jpeg';
+    const b64 = match ? match[2] : raw;
+    try {
+      const buffer = Buffer.from(b64, 'base64');
+      if (!buffer.length) return null;
+      const ext = (mimetype.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+      return { buffer, mimetype, originalname: `card-photo.${ext}` };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Créer une demande de carte (depuis l'app mobile)
    */
   async createRequest(
     customerId: string,
     createDto: CreateCardRequestDto,
     file?: Express.Multer.File,
+    photoInput?: { file?: Express.Multer.File; base64?: string },
   ) {
     // Vérifier si une demande en attente existe déjà
     const existingRequest = await this.prisma.cardRequest.findFirst({
@@ -85,6 +140,15 @@ export class CardRequestService {
         data: { birth_day: createDto.birth_day },
       });
     }
+
+    // Photo du titulaire (contrôle backoffice — affichée dans la modale Détail,
+    // jamais reprise sur la carte). Uploadée sur S3 si fournie (fichier multipart
+    // app/site, ou base64 en secours). NON bloquante ici pour rester
+    // RÉTRO-COMPATIBLE avec l'app en prod tant que l'OTA (qui envoie la photo)
+    // n'est pas publiée. L'exigence « obligatoire » est portée par les formulaires
+    // (app + site) et, côté adhésion site, par le contrôle amont dans
+    // AdhesionService.register. Placée après les gardes pour ne rien uploader en vain.
+    const photoKey = await this.uploadPhoto(photoInput);
 
     const requireJustificatif = await this.isJustificatifRequired();
 
@@ -123,6 +187,7 @@ export class CardRequestService {
           profile_type: createDto.profile_type ?? null,
           institution: createDto.institution,
           student_card_file_url: result?.key ?? '',
+          photo: photoKey,
           status: CardRequestStatus.PENDING,
         },
         include: {
@@ -140,6 +205,7 @@ export class CardRequestService {
           profile_type: createDto.profile_type ?? null,
           institution: createDto.institution ?? null,
           student_card_file_url: null,
+          photo: photoKey,
           status: CardRequestStatus.PENDING,
         },
         include: {
@@ -423,6 +489,12 @@ export class CardRequestService {
           })
           .catch((e) => this.logger.warn(`sendCardReady (WhatsApp) échoué : ${e?.message}`));
       }
+    } else if (reviewDto.status === CardRequestStatus.REJECTED) {
+      // Refus → notifier le client (push + cloche + WS temps réel). Best-effort,
+      // ne bloque jamais la réponse backoffice.
+      this.cardNotificationService
+        .notifyCardRejected(updatedRequest.customer_id)
+        .catch((e) => this.logger.warn(`notifyCardRejected échouée : ${e?.message}`));
     }
 
 

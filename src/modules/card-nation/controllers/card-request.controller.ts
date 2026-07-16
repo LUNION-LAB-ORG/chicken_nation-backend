@@ -4,11 +4,11 @@ import {
   Get,
   Post,
   Req,
-  UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
@@ -29,19 +29,28 @@ export class CardRequestController {
    */
   @Post('request')
   @UseGuards(JwtCustomerAuthGuard)
-  @UseInterceptors(FileInterceptor('image'))
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: 'image', maxCount: 1 }, // justificatif étudiant (mode V2 uniquement)
+      { name: 'photo', maxCount: 1 }, // photo du titulaire (obligatoire)
+    ]),
+  )
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Soumettre une demande de carte Nation' })
   async createRequest(
     @Req() req: Request,
     @Body() createDto: CreateCardRequestDto,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFiles()
+    files: { image?: Express.Multer.File[]; photo?: Express.Multer.File[] },
   ) {
     const customerId = (req as any).user.id;
 
-    return this.cardRequestService.createRequest(customerId, {
-      ...createDto
-    }, file);
+    return this.cardRequestService.createRequest(
+      customerId,
+      { ...createDto },
+      files?.image?.[0],
+      { file: files?.photo?.[0] },
+    );
   }
 
   /**

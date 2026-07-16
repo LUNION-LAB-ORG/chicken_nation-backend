@@ -1979,6 +1979,10 @@ model CardRequest {
   // Nullable depuis la Phase 3 (V1 déclaratif sans justificatif).
   institution           String?           @db.VarChar(255)
   student_card_file_url String?           @db.Text
+  // Photo du titulaire fournie au formulaire de demande (app + site). Sert au
+  // CONTRÔLE backoffice (affichée dans la modale Détail) ; N'est PAS reprise sur
+  // la carte générée. Nullable : les demandes antérieures n'en ont pas.
+  photo                 String?           @db.Text
   status                CardRequestStatus @default(PENDING)
   rejection_reason      String?           @db.Text
   reviewed_by           String?           @db.Uuid

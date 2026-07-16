@@ -66,6 +66,20 @@ export class CardNotificationService {
     );
   }
 
+  /** Notifie le REFUS d'une demande de carte (cloche + WS + push). */
+  async notifyCardRejected(customerId: string): Promise<void> {
+    await this.dispatch(
+      customerId,
+      CardNotificationsTemplate.CARD_REQUEST_REJECTED,
+      null,
+      {
+        title: 'Demande de carte non retenue',
+        body: "Votre demande de Carte de la Nation n'a pas pu être validée. Vous pouvez refaire une demande depuis l'application.",
+        data: { type: 'card_nation_request_rejected' },
+      },
+    );
+  }
+
   /** Notifie la mise à jour de la carte suite à un changement de niveau. */
   async notifyCardLevelChanged(customerId: string, level?: LoyaltyLevel | null): Promise<void> {
     const label = this.levelLabel(level);

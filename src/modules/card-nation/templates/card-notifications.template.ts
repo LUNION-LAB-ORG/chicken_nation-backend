@@ -37,4 +37,14 @@ export class CardNotificationsTemplate {
     iconBgColor: () => '#FFD700',
     showChevron: true,
   };
+
+  // Demande de carte REFUSÉE (à la validation backoffice)
+  static CARD_REQUEST_REJECTED: NotificationTemplate<{ first_name?: string | null; level?: string | null }> = {
+    title: () => 'Demande de carte non retenue',
+    message: (ctx) =>
+      `Bonjour ${ctx.data.first_name ?? 'cher client'}, votre demande de Carte de la Nation n'a pas pu être validée. Vous pouvez refaire une demande depuis l'application.`,
+    icon: () => notificationIcons.joice.url,
+    iconBgColor: () => '#9CA3AF',
+    showChevron: true,
+  };
 }
