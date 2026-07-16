@@ -12,7 +12,7 @@ import type { Request } from 'express';
 import { S3Service } from '../../../s3/s3.service';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { DishService } from 'src/modules/menu/services/dish.service';
-import { dishAudienceClause } from '../utils/dish-audience.util';
+import { AudienceContext, dishAudienceClause } from '../utils/dish-audience.util';
 
 @Injectable()
 export class CategoryService {
@@ -23,6 +23,11 @@ export class CategoryService {
     private readonly generateDataService: GenerateDataService,
     private readonly dishService: DishService,
   ) { }
+
+  /** Passe-plat vers {@link DishService.resolveAudience} (même règle de masque). */
+  resolveAudience(principal?: Customer | User, customerId?: string) {
+    return this.dishService.resolveAudience(principal, customerId);
+  }
 
   private async uploadImage(image?: Express.Multer.File) {
     if (!image || !image.buffer) return null;
@@ -84,9 +89,10 @@ export class CategoryService {
     });
   }
 
-  // `filterByAudience` : true uniquement pour la requête APP (GET /categories/:id).
-  // Les appels INTERNES (create/update) laissent false → aucun filtre (staff voit tout).
-  async findOne(id: string, customer?: Customer, filterByAudience = false) {
+  // `audience.apply` : true uniquement pour la requête APP (client) ou une prise
+  // de commande backoffice ciblant un client. Les appels INTERNES (create/update/
+  // remove) laissent le défaut `{ apply: false }` → aucun filtre (staff voit tout).
+  async findOne(id: string, audience: AudienceContext = { apply: false }) {
     if (!id) {
       throw new NotFoundException(`Catégorie non trouvée`);
     }
@@ -95,9 +101,9 @@ export class CategoryService {
       : { reference: id };
 
     const dishWhere: Prisma.DishWhereInput = { entity_status: EntityStatus.ACTIVE };
-    if (filterByAudience) {
+    if (audience.apply) {
       dishWhere.private = false;
-      dishWhere.AND = [dishAudienceClause(customer)];
+      dishWhere.AND = [dishAudienceClause(audience.customer)];
     }
 
     const category = await this.prisma.category.findFirst({
@@ -157,11 +163,15 @@ export class CategoryService {
       );
     }
 
-    return this.prisma.category.update({
+    const categoryDeleted = await this.prisma.category.update({
       where: { id: category.id },
       data: {
         entity_status: EntityStatus.DELETED,
       },
     });
+
+    this.categoryEvent.deleteCategory(categoryDeleted);
+
+    return categoryDeleted;
   }
 }

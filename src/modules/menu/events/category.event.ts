@@ -31,4 +31,14 @@ export class CategoryEvent {
       payload
     );
   }
+
+  /**
+   * Émet un événement de suppression (soft-delete) de catégorie
+   */
+  async deleteCategory(payload: Category) {
+    this.eventEmitter.emit(
+      'category.deleted',
+      payload
+    );
+  }
 }

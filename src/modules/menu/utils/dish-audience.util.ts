@@ -1,4 +1,16 @@
-import { DishAudience, LoyaltyLevel, Prisma, ProfileType } from '@prisma/client';
+import { Customer, DishAudience, LoyaltyLevel, Prisma, ProfileType } from '@prisma/client';
+
+/**
+ * Contexte d'audience résolu pour UNE requête de lecture de plats/catégories.
+ *
+ *  - `apply: false` → AUCUN filtre (staff en gestion des menus, ou appel interne).
+ *  - `apply: true` + `customer` → filtre par CE client (client app connecté, ou
+ *    client cible d'une prise de commande backoffice).
+ *  - `apply: true` sans `customer` → invité : plats PUBLIC uniquement.
+ *
+ * Voir {@link DishService.resolveAudience} pour la résolution depuis la requête.
+ */
+export type AudienceContext = { apply: boolean; customer?: Customer };
 
 /**
  * Ciblage d'audience des plats.

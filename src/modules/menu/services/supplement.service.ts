@@ -4,12 +4,14 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateSupplementDto } from 'src/modules/menu/dto/create-supplement.dto';
 import { UpdateSupplementDto } from 'src/modules/menu/dto/update-supplement.dto';
 import { S3Service } from '../../../s3/s3.service';
+import { SupplementEvent } from 'src/modules/menu/events/supplement.event';
 
 @Injectable()
 export class SupplementService {
   constructor(
     private prisma: PrismaService,
     private readonly s3service: S3Service,
+    private readonly supplementEvent: SupplementEvent,
   ) { }
 
   private async uploadImage(image?: Express.Multer.File) {
@@ -25,12 +27,16 @@ export class SupplementService {
   async create(createSupplementDto: CreateSupplementDto, image?: Express.Multer.File) {
     const uploadResult = await this.uploadImage(image);
 
-    return this.prisma.supplement.create({
+    const supplement = await this.prisma.supplement.create({
       data: {
         ...createSupplementDto,
         image: uploadResult?.key ?? createSupplementDto.image,
       },
     });
+
+    this.supplementEvent.createSupplement(supplement);
+
+    return supplement;
   }
 
   async findAll() {
@@ -84,20 +90,28 @@ export class SupplementService {
 
     const uploadResult = await this.uploadImage(image);
 
-    return this.prisma.supplement.update({
+    const supplement = await this.prisma.supplement.update({
       where: { id },
       data: {
         ...updateSupplementDto,
         ...(uploadResult?.key ? { image: uploadResult.key } : {}),
       },
     });
+
+    this.supplementEvent.updateSupplement(supplement);
+
+    return supplement;
   }
 
   async remove(id: string) {
     await this.findOne(id);
 
-    return this.prisma.supplement.delete({
+    const supplement = await this.prisma.supplement.delete({
       where: { id },
     });
+
+    this.supplementEvent.deleteSupplement(supplement);
+
+    return supplement;
   }
 }

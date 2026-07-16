@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Customer, EntityStatus, OrderStatus, Prisma, SpiceLevel, User } from '@prisma/client';
 import type { Request } from 'express';
-import { dishAudienceClause } from '../utils/dish-audience.util';
+import { AudienceContext, dishAudienceClause } from '../utils/dish-audience.util';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
@@ -19,6 +19,38 @@ export class DishService {
     private readonly s3service: S3Service,
     private readonly generateDataService: GenerateDataService
   ) { }
+
+  /**
+   * Résout le contexte d'audience d'une requête de lecture de plats/catégories
+   * (le « masque »). Règle unique, partagée par toutes les listes :
+   *
+   *  - STAFF (User, possède `role`) SANS `customerId` → gestion des menus :
+   *    AUCUN filtre, voit TOUT le catalogue.
+   *  - STAFF AVEC `customerId` → prise de commande POUR ce client : filtre par
+   *    l'audience de ce client cible.
+   *  - CLIENT app (token) → filtre par lui-même. `customerId` est IGNORÉ ici :
+   *    un client ne peut pas usurper l'audience d'un autre.
+   *  - Invité (aucun principal) → plats PUBLIC uniquement.
+   *
+   * ⚠️ Le masque ne s'applique donc côté backoffice QUE dans la prise de
+   * commande (customerId fourni) — jamais en gestion des menus.
+   */
+  async resolveAudience(
+    principal?: Customer | User,
+    customerId?: string,
+  ): Promise<AudienceContext> {
+    const isStaff = !!principal && 'role' in principal;
+    if (isStaff) {
+      if (customerId) {
+        const customer = await this.prisma.customer.findUnique({
+          where: { id: customerId },
+        });
+        return { apply: true, customer: customer ?? undefined };
+      }
+      return { apply: false };
+    }
+    return { apply: true, customer: principal as Customer | undefined };
+  }
 
   private async uploadImage(image?: Express.Multer.File) {
     if (!image || !image.buffer) return null;
@@ -147,15 +179,18 @@ export class DishService {
     return this.findOne(dish.id);
   }
 
-  async findAll(query: { all: boolean } = { all: false }, customer?: Customer) {
+  async findAll(
+    query: { all: boolean } = { all: false },
+    audience: AudienceContext = { apply: false },
+  ) {
     const where: Prisma.DishWhereInput = {
       private: query.all ? undefined : false,
       entity_status: EntityStatus.ACTIVE,
     };
-    // App (all=false) → filtre par audience du client (invité = publics only).
-    // Backoffice (all=true) → aucun filtre (le staff voit tout).
-    if (!query.all) {
-      where.AND = [dishAudienceClause(customer)];
+    // Filtre audience : jamais pour le backoffice `all=true`, sinon selon le
+    // contexte résolu (client → par lui ; invité → publics ; staff → aucun).
+    if (!query.all && audience.apply) {
+      where.AND = [dishAudienceClause(audience.customer)];
     }
     const dishes = await this.prisma.dish.findMany({
       where,
@@ -165,14 +200,21 @@ export class DishService {
     return this.withEffective(dishes);
   }
 
-  async findMany(filter: QueryDishDto, customer?: Customer): Promise<QueryResponseDto<unknown>> {
+  async findMany(
+    filter: QueryDishDto,
+    audience: AudienceContext = { apply: false },
+  ): Promise<QueryResponseDto<unknown>> {
     const { search, status, categoryId, minPrice, maxPrice, page = 1, limit = 10, sortBy = "name", sortOrder = "asc" } = filter;
 
     const where: Prisma.DishWhereInput = {
       entity_status: EntityStatus.ACTIVE,
       private: false,
-      AND: [dishAudienceClause(customer)],
     };
+    // Masque audience : appliqué UNIQUEMENT pour un client cible (client app,
+    // ou client d'une prise de commande). Staff en gestion des menus → non.
+    if (audience.apply) {
+      where.AND = [dishAudienceClause(audience.customer)];
+    }
     if (search) {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
@@ -331,13 +373,21 @@ export class DishService {
     await this.prisma.dishExcludedRestaurant.deleteMany({ where: { dish_id: id } });
     await this.prisma.dishExcludedSupplement.deleteMany({ where: { dish_id: id } });
 
-    return this.prisma.dish.update({
+    const dishDeleted = await this.prisma.dish.update({
       where: { id: dish.id },
       data: { entity_status: EntityStatus.DELETED },
     });
+
+    this.dishEvent.deleteDish(dishDeleted);
+
+    return dishDeleted;
   }
 
-  async findPopular(days: number = 30, limit: number = 4, customer?: Customer) {
+  async findPopular(
+    days: number = 30,
+    limit: number = 4,
+    audience: AudienceContext = { apply: false },
+  ) {
     const dateLimit = new Date();
     dateLimit.setDate(dateLimit.getDate() - days);
 
@@ -363,13 +413,16 @@ export class DishService {
     if (popularItems.length === 0) return [];
 
     const dishIds = popularItems.map((item) => item.dish_id);
+    const where: Prisma.DishWhereInput = {
+      id: { in: dishIds },
+      entity_status: EntityStatus.ACTIVE,
+      private: false,
+    };
+    if (audience.apply) {
+      where.AND = [dishAudienceClause(audience.customer)];
+    }
     const dishes = await this.prisma.dish.findMany({
-      where: {
-        id: { in: dishIds },
-        entity_status: EntityStatus.ACTIVE,
-        private: false,
-        AND: [dishAudienceClause(customer)],
-      },
+      where,
       include: { category: true },
     });
 

@@ -9,6 +9,7 @@ import { CategoryListenerService } from 'src/modules/menu/listeners/category-lis
 import { DishListenerService } from 'src/modules/menu/listeners/dish-listener.service';
 import { DishEvent } from './events/dish.event';
 import { CategoryEvent } from './events/category.event';
+import { SupplementEvent } from './events/supplement.event';
 import { CategoryNotificationsTemplate } from './templates/category-notifications.template';
 import { DishNotificationsTemplate } from './templates/dish-notifications.template';
 
@@ -21,6 +22,7 @@ import { DishNotificationsTemplate } from './templates/dish-notifications.templa
     SupplementService,
     DishEvent,
     CategoryEvent,
+    SupplementEvent,
     CategoryListenerService,
     DishListenerService,
     CategoryNotificationsTemplate,

@@ -31,4 +31,14 @@ export class DishEvent {
       payload
     );
   }
+
+  /**
+   * Émet un événement de suppression (soft-delete) de plat
+   */
+  async deleteDish(payload: Dish) {
+    this.eventEmitter.emit(
+      'dish.deleted',
+      payload
+    );
+  }
 }

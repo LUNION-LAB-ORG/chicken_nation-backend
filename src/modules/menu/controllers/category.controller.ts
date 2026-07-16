@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UploadedFile,
   UseGuards,
@@ -14,13 +15,13 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Customer } from '@prisma/client';
+import { Customer, User } from '@prisma/client';
 import type { Request } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { JwtCustomerOptionalAuthGuard } from 'src/modules/auth/guards/jwt-customer-optional-auth.guard';
+import { JwtCustomerOrStaffOptionalAuthGuard } from 'src/modules/auth/guards/jwt-customer-or-staff-optional-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
 import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
@@ -59,13 +60,24 @@ export class CategoryController {
     return this.categoryService.findAll({ all: true });
   }
 
-  // Plats imbriqués filtrés par audience du client → PAS de cache par URL
-  // (fuite inter-clients). Guard client optionnel : invité = plats publics.
+  // Plats imbriqués masqués par audience → PAS de cache par URL (fuite
+  // inter-clients). Guard client OU staff optionnel :
+  //  - client app → plats de son audience ; invité → plats publics ;
+  //  - staff (backoffice) sans `customerId` → aucun masque (voit tout) ;
+  //  - staff + `customerId` (prise de commande) → plats de CE client.
   @Get(':id')
-  @ApiOperation({ summary: 'Catégorie par id (plats filtrés par audience du client)' })
-  @UseGuards(JwtCustomerOptionalAuthGuard)
-  findOne(@Param('id') id: string, @Req() req: Request) {
-    return this.categoryService.findOne(id, req.user as Customer | undefined, true);
+  @ApiOperation({ summary: 'Catégorie par id (masque audience : client connecté/cible ; aucun pour le staff en gestion des menus)' })
+  @UseGuards(JwtCustomerOrStaffOptionalAuthGuard)
+  async findOne(
+    @Param('id') id: string,
+    @Req() req: Request,
+    @Query('customerId') customerId?: string,
+  ) {
+    const audience = await this.categoryService.resolveAudience(
+      req.user as Customer | User | undefined,
+      customerId,
+    );
+    return this.categoryService.findOne(id, audience);
   }
 
   @Patch(':id')

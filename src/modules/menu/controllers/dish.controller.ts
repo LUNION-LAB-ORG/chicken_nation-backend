@@ -14,13 +14,13 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Customer } from '@prisma/client';
+import { Customer, User } from '@prisma/client';
 import type { Request } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { JwtCustomerOptionalAuthGuard } from 'src/modules/auth/guards/jwt-customer-optional-auth.guard';
+import { JwtCustomerOrStaffOptionalAuthGuard } from 'src/modules/auth/guards/jwt-customer-or-staff-optional-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
 import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
@@ -52,10 +52,14 @@ export class DishController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Récupération des plats (filtrés par audience du client connecté)' })
-  @UseGuards(JwtCustomerOptionalAuthGuard)
-  findAll(@Req() req: Request) {
-    return this.dishService.findAll(undefined, req.user as Customer | undefined);
+  @ApiOperation({ summary: 'Récupération des plats (masque audience : client connecté ; aucun pour le staff)' })
+  @UseGuards(JwtCustomerOrStaffOptionalAuthGuard)
+  async findAll(@Req() req: Request, @Query('customerId') customerId?: string) {
+    const audience = await this.dishService.resolveAudience(
+      req.user as Customer | User | undefined,
+      customerId,
+    );
+    return this.dishService.findAll(undefined, audience);
   }
 
   @Get('get-all')
@@ -65,28 +69,37 @@ export class DishController {
   }
 
   @Get('search')
-  @ApiOperation({ summary: 'Recherche de plats (filtrés par audience du client connecté)' })
-  @UseGuards(JwtCustomerOptionalAuthGuard)
-  findMany(@Query() filter: QueryDishDto, @Req() req: Request) {
-    return this.dishService.findMany(filter, req.user as Customer | undefined);
+  @ApiOperation({ summary: 'Recherche de plats (masque audience : client connecté/cible ; aucun pour le staff en gestion des menus)' })
+  @UseGuards(JwtCustomerOrStaffOptionalAuthGuard)
+  async findMany(
+    @Query() filter: QueryDishDto,
+    @Req() req: Request,
+    @Query('customerId') customerId?: string,
+  ) {
+    const audience = await this.dishService.resolveAudience(
+      req.user as Customer | User | undefined,
+      customerId,
+    );
+    return this.dishService.findMany(filter, audience);
   }
 
   @Get('popular')
-  @ApiOperation({ summary: 'Plats populaires (filtrés par audience du client connecté)' })
-  @UseGuards(JwtCustomerOptionalAuthGuard)
+  @ApiOperation({ summary: 'Plats populaires (masque audience : client connecté/cible ; aucun pour le staff)' })
+  @UseGuards(JwtCustomerOrStaffOptionalAuthGuard)
   async getPopularDishes(
     @Req() req: Request,
     @Query('days') days?: string,
     @Query('limit') limit?: string,
+    @Query('customerId') customerId?: string,
   ) {
     const parsedDays = days ? parseInt(days, 10) : 30;
     const parsedLimit = limit ? parseInt(limit, 10) : 4;
 
-    return this.dishService.findPopular(
-      parsedDays,
-      parsedLimit,
-      req.user as Customer | undefined,
+    const audience = await this.dishService.resolveAudience(
+      req.user as Customer | User | undefined,
+      customerId,
     );
+    return this.dishService.findPopular(parsedDays, parsedLimit, audience);
   }
 
   @Get(':id')
