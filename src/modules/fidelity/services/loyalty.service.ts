@@ -630,6 +630,95 @@ export class LoyaltyService {
         return result;
     }
 
+    /**
+     * BACKFILL des niveaux de fidélité (`loyalty_level`) des clients EXISTANTS.
+     *
+     * Contexte : le niveau n'est (re)calculé que lors d'un gain/dépense de points
+     * (`updateCustomerLoyaltyLevel`). Les clients créés/importés avant ce câblage —
+     * ou qui n'ont plus bougé depuis — gardent `loyalty_level = null` et s'affichent
+     * « NOUVEAU » alors que leur `status_points` leur donne droit à un palier. Cette
+     * routine recalcule le NIVEAU attendu depuis `status_points` + seuils de la config
+     * active (via `computeLoyaltyLevel`, même logique que le temps réel) et corrige
+     * le champ.
+     *
+     * ⚠️ Ne recalcule QUE `loyalty_level`. Ne touche NI aux points
+     * (total/lifetime/status), NI aux bonus de palier, NI à `last_level_update`,
+     * NI à l'historique, NI aux événements/WS. Simple rattrapage d'affichage.
+     *
+     * - dryRun (DÉFAUT) : ne mute RIEN. Compte/liste ce qui CHANGERAIT.
+     * - apply : applique les UPDATE, uniquement là où le niveau attendu (non-null)
+     *   diffère de l'actuel. On n'écrase JAMAIS un niveau existant par null
+     *   (status_points sous le seuil Standard) → cohérent avec
+     *   `updateCustomerLoyaltyLevel` qui ne rétrograde jamais vers « aucun palier ».
+     *   UPDATE conditionné sur le niveau observé (claim atomique) : idempotent et
+     *   sans risque si un client change de niveau en temps réel pendant la passe.
+     */
+    async backfillLoyaltyLevels({
+        dryRun = true,
+        limit,
+    }: { dryRun?: boolean; limit?: number } = {}) {
+        const config = await this.getConfig();
+
+        const customers = await this.prisma.customer.findMany({
+            where: { entity_status: EntityStatus.ACTIVE },
+            select: { id: true, loyalty_level: true, status_points: true },
+            orderBy: { created_at: 'asc' },
+            ...(limit ? { take: limit } : {}),
+        });
+
+        // Répartition des corrections par niveau CIBLE (STANDARD/VIP/VVIP).
+        const byLevel: Record<LoyaltyLevel, number> = {
+            [LoyaltyLevel.STANDARD]: 0,
+            [LoyaltyLevel.VIP]: 0,
+            [LoyaltyLevel.VVIP]: 0,
+        };
+        const toChange: {
+            id: string;
+            from: LoyaltyLevel | null;
+            to: LoyaltyLevel;
+        }[] = [];
+
+        for (const c of customers) {
+            const expected = this.computeLoyaltyLevel(c.status_points, config);
+            // On ne corrige que vers un palier RÉEL (non-null) différent de l'actuel.
+            // Un niveau attendu null (sous le seuil Standard) est laissé tel quel :
+            // on ne rétrograde pas un client existant vers « NOUVEAU ».
+            if (expected && expected !== c.loyalty_level) {
+                toChange.push({ id: c.id, from: c.loyalty_level, to: expected });
+                byLevel[expected]++;
+            }
+        }
+
+        if (dryRun) {
+            return {
+                dry_run: true,
+                scanned: customers.length,
+                would_change: toChange.length,
+                by_level: byLevel,
+                sample: toChange.slice(0, 20),
+            };
+        }
+
+        let changed = 0;
+        for (const ch of toChange) {
+            // UPDATE ciblé du SEUL champ loyalty_level, conditionné sur le niveau
+            // observé (updateMany → 0 ligne si le client a bougé entre-temps, aucun
+            // throw si supprimé). Aucun autre champ n'est modifié.
+            const res = await this.prisma.customer.updateMany({
+                where: { id: ch.id, loyalty_level: ch.from },
+                data: { loyalty_level: ch.to },
+            });
+            changed += res.count;
+        }
+
+        return {
+            dry_run: false,
+            scanned: customers.length,
+            changed,
+            by_level: byLevel,
+        };
+    }
+
     // Obtenir les informations de fidélité d'un client
     async getCustomerLoyaltyInfo(customer_id: string) {
         const customer = await this.prisma.customer.findUnique({
@@ -710,6 +799,28 @@ export class LoyaltyService {
         };
     }
 
+    /**
+     * Déduit le NIVEAU de fidélité à partir du compteur ANNUEL `status_points`
+     * et des seuils de la config active. Renvoie `null` sous le seuil Standard
+     * (aucun palier atteint → « NOUVEAU »). SOURCE DE VÉRITÉ UNIQUE du calcul de
+     * niveau, réutilisée par `updateCustomerLoyaltyLevel` (temps réel, au
+     * gain/dépense) ET par `backfillLoyaltyLevels` (rattrapage des clients
+     * existants). Toute évolution des paliers se fait ICI, à un seul endroit.
+     */
+    private computeLoyaltyLevel(
+        statusPoints: number,
+        config: {
+            standard_threshold: number;
+            premium_threshold: number;
+            gold_threshold: number;
+        },
+    ): LoyaltyLevel | null {
+        if (statusPoints >= config.gold_threshold) return LoyaltyLevel.VVIP;
+        if (statusPoints >= config.premium_threshold) return LoyaltyLevel.VIP;
+        if (statusPoints >= config.standard_threshold) return LoyaltyLevel.STANDARD;
+        return null;
+    }
+
     // Mettre à jour le niveau de fidélité d'un client
     private async updateCustomerLoyaltyLevel(customer: Customer, tx: any) {
         const config = await this.getConfig();
@@ -730,15 +841,7 @@ export class LoyaltyService {
         if (!fresh) return;
 
         // Le NIVEAU est calculé sur le compteur ANNUEL status_points.
-        let newLevel: LoyaltyLevel | null = null;
-
-        if (fresh.status_points >= config.gold_threshold) {
-            newLevel = LoyaltyLevel.VVIP;
-        } else if (fresh.status_points >= config.premium_threshold) {
-            newLevel = LoyaltyLevel.VIP;
-        } else if (fresh.status_points >= config.standard_threshold) {
-            newLevel = LoyaltyLevel.STANDARD;
-        }
+        const newLevel = this.computeLoyaltyLevel(fresh.status_points, config);
 
         if (newLevel && newLevel !== fresh.loyalty_level) {
             // Ordre des niveaux : distingue une MONTÉE d'une rétrogradation (ex. après

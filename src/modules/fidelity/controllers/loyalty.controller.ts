@@ -158,4 +158,22 @@ export class LoyaltyController {
       limit: limit ? Number(limit) : undefined,
     });
   }
+
+  @Post('levels/backfill')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.FIDELITE, Action.UPDATE)
+  @ApiOperation({
+    summary:
+      'Recalculer (backfill) le niveau de fidélité des clients existants depuis leurs status_points + seuils config. Dry-run par défaut ; ?apply=true pour exécuter.',
+  })
+  @ApiOkResponse({ description: 'Diagnostic (dry-run) ou résultat du backfill des niveaux' })
+  backfillLoyaltyLevels(
+    @Query('apply') apply?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.loyaltyService.backfillLoyaltyLevels({
+      dryRun: apply !== 'true',
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
 }
