@@ -6,12 +6,13 @@ import {
 import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
 import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { EntityStatus, User } from '@prisma/client';
+import { Customer, EntityStatus, Prisma, User } from '@prisma/client';
 import { CategoryEvent } from 'src/modules/menu/events/category.event';
 import type { Request } from 'express';
 import { S3Service } from '../../../s3/s3.service';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { DishService } from 'src/modules/menu/services/dish.service';
+import { dishAudienceClause } from '../utils/dish-audience.util';
 
 @Injectable()
 export class CategoryService {
@@ -83,7 +84,9 @@ export class CategoryService {
     });
   }
 
-  async findOne(id: string) {
+  // `filterByAudience` : true uniquement pour la requête APP (GET /categories/:id).
+  // Les appels INTERNES (create/update) laissent false → aucun filtre (staff voit tout).
+  async findOne(id: string, customer?: Customer, filterByAudience = false) {
     if (!id) {
       throw new NotFoundException(`Catégorie non trouvée`);
     }
@@ -91,11 +94,17 @@ export class CategoryService {
       ? { id }
       : { reference: id };
 
+    const dishWhere: Prisma.DishWhereInput = { entity_status: EntityStatus.ACTIVE };
+    if (filterByAudience) {
+      dishWhere.private = false;
+      dishWhere.AND = [dishAudienceClause(customer)];
+    }
+
     const category = await this.prisma.category.findFirst({
       where: whereCondition,
       include: {
         dishes: {
-          where: { entity_status: EntityStatus.ACTIVE },
+          where: dishWhere,
           orderBy: {
             created_at: 'desc',
           },

@@ -1,9 +1,10 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
   IsBoolean,
   IsEnum,
   IsNotEmpty,
+  IsOptional,
   IsString,
   Matches,
   MaxLength,
@@ -45,13 +46,24 @@ export class CreateAdhesionDto {
   })
   phone: string;
 
-  @ApiProperty({
-    description: 'Profil déclaratif (sans justificatif)',
+  @ApiPropertyOptional({
+    description:
+      'Profil déclaratif : ETUDIANT si étudiant/élève. Absent = grand public.',
     enum: ProfileType,
     example: ProfileType.ETUDIANT,
   })
   @IsEnum(ProfileType)
-  profile_type: ProfileType;
+  @IsOptional()
+  profile_type?: ProfileType;
+
+  @ApiPropertyOptional({
+    description: "Établissement (école/université) — uniquement si étudiant/élève.",
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(255)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  establishment?: string;
 
   @ApiProperty({
     description: "Consentement à recevoir des messages WhatsApp (opt-in)",

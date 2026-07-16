@@ -1,7 +1,7 @@
 import { IsArray, IsBoolean, IsEnum, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { OrderType, SpiceLevel } from '@prisma/client';
+import { DishAudience, OrderType, SpiceLevel } from '@prisma/client';
 
 export class CreateDishDto {
   @ApiProperty({ description: 'Nom du plat' })
@@ -127,6 +127,23 @@ export class CreateDishDto {
   @Transform(({ value }) => String(value).trim() == "true" ? true : false)
   @IsBoolean()
   private?: boolean;
+
+  @ApiPropertyOptional({
+    enum: DishAudience,
+    isArray: true,
+    description:
+      "Audiences ciblées (vide = PUBLIC, tout le monde). ETUDIANT = carte étudiant ; STANDARD/VIP/VVIP = niveau de fidélité. Match strict, multi-valeurs.",
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === undefined || value === null || value === '') return [];
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'string') return value.split(',').map((v) => v.trim()).filter(Boolean);
+    return value;
+  })
+  @IsArray()
+  @IsEnum(DishAudience, { each: true })
+  audiences?: DishAudience[];
 
   @ApiPropertyOptional({ description: 'SKU HubRise pour la correspondance catalogue' })
   @IsOptional()

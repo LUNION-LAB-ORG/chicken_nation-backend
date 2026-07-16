@@ -171,6 +171,16 @@ enum LoyaltyLevel {
   VVIP // VVIP (ex-GOLD)
 }
 
+// Audience de ciblage d'un plat (Dish.audiences). ETUDIANT = niveau de carte
+// (profil étudiant) ; STANDARD/VIP/VVIP = niveau de fidélité (points). Un plat
+// sans audience ([]) est PUBLIC. Match strict, multi-valeurs possible.
+enum DishAudience {
+  ETUDIANT
+  STANDARD
+  VIP
+  VVIP
+}
+
 enum DiscountType {
   PERCENTAGE // POURCENTAGE
   FIXED_AMOUNT // MONTANT FIXE
@@ -912,6 +922,11 @@ model Dish {
   category_id               String                   @db.Uuid
   cooking_time              Int?                     @db.Integer // en minutes
   private                   Boolean                  @default(false)
+  // Ciblage d'audience : [] = PUBLIC (tout le monde). Sinon le plat n'est
+  // visible que pour les clients dont l'audience (ETUDIANT si étudiant, ou
+  // leur niveau de fidélité exact) figure dans la liste. Match STRICT (un plat
+  // [VIP] n'est PAS vu par VVIP tant que VVIP n'est pas coché aussi).
+  audiences                 DishAudience[]           @default([])
   hubrise_sku               String?                  @unique @db.VarChar
   category                  Category                 @relation(fields: [category_id], references: [id], onDelete: Cascade)
   dish_excluded_supplements DishExcludedSupplement[]
@@ -1957,8 +1972,9 @@ model CardRequest {
   customer_id           String            @db.Uuid
   customer              Customer          @relation(fields: [customer_id], references: [id], onDelete: Cascade)
   nickname              String?           @db.VarChar(100)
-  // Profil déclaratif (V1). Marqueur ETUDIANT indépendant du niveau de fidélité.
-  profile_type          ProfileType       @default(ETUDIANT)
+  // Profil déclaratif (V1). NULL = grand public (non-étudiant) ; ETUDIANT =
+  // carte étudiant (débloque les menus dédiés). Marqueur indépendant du niveau.
+  profile_type          ProfileType?
   // institution / justificatif : requis UNIQUEMENT en mode V2 (card.require_justificatif=true).
   // Nullable depuis la Phase 3 (V1 déclaratif sans justificatif).
   institution           String?           @db.VarChar(255)

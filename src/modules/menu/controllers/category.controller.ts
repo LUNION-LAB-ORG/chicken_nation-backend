@@ -14,11 +14,13 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Customer } from '@prisma/client';
 import type { Request } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { JwtCustomerOptionalAuthGuard } from 'src/modules/auth/guards/jwt-customer-optional-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
 import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
@@ -27,7 +29,6 @@ import { CategoryService } from 'src/modules/menu/services/category.service';
 @ApiTags('Categories')
 @ApiBearerAuth()
 @Controller('categories')
-@UseInterceptors(CacheInterceptor)
 export class CategoryController {
   constructor(private readonly categoryService: CategoryService) {}
 
@@ -46,20 +47,25 @@ export class CategoryController {
 
   @Get()
   @ApiOperation({ summary: 'Récupération de toutes les catégories' })
+  @UseInterceptors(CacheInterceptor)
   findAll() {
     return this.categoryService.findAll();
   }
 
   @Get('/get-all')
   @ApiOperation({ summary: 'Récupération de toutes les catégories' })
+  @UseInterceptors(CacheInterceptor)
   findAllBackoffice() {
     return this.categoryService.findAll({ all: true });
   }
 
+  // Plats imbriqués filtrés par audience du client → PAS de cache par URL
+  // (fuite inter-clients). Guard client optionnel : invité = plats publics.
   @Get(':id')
-  @ApiOperation({ summary: "Récupération d'une catégorie par son id" })
-  findOne(@Param('id') id: string) {
-    return this.categoryService.findOne(id);
+  @ApiOperation({ summary: 'Catégorie par id (plats filtrés par audience du client)' })
+  @UseGuards(JwtCustomerOptionalAuthGuard)
+  findOne(@Param('id') id: string, @Req() req: Request) {
+    return this.categoryService.findOne(id, req.user as Customer | undefined, true);
   }
 
   @Patch(':id')

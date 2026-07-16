@@ -12,14 +12,16 @@ export class CreateCardRequestDto {
   @Transform(({ value }) => (value ? value.trim() : value))
   nickname?: string;
 
-  @ApiProperty({
-    description: 'Profil déclaratif du client (V1 sans justificatif)',
+  @ApiPropertyOptional({
+    description:
+      'Profil déclaratif : ETUDIANT si le client est étudiant/élève. ' +
+      'Absent = grand public (carte fidélité simple). PROFESSIONNEL déprécié.',
     enum: ProfileType,
     example: ProfileType.ETUDIANT,
   })
-  @IsEnum(ProfileType, { message: 'Le profil doit être ETUDIANT ou PROFESSIONNEL' })
-  @IsNotEmpty({ message: 'Le profil (ETUDIANT / PROFESSIONNEL) est requis' })
-  profile_type: ProfileType;
+  @IsEnum(ProfileType, { message: 'Profil invalide' })
+  @IsOptional()
+  profile_type?: ProfileType;
 
   @ApiPropertyOptional({
     description:

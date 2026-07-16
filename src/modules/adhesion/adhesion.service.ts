@@ -73,6 +73,7 @@ export class AdhesionService {
       await this.cardRequestService.createRequest(customer.id, {
         profile_type: dto.profile_type,
         nickname: firstName || undefined,
+        institution: dto.establishment,
       });
     } catch (error: any) {
       this.logger.log(

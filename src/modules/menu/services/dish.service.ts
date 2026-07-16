@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { EntityStatus, OrderStatus, Prisma, SpiceLevel, User } from '@prisma/client';
+import { Customer, EntityStatus, OrderStatus, Prisma, SpiceLevel, User } from '@prisma/client';
 import type { Request } from 'express';
+import { dishAudienceClause } from '../utils/dish-audience.util';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
@@ -146,23 +147,31 @@ export class DishService {
     return this.findOne(dish.id);
   }
 
-  async findAll(query: { all: boolean } = { all: false }) {
+  async findAll(query: { all: boolean } = { all: false }, customer?: Customer) {
+    const where: Prisma.DishWhereInput = {
+      private: query.all ? undefined : false,
+      entity_status: EntityStatus.ACTIVE,
+    };
+    // App (all=false) → filtre par audience du client (invité = publics only).
+    // Backoffice (all=true) → aucun filtre (le staff voit tout).
+    if (!query.all) {
+      where.AND = [dishAudienceClause(customer)];
+    }
     const dishes = await this.prisma.dish.findMany({
-      where: {
-        private: query.all ? undefined : false,
-        entity_status: EntityStatus.ACTIVE,
-      },
+      where,
       include: { category: true },
       orderBy: { name: 'asc' },
     });
     return this.withEffective(dishes);
   }
 
-  async findMany(filter: QueryDishDto): Promise<QueryResponseDto<unknown>> {
+  async findMany(filter: QueryDishDto, customer?: Customer): Promise<QueryResponseDto<unknown>> {
     const { search, status, categoryId, minPrice, maxPrice, page = 1, limit = 10, sortBy = "name", sortOrder = "asc" } = filter;
 
     const where: Prisma.DishWhereInput = {
       entity_status: EntityStatus.ACTIVE,
+      private: false,
+      AND: [dishAudienceClause(customer)],
     };
     if (search) {
       where.OR = [
@@ -328,7 +337,7 @@ export class DishService {
     });
   }
 
-  async findPopular(days: number = 30, limit: number = 4) {
+  async findPopular(days: number = 30, limit: number = 4, customer?: Customer) {
     const dateLimit = new Date();
     dateLimit.setDate(dateLimit.getDate() - days);
 
@@ -358,6 +367,8 @@ export class DishService {
       where: {
         id: { in: dishIds },
         entity_status: EntityStatus.ACTIVE,
+        private: false,
+        AND: [dishAudienceClause(customer)],
       },
       include: { category: true },
     });

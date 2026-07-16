@@ -120,7 +120,7 @@ export class CardRequestService {
         data: {
           customer_id: customerId,
           nickname: createDto.nickname,
-          profile_type: createDto.profile_type,
+          profile_type: createDto.profile_type ?? null,
           institution: createDto.institution,
           student_card_file_url: result?.key ?? '',
           status: CardRequestStatus.PENDING,
@@ -137,7 +137,7 @@ export class CardRequestService {
         data: {
           customer_id: customerId,
           nickname: createDto.nickname,
-          profile_type: createDto.profile_type,
+          profile_type: createDto.profile_type ?? null,
           institution: createDto.institution ?? null,
           student_card_file_url: null,
           status: CardRequestStatus.PENDING,
@@ -460,7 +460,7 @@ export class CardRequestService {
         { level, is_student: isStudent },
       );
 
-      return await this.prisma.nationCard.create({
+      const card = await this.prisma.nationCard.create({
         data: {
           customer_id: requestCard.customer_id,
           card_request_id: requestCard.id,
@@ -473,6 +473,16 @@ export class CardRequestService {
           status: NationCardStatus.ACTIVE,
         },
       });
+
+      // Propage le profil déclaré au CLIENT : c'est `Customer.profile_type` que
+      // lit le filtre d'audience des menus (ETUDIANT → menus étudiants ; NULL =
+      // grand public). Fait à la VALIDATION (carte active), pas à la demande.
+      await this.prisma.customer.update({
+        where: { id: requestCard.customer_id },
+        data: { profile_type: requestCard.profile_type ?? null },
+      });
+
+      return card;
 
     } catch (error) {
       this.logger.error(`Erreur génération carte : ${(error as Error)?.message}`, (error as Error)?.stack);

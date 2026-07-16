@@ -1,4 +1,3 @@
-import { CacheInterceptor, CacheTTL } from '@nestjs/cache-manager';
 import {
   Body,
   Controller,
@@ -15,11 +14,13 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Customer } from '@prisma/client';
 import type { Request } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { JwtCustomerOptionalAuthGuard } from 'src/modules/auth/guards/jwt-customer-optional-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
 import { UpdateDishDto } from 'src/modules/menu/dto/update-dish.dto';
@@ -29,7 +30,9 @@ import { QueryDishDto } from '../dto/query-dish.dto';
 @Controller('dishes')
 @ApiTags('Dishes')
 @ApiBearerAuth()
-@UseInterceptors(CacheInterceptor)
+// ⚠️ PAS de CacheInterceptor global ici : les listes de plats sont filtrées par
+// l'audience du CLIENT connecté → un cache par URL servirait la liste d'un client
+// à un autre (fuite inter-clients). Le filtrage est per-request.
 export class DishController {
   constructor(
     private readonly dishService: DishService,
@@ -49,33 +52,41 @@ export class DishController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Récupération de tous les plats' })
-  findAll() {
-    return this.dishService.findAll();
+  @ApiOperation({ summary: 'Récupération des plats (filtrés par audience du client connecté)' })
+  @UseGuards(JwtCustomerOptionalAuthGuard)
+  findAll(@Req() req: Request) {
+    return this.dishService.findAll(undefined, req.user as Customer | undefined);
   }
 
   @Get('get-all')
-  @ApiOperation({ summary: 'Récupération de tous les plats' })
+  @ApiOperation({ summary: 'Récupération de tous les plats (backoffice, sans filtre audience)' })
   findAllBackoffice() {
     return this.dishService.findAll({ all: true });
   }
 
   @Get('search')
-  @ApiOperation({ summary: 'Recherche de plats' })
-  findMany(@Query() filter: QueryDishDto) {
-    return this.dishService.findMany(filter);
+  @ApiOperation({ summary: 'Recherche de plats (filtrés par audience du client connecté)' })
+  @UseGuards(JwtCustomerOptionalAuthGuard)
+  findMany(@Query() filter: QueryDishDto, @Req() req: Request) {
+    return this.dishService.findMany(filter, req.user as Customer | undefined);
   }
 
   @Get('popular')
-  @ApiOperation({ summary: 'Recherche de plats populaires' })
+  @ApiOperation({ summary: 'Plats populaires (filtrés par audience du client connecté)' })
+  @UseGuards(JwtCustomerOptionalAuthGuard)
   async getPopularDishes(
+    @Req() req: Request,
     @Query('days') days?: string,
     @Query('limit') limit?: string,
   ) {
     const parsedDays = days ? parseInt(days, 10) : 30;
     const parsedLimit = limit ? parseInt(limit, 10) : 4;
 
-    return this.dishService.findPopular(parsedDays, parsedLimit);
+    return this.dishService.findPopular(
+      parsedDays,
+      parsedLimit,
+      req.user as Customer | undefined,
+    );
   }
 
   @Get(':id')
