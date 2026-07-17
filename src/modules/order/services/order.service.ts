@@ -1140,12 +1140,13 @@ export class OrderService {
       }),
     };
 
+    // Rôles habilités à voir les commandes en attente (suivi client) : ADMIN + CALL CENTER.
+    const canSeePending =
+      user?.role === UserRole.ADMIN || user?.role === UserRole.CALL_CENTER;
+
     // Les brouillons app (auto:true, PENDING) sont masqués par défaut, SAUF si un
-    // ADMIN ou le CALL CENTER les demande EXPLICITEMENT via status=PENDING : ces
-    // rôles peuvent voir les commandes en attente de paiement (ex : suivi client).
-    const adminWantsPending =
-      (user?.role === UserRole.ADMIN || user?.role === UserRole.CALL_CENTER) &&
-      status === OrderStatus.PENDING;
+    // rôle habilité les demande EXPLICITEMENT via status=PENDING.
+    const adminWantsPending = canSeePending && status === OrderStatus.PENDING;
 
     if (filters.auto === undefined) {
       if (!adminWantsPending) {
@@ -1180,12 +1181,12 @@ export class OrderService {
       };
     }
 
-    // 🔒 Visibilité PENDING : seul l'ADMIN voit les commandes « en attente ».
-    // Pour tout autre rôle, on exclut PENDING via un AND de premier niveau : il se
-    // compose avec le filtre `status` explicite (un non-admin qui demande PENDING
-    // obtient un résultat vide) ET avec le bloc `auto` ci-dessus. Une commande payée
-    // en ligne passe TOUJOURS ACCEPTED → on ne masque jamais une commande payée.
-    if (user?.role !== UserRole.ADMIN) {
+    // 🔒 Visibilité PENDING : ADMIN + CALL_CENTER voient les commandes « en attente ».
+    // Pour tout AUTRE rôle, on exclut PENDING via un AND de premier niveau (se compose
+    // avec le filtre `status` explicite + le bloc `auto`). ⚠️ Doit rester aligné sur
+    // `canSeePending` ci-dessus : sinon un rôle habilité demande PENDING d'un côté et se
+    // le fait exclure ici → résultat vide (le bug vécu pour le CALL_CENTER).
+    if (!canSeePending) {
       where.AND = [
         ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
         { status: { not: OrderStatus.PENDING } },
