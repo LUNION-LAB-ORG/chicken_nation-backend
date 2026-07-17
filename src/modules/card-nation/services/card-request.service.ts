@@ -562,7 +562,7 @@ export class CardRequestService {
         cardNumber,
         qrCodeValue,
         requestCard.nickname,
-        { level, is_student: isStudent },
+        { level, is_student: isStudent, photo_key: requestCard.photo },
       );
 
       const card = await this.prisma.nationCard.create({
@@ -657,6 +657,8 @@ export class CardRequestService {
         customer: {
           select: { first_name: true, last_name: true, loyalty_level: true },
         },
+        // La photo vit sur la DEMANDE → nécessaire pour la redessiner.
+        card_request: { select: { photo: true } },
       },
     });
 
@@ -671,7 +673,7 @@ export class CardRequestService {
       card.card_number,
       card.qr_code_value,
       card.nickname ?? undefined,
-      { level, is_student: isStudent },
+      { level, is_student: isStudent, photo_key: card.card_request?.photo },
     );
 
     const previousImage = card.card_image_url;

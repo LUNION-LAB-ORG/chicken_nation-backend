@@ -6,12 +6,17 @@ import * as QRCode from 'qrcode';
 import { S3Service } from 'src/s3/s3.service';
 import { v4 as uuidv4 } from 'uuid';
 
-/** Options de thème passées à la génération d'image (Phase 3). */
+/** Options de thème / contenu passées à la génération d'image. */
 export interface CardImageThemeOptions {
   /** Niveau de fidélité snapshoté → pilote la couleur d'accent de la carte. */
   level?: LoyaltyLevel | null;
   /** Marqueur ETUDIANT → ajoute un liseré/badge jaune par-dessus. */
   is_student?: boolean;
+  /**
+   * Clé S3 de la photo du titulaire → dessinée en grand en bas de la carte.
+   * Absente → photo par défaut « champion » (cf. DEFAULT_PHOTO_KEY).
+   */
+  photo_key?: string | null;
 }
 
 @Injectable()
@@ -25,6 +30,13 @@ export class CardGenerationService {
   /** Alphabet du code carte : ni 0/O, ni 1/I/L → aucune erreur de lecture/dictée. */
   private static readonly CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
   private static readonly CODE_LENGTH = 6;
+
+  /**
+   * Photo par défaut du titulaire : la mascotte « champion » CN.
+   * Utilisée quand le client n'envoie aucune photo → aucune carte sans visage.
+   */
+  static readonly DEFAULT_PHOTO_KEY =
+    'chicken-nation/assets/images/carte_nation/champion-default.png';
 
   // Thème couleur par niveau (généré par dessin canvas, sans asset externe).
   private readonly STUDENT_COLOR = '#FFD24C'; // liseré / badge ETUDIANT (jaune)
@@ -185,37 +197,61 @@ export class CardGenerationService {
     );
 
     /* =====================================================
-       ▶️ CODE CARTE (AU CENTRE GAUCHE)
+       🔳 QR CODE + CODE CARTE (AU CENTRE GAUCHE)
+       Le QR est posé DEVANT le code, à l'emplacement de l'ancien glyphe « ▶ »
+       qui s'affichait en carré vide (police sans ce caractère → tofu).
     ====================================================== */
-    ctx.font = 'medium 80px monospace';
-    ctx.fillStyle = '#ffffff';
-
-    // Triangle play à gauche
-    ctx.fillText('▶', 70, 520);
-
-    // Code carte avec espacement
-    ctx.fillText(displayCode, 200, 520);
-
-    /* =====================================================
-       📦 QR CODE (EN BAS À DROITE - AGRANDI)
-    ====================================================== */
-    const qrSize = 280;
-
+    const qrSize = 130;
     const qrDataUrl = await QRCode.toDataURL(qrValue, {
-      width: qrSize,
+      width: qrSize * 2, // rendu 2x puis réduit → QR net
       margin: 0,
       errorCorrectionLevel: 'M',
     });
-
     const qr = await loadImage(qrDataUrl);
 
-    const qrX = this.CARD_WIDTH - qrSize - 100;
-    const qrY = this.CARD_HEIGHT - qrSize - 80;
+    const qrX = 70;
+    const qrY = 520 - qrSize + 12; // aligné sur la ligne de base du code
 
-    // Fond blanc pour le QR
+    // Fond blanc : indispensable à la lisibilité du QR sur un fond coloré.
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(qrX - 12, qrY - 12, qrSize + 24, qrSize + 24);
+    this.createRoundedRectPath(ctx, qrX - 10, qrY - 10, qrSize + 20, qrSize + 20, 12);
+    ctx.fill();
     ctx.drawImage(qr, qrX, qrY, qrSize, qrSize);
+
+    ctx.font = 'medium 80px monospace';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left';
+    ctx.fillText(displayCode, qrX + qrSize + 40, 520);
+
+    /* =====================================================
+       🧑 PHOTO DU TITULAIRE (EN BAS À DROITE, EN GRAND)
+       Bornée à 1/2 hauteur × 1/2 largeur de la carte, ratio préservé.
+       Défaut « champion » si le client n'a pas fourni de photo.
+    ====================================================== */
+    const photoKey = theme?.photo_key || CardGenerationService.DEFAULT_PHOTO_KEY;
+    try {
+      const photoUrl = await this.s3service.getCdnFileUrl(photoKey);
+      const photo = await loadImage(photoUrl);
+
+      const maxW = this.CARD_WIDTH / 2;
+      const maxH = this.CARD_HEIGHT / 2;
+      const scale = Math.min(maxW / photo.width, maxH / photo.height);
+      const pw = photo.width * scale;
+      const ph = photo.height * scale;
+      const px = this.CARD_WIDTH - pw - 70;
+      const py = this.CARD_HEIGHT - ph - 50;
+
+      ctx.save();
+      this.createRoundedRectPath(ctx, px, py, pw, ph, 24);
+      ctx.clip();
+      ctx.drawImage(photo, px, py, pw, ph);
+      ctx.restore();
+    } catch (error) {
+      // Une photo illisible ne doit jamais faire échouer l'émission de la carte.
+      this.logger.warn(
+        `Photo carte ignorée (${photoKey}) : ${(error as Error)?.message}`,
+      );
+    }
 
     /* =====================================================
        👤 SURNOM / NOM / PRÉNOMS
