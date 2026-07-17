@@ -7,14 +7,22 @@ import {
   Patch,
   Param,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
   Req,
   Res,
   HttpStatus,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { CardRequestService } from '../services/card-request.service';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+  ApiConsumes,
+} from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { NationCardStatus } from '@prisma/client';
 import { CardRequestQueryDto, NationCardQueryDto } from '../dtos/card-query.dto';
@@ -162,11 +170,16 @@ export class CardAdminController {
    */
   @Post('preview-card')
   @RequirePermission(Modules.CARD_NATION, Action.READ)
+  @UseInterceptors(FileInterceptor('photo'))
+  @ApiConsumes('multipart/form-data')
   @ApiOperation({
-    summary: "Générer l'aperçu d'une carte pour un type de carte donné",
+    summary: "Générer l'aperçu d'une carte (niveau + marqueur + photo de test)",
   })
-  async previewCard(@Body() dto: PreviewCardDto) {
-    return this.cardRequestService.previewCard(dto);
+  async previewCard(
+    @Body() dto: PreviewCardDto,
+    @UploadedFile() photo?: Express.Multer.File,
+  ) {
+    return this.cardRequestService.previewCard(dto, photo);
   }
 
   /**

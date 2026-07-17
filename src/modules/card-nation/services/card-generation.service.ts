@@ -17,6 +17,11 @@ export interface CardImageThemeOptions {
    * Absente → photo par défaut « champion » (cf. DEFAULT_PHOTO_KEY).
    */
   photo_key?: string | null;
+  /**
+   * Photo fournie directement (aperçu backoffice : on teste un rendu avec une
+   * vraie photo sans rien uploader). Prioritaire sur `photo_key`.
+   */
+  photo_buffer?: Buffer | null;
 }
 
 @Injectable()
@@ -228,10 +233,13 @@ export class CardGenerationService {
        Bornée à 1/2 hauteur × 1/2 largeur de la carte, ratio préservé.
        Défaut « champion » si le client n'a pas fourni de photo.
     ====================================================== */
+    // Photo directe (aperçu) > clé S3 (carte réelle) > champion par défaut.
     const photoKey = theme?.photo_key || CardGenerationService.DEFAULT_PHOTO_KEY;
     try {
-      const photoUrl = await this.s3service.getCdnFileUrl(photoKey);
-      const photo = await loadImage(photoUrl);
+      const photoSource = theme?.photo_buffer
+        ? theme.photo_buffer
+        : await this.s3service.getCdnFileUrl(photoKey);
+      const photo = await loadImage(photoSource as never);
 
       const maxW = this.CARD_WIDTH / 2;
       const maxH = this.CARD_HEIGHT / 2;

@@ -1039,7 +1039,7 @@ export class CardRequestService {
    * Rend l'image avec le VRAI générateur en mode render-only : aucune écriture en
    * base, aucun upload S3. Renvoie un data-URL base64 directement affichable.
    */
-  async previewCard(dto: PreviewCardDto) {
+  async previewCard(dto: PreviewCardDto, photoFile?: Express.Multer.File) {
     const isStudent = dto.is_student === true;
 
     const image = await this.cardGenerationService.generateCardImage(
@@ -1048,7 +1048,12 @@ export class CardRequestService {
       'CN-A7K29F',
       'APERCU-CARTE-NATION',
       dto.nickname || 'Jojo',
-      { level: dto.level, is_student: isStudent },
+      {
+        level: dto.level,
+        is_student: isStudent,
+        // Photo de test fournie par le backoffice ; sinon le champion par défaut.
+        photo_buffer: photoFile?.buffer,
+      },
       true,
     );
 
