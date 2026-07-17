@@ -19,6 +19,7 @@ import type { Request, Response } from 'express';
 import { NationCardStatus } from '@prisma/client';
 import { CardRequestQueryDto, NationCardQueryDto } from '../dtos/card-query.dto';
 import { PreviewCardDto } from '../dtos/preview-card.dto';
+import { RegenerateCardDto } from '../dtos/regenerate-card.dto';
 import { ReviewCardRequestDto } from '../dtos/review-card-request.dto';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
@@ -128,6 +129,20 @@ export class CardAdminController {
   @ApiOperation({ summary: 'Réactiver une carte Nation' })
   async activateCard(@Param('id') id: string) {
     return this.cardRequestService.updateCardStatus(id, NationCardStatus.ACTIVE);
+  }
+
+  /**
+   * Régénérer le visuel d'une carte avec un type imposé par le staff.
+   * Numéro et QR conservés ; seule l'image (+ niveau / marqueur étudiant) change.
+   */
+  @Patch('cards/:id/regenerate')
+  @RequirePermission(Modules.CARD_NATION, Action.UPDATE)
+  @ApiOperation({ summary: 'Régénérer une carte Nation avec un type choisi' })
+  async regenerateCard(
+    @Param('id') id: string,
+    @Body() dto: RegenerateCardDto,
+  ) {
+    return this.cardRequestService.regenerateCard(id, dto.level, dto.is_student);
   }
 
   /**

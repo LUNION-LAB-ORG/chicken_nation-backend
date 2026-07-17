@@ -1,21 +1,8 @@
 
-import { IsEnum, IsString, IsOptional, IsNotEmpty, ValidateIf } from 'class-validator';
+import { IsBoolean, IsEnum, IsString, IsOptional, IsNotEmpty, ValidateIf } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { CardRequestStatus } from '@prisma/client';
-
-/**
- * Type de carte choisi par le staff À L'APPROBATION (backoffice).
- * Détermine le visuel émis :
- *  - ETUDIANT           → carte étudiante (liseré jaune), couleur = niveau du client ;
- *  - STANDARD/VIP/VVIP  → carte de ce niveau, non étudiante.
- * Absent → dérivation automatique (niveau du client + profil déclaré) : rétro-compat.
- */
-export enum CardType {
-    ETUDIANT = 'ETUDIANT',
-    STANDARD = 'STANDARD',
-    VIP = 'VIP',
-    VVIP = 'VVIP',
-}
+import { CardRequestStatus, LoyaltyLevel } from '@prisma/client';
 
 export class ReviewCardRequestDto {
     @ApiProperty({
@@ -34,13 +21,29 @@ export class ReviewCardRequestDto {
     @IsNotEmpty({ message: 'Le motif de rejet est requis' })
     rejection_reason?: string;
 
+    /* ============================================================
+       Carte émise à l'approbation — DEUX AXES INDÉPENDANTS (cahier §4.5) :
+        - `level`      : la COULEUR de la carte (Standard → VIP → VVIP) ;
+        - `is_student` : le MARQUEUR jaune, posé PAR-DESSUS le niveau.
+       Un étudiant peut donc être « Étudiant + VIP ».
+       Absents → dérivation auto (niveau du client + profil déclaré).
+    ============================================================ */
+
     @ApiPropertyOptional({
-        description:
-            "Type de carte à émettre, choisi à l'approbation. Absent → dérivation auto.",
-        enum: CardType,
-        example: CardType.STANDARD,
+        description: "Niveau de la carte à émettre (couleur). Absent → niveau du client.",
+        enum: LoyaltyLevel,
+        example: LoyaltyLevel.VIP,
     })
     @IsOptional()
-    @IsEnum(CardType)
-    card_type?: CardType;
+    @IsEnum(LoyaltyLevel)
+    level?: LoyaltyLevel;
+
+    @ApiPropertyOptional({
+        description: "Marqueur étudiant (badge/liseré jaune), indépendant du niveau.",
+        example: true,
+    })
+    @IsOptional()
+    @Transform(({ value }) => value === true || value === 'true')
+    @IsBoolean()
+    is_student?: boolean;
 }

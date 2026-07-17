@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { LoyaltyLevel } from '@prisma/client';
 import { createCanvas, loadImage } from 'canvas';
+import { randomInt } from 'crypto';
 import * as QRCode from 'qrcode';
 import { S3Service } from 'src/s3/s3.service';
 import { v4 as uuidv4 } from 'uuid';
@@ -21,6 +22,10 @@ export class CardGenerationService {
   private readonly CARD_WIDTH = 1536;
   private readonly CARD_HEIGHT = 1024;
 
+  /** Alphabet du code carte : ni 0/O, ni 1/I/L → aucune erreur de lecture/dictée. */
+  private static readonly CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+  private static readonly CODE_LENGTH = 6;
+
   // Thème couleur par niveau (généré par dessin canvas, sans asset externe).
   private readonly STUDENT_COLOR = '#FFD24C'; // liseré / badge ETUDIANT (jaune)
   private readonly LEVEL_THEME: Record<LoyaltyLevel, { color: string; label: string }> = {
@@ -37,23 +42,27 @@ export class CardGenerationService {
   }
 
   /**
-   * Génère le code affiché sur la carte
-   * Format: DDMM YYXX XXXX XXXX
+   * Génère le code affiché sur la carte : `CN-XXXXXX`.
+   *
+   * Préfixe marque + 6 caractères d'un alphabet NON AMBIGU (ni 0/O, ni 1/I/L) →
+   * 31^6 ≈ 887 M combinaisons, lisible et dictable sans erreur. Même convention
+   * que les codes de parrainage.
+   *
+   * ⚠️ Remplace l'ancien format `DDMM YYXX MMYY RAND` (16 chiffres) qui était
+   * long ET encodait la DATE DE NAISSANCE du titulaire (donnée perso imprimée
+   * sur la carte).
+   *
+   * ⚠️ Ne garantit pas à lui seul l'unicité : l'appelant vérifie la contrainte
+   * `card_number @unique` et régénère en cas de collision
+   * (cf. CardRequestService.allocateCardNumber).
    */
-  generateCardNumber(birth_dayDB: string): string {
-    const d = new Date();
-    const dd = String(d.getDate()).padStart(2, '0');
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const yy = String(d.getFullYear()).slice(-2);
-
-    const birth_day = new Date(birth_dayDB);
-    const BD_dd = String(birth_day.getDate()).padStart(2, '0');
-    const BD_mm = String(birth_day.getMonth() + 1).padStart(2, '0');
-    const BD_yy = String(birth_day.getFullYear()).slice(-2);
-
-    const rand = () => Math.floor(1000 + Math.random() * 9000);
-
-    return `${dd}${mm} ${yy}${BD_dd} ${BD_mm}${BD_yy} ${rand()}`;
+  generateCardNumber(): string {
+    const alphabet = CardGenerationService.CODE_ALPHABET;
+    let code = '';
+    for (let i = 0; i < CardGenerationService.CODE_LENGTH; i++) {
+      code += alphabet[randomInt(alphabet.length)];
+    }
+    return `CN-${code}`;
   }
 
   generateQRValue(cardNumber: string, customerId: string): string {
@@ -98,8 +107,28 @@ export class CardGenerationService {
     this.drawImageCover(ctx, bg);
 
     /* =====================================================
-       🎨 THÈME COULEUR PAR NIVEAU (bordure d'accent)
-       + LISERÉ JAUNE ÉTUDIANT (par-dessus, si applicable)
+       🎨 DOMINANTE COULEUR = LE NIVEAU (cahier des charges §4.5)
+       « Niveau (couleur) : Standard → VIP → VVIP » avec une DOMINANTE
+       Orange / Or / Rouge. On recolore donc le fond de marque à la teinte du
+       niveau : le blend 'color' prend la teinte+saturation de la couleur et
+       garde la luminosité du fond (volutes, dégradé, texture préservés).
+       Sans ça, tous les niveaux partagent le même fond orange et sont
+       indiscernables — c'était le cas avant.
+    ====================================================== */
+    ctx.save();
+    ctx.globalCompositeOperation = 'color';
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(0, 0, this.CARD_WIDTH, this.CARD_HEIGHT);
+    // 'color' seul délave les teintes sombres (VVIP) : on renforce la densité.
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = accentColor;
+    ctx.fillRect(0, 0, this.CARD_WIDTH, this.CARD_HEIGHT);
+    ctx.restore();
+
+    /* =====================================================
+       🎨 BORDURE D'ACCENT AU NIVEAU
+       + LISERÉ JAUNE ÉTUDIANT (marqueur posé PAR-DESSUS le niveau, §4.5)
     ====================================================== */
     // Bordure d'accent au niveau (orange / or / rouge).
     ctx.save();

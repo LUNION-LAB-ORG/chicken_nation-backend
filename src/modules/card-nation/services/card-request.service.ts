@@ -6,7 +6,7 @@ import { SettingsService } from 'src/modules/settings/settings.service';
 import { CardRequestQueryDto, NationCardQueryDto } from '../dtos/card-query.dto';
 import { CreateCardRequestDto } from '../dtos/create-card-request.dto';
 import { PreviewCardDto } from '../dtos/preview-card.dto';
-import { CardType, ReviewCardRequestDto } from '../dtos/review-card-request.dto';
+import { ReviewCardRequestDto } from '../dtos/review-card-request.dto';
 import { CardGenerationService } from './card-generation.service';
 import { CardNotificationService } from './card-notification.service';
 import { S3Service } from 'src/s3/s3.service';
@@ -99,35 +99,23 @@ export class CardRequestService {
     }
   }
 
-  private static readonly LEVEL_BY_CARD_TYPE: Partial<Record<CardType, LoyaltyLevel>> = {
-    [CardType.STANDARD]: LoyaltyLevel.STANDARD,
-    [CardType.VIP]: LoyaltyLevel.VIP,
-    [CardType.VVIP]: LoyaltyLevel.VVIP,
-  };
-
   /**
-   * Résout le thème de la carte (niveau + marqueur étudiant) depuis le TYPE choisi
-   * au backoffice à l'approbation :
-   *  - ETUDIANT           → carte étudiante (liseré jaune) ; couleur = niveau du client ;
-   *  - STANDARD/VIP/VVIP  → ce niveau, non étudiante ;
-   *  - aucun type fourni  → dérivation auto (niveau du client + profil déclaré).
+   * Alloue un numéro de carte UNIQUE (`CN-XXXXXX`).
+   * Le générateur est aléatoire : on vérifie la contrainte `card_number @unique`
+   * et on régénère en cas de collision (improbable : ~887 M combinaisons).
    */
-  private resolveCardTheme(
-    cardType: CardType | undefined,
-    customerLevel: LoyaltyLevel | null,
-    declaredStudent = false,
-  ): { level: LoyaltyLevel | null; isStudent: boolean } {
-    if (cardType === CardType.ETUDIANT) {
-      return { level: customerLevel ?? LoyaltyLevel.STANDARD, isStudent: true };
+  private async allocateCardNumber(): Promise<string> {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const candidate = this.cardGenerationService.generateCardNumber();
+      const exists = await this.prisma.nationCard.findUnique({
+        where: { card_number: candidate },
+        select: { id: true },
+      });
+      if (!exists) return candidate;
     }
-    if (cardType) {
-      return {
-        level:
-          CardRequestService.LEVEL_BY_CARD_TYPE[cardType] ?? LoyaltyLevel.STANDARD,
-        isStudent: false,
-      };
-    }
-    return { level: customerLevel, isStudent: declaredStudent };
+    throw new BadRequestException(
+      "Impossible d'allouer un numéro de carte unique, veuillez réessayer",
+    );
   }
 
   /**
@@ -503,7 +491,11 @@ export class CardRequestService {
     // Si approuvée : générer la carte + notifier. C'est le SEUL endroit d'où
     // part « carte prête » (push/cloche/WS + WhatsApp). Best-effort.
     if (reviewDto.status === CardRequestStatus.APPROVED) {
-      const card = await this.generateCard(updatedRequest, reviewDto.card_type);
+      const card = await this.generateCard(
+        updatedRequest,
+        reviewDto.level,
+        reviewDto.is_student,
+      );
 
       this.cardNotificationService
         .notifyCardReady(updatedRequest.customer_id, card.level)
@@ -543,17 +535,21 @@ export class CardRequestService {
    * Génère une carte Nation après approbation.
    * Snapshot le niveau de fidélité (thème couleur) + le marqueur ETUDIANT.
    */
-  private async generateCard(requestCard: any, cardType?: CardType) {
+  private async generateCard(
+    requestCard: any,
+    chosenLevel?: LoyaltyLevel,
+    chosenIsStudent?: boolean,
+  ) {
     try {
-      // Type de carte CHOISI au backoffice à l'approbation (prioritaire) ; à
-      // défaut, dérivation auto depuis le client (rétro-compat).
-      const { level, isStudent } = this.resolveCardTheme(
-        cardType,
-        requestCard.customer.loyalty_level ?? null,
-        requestCard.profile_type === ProfileType.ETUDIANT,
-      );
+      // DEUX AXES INDÉPENDANTS (cahier §4.5) : le niveau donne la COULEUR, le
+      // marqueur étudiant se pose PAR-DESSUS (« Étudiant + VIP » possible).
+      // Choix du staff prioritaire ; à défaut, dérivation auto depuis le client.
+      const level: LoyaltyLevel | null =
+        chosenLevel ?? requestCard.customer.loyalty_level ?? null;
+      const isStudent =
+        chosenIsStudent ?? requestCard.profile_type === ProfileType.ETUDIANT;
 
-      const cardNumber = this.cardGenerationService.generateCardNumber(requestCard.customer.birth_day);
+      const cardNumber = await this.allocateCardNumber();
       const qrCodeValue = this.cardGenerationService.generateQRValue(
         cardNumber,
         requestCard.customer_id,
@@ -586,16 +582,11 @@ export class CardRequestService {
       // Propage le profil au CLIENT : c'est `Customer.profile_type` que lit le
       // filtre d'audience des menus (ETUDIANT → menus étudiants ; NULL = grand
       // public). Fait à la VALIDATION (carte active), pas à la demande.
-      // Si le staff a CHOISI un type de carte, c'est lui qui fait foi (émettre une
-      // carte étudiante ⇒ profil étudiant) ; sinon on garde le profil déclaré.
-      const resolvedProfile = cardType
-        ? cardType === CardType.ETUDIANT
-          ? ProfileType.ETUDIANT
-          : null
-        : (requestCard.profile_type ?? null);
+      // Le MARQUEUR étudiant retenu fait foi : émettre une carte avec le marqueur
+      // ⇒ profil étudiant (et inversement), pour que visuel et menus concordent.
       await this.prisma.customer.update({
         where: { id: requestCard.customer_id },
-        data: { profile_type: resolvedProfile },
+        data: { profile_type: isStudent ? ProfileType.ETUDIANT : null },
       });
 
       return card;
@@ -647,6 +638,63 @@ export class CardRequestService {
       where: { id: card.id },
       data: { level, is_student: isStudent, card_image_url: newImage },
     });
+  }
+
+  /**
+   * Régénère le visuel d'une carte avec un TYPE imposé par le staff (backoffice).
+   *
+   * Diffère de `regenerateActiveCard` (automatique, pilotée par le niveau de
+   * fidélité, clé = client) : ici c'est le staff qui choisit, la clé est la CARTE,
+   * et on régénère même si le snapshot semble identique. Le numéro et le QR sont
+   * conservés (identité inchangée) ; l'ancienne image est nettoyée de S3.
+   * Le profil du client est aligné sur le type (carte étudiante ⇒ profil étudiant),
+   * comme à l'approbation, pour que visuel et audience des menus restent cohérents.
+   */
+  async regenerateCard(id: string, level: LoyaltyLevel, isStudent = false) {
+    const card = await this.prisma.nationCard.findUnique({
+      where: { id },
+      include: {
+        customer: {
+          select: { first_name: true, last_name: true, loyalty_level: true },
+        },
+      },
+    });
+
+    if (!card) {
+      throw new NotFoundException('Carte non trouvée');
+    }
+
+    const firstName = (card.customer.first_name || '').split(' ')[0];
+    const newImage = await this.cardGenerationService.generateCardImage(
+      firstName,
+      card.customer.last_name || '',
+      card.card_number,
+      card.qr_code_value,
+      card.nickname ?? undefined,
+      { level, is_student: isStudent },
+    );
+
+    const previousImage = card.card_image_url;
+    const updated = await this.prisma.nationCard.update({
+      where: { id },
+      data: { level, is_student: isStudent, card_image_url: newImage },
+    });
+
+    await this.prisma.customer.update({
+      where: { id: card.customer_id },
+      data: { profile_type: isStudent ? ProfileType.ETUDIANT : null },
+    });
+
+    // L'ancien visuel n'est plus référencé → nettoyage best-effort.
+    if (previousImage && previousImage !== newImage) {
+      await this.deleteS3Files([previousImage]);
+    }
+
+    return {
+      success: true,
+      message: 'Carte régénérée avec succès',
+      data: updated,
+    };
   }
 
   /**
@@ -865,21 +913,21 @@ export class CardRequestService {
    * base, aucun upload S3. Renvoie un data-URL base64 directement affichable.
    */
   async previewCard(dto: PreviewCardDto) {
-    const { level, isStudent } = this.resolveCardTheme(dto.card_type, null);
+    const isStudent = dto.is_student === true;
 
     const image = await this.cardGenerationService.generateCardImage(
       dto.first_name || 'Awa',
       dto.last_name || 'Koné',
-      '0101 2712 3456 7890',
+      'CN-A7K29F',
       'APERCU-CARTE-NATION',
       dto.nickname || 'Jojo',
-      { level, is_student: isStudent },
+      { level: dto.level, is_student: isStudent },
       true,
     );
 
     return {
       success: true,
-      data: { card_type: dto.card_type, level, is_student: isStudent, image },
+      data: { level: dto.level, is_student: isStudent, image },
     };
   }
 

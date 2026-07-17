@@ -1,21 +1,40 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
-import { CardType } from './review-card-request.dto';
+import { LoyaltyLevel } from '@prisma/client';
+import { Transform } from 'class-transformer';
+import {
+    IsBoolean,
+    IsEnum,
+    IsNotEmpty,
+    IsOptional,
+    IsString,
+    MaxLength,
+} from 'class-validator';
 
 /**
- * Aperçu d'un design de carte (backoffice : galerie des designs / testeur de
- * génération par niveau). Rend l'image AVEC LE VRAI générateur, mais en mode
- * render-only : rien n'est écrit en base ni uploadé sur S3.
+ * Aperçu d'un design de carte (backoffice : galerie des designs / testeur).
+ * Rend l'image AVEC LE VRAI générateur, en mode render-only : rien n'est écrit
+ * en base ni uploadé sur S3.
+ *
+ * Deux axes (cahier §4.5) : `level` = la couleur, `is_student` = le marqueur jaune.
  */
 export class PreviewCardDto {
     @ApiProperty({
-        description: 'Type de carte à prévisualiser',
-        enum: CardType,
-        example: CardType.VIP,
+        description: 'Niveau à prévisualiser (couleur de la carte)',
+        enum: LoyaltyLevel,
+        example: LoyaltyLevel.VIP,
     })
-    @IsEnum(CardType)
-    @IsNotEmpty({ message: 'Le type de carte est requis' })
-    card_type: CardType;
+    @IsEnum(LoyaltyLevel)
+    @IsNotEmpty({ message: 'Le niveau est requis' })
+    level: LoyaltyLevel;
+
+    @ApiPropertyOptional({
+        description: 'Marqueur étudiant (badge/liseré jaune) par-dessus le niveau',
+        example: false,
+    })
+    @IsOptional()
+    @Transform(({ value }) => value === true || value === 'true')
+    @IsBoolean()
+    is_student?: boolean;
 
     @ApiPropertyOptional({ description: "Prénom affiché sur l'aperçu", example: 'Awa' })
     @IsOptional()
