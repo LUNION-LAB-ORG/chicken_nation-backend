@@ -241,18 +241,39 @@ export class CardGenerationService {
         : await this.s3service.getCdnFileUrl(photoKey);
       const photo = await loadImage(photoSource as never);
 
-      const maxW = this.CARD_WIDTH / 2;
-      const maxH = this.CARD_HEIGHT / 2;
-      const scale = Math.min(maxW / photo.width, maxH / photo.height);
+      // Cercle borné à 1/2 de la carte (diamètre = moitié du petit côté).
+      const diameter = Math.min(this.CARD_WIDTH, this.CARD_HEIGHT) / 2;
+      const radius = diameter / 2;
+      const cx = this.CARD_WIDTH - radius - 80;
+      const cy = this.CARD_HEIGHT - radius - 55;
+
+      // COVER : la photo remplit le cercle sans être déformée (on rogne le débord).
+      const scale = Math.max(diameter / photo.width, diameter / photo.height);
       const pw = photo.width * scale;
       const ph = photo.height * scale;
-      const px = this.CARD_WIDTH - pw - 70;
-      const py = this.CARD_HEIGHT - ph - 50;
 
       ctx.save();
-      this.createRoundedRectPath(ctx, px, py, pw, ph, 24);
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.closePath();
       ctx.clip();
-      ctx.drawImage(photo, px, py, pw, ph);
+      ctx.drawImage(photo, cx - pw / 2, cy - ph / 2, pw, ph);
+      ctx.restore();
+
+      // Bordure du médaillon : blanche (lisible sur orange/or/rouge) + fin liseré
+      // à la couleur du niveau pour rattacher la photo au thème de la carte.
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.lineWidth = 14;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 10, 0, Math.PI * 2);
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = accentColor;
+      ctx.stroke();
       ctx.restore();
     } catch (error) {
       // Une photo illisible ne doit jamais faire échouer l'émission de la carte.
