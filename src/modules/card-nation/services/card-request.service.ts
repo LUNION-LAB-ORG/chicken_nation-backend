@@ -5,7 +5,8 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { CardRequestQueryDto, NationCardQueryDto } from '../dtos/card-query.dto';
 import { CreateCardRequestDto } from '../dtos/create-card-request.dto';
-import { ReviewCardRequestDto } from '../dtos/review-card-request.dto';
+import { PreviewCardDto } from '../dtos/preview-card.dto';
+import { CardType, ReviewCardRequestDto } from '../dtos/review-card-request.dto';
 import { CardGenerationService } from './card-generation.service';
 import { CardNotificationService } from './card-notification.service';
 import { S3Service } from 'src/s3/s3.service';
@@ -96,6 +97,37 @@ export class CardRequestService {
     } catch {
       return null;
     }
+  }
+
+  private static readonly LEVEL_BY_CARD_TYPE: Partial<Record<CardType, LoyaltyLevel>> = {
+    [CardType.STANDARD]: LoyaltyLevel.STANDARD,
+    [CardType.VIP]: LoyaltyLevel.VIP,
+    [CardType.VVIP]: LoyaltyLevel.VVIP,
+  };
+
+  /**
+   * Résout le thème de la carte (niveau + marqueur étudiant) depuis le TYPE choisi
+   * au backoffice à l'approbation :
+   *  - ETUDIANT           → carte étudiante (liseré jaune) ; couleur = niveau du client ;
+   *  - STANDARD/VIP/VVIP  → ce niveau, non étudiante ;
+   *  - aucun type fourni  → dérivation auto (niveau du client + profil déclaré).
+   */
+  private resolveCardTheme(
+    cardType: CardType | undefined,
+    customerLevel: LoyaltyLevel | null,
+    declaredStudent = false,
+  ): { level: LoyaltyLevel | null; isStudent: boolean } {
+    if (cardType === CardType.ETUDIANT) {
+      return { level: customerLevel ?? LoyaltyLevel.STANDARD, isStudent: true };
+    }
+    if (cardType) {
+      return {
+        level:
+          CardRequestService.LEVEL_BY_CARD_TYPE[cardType] ?? LoyaltyLevel.STANDARD,
+        isStudent: false,
+      };
+    }
+    return { level: customerLevel, isStudent: declaredStudent };
   }
 
   /**
@@ -471,7 +503,7 @@ export class CardRequestService {
     // Si approuvée : générer la carte + notifier. C'est le SEUL endroit d'où
     // part « carte prête » (push/cloche/WS + WhatsApp). Best-effort.
     if (reviewDto.status === CardRequestStatus.APPROVED) {
-      const card = await this.generateCard(updatedRequest);
+      const card = await this.generateCard(updatedRequest, reviewDto.card_type);
 
       this.cardNotificationService
         .notifyCardReady(updatedRequest.customer_id, card.level)
@@ -511,10 +543,15 @@ export class CardRequestService {
    * Génère une carte Nation après approbation.
    * Snapshot le niveau de fidélité (thème couleur) + le marqueur ETUDIANT.
    */
-  private async generateCard(requestCard: any) {
+  private async generateCard(requestCard: any, cardType?: CardType) {
     try {
-      const level: LoyaltyLevel | null = requestCard.customer.loyalty_level ?? null;
-      const isStudent = requestCard.profile_type === ProfileType.ETUDIANT;
+      // Type de carte CHOISI au backoffice à l'approbation (prioritaire) ; à
+      // défaut, dérivation auto depuis le client (rétro-compat).
+      const { level, isStudent } = this.resolveCardTheme(
+        cardType,
+        requestCard.customer.loyalty_level ?? null,
+        requestCard.profile_type === ProfileType.ETUDIANT,
+      );
 
       const cardNumber = this.cardGenerationService.generateCardNumber(requestCard.customer.birth_day);
       const qrCodeValue = this.cardGenerationService.generateQRValue(
@@ -546,12 +583,19 @@ export class CardRequestService {
         },
       });
 
-      // Propage le profil déclaré au CLIENT : c'est `Customer.profile_type` que
-      // lit le filtre d'audience des menus (ETUDIANT → menus étudiants ; NULL =
-      // grand public). Fait à la VALIDATION (carte active), pas à la demande.
+      // Propage le profil au CLIENT : c'est `Customer.profile_type` que lit le
+      // filtre d'audience des menus (ETUDIANT → menus étudiants ; NULL = grand
+      // public). Fait à la VALIDATION (carte active), pas à la demande.
+      // Si le staff a CHOISI un type de carte, c'est lui qui fait foi (émettre une
+      // carte étudiante ⇒ profil étudiant) ; sinon on garde le profil déclaré.
+      const resolvedProfile = cardType
+        ? cardType === CardType.ETUDIANT
+          ? ProfileType.ETUDIANT
+          : null
+        : (requestCard.profile_type ?? null);
       await this.prisma.customer.update({
         where: { id: requestCard.customer_id },
-        data: { profile_type: requestCard.profile_type ?? null },
+        data: { profile_type: resolvedProfile },
       });
 
       return card;
@@ -742,6 +786,100 @@ export class CardRequestService {
       success: true,
       message: `Carte ${status === NationCardStatus.SUSPENDED ? 'suspendue' : 'révoquée'} avec succès`,
       data: updatedCard,
+    };
+  }
+
+  /**
+   * SUPPRIME DÉFINITIVEMENT une demande de carte (backoffice).
+   * La carte éventuellement générée référence la demande (FK onDelete: Restrict) :
+   * elle est donc supprimée AVANT, dans la même transaction. Les fichiers S3
+   * (image de carte, photo, justificatif) sont nettoyés après commit, en best-effort.
+   * ⚠️ Irréversible.
+   */
+  async deleteRequest(id: string) {
+    const request = await this.prisma.cardRequest.findUnique({
+      where: { id },
+      include: { nation_card: true },
+    });
+
+    if (!request) {
+      throw new NotFoundException('Demande non trouvée');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (request.nation_card) {
+        await tx.nationCard.delete({ where: { id: request.nation_card.id } });
+      }
+      await tx.cardRequest.delete({ where: { id } });
+    });
+
+    await this.deleteS3Files([
+      request.nation_card?.card_image_url,
+      request.photo,
+      request.student_card_file_url,
+    ]);
+
+    return {
+      success: true,
+      message: request.nation_card
+        ? 'Demande et carte associée supprimées définitivement'
+        : 'Demande supprimée définitivement',
+    };
+  }
+
+  /**
+   * SUPPRIME DÉFINITIVEMENT une carte générée + son image S3.
+   * ⚠️ Irréversible. Pour un retrait réversible, utiliser `revoke` (statut REVOKED).
+   */
+  async deleteCard(id: string) {
+    const card = await this.prisma.nationCard.findUnique({ where: { id } });
+
+    if (!card) {
+      throw new NotFoundException('Carte non trouvée');
+    }
+
+    await this.prisma.nationCard.delete({ where: { id } });
+    await this.deleteS3Files([card.card_image_url]);
+
+    return { success: true, message: 'Carte supprimée définitivement' };
+  }
+
+  /** Suppression S3 best-effort : un échec est loggé, jamais propagé. */
+  private async deleteS3Files(keys: (string | null | undefined)[]) {
+    await Promise.all(
+      keys
+        .filter((key): key is string => !!key)
+        .map((key) =>
+          this.s3service
+            .deleteFile(key)
+            .catch((e) =>
+              this.logger.warn(`Suppression S3 échouée (${key}) : ${e?.message}`),
+            ),
+        ),
+    );
+  }
+
+  /**
+   * Aperçu d'un design de carte (galerie des designs / testeur de génération).
+   * Rend l'image avec le VRAI générateur en mode render-only : aucune écriture en
+   * base, aucun upload S3. Renvoie un data-URL base64 directement affichable.
+   */
+  async previewCard(dto: PreviewCardDto) {
+    const { level, isStudent } = this.resolveCardTheme(dto.card_type, null);
+
+    const image = await this.cardGenerationService.generateCardImage(
+      dto.first_name || 'Awa',
+      dto.last_name || 'Koné',
+      '0101 2712 3456 7890',
+      'APERCU-CARTE-NATION',
+      dto.nickname || 'Jojo',
+      { level, is_student: isStudent },
+      true,
+    );
+
+    return {
+      success: true,
+      data: { card_type: dto.card_type, level, is_student: isStudent, image },
     };
   }
 

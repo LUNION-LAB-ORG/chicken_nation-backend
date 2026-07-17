@@ -70,6 +70,11 @@ export class CardGenerationService {
     qrValue: string,
     nickname?: string,
     theme?: CardImageThemeOptions,
+    /**
+     * true → renvoie un data-URL base64 SANS uploader sur S3 (aperçu backoffice :
+     * galerie des designs / testeur de génération). Évite les PNG orphelins.
+     */
+    renderOnly = false,
   ): Promise<string> {
     const canvas = createCanvas(this.CARD_WIDTH, this.CARD_HEIGHT);
     const ctx = canvas.getContext('2d');
@@ -214,6 +219,12 @@ export class CardGenerationService {
     ====================================================== */
     const fileName = `carte-nation-${uuidv4()}.png`;
     const buffer = canvas.toBuffer('image/png');
+
+    // Aperçu backoffice : image renvoyée en data-URL, AUCUN upload (sinon chaque
+    // prévisualisation laisserait un PNG orphelin sur S3).
+    if (renderOnly) {
+      return `data:image/png;base64,${buffer.toString('base64')}`;
+    }
 
     const result = await this.s3service.uploadFile({
       buffer,

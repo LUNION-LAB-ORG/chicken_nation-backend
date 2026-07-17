@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Post,
   Body,
@@ -17,6 +18,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { NationCardStatus } from '@prisma/client';
 import { CardRequestQueryDto, NationCardQueryDto } from '../dtos/card-query.dto';
+import { PreviewCardDto } from '../dtos/preview-card.dto';
 import { ReviewCardRequestDto } from '../dtos/review-card-request.dto';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
@@ -67,6 +69,18 @@ export class CardAdminController {
   }
 
   /**
+   * Supprimer DÉFINITIVEMENT une demande (et sa carte si déjà générée)
+   */
+  @Delete('requests/:id')
+  @RequirePermission(Modules.CARD_NATION, Action.DELETE)
+  @ApiOperation({
+    summary: 'Supprimer définitivement une demande de carte (et sa carte associée)',
+  })
+  async deleteRequest(@Param('id') id: string) {
+    return this.cardRequestService.deleteRequest(id);
+  }
+
+  /**
    * Liste de toutes les cartes Nation
    */
   @Get('cards')
@@ -114,6 +128,30 @@ export class CardAdminController {
   @ApiOperation({ summary: 'Réactiver une carte Nation' })
   async activateCard(@Param('id') id: string) {
     return this.cardRequestService.updateCardStatus(id, NationCardStatus.ACTIVE);
+  }
+
+  /**
+   * Supprimer DÉFINITIVEMENT une carte (+ son image S3).
+   * ⚠️ Irréversible — pour un retrait réversible, utiliser `revoke`.
+   */
+  @Delete('cards/:id')
+  @RequirePermission(Modules.CARD_NATION, Action.DELETE)
+  @ApiOperation({ summary: 'Supprimer définitivement une carte Nation (+ son image)' })
+  async deleteCard(@Param('id') id: string) {
+    return this.cardRequestService.deleteCard(id);
+  }
+
+  /**
+   * Aperçu d'un design de carte (galerie des designs / testeur de génération).
+   * Render-only : aucune écriture en base, aucun upload S3.
+   */
+  @Post('preview-card')
+  @RequirePermission(Modules.CARD_NATION, Action.READ)
+  @ApiOperation({
+    summary: "Générer l'aperçu d'une carte pour un type de carte donné",
+  })
+  async previewCard(@Body() dto: PreviewCardDto) {
+    return this.cardRequestService.previewCard(dto);
   }
 
   /**
