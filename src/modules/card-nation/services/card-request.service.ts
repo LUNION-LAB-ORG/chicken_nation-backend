@@ -571,7 +571,12 @@ export class CardRequestService {
   /**
    * Valider ou rejeter une demande (backoffice)
    */
-  async reviewRequest(id: string, userId: string, reviewDto: ReviewCardRequestDto) {
+  async reviewRequest(
+    id: string,
+    userId: string,
+    reviewDto: ReviewCardRequestDto,
+    photoFile?: Express.Multer.File,
+  ) {
     const request = await this.prisma.cardRequest.findUnique({
       where: { id },
       include: {
@@ -592,6 +597,13 @@ export class CardRequestService {
     const wasRevision = request.status === CardRequestStatus.IN_REVIEW;
 
     // Mise à jour de la demande
+    // Photo RECADRÉE par le staff au moment d'approuver (backoffice) : elle
+    // remplace celle soumise par le client et devient la photo de la demande →
+    // c'est elle que generateCard/applyRevision dessineront sur la carte.
+    const recroppedPhoto = photoFile
+      ? await this.uploadPhoto({ file: photoFile })
+      : null;
+
     const updatedRequest = await this.prisma.cardRequest.update({
       where: { id },
       data: {
@@ -599,6 +611,7 @@ export class CardRequestService {
         rejection_reason: reviewDto.rejection_reason,
         reviewed_by: userId,
         reviewed_at: new Date(),
+        ...(recroppedPhoto ? { photo: recroppedPhoto } : {}),
       },
       include: {
         customer: true,

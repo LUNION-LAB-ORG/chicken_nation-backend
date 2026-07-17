@@ -67,14 +67,19 @@ export class CardAdminController {
    */
   @Patch('requests/:id/review')
   @RequirePermission(Modules.CARD_NATION, Action.UPDATE)
-  @ApiOperation({ summary: 'Valider ou rejeter une demande de carte' })
+  @UseInterceptors(FileInterceptor('photo'))
+  @ApiConsumes('multipart/form-data', 'application/json')
+  @ApiOperation({
+    summary: 'Valider ou rejeter une demande (photo recadrée optionnelle)',
+  })
   async reviewRequest(
     @Param('id') id: string,
     @Req() req: Request,
     @Body() reviewDto: ReviewCardRequestDto,
+    @UploadedFile() photo?: Express.Multer.File,
   ) {
     const userId = (req as any).user.id;
-    return this.cardRequestService.reviewRequest(id, userId, reviewDto);
+    return this.cardRequestService.reviewRequest(id, userId, reviewDto, photo);
   }
 
   /**
