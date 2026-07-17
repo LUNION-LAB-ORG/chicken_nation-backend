@@ -1985,13 +1985,20 @@ model CardRequest {
   photo                 String?           @db.Text
   status                CardRequestStatus @default(PENDING)
   rejection_reason      String?           @db.Text
+  // Motif d'une demande de RÉVISION (modif de carte depuis l'app), généré
+  // automatiquement : « Changement de photo », « Nouveau pseudo : … ».
+  revision_reason       String?           @db.Text
   reviewed_by           String?           @db.Uuid
   reviewed_at           DateTime?         @db.Timestamp(6)
   created_at            DateTime          @default(now()) @db.Timestamp(6)
   updated_at            DateTime          @updatedAt @db.Timestamp(6)
   nation_card           NationCard?
 
-  @@unique([customer_id, status], name: "unique_pending_request")
+  // ⚠️ PAS de @@unique([customer_id, status]) : il interdisait tout historique
+  // (une 2e demande APPROVED entrait en collision) et rendait le flux de RÉVISION
+  // impossible. Remplacé par un index unique PARTIEL « une seule demande OUVERTE
+  // (PENDING/IN_REVIEW) par client », que Prisma ne sait pas exprimer → créé en
+  // SQL dans la migration 20260717120000_card_request_one_open_per_customer.
   @@index([customer_id])
   @@index([status])
   @@index([created_at])

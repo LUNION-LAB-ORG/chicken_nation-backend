@@ -119,6 +119,37 @@ export class CardRequestService {
   }
 
   /**
+   * Motif d'une demande de RÉVISION, généré automatiquement en comparant la
+   * demande à la carte existante → le staff voit immédiatement ce qui change,
+   * sans que le client ait à l'écrire. (Demandes issues de l'app.)
+   */
+  private buildRevisionReason(
+    card: { nickname: string | null; is_student: boolean },
+    createDto: CreateCardRequestDto,
+    hasNewPhoto: boolean,
+  ): string {
+    const parts: string[] = [];
+
+    if (hasNewPhoto) parts.push('Changement de photo');
+
+    const newNickname = createDto.nickname?.trim();
+    if (newNickname && newNickname !== (card.nickname ?? '')) {
+      parts.push(`Nouveau pseudo : ${newNickname}`);
+    }
+
+    const wantsStudent = createDto.profile_type === ProfileType.ETUDIANT;
+    if (wantsStudent !== card.is_student) {
+      parts.push(
+        wantsStudent ? 'Demande le statut étudiant' : 'Retrait du statut étudiant',
+      );
+    }
+
+    return parts.length
+      ? parts.join(' · ')
+      : 'Demande de régénération de la carte';
+  }
+
+  /**
    * Créer une demande de carte (depuis l'app mobile)
    */
   async createRequest(
@@ -141,17 +172,18 @@ export class CardRequestService {
       throw new ConflictException('Vous avez déjà une demande en cours de traitement');
     }
 
-    // Vérifier si le client a déjà une carte active
+    // Carte active ? → ce n'est PAS un refus : c'est une demande de RÉVISION
+    // (le client modifie sa photo / son pseudo / son statut étudiant depuis l'app).
+    // Elle repart dans la liste des demandes en IN_REVIEW avec un motif auto-généré,
+    // et c'est la validation backoffice qui régénérera la carte existante.
     const existingCard = await this.prisma.nationCard.findFirst({
       where: {
         customer_id: customerId,
         status: NationCardStatus.ACTIVE,
       },
+      include: { card_request: { select: { photo: true } } },
     });
-
-    if (existingCard) {
-      throw new ConflictException('Vous possédez déjà une carte Nation active');
-    }
+    const isRevision = !!existingCard;
 
     // Mise à jour du client si date de naissance renseignée (sert au numéro de carte).
     if (createDto.birth_day) {
@@ -169,6 +201,19 @@ export class CardRequestService {
     // (app + site) et, côté adhésion site, par le contrôle amont dans
     // AdhesionService.register. Placée après les gardes pour ne rien uploader en vain.
     const photoKey = await this.uploadPhoto(photoInput);
+
+    // Révision : statut IN_REVIEW + motif auto-généré (ce que le client change).
+    // Sinon : PENDING classique (1ʳᵉ demande).
+    const status = isRevision
+      ? CardRequestStatus.IN_REVIEW
+      : CardRequestStatus.PENDING;
+    const revisionReason = isRevision
+      ? this.buildRevisionReason(existingCard!, createDto, !!photoKey)
+      : null;
+    // Révision sans nouvelle photo → on reconduit celle de la carte actuelle,
+    // sinon la carte régénérée perdrait son visage.
+    const effectivePhoto =
+      photoKey ?? (isRevision ? (existingCard!.card_request?.photo ?? null) : null);
 
     const requireJustificatif = await this.isJustificatifRequired();
 
@@ -207,8 +252,9 @@ export class CardRequestService {
           profile_type: createDto.profile_type ?? null,
           institution: createDto.institution,
           student_card_file_url: result?.key ?? '',
-          photo: photoKey,
-          status: CardRequestStatus.PENDING,
+          photo: effectivePhoto,
+          status,
+          revision_reason: revisionReason,
         },
         include: {
           customer: {
@@ -225,8 +271,9 @@ export class CardRequestService {
           profile_type: createDto.profile_type ?? null,
           institution: createDto.institution ?? null,
           student_card_file_url: null,
-          photo: photoKey,
-          status: CardRequestStatus.PENDING,
+          photo: effectivePhoto,
+          status,
+          revision_reason: revisionReason,
         },
         include: {
           customer: {
@@ -427,6 +474,72 @@ export class CardRequestService {
   }
 
   /**
+   * Applique une demande de RÉVISION validée : on ne crée PAS une 2e carte, on
+   * RÉGÉNÈRE la carte active avec les nouvelles données (photo, pseudo, niveau,
+   * marqueur). Numéro et QR conservés → l'identité de la carte ne change pas.
+   */
+  private async applyRevision(
+    requestCard: any,
+    chosenLevel?: LoyaltyLevel,
+    chosenIsStudent?: boolean,
+  ) {
+    const card = await this.prisma.nationCard.findFirst({
+      where: {
+        customer_id: requestCard.customer_id,
+        status: NationCardStatus.ACTIVE,
+      },
+    });
+
+    // Carte révoquée entre-temps → la révision devient une émission normale.
+    if (!card) {
+      return this.generateCard(requestCard, chosenLevel, chosenIsStudent);
+    }
+
+    const level: LoyaltyLevel | null =
+      chosenLevel ?? requestCard.customer.loyalty_level ?? card.level ?? null;
+    const isStudent =
+      chosenIsStudent ?? requestCard.profile_type === ProfileType.ETUDIANT;
+    const nickname = requestCard.nickname ?? card.nickname;
+
+    const firstName = (requestCard.customer.first_name || '').split(' ')[0];
+    const newImage = await this.cardGenerationService.generateCardImage(
+      firstName,
+      requestCard.customer.last_name || '',
+      card.card_number,
+      card.qr_code_value,
+      nickname ?? undefined,
+      { level, is_student: isStudent, photo_key: requestCard.photo },
+    );
+
+    const previousImage = card.card_image_url;
+    const updated = await this.prisma.nationCard.update({
+      where: { id: card.id },
+      data: {
+        level,
+        is_student: isStudent,
+        nickname,
+        card_image_url: newImage,
+        // La carte doit désormais pointer sur la demande de RÉVISION : c'est elle
+        // qui porte la photo courante. Sans ça, une régénération ultérieure
+        // relirait la photo de la demande d'origine (card_request.photo).
+        card_request_id: requestCard.id,
+      },
+    });
+
+    // Le profil suit le marqueur étudiant (audience des menus), comme à l'émission.
+    await this.prisma.customer.update({
+      where: { id: requestCard.customer_id },
+      data: { profile_type: isStudent ? ProfileType.ETUDIANT : null },
+    });
+
+    if (previousImage && previousImage !== newImage) {
+      await this.deleteS3Files([previousImage]);
+    }
+
+    return updated;
+  }
+
+  /**
    * Détails d'une demande (backoffice)
    */
   async getRequestById(id: string) {
@@ -474,6 +587,10 @@ export class CardRequestService {
       throw new BadRequestException('Cette demande a déjà été traitée');
     }
 
+    // Capturé AVANT la mise à jour : IN_REVIEW = demande de modif d'une carte
+    // existante → à l'approbation on régénère, on n'émet pas une 2e carte.
+    const wasRevision = request.status === CardRequestStatus.IN_REVIEW;
+
     // Mise à jour de la demande
     const updatedRequest = await this.prisma.cardRequest.update({
       where: { id },
@@ -491,11 +608,19 @@ export class CardRequestService {
     // Si approuvée : générer la carte + notifier. C'est le SEUL endroit d'où
     // part « carte prête » (push/cloche/WS + WhatsApp). Best-effort.
     if (reviewDto.status === CardRequestStatus.APPROVED) {
-      const card = await this.generateCard(
-        updatedRequest,
-        reviewDto.level,
-        reviewDto.is_student,
-      );
+      // Une demande IN_REVIEW = révision d'une carte existante → on régénère
+      // (numéro/QR conservés) au lieu d'émettre une 2e carte.
+      const card = wasRevision
+        ? await this.applyRevision(
+            updatedRequest,
+            reviewDto.level,
+            reviewDto.is_student,
+          )
+        : await this.generateCard(
+            updatedRequest,
+            reviewDto.level,
+            reviewDto.is_student,
+          );
 
       this.cardNotificationService
         .notifyCardReady(updatedRequest.customer_id, card.level)
