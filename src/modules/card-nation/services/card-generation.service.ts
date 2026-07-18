@@ -233,12 +233,13 @@ export class CardGenerationService {
        Bornée à 1/2 hauteur × 1/2 largeur de la carte, ratio préservé.
        Défaut « champion » si le client n'a pas fourni de photo.
     ====================================================== */
-    // Photo directe (aperçu) > clé S3 (carte réelle) > champion par défaut.
-    const photoKey = theme?.photo_key || CardGenerationService.DEFAULT_PHOTO_KEY;
+    // La carte affiche TOUJOURS la mascotte « champion ». La photo du client
+    // n'est PLUS imprimée sur la carte : elle sert uniquement à la vérification
+    // d'identité au backoffice (cf. décision CEO). On ignore donc photo_key /
+    // photo_buffer pour le rendu.
+    const photoKey = CardGenerationService.DEFAULT_PHOTO_KEY;
     try {
-      const photoSource = theme?.photo_buffer
-        ? theme.photo_buffer
-        : await this.s3service.getCdnFileUrl(photoKey);
+      const photoSource = await this.s3service.getCdnFileUrl(photoKey);
       const photo = await loadImage(photoSource as never);
 
       // Cercle borné à 1/2 de la carte (diamètre = moitié du petit côté).
@@ -252,28 +253,14 @@ export class CardGenerationService {
       const pw = photo.width * scale;
       const ph = photo.height * scale;
 
+      // Champion détouré en cercle, SANS anneau/bordure autour (le cercle qui
+      // l'entourait a été retiré à la demande du CEO).
       ctx.save();
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.closePath();
       ctx.clip();
       ctx.drawImage(photo, cx - pw / 2, cy - ph / 2, pw, ph);
-      ctx.restore();
-
-      // Bordure du médaillon : blanche (lisible sur orange/or/rouge) + fin liseré
-      // à la couleur du niveau pour rattacher la photo au thème de la carte.
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      ctx.lineWidth = 14;
-      ctx.strokeStyle = '#ffffff';
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius + 10, 0, Math.PI * 2);
-      ctx.lineWidth = 6;
-      ctx.strokeStyle = accentColor;
-      ctx.stroke();
       ctx.restore();
     } catch (error) {
       // Une photo illisible ne doit jamais faire échouer l'émission de la carte.
