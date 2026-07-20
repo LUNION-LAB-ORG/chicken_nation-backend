@@ -538,15 +538,18 @@ export class OrderService {
       );
     }
 
-    // Montant frais de livraison (override admin préservé si delivery_fee fourni).
-    const deliveryFee = delivery_fee || (delivery ? delivery?.montant : 0);
+    // Montant frais de livraison. Le staff (call center) peut FORCER un frais — 0 INCLUS
+    // (ex. livraison offerte imposée à la main). On distingue "fourni" (même 0) de "absent"
+    // via `!= null` : `delivery_fee || …` écrasait à tort un 0 explicite par le frais recalculé.
+    const hasFeeOverride = delivery_fee != null;
+    const deliveryFee = hasFeeOverride ? Number(delivery_fee) : (delivery ? delivery?.montant : 0);
     // Frais PLEIN (avant offre) + remise, côté serveur → bilan fiable (call center inclus).
     // Si l'admin FORCE un frais (override), on ne lui attribue PAS la remise d'une offre
     // serveur : base = facturé, remise = 0 → invariant bilan (base = facturé + remise) préservé.
-    const deliveryFeeBase = delivery_fee
+    const deliveryFeeBase = hasFeeOverride
       ? Number(deliveryFee)
       : (delivery ? (delivery.original_montant ?? delivery.montant) : Number(deliveryFee));
-    const deliveryDiscount = delivery_fee ? 0 : (delivery?.discount ?? 0);
+    const deliveryDiscount = hasFeeOverride ? 0 : (delivery?.discount ?? 0);
 
     // Vérifier le paiement
     const payment = await this.orderHelper.checkPayment(createOrderDto);
@@ -611,7 +614,8 @@ export class OrderService {
           reference: orderNumber,
           ...(payment && { paiements: { connect: { id: payment.id } } }),
           address: address ?? '',
-          delivery_fee: delivery_fee ? delivery_fee : Number(deliveryFee),
+          // `deliveryFee` intègre déjà l'override staff (0 inclus) ou le frais recalculé.
+          delivery_fee: Number(deliveryFee),
           delivery_fee_base: Number(deliveryFeeBase),
           delivery_discount: Number(deliveryDiscount),
           // Override admin > auto-détection zone > fallback TURBO
