@@ -50,6 +50,7 @@ import { RetentionCallbackModule } from 'src/modules/retention-callback/retentio
 import { SchedulingModule } from 'src/modules/schedule/schedule.module';
 import { MapsModule } from 'src/modules/maps/maps.module';
 import { AdhesionModule } from 'src/modules/adhesion/adhesion.module';
+import { CallsModule } from 'src/modules/calls/calls.module';
 
 @Module({
   imports: [
@@ -133,6 +134,7 @@ import { AdhesionModule } from 'src/modules/adhesion/adhesion.module';
     MapsModule,
     ProspectModule,
     AdhesionModule,
+    CallsModule,
   ],
 })
 export class AppModule { }

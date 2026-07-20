@@ -1267,6 +1267,8 @@ model Restaurant {
   restaurantPromotions      RestaurantPromotion[]
   /// Plannings de créneaux émis pour ce restaurant (P7).
   schedule_plans            SchedulePlan[]
+  /// Appels internes reçus (Lunion Meet) — cible = ce restaurant.
+  calls_received            Call[]                   @relation("CallsToRestaurant")
 
   // ================================
   // INTÉGRATION HUBRISE
@@ -1344,6 +1346,10 @@ model User {
   retentionCallbacks  RetentionCallback[] @relation("RetentionCallbacks")
   prospects_created   Prospect[]          @relation("ProspectCreator")
   prospect_calls      ProspectCall[]      @relation("ProspectCallAgent")
+
+  // Appels internes (Lunion Meet)
+  calls_made     Call[] @relation("CallsMade")
+  calls_answered Call[] @relation("CallsAnswered")
 
   @@index([email, type])
 }
@@ -2052,6 +2058,60 @@ model Setting {
   updated_at  DateTime @updatedAt
 
   @@map("settings")
+}
+
+// ========================
+// APPELS INTERNES (Lunion Meet)
+// ========================
+// Appels audio internes entre le staff, routés par type d'utilisateur :
+// - un appelant BACKOFFICE sonne le staff d'un RESTAURANT ciblé (CAISSIER/MANAGER/…)
+// - un appelant RESTAURANT sonne le CALL_CENTER (BACKOFFICE)
+// Modèle « sonnerie de groupe » : tous les receveurs éligibles sonnent, le premier
+// qui décroche prend l'appel (claim atomique sur `status`), les autres arrêtent de sonner.
+enum CallStatus {
+  RINGING // room créée, receveurs en train de sonner, personne n'a décroché
+  ONGOING // un receveur a décroché, appel en cours
+  ENDED // appel terminé normalement (un des deux a raccroché)
+  MISSED // personne n'a décroché (tous refusé / timeout)
+  CANCELLED // l'appelant a raccroché avant que quelqu'un décroche
+  FAILED // échec technique (room Lunion non créée, etc.)
+}
+
+model Call {
+  id        String     @id @default(uuid()) @db.Uuid
+  room_slug String     @db.VarChar // slug de la room Lunion Meet
+  room_name String?    @db.VarChar // nom lisible de la room
+  status    CallStatus @default(RINGING)
+
+  // Appelant (toujours un membre du staff = User)
+  caller_id   String   @db.Uuid
+  caller      User     @relation("CallsMade", fields: [caller_id], references: [id])
+  caller_type UserType // type de l'appelant au moment de l'appel (BACKOFFICE | RESTAURANT)
+
+  // Cible de l'appel
+  target_kind          String      @db.VarChar // 'RESTAURANT' | 'CALL_CENTER'
+  target_restaurant_id String?     @db.Uuid
+  target_restaurant    Restaurant? @relation("CallsToRestaurant", fields: [target_restaurant_id], references: [id])
+
+  // Receveurs qui sonnent encore (retirés au refus). Vide + RINGING => MISSED.
+  ringing_user_ids String[] @default([])
+
+  // Receveur qui a décroché (null si personne)
+  answered_by_id String? @db.Uuid
+  answered_by    User?   @relation("CallsAnswered", fields: [answered_by_id], references: [id])
+
+  started_at  DateTime  @default(now())
+  answered_at DateTime?
+  ended_at    DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([caller_id])
+  @@index([answered_by_id])
+  @@index([target_restaurant_id])
+  @@index([status])
+  @@map("calls")
 }
 
 // ========================

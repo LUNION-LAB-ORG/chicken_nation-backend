@@ -15,5 +15,6 @@ export enum Modules {
   COMMENTAIRES = 'reviews',
   SETTINGS = 'settings',
   BASE_DONNEES = 'base_donnees',
+  CALLS = 'calls',
   ALL = 'all',
 }

@@ -73,6 +73,9 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
 
       [Modules.MESSAGES]: [Action.READ, Action.CREATE, Action.UPDATE],
 
+      // Appels internes : le call center appelle les restaurants et reçoit leurs appels.
+      [Modules.CALLS]: [Action.READ],
+
       // Acquisition Glovo/Yango : le call center a les MÊMES droits que l'admin
       // sur ce module (tableau de bord, contacts + fiche, vérification/file J+1,
       // coupons, ventes, export, capture, suppression). Limité à BASE_DONNEES.
@@ -92,6 +95,8 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
       [Modules.MENUS]: [Action.READ],
       [Modules.CLIENTS]: [Action.READ],
+      // Appels internes : le manager appelle le call center et reçoit ses appels.
+      [Modules.CALLS]: [Action.READ],
     },
   },
 
@@ -106,6 +111,8 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
       [Modules.MENUS]: [Action.READ],
       [Modules.CLIENTS]: [Action.READ],
+      // Appels internes : l'assistant manager appelle le call center et reçoit ses appels.
+      [Modules.CALLS]: [Action.READ],
     },
   },
 
@@ -124,6 +131,9 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.CARD_NATION]: [Action.READ],
       [Modules.COMMENTAIRES]: [Action.READ],
       [Modules.MESSAGES]: [Action.READ, Action.CREATE, Action.UPDATE],
+
+      // Appels internes : le caissier appelle le call center et reçoit ses appels.
+      [Modules.CALLS]: [Action.READ],
 
       // Store : lecture + saisie des contacts (aucune autre action)
       [Modules.BASE_DONNEES]: [Action.READ, Action.CREATE],
