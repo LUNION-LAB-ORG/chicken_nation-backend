@@ -44,45 +44,111 @@ export class CallsService {
    * l'accès (token + url) de l'appelant qui attend dans la room.
    */
   async start(caller: User, dto: StartCallDto) {
+    const isAdmin = caller.role === UserRole.ADMIN;
+
+    // L'admin peut cibler explicitement, au-delà de la config de routage.
+    if (isAdmin && dto.targetKind === 'USER') {
+      if (!dto.targetUserId) throw new BadRequestException('targetUserId requis');
+      const target = await this.prisma.user.findFirst({
+        where: { id: dto.targetUserId, entity_status: EntityStatus.ACTIVE },
+        select: { id: true, fullname: true },
+      });
+      if (!target || target.id === caller.id) {
+        throw new NotFoundException('Utilisateur cible introuvable');
+      }
+      return this.createAndRing(caller, {
+        targetKind: 'USER',
+        targetUserId: target.id,
+        targetRestaurantId: null,
+        receivers: [target],
+        targetLabel: target.fullname,
+      });
+    }
+    if (isAdmin && dto.targetKind === 'CALL_CENTER') {
+      return this.startGroup(caller, 'CALL_CENTER', null);
+    }
+    if (isAdmin && dto.targetKind === 'RESTAURANT') {
+      if (!dto.restaurantId) throw new BadRequestException('restaurantId requis');
+      return this.startGroup(caller, 'RESTAURANT', dto.restaurantId);
+    }
+
+    // Non-admin (ou admin sans cible explicite) : config de routage.
     const config = await this.config.getForCaller(caller.type);
     if (!config.canCall) {
       throw new ForbiddenException("Votre profil n'est pas autorisé à passer des appels");
     }
-
-    // Résolution de la cible + label
-    let targetRestaurantId: string | null = null;
-    let targetLabel: string;
     if (config.targetKind === 'RESTAURANT') {
       if (!dto.restaurantId) {
         throw new BadRequestException('restaurantId requis pour appeler un restaurant');
       }
+      return this.startGroup(caller, 'RESTAURANT', dto.restaurantId);
+    }
+    return this.startGroup(caller, 'CALL_CENTER', null);
+  }
+
+  /** Appel de groupe (restaurant ou call center) : receveurs résolus via la config. */
+  private async startGroup(
+    caller: User,
+    targetKind: 'RESTAURANT' | 'CALL_CENTER',
+    restaurantId: string | null,
+  ) {
+    const cfg = await this.config.getConfig();
+    let targetLabel: string;
+    let receiverType: UserType;
+    let receiverRoles: UserRole[];
+
+    if (targetKind === 'RESTAURANT') {
+      if (!restaurantId) throw new BadRequestException('restaurantId requis');
       const resto = await this.prisma.restaurant.findUnique({
-        where: { id: dto.restaurantId },
+        where: { id: restaurantId },
         select: { id: true, name: true },
       });
       if (!resto) throw new NotFoundException('Restaurant introuvable');
-      targetRestaurantId = resto.id;
       targetLabel = resto.name;
+      // Reçoivent un appel vers un restaurant = rôles configurés pour un appelant BACKOFFICE.
+      receiverType = cfg[UserType.BACKOFFICE].receiverType;
+      receiverRoles = cfg[UserType.BACKOFFICE].receiverRoles;
     } else {
       targetLabel = 'Call Center';
+      // Reçoivent un appel vers le call center = rôles configurés pour un appelant RESTAURANT.
+      receiverType = cfg[UserType.RESTAURANT].receiverType;
+      receiverRoles = cfg[UserType.RESTAURANT].receiverRoles;
     }
 
     const receivers = await this.resolveReceivers(
-      config.receiverType,
-      config.receiverRoles,
-      targetRestaurantId,
+      receiverType,
+      receiverRoles,
+      targetKind === 'RESTAURANT' ? restaurantId : null,
       caller.id,
     );
     if (receivers.length === 0) {
       throw new BadRequestException('Aucun destinataire disponible pour cet appel');
     }
+    return this.createAndRing(caller, {
+      targetKind,
+      targetUserId: null,
+      targetRestaurantId: targetKind === 'RESTAURANT' ? restaurantId : null,
+      receivers,
+      targetLabel,
+    });
+  }
 
-    // Room Lunion + token appelant
+  /** Crée la room Lunion, persiste l'appel, et fait sonner tous les receveurs. */
+  private async createAndRing(
+    caller: User,
+    opts: {
+      targetKind: 'RESTAURANT' | 'CALL_CENTER' | 'USER';
+      targetUserId: string | null;
+      targetRestaurantId: string | null;
+      receivers: { id: string; fullname: string }[];
+      targetLabel: string;
+    },
+  ) {
     let room: { slug: string; name: string };
     try {
       room = await this.lunion.createRoom(
-        `cn-call-${caller.id.slice(0, 8)}-${caller.type.toLowerCase()}`,
-        `Appel ${caller.fullname} → ${targetLabel}`,
+        `cn-call-${caller.id.slice(0, 8)}`,
+        `Appel ${caller.fullname} → ${opts.targetLabel}`,
       );
     } catch (e) {
       this.logger.error(`createRoom échec: ${(e as Error).message}`);
@@ -101,15 +167,15 @@ export class CallsService {
         status: CallStatus.RINGING,
         caller_id: caller.id,
         caller_type: caller.type,
-        target_kind: config.targetKind,
-        target_restaurant_id: targetRestaurantId,
-        ringing_user_ids: receivers.map((r) => r.id),
+        target_kind: opts.targetKind,
+        target_restaurant_id: opts.targetRestaurantId,
+        target_user_id: opts.targetUserId,
+        ringing_user_ids: opts.receivers.map((r) => r.id),
       },
     });
 
-    // Sonnerie : émettre l'appel entrant à chaque receveur
     let onlineCount = 0;
-    for (const r of receivers) {
+    for (const r of opts.receivers) {
       if (this.gateway.isUserOnline(r.id)) onlineCount++;
       this.gateway.emitToUser(r.id, 'user', CALL_EVENTS.INCOMING, {
         callId: call.id,
@@ -117,8 +183,8 @@ export class CallsService {
         callerId: caller.id,
         callerName: caller.fullname,
         callerType: caller.type,
-        targetKind: config.targetKind,
-        targetLabel,
+        targetKind: opts.targetKind,
+        targetLabel: opts.targetLabel,
         startedAt: call.started_at,
       });
     }
@@ -131,9 +197,9 @@ export class CallsService {
         url: callerAccess.url,
         identity: callerAccess.identity ?? `user-${caller.id}`,
       },
-      ringing: receivers.length,
+      ringing: opts.receivers.length,
       online: onlineCount,
-      targetLabel,
+      targetLabel: opts.targetLabel,
     };
   }
 
@@ -285,6 +351,7 @@ export class CallsService {
         caller: { select: { id: true, fullname: true, image: true, type: true } },
         answered_by: { select: { id: true, fullname: true } },
         target_restaurant: { select: { id: true, name: true } },
+        target_user: { select: { id: true, fullname: true } },
       },
     });
   }

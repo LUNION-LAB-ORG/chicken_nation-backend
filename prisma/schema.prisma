@@ -1350,6 +1350,7 @@ model User {
   // Appels internes (Lunion Meet)
   calls_made     Call[] @relation("CallsMade")
   calls_answered Call[] @relation("CallsAnswered")
+  calls_targeted Call[] @relation("CallsToUser")
 
   @@index([email, type])
 }
@@ -2089,9 +2090,12 @@ model Call {
   caller_type UserType // type de l'appelant au moment de l'appel (BACKOFFICE | RESTAURANT)
 
   // Cible de l'appel
-  target_kind          String      @db.VarChar // 'RESTAURANT' | 'CALL_CENTER'
+  target_kind          String      @db.VarChar // 'RESTAURANT' | 'CALL_CENTER' | 'USER'
   target_restaurant_id String?     @db.Uuid
   target_restaurant    Restaurant? @relation("CallsToRestaurant", fields: [target_restaurant_id], references: [id])
+  // Cible individuelle (appel P2P, ex : admin appelle une personne précise)
+  target_user_id       String?     @db.Uuid
+  target_user          User?       @relation("CallsToUser", fields: [target_user_id], references: [id])
 
   // Receveurs qui sonnent encore (retirés au refus). Vide + RINGING => MISSED.
   ringing_user_ids String[] @default([])
@@ -2110,6 +2114,7 @@ model Call {
   @@index([caller_id])
   @@index([answered_by_id])
   @@index([target_restaurant_id])
+  @@index([target_user_id])
   @@index([status])
   @@map("calls")
 }
