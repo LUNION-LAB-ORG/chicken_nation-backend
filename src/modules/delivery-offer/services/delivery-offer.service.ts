@@ -230,9 +230,17 @@ export class DeliveryOfferService {
       if (offer.days_of_week.length > 0 && !offer.days_of_week.includes(weekday)) {
         continue;
       }
-      // Créneau horaire
+      // Créneau horaire — gère aussi les fenêtres qui passent MINUIT (ex. 10:00 -> 02:00).
+      // Fenêtre "normale" (start <= end) : heure DANS [start, end].
+      // Fenêtre nocturne (start > end)  : heure >= start OU <= end.
+      // (Avant : `>= start && <= end` -> une fenêtre nocturne = intersection VIDE = offre
+      //  jamais appliquée. C'est ce qui bloquait "Livraison gratuite 2" 10:00->02:00.)
       if (offer.time_start && offer.time_end) {
-        if (!(hhmm >= offer.time_start && hhmm <= offer.time_end)) continue;
+        const inWindow =
+          offer.time_start <= offer.time_end
+            ? hhmm >= offer.time_start && hhmm <= offer.time_end
+            : hhmm >= offer.time_start || hhmm <= offer.time_end;
+        if (!inWindow) continue;
       }
       // Limite globale
       if (offer.max_usage != null && offer.usage_count >= offer.max_usage) {
