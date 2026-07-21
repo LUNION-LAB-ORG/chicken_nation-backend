@@ -2099,6 +2099,9 @@ model Call {
 
   // Receveurs qui sonnent encore (retirés au refus). Vide + RINGING => MISSED.
   ringing_user_ids String[] @default([])
+  // Receveurs sonnés à l'origine (IMMUABLE) — sert à l'historique des appels
+  // manqués et au contrôle d'accès du polling de statut.
+  rung_user_ids    String[] @default([])
 
   // Receveur qui a décroché (null si personne)
   answered_by_id String? @db.Uuid

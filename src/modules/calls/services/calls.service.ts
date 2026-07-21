@@ -171,6 +171,7 @@ export class CallsService {
         target_restaurant_id: opts.targetRestaurantId,
         target_user_id: opts.targetUserId,
         ringing_user_ids: opts.receivers.map((r) => r.id),
+        rung_user_ids: opts.receivers.map((r) => r.id),
       },
     });
 
@@ -259,20 +260,31 @@ export class CallsService {
   }
 
   /**
-   * Un receveur refuse : on le retire de la sonnerie. S'il ne reste personne,
+   * Un receveur refuse : on le retire de la sonnerie (retrait ATOMIQUE via
+   * `array_remove`, sûr en cas de refus simultanés). S'il ne reste personne,
    * l'appel devient MISSED et l'appelant reçoit `call:ended` (raison no-answer).
    */
   async reject(callId: string, user: User) {
     const call = await this.prisma.call.findUnique({ where: { id: callId } });
     if (!call) throw new NotFoundException('Appel introuvable');
+    if (!call.rung_user_ids.includes(user.id)) {
+      throw new ForbiddenException("Cet appel ne vous est pas destiné");
+    }
     if (call.status !== CallStatus.RINGING) return { status: call.status };
 
-    const remaining = call.ringing_user_ids.filter((id) => id !== user.id);
+    const rows = await this.prisma.$queryRaw<{ ringing_user_ids: string[] }[]>`
+      UPDATE "calls"
+      SET "ringing_user_ids" = array_remove("ringing_user_ids", ${user.id}),
+          "updated_at" = NOW()
+      WHERE "id" = ${callId}::uuid AND "status" = 'RINGING'
+      RETURNING "ringing_user_ids"`;
+    if (rows.length === 0) return { status: CallStatus.ONGOING }; // pris/annulé entre-temps
 
-    if (remaining.length === 0) {
+    if (rows[0].ringing_user_ids.length === 0) {
+      // Dernier refus → appel manqué (idempotent : conditionné sur RINGING).
       await this.prisma.call.updateMany({
         where: { id: callId, status: CallStatus.RINGING },
-        data: { status: CallStatus.MISSED, ringing_user_ids: [], ended_at: new Date() },
+        data: { status: CallStatus.MISSED, ended_at: new Date() },
       });
       this.gateway.emitToUser(call.caller_id, 'user', CALL_EVENTS.ENDED, {
         callId: call.id,
@@ -282,10 +294,6 @@ export class CallsService {
       return { status: CallStatus.MISSED };
     }
 
-    await this.prisma.call.update({
-      where: { id: callId },
-      data: { ringing_user_ids: remaining },
-    });
     // Info non bloquante à l'appelant
     this.gateway.emitToUser(call.caller_id, 'user', CALL_EVENTS.REJECTED, {
       callId: call.id,
@@ -297,20 +305,33 @@ export class CallsService {
   /**
    * Raccrocher : gère l'annulation (avant décrochage → CANCELLED) et la fin
    * normale (en cours → ENDED). Notifie l'autre partie / stoppe les sonneries.
+   * Réservé aux participants (appelant, receveur sonné, décrocheur) ou admin.
    */
   async hangup(callId: string, user: User) {
     const call = await this.prisma.call.findUnique({ where: { id: callId } });
     if (!call) throw new NotFoundException('Appel introuvable');
+    this.assertParticipant(call, user);
     if (TERMINAL_STATUSES.includes(call.status)) return { status: call.status };
 
     const isCaller = call.caller_id === user.id;
 
     if (call.status === CallStatus.RINGING) {
-      // Annulation par l'appelant avant tout décrochage
-      await this.prisma.call.updateMany({
+      // Un receveur qui « raccroche » pendant la sonnerie = un refus.
+      if (!isCaller) return this.reject(callId, user);
+
+      // Annulation par l'appelant avant tout décrochage (claim atomique :
+      // si un receveur décroche au même instant, on bascule en fin normale).
+      const cancelled = await this.prisma.call.updateMany({
         where: { id: callId, status: CallStatus.RINGING },
-        data: { status: CallStatus.CANCELLED, ringing_user_ids: [], ended_at: new Date() },
+        data: { status: CallStatus.CANCELLED, ended_at: new Date() },
       });
+      if (cancelled.count === 0) {
+        const fresh = await this.prisma.call.findUnique({ where: { id: callId } });
+        if (fresh && fresh.status === CallStatus.ONGOING) {
+          return this.endOngoing(fresh, user);
+        }
+        return { status: fresh?.status ?? CallStatus.CANCELLED };
+      }
       for (const rid of call.ringing_user_ids) {
         this.gateway.emitToUser(rid, 'user', CALL_EVENTS.CANCELLED, { callId: call.id });
       }
@@ -318,20 +339,95 @@ export class CallsService {
       return { status: CallStatus.CANCELLED };
     }
 
-    // ONGOING → fin normale
-    await this.prisma.call.update({
-      where: { id: callId },
+    return this.endOngoing(call, user);
+  }
+
+  /** Fin normale d'un appel ONGOING (idempotent : conditionné sur le statut). */
+  private async endOngoing(call: { id: string; room_slug: string; caller_id: string; answered_by_id: string | null }, user: User) {
+    const ended = await this.prisma.call.updateMany({
+      where: { id: call.id, status: CallStatus.ONGOING },
       data: { status: CallStatus.ENDED, ended_at: new Date() },
     });
-    const otherId = isCaller ? call.answered_by_id : call.caller_id;
-    if (otherId) {
-      this.gateway.emitToUser(otherId, 'user', CALL_EVENTS.ENDED, {
-        callId: call.id,
-        reason: 'hangup',
-      });
+    if (ended.count > 0) {
+      const otherId = call.caller_id === user.id ? call.answered_by_id : call.caller_id;
+      if (otherId) {
+        this.gateway.emitToUser(otherId, 'user', CALL_EVENTS.ENDED, {
+          callId: call.id,
+          reason: 'hangup',
+        });
+      }
+      void this.lunion.deleteRoom(call.room_slug);
     }
-    void this.lunion.deleteRoom(call.room_slug);
     return { status: CallStatus.ENDED };
+  }
+
+  /** L'utilisateur est-il partie prenante de cet appel ? (sinon 403) */
+  private assertParticipant(
+    call: { caller_id: string; answered_by_id: string | null; rung_user_ids: string[] },
+    user: User,
+  ) {
+    const ok =
+      call.caller_id === user.id ||
+      call.answered_by_id === user.id ||
+      call.rung_user_ids.includes(user.id) ||
+      user.role === UserRole.ADMIN;
+    if (!ok) throw new ForbiddenException("Cet appel ne vous concerne pas");
+  }
+
+  /**
+   * Statut d'un appel — filet de sécurité de synchronisation pour les clients
+   * (polling) : l'UI converge même si un événement socket s'est perdu.
+   */
+  async getStatus(callId: string, user: User) {
+    const call = await this.prisma.call.findUnique({
+      where: { id: callId },
+      include: { answered_by: { select: { id: true, fullname: true } } },
+    });
+    if (!call) throw new NotFoundException('Appel introuvable');
+    this.assertParticipant(call, user);
+    return {
+      id: call.id,
+      status: call.status,
+      answered_by: call.answered_by,
+      started_at: call.started_at,
+      answered_at: call.answered_at,
+      ended_at: call.ended_at,
+    };
+  }
+
+  /**
+   * Appels qui sonnent ENCORE pour moi (repris à la connexion / au chargement
+   * de page : couvre un `call:incoming` émis pendant que j'étais déconnecté).
+   */
+  async listRingingForMe(user: User) {
+    const calls = await this.prisma.call.findMany({
+      where: {
+        status: CallStatus.RINGING,
+        ringing_user_ids: { has: user.id },
+        started_at: { gte: new Date(Date.now() - 60_000) },
+      },
+      orderBy: { started_at: 'desc' },
+      include: {
+        caller: { select: { id: true, fullname: true, type: true } },
+        target_restaurant: { select: { name: true } },
+        target_user: { select: { fullname: true } },
+      },
+    });
+    return calls.map((c) => ({
+      callId: c.id,
+      room: c.room_slug,
+      callerId: c.caller_id,
+      callerName: c.caller?.fullname ?? 'Appelant',
+      callerType: c.caller_type,
+      targetKind: c.target_kind,
+      targetLabel:
+        c.target_kind === 'CALL_CENTER'
+          ? 'Call Center'
+          : c.target_kind === 'USER'
+            ? (c.target_user?.fullname ?? 'Personne')
+            : (c.target_restaurant?.name ?? 'Restaurant'),
+      startedAt: c.started_at,
+    }));
   }
 
   /** Historique récent visible par l'utilisateur (émis, reçus, ou ciblant son resto). */
@@ -339,7 +435,9 @@ export class CallsService {
     const or: Prisma.CallWhereInput[] = [
       { caller_id: user.id },
       { answered_by_id: user.id },
-      { ringing_user_ids: { has: user.id } },
+      // Liste IMMUABLE des sonnés : les manqués restent visibles même après
+      // refus/annulation (ringing_user_ids mute au fil des refus).
+      { rung_user_ids: { has: user.id } },
     ];
     if (user.restaurant_id) or.push({ target_restaurant_id: user.restaurant_id });
 
@@ -348,7 +446,15 @@ export class CallsService {
       orderBy: { started_at: 'desc' },
       take: Math.min(Math.max(limit, 1), 100),
       include: {
-        caller: { select: { id: true, fullname: true, image: true, type: true } },
+        caller: {
+          select: {
+            id: true,
+            fullname: true,
+            image: true,
+            type: true,
+            restaurant: { select: { id: true, name: true } },
+          },
+        },
         answered_by: { select: { id: true, fullname: true } },
         target_restaurant: { select: { id: true, name: true } },
         target_user: { select: { id: true, fullname: true } },

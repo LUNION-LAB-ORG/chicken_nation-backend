@@ -73,6 +73,20 @@ export class CallsController {
     return this.calls.history(req.user as User, limit ? Number(limit) : 30);
   }
 
+  /** Appels qui sonnent encore pour moi (resynchro à la connexion). */
+  @Get('ringing')
+  @UseGuards(JwtAuthGuard)
+  ringing(@Req() req: Request) {
+    return this.calls.listRingingForMe(req.user as User);
+  }
+
+  /** Statut d'un appel (polling de convergence — filet des events socket). */
+  @Get(':id')
+  @UseGuards(JwtAuthGuard)
+  getStatus(@Param('id') id: string, @Req() req: Request) {
+    return this.calls.getStatus(id, req.user as User);
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard)
   start(@Req() req: Request, @Body() dto: StartCallDto) {
