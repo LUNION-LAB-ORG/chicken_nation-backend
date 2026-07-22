@@ -403,6 +403,15 @@ export class CallsService {
    * encore en sonnerie (< 90 s). Renvoie null si rien à restaurer.
    */
   async getActiveForMe(user: User) {
+    const STALE_MS = 4 * 60 * 60 * 1000; // 4 h — au-delà, un ONGOING est un zombie
+
+    // Balayage opportuniste : clôt les appels ONGOING fantômes (navigateur
+    // fermé sans raccrocher, crash…) pour ne jamais restaurer un panneau mort.
+    await this.prisma.call.updateMany({
+      where: { status: CallStatus.ONGOING, started_at: { lt: new Date(Date.now() - STALE_MS) } },
+      data: { status: CallStatus.ENDED, ended_at: new Date() },
+    });
+
     const include = {
       caller: { select: { id: true, fullname: true } },
       answered_by: { select: { id: true, fullname: true } },
@@ -413,6 +422,7 @@ export class CallsService {
     let call = await this.prisma.call.findFirst({
       where: {
         status: CallStatus.ONGOING,
+        started_at: { gte: new Date(Date.now() - STALE_MS) },
         OR: [{ caller_id: user.id }, { answered_by_id: user.id }],
       },
       orderBy: { started_at: 'desc' },
