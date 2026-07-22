@@ -606,13 +606,19 @@ export class VoucherService {
     this.logger.log(`Updated ${result.count} expired vouchers`);
   }
 
+  /**
+   * Code court et facile à lire/dicter : `CN` + 6 caractères.
+   * Alphabet SANS ambiguïté (ni 0/O, ni 1/I/L) pour éviter les erreurs de
+   * saisie. Ex : `CN7K2XQ9`. (Avant : `CNV-260722-174`, long et daté.)
+   * ~1 milliard de combinaisons ; la collision est gérée par retry (P2002).
+   */
   private generateVoucherCode(): string {
-    const date = new Date();
-    const year = date.getFullYear().toString().slice(-2);
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    const random = Math.floor(100 + Math.random() * 900);
-    return `CNV-${year}${month}${day}-${random}`;
+    const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    let s = '';
+    for (let i = 0; i < 6; i++) {
+      s += alphabet[Math.floor(Math.random() * alphabet.length)];
+    }
+    return `CN${s}`;
   }
 
   private mapToDto(voucher: VoucherWithRelations): VoucherResponseDto {

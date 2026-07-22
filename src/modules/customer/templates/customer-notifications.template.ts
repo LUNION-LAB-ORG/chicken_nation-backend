@@ -8,12 +8,20 @@ export class CustomerNotificationsTemplate {
      * Welcome the customer when their account is created.
      */
     WELCOME_CUSTOMER: NotificationTemplate<{
-        customer: Customer
+        customer: Customer;
+        /** Montant du bon de bienvenue accordé (null = aucun). */
+        welcome_amount?: number | null;
     }> = {
-            title: (ctx) => `🎉 Bienvenue ${ctx.data.customer.first_name ?? ''} !`,
+            title: (ctx) =>
+                ctx.data.welcome_amount
+                    ? `🎉 Bienvenue ! Un cadeau t'attend`
+                    : `🎉 Bienvenue ${ctx.data.customer.first_name ?? ''} !`,
             message: (ctx) => {
                 const fullname = `${ctx.data.customer.first_name ?? ''} ${ctx.data.customer.last_name ?? ''}`.trim();
-                return `Bonjour ${fullname || ctx.data.customer.phone}, votre compte Chicken Nation est prêt ! Découvrez le menu et profitez de notre programme fidélité.`;
+                const who = fullname || ctx.data.customer.phone;
+                return ctx.data.welcome_amount
+                    ? `Bonjour ${who}, votre compte est prêt ! Gratte ta carte cadeau : un bon de ${ctx.data.welcome_amount} F t'attend.`
+                    : `Bonjour ${who}, votre compte Chicken Nation est prêt ! Découvrez le menu et profitez de notre programme fidélité.`;
             },
             icon: (ctx) => notificationIcons.joice.url, // Joie pour marquer la bienvenue
             iconBgColor: (ctx) => notificationIcons.joice.color,
