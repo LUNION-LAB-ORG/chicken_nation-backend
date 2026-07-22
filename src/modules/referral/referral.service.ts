@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
+  NotificationTarget,
+  NotificationType,
   Prisma,
   ReferralEarningStatus,
   ReferralEarningType,
@@ -7,6 +9,7 @@ import {
   RewardStatus,
   RewardType,
 } from '@prisma/client';
+import { notificationIcons } from 'src/modules/notifications/constantes/notifications.constante';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
@@ -140,6 +143,11 @@ export class ReferralService {
           '🎁 Un cadeau t\'attend !',
           'Bienvenue chez Chicken Nation ! Gratte ta carte cadeau dans l\'app et utilise-la sur ta première commande.',
         );
+        void this.notifyInApp(
+          refereeId,
+          '🎁 Bienvenue ! Un cadeau t\'attend',
+          'Ton code de parrainage est validé : gratte ta carte cadeau et utilise-la sur ta première commande.',
+        );
       }
     } catch (e: any) {
       this.logger.warn(`Cadeau filleul parrainage échoué (${refereeId}): ${e?.message}`);
@@ -186,6 +194,11 @@ export class ReferralService {
           referral.referrer_id,
           '💛 Ton filleul a utilisé son cadeau !',
           'Merci de nous avoir recommandés — un cadeau à gratter t\'attend dans l\'app.',
+        );
+        void this.notifyInApp(
+          referral.referrer_id,
+          '💛 Ton filleul a utilisé son cadeau !',
+          'Merci de nous avoir recommandés — un cadeau à gratter t\'attend.',
         );
       }
       this.logger.log(`Parrainage qualifié (filleul ${refereeId}) → parrain ${referral.referrer_id} récompensé.`);
@@ -947,6 +960,30 @@ export class ReferralService {
       return items[Math.floor(Math.random() * items.length)];
     }
     return items[0];
+  }
+
+  /**
+   * Notification IN-APP (cloche du client) non bloquante — visible même sans
+   * push (simulateur, permissions refusées, token pas encore enregistré).
+   */
+  private async notifyInApp(customerId: string, title: string, message: string) {
+    try {
+      await this.prisma.notification.create({
+        data: {
+          title,
+          message,
+          type: NotificationType.PROMOTION,
+          user_id: customerId,
+          target: NotificationTarget.CUSTOMER,
+          icon: notificationIcons.joice.url,
+          icon_bg_color: notificationIcons.joice.color,
+          show_chevron: false,
+          data: { kind: 'referral' },
+        },
+      });
+    } catch (e: any) {
+      this.logger.warn(`Notif in-app parrainage échouée (${customerId}): ${e?.message}`);
+    }
   }
 
   /** Push non bloquant vers un client (token Expo depuis ses réglages notifs). */
