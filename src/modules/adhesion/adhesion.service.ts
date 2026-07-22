@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CardRequestService } from 'src/modules/card-nation/services/card-request.service';
@@ -28,12 +28,8 @@ export class AdhesionService {
   ) {}
 
   async register(dto: CreateAdhesionDto, photo?: Express.Multer.File) {
-    // Photo OBLIGATOIRE (contrôle backoffice). On refuse l'adhésion sans photo
-    // AVANT de créer/mettre à jour le Customer (échec propre, rien de partiel).
-    if (!photo?.buffer) {
-      throw new BadRequestException('La photo est requise');
-    }
-
+    // Photo FACULTATIVE sur le tunnel web (décision 22/07) : elle sert à la
+    // vérification backoffice et peut être fournie plus tard dans l'app.
     const phone = this.normalizePhone(dto.phone);
     const now = new Date();
 
