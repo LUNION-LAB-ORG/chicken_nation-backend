@@ -41,6 +41,14 @@ export class ReferralController {
     return this.referralService.getAmbassadorDashboard(customerId);
   }
 
+  @Get('ambassador/dashboard')
+  @ApiOperation({ summary: "Tableau de bord ambassadeur (contrat de l'app mobile)" })
+  @ApiOkResponse({ description: 'Code, réglages, agrégats, filleuls masqués, versements' })
+  getAmbassadorDashboard(@Req() req: Request) {
+    const customerId = (req.user as Customer).id;
+    return this.referralService.getAmbassadorDashboardForApp(customerId);
+  }
+
   @Post('apply')
   @ApiOperation({ summary: 'Appliquer un code de parrainage (filleul, à l’inscription)' })
   @ApiOkResponse({ description: 'Parrainage créé + bon de bienvenue crédité' })

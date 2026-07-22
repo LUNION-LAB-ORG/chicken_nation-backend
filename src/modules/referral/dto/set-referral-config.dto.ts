@@ -14,10 +14,21 @@ export class SetReferralConfigDto {
   @Min(1)
   welcome_amount?: number;
 
-  @ApiPropertyOptional({ description: 'Récompense du parrain : { type, payload, expires_in_days? }' })
+  @ApiPropertyOptional({
+    description:
+      'Cadeau du parrain : { mode: FIXED|RANDOM, items: [{ type, payload, expires_in_days? }] } (legacy { type, payload } accepté)',
+  })
   @IsOptional()
   @IsObject()
-  parrain?: { type: RewardType; payload: Record<string, any>; expires_in_days?: number };
+  parrain?: Record<string, any>;
+
+  @ApiPropertyOptional({
+    description:
+      "Cadeau du filleul (à l'inscription) : { mode: FIXED|RANDOM, items: [...] } (legacy { type, payload } accepté)",
+  })
+  @IsOptional()
+  @IsObject()
+  filleul?: Record<string, any>;
 
   @ApiPropertyOptional({ description: 'Id User créateur des bons système (vide = 1er User)' })
   @IsOptional()

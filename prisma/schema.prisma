@@ -1621,7 +1621,8 @@ model Referral {
   referral_code       String         @db.VarChar // code utilisé (snapshot)
   status              ReferralStatus @default(PENDING)
   qualifying_order_id String?        @db.Uuid // 1ère commande payée ayant qualifié
-  welcome_voucher_id  String?        @db.Uuid // bon de bienvenue du filleul
+  welcome_voucher_id  String?        @db.Uuid // (legacy) bon de bienvenue direct du filleul
+  filleul_reward_id   String?        @db.Uuid // cadeau à gratter du filleul (créé à l'inscription)
   parrain_reward_id   String?        @db.Uuid // récompense (Reward) du parrain
   qualified_at        DateTime?      @db.Timestamp(6)
   created_at          DateTime       @default(now()) @db.Timestamp(6)

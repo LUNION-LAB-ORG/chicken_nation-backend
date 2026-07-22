@@ -10,6 +10,26 @@ import {
 import { PrismaService } from 'src/database/services/prisma.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
+import { ExpoPushService } from 'src/expo-push/expo-push.service';
+
+/** Un cadeau possible (carte à gratter) : bon d'achat, plat offert… */
+export interface ReferralGiftItem {
+  type: RewardType;
+  payload: Record<string, any>;
+  expires_in_days?: number;
+}
+
+/**
+ * Config d'un cadeau de parrainage (filleul OU parrain) :
+ * - FIXED  : toujours le 1er item.
+ * - RANDOM : un item tiré au hasard dans `items`.
+ * Rétro-compat : l'ancien format { type, payload, expires_in_days? } est lu
+ * comme { mode: 'FIXED', items: [ancien] }.
+ */
+export interface ReferralGiftConfig {
+  mode: 'FIXED' | 'RANDOM';
+  items: ReferralGiftItem[];
+}
 
 /**
  * Parrainage. Réutilise l'existant : le bon de bienvenue du filleul via
@@ -32,6 +52,7 @@ export class ReferralService {
     private readonly prisma: PrismaService,
     private readonly settingsService: SettingsService,
     private readonly voucherService: VoucherService,
+    private readonly expoPushService: ExpoPushService,
   ) {}
 
   /** Code de parrainage du client (généré à la 1ère demande, unique). */
@@ -100,26 +121,28 @@ export class ReferralService {
       throw e;
     }
 
-    // Bon de bienvenue du filleul (non bloquant : on ne casse pas l'inscription).
-    const creator = await this.resolveSystemCreatorId();
-    if (creator) {
-      try {
-        const amount = await this.getWelcomeAmount();
-        const voucher = await this.voucherService.createForCustomer({
-          customerId: refereeId,
-          amount,
-          createdBy: creator,
-          expiresAt: null,
-        });
+    // Cadeau à GRATTER du filleul (non bloquant : on ne casse pas l'inscription).
+    // C'est l'utilisation de CE cadeau sur une commande qui récompensera le parrain.
+    try {
+      const cfg = await this.getFilleulGiftConfig();
+      const reward = await this.createGiftReward(
+        refereeId,
+        cfg,
+        'Cadeau de bienvenue — parrainage 🎁',
+      );
+      if (reward) {
         await this.prisma.referral.update({
           where: { id: referral.id },
-          data: { welcome_voucher_id: voucher.id },
+          data: { filleul_reward_id: reward.id },
         });
-      } catch (e: any) {
-        this.logger.warn(`Bon de bienvenue parrainage échoué (filleul ${refereeId}): ${e?.message}`);
+        void this.pushToCustomer(
+          refereeId,
+          '🎁 Un cadeau t\'attend !',
+          'Bienvenue chez Chicken Nation ! Gratte ta carte cadeau dans l\'app et utilise-la sur ta première commande.',
+        );
       }
-    } else {
-      this.logger.warn('Parrainage : aucun créateur système → bon de bienvenue non créé.');
+    } catch (e: any) {
+      this.logger.warn(`Cadeau filleul parrainage échoué (${refereeId}): ${e?.message}`);
     }
 
     return { applied: true, referral_id: referral.id };
@@ -148,18 +171,72 @@ export class ReferralService {
     if (!referral) return true;
 
     try {
-      const reward = await this.createParrainReward(referral.referrer_id);
+      const cfg = await this.getParrainGiftConfig();
+      const reward = await this.createGiftReward(
+        referral.referrer_id,
+        cfg,
+        'Parrainage — merci de nous avoir recommandés !',
+      );
       if (reward) {
         await this.prisma.referral.update({
           where: { id: referral.id },
           data: { parrain_reward_id: reward.id },
         });
+        void this.pushToCustomer(
+          referral.referrer_id,
+          '💛 Ton filleul a utilisé son cadeau !',
+          'Merci de nous avoir recommandés — un cadeau à gratter t\'attend dans l\'app.',
+        );
       }
       this.logger.log(`Parrainage qualifié (filleul ${refereeId}) → parrain ${referral.referrer_id} récompensé.`);
     } catch (e: any) {
       this.logger.error(`Échec récompense parrain (parrainage ${referral.id}): ${e?.message}`);
     }
     return true;
+  }
+
+  /**
+   * Le filleul a-t-il UTILISÉ son cadeau de parrainage sur CETTE commande ?
+   * C'est le déclencheur de la récompense parrain (remplace « 1ère commande payée »).
+   *  - Cadeau VOUCHER : le bon créé au grattage (payload.voucher_id) a une
+   *    Redemption sur la commande.
+   *  - Cadeau GIFT (plat offert) : le Reward est CONSUMED sur la commande.
+   *  - Cadeau non créé / autre type : fallback = 1ère commande payée (ancienne règle).
+   *  - Referral legacy (bon direct, pas de filleul_reward_id) : ancienne règle.
+   */
+  private async giftUsedOnOrder(
+    referral: { filleul_reward_id: string | null },
+    orderId: string,
+  ): Promise<boolean> {
+    if (!referral.filleul_reward_id) return true; // legacy → ancienne règle
+
+    const reward = await this.prisma.reward.findUnique({
+      where: { id: referral.filleul_reward_id },
+      select: { id: true, type: true, status: true, payload: true, order_id: true },
+    });
+    if (!reward) return true; // cadeau disparu → ne pas bloquer la qualification
+
+    if (reward.type === RewardType.GIFT) {
+      return reward.order_id === orderId && reward.status === RewardStatus.CONSUMED;
+    }
+
+    const voucherId = (reward.payload as Record<string, any> | null)?.voucher_id as
+      | string
+      | undefined;
+    if (voucherId) {
+      const redemption = await this.prisma.redemption.findFirst({
+        where: { voucher_id: voucherId, order_id: orderId },
+        select: { id: true },
+      });
+      return !!redemption;
+    }
+
+    // VOUCHER pas encore gratté (pas de bon émis) → cadeau pas utilisé.
+    if (reward.type === RewardType.VOUCHER && reward.status === RewardStatus.PENDING) {
+      return false;
+    }
+    // Types sans traçage d'usage (ex. POINTS) : gratté = considéré utilisé.
+    return reward.status !== RewardStatus.PENDING;
   }
 
   /**
@@ -190,6 +267,19 @@ export class ReferralService {
     if (!order) return;
     const netAmount = order.net_amount ?? 0;
     const orderDate = order.created_at ?? new Date();
+
+    // 0) Déclencheur v2 : tant que le filleul n'a pas UTILISÉ son cadeau sur une
+    //    commande, pas de qualification (le parrain attend). Les commandes payées
+    //    sans le cadeau ne comptent pas.
+    if (referral.status === ReferralStatus.PENDING) {
+      const used = await this.giftUsedOnOrder(referral, orderId);
+      if (!used) {
+        this.logger.log(
+          `Parrainage : commande ${orderId} payée SANS le cadeau du filleul ${refereeId} → qualification différée.`,
+        );
+        return;
+      }
+    }
 
     // 1) Qualification (claim atomique) + carte à gratter parrain existante.
     const justQualified = await this.qualifyReferralForPaidOrder(refereeId, orderId);
@@ -451,6 +541,116 @@ export class ReferralService {
     };
   }
 
+  /**
+   * Tableau de bord ambassadeur au CONTRAT DE L'APP MOBILE (écran Phase 5) :
+   * réglages effectifs, agrégats nommés côté app, filleuls masqués enrichis
+   * (commandes, fenêtre de commission, plafonnement) et versements (V1 : vide,
+   * versement manuel non historisé par client).
+   */
+  async getAmbassadorDashboardForApp(customerId: string) {
+    const [wallet, config] = await Promise.all([
+      this.getAmbassadorDashboard(customerId),
+      this.getEarningConfig(),
+    ]);
+
+    const referrals = await this.prisma.referral.findMany({
+      where: { referrer_id: customerId },
+      select: {
+        id: true,
+        referee_id: true,
+        status: true,
+        created_at: true,
+        qualified_at: true,
+        referee: { select: { first_name: true, phone: true } },
+      },
+      orderBy: { created_at: 'desc' },
+    });
+    const refereeIds = referrals.map((r) => r.referee_id);
+
+    // Commandes payées (nb + CA) et gains par filleul et par type.
+    const ordersByReferee = new Map<string, { count: number; sales: number }>();
+    const primeByReferee = new Map<string, number>();
+    const commissionByReferee = new Map<string, number>();
+    if (refereeIds.length) {
+      const orders = await this.prisma.order.groupBy({
+        by: ['customer_id'],
+        where: { customer_id: { in: refereeIds }, paied: true },
+        _count: { _all: true },
+        _sum: { net_amount: true },
+      });
+      for (const o of orders) {
+        ordersByReferee.set(o.customer_id, {
+          count: o._count._all,
+          sales: o._sum.net_amount ?? 0,
+        });
+      }
+
+      const earnings = await this.prisma.referralEarning.groupBy({
+        by: ['referee_id', 'type'],
+        where: {
+          referrer_id: customerId,
+          status: { not: ReferralEarningStatus.CANCELLED },
+        },
+        _sum: { amount: true },
+      });
+      for (const e of earnings) {
+        const target =
+          e.type === ReferralEarningType.PRIME ? primeByReferee : commissionByReferee;
+        target.set(e.referee_id, (target.get(e.referee_id) ?? 0) + (e._sum.amount ?? 0));
+      }
+    }
+
+    const windowMs = config.commission_window_days * 24 * 60 * 60 * 1000;
+
+    const referees = referrals.map((r) => {
+      const prime = primeByReferee.get(r.referee_id) ?? 0;
+      const commission = commissionByReferee.get(r.referee_id) ?? 0;
+      const total = prime + commission;
+      const orders = ordersByReferee.get(r.referee_id);
+      return {
+        id: r.id,
+        masked_name: `${this.maskName(r.referee?.first_name)} (${this.maskPhone(r.referee?.phone)})`,
+        status: r.status === ReferralStatus.REWARDED ? 'QUALIFIED' : 'PENDING',
+        joined_at: r.created_at,
+        qualified_at: r.qualified_at,
+        commission_window_ends_at: r.qualified_at
+          ? new Date(r.qualified_at.getTime() + windowMs)
+          : null,
+        orders_count: orders?.count ?? 0,
+        sales_generated: orders?.sales ?? 0,
+        earned_prime: prime,
+        earned_commission: commission,
+        earned_total: total,
+        capped: config.cap_per_referee > 0 && total >= config.cap_per_referee,
+      };
+    });
+
+    return {
+      referral_code: wallet.referral_code,
+      currency: 'FCFA',
+      config: {
+        prime_amount: config.prime_amount,
+        min_basket: config.min_qualifying_basket,
+        commission_rate: config.commission_pct / 100,
+        commission_window_days: config.commission_window_days,
+        per_referee_cap: config.cap_per_referee,
+      },
+      totals: {
+        referred_count: wallet.totals.filleuls,
+        qualified_count: wallet.totals.qualified,
+        pending_count: wallet.totals.filleuls - wallet.totals.qualified,
+        sales_generated: wallet.totals.ventes,
+        earned_total: wallet.totals.gains_prime + wallet.totals.gains_commission,
+        earned_prime: wallet.totals.gains_prime,
+        earned_commission: wallet.totals.gains_commission,
+        payable_balance: wallet.totals.solde_payable,
+        paid_total: wallet.totals.deja_paye,
+      },
+      referees,
+      payouts: [] as any[], // V1 : versements manuels, pas d'historique par client
+    };
+  }
+
   // ── Admin (back office) ───────────────────────────────────────────────────
 
   /** Liste des ambassadeurs avec un solde (PENDING/PAYABLE) ou déjà payé, triée par
@@ -604,16 +804,18 @@ export class ReferralService {
    *  volet MONÉTAIRE (prime, commission, fenêtre, plafond, panier mini, seuil). */
   async getConfig() {
     const welcome_amount = await this.getWelcomeAmount();
-    const parrain = await this.getParrainRewardConfig();
+    const parrain = await this.getParrainGiftConfig();
+    const filleul = await this.getFilleulGiftConfig();
     const created_by = (await this.settingsService.get('reward.referral.created_by')) ?? null;
     const earning = await this.getEarningConfig();
-    return { welcome_amount, parrain, created_by, ...earning };
+    return { welcome_amount, parrain, filleul, created_by, ...earning };
   }
 
   /** Met à jour la configuration du parrainage (réglages). */
   async setConfig(dto: {
     welcome_amount?: number;
-    parrain?: { type: RewardType; payload: Record<string, any>; expires_in_days?: number };
+    parrain?: any;
+    filleul?: any;
     created_by?: string | null;
     prime_amount?: number;
     commission_pct?: number;
@@ -629,10 +831,22 @@ export class ReferralService {
       await this.settingsService.set('reward.referral.welcome_amount', String(dto.welcome_amount));
     }
     if (dto.parrain !== undefined) {
-      if (!dto.parrain.type || !dto.parrain.payload) {
-        throw new BadRequestException('Récompense parrain invalide (type + payload requis).');
+      const normalized = this.normalizeGiftConfig(dto.parrain);
+      if (!normalized) {
+        throw new BadRequestException(
+          'Cadeau parrain invalide ({ mode, items[] } ou { type, payload }).',
+        );
       }
-      await this.settingsService.setJson('reward.referral.parrain', dto.parrain);
+      await this.settingsService.setJson('reward.referral.parrain', normalized);
+    }
+    if (dto.filleul !== undefined) {
+      const normalized = this.normalizeGiftConfig(dto.filleul);
+      if (!normalized) {
+        throw new BadRequestException(
+          'Cadeau filleul invalide ({ mode, items[] } ou { type, payload }).',
+        );
+      }
+      await this.settingsService.setJson('reward.referral.filleul', normalized);
     }
     if (dto.created_by !== undefined) {
       if (dto.created_by) await this.settingsService.set('reward.referral.created_by', dto.created_by);
@@ -680,38 +894,81 @@ export class ReferralService {
     return this.getConfig();
   }
 
-  // ── Récompense du parrain (carte à gratter configurable) ──────────────────
+  // ── Cadeaux à gratter configurables (filleul & parrain) ───────────────────
 
-  private async createParrainReward(referrerId: string) {
-    const config = await this.getParrainRewardConfig();
-    const payload: Record<string, any> = { ...config.payload };
+  /**
+   * Crée un cadeau à gratter (Reward PENDING) selon la config : mode FIXED = le
+   * 1er item, mode RANDOM = tirage au sort. VOUCHER → injecte le créateur système
+   * (le bon est créé AU GRATTAGE, `Voucher.created_by` non nullable).
+   */
+  private async createGiftReward(
+    customerId: string,
+    cfg: ReferralGiftConfig,
+    reason: string,
+  ) {
+    const item = this.pickGiftItem(cfg);
+    if (!item) {
+      this.logger.warn('Parrainage : config cadeau vide → aucun cadeau créé.');
+      return null;
+    }
+    const payload: Record<string, any> = { ...item.payload };
 
-    // VOUCHER : le bon est créé AU GRATTAGE et Voucher.created_by est NON nullable
-    // → on injecte le créateur système dans le payload (lu par RewardService.scratchReward).
-    if (config.type === RewardType.VOUCHER) {
+    if (item.type === RewardType.VOUCHER) {
       const creator = await this.resolveSystemCreatorId();
       if (!creator) {
-        this.logger.warn('Parrainage : aucun créateur système → récompense VOUCHER parrain non créée.');
+        this.logger.warn('Parrainage : aucun créateur système → cadeau VOUCHER non créé.');
         return null;
       }
       payload.created_by = creator;
     }
 
     const expiresAt =
-      config.expires_in_days && config.expires_in_days > 0
-        ? new Date(Date.now() + config.expires_in_days * 24 * 60 * 60 * 1000)
+      item.expires_in_days && item.expires_in_days > 0
+        ? new Date(Date.now() + item.expires_in_days * 24 * 60 * 60 * 1000)
         : null;
 
     return this.prisma.reward.create({
       data: {
-        customer_id: referrerId,
-        type: config.type,
+        customer_id: customerId,
+        type: item.type,
         payload: payload as Prisma.InputJsonValue,
-        reason: 'Parrainage — merci de nous avoir recommandés !',
+        reason,
         status: RewardStatus.PENDING,
         expires_at: expiresAt,
       },
     });
+  }
+
+  /** FIXED → 1er item ; RANDOM → tirage uniforme. */
+  private pickGiftItem(cfg: ReferralGiftConfig): ReferralGiftItem | null {
+    const items = (cfg.items ?? []).filter((i) => i && i.type && i.payload);
+    if (items.length === 0) return null;
+    if (cfg.mode === 'RANDOM' && items.length > 1) {
+      return items[Math.floor(Math.random() * items.length)];
+    }
+    return items[0];
+  }
+
+  /** Push non bloquant vers un client (token Expo depuis ses réglages notifs). */
+  private async pushToCustomer(customerId: string, title: string, body: string) {
+    try {
+      const settings = await this.prisma.notificationSetting.findUnique({
+        where: { customer_id: customerId },
+        select: { expo_push_token: true, push: true, active: true },
+      });
+      const token = settings?.expo_push_token;
+      if (!token || settings?.push === false || settings?.active === false) return;
+      await this.expoPushService.sendPushNotifications({
+        tokens: [token],
+        title,
+        body,
+        data: { type: 'referral' },
+        sound: 'default',
+        priority: 'high',
+      });
+    } catch (e: any) {
+      this.logger.warn(`Push parrainage échoué (${customerId}): ${e?.message}`);
+    }
   }
 
   // ── Configuration (réglages) ──────────────────────────────────────────────
@@ -764,18 +1021,37 @@ export class ReferralService {
     return `****${p.slice(-2)}`;
   }
 
-  private async getParrainRewardConfig(): Promise<{
-    type: RewardType;
-    payload: Record<string, any>;
-    expires_in_days?: number;
-  }> {
-    const cfg = await this.settingsService.getJson<{
-      type: RewardType;
-      payload: Record<string, any>;
-      expires_in_days?: number;
-    }>('reward.referral.parrain');
-    if (cfg && cfg.type && cfg.payload) return cfg;
-    return { type: RewardType.VOUCHER, payload: { amount: 2000 } }; // défaut
+  /** Normalise une config cadeau : v2 { mode, items } OU legacy { type, payload }. */
+  private normalizeGiftConfig(raw: any): ReferralGiftConfig | null {
+    if (!raw) return null;
+    if (raw.mode && Array.isArray(raw.items)) {
+      const items = raw.items.filter((i: any) => i?.type && i?.payload);
+      return items.length ? { mode: raw.mode === 'RANDOM' ? 'RANDOM' : 'FIXED', items } : null;
+    }
+    if (raw.type && raw.payload) {
+      return { mode: 'FIXED', items: [raw] };
+    }
+    return null;
+  }
+
+  /** Cadeau du PARRAIN (à l'utilisation du cadeau filleul). Défaut : bon 2000 F. */
+  private async getParrainGiftConfig(): Promise<ReferralGiftConfig> {
+    const raw = await this.settingsService.getJson<any>('reward.referral.parrain');
+    return (
+      this.normalizeGiftConfig(raw) ?? {
+        mode: 'FIXED',
+        items: [{ type: RewardType.VOUCHER, payload: { amount: 2000 } }],
+      }
+    );
+  }
+
+  /** Cadeau du FILLEUL (à l'inscription avec un code). Défaut : bon `welcome_amount`. */
+  private async getFilleulGiftConfig(): Promise<ReferralGiftConfig> {
+    const raw = await this.settingsService.getJson<any>('reward.referral.filleul');
+    const normalized = this.normalizeGiftConfig(raw);
+    if (normalized) return normalized;
+    const amount = await this.getWelcomeAmount();
+    return { mode: 'FIXED', items: [{ type: RewardType.VOUCHER, payload: { amount } }] };
   }
 
   /** Créateur des bons système : réglage `reward.referral.created_by`, sinon 1er User. */
