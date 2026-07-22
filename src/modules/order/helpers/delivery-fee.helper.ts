@@ -23,6 +23,8 @@ export interface IDeliveryFeeSettings {
   grid: IDeliveryFeeTier[];
   /** Service de livraison par défaut des commandes auto (indépendant des PRIX). */
   defaultService: DeliveryService;
+  /** Surcharges PAR RESTAURANT : { [restaurantId]: service }. Absent = défaut. */
+  serviceByRestaurant: Record<string, DeliveryService>;
 }
 
 /** Résultat d'un calcul de frais de livraison. */
@@ -63,6 +65,7 @@ export const DELIVERY_FEE_SETTING_KEYS = {
   turboZonesEnabled: 'delivery.turbo_zones_enabled',
   feeGrid: 'delivery.fee_grid',
   defaultService: 'delivery.default_service',
+  serviceByRestaurant: 'delivery.service_by_restaurant',
 } as const;
 
 /**
@@ -92,6 +95,7 @@ export class DeliveryFeeHelper {
       DELIVERY_FEE_SETTING_KEYS.turboZonesEnabled,
       DELIVERY_FEE_SETTING_KEYS.feeGrid,
       DELIVERY_FEE_SETTING_KEYS.defaultService,
+      DELIVERY_FEE_SETTING_KEYS.serviceByRestaurant,
     ]);
     return {
       turboZonesEnabled: this.toBoolean(
@@ -100,6 +104,9 @@ export class DeliveryFeeHelper {
       ),
       grid: this.toGrid(map[DELIVERY_FEE_SETTING_KEYS.feeGrid]),
       defaultService: this.toService(map[DELIVERY_FEE_SETTING_KEYS.defaultService]),
+      serviceByRestaurant: this.toServiceMap(
+        map[DELIVERY_FEE_SETTING_KEYS.serviceByRestaurant],
+      ),
     };
   }
 
@@ -110,6 +117,36 @@ export class DeliveryFeeHelper {
       return v as DeliveryService;
     }
     return DEFAULTS.default_service;
+  }
+
+  /** Parse `delivery.service_by_restaurant` (JSON { restaurantId: service }) — entrées invalides ignorées. */
+  private toServiceMap(raw?: string): Record<string, DeliveryService> {
+    if (!raw || raw.trim() === '') return {};
+    try {
+      const parsed = JSON.parse(raw) as Record<string, string>;
+      const valid = Object.values(DeliveryService) as string[];
+      const out: Record<string, DeliveryService> = {};
+      for (const [restaurantId, service] of Object.entries(parsed ?? {})) {
+        if (typeof service === 'string' && valid.includes(service)) {
+          out[restaurantId] = service as DeliveryService;
+        }
+      }
+      return out;
+    } catch {
+      this.logger.warn('Réglage delivery.service_by_restaurant invalide (JSON attendu) — ignoré.');
+      return {};
+    }
+  }
+
+  /** Service applicable à UN restaurant : surcharge par restaurant sinon défaut global. */
+  private serviceFor(
+    feeSettings: IDeliveryFeeSettings,
+    restaurantId?: string | null,
+  ): DeliveryService {
+    if (restaurantId && feeSettings.serviceByRestaurant[restaurantId]) {
+      return feeSettings.serviceByRestaurant[restaurantId];
+    }
+    return feeSettings.defaultService;
   }
 
   /**
@@ -242,7 +279,7 @@ export class DeliveryFeeHelper {
       montant: this.priceForDistance(feeSettings.grid, distance),
       zone: this.zoneLabel(feeSettings.grid, distance, restaurant.name),
       distance: Math.round(distance),
-      service: feeSettings.defaultService,
+      service: this.serviceFor(feeSettings, restaurant.id),
       zone_id: null,
     };
   }
@@ -316,7 +353,7 @@ export class DeliveryFeeHelper {
           montant: zone.prix,
           distance: config.distance,
           zone: restaurant.name + ' - ' + zone.name,
-          service: feeSettings.defaultService,
+          service: this.serviceFor(feeSettings, restaurant.id),
           zone_id: zone.id,
         };
       }

@@ -80,6 +80,13 @@ export class CallsController {
     return this.calls.listRingingForMe(req.user as User);
   }
 
+  /** Mon appel actif (restauré après un rechargement de page) — jeton frais. */
+  @Get('active')
+  @UseGuards(JwtAuthGuard)
+  active(@Req() req: Request) {
+    return this.calls.getActiveForMe(req.user as User);
+  }
+
   /** Statut d'un appel (polling de convergence — filet des events socket). */
   @Get(':id')
   @UseGuards(JwtAuthGuard)

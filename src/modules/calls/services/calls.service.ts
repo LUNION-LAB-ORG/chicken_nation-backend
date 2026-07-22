@@ -396,6 +396,75 @@ export class CallsService {
   }
 
   /**
+   * MON appel actif (repris au chargement de page) : un rechargement du
+   * backoffice perd l'état en mémoire alors que l'appel est toujours EN COURS
+   * côté serveur. On renvoie l'appel + un jeton Lunion FRAIS pour re-rejoindre
+   * la room. Couvre : appel ONGOING (appelant ou décrocheur) et appel sortant
+   * encore en sonnerie (< 90 s). Renvoie null si rien à restaurer.
+   */
+  async getActiveForMe(user: User) {
+    const include = {
+      caller: { select: { id: true, fullname: true } },
+      answered_by: { select: { id: true, fullname: true } },
+      target_restaurant: { select: { name: true } },
+      target_user: { select: { fullname: true } },
+    } as const;
+
+    let call = await this.prisma.call.findFirst({
+      where: {
+        status: CallStatus.ONGOING,
+        OR: [{ caller_id: user.id }, { answered_by_id: user.id }],
+      },
+      orderBy: { started_at: 'desc' },
+      include,
+    });
+
+    // Appel sortant encore en sonnerie (l'appelant a rechargé pendant que ça sonne).
+    if (!call) {
+      call = await this.prisma.call.findFirst({
+        where: {
+          status: CallStatus.RINGING,
+          caller_id: user.id,
+          started_at: { gte: new Date(Date.now() - 90_000) },
+        },
+        orderBy: { started_at: 'desc' },
+        include,
+      });
+    }
+    if (!call) return null;
+
+    const isCaller = call.caller_id === user.id;
+    const targetLabel =
+      call.target_kind === 'CALL_CENTER'
+        ? 'Call Center'
+        : call.target_kind === 'USER'
+          ? (call.target_user?.fullname ?? 'Personne')
+          : (call.target_restaurant?.name ?? 'Restaurant');
+    const peerLabel = isCaller
+      ? (call.answered_by?.fullname ?? targetLabel)
+      : (call.caller?.fullname ?? 'Appelant');
+
+    const access = await this.lunion.createToken(
+      call.room_slug,
+      `user-${user.id}`,
+      user.fullname,
+    );
+
+    return {
+      callId: call.id,
+      direction: isCaller ? 'outgoing' : 'incoming',
+      phase: call.status === CallStatus.ONGOING ? 'connected' : 'calling',
+      peerLabel,
+      access: {
+        room: call.room_slug,
+        token: access.token,
+        url: access.url,
+        identity: access.identity ?? `user-${user.id}`,
+      },
+    };
+  }
+
+  /**
    * Appels qui sonnent ENCORE pour moi (repris à la connexion / au chargement
    * de page : couvre un `call:incoming` émis pendant que j'étais déconnecté).
    */
