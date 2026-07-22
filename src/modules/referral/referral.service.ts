@@ -143,11 +143,7 @@ export class ReferralService {
           '🎁 Un cadeau t\'attend !',
           'Bienvenue chez Chicken Nation ! Gratte ta carte cadeau dans l\'app et utilise-la sur ta première commande.',
         );
-        void this.notifyInApp(
-          refereeId,
-          '🎁 Bienvenue ! Un cadeau t\'attend',
-          'Ton code de parrainage est validé : gratte ta carte cadeau et utilise-la sur ta première commande.',
-        );
+        void this.notifyFilleulMerged(refereeId);
       }
     } catch (e: any) {
       this.logger.warn(`Cadeau filleul parrainage échoué (${refereeId}): ${e?.message}`);
@@ -960,6 +956,31 @@ export class ReferralService {
       return items[Math.floor(Math.random() * items.length)];
     }
     return items[0];
+  }
+
+  /**
+   * FUSION des messages de bienvenue du filleul : remplace le « 🎉 Bienvenue »
+   * générique (créé quelques secondes plus tôt à la création du compte) par UN
+   * SEUL message bienvenue + cadeau — pas deux notifications côte à côte.
+   */
+  private async notifyFilleulMerged(customerId: string) {
+    try {
+      await this.prisma.notification.deleteMany({
+        where: {
+          user_id: customerId,
+          target: NotificationTarget.CUSTOMER,
+          title: { startsWith: '🎉 Bienvenue' },
+          created_at: { gte: new Date(Date.now() - 60 * 60 * 1000) },
+        },
+      });
+    } catch {
+      // Non bloquant : au pire, deux notifs.
+    }
+    await this.notifyInApp(
+      customerId,
+      '🎉 Bienvenue ! Un cadeau t\'attend',
+      'Ton compte est prêt et ton code de parrainage est validé : gratte ta carte cadeau et utilise-la sur ta première commande.',
+    );
   }
 
   /**
