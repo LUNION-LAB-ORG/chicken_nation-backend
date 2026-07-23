@@ -150,6 +150,224 @@ export class RewardService {
     }
 
     /**
+     * PORTEFEUILLE D'AVANTAGES — endpoint UNIQUE de l'écran « Mes cadeaux ».
+     *
+     * Fusionne ici, côté serveur, ce que l'app devait auparavant recoller depuis
+     * trois appels (rewards + bons + utilisations) :
+     *  - Reward : cartes à gratter (bon, code promo, plat/supplément offert, points)
+     *  - Voucher : bons réellement émis, avec leur solde restant
+     *  - Redemption : dernière utilisation d'un bon → date « Utilisé le … »
+     *
+     * ⚠️ Dédoublonnage : gratter un Reward VOUCHER **crée** un Voucher ; les deux
+     * décrivent le même avantage. Le Voucher fait autorité (solde, expiration) et
+     * le Reward source est écarté.
+     *
+     * Renvoie une liste PLATE triée du plus récent au plus ancien, paginée : un
+     * seul statut par ligne, aucune section à recomposer côté client.
+     */
+    async getWallet(customer_id: string, page = 1, limit = 20) {
+        const safePage = Math.max(1, Math.floor(page));
+        const safeLimit = Math.min(50, Math.max(1, Math.floor(limit)));
+
+        // Volumes bornés (un client a des dizaines d'avantages, pas des milliers) :
+        // on charge, on fusionne en mémoire, puis on découpe la page demandée.
+        const [rewards, vouchers, redemptions] = await Promise.all([
+            this.prisma.reward.findMany({
+                where: { customer_id },
+                orderBy: { created_at: 'desc' },
+                take: 300,
+                select: {
+                    id: true, type: true, status: true, payload: true, reason: true,
+                    order_id: true, scratched_at: true, consumed_at: true,
+                    expires_at: true, created_at: true,
+                },
+            }),
+            this.prisma.voucher.findMany({
+                where: { customer_id, entity_status: 'ACTIVE' },
+                orderBy: { created_at: 'desc' },
+                take: 300,
+                select: {
+                    id: true, code: true, initial_amount: true, remaining_amount: true,
+                    status: true, expires_at: true, created_at: true,
+                },
+            }),
+            this.prisma.redemption.findMany({
+                where: { voucher: { customer_id } },
+                orderBy: { created_at: 'desc' },
+                take: 300,
+                select: { voucher_id: true, created_at: true },
+            }),
+        ]);
+
+        const lastUseByVoucher = new Map<string, Date>();
+        for (const r of redemptions) {
+            if (!lastUseByVoucher.has(r.voucher_id)) lastUseByVoucher.set(r.voucher_id, r.created_at);
+        }
+
+        const voucherCodes = new Set(vouchers.map((v) => v.code));
+        const items = [
+            ...rewards
+                .filter((r) => {
+                    const code = (r.payload as any)?.code;
+                    return !(r.type === RewardType.VOUCHER && code && voucherCodes.has(code));
+                })
+                .map((r) => this.rewardToWalletItem(r)),
+            ...vouchers.map((v) => this.voucherToWalletItem(v, lastUseByVoucher.get(v.id))),
+        ].sort((a, b) => new Date(b.obtained_at).getTime() - new Date(a.obtained_at).getTime());
+
+        const total = items.length;
+        const start = (safePage - 1) * safeLimit;
+
+        return {
+            data: items.slice(start, start + safeLimit),
+            meta: {
+                page: safePage,
+                limit: safeLimit,
+                total,
+                total_pages: Math.max(1, Math.ceil(total / safeLimit)),
+                has_more: start + safeLimit < total,
+            },
+        };
+    }
+
+    /** Formate une date en « 23 juil. 2026 » (libellés prêts à afficher). */
+    private static fmtDate(d?: Date | null): string {
+        return d
+            ? new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
+            : '';
+    }
+
+    /** Un Reward NON gratté ne dévoile rien : ni nom, ni valeur (c'est la surprise). */
+    private rewardToWalletItem(r: {
+        id: string; type: RewardType; status: RewardStatus; payload: Prisma.JsonValue;
+        reason: string | null; consumed_at: Date | null; scratched_at: Date | null;
+        expires_at: Date | null; created_at: Date;
+    }) {
+        const p = (r.payload ?? {}) as Record<string, any>;
+        const pending = r.status === RewardStatus.PENDING;
+        const expired = !!r.expires_at && r.expires_at.getTime() < Date.now() && r.status !== RewardStatus.CONSUMED;
+
+        const kind = pending
+            ? 'MYSTERY'
+            : r.type === RewardType.VOUCHER
+                ? 'VOUCHER'
+                : r.type === RewardType.PROMO_CODE
+                    ? 'PROMO_CODE'
+                    : r.type === RewardType.POINTS
+                        ? 'POINTS'
+                        : p.item_type === 'SUPPLEMENT'
+                            ? 'SUPPLEMENT'
+                            : 'DISH';
+
+        let title: string;
+        if (pending) title = 'Cadeau surprise';
+        else if (r.type === RewardType.VOUCHER) {
+            const a = Number(p.amount) || 0;
+            title = a ? `Bon d'achat de ${a.toLocaleString('fr-FR')} F` : "Bon d'achat";
+        } else if (r.type === RewardType.PROMO_CODE) title = p.code ? `Code promo ${p.code}` : 'Code promo';
+        else if (r.type === RewardType.POINTS) {
+            const pts = Number(p.points) || 0;
+            title = pts ? `${pts} points de fidélité` : 'Points de fidélité';
+        } else title = p.label || p.name || 'Cadeau';
+
+        let status: string;
+        let status_label: string;
+        if (expired) {
+            status = 'EXPIRED';
+            status_label = `Expiré le ${RewardService.fmtDate(r.expires_at)}`;
+        } else if (pending) {
+            status = 'TO_SCRATCH';
+            status_label = 'À gratter';
+        } else if (r.status === RewardStatus.CONSUMED) {
+            status = 'USED';
+            status_label = `Utilisé le ${RewardService.fmtDate(r.consumed_at ?? r.created_at)}`;
+        } else if (r.status === RewardStatus.REVOKED) {
+            status = 'EXPIRED';
+            status_label = 'Annulé';
+        } else if (r.type === RewardType.POINTS) {
+            status = 'USED';
+            status_label = `Crédités le ${RewardService.fmtDate(r.scratched_at ?? r.created_at)}`;
+        } else {
+            status = 'AVAILABLE';
+            status_label = r.expires_at
+                ? `Valable jusqu'au ${RewardService.fmtDate(r.expires_at)}`
+                : 'Disponible';
+        }
+
+        return {
+            id: `reward:${r.id}`,
+            kind,
+            title,
+            status,
+            status_label,
+            amount: pending ? null : Number(p.amount ?? p.price) || null,
+            initial_amount: null as number | null,
+            remaining: null as number | null,
+            code: pending ? null : (p.code ?? null),
+            image: pending ? null : (p.image ?? null),
+            obtained_at: r.created_at,
+            expires_at: r.expires_at,
+            reason: r.reason,
+            // De quoi agir depuis l'app (gratter / ajouter au panier).
+            reward_id: r.id,
+            reward_type: r.type,
+            reward_payload: r.payload,
+        };
+    }
+
+    private voucherToWalletItem(
+        v: {
+            id: string; code: string; initial_amount: number; remaining_amount: number;
+            status: string; expires_at: Date | null; created_at: Date;
+        },
+        usedAt?: Date,
+    ) {
+        const expiredByDate = !!v.expires_at && v.expires_at.getTime() < Date.now();
+        const exhausted = v.remaining_amount <= 0;
+        const partiallyUsed = v.remaining_amount > 0 && v.remaining_amount < v.initial_amount;
+
+        let status: string;
+        let status_label: string;
+        if (v.status === 'CANCELLED') {
+            status = 'EXPIRED';
+            status_label = 'Annulé';
+        } else if (exhausted) {
+            status = 'USED';
+            status_label = usedAt ? `Utilisé le ${RewardService.fmtDate(usedAt)}` : 'Entièrement utilisé';
+        } else if (v.status === 'EXPIRED' || expiredByDate) {
+            status = 'EXPIRED';
+            status_label = `Expiré le ${RewardService.fmtDate(v.expires_at)}`;
+        } else if (partiallyUsed) {
+            status = 'AVAILABLE';
+            status_label = `${v.remaining_amount.toLocaleString('fr-FR')} F restants`;
+        } else {
+            status = 'AVAILABLE';
+            status_label = v.expires_at
+                ? `Valable jusqu'au ${RewardService.fmtDate(v.expires_at)}`
+                : 'Disponible';
+        }
+
+        return {
+            id: `voucher:${v.id}`,
+            kind: 'VOUCHER',
+            title: `Bon d'achat de ${v.initial_amount.toLocaleString('fr-FR')} F`,
+            status,
+            status_label,
+            amount: v.initial_amount,
+            initial_amount: v.initial_amount,
+            remaining: v.remaining_amount,
+            code: v.code,
+            image: null as string | null,
+            obtained_at: v.created_at,
+            expires_at: v.expires_at,
+            reason: null as string | null,
+            reward_id: null as string | null,
+            reward_type: null as RewardType | null,
+            reward_payload: null as Prisma.JsonValue | null,
+        };
+    }
+
+    /**
      * TOUS les cadeaux du client — l'espace « Mes cadeaux » de l'app : à gratter
      * (PENDING), disponibles (SCRATCHED non consommés), et l'historique
      * (CONSUMED / expirés). Borné aux 100 plus récents.

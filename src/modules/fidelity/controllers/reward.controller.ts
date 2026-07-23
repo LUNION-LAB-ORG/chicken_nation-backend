@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { Customer } from '@prisma/client';
@@ -40,6 +40,26 @@ export class RewardController {
     getMine(@Req() req: Request) {
         const customerId = (req.user as Customer).id;
         return this.rewardService.getMyRewards(customerId);
+    }
+
+    @Get('wallet')
+    @UseGuards(JwtCustomerAuthGuard)
+    @ApiOperation({
+        summary:
+            'Portefeuille d\'avantages PAGINÉ — bons, codes promo, articles offerts et cartes à gratter en UNE liste',
+    })
+    @ApiOkResponse({ description: '{ data: WalletItem[], meta: { page, limit, total, has_more } }' })
+    getWallet(
+        @Req() req: Request,
+        @Query('page') page?: string,
+        @Query('limit') limit?: string,
+    ) {
+        const customerId = (req.user as Customer).id;
+        return this.rewardService.getWallet(
+            customerId,
+            Number(page) || 1,
+            Number(limit) || 20,
+        );
     }
 
     @Post(':id/scratch')
