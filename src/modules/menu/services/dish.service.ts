@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Customer, EntityStatus, OrderStatus, Prisma, SpiceLevel, User } from '@prisma/client';
 import type { Request } from 'express';
 import { AudienceContext, dishAudienceClause } from '../utils/dish-audience.util';
@@ -13,6 +13,8 @@ import { GenerateDataService } from 'src/common/services/generate-data.service';
 
 @Injectable()
 export class DishService {
+  private readonly logger = new Logger(DishService.name);
+
   constructor(
     private prisma: PrismaService,
     private dishEvent: DishEvent,
@@ -332,6 +334,18 @@ export class DishService {
         image: uploadResult?.key ?? dishData.image,
       },
     });
+
+    // Chaque upload crée une clé NOUVELLE (`path/<timestamp>-nom`) : sans ce
+    // nettoyage, l'ancien visuel resterait sur S3 indéfiniment à chaque
+    // changement d'image. Best-effort APRÈS commit — un échec S3 ne doit
+    // jamais faire échouer la mise à jour du plat.
+    if (uploadResult?.key && dish.image && dish.image !== uploadResult.key) {
+      this.s3service
+        .deleteFile(dish.image)
+        .catch((e) =>
+          this.logger.warn(`Ancienne image plat non supprimée (${dish.image}) : ${e?.message}`),
+        );
+    }
 
     // Remplacement complet des exclusions si géré explicitement (manage_exclusions)
     // ou si une liste est fournie. manage_exclusions permet aussi de TOUT effacer (liste vide).

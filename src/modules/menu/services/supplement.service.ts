@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { SupplementCategory } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateSupplementDto } from 'src/modules/menu/dto/create-supplement.dto';
@@ -8,6 +8,8 @@ import { SupplementEvent } from 'src/modules/menu/events/supplement.event';
 
 @Injectable()
 export class SupplementService {
+  private readonly logger = new Logger(SupplementService.name);
+
   constructor(
     private prisma: PrismaService,
     private readonly s3service: S3Service,
@@ -86,7 +88,7 @@ export class SupplementService {
   }
 
   async update(id: string, updateSupplementDto: UpdateSupplementDto, image?: Express.Multer.File) {
-    await this.findOne(id);
+    const previous = await this.findOne(id);
 
     const uploadResult = await this.uploadImage(image);
 
@@ -97,6 +99,18 @@ export class SupplementService {
         ...(uploadResult?.key ? { image: uploadResult.key } : {}),
       },
     });
+
+    // Chaque upload crée une clé NOUVELLE (`path/<timestamp>-nom`) : sans ce
+    // nettoyage, l'ancien visuel resterait sur S3 indéfiniment à chaque
+    // changement d'image. Best-effort APRÈS commit — un échec S3 ne doit
+    // jamais faire échouer la mise à jour du supplément.
+    if (uploadResult?.key && previous.image && previous.image !== uploadResult.key) {
+      this.s3service
+        .deleteFile(previous.image)
+        .catch((e) =>
+          this.logger.warn(`Ancienne image supplément non supprimée (${previous.image}) : ${e?.message}`),
+        );
+    }
 
     this.supplementEvent.updateSupplement(supplement);
 

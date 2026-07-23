@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
@@ -16,6 +17,8 @@ import { AudienceContext, dishAudienceClause } from '../utils/dish-audience.util
 
 @Injectable()
 export class CategoryService {
+  private readonly logger = new Logger(CategoryService.name);
+
   constructor(
     private prisma: PrismaService,
     private categoryEvent: CategoryEvent,
@@ -146,6 +149,18 @@ export class CategoryService {
         ...(result?.key ? { image: result.key } : {}),
       },
     });
+
+    // Chaque upload crée une clé NOUVELLE (`path/<timestamp>-nom`) : sans ce
+    // nettoyage, l'ancien visuel resterait sur S3 indéfiniment à chaque
+    // changement d'image. Best-effort APRÈS commit — un échec S3 ne doit
+    // jamais faire échouer la mise à jour de la catégorie.
+    if (result?.key && category.image && category.image !== result.key) {
+      this.s3service
+        .deleteFile(category.image)
+        .catch((e) =>
+          this.logger.warn(`Ancienne image catégorie non supprimée (${category.image}) : ${e?.message}`),
+        );
+    }
 
     // Émettre l'événement de mise à jour de catégorie
     this.categoryEvent.updateCategory(categoryUpdated);
