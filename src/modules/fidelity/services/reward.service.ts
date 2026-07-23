@@ -150,6 +150,31 @@ export class RewardService {
     }
 
     /**
+     * TOUS les cadeaux du client — l'espace « Mes cadeaux » de l'app : à gratter
+     * (PENDING), disponibles (SCRATCHED non consommés), et l'historique
+     * (CONSUMED / expirés). Borné aux 100 plus récents.
+     */
+    async getMyRewards(customer_id: string) {
+        return this.prisma.reward.findMany({
+            where: { customer_id },
+            orderBy: { created_at: 'desc' },
+            take: 100,
+            select: {
+                id: true,
+                type: true,
+                status: true,
+                payload: true,
+                reason: true,
+                order_id: true,
+                scratched_at: true,
+                consumed_at: true,
+                expires_at: true,
+                created_at: true,
+            },
+        });
+    }
+
+    /**
      * Marque une récompense comme GRATTÉE — claim ATOMIQUE (updateMany conditionné
      * par le statut PENDING) : idempotent, et cloisonné par customer_id (le client
      * ne peut gratter que SES récompenses).

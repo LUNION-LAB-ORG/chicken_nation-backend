@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
+  EntityStatus,
   NotificationTarget,
   NotificationType,
   Prisma,
@@ -846,7 +847,8 @@ export class ReferralService {
           'Cadeau parrain invalide ({ mode, items[] } ou { type, payload }).',
         );
       }
-      await this.settingsService.setJson('reward.referral.parrain', normalized);
+      const enriched = await this.enrichGiftItems(normalized);
+      await this.settingsService.setJson('reward.referral.parrain', enriched);
     }
     if (dto.filleul !== undefined) {
       const normalized = this.normalizeGiftConfig(dto.filleul);
@@ -855,7 +857,8 @@ export class ReferralService {
           'Cadeau filleul invalide ({ mode, items[] } ou { type, payload }).',
         );
       }
-      await this.settingsService.setJson('reward.referral.filleul', normalized);
+      const enriched = await this.enrichGiftItems(normalized);
+      await this.settingsService.setJson('reward.referral.filleul', enriched);
     }
     if (dto.created_by !== undefined) {
       if (dto.created_by) await this.settingsService.set('reward.referral.created_by', dto.created_by);
@@ -1090,6 +1093,59 @@ export class ReferralService {
       return { mode: 'FIXED', items: [raw] };
     }
     return null;
+  }
+
+  /**
+   * Enrichit les items GIFT d'une config au moment de la SAUVEGARDE : snapshot
+   * `{ item_type, dish_id|supplement_id, name, price, image? }` depuis le
+   * catalogue — même forme que les campagnes « Envoyer un cadeau ». Un cadeau
+   * peut être un PLAT/MENU **ou un SUPPLÉMENT** ; le grattage app affiche ainsi
+   * image + nom, et la commande valide l'article (validateGiftLines).
+   */
+  private async enrichGiftItems(cfg: ReferralGiftConfig | null): Promise<ReferralGiftConfig | null> {
+    if (!cfg) return null;
+    const items: ReferralGiftItem[] = [];
+    for (const item of cfg.items) {
+      if (item.type !== RewardType.GIFT) {
+        items.push(item);
+        continue;
+      }
+      const p = item.payload ?? {};
+      if (p.supplement_id) {
+        const supp = await this.prisma.supplement.findUnique({ where: { id: p.supplement_id } });
+        if (!supp || supp.available === false) {
+          throw new BadRequestException('Cadeau : supplément introuvable ou indisponible.');
+        }
+        items.push({
+          ...item,
+          payload: {
+            item_type: 'SUPPLEMENT',
+            supplement_id: supp.id,
+            name: supp.name,
+            price: supp.price,
+            ...(supp.image ? { image: supp.image } : {}),
+          },
+        });
+      } else if (p.dish_id) {
+        const dish = await this.prisma.dish.findUnique({ where: { id: p.dish_id } });
+        if (!dish || dish.entity_status === EntityStatus.DELETED) {
+          throw new BadRequestException('Cadeau : plat introuvable ou indisponible.');
+        }
+        items.push({
+          ...item,
+          payload: {
+            item_type: 'DISH',
+            dish_id: dish.id,
+            name: dish.name,
+            price: dish.price,
+            ...(dish.image ? { image: dish.image } : {}),
+          },
+        });
+      } else {
+        throw new BadRequestException('Cadeau GIFT : sélectionnez un plat ou un supplément.');
+      }
+    }
+    return { ...cfg, items };
   }
 
   /** Cadeau du PARRAIN (à l'utilisation du cadeau filleul). Défaut : bon 2000 F. */

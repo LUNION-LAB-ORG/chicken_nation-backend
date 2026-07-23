@@ -33,6 +33,15 @@ export class RewardController {
         return this.rewardService.getRedeemableGifts(customerId);
     }
 
+    @Get('mine')
+    @UseGuards(JwtCustomerAuthGuard)
+    @ApiOperation({ summary: 'Tous les cadeaux du client (à gratter, disponibles, utilisés/expirés)' })
+    @ApiOkResponse({ description: 'Historique complet des récompenses du client' })
+    getMine(@Req() req: Request) {
+        const customerId = (req.user as Customer).id;
+        return this.rewardService.getMyRewards(customerId);
+    }
+
     @Post(':id/scratch')
     @UseGuards(JwtCustomerAuthGuard)
     @ApiOperation({ summary: 'Marquer une récompense comme grattée (idempotent)' })

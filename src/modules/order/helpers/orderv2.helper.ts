@@ -111,14 +111,20 @@ export class OrderV2Helper {
 
   // 1. Récupérer les détails des plats (Prix, Suppléments globaux) - Garde cette méthode
   async getDishesWithDetails(dishIds: string[]) {
+    // ⚠️ Dédup obligatoire : le panier crée une ligne DISTINCTE par
+    // (plat + épicé + suppléments) et une ligne-CADEAU duplique souvent un plat
+    // déjà présent en ligne payante. findMany renvoie des lignes distinctes →
+    // comparer à la liste brute rejetait ces paniers légitimes
+    // (« n'existent plus au catalogue » alors que tout va bien).
+    const uniqueDishIds = [...new Set(dishIds)];
     const dishes = await this.prisma.dish.findMany({
       where: {
-        id: { in: dishIds },
+        id: { in: uniqueDishIds },
         entity_status: EntityStatus.ACTIVE,
       },
     });
 
-    if (dishes.length !== dishIds.length) {
+    if (dishes.length !== uniqueDishIds.length) {
       throw new BadRequestException('Un ou plusieurs plats de votre commande n\'existent plus au catalogue.');
     }
 

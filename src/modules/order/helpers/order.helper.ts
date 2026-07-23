@@ -178,14 +178,17 @@ export class OrderHelper {
 
   // Récupérer les détails des plats
   async getDishesWithDetails(dishIds: string[]) {
+    // Dédup : plusieurs lignes peuvent référencer le même plat (variantes,
+    // ligne-cadeau). findMany est distinct → comparer aux ids UNIQUES.
+    const uniqueDishIds = [...new Set(dishIds)];
     const dishes = await this.prisma.dish.findMany({
       where: {
-        id: { in: dishIds },
+        id: { in: uniqueDishIds },
         entity_status: EntityStatus.ACTIVE,
       },
     });
 
-    if (dishes.length !== dishIds.length) {
+    if (dishes.length !== uniqueDishIds.length) {
       throw new BadRequestException(
         'Un ou plusieurs plats sont introuvables ou indisponibles',
       );
