@@ -493,6 +493,58 @@ export class RewardCampaignService {
     return this.withMetrics(campaign, metrics.get(id));
   }
 
+  /**
+   * DESTINATAIRES d'une campagne, avec le statut INDIVIDUEL de chacun :
+   * a-t-il gratté ? a-t-il utilisé son cadeau ? Sans cela, le backoffice ne
+   * voyait que des compteurs agrégés, sans jamais savoir QUI avait reçu quoi.
+   *
+   * La source est la table Reward (`campaign_id`) : ce sont les cadeaux
+   * réellement distribués — donc les clients écartés par le capping
+   * anti-fatigue n'y figurent pas, ce qui est précisément l'information utile.
+   */
+  async getCampaignRecipients(id: string) {
+    const campaign = await this.prisma.rewardCampaign.findUnique({ where: { id } });
+    if (!campaign) throw new NotFoundException('Campagne introuvable');
+
+    const rewards = await this.prisma.reward.findMany({
+      where: { campaign_id: id },
+      orderBy: { created_at: 'desc' },
+      take: 500,
+      select: {
+        id: true,
+        status: true,
+        scratched_at: true,
+        consumed_at: true,
+        expires_at: true,
+        created_at: true,
+        customer: {
+          select: { id: true, first_name: true, last_name: true, phone: true },
+        },
+      },
+    });
+
+    const config = (campaign.target_config ?? {}) as { skipped_capping?: number };
+
+    return {
+      campaign_id: id,
+      // Écartés par le capping : le nombre est tracé à l'envoi (target_config).
+      skipped_capping: config.skipped_capping ?? 0,
+      total: rewards.length,
+      recipients: rewards.map((r) => ({
+        reward_id: r.id,
+        customer_id: r.customer?.id ?? null,
+        fullname:
+          [r.customer?.first_name, r.customer?.last_name].filter(Boolean).join(' ').trim() || null,
+        phone: r.customer?.phone ?? null,
+        status: r.status, // PENDING (non gratté) | SCRATCHED | CONSUMED | REVOKED
+        scratched_at: r.scratched_at,
+        consumed_at: r.consumed_at,
+        expires_at: r.expires_at,
+        sent_at: r.created_at,
+      })),
+    };
+  }
+
   /** Annule une campagne encore PROGRAMMÉE (non distribuée). */
   async cancelCampaign(id: string) {
     const res = await this.prisma.rewardCampaign.updateMany({

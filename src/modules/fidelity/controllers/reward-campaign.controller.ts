@@ -43,6 +43,15 @@ export class RewardCampaignController {
     return this.rewardCampaignService.getCampaign(id);
   }
 
+  @Get(':id/recipients')
+  @RequirePermission(Modules.FIDELITE, Action.READ)
+  @ApiOperation({
+    summary: 'Destinataires d\'une campagne + statut individuel (gratté / utilisé)',
+  })
+  recipients(@Param('id') id: string) {
+    return this.rewardCampaignService.getCampaignRecipients(id);
+  }
+
   @Patch(':id/cancel')
   @RequirePermission(Modules.FIDELITE, Action.UPDATE)
   @ApiOperation({ summary: 'Annuler une campagne encore programmée' })
