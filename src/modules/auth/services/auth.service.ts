@@ -10,6 +10,10 @@ import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { TwilioService } from 'src/twilio/services/twilio.service';
 import { permissionsByRole } from 'src/modules/auth/constantes/permissionsByRole';
 import { UserRole } from '@prisma/client';
+import {
+  canonicalizeCustomerPhone,
+  customerPhoneVariants,
+} from 'src/common/utils/customer-phone.util';
 
 @Injectable()
 export class AuthService {
@@ -76,15 +80,36 @@ export class AuthService {
 
   // LOGIN CUSTOMER
   async loginCustomer(phone: string) {
+    // ⚠️ Lookup TOLÉRANT aux deux graphies (`+225…` app / `225…` adhésion site) :
+    // le match exact créait un DOUBLON vide pour les comptes pré-inscrits via le
+    // site → formulaire re-affiché + demande de carte invisible. On cherche
+    // toutes les variantes, on écrit toujours le format canonique `+…`.
+    const canonical = canonicalizeCustomerPhone(phone);
+    const variants = customerPhoneVariants(phone);
     let customer = await this.prisma.customer.findFirst({
       where: {
-        phone,
+        phone: { in: variants },
         entity_status: { not: EntityStatus.DELETED },
       },
+      // Si un doublon existe malgré tout, privilégier la ligne canonique.
+      orderBy: { created_at: 'asc' },
     });
 
+    if (customer && customer.phone !== canonical) {
+      // Auto-réparation : on normalise la ligne héritée (best-effort — si la
+      // graphie canonique est déjà prise par un twin, on garde l'existante).
+      try {
+        customer = await this.prisma.customer.update({
+          where: { id: customer.id },
+          data: { phone: canonical },
+        });
+      } catch {
+        /* conflit d'unicité → la migration de fusion s'en charge */
+      }
+    }
+
     if (!customer) {
-      customer = await this.prisma.customer.create({ data: { phone } });
+      customer = await this.prisma.customer.create({ data: { phone: canonical } });
     }
 
     // Anti-flood : si un code a été envoyé il y a moins de COOLDOWN, on refuse
@@ -117,11 +142,13 @@ export class AuthService {
     await this.assertOtpNotLocked(data.phone);
 
     // Validation COMPLÈTE et suffisante : le token stocké correspond-il au
-    // (téléphone + code) saisi, et n'est-il pas expiré ?
+    // (téléphone + code) saisi, et n'est-il pas expiré ? Le token est stocké
+    // sous la graphie DB du client (canonique `+…`, ou héritée `225…` si la
+    // normalisation a rencontré un twin) → lookup tolérant aux variantes.
     const otpToken = await this.prisma.otpToken.findFirst({
       where: {
         code: data.otp,
-        phone: data.phone,
+        phone: { in: customerPhoneVariants(data.phone) },
         expire: { gte: new Date() },
       },
     });
@@ -141,7 +168,11 @@ export class AuthService {
     // alors que le code stocké est correct. Le lookup ci-dessus suffit.
 
     const customer = await this.prisma.customer.findFirst({
-      where: { phone: otpToken.phone, entity_status: { not: EntityStatus.DELETED } },
+      where: {
+        phone: { in: customerPhoneVariants(otpToken.phone) },
+        entity_status: { not: EntityStatus.DELETED },
+      },
+      orderBy: { created_at: 'asc' },
     });
 
     if (!customer) throw new NotFoundException('Utilisateur non trouvé');

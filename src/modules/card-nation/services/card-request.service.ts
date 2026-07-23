@@ -11,6 +11,7 @@ import { CardGenerationService } from './card-generation.service';
 import { CardNotificationService } from './card-notification.service';
 import { S3Service } from 'src/s3/s3.service';
 import { TwilioService } from 'src/twilio/services/twilio.service';
+import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
 @Injectable()
 export class CardRequestService {
@@ -24,9 +25,12 @@ export class CardRequestService {
   /**
    * URL de partage / deep link CANONIQUE (page smart-redirect app/store).
    * ⚠️ `www.` ET le préfixe `/fr/` sont OBLIGATOIRES.
+   * `?to=nation-card` : app installée → le DeepLinkManager route directement
+   * vers la page « Carte de la Nation » (sinon la page smart-redirect propose
+   * les stores, comportement inchangé).
    */
   private static readonly CANONICAL_DEEP_LINK =
-    'https://www.chicken-nation.com/fr/app-mobile/deep-link';
+    'https://www.chicken-nation.com/fr/app-mobile/deep-link?to=nation-card';
 
   constructor(
     private prisma: PrismaService,
@@ -35,7 +39,25 @@ export class CardRequestService {
     private readonly settingsService: SettingsService,
     private readonly s3service: S3Service,
     private readonly twilioService: TwilioService,
+    private readonly appGateway: AppGateway,
   ) { }
+
+  /**
+   * Temps réel client : signale à l'app que SON état carte a changé (demande
+   * soumise / validée / refusée, carte suspendue, réactivée, régénérée…).
+   * L'app invalide ses caches TanStack → l'écran « Carte de la Nation » se met
+   * à jour sans relancer l'app. Fire-and-forget, jamais bloquant.
+   */
+  private emitCardUpdated(customerId: string, reason: string) {
+    try {
+      this.appGateway.emitToUser(customerId, 'customer', 'card:updated', {
+        reason,
+        at: new Date().toISOString(),
+      });
+    } catch (e) {
+      this.logger.warn(`emit card:updated (${reason}) échoué : ${(e as Error)?.message}`);
+    }
+  }
 
   /** Lit le réglage card.require_justificatif (défaut false = V1). */
   private async isJustificatifRequired(): Promise<boolean> {
@@ -289,6 +311,7 @@ export class CardRequestService {
     this.cardNotificationService
       .notifyRequestReceived(customerId)
       .catch((e) => this.logger.warn(`notifyRequestReceived échouée : ${e?.message}`));
+    this.emitCardUpdated(customerId, 'request_submitted');
 
     return {
       success: true,
@@ -659,6 +682,10 @@ export class CardRequestService {
         .catch((e) => this.logger.warn(`notifyCardRejected échouée : ${e?.message}`));
     }
 
+    // Temps réel : l'écran carte de l'app se resynchronise immédiatement
+    // (APPROVED → la carte apparaît ; REJECTED → l'écran de refus).
+    this.emitCardUpdated(updatedRequest.customer_id, `request_${reviewDto.status.toLowerCase()}`);
+
 
     return {
       success: true,
@@ -830,6 +857,8 @@ export class CardRequestService {
       await this.deleteS3Files([previousImage]);
     }
 
+    this.emitCardUpdated(updated.customer_id, 'card_regenerated');
+
     return {
       success: true,
       message: 'Carte régénérée avec succès',
@@ -969,6 +998,7 @@ export class CardRequestService {
       data: { status },
     });
 
+    this.emitCardUpdated(updatedCard.customer_id, `card_${status.toLowerCase()}`);
 
     return {
       success: true,
@@ -1007,6 +1037,8 @@ export class CardRequestService {
       request.student_card_file_url,
     ]);
 
+    this.emitCardUpdated(request.customer_id, 'request_deleted');
+
     return {
       success: true,
       message: request.nation_card
@@ -1028,6 +1060,8 @@ export class CardRequestService {
 
     await this.prisma.nationCard.delete({ where: { id } });
     await this.deleteS3Files([card.card_image_url]);
+
+    this.emitCardUpdated(card.customer_id, 'card_deleted');
 
     return { success: true, message: 'Carte supprimée définitivement' };
   }

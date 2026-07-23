@@ -47,6 +47,24 @@ export class PromoCodeService {
     private readonly appGateway: AppGateway,
   ) {}
 
+  /**
+   * Temps réel APP : les codes promo visibles côté client (création, modif,
+   * activation/désactivation, suppression) → broadcast à la room `customers`.
+   * Payload volontairement minimal : l'app invalide ses caches et refetch
+   * (pas de données promo poussées ; l'éligibilité reste vérifiée serveur).
+   */
+  private emitPromoUpdatedToCustomers(id: string, action: 'created' | 'updated' | 'deleted') {
+    try {
+      this.appGateway.emitToUserType('customers', 'promo:updated', {
+        id,
+        action,
+        at: new Date().toISOString(),
+      });
+    } catch (e) {
+      this.logger.warn(`emit promo:updated (${action}) échoué : ${(e as Error)?.message}`);
+    }
+  }
+
   async create(req: Request, dto: CreatePromoCodeDto) {
     const userId = (req.user as User).id;
 
@@ -158,6 +176,7 @@ export class PromoCodeService {
     });
 
     this.appGateway.emitToBackoffice('promo_code:created', promoCode);
+    this.emitPromoUpdatedToCustomers(promoCode.id, 'created');
 
     return promoCode;
   }
@@ -391,6 +410,7 @@ export class PromoCodeService {
     });
 
     this.appGateway.emitToBackoffice('promo_code:updated', promoCode);
+    this.emitPromoUpdatedToCustomers(promoCode.id, 'updated');
 
     return promoCode;
   }
@@ -416,6 +436,7 @@ export class PromoCodeService {
     });
 
     this.appGateway.emitToBackoffice('promo_code:deleted', promoCode);
+    this.emitPromoUpdatedToCustomers(promoCode.id, 'deleted');
 
     return promoCode;
   }
@@ -441,6 +462,7 @@ export class PromoCodeService {
     });
 
     this.appGateway.emitToBackoffice('promo_code:updated', promoCode);
+    this.emitPromoUpdatedToCustomers(promoCode.id, 'updated');
 
     return promoCode;
   }

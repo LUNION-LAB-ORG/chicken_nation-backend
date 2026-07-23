@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CardRequestService } from 'src/modules/card-nation/services/card-request.service';
 import { CreateAdhesionDto } from './dto/create-adhesion.dto';
+import { customerPhoneVariants } from 'src/common/utils/customer-phone.util';
 
 /**
  * Tunnel d'adhésion (Phase 4) — PRÉ-INSCRIPTION SILENCIEUSE depuis le site.
@@ -16,7 +17,7 @@ import { CreateAdhesionDto } from './dto/create-adhesion.dto';
  * RG-07 : AUCUNE session n'est créée ici. Le client se connectera ensuite dans
  * l'app par OTP sur le MÊME numéro → il retombe sur le compte déjà pré-créé.
  * Pour que la jonction fonctionne, on normalise le téléphone EXACTEMENT comme
- * le login OTP de l'app (E.164 CI → `225XXXXXXXXXX`, chiffres uniquement).
+ * le login OTP de l'app (E.164 CI → `+225XXXXXXXXXX`).
  */
 @Injectable()
 export class AdhesionService {
@@ -45,26 +46,45 @@ export class AdhesionService {
         ? { whatsapp_opt_in: true, whatsapp_opt_in_at: now }
         : { whatsapp_opt_in: false, whatsapp_opt_in_at: null };
 
-    const customer = await this.prisma.customer.upsert({
-      where: { phone },
-      // À la création : on pose nom + profil + opt-in.
-      create: {
-        phone,
-        first_name: firstName,
-        last_name: lastName,
-        profile_type: dto.profile_type,
-        whatsapp_opt_in: dto.whatsapp_opt_in === true,
-        whatsapp_opt_in_at: dto.whatsapp_opt_in === true ? now : null,
-      },
-      // À la mise à jour : on ne réécrit le nom que s'il n'était pas déjà connu
-      // (ne pas écraser un profil déjà renseigné par le client dans l'app).
-      update: {
-        first_name: firstName ? { set: firstName } : undefined,
-        last_name: lastName ? { set: lastName } : undefined,
-        profile_type: dto.profile_type,
-        ...optInData,
-      },
-    });
+    // Lookup TOLÉRANT (`+225…` app / `225…` héritée) : un compte déjà créé par
+    // le login OTP de l'app doit être RETROUVÉ, jamais dupliqué. On préfère un
+    // compte NON supprimé (les doublons fusionnés par migration restent en
+    // DELETED avec leur graphie `225…`) ; à défaut on retombe sur la ligne
+    // supprimée (comportement historique : mise à jour sans réactivation).
+    const variants = customerPhoneVariants(phone);
+    const existing =
+      (await this.prisma.customer.findFirst({
+        where: { phone: { in: variants }, entity_status: { not: 'DELETED' } },
+        orderBy: { created_at: 'asc' },
+      })) ??
+      (await this.prisma.customer.findFirst({
+        where: { phone: { in: variants } },
+        orderBy: { created_at: 'asc' },
+      }));
+
+    const customer = existing
+      ? // À la mise à jour : on ne réécrit le nom que s'il n'était pas déjà connu
+        // (ne pas écraser un profil déjà renseigné par le client dans l'app).
+        await this.prisma.customer.update({
+          where: { id: existing.id },
+          data: {
+            first_name: existing.first_name?.trim() ? undefined : (firstName ?? undefined),
+            last_name: existing.last_name?.trim() ? undefined : (lastName ?? undefined),
+            profile_type: dto.profile_type,
+            ...optInData,
+          },
+        })
+      : // À la création : on pose nom + profil + opt-in.
+        await this.prisma.customer.create({
+          data: {
+            phone,
+            first_name: firstName,
+            last_name: lastName,
+            profile_type: dto.profile_type,
+            whatsapp_opt_in: dto.whatsapp_opt_in === true,
+            whatsapp_opt_in_at: dto.whatsapp_opt_in === true ? now : null,
+          },
+        });
 
     // 💳 DEMANDE DE CARTE (V1 déclaratif) — BEST-EFFORT. On crée une demande en
     // statut PENDING : la carte N'EST PLUS émise ici. C'est le backoffice qui la
@@ -99,18 +119,19 @@ export class AdhesionService {
   }
 
   /**
-   * Normalise un téléphone ivoirien en `225XXXXXXXXXX` (chiffres uniquement).
+   * Normalise un téléphone ivoirien en `+225XXXXXXXXXX` (E.164).
    *
    * On garde les 10 derniers chiffres (le numéro national CI) et on préfixe
-   * `225`. Cela produit la MÊME clé que le login OTP de l'app quand celui-ci
-   * envoie un E.164 `+225XXXXXXXXXX` (le DTO de login retire le `+`) → la
+   * `+225` : c'est le format que le login OTP de l'app écrit en base → la
    * pré-inscription et le compte créé au login se rejoignent (RG-07), et
    * l'appel est idempotent quel que soit le format saisi sur le site.
+   * ⚠️ L'ancien format `225…` (sans `+`) créait des DOUBLONS : résorbé par la
+   * migration de fusion + les lookups tolérants (customerPhoneVariants).
    */
   private normalizePhone(raw: string): string {
     const digits = (raw || '').replace(/\D/g, '');
     const national = digits.slice(-10); // 10 derniers = numéro CI
-    return `225${national}`;
+    return `+225${national}`;
   }
 
   private splitName(name: string): {
