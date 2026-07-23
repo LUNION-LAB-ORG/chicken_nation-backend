@@ -420,7 +420,8 @@ export class CardRequestService {
   private async getLevelProgression(level: LoyaltyLevel | null, statusPoints: number) {
     const config = await this.prisma.loyaltyConfig.findFirst({ where: { is_active: true } });
     const thresholds = {
-      STANDARD: config?.standard_threshold ?? 300,
+      // STANDARD = niveau d'entrée → seuil 0 (personne n'est « sous » Standard).
+      STANDARD: config?.standard_threshold ?? 0,
       VIP: config?.premium_threshold ?? 700,
       VVIP: config?.gold_threshold ?? 1000,
     };

@@ -19,15 +19,15 @@ export class LoyaltyService {
 
     async updateConfig(data: UpdateLoyaltyConfigDto) {
         // Valider la cohérence des seuils
-        if (data.standard_threshold !== undefined &&
-            data.premium_threshold !== undefined &&
-            data.gold_threshold !== undefined) {
-            if (data.standard_threshold >= data.premium_threshold ||
-                data.premium_threshold >= data.gold_threshold) {
-                throw new BadRequestException(
-                    'Les seuils doivent être croissants: Standard < VIP < VVIP'
-                );
+        // STANDARD étant le niveau d'ENTRÉE, son seuil vaut 0 et n'est plus
+        // réglable : seuls VIP et VVIP se paramètrent, et dans cet ordre.
+        if (data.premium_threshold !== undefined && data.gold_threshold !== undefined) {
+            if (data.premium_threshold >= data.gold_threshold) {
+                throw new BadRequestException('Les seuils doivent être croissants : VIP < VVIP');
             }
+        }
+        if (data.premium_threshold !== undefined && data.premium_threshold <= 0) {
+            throw new BadRequestException('Le seuil VIP doit être strictement positif.');
         }
 
         // Récupérer la config active ou en créer une
@@ -746,11 +746,10 @@ export class LoyaltyService {
         let pointsToNextLevel = 0;
 
         // Le NIVEAU est adossé au compteur ANNUEL status_points (pas lifetime_points).
-        switch (customer.loyalty_level) {
-            case LoyaltyLevel.STANDARD:
-                nextLevel = LoyaltyLevel.VIP;
-                pointsToNextLevel = config.premium_threshold - customer.status_points;
-                break;
+        // STANDARD est le niveau d'ENTRÉE : un `loyalty_level` encore null en base
+        // (client antérieur au backfill) est traité comme STANDARD.
+        const effectiveLevel = customer.loyalty_level ?? LoyaltyLevel.STANDARD;
+        switch (effectiveLevel) {
             case LoyaltyLevel.VIP:
                 nextLevel = LoyaltyLevel.VVIP;
                 pointsToNextLevel = config.gold_threshold - customer.status_points;
@@ -759,12 +758,9 @@ export class LoyaltyService {
                 nextLevel = null;
                 pointsToNextLevel = 0;
                 break;
-            default:
-                // NOUVEAU (aucun palier atteint) : la cible est STANDARD. Sans ce cas,
-                // l'API renvoyait 0 « point restant » pour un client à 0 point — les
-                // écrans devaient deviner, et divergeaient (carte vs club).
-                nextLevel = LoyaltyLevel.STANDARD;
-                pointsToNextLevel = config.standard_threshold - customer.status_points;
+            default: // STANDARD
+                nextLevel = LoyaltyLevel.VIP;
+                pointsToNextLevel = config.premium_threshold - customer.status_points;
                 break;
         }
 
@@ -794,7 +790,9 @@ export class LoyaltyService {
 
         return {
             customer_id: customer.id,
-            current_level: customer.loyalty_level,
+            // Jamais null : STANDARD est le niveau d'entrée (les lignes encore
+            // à null en base sont vues comme STANDARD, comme le fait le calcul).
+            current_level: effectiveLevel,
             // ⚠️ SOURCE DE VÉRITÉ du niveau — doit être exposée : sans elle, les
             // écrans reconstituaient le compteur à partir des seuils et
             // fabriquaient des valeurs fausses (carte « 300/300 pts » pour un
@@ -833,11 +831,13 @@ export class LoyaltyService {
             premium_threshold: number;
             gold_threshold: number;
         },
-    ): LoyaltyLevel | null {
+    ): LoyaltyLevel {
         if (statusPoints >= config.gold_threshold) return LoyaltyLevel.VVIP;
         if (statusPoints >= config.premium_threshold) return LoyaltyLevel.VIP;
-        if (statusPoints >= config.standard_threshold) return LoyaltyLevel.STANDARD;
-        return null;
+        // STANDARD est le niveau d'ENTRÉE (décision 23/07) : tout client en fait
+        // partie dès l'inscription, ce qui colle aux cartes déjà imprimées et
+        // supprime l'état « NOUVEAU » qui n'existait que dans les écrans.
+        return LoyaltyLevel.STANDARD;
     }
 
     // Mettre à jour le niveau de fidélité d'un client

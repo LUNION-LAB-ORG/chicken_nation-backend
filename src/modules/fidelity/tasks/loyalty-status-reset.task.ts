@@ -174,10 +174,11 @@ export class LoyaltyStatusResetTask {
   private computeLevel(
     statusPoints: number,
     config: { standard_threshold: number; premium_threshold: number; gold_threshold: number },
-  ): LoyaltyLevel | null {
+  ): LoyaltyLevel {
     if (statusPoints >= config.gold_threshold) return LoyaltyLevel.VVIP;
     if (statusPoints >= config.premium_threshold) return LoyaltyLevel.VIP;
-    if (statusPoints >= config.standard_threshold) return LoyaltyLevel.STANDARD;
-    return null;
+    // STANDARD = niveau d'entrée : le reset annuel ramène donc à STANDARD,
+    // jamais à « aucun niveau » (et la transition est traçable en historique).
+    return LoyaltyLevel.STANDARD;
   }
 }

@@ -1802,7 +1802,7 @@ model LoyaltyConfig {
   // Seuils pour les niveaux de fidélité (comparés à status_points, compteur annuel)
   // NB : les CHAMPS gardent leurs noms historiques premium_threshold/gold_threshold
   // (compat backoffice/config JSON) mais correspondent désormais aux niveaux VIP/VVIP.
-  standard_threshold Int @default(300) // 300 points pour Standard
+  standard_threshold Int @default(0) // STANDARD = niveau d'ENTRÉE (0 point)
   premium_threshold  Int @default(700) // 700 points pour VIP (ex-Premium)
   gold_threshold     Int @default(1000) // 1000 points pour VVIP (ex-Gold)
 
