@@ -381,7 +381,13 @@ export class CardRequestService {
     }
 
     // Régénération paresseuse best-effort (couvre le reset annuel).
-    if (card.level !== (card.customer.loyalty_level ?? null)) {
+    // ⚠️ Comparaison sur le niveau VISUEL résolu (NOUVEAU/null → thème STANDARD,
+    // cf. app resolveCardLevel) : comparer les valeurs brutes rendait la
+    // condition TOUJOURS vraie pour un client sans palier (card.level='STANDARD'
+    // vs loyalty_level=null) → rendu PNG + upload S3 à CHAQUE consultation.
+    const visualLevel = (l: LoyaltyLevel | null) =>
+      l === LoyaltyLevel.VIP || l === LoyaltyLevel.VVIP ? l : LoyaltyLevel.STANDARD;
+    if (visualLevel(card.level) !== visualLevel(card.customer.loyalty_level ?? null)) {
       try {
         const regenerated = await this.regenerateActiveCard(customerId);
         if (regenerated) {

@@ -759,6 +759,13 @@ export class LoyaltyService {
                 nextLevel = null;
                 pointsToNextLevel = 0;
                 break;
+            default:
+                // NOUVEAU (aucun palier atteint) : la cible est STANDARD. Sans ce cas,
+                // l'API renvoyait 0 « point restant » pour un client à 0 point — les
+                // écrans devaient deviner, et divergeaient (carte vs club).
+                nextLevel = LoyaltyLevel.STANDARD;
+                pointsToNextLevel = config.standard_threshold - customer.status_points;
+                break;
         }
 
         // Calculer les points disponibles par type
@@ -788,6 +795,18 @@ export class LoyaltyService {
         return {
             customer_id: customer.id,
             current_level: customer.loyalty_level,
+            // ⚠️ SOURCE DE VÉRITÉ du niveau — doit être exposée : sans elle, les
+            // écrans reconstituaient le compteur à partir des seuils et
+            // fabriquaient des valeurs fausses (carte « 300/300 pts » pour un
+            // client à 0 point).
+            status_points: customer.status_points,
+            // Seuils renvoyés avec la donnée : un écran n'a plus à les recroiser
+            // avec un autre appel pour afficher une progression.
+            level_thresholds: {
+                STANDARD: config.standard_threshold,
+                VIP: config.premium_threshold,
+                VVIP: config.gold_threshold,
+            },
             total_points: customer.total_points,
             lifetime_points: customer.lifetime_points,
             next_level: nextLevel,
