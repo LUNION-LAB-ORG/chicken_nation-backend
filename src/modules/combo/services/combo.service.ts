@@ -135,8 +135,8 @@ export class ComboService {
     return h >>> 0;
   }
 
-  /** Difficulté « facile » : la bonne réponse + 2 leurres du même type par ligne. */
-  private static readonly DECOYS_PER_SLOT = 2;
+  /** 4 propositions par catégorie (grille 2×2 côté app) : la bonne + 3 leurres. */
+  private static readonly DECOYS_PER_SLOT = 3;
 
   /**
    * Construit les « slots » jouables : pour chaque item de la solution, une ligne
@@ -215,14 +215,15 @@ export class ComboService {
         .map((x) => x.id);
 
       seen[sol.type] += 1;
+      // Terminologie métier de l'app : « Plat » / « Supplément » (cf. panier).
       const label =
         sol.type === 'DISH'
           ? totalByType.DISH > 1
             ? `Plat ${seen.DISH}`
             : 'Plat'
           : totalByType.SUPPLEMENT > 1
-            ? `Accompagnement ${seen.SUPPLEMENT}`
-            : 'Accompagnement / Sauce';
+            ? `Supplément ${seen.SUPPLEMENT}`
+            : 'Supplément';
 
       return {
         id: `${sol.type}_${i}`,
