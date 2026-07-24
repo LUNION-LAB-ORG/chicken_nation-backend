@@ -300,6 +300,9 @@ export class OrderV2Helper {
               price: unit,
               quantity: qty,
               category: dbSupp.category,
+              // Marqueur explicite « offert » (l'app + le backoffice l'affichent).
+              // Le prix 0 sert de repli pour les commandes créées avant ce flag.
+              offert: isGiftSupp,
             });
             supplementsTotal += (unit * qty);
           }
