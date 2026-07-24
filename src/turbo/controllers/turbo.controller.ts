@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Headers, UnauthorizedException, Query } from '@nestjs/common';
+import { Controller, Post, Body, Headers, HttpCode, UnauthorizedException, Query } from '@nestjs/common';
 import { TurboService } from '../services/turbo.service';
 import { ApiBody, ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { WebhookEventDto, WebhookResponseDto } from '../dto/turbo-webhook.dto';
@@ -28,6 +28,7 @@ export class TurboController {
   }
 
   @Post('webhook')
+  @HttpCode(200)
   @ApiOperation({
     summary: 'Réception des événements webhook Turbo',
     description: 'Cet endpoint reçoit les différents statuts de livraison en temps réel.'
