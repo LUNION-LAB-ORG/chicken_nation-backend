@@ -253,7 +253,8 @@ export class ComboService {
       where: { combo_game_id: game.id, customer_id: customerId, is_correct: true },
       select: { id: true },
     });
-    const prize = (game.prize as { payload?: { label?: string; name?: string } }) ?? {};
+    const prize =
+      (game.prize as { payload?: { label?: string; name?: string; image?: string } }) ?? {};
     const rewardLabel = prize.payload?.label || prize.payload?.name || null;
 
     return {
@@ -269,6 +270,8 @@ export class ComboService {
       already_found: !!alreadyFound,
       slots: await this.buildSlots(game),
       reward_label: rewardLabel,
+      reward_name: prize.payload?.name ?? null,
+      reward_image: prize.payload?.image ?? null,
       winners_count: game.winners_count,
     };
   }
