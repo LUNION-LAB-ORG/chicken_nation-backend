@@ -36,4 +36,11 @@ export class ComboController {
   result(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
     return this.comboService.getResult((req.user as Customer).id, id);
   }
+
+  @Get(':id/leaderboard')
+  @ApiOperation({ summary: 'Classement : gagnants + top 50 participants (noms masqués)' })
+  @ApiOkResponse({ description: '{ participants_count, winners, participants }' })
+  leaderboard(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
+    return this.comboService.leaderboard((req.user as Customer).id, id);
+  }
 }

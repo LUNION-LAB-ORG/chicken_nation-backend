@@ -276,6 +276,103 @@ export class ComboService {
     };
   }
 
+  /**
+   * CLASSEMENT PUBLIC d'une partie : gagnants (badge) + top 50 participants +
+   * totaux. Les noms sont MASQUÉS (« A*** K. ») pour la vie privée — sauf
+   * l'entrée du client courant (`is_me`, l'app affiche « Toi »). L'app bascule
+   * sur cette vue simple quand le joueur a fini de jouer.
+   */
+  async leaderboard(customerId: string, gameId: string) {
+    const game = await this.prisma.comboGame.findUnique({
+      where: { id: gameId },
+      select: { id: true, title: true, status: true, winners_count: true },
+    });
+    if (!game) throw new NotFoundException('Jeu introuvable');
+
+    const attempts = await this.prisma.comboAttempt.findMany({
+      where: { combo_game_id: gameId },
+      orderBy: { created_at: 'asc' },
+      select: { customer_id: true, is_correct: true, created_at: true },
+    });
+
+    // Agrégat par joueur (1 entrée par client).
+    const byCustomer = new Map<
+      string,
+      { correct: boolean; correctAt: Date | null; last: Date }
+    >();
+    for (const a of attempts) {
+      const cur =
+        byCustomer.get(a.customer_id) ??
+        ({ correct: false, correctAt: null, last: a.created_at } as {
+          correct: boolean;
+          correctAt: Date | null;
+          last: Date;
+        });
+      cur.last = a.created_at;
+      if (a.is_correct && !cur.correct) {
+        cur.correct = true;
+        cur.correctAt = a.created_at;
+      }
+      byCustomer.set(a.customer_id, cur);
+    }
+
+    const winners = await this.prisma.comboWinner.findMany({
+      where: { combo_game_id: gameId },
+      orderBy: { created_at: 'asc' },
+      select: { customer_id: true },
+    });
+    const winnerSet = new Set(winners.map((w) => w.customer_id));
+
+    // TOP 50 : bonnes réponses d'abord (ordre de réussite), puis derniers actifs.
+    const entries = [...byCustomer.entries()]
+      .sort(([, a], [, b]) => {
+        if (a.correct !== b.correct) return a.correct ? -1 : 1;
+        if (a.correct && b.correct)
+          return (a.correctAt?.getTime() ?? 0) - (b.correctAt?.getTime() ?? 0);
+        return b.last.getTime() - a.last.getTime();
+      })
+      .slice(0, 50);
+
+    const ids = [...new Set([...entries.map(([id]) => id), ...winners.map((w) => w.customer_id)])];
+    const customers = ids.length
+      ? await this.prisma.customer.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, first_name: true, last_name: true },
+        })
+      : [];
+    const cById = new Map(customers.map((c) => [c.id, c]));
+
+    // « Anderson Kouadio » → « A*** K. » ; le client courant garde son vrai nom.
+    const displayName = (cid: string) => {
+      const c = cById.get(cid);
+      const first = (c?.first_name ?? '').trim();
+      const last = (c?.last_name ?? '').trim();
+      if (cid === customerId) return `${first} ${last}`.trim() || 'Toi';
+      const f = first ? `${first[0]}${'*'.repeat(Math.max(2, Math.min(4, first.length - 1)))}` : 'Client';
+      const l = last ? ` ${last[0]}.` : '';
+      return `${f}${l}`;
+    };
+
+    return {
+      game_id: game.id,
+      status: game.status,
+      settled: game.status === ComboGameStatus.SETTLED,
+      participants_count: byCustomer.size,
+      correct_count: [...byCustomer.values()].filter((v) => v.correct).length,
+      winners_target: game.winners_count,
+      winners: winners.map((w) => ({
+        name: displayName(w.customer_id),
+        is_me: w.customer_id === customerId,
+      })),
+      participants: entries.map(([cid, v]) => ({
+        name: displayName(cid),
+        found: v.correct,
+        is_winner: winnerSet.has(cid),
+        is_me: cid === customerId,
+      })),
+    };
+  }
+
   /** Résultat d'une partie SETTLED pour le client : a-t-il gagné ? */
   async getResult(customerId: string, gameId: string) {
     const game = await this.prisma.comboGame.findUnique({
@@ -448,9 +545,55 @@ export class ComboService {
     this.sendWinnerPush(rewarded, game.title).catch((e) =>
       this.logger.warn(`Push gagnants Combo ${gameId} échoué: ${e?.message}`),
     );
+    // Webhook « tirage effectué » : les AUTRES participants sont prévenus que le
+    // classement est disponible (les gagnants reçoivent déjà le push gagnant).
+    this.notifyParticipantsSettled(gameId, game.title, new Set(rewarded)).catch((e) =>
+      this.logger.warn(`Push résultats Combo ${gameId} échoué: ${e?.message}`),
+    );
 
     this.logger.log(`Combo ${gameId} réglé : ${rewarded.length} gagnant(s) récompensé(s).`);
     return { settled: true, already: false, winners: rewarded.length };
+  }
+
+  /**
+   * Push « résultats disponibles » à tous les participants (hors gagnants, déjà
+   * notifiés) quand le tirage a eu lieu. Best-effort. Le tap ouvre le Combo.
+   */
+  private async notifyParticipantsSettled(
+    gameId: string,
+    title: string,
+    winnerIds: Set<string>,
+  ) {
+    const participants = await this.prisma.comboAttempt.findMany({
+      where: { combo_game_id: gameId },
+      select: { customer_id: true },
+      distinct: ['customer_id'],
+    });
+    const ids = participants.map((p) => p.customer_id).filter((id) => !winnerIds.has(id));
+    if (ids.length === 0) return;
+
+    const settings = await this.prisma.notificationSetting.findMany({
+      where: {
+        customer_id: { in: ids },
+        push: true,
+        active: true,
+        expo_push_token: { not: null },
+      },
+      select: { expo_push_token: true },
+    });
+    const tokens = [
+      ...new Set(settings.map((s) => s.expo_push_token).filter((t): t is string => !!t)),
+    ];
+    if (tokens.length === 0) return;
+
+    await this.expoPushService.sendPushNotifications({
+      tokens,
+      title: '🎲 Résultats du Combo Mystère',
+      body: `Le tirage de « ${title} » a eu lieu. Découvre le classement et les gagnants !`,
+      sound: 'default',
+      priority: 'high',
+      data: { type: 'combo' },
+    });
   }
 
   /**

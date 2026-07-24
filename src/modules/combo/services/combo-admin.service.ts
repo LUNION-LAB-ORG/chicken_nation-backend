@@ -20,34 +20,101 @@ export class ComboAdminService {
 
   async list() {
     const games = await this.prisma.comboGame.findMany({ orderBy: { created_at: 'desc' } });
-    // Compteurs de participation (bornés : 2 groupBy).
     const ids = games.map((g) => g.id);
     if (ids.length === 0) return [];
 
-    const attempts = await this.prisma.comboAttempt.groupBy({
-      by: ['combo_game_id'],
-      where: { combo_game_id: { in: ids } },
-      _count: { _all: true },
-    });
-    const winners = await this.prisma.comboWinner.groupBy({
-      by: ['combo_game_id'],
-      where: { combo_game_id: { in: ids } },
-      _count: { _all: true },
-    });
-    const aMap = new Map(attempts.map((a) => [a.combo_game_id, a._count._all]));
-    const wMap = new Map(winners.map((w) => [w.combo_game_id, w._count._all]));
+    // JOUEURS DISTINCTS (pas nombre d'essais) + bonnes réponses distinctes :
+    // groupBy [game, client] → 1 ligne par (partie, joueur), qu'on compte par partie.
+    const [participantGroups, correctGroups, winnerGroups] = await Promise.all([
+      this.prisma.comboAttempt.groupBy({
+        by: ['combo_game_id', 'customer_id'],
+        where: { combo_game_id: { in: ids } },
+      }),
+      this.prisma.comboAttempt.groupBy({
+        by: ['combo_game_id', 'customer_id'],
+        where: { combo_game_id: { in: ids }, is_correct: true },
+      }),
+      this.prisma.comboWinner.groupBy({
+        by: ['combo_game_id'],
+        where: { combo_game_id: { in: ids } },
+        _count: { _all: true },
+      }),
+    ]);
 
-    return games.map((g) => ({
+    const countByGame = (groups: Array<{ combo_game_id: string }>) => {
+      const m = new Map<string, number>();
+      for (const g of groups) m.set(g.combo_game_id, (m.get(g.combo_game_id) ?? 0) + 1);
+      return m;
+    };
+    const participantsMap = countByGame(participantGroups);
+    const correctMap = countByGame(correctGroups);
+    const winnersMap = new Map(winnerGroups.map((w) => [w.combo_game_id, w._count._all]));
+
+    const withCounts = games.map((g) => ({
       ...g,
-      attempts_count: aMap.get(g.id) ?? 0,
-      winners_count_actual: wMap.get(g.id) ?? 0,
+      attempts_count: participantsMap.get(g.id) ?? 0, // = joueurs distincts
+      correct_count: correctMap.get(g.id) ?? 0,
+      winners_count_actual: winnersMap.get(g.id) ?? 0,
     }));
+
+    return this.withSolutionNames(withCounts);
   }
 
-  async get(id: string) {
+  /** Getter brut (usage interne : update/remove/participations). */
+  private async findGameOrThrow(id: string) {
     const game = await this.prisma.comboGame.findUnique({ where: { id } });
     if (!game) throw new NotFoundException('Jeu introuvable');
     return game;
+  }
+
+  async get(id: string) {
+    const game = await this.findGameOrThrow(id);
+    return (await this.withSolutionNames([game]))[0];
+  }
+
+  /**
+   * Enrichit la `solution` de chaque jeu avec le NOM (et l'image) du plat /
+   * supplément — le back office affiche des noms, jamais des UUID. Résolu en 2
+   * requêtes groupées (pas de N+1), tolérant aux items supprimés.
+   */
+  private async withSolutionNames<T extends { solution: unknown }>(
+    games: T[],
+  ): Promise<T[]> {
+    const items = games.flatMap(
+      (g) => ((g.solution as Array<{ type?: string; id?: string }>) ?? []) as Array<{ type?: string; id?: string }>,
+    );
+    const dishIds = [
+      ...new Set(
+        items.filter((i) => String(i.type).toUpperCase() === 'DISH').map((i) => i.id!).filter(Boolean),
+      ),
+    ];
+    const suppIds = [
+      ...new Set(
+        items.filter((i) => String(i.type).toUpperCase() === 'SUPPLEMENT').map((i) => i.id!).filter(Boolean),
+      ),
+    ];
+    const [dishes, supps] = await Promise.all([
+      dishIds.length
+        ? this.prisma.dish.findMany({ where: { id: { in: dishIds } }, select: { id: true, name: true, image: true } })
+        : Promise.resolve([]),
+      suppIds.length
+        ? this.prisma.supplement.findMany({ where: { id: { in: suppIds } }, select: { id: true, name: true, image: true } })
+        : Promise.resolve([]),
+    ]);
+    const byId = new Map<string, { name: string; image: string | null }>();
+    for (const d of dishes) byId.set(d.id, { name: d.name, image: d.image ?? null });
+    for (const s of supps) byId.set(s.id, { name: s.name, image: s.image ?? null });
+
+    return games.map((g) => ({
+      ...g,
+      solution: ((g.solution as Array<{ type: string; id: string; quantity?: number }>) ?? []).map((s) => ({
+        type: s.type,
+        id: s.id,
+        ...(s.quantity ? { quantity: s.quantity } : {}),
+        name: byId.get(s.id)?.name ?? null,
+        image: byId.get(s.id)?.image ?? null,
+      })),
+    }));
   }
 
   async create(dto: CreateComboGameDto, adminId: string) {
@@ -88,7 +155,7 @@ export class ComboAdminService {
   }
 
   async update(id: string, dto: UpdateComboGameDto) {
-    const game = await this.get(id);
+    const game = await this.findGameOrThrow(id);
     if (game.status === ComboGameStatus.SETTLED) {
       throw new BadRequestException('Un jeu réglé (SETTLED) ne peut plus être modifié.');
     }
@@ -120,7 +187,7 @@ export class ComboAdminService {
   }
 
   async remove(id: string) {
-    const game = await this.get(id);
+    const game = await this.findGameOrThrow(id);
     if (game.status === ComboGameStatus.SETTLED) {
       throw new BadRequestException('Un jeu réglé ne peut pas être supprimé (audit des gagnants).');
     }
@@ -135,20 +202,100 @@ export class ComboAdminService {
     return this.prisma.comboGame.delete({ where: { id } });
   }
 
-  /** Participations + gagnants d'une partie (back office). */
+  /**
+   * Participations + gagnants d'une partie (back office). Les tentatives sont
+   * AGRÉGÉES PAR JOUEUR (1 ligne par client, pas 1 par essai) et enrichies du
+   * nom / téléphone / image du client. `attempts` = participations agrégées
+   * (le front lit `data.attempts`).
+   */
   async participations(id: string) {
-    await this.get(id);
-    const [attempts, winners] = await Promise.all([
+    await this.findGameOrThrow(id);
+    const [rawAttempts, winnerRows] = await Promise.all([
       this.prisma.comboAttempt.findMany({
         where: { combo_game_id: id },
-        orderBy: { created_at: 'desc' },
+        orderBy: { created_at: 'asc' },
+        select: { customer_id: true, is_correct: true, created_at: true },
       }),
       this.prisma.comboWinner.findMany({
         where: { combo_game_id: id },
         orderBy: { created_at: 'desc' },
+        select: { id: true, customer_id: true, reward_id: true, created_at: true },
       }),
     ]);
-    return { attempts, winners };
+
+    // Infos clients (nom/tel/image) en une seule requête.
+    const customerIds = [
+      ...new Set([...rawAttempts.map((a) => a.customer_id), ...winnerRows.map((w) => w.customer_id)]),
+    ];
+    const customers = customerIds.length
+      ? await this.prisma.customer.findMany({
+          where: { id: { in: customerIds } },
+          select: { id: true, first_name: true, last_name: true, phone: true, image: true },
+        })
+      : [];
+    const cById = new Map(customers.map((c) => [c.id, c]));
+    const nameOf = (cid: string) => {
+      const c = cById.get(cid);
+      const n = `${c?.first_name ?? ''} ${c?.last_name ?? ''}`.trim();
+      return n || null;
+    };
+
+    // Agrégation par CLIENT : 1 ligne par joueur.
+    const byCustomer = new Map<
+      string,
+      { attempts_used: number; is_correct: boolean; answered_at: Date | null; last_attempt_at: Date | null }
+    >();
+    for (const a of rawAttempts) {
+      const agg =
+        byCustomer.get(a.customer_id) ??
+        { attempts_used: 0, is_correct: false, answered_at: null, last_attempt_at: null };
+      agg.attempts_used += 1;
+      if (!agg.last_attempt_at || a.created_at > agg.last_attempt_at) agg.last_attempt_at = a.created_at;
+      if (a.is_correct) {
+        agg.is_correct = true;
+        if (!agg.answered_at || a.created_at < agg.answered_at) agg.answered_at = a.created_at;
+      }
+      byCustomer.set(a.customer_id, agg);
+    }
+
+    const attempts = [...byCustomer.entries()]
+      .sort(
+        ([, a], [, b]) =>
+          (b.last_attempt_at?.getTime() ?? 0) - (a.last_attempt_at?.getTime() ?? 0),
+      )
+      .map(([customerId, p]) => ({
+        id: customerId,
+        game_id: id,
+        customer_id: customerId,
+        customer_name: nameOf(customerId),
+        customer_phone: cById.get(customerId)?.phone ?? null,
+        customer_image: cById.get(customerId)?.image ?? null,
+        attempts_used: p.attempts_used,
+        is_correct: p.is_correct,
+        answered_at: p.answered_at,
+        last_attempt_at: p.last_attempt_at,
+      }));
+
+    const winners = winnerRows.map((w) => ({
+      id: w.id,
+      game_id: id,
+      customer_id: w.customer_id,
+      customer_name: nameOf(w.customer_id),
+      customer_phone: cById.get(w.customer_id)?.phone ?? null,
+      customer_image: cById.get(w.customer_id)?.image ?? null,
+      reward_id: w.reward_id,
+      drawn_at: w.created_at,
+    }));
+
+    return {
+      attempts,
+      winners,
+      stats: {
+        participants_count: attempts.length,
+        correct_count: attempts.filter((p) => p.is_correct).length,
+        winners_count: winners.length,
+      },
+    };
   }
 
   // ── Validation menu réel ──────────────────────────────────────────────────
