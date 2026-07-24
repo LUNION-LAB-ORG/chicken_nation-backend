@@ -117,22 +117,45 @@ export class ScratchLotService {
         }
 
         if (type === RewardType.GIFT) {
+            const quantity = Number(payload.quantity);
+            const qtyPart = Number.isFinite(quantity) && quantity > 0 ? { quantity } : {};
+
+            // Cadeau = un PLAT ou un SUPPLÉMENT précis, offert au panier à 0 fr
+            // (aligné sur RewardCampaignService.buildPayload). Supplément prioritaire
+            // s'il est fourni.
+            if (payload.supplement_id) {
+                const supp = await this.prisma.supplement.findUnique({
+                    where: { id: payload.supplement_id },
+                });
+                if (!supp || supp.available === false) {
+                    throw new BadRequestException('Supplément introuvable ou indisponible.');
+                }
+                return {
+                    item_type: 'SUPPLEMENT',
+                    supplement_id: supp.id,
+                    label: typeof payload.label === 'string' && payload.label.trim() ? payload.label.trim() : supp.name,
+                    name: supp.name,
+                    price: supp.price,
+                    ...qtyPart,
+                    ...(supp.image ? { image: supp.image } : {}),
+                };
+            }
+
             const dishId = payload.dish_id;
             if (!dishId || typeof dishId !== 'string') {
-                throw new BadRequestException('Sélectionnez le plat offert (dish_id).');
+                throw new BadRequestException('Sélectionnez le plat ou le supplément offert.');
             }
             const dish = await this.prisma.dish.findUnique({ where: { id: dishId } });
             if (!dish || dish.entity_status === EntityStatus.DELETED) {
                 throw new BadRequestException('Plat introuvable ou indisponible.');
             }
-            const quantity = Number(payload.quantity);
             return {
                 item_type: 'DISH',
                 dish_id: dish.id,
                 label: typeof payload.label === 'string' && payload.label.trim() ? payload.label.trim() : dish.name,
                 name: dish.name,
                 price: dish.price,
-                ...(Number.isFinite(quantity) && quantity > 0 ? { quantity } : {}),
+                ...qtyPart,
                 ...(dish.image ? { image: dish.image } : {}),
             };
         }
