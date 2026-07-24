@@ -126,6 +126,65 @@ export class NotificationsSenderService {
     }
 
     /**
+     * ⚠️ ALERTE : l'envoi d'une commande à TURBO a échoué (le livreur ne sera
+     * pas affecté automatiquement). Cloche in-app pour le staff du restaurant +
+     * le back office, afin que la commande soit prise en charge MANUELLEMENT au
+     * lieu de rester silencieusement bloquée. Best-effort : ne jamais propager.
+     */
+    async sendTurboDispatchFailedBell(order: any, errorMessage: string) {
+        try {
+            if (!order?.restaurant_id) return;
+
+            const [restoUsers, backofficeUsers] = await Promise.all([
+                this.notificationRecipientService.getAllUsersByRestaurantAndRole(
+                    order.restaurant_id,
+                    [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+                ),
+                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+            ]);
+
+            const byId = new Map<string, NotificationRecipient>();
+            for (const r of [...restoUsers, ...backofficeUsers]) byId.set(r.id, r);
+            const recipients = [...byId.values()].filter(
+                (r) => r.in_app_notifications_enabled !== false,
+            );
+            if (recipients.length === 0) return;
+
+            const reason = (errorMessage || 'erreur inconnue').slice(0, 200);
+            const template: NotificationTemplate<any> = {
+                title: () => '⚠️ Livraison Turbo échouée',
+                message: () =>
+                    `La commande ${order.reference} (${order.restaurant?.name ?? 'restaurant'}) n'a pas pu être envoyée à Turbo : ${reason}. À affecter manuellement à un livreur.`,
+                icon: () => notificationIcons.delivery.url,
+                iconBgColor: () => notificationIcons.delivery.color,
+            };
+
+            const notifications = await this.notificationsService.sendNotificationToMultiple(
+                template,
+                {
+                    actor: recipients[0],
+                    recipients,
+                    data: order,
+                    // Clic cloche → page Commandes filtrée sur la référence.
+                    meta: {
+                        kind: 'order',
+                        order_id: order.id,
+                        reference: order.reference,
+                        status: order.status,
+                        turbo_error: reason,
+                    },
+                },
+                NotificationType.SYSTEM,
+            );
+            notifications.forEach((notif, i) => {
+                this.notificationsWebSocketService.emitNotification(notif, recipients[i]);
+            });
+        } catch (e) {
+            this.logger.warn(`Alerte échec Turbo non envoyée : ${(e as Error)?.message}`);
+        }
+    }
+
+    /**
      * Notifie le STAFF (cloche in-app + email) qu'un CLIENT a écrit un nouveau
      * message. Destinataires = staff du restaurant concerné + tout le back office.
      * Chaque canal est filtré par la préférence du membre
