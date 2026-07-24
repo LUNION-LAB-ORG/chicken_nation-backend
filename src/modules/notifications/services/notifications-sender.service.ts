@@ -6,6 +6,7 @@ import { NotificationsWebSocketService } from '../websockets/notifications-webso
 import { NotificationRecipientService } from '../recipients/notification-recipient.service';
 import { NotificationTemplate, NotificationRecipient } from '../interfaces/notifications.interface';
 import { getOrderNotificationContent } from 'src/modules/order/constantes/order-notifications.constante';
+import { notificationIcons } from '../constantes/notifications.constante';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { EmailService } from './email.service';
 
