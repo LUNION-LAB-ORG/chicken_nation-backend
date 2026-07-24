@@ -2569,3 +2569,36 @@ model DeliveryOfferUsage {
   @@index([customer_id])
   @@index([order_id])
 }
+
+// ================================
+// AUDIT — journal des actions du personnel (backoffice)
+// ================================
+// Snapshot DÉNORMALISÉ (pas de FK vers User/Restaurant) : un log d'audit doit
+// survivre à la suppression de son auteur et ne jamais coupler le cycle de vie
+// d'un compte. On fige donc actor_name/actor_role au moment de l'action.
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  actor_id      String?  @db.Uuid // id du User staff (null = public / système)
+  actor_name    String?  @db.VarChar
+  actor_role    String?  @db.VarChar
+  restaurant_id String?  @db.Uuid
+  action        String   @db.VarChar // CREATE | UPDATE | DELETE | LOGIN | READ | OTHER
+  module        String?  @db.VarChar // 1er segment de path (orders, dishes, card-nation…)
+  entity_id     String?  @db.VarChar // id ciblé (UUID trouvé dans le path)
+  method        String   @db.VarChar // GET | POST | PATCH | PUT | DELETE
+  path          String   @db.Text
+  status_code   Int?
+  duration_ms   Int?
+  ip            String?  @db.VarChar
+  user_agent    String?  @db.Text
+  summary       String?  @db.Text
+  metadata      Json? // { body (redacted), query, params } tronqué
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([created_at])
+  @@index([actor_id])
+  @@index([module])
+  @@index([action])
+  @@index([status_code])
+  @@map("audit_logs")
+}

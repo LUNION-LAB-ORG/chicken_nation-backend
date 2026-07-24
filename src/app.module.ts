@@ -9,6 +9,7 @@ import KeyvRedis from '@keyv/redis';
 
 // Modules internes
 import { CommonModule } from 'src/common/common.module';
+import { AuditModule } from 'src/modules/audit/audit.module';
 import { UsersModule } from 'src/modules/users/users.module';
 import { AuthModule } from 'src/modules/auth/auth.module';
 import { AuthDelivererModule } from 'src/modules/auth-deliverer/auth-deliverer.module';
@@ -96,6 +97,7 @@ import { CallsModule } from 'src/modules/calls/calls.module';
     ExpoPushModule,
     DatabaseModule,
     CommonModule,
+    AuditModule,
     UsersModule,
     AuthModule,
     AuthDelivererModule,

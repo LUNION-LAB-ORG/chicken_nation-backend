@@ -16,5 +16,6 @@ export enum Modules {
   SETTINGS = 'settings',
   BASE_DONNEES = 'base_donnees',
   CALLS = 'calls',
+  AUDIT = 'audit',
   ALL = 'all',
 }
