@@ -4,6 +4,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateComboGameDto } from '../dto/create-combo-game.dto';
 import { UpdateComboGameDto } from '../dto/update-combo-game.dto';
 import { ComboItemDto } from '../dto/combo-item.dto';
+import { ComboService } from './combo.service';
 
 /**
  * CRUD des COMBO MYSTÈRE (back office). Valide la solution et le lot (prize)
@@ -12,7 +13,10 @@ import { ComboItemDto } from '../dto/combo-item.dto';
  */
 @Injectable()
 export class ComboAdminService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly comboService: ComboService,
+  ) {}
 
   async list() {
     const games = await this.prisma.comboGame.findMany({ orderBy: { created_at: 'desc' } });
@@ -54,7 +58,7 @@ export class ComboAdminService {
     const solution = await this.validateSolution(dto.solution);
     const prize = await this.buildPrizePayload(dto.prize);
 
-    return this.prisma.comboGame.create({
+    const created = await this.prisma.comboGame.create({
       data: {
         title: dto.title,
         description: dto.description ?? null,
@@ -70,6 +74,17 @@ export class ComboAdminService {
         created_by: adminId,
       },
     });
+
+    // Jeu déjà ouvert à la création → push « nouveau Combo » à tous les clients
+    // (best-effort, ne bloque jamais la création). Les jeux planifiés seront
+    // notifiés par le cron à leur ouverture.
+    if (created.status === ComboGameStatus.OPEN) {
+      void this.comboService
+        .notifyGameOpened(created)
+        .catch(() => undefined);
+    }
+
+    return created;
   }
 
   async update(id: string, dto: UpdateComboGameDto) {

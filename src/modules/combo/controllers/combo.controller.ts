@@ -27,7 +27,7 @@ export class ComboController {
   @ApiOperation({ summary: 'Soumettre une combinaison (essais bornés RG-10)' })
   @ApiOkResponse({ description: '{ correct, attempts_left }' })
   attempt(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string, @Body() dto: SubmitAttemptDto) {
-    return this.comboService.submitAttempt((req.user as Customer).id, id, dto.answer);
+    return this.comboService.submitAttempt((req.user as Customer).id, id, dto.selections);
   }
 
   @Get(':id/result')
