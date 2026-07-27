@@ -27,6 +27,32 @@ export class TurboController {
     return this.turboService.obtenirFraisLivraisonParRestaurant(body.apikey, query?.page, query?.size);
   }
 
+  /**
+   * Validation du CODE CLIENT (4 chiffres) par un livreur Turbo.
+   * Le code ne transite jamais chez eux : leur app nous envoie le code saisi,
+   * nous répondons valide/invalide et clôturons la livraison si c'est bon.
+   */
+  @Post('livraison/valider-code')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Valider le code client saisi par un livreur Turbo',
+    description:
+      'Le livreur externe saisit le code à 4 chiffres communiqué par le client. ' +
+      'Chicken Nation vérifie et clôture la livraison. La clé API doit être celle du restaurant de la commande.',
+  })
+  @ApiHeader({ name: 'X-API-KEY', description: 'Clé API du restaurant', required: true })
+  @ApiResponse({ status: 200, description: '{ valid, message }' })
+  async validerCodeClient(
+    @Body() body: { numero: string; code: string },
+    @Headers('X-API-KEY') apiKey: string,
+  ) {
+    return this.turboWebhookService.validerCodeClient({
+      numero: body?.numero,
+      code: body?.code,
+      apiKey,
+    });
+  }
+
   @Post('webhook')
   @HttpCode(200)
   @ApiOperation({

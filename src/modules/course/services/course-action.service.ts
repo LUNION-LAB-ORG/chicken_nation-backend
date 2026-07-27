@@ -15,6 +15,7 @@ import {
 import { PrismaService } from 'src/database/services/prisma.service';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer-queue.service';
+import { TurboService } from 'src/turbo/services/turbo.service';
 
 import { CancelCourseDto } from '../dto/cancel-course.dto';
 import { ConfirmDeliveryDto } from '../dto/confirm-delivery.dto';
@@ -40,6 +41,8 @@ export class CourseActionService {
     private readonly queueService: DelivererQueueService,
     // P-push livreur : envoi de push notifications aux livreurs sur les events critiques
     private readonly pushService: DelivererPushService,
+    // Sous-traitance : confirmation du retrait caissière vers la flotte externe.
+    private readonly turboService: TurboService,
   ) {}
 
   // ============================================================
@@ -326,6 +329,27 @@ export class CourseActionService {
         courseReference: updated.reference,
         courseId: updated.id,
       });
+    }
+
+    // Course SOUS-TRAITÉE : on signale le retrait à Turbo (leur groupe passe
+    // « récupéré » → picked_up). C'est CN qui reste la source de vérité sur la
+    // remise des plats, exactement comme pour un livreur interne.
+    // Best-effort : ne bloque jamais la validation (les plats sont déjà remis).
+    //
+    // ⚠️ La clé API est lue par une requête DÉDIÉE : `COURSE_FULL_INCLUDE` est
+    // diffusé aux mobiles et au backoffice par WebSocket — y ajouter `apikey`
+    // la divulguerait à tous les clients connectés.
+    if (updated.turbo_escalated_at) {
+      void (async () => {
+        const resto = await this.prisma.restaurant.findUnique({
+          where: { id: updated.restaurant_id },
+          select: { apikey: true },
+        });
+        await this.turboService.confirmerRetrait({
+          referenceCourse: updated.reference,
+          apikey: resto?.apikey ?? '',
+        });
+      })().catch(() => undefined);
     }
 
     this.logger.log(

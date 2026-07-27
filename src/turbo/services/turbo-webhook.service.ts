@@ -402,6 +402,100 @@ export class TurboWebhookService {
     return this.ack(WebhookEvent.COURIER_LOCATION_UPDATED);
   }
 
+  /**
+   * VALIDATION DU CODE CLIENT par un livreur Turbo (Turbo → CN).
+   *
+   * Le code à 4 chiffres que le client communique au livreur NE QUITTE JAMAIS
+   * nos serveurs : l'application Turbo nous envoie le code saisi, nous répondons
+   * valide / invalide. Si valide, la livraison est clôturée exactement comme
+   * pour un livreur interne (même transition, mêmes effets métier).
+   *
+   * 🔒 Sécurité : la clé API doit être celle DU RESTAURANT de la commande — une
+   * clé valide d'un autre restaurant ne permet pas de clore ses livraisons.
+   */
+  async validerCodeClient(params: {
+    numero: string;
+    code: string;
+    apiKey: string;
+  }): Promise<{ valid: boolean; message: string }> {
+    const { numero, code, apiKey } = params;
+    if (!numero || !code) {
+      return { valid: false, message: 'Référence et code requis.' };
+    }
+
+    const delivery = await this.prisma.delivery.findFirst({
+      where: { order: { reference: numero } },
+      include: {
+        order: {
+          select: {
+            id: true,
+            paied: true,
+            customer_id: true,
+            restaurant: { select: { apikey: true } },
+          },
+        },
+      },
+    });
+    if (!delivery) {
+      return { valid: false, message: 'Livraison introuvable.' };
+    }
+
+    // Cloisonnement : la clé doit être celle du restaurant de la commande.
+    if (!apiKey || delivery.order.restaurant?.apikey !== apiKey) {
+      this.logger.warn(`Validation code client refusée (clé invalide) — commande ${numero}.`);
+      return { valid: false, message: 'Clé API non autorisée pour cette commande.' };
+    }
+
+    if (delivery.statut === DeliveryStatut.DELIVERED) {
+      return { valid: true, message: 'Livraison déjà confirmée.' }; // idempotent
+    }
+    if (delivery.delivery_pin !== code) {
+      this.logger.warn(`Code client invalide pour la commande ${numero}.`);
+      return { valid: false, message: 'Code invalide.' };
+    }
+
+    // Code correct → clôture identique au flux interne (COMPLETED si déjà payée,
+    // COLLECTED sinon : le paiement à la livraison reste à encaisser).
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.delivery.update({
+        where: { id: delivery.id },
+        data: { statut: DeliveryStatut.DELIVERED, delivered_at: now },
+      }),
+      this.prisma.order.update({
+        where: { id: delivery.order_id },
+        data: delivery.order.paied
+          ? { status: OrderStatus.COMPLETED, collected_at: now, completed_at: now }
+          : { status: OrderStatus.COLLECTED, collected_at: now },
+      }),
+    ]);
+
+    if (delivery.order.customer_id) {
+      this.appGateway.emitToUser(
+        delivery.order.customer_id,
+        'customer',
+        CourseChannels.CUSTOMER_DELIVERY_STATUT_CHANGED,
+        { orderId: delivery.order_id, deliveryStatut: DeliveryStatut.DELIVERED, source: 'turbo' },
+      );
+    }
+
+    // Course terminée si plus aucune livraison en cours.
+    if (delivery.course_id) {
+      const restantes = await this.prisma.delivery.count({
+        where: {
+          course_id: delivery.course_id,
+          statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
+        },
+      });
+      if (restantes === 0) {
+        await this.advanceCourse(delivery.course_id, CourseStatut.COMPLETED);
+      }
+    }
+
+    this.logger.log(`Code client validé (Turbo) — commande ${numero} livrée.`);
+    return { valid: true, message: 'Livraison confirmée.' };
+  }
+
   async handleEmergency(data: any): Promise<WebhookResponseDto> {
     this.logger.error(`🚨 Urgence Turbo (commande ${data?.numero}): ${JSON.stringify(data)}`);
     return this.ack(WebhookEvent.DELIVERY_EMERGENCY);

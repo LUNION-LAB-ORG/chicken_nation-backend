@@ -219,6 +219,45 @@ export class TurboService {
   }
 
   /**
+   * CONFIRMATION DU RETRAIT (CN → Turbo).
+   *
+   * Chez Chicken Nation, c'est la CAISSIÈRE — jamais le livreur — qui atteste la
+   * remise des plats : c'est le garde-fou anti-fraude du process, et il ne doit
+   * pas sauter parce que la course est sous-traitée. Turbo n'ayant aucun moyen
+   * de connaître cette validation, c'est nous qui la leur signalons : leur groupe
+   * passe « récupéré » et leur `picked_up` est déclenché.
+   *
+   * Best-effort : un échec ici ne casse JAMAIS la validation côté CN (les plats
+   * sont déjà remis au livreur, la commande doit avancer quoi qu'il arrive).
+   */
+  async confirmerRetrait(params: {
+    referenceCourse: string;
+    apikey: string;
+  }): Promise<boolean> {
+    const { referenceCourse, apikey } = params;
+    try {
+      const response = await fetch(TURBO_API.CONFIRMATION_RETRAIT(referenceCourse), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-KEY': apikey },
+        body: JSON.stringify({ referenceCourse }),
+      });
+      if (!response.ok) {
+        this.logger.error(
+          `Confirmation retrait Turbo refusée pour ${referenceCourse} : HTTP ${response.status}`,
+        );
+        return false;
+      }
+      this.logger.log(`Retrait confirmé auprès de Turbo pour la course ${referenceCourse}.`);
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Confirmation retrait Turbo échouée pour ${referenceCourse} : ${(error as Error)?.message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
    * Un dispatch Turbo a échoué : la commande ne sera PAS affectée à un livreur
    * automatiquement. On rend l'échec VISIBLE (log explicite + alerte cloche au
    * staff) au lieu de l'avaler silencieusement, pour un traitement manuel.
