@@ -51,6 +51,33 @@ export class TurboWebhookService {
     return { event, received: true, process };
   }
 
+  /**
+   * 🔒 Authentification du webhook. Jusqu'ici, TOUTE clé non vide était
+   * acceptée : n'importe qui pouvait marquer une commande livrée ou annulée.
+   * On exige désormais une clé appartenant à un restaurant connu.
+   *
+   * Bascule en DEUX TEMPS pour ne pas casser l'intégration en cours :
+   *   • par défaut (souple) : une clé inconnue est journalisée en ERREUR mais
+   *     l'événement est traité — on observe ce que Turbo envoie réellement ;
+   *   • `TURBO_WEBHOOK_STRICT=true` : la clé inconnue est REJETÉE.
+   * Une fois les journaux confirmés, passer la variable à `true`.
+   */
+  async verifierCleApi(apiKey?: string): Promise<{ known: boolean; reject: boolean }> {
+    const strict = process.env.TURBO_WEBHOOK_STRICT === 'true';
+    if (!apiKey) return { known: false, reject: true };
+
+    const resto = await this.prisma.restaurant.findFirst({
+      where: { apikey: apiKey },
+      select: { id: true },
+    });
+    if (resto) return { known: true, reject: false };
+
+    this.logger.error(
+      `🔒 Webhook Turbo : clé API INCONNUE (${apiKey.slice(0, 6)}…) — ${strict ? 'REJETÉ' : 'toléré (mode souple)'}.`,
+    );
+    return { known: false, reject: strict };
+  }
+
   /** Retrouve la commande CN par la RÉFÉRENCE portée par `data.numero`. */
   private async resolveOrder(numero?: string) {
     if (!numero) return null;

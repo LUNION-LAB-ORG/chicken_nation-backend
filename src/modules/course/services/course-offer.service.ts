@@ -613,14 +613,36 @@ export class CourseOfferService {
     // (1 course = 1 commande chez eux) qu'un même livreur accepte en bloc, et le
     // livreur annonce notre code au restaurant → process CN inchangé.
     let sent: string[] = [];
+    let uncertain = false;
     try {
       const res = await this.turboService.creerCourseGroupe({ courseId, apikey });
       sent = res.sentOrderIds;
+      uncertain = res.uncertain === true;
     } catch (err) {
+      uncertain = true; // exception inattendue : on ne peut rien affirmer
       this.logger.warn(
         `Bascule Turbo : groupe ${course.reference} échoué — ${(err as Error).message}`,
       );
     }
+
+    // ⚠️ DOUBLE ENVOI DE LIVREUR — issue INCERTAINE (timeout/coupure) : Turbo a
+    // peut-être créé le groupe sans que la réponse nous parvienne. Repartir en
+    // recherche interne enverrait un livreur CN sur une commande déjà prise par
+    // un livreur Turbo. On GARDE donc la sous-traitance et on fait trancher un
+    // humain, au lieu de risquer deux livreurs sur la même commande.
+    if (sent.length === 0 && uncertain) {
+      this.logger.error(
+        `⚠️ Bascule Turbo INCERTAINE pour ${course.reference} — maintenue sous-traitée (vérification manuelle requise).`,
+      );
+      this.notificationsSender
+        .sendTurboPickupSyncFailedBell({
+          reference: course.reference,
+          restaurantId: course.restaurant.id,
+        })
+        .catch(() => undefined);
+      return true; // sous-traitée « en doute » : plus aucune recherche interne
+    }
+
     const failed = orderIds.filter((id) => !sent.includes(id));
 
     // Turbo totalement injoignable → rollback COMPLET : la recherche interne

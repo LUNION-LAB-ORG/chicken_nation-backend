@@ -70,12 +70,11 @@ export class TurboController {
     @Body() body: WebhookEventDto,
     @Headers('X-API-KEY') apiKey: string,
   ) {
-    if (!apiKey) {
-      return new UnauthorizedException({
-        event: 'unauthorized',
-        received: true,
-        process: false,
-      });
+    // 🔒 La clé doit appartenir à un restaurant connu (mode souple par défaut :
+    // une clé inconnue est journalisée ; `TURBO_WEBHOOK_STRICT=true` la rejette).
+    const auth = await this.turboWebhookService.verifierCleApi(apiKey);
+    if (auth.reject) {
+      return { event: 'unauthorized', received: true, process: false };
     }
 
     const { alias, data } = body;

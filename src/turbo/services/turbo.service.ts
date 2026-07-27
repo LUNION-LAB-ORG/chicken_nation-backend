@@ -112,7 +112,17 @@ export class TurboService {
   async creerCourseGroupe(params: {
     courseId: string;
     apikey: string;
-  }): Promise<{ sentOrderIds: string[]; response: CommandeResponse | null }> {
+  }): Promise<{
+    sentOrderIds: string[];
+    response: CommandeResponse | null;
+    /**
+     * `true` quand l'issue est INCERTAINE (timeout / coupure réseau) : Turbo a
+     * PEUT-ÊTRE créé le groupe sans que la réponse nous parvienne. L'appelant ne
+     * doit alors SURTOUT PAS repartir en recherche interne, sous peine
+     * d'envoyer deux livreurs sur la même commande.
+     */
+    uncertain?: boolean;
+  }> {
     const { courseId, apikey } = params;
 
     const course = await this.prisma.course.findUnique({
@@ -210,11 +220,13 @@ export class TurboService {
         response: data as CommandeResponse,
       };
     } catch (error) {
+      // Coupure réseau / timeout : leur groupe a PEUT-ÊTRE été créé. On le
+      // signale comme INCERTAIN pour interdire tout repli en interne.
       await this.reportDispatchFailure(
         eligibles[0],
         (error as Error)?.message ?? 'erreur réseau',
       );
-      return { sentOrderIds: [], response: null };
+      return { sentOrderIds: [], response: null, uncertain: true };
     }
   }
 
