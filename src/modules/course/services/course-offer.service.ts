@@ -453,6 +453,9 @@ export class CourseOfferService {
     const waiting = await this.prisma.course.findMany({
       where: {
         statut: CourseStatut.PENDING_ASSIGNMENT,
+        // Déjà sous-traitée à Turbo → plus aucune recherche de livreur interne
+        // (la course vit désormais au rythme des webhooks Turbo).
+        turbo_escalated_at: null,
         // Aucune offer en cours : soit jamais proposée, soit toutes échues.
         offer_attempts: {
           none: { status: CourseOfferStatus.PENDING, expires_at: { gt: now } },
@@ -594,56 +597,70 @@ export class CourseOfferService {
     }
 
     const apikey = course.restaurant.apikey ?? '';
+    const orderIds = course.deliveries.map((d) => d.order.id);
+
+    // ⚠️ ORDRE CRITIQUE : `TurboService.creerCourse` REFUSE toute commande dont
+    // `delivery_service` n'est pas déjà TURBO (garde interne). Il faut donc
+    // basculer le champ AVANT l'appel, sinon la sous-traitance échoue en
+    // silence à tous les coups.
+    await this.prisma.order.updateMany({
+      where: { id: { in: orderIds } },
+      data: { delivery_service: DeliveryService.TURBO },
+    });
+
     const sent: string[] = [];
+    const failed: string[] = [];
     for (const d of course.deliveries) {
       try {
         // `creerCourse` renvoie null en cas d'échec (il alerte déjà de son côté).
         const res = await this.turboService.creerCourse(d.order.id, apikey);
         if (res) sent.push(d.order.id);
+        else failed.push(d.order.id);
       } catch (err) {
+        failed.push(d.order.id);
         this.logger.warn(
           `Bascule Turbo : commande ${d.order.reference} échouée — ${(err as Error).message}`,
         );
       }
     }
 
-    // Turbo totalement injoignable → on annule la bascule, la recherche interne
+    // Turbo totalement injoignable → rollback COMPLET : la recherche interne
     // reprend et le staff sera alerté. Aucune commande n'est perdue.
     if (sent.length === 0) {
-      await this.prisma.course.updateMany({
-        where: { id: courseId },
-        data: { turbo_escalated_at: null },
-      });
+      await this.prisma.$transaction([
+        this.prisma.order.updateMany({
+          where: { id: { in: orderIds } },
+          data: { delivery_service: DeliveryService.CHICKEN_NATION },
+        }),
+        this.prisma.course.updateMany({
+          where: { id: courseId },
+          data: { turbo_escalated_at: null },
+        }),
+      ]);
       this.logger.error(
         `Bascule Turbo ÉCHOUÉE pour ${course.reference} — retour à la recherche interne`,
       );
       return false;
     }
 
-    const now = new Date();
-    await this.prisma.$transaction([
-      // Les commandes passent en livraison Turbo (tracking + libellé backoffice).
-      this.prisma.order.updateMany({
-        where: { id: { in: sent } },
-        data: { delivery_service: DeliveryService.TURBO },
-      }),
-      // La course interne se ferme : aucun livreur CN ne doit plus la chercher.
-      // Les COMMANDES ne sont volontairement PAS annulées.
-      this.prisma.course.update({
-        where: { id: courseId },
-        data: {
-          statut: CourseStatut.CANCELLED,
-          cancelled_at: now,
-          cancelled_by: 'system',
-          cancelled_reason: `Sous-traitée à Turbo (aucun livreur interne depuis ${waitingMinutes} min)`,
-          offer_expires_at: null,
-        },
-      }),
-      this.prisma.delivery.updateMany({
-        where: { course_id: courseId, statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED] } },
-        data: { statut: DeliveryStatut.CANCELLED },
-      }),
-    ]);
+    // Échec PARTIEL : les commandes non transmises repassent en interne pour
+    // être re-proposées à un livreur CN (elles ne doivent pas rester orphelines).
+    if (failed.length > 0) {
+      await this.prisma.order.updateMany({
+        where: { id: { in: failed } },
+        data: { delivery_service: DeliveryService.CHICKEN_NATION },
+      });
+      this.logger.warn(
+        `Bascule Turbo partielle sur ${course.reference} : ${failed.length} commande(s) restée(s) en interne`,
+      );
+    }
+
+    // La Course CN reste VIVANTE (pas d'annulation) : elle continue de suivre le
+    // cycle de vie normal, piloté cette fois par les webhooks Turbo
+    // (courier_assigned → ACCEPTED, pickup → AT_RESTAURANT, etc.). Le staff et le
+    // client gardent donc exactement le même suivi qu'avec un livreur interne.
+    // `turbo_escalated_at` (déjà posé par le claim) exclut la course de la
+    // recherche de livreur interne.
 
     this.notificationsSender
       .sendCourseTurboFallbackBell({

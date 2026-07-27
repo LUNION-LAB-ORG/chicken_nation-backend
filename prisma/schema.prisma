@@ -622,6 +622,21 @@ model Delivery {
   customer_rating_note String?   @db.VarChar(500)
   customer_rated_at    DateTime? @db.Timestamp(6)
 
+  // === Sous-traitance TURBO (flotte externe) ===
+  // Dégroupage : 1 Delivery = 1 course Turbo (leur API prend 1 commande).
+  // Ces champs donnent au suivi Turbo la MÊME richesse qu'une livraison interne
+  // (qui livre, comment le joindre, où il est) — alimentés par les webhooks.
+  /// Id de la course côté Turbo (webhook `created`).
+  turbo_course_id           String?   @db.VarChar
+  /// Livreur Turbo affecté (webhook `courier_assigned`).
+  turbo_courier_id          String?   @db.VarChar
+  turbo_courier_name        String?   @db.VarChar
+  turbo_courier_phone       String?   @db.VarChar
+  /// Dernière position connue du livreur Turbo (webhook `location_updated`).
+  turbo_courier_lat         Float?
+  turbo_courier_lng         Float?
+  turbo_courier_location_at DateTime? @db.Timestamp(6)
+
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
 

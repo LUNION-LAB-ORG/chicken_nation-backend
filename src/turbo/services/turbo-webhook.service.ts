@@ -4,23 +4,33 @@ import { WebhookResponseDto } from '../dto/turbo-webhook.dto';
 import { WebhookEvent } from '../enums/webhook-event.enum';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { OrderStatus } from '@prisma/client';
+import { CourseStatut, DeliveryStatut, OrderStatus } from '@prisma/client';
 import { OrderChannels } from 'src/modules/order/enums/order-channels';
+import { CourseChannels } from 'src/modules/course/enums/course-channels';
 
 /**
  * Réception des webhooks de suivi de livraison Turbo (Turbo → CN).
  *
- * ⚠️ Contrat Turbo (fixe) : `{ alias, data: { numero, courierId } }` où
+ * ⚠️ Contrat Turbo : `{ alias, data: { numero, courierId, ... } }` où
  * `numero` = RÉFÉRENCE de la commande CN (jamais l'UUID — CN n'envoie que la
  * référence à la création). On retrouve donc la commande par `reference`.
  * Sur `created`, `courierId` porte l'id de la COURSE (aucun livreur assigné) →
  * on ne l'interprète JAMAIS comme un livreur.
  *
- * Chaque étape met à jour le statut de la commande CN et déclenche exactement
- * le même flux qu'une mise à jour de statut normale : temps réel (app +
- * backoffice + resto via AppGateway) + effets métier (fidélité sur COMPLETED,
- * notifications…) via l'EventEmitter `order:statusUpdated`. Tolérant : jamais
- * d'exception (donc plus de 500/400), idempotent, no-op si commande absente.
+ * ── Suivi COMPLET (sous-traitance) ──────────────────────────────────────────
+ * Une commande confiée à Turbo doit être suivie AUSSI FINEMENT qu'une livraison
+ * interne. Chaque événement met donc à jour les TROIS entités :
+ *   • `Order`   → statut client (app cliente + backoffice)
+ *   • `Delivery`→ étape fine + identité/position du livreur Turbo
+ *   • `Course`  → cycle de vie identique à l'interne (ACCEPTED → AT_RESTAURANT
+ *                 → IN_DELIVERY → COMPLETED)
+ *
+ * Les positions GPS sont relayées sur le MÊME canal que le suivi interne
+ * (`delivery:location`) : l'app cliente suit un livreur Turbo sans aucune
+ * modification.
+ *
+ * Tolérant : jamais d'exception (donc plus de 500/400), idempotent, no-op si la
+ * commande est absente.
  */
 @Injectable()
 export class TurboWebhookService {
@@ -48,6 +58,19 @@ export class TurboWebhookService {
     });
   }
 
+  /**
+   * Retrouve la LIVRAISON CN (et sa course) rattachée à la commande. Absente si
+   * la commande a été envoyée à Turbo dès la création (flux « Turbo direct »,
+   * sans course interne) — dans ce cas seul l'Order est suivi.
+   */
+  private async resolveDelivery(numero?: string) {
+    if (!numero) return null;
+    return this.prisma.delivery.findFirst({
+      where: { order: { reference: numero } },
+      include: { course: true, order: { select: { id: true, customer_id: true } } },
+    });
+  }
+
   private statusMessage(status: OrderStatus): string {
     switch (status) {
       case OrderStatus.PICKED_UP:
@@ -58,6 +81,74 @@ export class TurboWebhookService {
         return 'Commande annulée';
       default:
         return 'Statut mis à jour';
+    }
+  }
+
+  /**
+   * Fait progresser la COURSE CN sur son cycle de vie normal. Idempotent et
+   * ANTI-RETOUR : on n'applique la transition que si elle avance (un webhook
+   * rejoué ou arrivé dans le désordre ne fait jamais reculer la course).
+   */
+  private async advanceCourse(courseId: string, next: CourseStatut): Promise<void> {
+    const ORDER: CourseStatut[] = [
+      CourseStatut.PENDING_ASSIGNMENT,
+      CourseStatut.ACCEPTED,
+      CourseStatut.AT_RESTAURANT,
+      CourseStatut.IN_DELIVERY,
+      CourseStatut.COMPLETED,
+    ];
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: { id: true, statut: true },
+    });
+    if (!course) return;
+
+    const from = ORDER.indexOf(course.statut);
+    const to = ORDER.indexOf(next);
+    if (from === -1 || to === -1 || to <= from) return; // terminal, inconnu ou recul
+
+    const now = new Date();
+    await this.prisma.course.update({
+      where: { id: courseId },
+      data: {
+        statut: next,
+        ...(next === CourseStatut.ACCEPTED && { assigned_at: now }),
+        ...(next === CourseStatut.IN_DELIVERY && { picked_up_at: now }),
+        ...(next === CourseStatut.COMPLETED && { completed_at: now }),
+      },
+    });
+    this.appGateway.emitToBackoffice(CourseChannels.COURSE_STATUT_CHANGED, {
+      course_id: courseId,
+      statut: next,
+      source: 'turbo',
+    });
+  }
+
+  /** Met à jour l'étape fine de la livraison CN (miroir du suivi interne). */
+  private async advanceDelivery(
+    deliveryId: string,
+    next: DeliveryStatut,
+    customerId?: string | null,
+    orderId?: string,
+  ): Promise<void> {
+    const now = new Date();
+    await this.prisma.delivery.update({
+      where: { id: deliveryId },
+      data: {
+        statut: next,
+        ...(next === DeliveryStatut.IN_ROUTE && { in_route_at: now }),
+        ...(next === DeliveryStatut.ARRIVED && { arrived_at: now }),
+        ...(next === DeliveryStatut.DELIVERED && { delivered_at: now }),
+      },
+    });
+    // Même canal que le suivi interne → l'app cliente n'a rien à changer.
+    if (customerId) {
+      this.appGateway.emitToUser(
+        customerId,
+        'customer',
+        CourseChannels.CUSTOMER_DELIVERY_STATUT_CHANGED,
+        { orderId, deliveryStatut: next, source: 'turbo' },
+      );
     }
   }
 
@@ -123,42 +214,191 @@ export class TurboWebhookService {
 
   // ── Handlers par événement ────────────────────────────────────────────────
 
-  /** Course créée côté Turbo : la commande est DÉJÀ READY (c'est ce qui a
-   *  déclenché l'envoi). On accuse simplement réception — `courierId` = id de
-   *  course, pas un livreur, donc on n'y touche pas. */
+  /**
+   * Course créée côté Turbo. La commande est DÉJÀ READY (c'est ce qui a
+   * déclenché l'envoi). `courierId` = id de la COURSE Turbo, PAS un livreur :
+   * on le mémorise pour la traçabilité (rapprochement, support, litiges).
+   */
   async handleDeliveryCreated(data: any): Promise<WebhookResponseDto> {
+    const delivery = await this.resolveDelivery(data?.numero);
+    if (delivery && data?.courierId) {
+      await this.prisma.delivery.update({
+        where: { id: delivery.id },
+        data: { turbo_course_id: String(data.courierId) },
+      });
+    }
     this.logger.log(`Course Turbo confirmée pour la commande ${data?.numero}.`);
     return this.ack(WebhookEvent.DELIVERY_CREATED);
   }
 
+  /**
+   * Un livreur Turbo est affecté : on enregistre son identité (qui livre,
+   * comment le joindre) et la course CN passe ACCEPTED — exactement comme si un
+   * livreur interne avait accepté.
+   *
+   * Les champs d'identité sont lus de façon TOLÉRANTE : le contrat Turbo peut
+   * les nommer différemment (ou ne pas encore les envoyer) — dans ce cas seul
+   * l'identifiant est stocké et l'affichage retombe sur « Livreur Turbo ».
+   */
   async handleCourierAssigned(data: any): Promise<WebhookResponseDto> {
-    this.logger.log(`Livreur Turbo assigné (commande ${data?.numero}).`);
+    const delivery = await this.resolveDelivery(data?.numero);
+    if (!delivery) {
+      this.logger.warn(`Webhook Turbo courier_assigned : livraison « ${data?.numero} » introuvable.`);
+      return this.ack(WebhookEvent.DELIVERY_COURIER_ASSIGNED, false);
+    }
+
+    const name =
+      data?.courierName ?? data?.nomComplet ?? data?.courier?.nomComplet ?? data?.courier?.name ?? null;
+    const phone =
+      data?.courierPhone ?? data?.contact ?? data?.courier?.contact ?? data?.courier?.telephone ?? null;
+    const courierId = data?.courierId ?? data?.courier?.id ?? null;
+
+    await this.prisma.delivery.update({
+      where: { id: delivery.id },
+      data: {
+        ...(courierId && { turbo_courier_id: String(courierId) }),
+        ...(name && { turbo_courier_name: String(name) }),
+        ...(phone && { turbo_courier_phone: String(phone) }),
+      },
+    });
+
+    if (delivery.course_id) {
+      await this.advanceCourse(delivery.course_id, CourseStatut.ACCEPTED);
+    }
+
+    this.logger.log(
+      `Livreur Turbo assigné (commande ${data?.numero})${name ? ` : ${name}` : ''}.`,
+    );
     return this.ack(WebhookEvent.DELIVERY_COURIER_ASSIGNED);
   }
 
+  /** Le livreur Turbo est en route vers le restaurant / sur place. */
   async handlePickupStarted(data: any): Promise<WebhookResponseDto> {
-    return this.syncStatus(data?.numero, OrderStatus.PICKED_UP, WebhookEvent.DELIVERY_PICKUP_STARTED);
+    const delivery = await this.resolveDelivery(data?.numero);
+    if (delivery?.course_id) {
+      await this.advanceCourse(delivery.course_id, CourseStatut.AT_RESTAURANT);
+    }
+    // La commande reste READY tant que les plats ne sont pas récupérés.
+    return this.ack(WebhookEvent.DELIVERY_PICKUP_STARTED);
   }
 
+  /** Plats récupérés au restaurant → la tournée démarre. */
   async handlePickedUp(data: any): Promise<WebhookResponseDto> {
+    const delivery = await this.resolveDelivery(data?.numero);
+    if (delivery) {
+      if (delivery.course_id) {
+        await this.advanceCourse(delivery.course_id, CourseStatut.IN_DELIVERY);
+      }
+      await this.advanceDelivery(
+        delivery.id,
+        DeliveryStatut.IN_ROUTE,
+        delivery.order?.customer_id,
+        delivery.order_id,
+      );
+    }
     return this.syncStatus(data?.numero, OrderStatus.PICKED_UP, WebhookEvent.DELIVERY_PICKED_UP);
   }
 
+  /** En route vers le client (même étape métier que picked_up côté commande). */
   async handleInTransit(data: any): Promise<WebhookResponseDto> {
-    // Pas de statut « en transit » distinct côté CN : reste EN LIVRAISON (PICKED_UP).
+    const delivery = await this.resolveDelivery(data?.numero);
+    if (delivery) {
+      if (delivery.course_id) {
+        await this.advanceCourse(delivery.course_id, CourseStatut.IN_DELIVERY);
+      }
+      await this.advanceDelivery(
+        delivery.id,
+        DeliveryStatut.IN_ROUTE,
+        delivery.order?.customer_id,
+        delivery.order_id,
+      );
+    }
     return this.syncStatus(data?.numero, OrderStatus.PICKED_UP, WebhookEvent.DELIVERY_IN_TRANSIT);
   }
 
+  /**
+   * Livrée : on clôt la livraison, puis la course SI toutes ses livraisons sont
+   * terminées (une course peut avoir été partiellement sous-traitée).
+   */
   async handleDelivered(data: any): Promise<WebhookResponseDto> {
+    const delivery = await this.resolveDelivery(data?.numero);
+    if (delivery) {
+      await this.advanceDelivery(
+        delivery.id,
+        DeliveryStatut.DELIVERED,
+        delivery.order?.customer_id,
+        delivery.order_id,
+      );
+      if (delivery.course_id) {
+        const restantes = await this.prisma.delivery.count({
+          where: {
+            course_id: delivery.course_id,
+            statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
+          },
+        });
+        if (restantes === 0) {
+          await this.advanceCourse(delivery.course_id, CourseStatut.COMPLETED);
+        }
+      }
+    }
     return this.syncStatus(data?.numero, OrderStatus.COMPLETED, WebhookEvent.DELIVERY_DELIVERED);
   }
 
+  /** Annulée côté Turbo : la livraison CN est annulée avec elle. */
   async handleCancelled(data: any): Promise<WebhookResponseDto> {
+    const delivery = await this.resolveDelivery(data?.numero);
+    if (delivery) {
+      await this.prisma.delivery.update({
+        where: { id: delivery.id },
+        data: { statut: DeliveryStatut.CANCELLED },
+      });
+    }
     return this.syncStatus(data?.numero, OrderStatus.CANCELLED, WebhookEvent.DELIVERY_CANCELLED);
   }
 
+  /**
+   * Position du livreur Turbo : persistée sur la livraison ET relayée au client
+   * sur le MÊME canal que le suivi interne (`delivery:location`) → l'app cliente
+   * affiche le livreur Turbo sur sa carte sans aucune modification.
+   *
+   * Lecture tolérante des coordonnées (le contrat Turbo peut varier).
+   */
   async handleLocationUpdated(data: any): Promise<WebhookResponseDto> {
-    // Position livreur : pas de persistance côté CN pour l'instant.
+    const lat = Number(data?.latitude ?? data?.lat ?? data?.position?.latitude);
+    const lng = Number(data?.longitude ?? data?.lng ?? data?.position?.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return this.ack(WebhookEvent.COURIER_LOCATION_UPDATED, false);
+    }
+
+    const delivery = await this.resolveDelivery(data?.numero);
+    if (!delivery) return this.ack(WebhookEvent.COURIER_LOCATION_UPDATED, false);
+
+    const now = new Date();
+    await this.prisma.delivery.update({
+      where: { id: delivery.id },
+      data: {
+        turbo_courier_lat: lat,
+        turbo_courier_lng: lng,
+        turbo_courier_location_at: now,
+      },
+    });
+
+    if (delivery.order?.customer_id) {
+      this.appGateway.emitToUser(
+        delivery.order.customer_id,
+        'customer',
+        CourseChannels.CUSTOMER_DELIVERY_LOCATION,
+        {
+          orderId: delivery.order_id,
+          delivererId: delivery.turbo_courier_id ?? 'turbo',
+          lat,
+          lng,
+          deliveryStatut: delivery.statut,
+          source: 'turbo',
+          ts: now.toISOString(),
+        },
+      );
+    }
     return this.ack(WebhookEvent.COURIER_LOCATION_UPDATED);
   }
 
