@@ -540,8 +540,27 @@ export class TurboWebhookService {
     return { valid: true, message: 'Livraison confirmée.' };
   }
 
+  /**
+   * Incident déclaré par un livreur Turbo (accident, agression, panne…).
+   * Auparavant simplement loggé : personne ne le voyait. Le staff est désormais
+   * ALERTÉ — un incident sur une livraison en cours demande une réaction humaine
+   * immédiate (rappeler le client, relancer la commande, prévenir Turbo).
+   */
   async handleEmergency(data: any): Promise<WebhookResponseDto> {
     this.logger.error(`🚨 Urgence Turbo (commande ${data?.numero}): ${JSON.stringify(data)}`);
+
+    const order = await this.resolveOrder(data?.numero);
+    if (order) {
+      const motif =
+        data?.motif ?? data?.reason ?? data?.message ?? 'incident non précisé';
+      this.notificationsSender
+        .sendTurboEmergencyBell({
+          reference: order.reference,
+          restaurantId: order.restaurant_id,
+          motif: String(motif).slice(0, 200),
+        })
+        .catch(() => undefined);
+    }
     return this.ack(WebhookEvent.DELIVERY_EMERGENCY);
   }
 }

@@ -306,6 +306,61 @@ export class NotificationsSenderService {
     }
 
     /**
+     * 🚨 Alerte : INCIDENT déclaré par un livreur Turbo sur une livraison en
+     * cours (accident, agression, panne…). Demande une réaction humaine
+     * immédiate — rappeler le client, relancer la commande, joindre Turbo.
+     */
+    async sendTurboEmergencyBell(params: {
+        reference: string;
+        restaurantId: string;
+        motif: string;
+    }) {
+        try {
+            const { reference, restaurantId, motif } = params;
+
+            const [restoUsers, backofficeUsers] = await Promise.all([
+                this.notificationRecipientService.getAllUsersByRestaurantAndRole(
+                    restaurantId,
+                    [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+                ),
+                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+            ]);
+
+            const byId = new Map<string, NotificationRecipient>();
+            for (const r of [...restoUsers, ...backofficeUsers]) byId.set(r.id, r);
+            const recipients = [...byId.values()].filter(
+                (r) => r.in_app_notifications_enabled !== false,
+            );
+            if (recipients.length === 0) return;
+
+            const template: NotificationTemplate<any> = {
+                title: () => '🚨 Incident livreur Turbo',
+                message: () =>
+                    `Incident signalé sur la livraison de la commande ${reference} : ${motif}. ` +
+                    `Vérifiez la situation du client et contactez Turbo.`,
+                icon: () => notificationIcons.delivery.url,
+                iconBgColor: () => notificationIcons.delivery.color,
+            };
+
+            const notifications = await this.notificationsService.sendNotificationToMultiple(
+                template,
+                {
+                    actor: recipients[0],
+                    recipients,
+                    data: { reference, motif },
+                    meta: { kind: 'order', reference, turbo_emergency: true },
+                },
+                NotificationType.SYSTEM,
+            );
+            notifications.forEach((notif, i) => {
+                this.notificationsWebSocketService.emitNotification(notif, recipients[i]);
+            });
+        } catch (e) {
+            this.logger.warn(`Alerte « incident Turbo » non envoyée : ${(e as Error)?.message}`);
+        }
+    }
+
+    /**
      * 🚨 Alerte : Turbo n'a PAS accusé réception du retrait alors que la
      * caissière a remis les plats. Conséquence côté Turbo : leur groupe reste
      * « non récupéré » et le livreur peut être bloqué dans son application avec

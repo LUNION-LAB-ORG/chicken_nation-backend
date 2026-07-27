@@ -258,6 +258,18 @@ export class TurboService {
           );
           return true;
         }
+
+        // 404/501 : l'endpoint n'est pas ENCORE livré côté Turbo (déploiement en
+        // cours de leur côté). Ce n'est pas une panne : relancer et alerter le
+        // staff n'apporterait que du bruit. On sort proprement, en silence.
+        // Dès qu'ils déploient, le flux nominal reprend sans rien changer ici.
+        if (response.status === 404 || response.status === 501) {
+          this.logger.warn(
+            `Confirmation retrait : endpoint Turbo pas encore disponible (HTTP ${response.status}) — ignoré pour ${referenceCourse}.`,
+          );
+          return false;
+        }
+
         this.logger.warn(
           `Confirmation retrait Turbo refusée (${referenceCourse}, essai ${essai + 1}/${DELAIS_MS.length}) : HTTP ${response.status}`,
         );
