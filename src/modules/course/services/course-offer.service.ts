@@ -608,21 +608,20 @@ export class CourseOfferService {
       data: { delivery_service: DeliveryService.TURBO },
     });
 
-    const sent: string[] = [];
-    const failed: string[] = [];
-    for (const d of course.deliveries) {
-      try {
-        // `creerCourse` renvoie null en cas d'échec (il alerte déjà de son côté).
-        const res = await this.turboService.creerCourse(d.order.id, apikey);
-        if (res) sent.push(d.order.id);
-        else failed.push(d.order.id);
-      } catch (err) {
-        failed.push(d.order.id);
-        this.logger.warn(
-          `Bascule Turbo : commande ${d.order.reference} échouée — ${(err as Error).message}`,
-        );
-      }
+    // ENVOI PAR GROUPE : un seul appel portant les N commandes de la course, plus
+    // le CODE DE RETRAIT et la référence CN. Turbo en fait un groupe de courses
+    // (1 course = 1 commande chez eux) qu'un même livreur accepte en bloc, et le
+    // livreur annonce notre code au restaurant → process CN inchangé.
+    let sent: string[] = [];
+    try {
+      const res = await this.turboService.creerCourseGroupe({ courseId, apikey });
+      sent = res.sentOrderIds;
+    } catch (err) {
+      this.logger.warn(
+        `Bascule Turbo : groupe ${course.reference} échoué — ${(err as Error).message}`,
+      );
     }
+    const failed = orderIds.filter((id) => !sent.includes(id));
 
     // Turbo totalement injoignable → rollback COMPLET : la recherche interne
     // reprend et le staff sera alerté. Aucune commande n'est perdue.
