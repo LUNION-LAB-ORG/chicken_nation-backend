@@ -15,6 +15,7 @@ import {
 } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
+import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
 import { DelivererScoringSettingsHelper } from 'src/modules/deliverers/helpers/deliverer-scoring-settings.helper';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer-queue.service';
@@ -51,6 +52,9 @@ export class CourseOfferService {
     // P-push livreur : push "Nouvelle course !" CRITIQUE — l'événement le plus
     // important pour le livreur (vibration + son fort, ouvre directement le sheet).
     private readonly pushService: DelivererPushService,
+    // Alerte cloche staff quand aucun livreur n'est trouvé (NotificationsModule
+    // est @Global : pas d'import de module nécessaire).
+    private readonly notificationsSender: NotificationsSenderService,
   ) {}
 
   /**
@@ -171,12 +175,18 @@ export class CourseOfferService {
     const candidate = await this.findBestDeliverer(course.restaurant_id, excludedIds);
 
     if (!candidate) {
-      // Plus de livreurs disponibles → la course expire
+      // AUCUN livreur disponible (tous occupés / hors service / en pause, ou
+      // tous ont déjà refusé). On NE l'expire PLUS en silence : la course RESTE
+      // en PENDING_ASSIGNMENT, `retryUnassignedCourses` (cron) re-cherchera un
+      // livreur, alertera le staff après `no_deliverer_alert_after_min`, et
+      // n'expirera qu'au-delà de `no_deliverer_max_wait_min`.
       await this.prisma.course.update({
         where: { id: courseId },
-        data: { statut: CourseStatut.EXPIRED, offer_expires_at: null },
+        data: { offer_expires_at: null },
       });
-      this.logger.warn(`Course ${course.reference} : plus de livreur candidat, EXPIRED`);
+      this.logger.warn(
+        `Course ${course.reference} : aucun livreur candidat pour l'instant — maintenue en attente (relance auto)`,
+      );
       return;
     }
 
@@ -417,6 +427,101 @@ export class CourseOfferService {
 
     this.logger.log(`${expired.length} offer(s) expirée(s) traitée(s)`);
     return expired.length;
+  }
+
+  /**
+   * RELANCE des courses restées SANS LIVREUR (cron, toutes les 30 s).
+   *
+   * Une course tombe ici quand `offerNextDeliverer` n'a trouvé aucun candidat
+   * (tous occupés / hors service / en pause). Au lieu d'expirer en silence, elle
+   * reste PENDING_ASSIGNMENT et on :
+   *   1. re-cherche un livreur à chaque passage (un livreur se libère → il est pris)
+   *   2. ALERTE le staff (cloche) une seule fois passé `no_deliverer_alert_after_min`
+   *   3. expire pour de bon au-delà de `no_deliverer_max_wait_min` (anti-zombie)
+   *
+   * Les courses ayant une offer PENDING active sont ignorées (`offerNextDeliverer`
+   * sort tout seul, mais on évite le bruit).
+   */
+  async retryUnassignedCourses(): Promise<number> {
+    const settings = await this.settings.load();
+    const now = new Date();
+
+    const waiting = await this.prisma.course.findMany({
+      where: {
+        statut: CourseStatut.PENDING_ASSIGNMENT,
+        // Aucune offer en cours : soit jamais proposée, soit toutes échues.
+        offer_attempts: {
+          none: { status: CourseOfferStatus.PENDING, expires_at: { gt: now } },
+        },
+      },
+      select: {
+        id: true,
+        reference: true,
+        created_at: true,
+        no_deliverer_alerted_at: true,
+        restaurant_id: true,
+      },
+      orderBy: { created_at: 'asc' }, // la plus ancienne d'abord (équité client)
+      take: 50, // garde-fou
+    });
+
+    let retried = 0;
+    for (const course of waiting) {
+      const waitingMin = (now.getTime() - course.created_at.getTime()) / 60000;
+
+      // 1. Garde-fou anti-zombie : au-delà du plafond, on expire réellement.
+      //    Claim ATOMIQUE (conditionné sur le statut) : deux backends tournent
+      //    en parallèle sur la même base, un update non conditionné écraserait
+      //    une course entre-temps acceptée par un livreur.
+      if (waitingMin >= settings.noDelivererMaxWaitMin) {
+        const claimed = await this.prisma.course.updateMany({
+          where: { id: course.id, statut: CourseStatut.PENDING_ASSIGNMENT },
+          data: { statut: CourseStatut.EXPIRED, offer_expires_at: null },
+        });
+        if (claimed.count === 1) {
+          this.logger.warn(
+            `Course ${course.reference} : aucun livreur depuis ${Math.round(waitingMin)} min → EXPIRED`,
+          );
+        }
+        continue;
+      }
+
+      // 2. Alerte staff — UNE SEULE FOIS, y compris avec 2 backends : le claim
+      //    atomique (`no_deliverer_alerted_at: null`) désigne un seul gagnant.
+      if (
+        !course.no_deliverer_alerted_at &&
+        waitingMin >= settings.noDelivererAlertAfterMin
+      ) {
+        const alertClaim = await this.prisma.course.updateMany({
+          where: { id: course.id, no_deliverer_alerted_at: null },
+          data: { no_deliverer_alerted_at: now },
+        });
+        if (alertClaim.count === 1) {
+          this.notificationsSender
+            .sendCourseNoDelivererBell({
+              courseId: course.id,
+              reference: course.reference,
+              restaurantId: course.restaurant_id,
+              waitingMinutes: Math.round(waitingMin),
+            })
+            .catch((e) =>
+              this.logger.warn(`Alerte « aucun livreur » non envoyée : ${e?.message}`),
+            );
+        }
+      }
+
+      // 3. Nouvelle tentative d'affectation (best-effort, on n'interrompt pas la boucle).
+      try {
+        await this.offerNextDeliverer(course.id);
+        retried++;
+      } catch (err) {
+        this.logger.warn(
+          `Relance affectation échouée pour ${course.reference}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    return retried;
   }
 
   /**

@@ -40,6 +40,24 @@ export class CourseTask {
     }
   }
 
+  /**
+   * Relance les courses restées SANS livreur (aucun candidat au moment de la
+   * création). Re-cherche un livreur, alerte le staff après le délai configuré,
+   * et n'expire qu'au-delà du plafond d'attente. Sans ce cron, une commande
+   * prête pouvait rester invisible indéfiniment.
+   */
+  @Cron(CronExpression.EVERY_30_SECONDS)
+  async retryUnassignedCourses() {
+    try {
+      const count = await this.courseOfferService.retryUnassignedCourses();
+      if (count > 0) {
+        this.logger.debug(`Cron : ${count} course(s) sans livreur relancée(s)`);
+      }
+    } catch (err) {
+      this.logger.error(`Erreur cron retryUnassignedCourses: ${(err as Error).message}`);
+    }
+  }
+
   @Cron(CronExpression.EVERY_5_MINUTES)
   async autoCancelStuckCourses() {
     try {

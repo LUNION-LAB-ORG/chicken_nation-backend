@@ -561,6 +561,9 @@ model Course {
   offer_expires_at DateTime? @db.Timestamp(6)
   /// Cumul des livreurs ayant refusé (stat de difficulté)
   refusal_count    Int       @default(0)
+  /// Horodatage de l'alerte « aucun livreur disponible » envoyée au staff.
+  /// Non null ⇒ alerte déjà émise, on ne la renvoie pas à chaque relance du cron.
+  no_deliverer_alerted_at DateTime? @db.Timestamp(6)
 
   // === Financier ===
   total_delivery_fee     Float

@@ -186,6 +186,70 @@ export class NotificationsSenderService {
     }
 
     /**
+     * Alerte cloche : une COURSE est prête mais AUCUN livreur n'est disponible
+     * (tous occupés / hors service / en pause). Émise UNE SEULE FOIS par course
+     * (l'appelant horodate `no_deliverer_alerted_at`). La course continue d'être
+     * relancée automatiquement — cette alerte permet au staff d'agir (activer un
+     * livreur, affecter manuellement) sans attendre une réclamation client.
+     */
+    async sendCourseNoDelivererBell(params: {
+        courseId: string;
+        reference: string;
+        restaurantId: string;
+        waitingMinutes: number;
+    }) {
+        try {
+            const { courseId, reference, restaurantId, waitingMinutes } = params;
+
+            const [restoUsers, backofficeUsers] = await Promise.all([
+                this.notificationRecipientService.getAllUsersByRestaurantAndRole(
+                    restaurantId,
+                    [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+                ),
+                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+            ]);
+
+            const byId = new Map<string, NotificationRecipient>();
+            for (const r of [...restoUsers, ...backofficeUsers]) byId.set(r.id, r);
+            const recipients = [...byId.values()].filter(
+                (r) => r.in_app_notifications_enabled !== false,
+            );
+            if (recipients.length === 0) return;
+
+            const template: NotificationTemplate<any> = {
+                title: () => '🛵 Aucun livreur disponible',
+                message: () =>
+                    `La course ${reference} attend un livreur depuis ${waitingMinutes} min. ` +
+                    `La recherche continue automatiquement — vérifiez qu'un livreur est actif, ou affectez-le manuellement.`,
+                icon: () => notificationIcons.delivery.url,
+                iconBgColor: () => notificationIcons.delivery.color,
+            };
+
+            const notifications = await this.notificationsService.sendNotificationToMultiple(
+                template,
+                {
+                    actor: recipients[0],
+                    recipients,
+                    data: { reference, waitingMinutes },
+                    // Clic cloche → page Courses sur la course concernée.
+                    meta: {
+                        kind: 'course',
+                        course_id: courseId,
+                        reference,
+                        waiting_minutes: waitingMinutes,
+                    },
+                },
+                NotificationType.SYSTEM,
+            );
+            notifications.forEach((notif, i) => {
+                this.notificationsWebSocketService.emitNotification(notif, recipients[i]);
+            });
+        } catch (e) {
+            this.logger.warn(`Alerte « aucun livreur » non envoyée : ${(e as Error)?.message}`);
+        }
+    }
+
+    /**
      * Notifie le STAFF (cloche in-app + email) qu'un CLIENT a écrit un nouveau
      * message. Destinataires = staff du restaurant concerné + tout le back office.
      * Chaque canal est filtré par la préférence du membre

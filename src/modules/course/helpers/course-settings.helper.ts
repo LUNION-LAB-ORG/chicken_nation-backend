@@ -26,6 +26,10 @@ const DEFAULTS = {
   lookahead_in_progress: 1,         // 1 = check Orders IN_PROGRESS pour anticiper grouping
   rebalance_enabled: 1,             // 1 = re-grouping périodique des courses non récupérées
   rebalance_interval_seconds: 30,   // fréquence du cron de re-grouping
+
+  // Aucun livreur disponible : relance + alerte (au lieu d'expirer en silence)
+  no_deliverer_alert_after_min: 5,  // délai avant d'alerter le staff (cloche)
+  no_deliverer_max_wait_min: 60,    // au-delà, la course expire pour de bon (anti-zombie)
 } as const;
 
 export interface ICourseSettings {
@@ -43,6 +47,9 @@ export interface ICourseSettings {
   lookaheadInProgress: boolean;
   rebalanceEnabled: boolean;
   rebalanceIntervalSeconds: number;
+  // Aucun livreur disponible
+  noDelivererAlertAfterMin: number;
+  noDelivererMaxWaitMin: number;
 }
 
 /**
@@ -77,6 +84,9 @@ export class CourseSettingsHelper {
       'course.lookahead_in_progress',
       'course.rebalance_enabled',
       'course.rebalance_interval_seconds',
+      // Aucun livreur disponible
+      'course.no_deliverer_alert_after_min',
+      'course.no_deliverer_max_wait_min',
     ]);
 
     const legacy = map['course.auto_cancel_after_min']; // string | undefined
@@ -96,6 +106,8 @@ export class CourseSettingsHelper {
       lookaheadInProgress: this.toBoolean(map['course.lookahead_in_progress'], DEFAULTS.lookahead_in_progress),
       rebalanceEnabled: this.toBoolean(map['course.rebalance_enabled'], DEFAULTS.rebalance_enabled),
       rebalanceIntervalSeconds: this.toNumber(map['course.rebalance_interval_seconds'], DEFAULTS.rebalance_interval_seconds),
+      noDelivererAlertAfterMin: this.toNumber(map['course.no_deliverer_alert_after_min'], DEFAULTS.no_deliverer_alert_after_min),
+      noDelivererMaxWaitMin: this.toNumber(map['course.no_deliverer_max_wait_min'], DEFAULTS.no_deliverer_max_wait_min),
     };
   }
 
