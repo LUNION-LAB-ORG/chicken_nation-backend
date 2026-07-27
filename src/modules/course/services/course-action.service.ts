@@ -348,6 +348,7 @@ export class CourseActionService {
         await this.turboService.confirmerRetrait({
           referenceCourse: updated.reference,
           apikey: resto?.apikey ?? '',
+          restaurantId: updated.restaurant_id,
         });
       })().catch(() => undefined);
     }

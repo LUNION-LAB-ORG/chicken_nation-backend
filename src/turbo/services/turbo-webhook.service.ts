@@ -7,6 +7,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { CourseStatut, DeliveryStatut, OrderStatus } from '@prisma/client';
 import { OrderChannels } from 'src/modules/order/enums/order-channels';
 import { CourseChannels } from 'src/modules/course/enums/course-channels';
+import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
 
 /**
  * Réception des webhooks de suivi de livraison Turbo (Turbo → CN).
@@ -36,10 +37,14 @@ import { CourseChannels } from 'src/modules/course/enums/course-channels';
 export class TurboWebhookService {
   private readonly logger = new Logger(TurboWebhookService.name);
 
+  /** Tentatives autorisées sur le code client avant blocage (anti-brute-force). */
+  private static readonly MAX_CODE_ATTEMPTS = 5;
+
   constructor(
     private readonly appGateway: AppGateway,
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly notificationsSender: NotificationsSenderService,
   ) { }
 
   private ack(event: WebhookEvent, process = true): WebhookResponseDto {
@@ -431,6 +436,7 @@ export class TurboWebhookService {
             id: true,
             paied: true,
             customer_id: true,
+            restaurant_id: true,
             restaurant: { select: { apikey: true } },
           },
         },
@@ -449,9 +455,47 @@ export class TurboWebhookService {
     if (delivery.statut === DeliveryStatut.DELIVERED) {
       return { valid: true, message: 'Livraison déjà confirmée.' }; // idempotent
     }
+
+    // 🔒 Anti-brute-force : le code fait 4 chiffres (10 000 combinaisons), donc
+    // quelques minutes suffiraient avec une clé valide. Au-delà du plafond, la
+    // validation est BLOQUÉE — le livreur doit passer par le staff.
+    if (delivery.turbo_code_attempts >= TurboWebhookService.MAX_CODE_ATTEMPTS) {
+      return {
+        valid: false,
+        message:
+          'Trop de tentatives. Validation bloquée — contactez le restaurant pour confirmer la livraison.',
+      };
+    }
+
     if (delivery.delivery_pin !== code) {
-      this.logger.warn(`Code client invalide pour la commande ${numero}.`);
-      return { valid: false, message: 'Code invalide.' };
+      const attempts = delivery.turbo_code_attempts + 1;
+      await this.prisma.delivery.update({
+        where: { id: delivery.id },
+        data: { turbo_code_attempts: attempts },
+      });
+      this.logger.warn(
+        `Code client invalide pour la commande ${numero} (${attempts}/${TurboWebhookService.MAX_CODE_ATTEMPTS}).`,
+      );
+
+      // Seuil atteint → alerte staff : soit le livreur se trompe de commande,
+      // soit quelqu'un essaie de forcer un code. Dans les deux cas, un humain doit voir.
+      if (attempts >= TurboWebhookService.MAX_CODE_ATTEMPTS) {
+        this.logger.error(
+          `🚨 Code client BLOQUÉ après ${attempts} tentatives — commande ${numero} (livreur Turbo).`,
+        );
+        this.notificationsSender
+          .sendTurboCodeBlockedBell({
+            reference: numero,
+            restaurantId: delivery.order.restaurant_id,
+            attempts,
+          })
+          .catch(() => undefined);
+      }
+
+      return {
+        valid: false,
+        message: `Code invalide (${attempts}/${TurboWebhookService.MAX_CODE_ATTEMPTS} tentatives).`,
+      };
     }
 
     // Code correct → clôture identique au flux interne (COMPLETED si déjà payée,

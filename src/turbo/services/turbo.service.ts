@@ -233,28 +233,52 @@ export class TurboService {
   async confirmerRetrait(params: {
     referenceCourse: string;
     apikey: string;
+    restaurantId?: string;
   }): Promise<boolean> {
-    const { referenceCourse, apikey } = params;
-    try {
-      const response = await fetch(TURBO_API.CONFIRMATION_RETRAIT(referenceCourse), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-API-KEY': apikey },
-        body: JSON.stringify({ referenceCourse }),
-      });
-      if (!response.ok) {
-        this.logger.error(
-          `Confirmation retrait Turbo refusée pour ${referenceCourse} : HTTP ${response.status}`,
-        );
-        return false;
+    const { referenceCourse, apikey, restaurantId } = params;
+
+    // Un appel PERDU laisse leur groupe « non récupéré » : le livreur se
+    // retrouve bloqué dans son application avec les sacs en main. On relance
+    // donc 3 fois (backoff court) avant d'abandonner.
+    const DELAIS_MS = [0, 1500, 4000];
+
+    for (let essai = 0; essai < DELAIS_MS.length; essai++) {
+      if (DELAIS_MS[essai] > 0) {
+        await new Promise((r) => setTimeout(r, DELAIS_MS[essai]));
       }
-      this.logger.log(`Retrait confirmé auprès de Turbo pour la course ${referenceCourse}.`);
-      return true;
-    } catch (error) {
-      this.logger.error(
-        `Confirmation retrait Turbo échouée pour ${referenceCourse} : ${(error as Error)?.message}`,
-      );
-      return false;
+      try {
+        const response = await fetch(TURBO_API.CONFIRMATION_RETRAIT(referenceCourse), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-API-KEY': apikey },
+          body: JSON.stringify({ referenceCourse }),
+        });
+        if (response.ok) {
+          this.logger.log(
+            `Retrait confirmé auprès de Turbo pour la course ${referenceCourse}${essai > 0 ? ` (essai ${essai + 1})` : ''}.`,
+          );
+          return true;
+        }
+        this.logger.warn(
+          `Confirmation retrait Turbo refusée (${referenceCourse}, essai ${essai + 1}/${DELAIS_MS.length}) : HTTP ${response.status}`,
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Confirmation retrait Turbo échouée (${referenceCourse}, essai ${essai + 1}/${DELAIS_MS.length}) : ${(error as Error)?.message}`,
+        );
+      }
     }
+
+    // Toutes les relances ont échoué : la désynchronisation est certaine et le
+    // livreur est probablement bloqué → le staff doit pouvoir agir tout de suite.
+    this.logger.error(
+      `❌ Retrait NON synchronisé avec Turbo pour la course ${referenceCourse} — livreur potentiellement bloqué.`,
+    );
+    if (restaurantId) {
+      await this.notificationsSender
+        .sendTurboPickupSyncFailedBell({ reference: referenceCourse, restaurantId })
+        .catch(() => undefined);
+    }
+    return false;
   }
 
   /**

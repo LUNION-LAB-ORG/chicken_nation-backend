@@ -250,6 +250,117 @@ export class NotificationsSenderService {
     }
 
     /**
+     * 🚨 Alerte SÉCURITÉ : le code client d'une livraison Turbo a été bloqué
+     * après trop de tentatives. Deux lectures possibles — le livreur se trompe
+     * de commande, ou quelqu'un tente de forcer un code. Dans les deux cas un
+     * humain doit trancher : la livraison ne peut plus être clôturée seule.
+     */
+    async sendTurboCodeBlockedBell(params: {
+        reference: string;
+        restaurantId: string;
+        attempts: number;
+    }) {
+        try {
+            const { reference, restaurantId, attempts } = params;
+
+            const [restoUsers, backofficeUsers] = await Promise.all([
+                this.notificationRecipientService.getAllUsersByRestaurantAndRole(
+                    restaurantId,
+                    [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+                ),
+                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+            ]);
+
+            const byId = new Map<string, NotificationRecipient>();
+            for (const r of [...restoUsers, ...backofficeUsers]) byId.set(r.id, r);
+            const recipients = [...byId.values()].filter(
+                (r) => r.in_app_notifications_enabled !== false,
+            );
+            if (recipients.length === 0) return;
+
+            const template: NotificationTemplate<any> = {
+                title: () => '🚨 Code de livraison bloqué',
+                message: () =>
+                    `Le livreur Turbo a saisi ${attempts} codes erronés pour la commande ${reference}. ` +
+                    `La validation est bloquée : confirmez la livraison manuellement après vérification.`,
+                icon: () => notificationIcons.delivery.url,
+                iconBgColor: () => notificationIcons.delivery.color,
+            };
+
+            const notifications = await this.notificationsService.sendNotificationToMultiple(
+                template,
+                {
+                    actor: recipients[0],
+                    recipients,
+                    data: { reference, attempts },
+                    meta: { kind: 'order', reference, turbo_code_blocked: true },
+                },
+                NotificationType.SYSTEM,
+            );
+            notifications.forEach((notif, i) => {
+                this.notificationsWebSocketService.emitNotification(notif, recipients[i]);
+            });
+        } catch (e) {
+            this.logger.warn(`Alerte « code bloqué » non envoyée : ${(e as Error)?.message}`);
+        }
+    }
+
+    /**
+     * 🚨 Alerte : Turbo n'a PAS accusé réception du retrait alors que la
+     * caissière a remis les plats. Conséquence côté Turbo : leur groupe reste
+     * « non récupéré » et le livreur peut être bloqué dans son application avec
+     * les sacs en main. Le staff doit le savoir immédiatement.
+     */
+    async sendTurboPickupSyncFailedBell(params: {
+        reference: string;
+        restaurantId: string;
+    }) {
+        try {
+            const { reference, restaurantId } = params;
+
+            const [restoUsers, backofficeUsers] = await Promise.all([
+                this.notificationRecipientService.getAllUsersByRestaurantAndRole(
+                    restaurantId,
+                    [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+                ),
+                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+            ]);
+
+            const byId = new Map<string, NotificationRecipient>();
+            for (const r of [...restoUsers, ...backofficeUsers]) byId.set(r.id, r);
+            const recipients = [...byId.values()].filter(
+                (r) => r.in_app_notifications_enabled !== false,
+            );
+            if (recipients.length === 0) return;
+
+            const template: NotificationTemplate<any> = {
+                title: () => '⚠️ Retrait non synchronisé avec Turbo',
+                message: () =>
+                    `Les plats de la course ${reference} ont été remis, mais Turbo n'a pas confirmé la réception. ` +
+                    `Le livreur peut être bloqué dans son application : demandez-lui de déclarer le retrait de son côté.`,
+                icon: () => notificationIcons.delivery.url,
+                iconBgColor: () => notificationIcons.delivery.color,
+            };
+
+            const notifications = await this.notificationsService.sendNotificationToMultiple(
+                template,
+                {
+                    actor: recipients[0],
+                    recipients,
+                    data: { reference },
+                    meta: { kind: 'course', reference, turbo_pickup_sync_failed: true },
+                },
+                NotificationType.SYSTEM,
+            );
+            notifications.forEach((notif, i) => {
+                this.notificationsWebSocketService.emitNotification(notif, recipients[i]);
+            });
+        } catch (e) {
+            this.logger.warn(`Alerte « retrait non synchronisé » non envoyée : ${(e as Error)?.message}`);
+        }
+    }
+
+    /**
      * Cloche d'INFORMATION : une course a été sous-traitée à la flotte externe
      * Turbo faute de livreur interne. Ce n'est pas une erreur — le staff doit
      * simplement savoir que la commande part avec un livreur Turbo (et non un

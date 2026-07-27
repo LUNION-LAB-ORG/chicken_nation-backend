@@ -636,6 +636,11 @@ model Delivery {
   turbo_courier_lat         Float?
   turbo_courier_lng         Float?
   turbo_courier_location_at DateTime? @db.Timestamp(6)
+  /// Tentatives de saisie du code client par un livreur Turbo. Le code fait 4
+  /// chiffres (10 000 combinaisons) : sans plafond, il est brute-forçable par
+  /// quiconque détient une clé API. Au-delà du seuil, la validation est bloquée
+  /// et le staff alerté.
+  turbo_code_attempts       Int       @default(0)
 
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
