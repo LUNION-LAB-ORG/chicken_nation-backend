@@ -9,6 +9,7 @@ import {
   Course,
   CourseOfferStatus,
   CourseStatut,
+  DeliveryService,
   DeliveryStatut,
   EntityStatus,
   OrderStatus,
@@ -16,6 +17,7 @@ import {
 
 import { PrismaService } from 'src/database/services/prisma.service';
 import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
+import { TurboService } from 'src/turbo/services/turbo.service';
 import { DelivererScoringSettingsHelper } from 'src/modules/deliverers/helpers/deliverer-scoring-settings.helper';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer-queue.service';
@@ -55,6 +57,8 @@ export class CourseOfferService {
     // Alerte cloche staff quand aucun livreur n'est trouvé (NotificationsModule
     // est @Global : pas d'import de module nécessaire).
     private readonly notificationsSender: NotificationsSenderService,
+    // Flotte externe : sous-traitance quand la flotte interne est saturée.
+    private readonly turboService: TurboService,
   ) {}
 
   /**
@@ -486,7 +490,19 @@ export class CourseOfferService {
         continue;
       }
 
-      // 2. Alerte staff — UNE SEULE FOIS, y compris avec 2 backends : le claim
+      // 2. SATURATION INTERNE → bascule sur la flotte externe Turbo.
+      //    Se produit AVANT l'alerte staff : si Turbo prend la course, il n'y a
+      //    plus rien à signaler. L'alerte reste le filet si Turbo échoue aussi.
+      if (
+        settings.turboFallbackEnabled &&
+        waitingMin >= settings.turboFallbackAfterMin
+      ) {
+        const escalated = await this.escalateToTurbo(course.id, Math.round(waitingMin));
+        if (escalated) continue; // sous-traitée : plus de recherche interne
+        // Turbo indisponible → on poursuit (alerte + relance interne)
+      }
+
+      // 3. Alerte staff — UNE SEULE FOIS, y compris avec 2 backends : le claim
       //    atomique (`no_deliverer_alerted_at: null`) désigne un seul gagnant.
       if (
         !course.no_deliverer_alerted_at &&
@@ -510,7 +526,7 @@ export class CourseOfferService {
         }
       }
 
-      // 3. Nouvelle tentative d'affectation (best-effort, on n'interrompt pas la boucle).
+      // 4. Nouvelle tentative d'affectation (best-effort, on n'interrompt pas la boucle).
       try {
         await this.offerNextDeliverer(course.id);
         retried++;
@@ -522,6 +538,126 @@ export class CourseOfferService {
     }
 
     return retried;
+  }
+
+  /**
+   * SATURATION INTERNE → sous-traite la course à la flotte externe TURBO.
+   *
+   * Décisions produit actées :
+   *   - **Turbo choisit le livreur** (BIRD rayon 3-5 km / score, puis ASSIGNÉ du
+   *     site le plus proche). CN ne réimplémente PAS son dispatcher : on appelle
+   *     `creerCourse` et Turbo applique sa règle avec ses données temps réel.
+   *   - **Dégroupage** : l'API Turbo prend UNE commande par course → on émet une
+   *     course Turbo par commande de la course interne.
+   *
+   * ⚠️ On NE réutilise PAS `cancelCourse` : il annulerait les COMMANDES CLIENTS.
+   * Ici les commandes restent vivantes (READY) — ce sont les webhooks Turbo qui
+   * piloteront ensuite leur statut (PICKED_UP → COMPLETED).
+   *
+   * Renvoie `true` si au moins une commande est passée chez Turbo. Si Turbo est
+   * injoignable, renvoie `false` : la course reste en recherche interne + alerte
+   * staff (on ne perd jamais la commande).
+   */
+  private async escalateToTurbo(courseId: string, waitingMinutes: number): Promise<boolean> {
+    // Claim ATOMIQUE : un seul backend sous-traite (2 instances // même base).
+    const claim = await this.prisma.course.updateMany({
+      where: {
+        id: courseId,
+        statut: CourseStatut.PENDING_ASSIGNMENT,
+        turbo_escalated_at: null,
+      },
+      data: { turbo_escalated_at: new Date() },
+    });
+    if (claim.count !== 1) return false; // déjà traitée par l'autre instance
+
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: {
+        id: true,
+        reference: true,
+        restaurant: { select: { id: true, apikey: true, name: true } },
+        deliveries: {
+          where: {
+            statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
+          },
+          select: { id: true, order: { select: { id: true, reference: true } } },
+        },
+      },
+    });
+    if (!course || course.deliveries.length === 0) {
+      // Plus rien à sous-traiter → on relâche le claim.
+      await this.prisma.course.updateMany({
+        where: { id: courseId },
+        data: { turbo_escalated_at: null },
+      });
+      return false;
+    }
+
+    const apikey = course.restaurant.apikey ?? '';
+    const sent: string[] = [];
+    for (const d of course.deliveries) {
+      try {
+        // `creerCourse` renvoie null en cas d'échec (il alerte déjà de son côté).
+        const res = await this.turboService.creerCourse(d.order.id, apikey);
+        if (res) sent.push(d.order.id);
+      } catch (err) {
+        this.logger.warn(
+          `Bascule Turbo : commande ${d.order.reference} échouée — ${(err as Error).message}`,
+        );
+      }
+    }
+
+    // Turbo totalement injoignable → on annule la bascule, la recherche interne
+    // reprend et le staff sera alerté. Aucune commande n'est perdue.
+    if (sent.length === 0) {
+      await this.prisma.course.updateMany({
+        where: { id: courseId },
+        data: { turbo_escalated_at: null },
+      });
+      this.logger.error(
+        `Bascule Turbo ÉCHOUÉE pour ${course.reference} — retour à la recherche interne`,
+      );
+      return false;
+    }
+
+    const now = new Date();
+    await this.prisma.$transaction([
+      // Les commandes passent en livraison Turbo (tracking + libellé backoffice).
+      this.prisma.order.updateMany({
+        where: { id: { in: sent } },
+        data: { delivery_service: DeliveryService.TURBO },
+      }),
+      // La course interne se ferme : aucun livreur CN ne doit plus la chercher.
+      // Les COMMANDES ne sont volontairement PAS annulées.
+      this.prisma.course.update({
+        where: { id: courseId },
+        data: {
+          statut: CourseStatut.CANCELLED,
+          cancelled_at: now,
+          cancelled_by: 'system',
+          cancelled_reason: `Sous-traitée à Turbo (aucun livreur interne depuis ${waitingMinutes} min)`,
+          offer_expires_at: null,
+        },
+      }),
+      this.prisma.delivery.updateMany({
+        where: { course_id: courseId, statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED] } },
+        data: { statut: DeliveryStatut.CANCELLED },
+      }),
+    ]);
+
+    this.notificationsSender
+      .sendCourseTurboFallbackBell({
+        reference: course.reference,
+        restaurantId: course.restaurant.id,
+        waitingMinutes,
+        orderCount: sent.length,
+      })
+      .catch((e) => this.logger.warn(`Info « bascule Turbo » non envoyée : ${e?.message}`));
+
+    this.logger.log(
+      `Course ${course.reference} sous-traitée à Turbo : ${sent.length} commande(s) après ${waitingMinutes} min sans livreur interne`,
+    );
+    return true;
   }
 
   /**

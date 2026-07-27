@@ -250,6 +250,63 @@ export class NotificationsSenderService {
     }
 
     /**
+     * Cloche d'INFORMATION : une course a été sous-traitée à la flotte externe
+     * Turbo faute de livreur interne. Ce n'est pas une erreur — le staff doit
+     * simplement savoir que la commande part avec un livreur Turbo (et non un
+     * livreur du Store), pour la remise au point de retrait.
+     */
+    async sendCourseTurboFallbackBell(params: {
+        reference: string;
+        restaurantId: string;
+        waitingMinutes: number;
+        orderCount: number;
+    }) {
+        try {
+            const { reference, restaurantId, waitingMinutes, orderCount } = params;
+
+            const [restoUsers, backofficeUsers] = await Promise.all([
+                this.notificationRecipientService.getAllUsersByRestaurantAndRole(
+                    restaurantId,
+                    [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+                ),
+                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+            ]);
+
+            const byId = new Map<string, NotificationRecipient>();
+            for (const r of [...restoUsers, ...backofficeUsers]) byId.set(r.id, r);
+            const recipients = [...byId.values()].filter(
+                (r) => r.in_app_notifications_enabled !== false,
+            );
+            if (recipients.length === 0) return;
+
+            const template: NotificationTemplate<any> = {
+                title: () => '🔄 Livraison confiée à Turbo',
+                message: () =>
+                    `Aucun livreur interne disponible depuis ${waitingMinutes} min pour la course ${reference} : ` +
+                    `${orderCount} commande(s) confiée(s) à un livreur Turbo. Prévoyez la remise au livreur externe.`,
+                icon: () => notificationIcons.delivery.url,
+                iconBgColor: () => notificationIcons.delivery.color,
+            };
+
+            const notifications = await this.notificationsService.sendNotificationToMultiple(
+                template,
+                {
+                    actor: recipients[0],
+                    recipients,
+                    data: { reference, waitingMinutes, orderCount },
+                    meta: { kind: 'course', reference, turbo_fallback: true },
+                },
+                NotificationType.SYSTEM,
+            );
+            notifications.forEach((notif, i) => {
+                this.notificationsWebSocketService.emitNotification(notif, recipients[i]);
+            });
+        } catch (e) {
+            this.logger.warn(`Info « bascule Turbo » non envoyée : ${(e as Error)?.message}`);
+        }
+    }
+
+    /**
      * Notifie le STAFF (cloche in-app + email) qu'un CLIENT a écrit un nouveau
      * message. Destinataires = staff du restaurant concerné + tout le back office.
      * Chaque canal est filtré par la préférence du membre

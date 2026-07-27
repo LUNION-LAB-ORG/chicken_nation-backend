@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AuthDelivererModule } from 'src/modules/auth-deliverer/auth-deliverer.module';
 import { DeliverersModule } from 'src/modules/deliverers/deliverers.module';
+import { TurboModule } from 'src/turbo/turbo.module';
 
 import { CourseAdminController } from './controllers/course-admin.controller';
 import { CourseDelivererController } from './controllers/course-deliverer.controller';
@@ -22,7 +23,8 @@ import { CourseTask } from './tasks/course.task';
 import { CourseWebSocketService } from './websockets/course-websocket.service';
 
 @Module({
-  imports: [AuthDelivererModule, DeliverersModule],
+  // TurboModule : bascule vers la flotte externe quand la flotte interne est saturée.
+  imports: [AuthDelivererModule, DeliverersModule, TurboModule],
   controllers: [CourseDelivererController, CourseAdminController, CourseOperationsController],
   providers: [
     // Helpers

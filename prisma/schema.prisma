@@ -564,6 +564,9 @@ model Course {
   /// Horodatage de l'alerte « aucun livreur disponible » envoyée au staff.
   /// Non null ⇒ alerte déjà émise, on ne la renvoie pas à chaque relance du cron.
   no_deliverer_alerted_at DateTime? @db.Timestamp(6)
+  /// Horodatage de la bascule vers la flotte externe Turbo (saturation interne).
+  /// Non null ⇒ la course a été sous-traitée : plus aucune recherche interne.
+  turbo_escalated_at      DateTime? @db.Timestamp(6)
 
   // === Financier ===
   total_delivery_fee     Float
