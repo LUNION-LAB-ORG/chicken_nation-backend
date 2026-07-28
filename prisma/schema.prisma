@@ -668,6 +668,11 @@ model CourseOfferAttempt {
   expires_at     DateTime          @db.Timestamp(6) // offered_at + 30s
   responded_at   DateTime?         @db.Timestamp(6)
   refusal_reason String?           @db.VarChar(500)
+  /// Relances déjà envoyées pendant la fenêtre d'acceptation. Une notification
+  /// unique ne laisse au livreur QU'UNE chance de voir l'offre : s'il est
+  /// distrait à cet instant, la course lui échappe alors qu'il était libre.
+  /// Le compteur rend les relances idempotentes (claim atomique, 2 backends).
+  reminders_sent Int               @default(0)
 
   created_at DateTime @default(now()) @db.Timestamp(6)
 

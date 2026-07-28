@@ -138,6 +138,33 @@ export class DelivererPushService {
     });
   }
 
+  /**
+   * RELANCE d'une offre non traitée, pendant la fenêtre d'acceptation.
+   *
+   * Une seule notification laisse au livreur UNE chance de voir l'offre : s'il
+   * est distrait à cet instant (téléphone en poche, moteur allumé, casque), la
+   * course lui échappe alors qu'il était disponible. On le re-sollicite donc à
+   * mi-parcours avec le temps restant, ce qui crée l'urgence sans harceler.
+   */
+  notifyCourseOfferReminder(input: {
+    delivererId: string;
+    courseReference: string;
+    restaurantName: string;
+    courseId: string;
+    secondsLeft: number;
+  }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'new_course_offer',
+      title: `⏳ Course en attente — ${input.secondsLeft}s`,
+      body: `${input.restaurantName} : réponds vite, la course va partir !`,
+      data: { courseId: input.courseId, reference: input.courseReference },
+      critical: true,
+      // Mêmes boutons Accepter/Refuser sur l'écran verrouillé.
+      categoryId: 'new_course_offer',
+    });
+  }
+
   notifyCourseAssigned(input: {
     delivererId: string;
     courseReference: string;

@@ -8,7 +8,9 @@ import { SettingsService } from 'src/modules/settings/settings.service';
  */
 const DEFAULTS = {
   // Offre & refus
-  offer_duration_seconds: 90,
+  // 120 s (et non 90) : la fenêtre doit laisser la place à 2 relances (30 s et
+  // 60 s) tout en gardant au livreur le temps de réagir après la dernière.
+  offer_duration_seconds: 120,
   max_refusal_count: 5,
   // Course ACCEPTED mais livreur jamais arrivé au resto (trafic, désistement silencieux)
   auto_cancel_accepted_after_min: 60,

@@ -41,6 +41,23 @@ export class CourseTask {
   }
 
   /**
+   * Relance l'OFFRE en cours auprès du livreur (30 s et 60 s après l'envoi).
+   * Une seule notification lui laisse une seule chance de la voir : distrait à
+   * cet instant, il perd une course qu'il aurait acceptée.
+   */
+  @Cron(CronExpression.EVERY_10_SECONDS)
+  async remindPendingOffers() {
+    try {
+      const count = await this.courseOfferService.remindPendingOffers();
+      if (count > 0) {
+        this.logger.debug(`Cron : ${count} relance(s) d'offre envoyée(s)`);
+      }
+    } catch (err) {
+      this.logger.error(`Erreur cron remindPendingOffers: ${(err as Error).message}`);
+    }
+  }
+
+  /**
    * Relance les courses restées SANS livreur (aucun candidat au moment de la
    * création). Re-cherche un livreur, alerte le staff après le délai configuré,
    * et n'expire qu'au-delà du plafond d'attente. Sans ce cron, une commande

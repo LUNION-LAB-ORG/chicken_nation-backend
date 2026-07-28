@@ -434,6 +434,73 @@ export class CourseOfferService {
   }
 
   /**
+   * RELANCES de l'offre pendant la fenêtre d'acceptation (cron, 10 s).
+   *
+   * Une notification unique ne laisse au livreur QU'UNE chance de voir l'offre :
+   * s'il est distrait à cet instant (téléphone en poche, moteur allumé, casque),
+   * la course lui échappe alors qu'il était disponible — c'est la première cause
+   * d'offres manquées. On le re-sollicite donc à 30 s et 60 s, avec le temps
+   * restant affiché pour créer l'urgence.
+   *
+   * Idempotent et sûr à deux backends : le compteur `reminders_sent` est
+   * incrémenté par un claim atomique (conditionné sur sa valeur précédente),
+   * donc une relance ne part JAMAIS deux fois.
+   */
+  async remindPendingOffers(): Promise<number> {
+    const now = new Date();
+    /** Secondes écoulées depuis l'envoi déclenchant une relance. */
+    const PALIERS = [30, 60];
+
+    const offers = await this.prisma.courseOfferAttempt.findMany({
+      where: { status: CourseOfferStatus.PENDING, expires_at: { gt: now } },
+      select: {
+        id: true,
+        deliverer_id: true,
+        offered_at: true,
+        expires_at: true,
+        reminders_sent: true,
+        course: {
+          select: { id: true, reference: true, restaurant: { select: { name: true } } },
+        },
+      },
+      take: 100, // garde-fou
+    });
+
+    let sent = 0;
+    for (const offer of offers) {
+      const ecoule = (now.getTime() - offer.offered_at.getTime()) / 1000;
+      const dus = PALIERS.filter((p) => ecoule >= p).length;
+      if (dus <= offer.reminders_sent) continue;
+
+      // Claim atomique : un seul backend envoie la relance.
+      const claim = await this.prisma.courseOfferAttempt.updateMany({
+        where: {
+          id: offer.id,
+          reminders_sent: offer.reminders_sent,
+          status: CourseOfferStatus.PENDING,
+        },
+        data: { reminders_sent: dus },
+      });
+      if (claim.count !== 1) continue;
+
+      const restant = Math.max(
+        1,
+        Math.round((offer.expires_at.getTime() - now.getTime()) / 1000),
+      );
+      this.pushService.notifyCourseOfferReminder({
+        delivererId: offer.deliverer_id,
+        courseReference: offer.course.reference,
+        restaurantName: offer.course.restaurant?.name ?? 'Le restaurant',
+        courseId: offer.course.id,
+        secondsLeft: restant,
+      });
+      sent++;
+    }
+
+    return sent;
+  }
+
+  /**
    * RELANCE des courses restées SANS LIVREUR (cron, toutes les 30 s).
    *
    * Une course tombe ici quand `offerNextDeliverer` n'a trouvé aucun candidat
