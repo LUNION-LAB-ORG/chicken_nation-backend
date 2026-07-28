@@ -1028,7 +1028,8 @@ export class OrderService {
           select: { id: true, first_name: true, last_name: true, phone: true, email: true, image: true },
         },
         restaurant: { select: { id: true, name: true, image: true, address: true } },
-        order_items: { include: { dish: { select: { id: true, name: true, image: true, price: true } } } },
+        // `cooking_time` : alimente le minuteur « En préparation » du back office.
+        order_items: { include: { dish: { select: { id: true, name: true, image: true, price: true, cooking_time: true } } } },
         paiements: true,
         delivery: {
           include: {
