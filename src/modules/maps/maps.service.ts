@@ -19,7 +19,16 @@ export interface IDirectionsLeg {
 export interface IDirectionsResult {
   coordinates: ILatLng[];
   totalDistanceMeters: number;
+  /** Temps de CONDUITE seul, trafic compris. */
   totalDurationSeconds: number;
+  /**
+   * Durée RÉELLE de la mission : conduite + arrêts chez chaque client
+   * intermédiaire. C'est la valeur à montrer sur une course groupée, où
+   * plusieurs remises s'enchaînent.
+   */
+  totalDurationWithStopsSeconds: number;
+  /** Part des arrêts dans la durée ci-dessus. */
+  stopsSeconds: number;
   legs: IDirectionsLeg[];
 }
 
@@ -47,13 +56,24 @@ export interface IPlaceDetailsResult {
 // ─── TTLs (millisecondes) ────────────────────────────────────────────────────
 
 const TTL = {
-  DIRECTIONS:       10 * 60 * 1000,         //  10 min  — les routes peuvent changer
+  // 3 min (et non 10) : la durée est calculée AVEC le trafic temps réel. La
+  // mettre en cache trop longtemps reviendrait à servir un temps périmé, ce qui
+  // annulerait l'intérêt de la demander. Compromis entre fraîcheur et coût.
+  DIRECTIONS:        3 * 60 * 1000,         //   3 min  — durée avec trafic, doit rester fraîche
   REVERSE_GEOCODE:  24 * 60 * 60 * 1000,    //  24h     — l'adresse d'un point reste stable
   AUTOCOMPLETE:      5 * 60 * 1000,         //   5 min  — suggestions fraîches
   PLACE_DETAILS:     7 * 24 * 60 * 60 * 1000, // 7 jours — les détails d'un lieu sont immuables
 } as const;
 
 const BASE_URL = 'https://maps.googleapis.com/maps/api';
+
+/**
+ * Temps passé chez un client avant de repartir : trouver la porte, remettre la
+ * commande, faire saisir le code. Google ne compte QUE la conduite, or sur une
+ * course groupée ces arrêts s'additionnent et pèsent lourd dans l'estimation.
+ * Ajustable via `MAPS_STOP_SECONDS`.
+ */
+const STOP_SECONDS_PER_DELIVERY = Number(process.env.MAPS_STOP_SECONDS ?? 180);
 
 // ─── Service ─────────────────────────────────────────────────────────────────
 
@@ -148,6 +168,15 @@ export class MapsService {
     url.searchParams.set('destination', `${params.destLat},${params.destLng}`);
     if (waypointsStr) url.searchParams.set('waypoints', waypointsStr);
     url.searchParams.set('mode', 'driving');
+    // TRAFIC TEMPS RÉEL. Sans `departure_time`, Google renvoie une durée
+    // THÉORIQUE calculée sur les limitations de vitesse : à Abidjan, un trajet
+    // annoncé 12 min en prend 25 aux heures de pointe, et le livreur comme le
+    // client se fient à un chiffre faux. Avec ces deux paramètres, la réponse
+    // porte `duration_in_traffic`.
+    // ⚠️ Cet appel est facturé au tarif Directions Advanced (plus cher) : le
+    // cache court ci-dessus est ce qui garde la facture raisonnable.
+    url.searchParams.set('departure_time', 'now');
+    url.searchParams.set('traffic_model', 'best_guess');
     url.searchParams.set('key', this.apiKey);
 
     try {
@@ -158,6 +187,8 @@ export class MapsService {
           legs: {
             distance: { value: number };
             duration: { value: number };
+            /** Présent uniquement si `departure_time` a été transmis. */
+            duration_in_traffic?: { value: number };
             start_location: { lat: number; lng: number };
             end_location: { lat: number; lng: number };
           }[];
@@ -170,17 +201,34 @@ export class MapsService {
       }
 
       const route = data.routes[0];
+      // `duration_in_traffic` quand Google le fournit (trafic temps réel),
+      // sinon repli sur la durée théorique : jamais de valeur manquante.
       const legs: IDirectionsLeg[] = route.legs.map((l) => ({
         distanceMeters: l.distance.value,
-        durationSeconds: l.duration.value,
+        durationSeconds: l.duration_in_traffic?.value ?? l.duration.value,
         startCoord: { latitude: l.start_location.lat, longitude: l.start_location.lng },
         endCoord: { latitude: l.end_location.lat, longitude: l.end_location.lng },
       }));
 
+      // ARRÊTS INTERMÉDIAIRES (courses groupées). Google ne compte QUE le temps
+      // de conduite. Sur une tournée à plusieurs livraisons, le livreur s'arrête
+      // à chaque client : trouver la porte, remettre les plats, saisir le code.
+      // Ignorer ces arrêts sous-estime lourdement une course chaînée (une
+      // tournée de 3 clients perd environ 6 minutes dans l'estimation).
+      // Le dernier client n'ouvre pas d'arrêt : on n'en compte que N-1.
+      const arrets = Math.max(0, legs.length - 1);
+      const tempsArretsSeconds = arrets * STOP_SECONDS_PER_DELIVERY;
+      const conduiteSeconds = legs.reduce((s, l) => s + l.durationSeconds, 0);
+
       const result: IDirectionsResult = {
         coordinates: this.decodePolyline(route.overview_polyline.points),
         totalDistanceMeters: legs.reduce((s, l) => s + l.distanceMeters, 0),
-        totalDurationSeconds: legs.reduce((s, l) => s + l.durationSeconds, 0),
+        // Conduite seule — conservé tel quel pour ne rien casser des usages existants.
+        totalDurationSeconds: conduiteSeconds,
+        // Durée RÉELLE de la mission, arrêts compris : c'est celle à présenter
+        // au livreur pour qu'il décide, et au client pour son heure d'arrivée.
+        totalDurationWithStopsSeconds: conduiteSeconds + tempsArretsSeconds,
+        stopsSeconds: tempsArretsSeconds,
         legs,
       };
 
