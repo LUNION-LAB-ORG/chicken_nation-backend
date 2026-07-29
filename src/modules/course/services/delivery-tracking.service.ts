@@ -59,8 +59,12 @@ export class DeliveryTrackingService {
     { calculeA: number; parCommande: Map<string, number> }
   >();
 
-  /** Fraîcheur du calcul d'ETA. Au-dela, on recalcule. */
-  private static readonly ETA_TTL_MS = 90_000;
+  /**
+   * Fraîcheur de l'ETA : 5 minutes. Le client n'a pas besoin d'un compte à
+   * rebours à la seconde, et recalculer un itinéraire à chaque ping GPS
+   * coûterait cher chez Google pour un gain nul. Au-delà, on recalcule.
+   */
+  private static readonly ETA_TTL_MS = 5 * 60_000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -205,6 +209,27 @@ export class DeliveryTrackingService {
     return parCommande;
   }
 
+  /**
+   * ETA d'un client au moment où la livraison démarre. Le livreur vient de
+   * récupérer les plats : on part du restaurant, ce qui est exact à cet instant
+   * et évite d'attendre le premier relevé GPS.
+   */
+  private async etaAuDepart(courseId: string, orderId: string): Promise<number | null> {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: { deliverer_id: true, restaurant: { select: { latitude: true, longitude: true } } },
+    });
+    if (!course?.restaurant?.latitude || !course.restaurant.longitude || !course.deliverer_id) {
+      return null;
+    }
+    const etas = await this.calculerEtas(course.deliverer_id, {
+      latitude: course.restaurant.latitude,
+      longitude: course.restaurant.longitude,
+    });
+    const seconds = etas.get(orderId);
+    return seconds != null ? Math.max(1, Math.round(seconds / 60)) : null;
+  }
+
   private async resolveActiveCustomers(
     delivererId: string,
   ): Promise<Array<{ customerId: string; orderId: string; deliveryStatut: DeliveryStatut }>> {
@@ -249,6 +274,15 @@ export class DeliveryTrackingService {
       });
       if (!order?.customer_id) return;
 
+      // Au DÉPART de la livraison, le client doit voir son heure d'arrivée tout
+      // de suite, sans attendre le premier ping GPS (jusqu'à une minute plus
+      // tard). Le livreur étant encore au restaurant, on prend le restaurant
+      // comme point de départ : c'est exact à cet instant précis.
+      let etaMin: number | null = null;
+      if (payload.new_statut === DeliveryStatut.IN_ROUTE) {
+        etaMin = await this.etaAuDepart(payload.course_id, order.id).catch(() => null);
+      }
+
       this.appGateway.emitToUser(
         order.customer_id,
         'customer',
@@ -258,6 +292,8 @@ export class DeliveryTrackingService {
           statut: payload.new_statut,
           previousStatut: payload.previous_statut,
           courseId: payload.course_id,
+          /** Minutes avant l'arrivée. Renseigné au départ de la livraison. */
+          etaMin,
           ts: new Date().toISOString(),
         },
       );
