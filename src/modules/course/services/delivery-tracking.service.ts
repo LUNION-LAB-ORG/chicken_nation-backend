@@ -4,10 +4,12 @@ import { CourseStatut, DeliveryStatut } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 import { DelivererChannels } from 'src/modules/deliverers/enums/deliverer-channels';
+import { MapsService } from 'src/modules/maps/maps.service';
 import type { DelivererLocationUpdatedPayload } from 'src/modules/deliverers/events/deliverer.event';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
 import { CourseChannels } from '../enums/course-channels';
+import { parseOrderLatLng } from '../helpers/geo.helper';
 import type { DeliveryStatutChangedPayload } from '../interfaces/course-event.interface';
 
 /**
@@ -45,9 +47,25 @@ export class DeliveryTrackingService {
     DeliveryStatut.ARRIVED,
   ];
 
+  /**
+   * Dernier calcul d'ETA par course : { à quand, ETA en secondes par commande }.
+   * Le GPS remonte toutes les 60 s ; recalculer un itinéraire à chaque ping
+   * coûterait cher chez Google pour un gain nul (le trafic ne change pas en
+   * une minute). Cache mémoire volontaire : le perdre au redémarrage est sans
+   * conséquence, le calcul suivant le reconstruit.
+   */
+  private readonly etaCache = new Map<
+    string,
+    { calculeA: number; parCommande: Map<string, number> }
+  >();
+
+  /** Fraîcheur du calcul d'ETA. Au-dela, on recalcule. */
+  private static readonly ETA_TTL_MS = 90_000;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly appGateway: AppGateway,
+    private readonly maps: MapsService,
   ) {}
 
   // ── 1. Position live livreur → client(s) ───────────────────────────────────
@@ -67,7 +85,17 @@ export class DeliveryTrackingService {
       const targets = await this.resolveActiveCustomers(payload.delivererId);
       if (targets.length === 0) return;
 
+      // Heure d'arrivée par client. Tient compte du trafic ET des arrêts chez
+      // les clients précédents : sur une tournée, le 2e livré attend aussi que
+      // le 1er soit servi. Best-effort — une panne Google ne coupe jamais le
+      // suivi de position.
+      const etas = await this.calculerEtas(payload.delivererId, {
+        latitude: payload.lat,
+        longitude: payload.lng,
+      }).catch(() => new Map<string, number>());
+
       for (const t of targets) {
+        const etaSeconds = etas.get(t.orderId);
         this.appGateway.emitToUser(
           t.customerId,
           'customer',
@@ -80,6 +108,8 @@ export class DeliveryTrackingService {
             heading: payload.heading,
             speedKmh: payload.speedKmh,
             deliveryStatut: t.deliveryStatut,
+            /** Minutes avant l'arrivée chez CE client. `null` si indisponible. */
+            etaMin: etaSeconds != null ? Math.max(1, Math.round(etaSeconds / 60)) : null,
             ts: payload.ts,
           },
         );
@@ -99,6 +129,82 @@ export class DeliveryTrackingService {
    * lignes max (livraisons d'une seule course) ⇒ assez légère pour être appelée
    * à chaque ping GPS sans cache.
    */
+  /**
+   * ETA par commande pour la tournée en cours.
+   *
+   * UN SEUL appel Google pour toute la tournée : origine = position du livreur,
+   * étapes = les livraisons restantes dans l'ordre. Les durées cumulées des
+   * segments donnent l'heure d'arrivée de chaque client, et on ajoute le temps
+   * d'arrêt chez les clients qui le précèdent (il attend aussi qu'ils soient
+   * servis). Résultat mis en cache `ETA_TTL_MS` pour ne pas rappeler Google à
+   * chaque ping GPS.
+   */
+  private async calculerEtas(
+    delivererId: string,
+    position: { latitude: number; longitude: number },
+  ): Promise<Map<string, number>> {
+    const course = await this.prisma.course.findFirst({
+      where: { deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY },
+      select: {
+        id: true,
+        deliveries: {
+          where: { statut: { in: DeliveryTrackingService.NON_TERMINAL } },
+          orderBy: { sequence_order: 'asc' },
+          select: { order: { select: { id: true, address: true } } },
+        },
+      },
+    });
+    if (!course || course.deliveries.length === 0) return new Map();
+
+    const frais = this.etaCache.get(course.id);
+    if (frais && Date.now() - frais.calculeA < DeliveryTrackingService.ETA_TTL_MS) {
+      return frais.parCommande;
+    }
+
+    // Arrêts géolocalisables uniquement : une adresse sans coordonnées ne peut
+    // pas entrer dans l'itinéraire, on la laisse simplement sans ETA.
+    // `parseOrderLatLng` renvoie {lat,lng}, l'API Maps attend {latitude,longitude} :
+    // on normalise ici une bonne fois pour toutes.
+    const etapes = course.deliveries
+      .map((d) => {
+        const c = parseOrderLatLng(d.order.address);
+        return c
+          ? { orderId: d.order.id, coord: { latitude: c.lat, longitude: c.lng } }
+          : null;
+      })
+      .filter(
+        (e): e is { orderId: string; coord: { latitude: number; longitude: number } } =>
+          e !== null,
+      );
+    if (etapes.length === 0) return new Map();
+
+    const derniere = etapes[etapes.length - 1].coord;
+    const directions = await this.maps.getDirections({
+      originLat: position.latitude,
+      originLng: position.longitude,
+      destLat: derniere.latitude,
+      destLng: derniere.longitude,
+      waypoints: etapes.slice(0, -1).map((e) => e.coord),
+    });
+    if (!directions || directions.legs.length === 0) return new Map();
+
+    const parCommande = new Map<string, number>();
+    // Temps d'arrêt appliqué AVANT chaque client, déduit du calcul backend
+    // (arrêts totaux répartis sur les clients intermédiaires).
+    const arretUnitaire =
+      etapes.length > 1 ? (directions.stopsSeconds ?? 0) / (etapes.length - 1) : 0;
+
+    let cumul = 0;
+    etapes.forEach((etape, i) => {
+      cumul += directions.legs[i]?.durationSeconds ?? 0;
+      // Le i-ème client attend aussi la remise chez les i clients précédents.
+      parCommande.set(etape.orderId, Math.round(cumul + i * arretUnitaire));
+    });
+
+    this.etaCache.set(course.id, { calculeA: Date.now(), parCommande });
+    return parCommande;
+  }
+
   private async resolveActiveCustomers(
     delivererId: string,
   ): Promise<Array<{ customerId: string; orderId: string; deliveryStatut: DeliveryStatut }>> {

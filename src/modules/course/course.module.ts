@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AuthDelivererModule } from 'src/modules/auth-deliverer/auth-deliverer.module';
 import { DeliverersModule } from 'src/modules/deliverers/deliverers.module';
+import { MapsModule } from 'src/modules/maps/maps.module';
 import { TurboModule } from 'src/turbo/turbo.module';
 
 import { CourseAdminController } from './controllers/course-admin.controller';
@@ -24,7 +25,8 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
 
 @Module({
   // TurboModule : bascule vers la flotte externe quand la flotte interne est saturée.
-  imports: [AuthDelivererModule, DeliverersModule, TurboModule],
+  // MapsModule : ETA client (trafic + arrêts) dans le suivi de livraison.
+  imports: [AuthDelivererModule, DeliverersModule, TurboModule, MapsModule],
   controllers: [CourseDelivererController, CourseAdminController, CourseOperationsController],
   providers: [
     // Helpers

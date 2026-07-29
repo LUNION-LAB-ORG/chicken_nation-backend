@@ -4,6 +4,8 @@ import { CourseStatut } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 
+import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
+
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { CourseActionService } from '../services/course-action.service';
 import { CourseOfferService } from '../services/course-offer.service';
@@ -26,6 +28,8 @@ export class CourseTask {
     private readonly courseOfferService: CourseOfferService,
     private readonly courseActionService: CourseActionService,
     private readonly settings: CourseSettingsHelper,
+    // Alerte staff sur les livraisons qui dérapent.
+    private readonly notificationsSender: NotificationsSenderService,
   ) {}
 
   @Cron(CronExpression.EVERY_10_SECONDS)
@@ -72,6 +76,63 @@ export class CourseTask {
       }
     } catch (err) {
       this.logger.error(`Erreur cron retryUnassignedCourses: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Détecte les tournées qui DÉPASSENT nettement leur durée estimée.
+   * Sans cela, un retard n'est visible que lorsque le client réclame.
+   * Alerte émise UNE SEULE FOIS par course (claim atomique, 2 backends).
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async detecterRetards() {
+    try {
+      const { delayAlertFactor } = await this.settings.load();
+      const now = new Date();
+
+      const enCours = await this.prisma.course.findMany({
+        where: {
+          statut: CourseStatut.IN_DELIVERY,
+          delay_alerted_at: null,
+          picked_up_at: { not: null },
+          estimated_duration_min: { not: null },
+        },
+        select: {
+          id: true,
+          reference: true,
+          restaurant_id: true,
+          picked_up_at: true,
+          estimated_duration_min: true,
+        },
+        take: 100,
+      });
+
+      for (const c of enCours) {
+        const ecouleMin = (now.getTime() - c.picked_up_at!.getTime()) / 60000;
+        const seuil = c.estimated_duration_min! * delayAlertFactor;
+        if (ecouleMin < seuil) continue;
+
+        // Claim atomique : une seule alerte, même avec deux backends.
+        const claim = await this.prisma.course.updateMany({
+          where: { id: c.id, delay_alerted_at: null },
+          data: { delay_alerted_at: now },
+        });
+        if (claim.count !== 1) continue;
+
+        this.logger.warn(
+          `Course ${c.reference} en retard : ${Math.round(ecouleMin)} min pour ${c.estimated_duration_min} min estimées.`,
+        );
+        void this.notificationsSender
+          .sendCourseDelayBell({
+            reference: c.reference,
+            restaurantId: c.restaurant_id,
+            estimeMin: c.estimated_duration_min!,
+            ecouleMin: Math.round(ecouleMin),
+          })
+          .catch(() => undefined);
+      }
+    } catch (err) {
+      this.logger.error(`Erreur cron detecterRetards: ${(err as Error).message}`);
     }
   }
 

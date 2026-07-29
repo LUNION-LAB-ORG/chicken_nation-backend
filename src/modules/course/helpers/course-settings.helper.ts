@@ -33,6 +33,9 @@ const DEFAULTS = {
   no_deliverer_alert_after_min: 5,  // délai avant d'alerter le staff (cloche)
   no_deliverer_max_wait_min: 60,    // au-delà, la course expire pour de bon (anti-zombie)
 
+  // Détection des retards de livraison
+  delay_alert_factor: 1.5,          // alerte si le réel dépasse l'estimé de 50 %
+
   // Saturation interne → bascule sur la flotte externe Turbo
   turbo_fallback_enabled: 1,        // 1 = sous-traiter à Turbo si aucun livreur interne
   turbo_fallback_after_min: 4,      // minutes d'attente avant de basculer (< alerte staff)
@@ -56,6 +59,8 @@ export interface ICourseSettings {
   // Aucun livreur disponible
   noDelivererAlertAfterMin: number;
   noDelivererMaxWaitMin: number;
+  // Détection des retards
+  delayAlertFactor: number;
   // Bascule flotte externe Turbo
   turboFallbackEnabled: boolean;
   turboFallbackAfterMin: number;
@@ -96,6 +101,7 @@ export class CourseSettingsHelper {
       // Aucun livreur disponible
       'course.no_deliverer_alert_after_min',
       'course.no_deliverer_max_wait_min',
+      'course.delay_alert_factor',
       // Bascule Turbo
       'course.turbo_fallback_enabled',
       'course.turbo_fallback_after_min',
@@ -120,6 +126,7 @@ export class CourseSettingsHelper {
       rebalanceIntervalSeconds: this.toNumber(map['course.rebalance_interval_seconds'], DEFAULTS.rebalance_interval_seconds),
       noDelivererAlertAfterMin: this.toNumber(map['course.no_deliverer_alert_after_min'], DEFAULTS.no_deliverer_alert_after_min),
       noDelivererMaxWaitMin: this.toNumber(map['course.no_deliverer_max_wait_min'], DEFAULTS.no_deliverer_max_wait_min),
+      delayAlertFactor: this.toNumber(map['course.delay_alert_factor'], DEFAULTS.delay_alert_factor),
       turboFallbackEnabled: this.toBoolean(map['course.turbo_fallback_enabled'], DEFAULTS.turbo_fallback_enabled),
       turboFallbackAfterMin: this.toNumber(map['course.turbo_fallback_after_min'], DEFAULTS.turbo_fallback_after_min),
     };

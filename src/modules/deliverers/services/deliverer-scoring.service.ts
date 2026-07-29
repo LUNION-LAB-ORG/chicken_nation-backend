@@ -14,6 +14,7 @@ import {
 } from 'src/modules/course/helpers/geo.helper';
 
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
+import { MapsService } from 'src/modules/maps/maps.service';
 
 export interface IRankInput {
   restaurantId: string;
@@ -67,6 +68,9 @@ export class DelivererScoringService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly settings: DelivererScoringSettingsHelper,
+    // Temps de trajet réels : la distance à vol d'oiseau ment dès qu'il y a un
+    // pont ou un sens unique.
+    private readonly maps: MapsService,
   ) {}
 
   // ============================================================
@@ -84,6 +88,77 @@ export class DelivererScoringService {
    *      déjà dépassé `chain_max_per_hour` chaînages dans la dernière heure.
    *      → reçoivent `chainScore = 1` pour compenser leur rang élevé (ou nul).
    */
+  /**
+   * Réordonne les meilleurs candidats selon le temps de trajet RÉEL jusqu'au
+   * restaurant (trafic compris), au lieu de la distance à vol d'oiseau.
+   *
+   * Best-effort et sans effet de bord : désactivé par réglage, coordonnées
+   * manquantes, ou Google injoignable, on rend le classement d'origine intact.
+   */
+  private async affinerParTempsDeTrajet(
+    restaurantId: string,
+    ranked: IRankedCandidate[],
+  ): Promise<IRankedCandidate[]> {
+    const settings = await this.settings.load();
+    if (!settings.travelTimeRanking || ranked.length < 2) return ranked;
+
+    const restaurant = await this.prisma.restaurant.findUnique({
+      where: { id: restaurantId },
+      select: { latitude: true, longitude: true },
+    });
+    if (!restaurant?.latitude || !restaurant?.longitude) return ranked;
+
+    const topN = Math.max(2, settings.travelTimeTopN);
+    const tete = ranked.slice(0, topN);
+    const reste = ranked.slice(topN);
+
+    // Positions connues uniquement : sans GPS frais, aucun temps calculable.
+    const positions = await this.prisma.deliverer.findMany({
+      where: { id: { in: tete.map((c) => c.delivererId) } },
+      select: { id: true, last_location: true },
+    });
+    const parId = new Map(positions.map((p) => [p.id, p.last_location]));
+
+    const origines: { latitude: number; longitude: number }[] = [];
+    const idsAlignes: string[] = [];
+    for (const c of tete) {
+      const loc = parId.get(c.delivererId) as { lat?: number; lng?: number } | null;
+      if (typeof loc?.lat !== 'number' || typeof loc?.lng !== 'number') continue;
+      origines.push({ latitude: loc.lat, longitude: loc.lng });
+      idsAlignes.push(c.delivererId);
+    }
+    if (origines.length < 2) return ranked;
+
+    const temps = await this.maps.getTravelTimes(origines, {
+      latitude: restaurant.latitude,
+      longitude: restaurant.longitude,
+    });
+    if (!temps) return ranked;
+
+    const secondesParId = new Map<string, number>();
+    idsAlignes.forEach((id, i) => {
+      const t = temps[i];
+      if (t != null) secondesParId.set(id, t);
+    });
+    if (secondesParId.size < 2) return ranked;
+
+    // Tri du peloton de tête par temps réel croissant. Les candidats sans temps
+    // calculable gardent leur position relative, à la suite.
+    const avecTemps = tete.filter((c) => secondesParId.has(c.delivererId));
+    const sansTemps = tete.filter((c) => !secondesParId.has(c.delivererId));
+    avecTemps.sort(
+      (a, b) => secondesParId.get(a.delivererId)! - secondesParId.get(b.delivererId)!,
+    );
+
+    this.logger.log(
+      `Affinage temps de trajet : ${avecTemps
+        .map((c) => `${c.delivererId.slice(0, 8)}=${Math.round(secondesParId.get(c.delivererId)! / 60)}min`)
+        .join(' | ')}`,
+    );
+
+    return [...avecTemps, ...sansTemps, ...reste];
+  }
+
   async rankCandidates(input: IRankInput): Promise<IRankedCandidate[]> {
     const now = new Date();
     const settings = await this.settings.load();
@@ -385,8 +460,16 @@ export class DelivererScoringService {
    * du top 3) pour audit / tuning des poids.
    */
   async pickBestCandidate(input: IRankInput): Promise<IRankedCandidate | null> {
-    const ranked = await this.rankCandidates(input);
+    let ranked = await this.rankCandidates(input);
     if (ranked.length === 0) return null;
+
+    // AFFINAGE PAR TEMPS DE TRAJET RÉEL.
+    // Le classement ci-dessus mesure la distance à vol d'oiseau, qui ment dès
+    // qu'il y a un pont, une lagune ou un sens unique : un livreur à 800 m de
+    // l'autre côté d'un pont est plus loin qu'un livreur à 1,5 km en ligne
+    // droite. On ne raffine que les MEILLEURS candidats : un appel Google par
+    // offre est facturé, la borne `travelTimeTopN` maîtrise la dépense.
+    ranked = await this.affinerParTempsDeTrajet(input.restaurantId, ranked);
 
     const top3 = ranked
       .slice(0, 3)

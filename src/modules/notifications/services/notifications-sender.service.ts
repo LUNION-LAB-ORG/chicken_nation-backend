@@ -306,6 +306,62 @@ export class NotificationsSenderService {
     }
 
     /**
+     * Alerte : une livraison DÉPASSE nettement sa durée estimée. Permet de
+     * prévenir le client avant qu'il ne réclame, et de comprendre ce qui bloque
+     * (panne, adresse introuvable, livreur en difficulté).
+     */
+    async sendCourseDelayBell(params: {
+        reference: string;
+        restaurantId: string;
+        estimeMin: number;
+        ecouleMin: number;
+    }) {
+        try {
+            const { reference, restaurantId, estimeMin, ecouleMin } = params;
+
+            const [restoUsers, backofficeUsers] = await Promise.all([
+                this.notificationRecipientService.getAllUsersByRestaurantAndRole(
+                    restaurantId,
+                    [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+                ),
+                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+            ]);
+
+            const byId = new Map<string, NotificationRecipient>();
+            for (const r of [...restoUsers, ...backofficeUsers]) byId.set(r.id, r);
+            const recipients = [...byId.values()].filter(
+                (r) => r.in_app_notifications_enabled !== false,
+            );
+            if (recipients.length === 0) return;
+
+            const template: NotificationTemplate<any> = {
+                title: () => '⏱️ Livraison en retard',
+                message: () =>
+                    `La course ${reference} roule depuis ${ecouleMin} min pour une tournée estimée à ${estimeMin} min. ` +
+                    `Contactez le livreur et prévenez le client avant qu'il ne réclame.`,
+                icon: () => notificationIcons.delivery.url,
+                iconBgColor: () => notificationIcons.delivery.color,
+            };
+
+            const notifications = await this.notificationsService.sendNotificationToMultiple(
+                template,
+                {
+                    actor: recipients[0],
+                    recipients,
+                    data: { reference, estimeMin, ecouleMin },
+                    meta: { kind: 'course', reference, delay: true },
+                },
+                NotificationType.SYSTEM,
+            );
+            notifications.forEach((notif, i) => {
+                this.notificationsWebSocketService.emitNotification(notif, recipients[i]);
+            });
+        } catch (e) {
+            this.logger.warn(`Alerte « retard » non envoyée : ${(e as Error)?.message}`);
+        }
+    }
+
+    /**
      * 🚨 Alerte : INCIDENT déclaré par un livreur Turbo sur une livraison en
      * cours (accident, agression, panne…). Demande une réaction humaine
      * immédiate — rappeler le client, relancer la commande, joindre Turbo.

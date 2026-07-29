@@ -240,6 +240,72 @@ export class MapsService {
     }
   }
 
+  // ── Temps de trajet (Distance Matrix) ────────────────────────────────────
+
+  /**
+   * Temps de trajet RÉELS de plusieurs origines vers une destination unique,
+   * trafic compris. Un seul appel pour tout le lot.
+   *
+   * Sert au choix du livreur : la distance à vol d'oiseau ment dès qu'il y a un
+   * pont, un sens unique ou une lagune. Un livreur à 800 m de l'autre côté d'un
+   * pont est plus loin qu'un livreur à 1,5 km en ligne droite.
+   *
+   * Renvoie un tableau aligné sur `origins` ; `null` pour une origine dont
+   * Google n'a pas su calculer l'itinéraire. Renvoie `null` global en cas
+   * d'échec, pour que l'appelant retombe sur son classement habituel.
+   */
+  async getTravelTimes(
+    origins: ILatLng[],
+    destination: ILatLng,
+  ): Promise<(number | null)[] | null> {
+    if (origins.length === 0) return [];
+
+    const originsStr = origins.map((o) => `${o.latitude},${o.longitude}`).join('|');
+    const destStr = `${destination.latitude},${destination.longitude}`;
+    const cacheKey = this.key('matrix', originsStr, destStr);
+
+    const cached = await this.cache.get<(number | null)[]>(cacheKey);
+    if (cached) return cached;
+
+    const url = new URL(`${BASE_URL}/distancematrix/json`);
+    url.searchParams.set('origins', originsStr);
+    url.searchParams.set('destinations', destStr);
+    url.searchParams.set('mode', 'driving');
+    url.searchParams.set('departure_time', 'now');
+    url.searchParams.set('traffic_model', 'best_guess');
+    url.searchParams.set('key', this.apiKey);
+
+    try {
+      const data = await this.googleFetch<{
+        status: string;
+        rows?: {
+          elements: {
+            status: string;
+            duration?: { value: number };
+            duration_in_traffic?: { value: number };
+          }[];
+        }[];
+      }>(url.toString());
+
+      if (data.status !== 'OK' || !data.rows) {
+        this.logger.warn(`[Maps] DistanceMatrix status=${data.status}`);
+        return null;
+      }
+
+      const result = data.rows.map((row) => {
+        const el = row.elements?.[0];
+        if (!el || el.status !== 'OK') return null;
+        return el.duration_in_traffic?.value ?? el.duration?.value ?? null;
+      });
+
+      await this.cache.set(cacheKey, result, TTL.DIRECTIONS);
+      return result;
+    } catch (err) {
+      this.logger.warn(`[Maps] DistanceMatrix error: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
   // ── Reverse Geocode ──────────────────────────────────────────────────────
 
   async reverseGeocode(lat: number, lng: number): Promise<IReverseGeocodeResult | null> {

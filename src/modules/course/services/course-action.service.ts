@@ -15,8 +15,10 @@ import {
 import { PrismaService } from 'src/database/services/prisma.service';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer-queue.service';
+import { MapsService } from 'src/modules/maps/maps.service';
 import { TurboService } from 'src/turbo/services/turbo.service';
 
+import { parseOrderLatLng } from '../helpers/geo.helper';
 import { CancelCourseDto } from '../dto/cancel-course.dto';
 import { ConfirmDeliveryDto } from '../dto/confirm-delivery.dto';
 import { FailDeliveryDto } from '../dto/fail-delivery.dto';
@@ -43,6 +45,8 @@ export class CourseActionService {
     private readonly pushService: DelivererPushService,
     // Sous-traitance : confirmation du retrait caissière vers la flotte externe.
     private readonly turboService: TurboService,
+    // Estimation de la tournée (trafic + arrêts) pour détecter les retards.
+    private readonly maps: MapsService,
   ) {}
 
   // ============================================================
@@ -331,6 +335,11 @@ export class CourseActionService {
       });
     }
 
+    // Fige la durée ESTIMÉE de la tournée (trafic + arrêts) au moment du retrait.
+    // Sans cette référence, aucun retard ne peut être détecté : on ne s'en rend
+    // compte qu'au moment où le client réclame. Best-effort.
+    void this.estimerDureeTournee(updated.id).catch(() => undefined);
+
     // Course SOUS-TRAITÉE : on signale le retrait à Turbo (leur groupe passe
     // « récupéré » → picked_up). C'est CN qui reste la source de vérité sur la
     // remise des plats, exactement comme pour un livreur interne.
@@ -365,6 +374,50 @@ export class CourseActionService {
   // ============================================================
 
   /** Vérifie que la course appartient au livreur + est dans le bon statut */
+  /**
+   * Calcule et fige la durée prévisionnelle de la tournée : restaurant → tous
+   * les clients, trafic réel et arrêts compris. Sert de référence à la détection
+   * des retards. Silencieux en cas d'échec : une estimation manquante ne doit
+   * jamais empêcher une course de partir.
+   */
+  private async estimerDureeTournee(courseId: string): Promise<void> {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: {
+        restaurant: { select: { latitude: true, longitude: true } },
+        deliveries: {
+          orderBy: { sequence_order: 'asc' },
+          select: { order: { select: { address: true } } },
+        },
+      },
+    });
+    if (!course?.restaurant?.latitude || !course.restaurant.longitude) return;
+
+    const etapes = course.deliveries
+      .map((d) => parseOrderLatLng(d.order.address))
+      .filter((c): c is { lat: number; lng: number } => c !== null)
+      .map((c) => ({ latitude: c.lat, longitude: c.lng }));
+    if (etapes.length === 0) return;
+
+    const directions = await this.maps.getDirections({
+      originLat: course.restaurant.latitude,
+      originLng: course.restaurant.longitude,
+      destLat: etapes[etapes.length - 1].latitude,
+      destLng: etapes[etapes.length - 1].longitude,
+      waypoints: etapes.slice(0, -1),
+    });
+    if (!directions) return;
+
+    const minutes = Math.round(
+      (directions.totalDurationWithStopsSeconds ?? directions.totalDurationSeconds) / 60,
+    );
+    await this.prisma.course.update({
+      where: { id: courseId },
+      data: { estimated_duration_min: minutes },
+    });
+    this.logger.log(`Course ${courseId.slice(0, 8)} : tournée estimée à ${minutes} min.`);
+  }
+
   private async assertOwnedCourse(courseId: string, delivererId: string, expected: CourseStatut) {
     const course = await this.prisma.course.findUnique({ where: { id: courseId } });
     if (!course) throw new NotFoundException('Course non trouvée');

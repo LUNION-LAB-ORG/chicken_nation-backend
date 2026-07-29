@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AuthDelivererModule } from 'src/modules/auth-deliverer/auth-deliverer.module';
 import { NotificationsModule } from 'src/modules/notifications/notifications.module';
 import { SettingsModule } from 'src/modules/settings/settings.module';
+import { MapsModule } from 'src/modules/maps/maps.module';
 
 import { DeliverersAdminController } from './controllers/deliverers-admin.controller';
 import { DeliverersSelfController } from './controllers/deliverers-self.controller';
@@ -22,7 +23,8 @@ import { DeliverersTask } from './tasks/deliverers.task';
 import { DeliverersWebSocketService } from './websockets/deliverers-websocket.service';
 
 @Module({
-  imports: [AuthDelivererModule, SettingsModule, ExpoPushModule, NotificationsModule],
+  // MapsModule : affinage du classement des livreurs par temps de trajet réel.
+  imports: [AuthDelivererModule, SettingsModule, ExpoPushModule, NotificationsModule, MapsModule],
   // ⚠ ORDRE IMPORTANT : `DeliverersSelfController` (`@Controller('deliverers/me')`)
   // doit être enregistré AVANT `DeliverersAdminController` (`@Controller('deliverers')`).
   // Sans ça, Express matche `/deliverers/me/scoring-info` sur le pattern

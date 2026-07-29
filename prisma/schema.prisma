@@ -567,6 +567,9 @@ model Course {
   /// Horodatage de la bascule vers la flotte externe Turbo (saturation interne).
   /// Non null ⇒ la course a été sous-traitée : plus aucune recherche interne.
   turbo_escalated_at      DateTime? @db.Timestamp(6)
+  /// Horodatage de l'alerte « livraison en retard » envoyée au staff.
+  /// Non null ⇒ déjà signalée, on ne la répète pas à chaque passage du cron.
+  delay_alerted_at        DateTime? @db.Timestamp(6)
 
   // === Financier ===
   total_delivery_fee     Float

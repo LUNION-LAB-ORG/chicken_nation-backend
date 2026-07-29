@@ -30,6 +30,12 @@ const DEFAULTS = {
   chain_max_distance_meters: 1000,
   chain_max_per_hour: 2,
 
+  // Classement par TEMPS DE TRAJET réel (Google Distance Matrix)
+  // Désactivé par défaut : chaque offre déclenche un appel Google facturé.
+  // À activer quand le gain de pertinence justifie le coût.
+  travel_time_ranking: 0,
+  travel_time_top_n: 4,
+
   // Géolocalisation
   gps_update_interval_seconds: 60,
   gps_expiration_minutes: 5,
@@ -68,6 +74,10 @@ export interface IDelivererScoringSettings {
 
   // Shadow mode
   scoringShadowMode: boolean;
+  /** Affiner le classement des meilleurs candidats par temps de trajet réel. */
+  travelTimeRanking: boolean;
+  /** Nombre de candidats soumis au calcul de temps de trajet (borne le coût). */
+  travelTimeTopN: number;
 }
 
 /**
@@ -106,6 +116,8 @@ export class DelivererScoringSettingsHelper {
       'deliverer.chain_max_distance_meters',
       'deliverer.chain_max_per_hour',
       // GPS
+      'deliverer.travel_time_ranking',
+      'deliverer.travel_time_top_n',
       'deliverer.gps_update_interval_seconds',
       'deliverer.gps_expiration_minutes',
       'deliverer.gps_max_speed_kmh',
@@ -126,6 +138,8 @@ export class DelivererScoringSettingsHelper {
       autoPauseRefusalsWindowMin: this.toNumber(map['deliverer.auto_pause_refusals_window_min'], DEFAULTS.auto_pause_refusals_window_min),
       autoPauseDurationMin: this.toNumber(map['deliverer.auto_pause_duration_min'], DEFAULTS.auto_pause_duration_min),
 
+      travelTimeRanking: this.toBoolean(map['deliverer.travel_time_ranking']),
+      travelTimeTopN: this.toNumber(map['deliverer.travel_time_top_n'], DEFAULTS.travel_time_top_n),
       chainMaxDistanceMeters: this.toNumber(map['deliverer.chain_max_distance_meters'], DEFAULTS.chain_max_distance_meters),
       chainMaxPerHour: this.toNumber(map['deliverer.chain_max_per_hour'], DEFAULTS.chain_max_per_hour, { allowZero: true }),
 
