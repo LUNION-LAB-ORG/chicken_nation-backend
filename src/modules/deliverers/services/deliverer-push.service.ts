@@ -38,6 +38,17 @@ interface NotifyInput {
    * Ex: `'new_course_offer'` → boutons Accepter/Refuser sur le lockscreen.
    */
   categoryId?: string;
+  /**
+   * Canal Android. Le SON et la VIBRATION sont portés par le canal côté mobile :
+   * `offres_v1` déclenche la sonnerie dédiée aux offres de course.
+   * Par défaut `default` (son système).
+   */
+  channelId?: string;
+  /**
+   * Son iOS (Android l'ignore, c'est le canal qui décide). Nom du fichier
+   * embarqué dans le binaire, extension comprise, ex. `offre_course.wav`.
+   */
+  sound?: string;
 }
 
 /**
@@ -84,9 +95,9 @@ export class DelivererPushService {
         tokens: [deliverer.expo_push_token],
         title: input.title,
         body: input.body.substring(0, 200),
-        sound: 'default',
+        sound: input.sound ?? 'default',
         priority: input.critical ? 'high' : 'normal',
-        channelId: 'default',
+        channelId: input.channelId ?? 'default',
         categoryId: input.categoryId,
         data: {
           type: input.type,
@@ -135,6 +146,10 @@ export class DelivererPushService {
       // lockscreen — gros gain UX pour le livreur (un tap au lieu de
       // déverrouiller + ouvrir l'app + scroller).
       categoryId: 'new_course_offer',
+      // Sonnerie dédiée : le bip système d'une seconde passait inaperçu pour un
+      // livreur au volant ou casque sur les oreilles.
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
     });
   }
 
@@ -160,8 +175,11 @@ export class DelivererPushService {
       body: `${input.restaurantName} : réponds vite, la course va partir !`,
       data: { courseId: input.courseId, reference: input.courseReference },
       critical: true,
-      // Mêmes boutons Accepter/Refuser sur l'écran verrouillé.
+      // Mêmes boutons Accepter/Refuser sur l'écran verrouillé, et même sonnerie
+      // que l'offre initiale : c'est la relance qui doit percer la distraction.
       categoryId: 'new_course_offer',
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
     });
   }
 

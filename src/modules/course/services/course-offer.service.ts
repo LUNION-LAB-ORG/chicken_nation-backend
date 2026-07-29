@@ -628,6 +628,107 @@ export class CourseOfferService {
    * injoignable, renvoie `false` : la course reste en recherche interne + alerte
    * staff (on ne perd jamais la commande).
    */
+  /**
+   * BASCULE MANUELLE vers Turbo, déclenchée depuis le back office.
+   *
+   * Même mécanique que la bascule automatique, mais a l'initiative d'un humain :
+   * le staff voit qu'aucun livreur interne ne se libérera (fin de service, pic
+   * d'activité) et n'attend pas le délai automatique.
+   */
+  async basculerVersTurbo(courseId: string): Promise<{ ok: boolean; message: string }> {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: { id: true, reference: true, statut: true, turbo_escalated_at: true, created_at: true },
+    });
+    if (!course) throw new NotFoundException('Course introuvable');
+
+    if (course.turbo_escalated_at) {
+      return { ok: false, message: 'Cette course est déjà confiée à Turbo.' };
+    }
+    if (course.statut !== CourseStatut.PENDING_ASSIGNMENT) {
+      throw new BadRequestException(
+        "Seule une course en recherche de livreur peut être confiée à Turbo. " +
+          "Annulez d'abord l'affectation en cours.",
+      );
+    }
+
+    const attente = Math.max(
+      0,
+      Math.round((Date.now() - course.created_at.getTime()) / 60000),
+    );
+    const ok = await this.escalateToTurbo(courseId, attente);
+    return ok
+      ? { ok: true, message: `Course ${course.reference} confiée à Turbo.` }
+      : {
+          ok: false,
+          message:
+            "Turbo n'a pas accepté la course. Elle reste en recherche interne, réessayez plus tard.",
+        };
+  }
+
+  /**
+   * RETOUR EN INTERNE, déclenché depuis le back office.
+   *
+   * Reprend une course confiée a Turbo pour la reproposer aux livreurs Chicken
+   * Nation. Autorisé UNIQUEMENT tant qu'aucun livreur Turbo n'a été affecté :
+   * au-dela, un livreur externe est deja en route et le reprendre créerait deux
+   * livreurs sur la même commande.
+   *
+   * ⚠️ La course reste ouverte chez Turbo : prévenez-les pour qu'ils l'annulent
+   * de leur côté (aucun endpoint d'annulation ne nous est exposé aujourd'hui).
+   */
+  async revenirEnInterne(courseId: string): Promise<{ ok: boolean; message: string }> {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: {
+        id: true,
+        reference: true,
+        statut: true,
+        turbo_escalated_at: true,
+        deliveries: { select: { order_id: true, turbo_courier_id: true } },
+      },
+    });
+    if (!course) throw new NotFoundException('Course introuvable');
+
+    if (!course.turbo_escalated_at) {
+      return { ok: false, message: "Cette course n'a pas été confiée à Turbo." };
+    }
+    if (course.statut !== CourseStatut.PENDING_ASSIGNMENT) {
+      throw new BadRequestException(
+        "Un livreur Turbo a déjà pris cette course : impossible de la reprendre sans " +
+          "risquer deux livreurs sur la même commande. Annulez-la plutôt.",
+      );
+    }
+    const dejaAffectee = course.deliveries.some((d) => d.turbo_courier_id);
+    if (dejaAffectee) {
+      throw new BadRequestException(
+        'Un livreur Turbo est déjà affecté à cette course. Reprise impossible.',
+      );
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.order.updateMany({
+        where: { id: { in: course.deliveries.map((d) => d.order_id) } },
+        data: { delivery_service: DeliveryService.CHICKEN_NATION },
+      }),
+      this.prisma.course.update({
+        where: { id: courseId },
+        data: { turbo_escalated_at: null, no_deliverer_alerted_at: null },
+      }),
+    ]);
+
+    // Relance immédiate de la recherche interne.
+    await this.offerNextDeliverer(courseId).catch(() => undefined);
+
+    this.logger.log(`Course ${course.reference} reprise en interne depuis Turbo.`);
+    return {
+      ok: true,
+      message:
+        `Course ${course.reference} reprise en interne. ` +
+        'Prévenez Turbo pour qu\'ils annulent la course de leur côté.',
+    };
+  }
+
   private async escalateToTurbo(courseId: string, waitingMinutes: number): Promise<boolean> {
     // Claim ATOMIQUE : un seul backend sous-traite (2 instances // même base).
     const claim = await this.prisma.course.updateMany({

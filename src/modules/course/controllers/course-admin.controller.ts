@@ -82,4 +82,28 @@ export class CourseAdminController {
     await this.offerService.retryExpiredCourse(id);
     return { success: true, message: 'Course relancée — recherche de livreur en cours' };
   }
+
+  @ApiOperation({
+    summary: 'Confier la course à la flotte externe Turbo',
+    description:
+      "Bascule manuelle, sans attendre le délai automatique. Utile quand le staff " +
+      "sait qu'aucun livreur interne ne se libérera. Course en recherche uniquement.",
+  })
+  @Patch(':id/turbo')
+  async basculerVersTurbo(@Param('id', new ParseUUIDPipe()) id: string) {
+    const r = await this.offerService.basculerVersTurbo(id);
+    return { success: r.ok, message: r.message };
+  }
+
+  @ApiOperation({
+    summary: 'Reprendre la course en interne (retour depuis Turbo)',
+    description:
+      "Repropose la course aux livreurs Chicken Nation. Refusé si un livreur Turbo " +
+      'a déjà été affecté, pour ne pas envoyer deux livreurs sur la même commande.',
+  })
+  @Patch(':id/interne')
+  async revenirEnInterne(@Param('id', new ParseUUIDPipe()) id: string) {
+    const r = await this.offerService.revenirEnInterne(id);
+    return { success: r.ok, message: r.message };
+  }
 }
