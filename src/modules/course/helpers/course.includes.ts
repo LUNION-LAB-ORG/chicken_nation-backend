@@ -8,10 +8,18 @@
  *
  * Bug historique : utiliser `include: { deliveries: true }` (shallow) cassait les mappers côté
  * mobile qui lisent `course.restaurant.name` ou `delivery.order.*`.
+ *
+ * 🔒 `delivery_pin` est OMIS ici (même logique que la clé API restaurant) :
+ * ce payload part vers l'app LIVREUR et les rooms WebSocket — or le code à
+ * 4 chiffres est le secret que LE CLIENT donne au livreur pour prouver la
+ * remise. S'il voyageait dans le payload, un livreur pourrait auto-valider
+ * ses livraisons sans voir le client. Le staff, lui, le voit via
+ * `COURSE_ADMIN_INCLUDE` (support : client qui a perdu son code).
  */
 export const COURSE_FULL_INCLUDE = {
   deliveries: {
     orderBy: { sequence_order: 'asc' as const },
+    omit: { delivery_pin: true },
     include: {
       order: {
         select: {
@@ -67,5 +75,20 @@ export const COURSE_FULL_INCLUDE = {
       phone: true,
       image: true,
     },
+  },
+} as const;
+
+/**
+ * Variante BACKOFFICE (staff uniquement — `findAllAdmin`, `findOne` admin) :
+ * identique à `COURSE_FULL_INCLUDE` mais AVEC `delivery_pin` sur chaque
+ * livraison. Le staff doit pouvoir lire le code de récupération au client
+ * (support : client qui ne retrouve plus son code, litige de remise).
+ * ⚠️ Ne JAMAIS utiliser sur un endpoint ou une émission destinés au livreur.
+ */
+export const COURSE_ADMIN_INCLUDE = {
+  ...COURSE_FULL_INCLUDE,
+  deliveries: {
+    ...COURSE_FULL_INCLUDE.deliveries,
+    omit: { delivery_pin: false },
   },
 } as const;

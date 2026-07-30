@@ -6,7 +6,13 @@ import { Course, CourseStatut, Delivery, DeliveryStatut } from '@prisma/client';
  */
 
 export interface CourseWithDetails extends Course {
-  deliveries: Delivery[];
+  /**
+   * Livraisons SANS `delivery_pin` : ces payloads partent vers l'app livreur
+   * et les rooms WebSocket, or le code à 4 chiffres est le secret que le
+   * CLIENT donne au livreur (cf. COURSE_FULL_INCLUDE). Seuls les endpoints
+   * ADMIN le renvoient.
+   */
+  deliveries: Omit<Delivery, 'delivery_pin'>[];
 }
 
 export interface CourseOfferNewPayload {

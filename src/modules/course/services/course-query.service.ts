@@ -5,7 +5,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 
 import { QueryCourseStatsDto } from '../dto/query-course-stats.dto';
 import { QueryCoursesDto } from '../dto/query-courses.dto';
-import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
+import { COURSE_ADMIN_INCLUDE, COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 
 /**
  * Service : lectures Course (queries read-only).
@@ -114,7 +114,8 @@ export class CourseQueryService {
         skip,
         take: limit,
         orderBy: { created_at: 'desc' },
-        include: COURSE_FULL_INCLUDE,
+        // ADMIN : le staff voit le code de récupération client (delivery_pin).
+        include: COURSE_ADMIN_INCLUDE,
       }),
       this.prisma.course.count({ where }),
     ]);
@@ -261,7 +262,8 @@ export class CourseQueryService {
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
       include: {
-        ...COURSE_FULL_INCLUDE,
+        // ADMIN : le staff voit le code de récupération client (delivery_pin).
+        ...COURSE_ADMIN_INCLUDE,
         offer_attempts: {
           orderBy: { offered_at: 'desc' },
           include: {
