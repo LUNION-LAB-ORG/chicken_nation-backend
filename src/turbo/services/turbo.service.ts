@@ -54,6 +54,9 @@ export class TurboService {
           // livraison inclus), 0 si déjà payée. Champ explicite du contrat — le
           // livreur Turbo ne doit rien déduire de prix/frais lui-même.
           "montantAEncaisser": order.paied ? 0 : order.amount,
+          // Coût RÉEL de la course endossé par CN (tarif PLEIN avant offre
+          // client) — cf. creerCourseGroupe. Jamais `prix`, jamais recalculé.
+          "fraisLivraison": Math.max(order.delivery_fee_base ?? 0, order.delivery_fee ?? 0),
           "statut": "EN_ATTENTE_RECUPERATION"
         }]
       }
@@ -199,6 +202,11 @@ export class TurboService {
         // livraison inclus), 0 si déjà payée. Champ explicite du contrat — le
         // livreur Turbo ne doit rien déduire de prix/frais lui-même.
         montantAEncaisser: order.paied ? 0 : order.amount,
+        // Coût RÉEL de la course, endossé par CN : tarif PLEIN (avant offre
+        // client). `delivery_fee` peut être 0 — livraison OFFERTE au client —
+        // sans que la course soit gratuite : c'est CN qui paie Turbo, sur CE
+        // montant. Ne jamais utiliser `prix` (valeur nourriture) ni recalculer.
+        fraisLivraison: Math.max(order.delivery_fee_base ?? 0, order.delivery_fee ?? 0),
         statut: 'EN_ATTENTE_RECUPERATION',
       };
     });
