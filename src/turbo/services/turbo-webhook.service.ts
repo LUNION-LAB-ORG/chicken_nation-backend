@@ -887,11 +887,22 @@ export class TurboWebhookService {
     if (delivery.order.paied) {
       await this.syncStatus(numero, OrderStatus.COMPLETED, WebhookEvent.DELIVERY_DELIVERED);
     } else {
-      await this.enregistrerEncaissementLivreur(delivery.order, {
-        moyenPaiement: params.moyenPaiement,
-        montantEncaisse: params.montantEncaisse,
-        encaissements: params.encaissements,
-      });
+      // ⚠️ ORDRE DES DÉCLARATIONS : on n'enregistre l'encaissement ICI que si
+      // l'appel PORTE réellement l'info. Sinon, un défaut « espèces/total »
+      // posé maintenant BLOQUERAIT (dédup : un PENDING existe déjà) le vrai
+      // détail — potentiellement PARTAGÉ (Wave + Orange…) — que le webhook
+      // `delivered` apporte juste après. Le défaut espèces ne s'applique
+      // qu'au DERNIER maillon (handleDelivered).
+      const porteEncaissement =
+        (Array.isArray(params.encaissements) && params.encaissements.length > 0) ||
+        Boolean(params.moyenPaiement);
+      if (porteEncaissement) {
+        await this.enregistrerEncaissementLivreur(delivery.order, {
+          moyenPaiement: params.moyenPaiement,
+          montantEncaisse: params.montantEncaisse,
+          encaissements: params.encaissements,
+        });
+      }
       await this.syncStatus(numero, OrderStatus.COLLECTED, WebhookEvent.DELIVERY_DELIVERED);
     }
 
