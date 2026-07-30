@@ -17,7 +17,10 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer-queue.service';
 import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
-import { resoudreMoyenPaiement } from 'src/turbo/constantes/turbo.constante';
+import {
+  libelleEncaissements,
+  normaliserEncaissements,
+} from 'src/turbo/constantes/turbo.constante';
 
 import { ConfirmDeliveryDto } from '../dto/confirm-delivery.dto';
 import { FailDeliveryDto } from '../dto/fail-delivery.dto';
@@ -152,40 +155,59 @@ export class DeliveryActionService {
     });
     if (dejaDeclare) return;
 
-    const moyen = resoudreMoyenPaiement(dto.moyen_paiement);
-    const montantBrut = Number(dto.montant_encaisse);
-    const montant =
-      Number.isFinite(montantBrut) && montantBrut > 0 ? montantBrut : order.amount;
+    // PAIEMENT PARTAGÉ : liste `encaissements` (une ligne par moyen, agrégée),
+    // sinon champ simple, sinon espèces pour le montant total.
+    const lignes = normaliserEncaissements(
+      {
+        encaissements: dto.encaissements,
+        moyenPaiement: dto.moyen_paiement,
+        montantEncaisse: dto.montant_encaisse,
+      },
+      order.amount,
+    );
 
     try {
-      await this.prisma.paiement.create({
-        data: {
-          reference: `LIVREUR-${order.reference}-${Date.now()}`,
-          amount: montant,
-          total: montant,
-          fees: 0,
-          mode: moyen.mode,
-          source: moyen.source,
-          status: PaiementStatus.PENDING,
-          order_id: order.id,
-          client_id: order.customer_id,
-        },
-      });
+      const horodatage = Date.now();
+      await this.prisma.$transaction(
+        lignes.map((ligne, i) =>
+          this.prisma.paiement.create({
+            data: {
+              reference: `LIVREUR-${order.reference}-${horodatage}-${i}`,
+              amount: ligne.montant,
+              total: ligne.montant,
+              fees: 0,
+              mode: ligne.mode,
+              source: ligne.source,
+              status: PaiementStatus.PENDING,
+              order_id: order.id,
+              client_id: order.customer_id,
+            },
+          }),
+        ),
+      );
     } catch (err: any) {
-      if (err?.code === 'P2002') return; // un PENDING concurrent a déjà gagné
+      // Index unique (1 PENDING par commande ET par moyen) : un lot concurrent
+      // a déjà gagné — la transaction du perdant est annulée en bloc.
+      if (err?.code === 'P2002') return;
       throw err;
     }
 
+    const detail = libelleEncaissements(lignes);
+    const total = lignes.reduce((somme, l) => somme + l.montant, 0);
+
     this.logger.log(
-      `Encaissement livreur interne enregistré (EN ATTENTE) — commande ${order.reference} : ${montant} XOF en ${moyen.label}.`,
+      `Encaissement livreur interne enregistré (EN ATTENTE) — commande ${order.reference} : ${detail}.`,
     );
 
     this.notificationsSender
       .sendTurboPaymentPendingBell({
         reference: order.reference,
         restaurantId: order.restaurant_id,
-        montant,
-        moyenLabel: moyen.label,
+        montant: total,
+        moyenLabel:
+          lignes.length > 1
+            ? lignes.map((l) => `${l.label} (${l.montant.toLocaleString('fr-FR')} XOF)`).join(' + ')
+            : lignes[0].label,
         livreurLabel: 'le livreur Chicken Nation',
       })
       .catch(() => undefined);

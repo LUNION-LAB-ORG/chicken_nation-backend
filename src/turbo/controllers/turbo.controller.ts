@@ -51,6 +51,8 @@ export class TurboController {
       moyenPaiement?: string;
       /** Montant réellement encaissé (défaut : montant TTC de la commande). */
       montantEncaisse?: number;
+      /** PAIEMENT PARTAGÉ : liste [{moyenPaiement, montantEncaisse}], une entrée par moyen. */
+      encaissements?: { moyenPaiement?: string; montantEncaisse?: number }[];
     },
     @Headers('X-API-KEY') apiKey: string,
   ) {
@@ -60,6 +62,7 @@ export class TurboController {
       apiKey,
       moyenPaiement: body?.moyenPaiement,
       montantEncaisse: body?.montantEncaisse,
+      encaissements: body?.encaissements,
     });
   }
 

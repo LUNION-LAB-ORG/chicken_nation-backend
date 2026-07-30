@@ -61,3 +61,64 @@ export function resoudreMoyenPaiement(code?: string | null): { mode: PaiementMod
     const cle = String(code ?? '').trim().toLowerCase();
     return ENCAISSEMENT_LIVREUR[cle] ?? ENCAISSEMENT_LIVREUR['cash'];
 }
+
+export interface IEncaissementDeclare {
+    mode: PaiementMode;
+    source: string;
+    label: string;
+    montant: number;
+}
+
+/**
+ * Normalise la déclaration d'encaissement d'un livreur (Turbo OU interne) en
+ * lignes {mode, source, label, montant} AGRÉGÉES PAR MOYEN.
+ *
+ * PAIEMENT PARTAGÉ : le client peut régler en plusieurs moyens (une partie
+ * Wave + une partie Orange Money). Formats acceptés, du plus riche au plus
+ * simple (lecture tolérante, clés camelCase ou snake_case) :
+ *   1. `encaissements: [{ moyenPaiement, montantEncaisse }, …]` — liste ;
+ *   2. `moyenPaiement` + `montantEncaisse` — champ simple (montant absent →
+ *      montant total) ;
+ *   3. rien → espèces pour le montant total.
+ * Deux lignes du même moyen sont fusionnées (l'index unique partiel n'accepte
+ * qu'un PENDING par commande et par moyen).
+ */
+export function normaliserEncaissements(
+    input: {
+        encaissements?: unknown;
+        moyenPaiement?: unknown;
+        montantEncaisse?: unknown;
+    },
+    montantTotal: number,
+): IEncaissementDeclare[] {
+    const lignes: IEncaissementDeclare[] = [];
+
+    if (Array.isArray(input.encaissements)) {
+        for (const brut of input.encaissements) {
+            const e = (brut ?? {}) as Record<string, unknown>;
+            const moyen = resoudreMoyenPaiement(
+                (e.moyenPaiement ?? e.moyen_paiement ?? e.moyen) as string | undefined,
+            );
+            const montant = Number(e.montantEncaisse ?? e.montant_encaisse ?? e.montant);
+            if (!Number.isFinite(montant) || montant <= 0) continue;
+            const existante = lignes.find((l) => l.source === moyen.source);
+            if (existante) existante.montant += montant;
+            else lignes.push({ ...moyen, montant });
+        }
+    }
+    if (lignes.length > 0) return lignes;
+
+    // Champ simple (ou rien) : un seul moyen pour le montant total.
+    const moyen = resoudreMoyenPaiement(input.moyenPaiement as string | undefined);
+    const montantBrut = Number(input.montantEncaisse);
+    const montant =
+        Number.isFinite(montantBrut) && montantBrut > 0 ? montantBrut : montantTotal;
+    return [{ ...moyen, montant }];
+}
+
+/** « 1 200 XOF en Wave + 800 XOF en Orange Money » — pour cloches et logs. */
+export function libelleEncaissements(lignes: IEncaissementDeclare[]): string {
+    return lignes
+        .map((l) => `${l.montant.toLocaleString('fr-FR')} XOF en ${l.label}`)
+        .join(' + ');
+}

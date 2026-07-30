@@ -8,7 +8,10 @@ import { CourseStatut, DeliveryStatut, OrderStatus, PaiementStatus } from '@pris
 import { OrderChannels } from 'src/modules/order/enums/order-channels';
 import { CourseChannels } from 'src/modules/course/enums/course-channels';
 import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
-import { resoudreMoyenPaiement } from '../constantes/turbo.constante';
+import {
+  libelleEncaissements,
+  normaliserEncaissements,
+} from '../constantes/turbo.constante';
 
 /**
  * Réception des webhooks de suivi de livraison Turbo (Turbo → CN).
@@ -433,42 +436,60 @@ export class TurboWebhookService {
     });
     if (dejaDeclare) return;
 
-    const moyen = resoudreMoyenPaiement(data?.moyenPaiement ?? data?.modePaiement);
-    const montantBrut = Number(data?.montantEncaisse ?? data?.montant);
-    const montant =
-      Number.isFinite(montantBrut) && montantBrut > 0 ? montantBrut : order.amount;
+    // PAIEMENT PARTAGÉ : liste `encaissements[{moyenPaiement, montantEncaisse}]`
+    // (une ligne par moyen, agrégée), sinon champ simple, sinon espèces/total.
+    const lignes = normaliserEncaissements(
+      {
+        encaissements: data?.encaissements,
+        moyenPaiement: data?.moyenPaiement ?? data?.modePaiement,
+        montantEncaisse: data?.montantEncaisse ?? data?.montant,
+      },
+      order.amount,
+    );
 
     try {
-      await this.prisma.paiement.create({
-        data: {
-          reference: `TURBO-${order.reference}-${Date.now()}`,
-          amount: montant,
-          total: montant,
-          fees: 0,
-          mode: moyen.mode,
-          source: moyen.source,
-          status: PaiementStatus.PENDING,
-          order_id: order.id,
-          client_id: order.customer_id,
-        },
-      });
+      const horodatage = Date.now();
+      await this.prisma.$transaction(
+        lignes.map((ligne, i) =>
+          this.prisma.paiement.create({
+            data: {
+              reference: `TURBO-${order.reference}-${horodatage}-${i}`,
+              amount: ligne.montant,
+              total: ligne.montant,
+              fees: 0,
+              mode: ligne.mode,
+              source: ligne.source,
+              status: PaiementStatus.PENDING,
+              order_id: order.id,
+              client_id: order.customer_id,
+            },
+          }),
+        ),
+      );
     } catch (err: any) {
-      // Index unique partiel (1 PENDING par commande) : un create concurrent
-      // (webhook rejoué, valider-code + delivered, 2 backends) a déjà gagné.
+      // Index unique partiel (1 PENDING par commande ET par moyen) : un lot
+      // concurrent (webhook rejoué, valider-code + delivered, 2 backends) a
+      // déjà gagné — la transaction du perdant est annulée en bloc.
       if (err?.code === 'P2002') return;
       throw err;
     }
 
+    const detail = libelleEncaissements(lignes);
+    const total = lignes.reduce((somme, l) => somme + l.montant, 0);
+
     this.logger.log(
-      `Encaissement livreur Turbo enregistré (EN ATTENTE) — commande ${order.reference} : ${montant} XOF en ${moyen.label}.`,
+      `Encaissement livreur Turbo enregistré (EN ATTENTE) — commande ${order.reference} : ${detail}.`,
     );
 
     this.notificationsSender
       .sendTurboPaymentPendingBell({
         reference: order.reference,
         restaurantId: order.restaurant_id,
-        montant,
-        moyenLabel: moyen.label,
+        montant: total,
+        moyenLabel:
+          lignes.length > 1
+            ? lignes.map((l) => `${l.label} (${l.montant.toLocaleString('fr-FR')} XOF)`).join(' + ')
+            : lignes[0].label,
       })
       .catch(() => undefined);
   }
@@ -759,6 +780,8 @@ export class TurboWebhookService {
     moyenPaiement?: string;
     /** Montant réellement encaissé (défaut : montant TTC de la commande). */
     montantEncaisse?: number;
+    /** PAIEMENT PARTAGÉ : liste {moyenPaiement, montantEncaisse}, une entrée par moyen. */
+    encaissements?: unknown[];
   }): Promise<{ valid: boolean; message: string }> {
     const { numero, code, apiKey } = params;
     if (!numero || !code) {
@@ -867,6 +890,7 @@ export class TurboWebhookService {
       await this.enregistrerEncaissementLivreur(delivery.order, {
         moyenPaiement: params.moyenPaiement,
         montantEncaisse: params.montantEncaisse,
+        encaissements: params.encaissements,
       });
       await this.syncStatus(numero, OrderStatus.COLLECTED, WebhookEvent.DELIVERY_DELIVERED);
     }

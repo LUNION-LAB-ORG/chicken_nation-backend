@@ -1,12 +1,28 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  IsArray,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
   Length,
   Matches,
+  ValidateNested,
 } from 'class-validator';
+
+/** Une part d'un PAIEMENT PARTAGÉ : le montant réglé via un moyen donné. */
+export class EncaissementItemDto {
+  @ApiProperty({ description: 'Code fermé du moyen (cash, orange-ci, mtn-ci, moov-ci, wave, card)', example: 'wave' })
+  @IsOptional()
+  @IsString()
+  moyen_paiement?: string;
+
+  @ApiProperty({ description: 'Montant réglé via ce moyen', example: 1200 })
+  @IsOptional()
+  @IsNumber()
+  montant?: number;
+}
 
 /**
  * Validation d'une livraison par PIN client.
@@ -43,4 +59,20 @@ export class ConfirmDeliveryDto {
   @IsOptional()
   @IsNumber()
   montant_encaisse?: number;
+
+  /**
+   * PAIEMENT PARTAGÉ : le client règle en plusieurs moyens (une partie Wave,
+   * une partie Orange…). Une entrée PAR MOYEN, montants agrégés côté app.
+   * Prioritaire sur `moyen_paiement`/`montant_encaisse` quand présent.
+   */
+  @ApiProperty({
+    required: false,
+    type: [EncaissementItemDto],
+    description: 'Paiement partagé : une entrée {moyen_paiement, montant} par moyen',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => EncaissementItemDto)
+  encaissements?: EncaissementItemDto[];
 }
