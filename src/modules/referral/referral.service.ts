@@ -172,36 +172,13 @@ export class ReferralService {
     });
     if (claim.count === 0) return false; // pas de parrainage en attente / déjà récompensé
 
-    const referral = await this.prisma.referral.findUnique({ where: { referee_id: refereeId } });
-    if (!referral) return true;
-
-    try {
-      const cfg = await this.getParrainGiftConfig();
-      const reward = await this.createGiftReward(
-        referral.referrer_id,
-        cfg,
-        'Parrainage — merci de nous avoir recommandés !',
-      );
-      if (reward) {
-        await this.prisma.referral.update({
-          where: { id: referral.id },
-          data: { parrain_reward_id: reward.id },
-        });
-        void this.pushToCustomer(
-          referral.referrer_id,
-          '💛 Ton filleul a utilisé son cadeau !',
-          'Merci de nous avoir recommandés — un cadeau à gratter t\'attend dans l\'app.',
-        );
-        void this.notifyInApp(
-          referral.referrer_id,
-          '💛 Ton filleul a utilisé son cadeau !',
-          'Merci de nous avoir recommandés — un cadeau à gratter t\'attend.',
-        );
-      }
-      this.logger.log(`Parrainage qualifié (filleul ${refereeId}) → parrain ${referral.referrer_id} récompensé.`);
-    } catch (e: any) {
-      this.logger.error(`Échec récompense parrain (parrainage ${referral.id}): ${e?.message}`);
-    }
+    // DÉCISION 30/07 : le parrain ne reçoit PLUS de bon/carte à gratter à la
+    // qualification — sa récompense est UNIQUEMENT monétaire (PRIME ambassadeur
+    // + commissions, créditées par accrueForPaidOrder juste après). L'ancienne
+    // carte à gratter parrain (`reward.referral.parrain`) est débranchée ;
+    // `parrain_reward_id` reste en base pour l'historique des parrainages
+    // antérieurs. Le cadeau du FILLEUL, lui, ne change pas.
+    this.logger.log(`Parrainage qualifié (filleul ${refereeId}) → prime ambassadeur au parrain.`);
     return true;
   }
 
@@ -299,7 +276,7 @@ export class ReferralService {
     if (justQualified) {
       // 2) PRIME — seule la commande qualifiante y donne droit (RG-11 : panier mini).
       if (netAmount >= config.min_qualifying_basket && config.prime_amount > 0) {
-        await this.createEarning({
+        const credite = await this.createEarning({
           referral,
           refereeId,
           orderId,
@@ -307,6 +284,20 @@ export class ReferralService {
           rawAmount: config.prime_amount,
           cap: config.cap_per_referee,
         });
+        // Notification parrain : la récompense est désormais UNIQUEMENT la
+        // prime — on annonce le montant réellement crédité (plafond déduit).
+        if (credite > 0) {
+          void this.pushToCustomer(
+            referral.referrer_id,
+            '💛 Ton filleul a utilisé son cadeau !',
+            `Ta prime ambassadeur de ${credite.toLocaleString('fr-FR')} F est créditée — retrouve-la dans « Inviter un ami ».`,
+          );
+          void this.notifyInApp(
+            referral.referrer_id,
+            '💛 Ton filleul a utilisé son cadeau !',
+            `Ta prime ambassadeur de ${credite.toLocaleString('fr-FR')} F est créditée.`,
+          );
+        }
       } else {
         this.logger.log(
           `Parrainage : commande qualifiante ${orderId} sous le panier mini ` +
@@ -391,7 +382,7 @@ export class ReferralService {
     type: ReferralEarningType;
     rawAmount: number;
     cap: number;
-  }): Promise<void> {
+  }): Promise<number> {
     let amount = p.rawAmount;
 
     if (p.cap > 0) {
@@ -405,12 +396,12 @@ export class ReferralService {
         this.logger.log(
           `Plafond parrainage atteint (filleul ${p.refereeId}, cap ${p.cap}) → ${p.type} ignorée.`,
         );
-        return;
+        return 0;
       }
       amount = Math.min(amount, remaining);
     }
 
-    if (amount <= 0) return;
+    if (amount <= 0) return 0;
 
     try {
       await this.prisma.referralEarning.create({
@@ -427,8 +418,9 @@ export class ReferralService {
       this.logger.log(
         `Gain parrainage ${p.type} ${amount} FCFA (parrain ${p.referral.referrer_id}, commande ${p.orderId}).`,
       );
+      return amount;
     } catch (e: any) {
-      if (e?.code === 'P2002') return; // déjà comptabilisé pour cette commande + type
+      if (e?.code === 'P2002') return 0; // déjà comptabilisé pour cette commande + type
       throw e; // transitoire → relancé par le listener pour retry BullMQ
     }
   }

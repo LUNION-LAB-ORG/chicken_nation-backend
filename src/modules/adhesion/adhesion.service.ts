@@ -62,6 +62,12 @@ export class AdhesionService {
         orderBy: { created_at: 'asc' },
       }));
 
+    // Email PLACEHOLDER (déterministe par téléphone, donc unique et idempotent) :
+    // le client venu du site ne saisit pas d'email, mais un email non nul évite
+    // les trous dans les exports/intégrations. Le client pourra le remplacer
+    // par le sien dans l'app (le placeholder n'est posé que si l'email manque).
+    const placeholderEmail = `${phone.replace('+', '')}@client.chicken-nation.com`;
+
     const customer = existing
       ? // À la mise à jour : on ne réécrit le nom que s'il n'était pas déjà connu
         // (ne pas écraser un profil déjà renseigné par le client dans l'app).
@@ -70,6 +76,7 @@ export class AdhesionService {
           data: {
             first_name: existing.first_name?.trim() ? undefined : (firstName ?? undefined),
             last_name: existing.last_name?.trim() ? undefined : (lastName ?? undefined),
+            email: existing.email?.trim() ? undefined : placeholderEmail,
             profile_type: dto.profile_type,
             ...optInData,
           },
@@ -80,6 +87,7 @@ export class AdhesionService {
             phone,
             first_name: firstName,
             last_name: lastName,
+            email: placeholderEmail,
             profile_type: dto.profile_type,
             whatsapp_opt_in: dto.whatsapp_opt_in === true,
             whatsapp_opt_in_at: dto.whatsapp_opt_in === true ? now : null,
