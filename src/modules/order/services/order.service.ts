@@ -907,10 +907,17 @@ export class OrderService {
             // (il en est le destinataire) ; le livreur, lui, ne le voit jamais
             // (son service `order-deliverer.service` a un select distinct).
             delivery_pin: true,
+            // Annulation Turbo DÉCOUPLÉE : quand Turbo annule la course, la
+            // commande reste vivante — le backoffice affiche la raison ici
+            // (bannière drawer/détail) et le staff décide (relancer/annuler).
+            turbo_cancelled_reason: true,
             course: {
               select: {
                 id: true,
+                reference: true,
                 statut: true,
+                cancelled_by: true,
+                cancelled_reason: true,
                 deliverer: {
                   select: {
                     id: true,

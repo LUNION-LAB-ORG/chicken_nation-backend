@@ -43,13 +43,23 @@ export class TurboController {
   @ApiHeader({ name: 'X-API-KEY', description: 'Clé API du restaurant', required: true })
   @ApiResponse({ status: 200, description: '{ valid, message }' })
   async validerCodeClient(
-    @Body() body: { numero: string; code: string },
+    @Body()
+    body: {
+      numero: string;
+      code: string;
+      /** Encaissement à la livraison : code fermé du contrat (cash, orange-ci, mtn-ci, moov-ci, wave, card). */
+      moyenPaiement?: string;
+      /** Montant réellement encaissé (défaut : montant TTC de la commande). */
+      montantEncaisse?: number;
+    },
     @Headers('X-API-KEY') apiKey: string,
   ) {
     return this.turboWebhookService.validerCodeClient({
       numero: body?.numero,
       code: body?.code,
       apiKey,
+      moyenPaiement: body?.moyenPaiement,
+      montantEncaisse: body?.montantEncaisse,
     });
   }
 

@@ -145,6 +145,13 @@ export class CourseTask {
 
       const stuck = await this.prisma.course.findMany({
         where: {
+          // ⚠️ Jamais sur une course SOUS-TRAITÉE : un livreur Turbo lent n'est
+          // pas une course zombie — auto-annuler ici annulerait les COMMANDES
+          // CLIENTS pendant qu'un livreur externe est en route (découplage
+          // annulation : la commande ne s'annule plus que manuellement). Les
+          // courses Turbo qui dérapent sont couvertes par detecterRetards +
+          // les webhooks Turbo.
+          turbo_escalated_at: null,
           OR: [
             // ACCEPTED depuis trop longtemps → livreur n'est jamais arrivé
             { statut: CourseStatut.ACCEPTED, assigned_at: { lt: acceptedThreshold } },

@@ -19,8 +19,11 @@ import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
 import { KkiapayService } from 'src/kkiapay/kkiapay.service';
 import { CreatePaiementKkiapayDto } from 'src/modules/paiements/dto/create-paiement-kkiapay.dto';
 import type { Request } from 'express';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PaiementEvent } from 'src/modules/paiements/events/paiement.event';
 import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
+import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import { OrderChannels } from 'src/modules/order/enums/order-channels';
 
 /**
  * Tolérance d'arrondi (FCFA) entre le cumul des paiements SUCCESS et le total de
@@ -37,6 +40,8 @@ export class PaiementsService {
     private readonly kkiapay: KkiapayService,
     private readonly paiementEvent: PaiementEvent,
     private readonly promoCodeService: PromoCodeService,
+    private readonly appGateway: AppGateway,
+    private readonly eventEmitter: EventEmitter2,
   ) { }
 
   // Payer avec Kkiapay
@@ -207,6 +212,147 @@ export class PaiementsService {
     return {
       success: true,
       message: 'Paiement effectué avec succès',
+    };
+  }
+
+  /**
+   * CONFIRMATION D'UN ENCAISSEMENT LIVREUR (backoffice).
+   *
+   * Un livreur (Turbo) a encaissé le client à la livraison : le webhook a
+   * enregistré un Paiement **PENDING** et la commande est restée COLLECTED.
+   * La confirmation par le staff :
+   *   1. passe le paiement en SUCCESS (claim atomique — double-clic et
+   *      2 backends sans double effet) ;
+   *   2. marque la commande payée (`paied`, `paied_at`) ;
+   *   3. la termine (COMPLETED) si elle est déjà livrée (COLLECTED) et que le
+   *      cumul des paiements SUCCESS couvre le montant — même cascade que
+   *      `addPaiement` ;
+   *   4. émet les mêmes sockets/événements métier qu'une transition normale
+   *      (app client, backoffice, fidélité).
+   */
+  async confirmerEncaissement(req: Request, paiementId: string) {
+    const paiement = await this.prisma.paiement.findUnique({
+      where: { id: paiementId },
+      select: {
+        id: true,
+        status: true,
+        order_id: true,
+        order: { select: { status: true } },
+      },
+    });
+    if (!paiement) {
+      throw new NotFoundException('Paiement introuvable');
+    }
+    if (paiement.status !== PaiementStatus.PENDING) {
+      throw new BadRequestException(
+        'Seul un encaissement en attente peut être confirmé.',
+      );
+    }
+    if (!paiement.order_id) {
+      throw new BadRequestException(
+        "Cet encaissement n'est rattaché à aucune commande.",
+      );
+    }
+    // Commande annulée entre temps : l'argent encaissé par le livreur est un
+    // LITIGE (remboursement/restitution), pas un paiement à confirmer — on ne
+    // marque jamais payée une commande annulée.
+    if (paiement.order?.status === OrderStatus.CANCELLED) {
+      throw new BadRequestException(
+        'Commande annulée : encaissement non confirmable. Traitez le litige manuellement (paiements).',
+      );
+    }
+
+    // Claim atomique PENDING → SUCCESS.
+    const claim = await this.prisma.paiement.updateMany({
+      where: { id: paiementId, status: PaiementStatus.PENDING },
+      data: { status: PaiementStatus.SUCCESS, updated_at: new Date() },
+    });
+    if (claim.count !== 1) {
+      return { success: true, message: 'Encaissement déjà confirmé.' }; // idempotent
+    }
+
+    // Cascade sur la commande — même logique que `addPaiement`.
+    const order = await this.prisma.order.findUnique({
+      where: { id: paiement.order_id },
+      include: { paiements: { where: { status: PaiementStatus.SUCCESS } } },
+    });
+    if (!order) {
+      return { success: true, message: 'Encaissement confirmé.' };
+    }
+
+    const now = new Date();
+    const totalPaid = order.paiements.reduce(
+      (sum, p) => sum + (p.total ?? p.amount ?? 0),
+      0,
+    );
+    const isFullyPaid = totalPaid >= order.amount - PAYMENT_AMOUNT_TOLERANCE;
+    const shouldComplete = isFullyPaid && order.status === OrderStatus.COLLECTED;
+
+    const previousStatus = order.status;
+    const updatedOrder = await this.prisma.order.update({
+      where: { id: order.id },
+      data: {
+        // `paied` SEULEMENT si le cumul couvre le montant (leçon KKiaPay : un
+        // encaissement partiel ne rend pas la commande « payée » — elle reste
+        // COLLECTED avec un reste dû, encaissable via l'ajout caissière).
+        ...(isFullyPaid && {
+          paied: true,
+          paied_at: order.paied_at ?? now,
+        }),
+        ...(shouldComplete && {
+          status: OrderStatus.COMPLETED,
+          completed_at: now,
+        }),
+      },
+      include: {
+        restaurant: true,
+        customer: { include: { notification_settings: true } },
+      },
+    });
+
+    // Usage code promo (idempotent, isolé — comme addPaiement).
+    try {
+      await this.promoCodeService.activateUsageForOrder(updatedOrder);
+    } catch (e) {
+      console.error(
+        `Sync usage promo (confirmerEncaissement) échoué pour ${order.id}: ${(e as Error)?.message}`,
+      );
+    }
+
+    // La commande vient de se TERMINER : mêmes sockets et effets métier
+    // (fidélité, notifications) qu'une transition COMPLETED normale.
+    if (shouldComplete) {
+      const statusData = {
+        order: updatedOrder,
+        message: 'Commande terminée',
+        previousStatus,
+      };
+      this.appGateway.emitToUser(
+        updatedOrder.customer_id,
+        'customer',
+        OrderChannels.ORDER_STATUS_UPDATED,
+        statusData,
+      );
+      this.appGateway.emitToBackoffice(OrderChannels.ORDER_STATUS_UPDATED, statusData);
+      this.appGateway.emitToRestaurant(
+        updatedOrder.restaurant_id,
+        OrderChannels.ORDER_STATUS_UPDATED,
+        statusData,
+      );
+      this.eventEmitter.emit(OrderChannels.ORDER_STATUS_UPDATED, {
+        order: updatedOrder,
+        expo_token:
+          updatedOrder.customer?.notification_settings?.expo_push_token,
+      });
+    }
+
+    return {
+      success: true,
+      message: shouldComplete
+        ? 'Encaissement confirmé — commande terminée.'
+        : isFullyPaid
+          ? 'Encaissement confirmé.'
+          : `Encaissement confirmé — reste dû ${Math.max(0, order.amount - totalPaid).toLocaleString('fr-FR')} XOF (commande non soldée).`,
     };
   }
 
@@ -716,14 +862,17 @@ export class PaiementsService {
       throw new BadRequestException('Statut du paiement non fourni');
     }
 
-    // Vérification de la validité du statut du paiement
-    if (
-      ![
-        PaiementStatus.REVERTED,
-        PaiementStatus.SUCCESS,
-        PaiementStatus.FAILED,
-      ].includes(status)
-    ) {
+    // Vérification de la validité du statut du paiement.
+    // ⚠️ PENDING est volontairement ABSENT : un encaissement « en attente »
+    // ne naît QUE du webhook Turbo (interne) — jamais via l'API de
+    // création/édition, sinon n'importe quel client pourrait fabriquer des
+    // paiements à confirmer ou en repasser un en attente.
+    const STATUTS_AUTORISES: PaiementStatus[] = [
+      PaiementStatus.REVERTED,
+      PaiementStatus.SUCCESS,
+      PaiementStatus.FAILED,
+    ];
+    if (!STATUTS_AUTORISES.includes(status)) {
       throw new BadRequestException('Statut du paiement non valide');
     }
     return status;

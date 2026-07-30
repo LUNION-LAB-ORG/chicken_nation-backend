@@ -4,10 +4,11 @@ import { WebhookResponseDto } from '../dto/turbo-webhook.dto';
 import { WebhookEvent } from '../enums/webhook-event.enum';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { CourseStatut, DeliveryStatut, OrderStatus } from '@prisma/client';
+import { CourseStatut, DeliveryStatut, OrderStatus, PaiementStatus } from '@prisma/client';
 import { OrderChannels } from 'src/modules/order/enums/order-channels';
 import { CourseChannels } from 'src/modules/course/enums/course-channels';
 import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
+import { resoudreMoyenPaiement } from '../constantes/turbo.constante';
 
 /**
  * Réception des webhooks de suivi de livraison Turbo (Turbo → CN).
@@ -91,6 +92,22 @@ export class TurboWebhookService {
   }
 
   /**
+   * Webhook PÉRIMÉ ? Après une RELANCE, la même livraison vit sur une NOUVELLE
+   * course (référence neuve). Un webhook rejoué de l'ANCIENNE course (annulée)
+   * ne doit pas toucher la nouvelle : quand Turbo fournit `referenceCourse` et
+   * qu'elle ne correspond plus à la course actuelle de la livraison, l'événement
+   * est ignoré. Tolérant : sans `referenceCourse`, on traite normalement.
+   */
+  private isStaleForCourse(
+    delivery: { course?: { reference?: string | null } | null },
+    data: any,
+  ): boolean {
+    const refCourse = data?.referenceCourse ? String(data.referenceCourse) : null;
+    const current = delivery.course?.reference ?? null;
+    return Boolean(refCourse && current && refCourse !== current);
+  }
+
+  /**
    * Retrouve la LIVRAISON CN (et sa course) rattachée à la commande. Absente si
    * la commande a été envoyée à Turbo dès la création (flux « Turbo direct »,
    * sans course interne) — dans ce cas seul l'Order est suivi.
@@ -107,6 +124,8 @@ export class TurboWebhookService {
     switch (status) {
       case OrderStatus.PICKED_UP:
         return 'Commande en livraison';
+      case OrderStatus.COLLECTED:
+        return 'Commande livrée';
       case OrderStatus.COMPLETED:
         return 'Commande terminée';
       case OrderStatus.CANCELLED:
@@ -203,6 +222,30 @@ export class TurboWebhookService {
       return this.ack(alias); // déjà à ce statut → rien à faire
     }
 
+    // ANTI-RÉGRESSION : un webhook rejoué ou arrivé dans le désordre ne fait
+    // JAMAIS reculer la commande, et ne ressuscite jamais un état terminal
+    // (une commande annulée manuellement ou terminée le reste).
+    if (
+      order.status === OrderStatus.CANCELLED ||
+      order.status === OrderStatus.COMPLETED
+    ) {
+      return this.ack(alias);
+    }
+    const RANK: Partial<Record<OrderStatus, number>> = {
+      [OrderStatus.PENDING]: 0,
+      [OrderStatus.ACCEPTED]: 1,
+      [OrderStatus.IN_PROGRESS]: 2,
+      [OrderStatus.READY]: 3,
+      [OrderStatus.PICKED_UP]: 4,
+      [OrderStatus.COLLECTED]: 5,
+      [OrderStatus.COMPLETED]: 6,
+    };
+    const from = RANK[order.status];
+    const to = RANK[newStatus];
+    if (from !== undefined && to !== undefined && to <= from) {
+      return this.ack(alias); // recul → no-op
+    }
+
     const previousStatus = order.status;
     const updated = await this.prisma.order.update({
       where: { id: order.id },
@@ -210,7 +253,11 @@ export class TurboWebhookService {
         status: newStatus,
         updated_at: new Date(),
         ...(newStatus === OrderStatus.PICKED_UP && { picked_up_at: new Date() }),
-        ...(newStatus === OrderStatus.COMPLETED && { completed_at: new Date() }),
+        ...(newStatus === OrderStatus.COLLECTED && { collected_at: new Date() }),
+        ...(newStatus === OrderStatus.COMPLETED && {
+          collected_at: order.collected_at ?? new Date(),
+          completed_at: new Date(),
+        }),
         ...(newStatus === OrderStatus.CANCELLED && {
           cancelled_at: new Date(),
           cancelled_reason: 'Annulée par Turbo',
@@ -278,6 +325,9 @@ export class TurboWebhookService {
       this.logger.warn(`Webhook Turbo courier_assigned : livraison « ${data?.numero} » introuvable.`);
       return this.ack(WebhookEvent.DELIVERY_COURIER_ASSIGNED, false);
     }
+    if (this.isStaleForCourse(delivery, data)) {
+      return this.ack(WebhookEvent.DELIVERY_COURIER_ASSIGNED); // webhook d'une ancienne course
+    }
 
     const name =
       data?.courierName ?? data?.nomComplet ?? data?.courier?.nomComplet ?? data?.courier?.name ?? null;
@@ -307,6 +357,9 @@ export class TurboWebhookService {
   /** Le livreur Turbo est en route vers le restaurant / sur place. */
   async handlePickupStarted(data: any): Promise<WebhookResponseDto> {
     const delivery = await this.resolveDelivery(data?.numero);
+    if (delivery && this.isStaleForCourse(delivery, data)) {
+      return this.ack(WebhookEvent.DELIVERY_PICKUP_STARTED);
+    }
     if (delivery?.course_id) {
       await this.advanceCourse(delivery.course_id, CourseStatut.AT_RESTAURANT);
     }
@@ -317,6 +370,9 @@ export class TurboWebhookService {
   /** Plats récupérés au restaurant → la tournée démarre. */
   async handlePickedUp(data: any): Promise<WebhookResponseDto> {
     const delivery = await this.resolveDelivery(data?.numero);
+    if (delivery && this.isStaleForCourse(delivery, data)) {
+      return this.ack(WebhookEvent.DELIVERY_PICKED_UP);
+    }
     if (delivery) {
       if (delivery.course_id) {
         await this.advanceCourse(delivery.course_id, CourseStatut.IN_DELIVERY);
@@ -334,6 +390,9 @@ export class TurboWebhookService {
   /** En route vers le client (même étape métier que picked_up côté commande). */
   async handleInTransit(data: any): Promise<WebhookResponseDto> {
     const delivery = await this.resolveDelivery(data?.numero);
+    if (delivery && this.isStaleForCourse(delivery, data)) {
+      return this.ack(WebhookEvent.DELIVERY_IN_TRANSIT);
+    }
     if (delivery) {
       if (delivery.course_id) {
         await this.advanceCourse(delivery.course_id, CourseStatut.IN_DELIVERY);
@@ -349,11 +408,85 @@ export class TurboWebhookService {
   }
 
   /**
+   * ENCAISSEMENT À LA LIVRAISON : le livreur Turbo a encaissé le client et nous
+   * transmet le moyen de paiement (contrat : code fermé `cash` / `orange-ci` /
+   * `mtn-ci` / `moov-ci` / `wave` / `card` — CN dérive la catégorie comptable).
+   *
+   * On enregistre un Paiement **PENDING** : la commande passe COLLECTED et ne se
+   * termine qu'après confirmation humaine au backoffice (bouton → SUCCESS →
+   * COMPLETED). Idempotent : un seul encaissement Turbo en attente par commande
+   * (webhook rejoué = no-op).
+   */
+  private async enregistrerEncaissementLivreur(
+    order: {
+      id: string;
+      reference: string;
+      amount: number;
+      restaurant_id: string;
+      customer_id: string;
+    },
+    data: any,
+  ): Promise<void> {
+    const dejaDeclare = await this.prisma.paiement.findFirst({
+      where: { order_id: order.id, status: PaiementStatus.PENDING },
+      select: { id: true },
+    });
+    if (dejaDeclare) return;
+
+    const moyen = resoudreMoyenPaiement(data?.moyenPaiement ?? data?.modePaiement);
+    const montantBrut = Number(data?.montantEncaisse ?? data?.montant);
+    const montant =
+      Number.isFinite(montantBrut) && montantBrut > 0 ? montantBrut : order.amount;
+
+    try {
+      await this.prisma.paiement.create({
+        data: {
+          reference: `TURBO-${order.reference}-${Date.now()}`,
+          amount: montant,
+          total: montant,
+          fees: 0,
+          mode: moyen.mode,
+          source: moyen.source,
+          status: PaiementStatus.PENDING,
+          order_id: order.id,
+          client_id: order.customer_id,
+        },
+      });
+    } catch (err: any) {
+      // Index unique partiel (1 PENDING par commande) : un create concurrent
+      // (webhook rejoué, valider-code + delivered, 2 backends) a déjà gagné.
+      if (err?.code === 'P2002') return;
+      throw err;
+    }
+
+    this.logger.log(
+      `Encaissement livreur Turbo enregistré (EN ATTENTE) — commande ${order.reference} : ${montant} XOF en ${moyen.label}.`,
+    );
+
+    this.notificationsSender
+      .sendTurboPaymentPendingBell({
+        reference: order.reference,
+        restaurantId: order.restaurant_id,
+        montant,
+        moyenLabel: moyen.label,
+      })
+      .catch(() => undefined);
+  }
+
+  /**
    * Livrée : on clôt la livraison, puis la course SI toutes ses livraisons sont
    * terminées (une course peut avoir été partiellement sous-traitée).
+   *
+   * Commande DÉJÀ PAYÉE → COMPLETED (comme avant). NON payée → COLLECTED +
+   * enregistrement de l'encaissement livreur EN ATTENTE : plus jamais de refus
+   * « la commande n'a pas été payée » côté Turbo, et jamais de COMPLETED sans
+   * paiement tracé — le backoffice confirme, la commande se termine.
    */
   async handleDelivered(data: any): Promise<WebhookResponseDto> {
     const delivery = await this.resolveDelivery(data?.numero);
+    if (delivery && this.isStaleForCourse(delivery, data)) {
+      return this.ack(WebhookEvent.DELIVERY_DELIVERED); // webhook d'une ancienne course
+    }
     if (delivery) {
       await this.advanceDelivery(
         delivery.id,
@@ -373,19 +506,192 @@ export class TurboWebhookService {
         }
       }
     }
-    return this.syncStatus(data?.numero, OrderStatus.COMPLETED, WebhookEvent.DELIVERY_DELIVERED);
+
+    const order = await this.resolveOrder(data?.numero);
+    if (!order) {
+      this.logger.warn(`Webhook Turbo delivered : commande « ${data?.numero} » introuvable.`);
+      return this.ack(WebhookEvent.DELIVERY_DELIVERED, false);
+    }
+
+    // État terminal → no-op complet : pas de régression de statut ET pas de
+    // paiement fantôme sur une commande annulée/terminée (webhook rejoué).
+    if (
+      order.status === OrderStatus.CANCELLED ||
+      order.status === OrderStatus.COMPLETED
+    ) {
+      return this.ack(WebhookEvent.DELIVERY_DELIVERED);
+    }
+
+    if (order.paied) {
+      return this.syncStatus(data?.numero, OrderStatus.COMPLETED, WebhookEvent.DELIVERY_DELIVERED);
+    }
+
+    await this.enregistrerEncaissementLivreur(order, data);
+    return this.syncStatus(data?.numero, OrderStatus.COLLECTED, WebhookEvent.DELIVERY_DELIVERED);
   }
 
-  /** Annulée côté Turbo : la livraison CN est annulée avec elle. */
+  /**
+   * ANNULATION CÔTÉ TURBO — DÉCOUPLÉE de la commande.
+   *
+   * Avant : leur annulation annulait la COMMANDE CN. Désormais seule la
+   * course/livraison CN est annulée, avec la RAISON transmise (`data.raison`),
+   * affichée au staff (drawer + détail commande). La commande reste VIVANTE :
+   * le staff décide — relancer une livraison (nouvelle course, nouvelle
+   * référence) ou annuler la commande manuellement comme aujourd'hui.
+   *
+   * Deux portées (contrat) :
+   *  - `numero` renseigné → annulation d'UNE commande du groupe ;
+   *  - sinon `referenceCourse` → annulation du groupe ENTIER.
+   * Claims conditionnés sur le statut : idempotent, anti-régression (une
+   * livraison déjà livrée n'est jamais « dé-livrée »), sûr avec 2 backends.
+   */
   async handleCancelled(data: any): Promise<WebhookResponseDto> {
+    const raison =
+      String(data?.raison ?? data?.reason ?? data?.motif ?? '').trim().slice(0, 500) ||
+      'Raison non transmise par Turbo';
+
+    const TERMINAL_DELIVERY: DeliveryStatut[] = [
+      DeliveryStatut.DELIVERED,
+      DeliveryStatut.FAILED,
+      DeliveryStatut.CANCELLED,
+    ];
+
+    // ── Portée COMMANDE : data.numero identifie une livraison précise ────────
     const delivery = await this.resolveDelivery(data?.numero);
+    if (delivery && this.isStaleForCourse(delivery, data)) {
+      // Rejeu de l'annulation d'une ANCIENNE course déjà relancée : la
+      // nouvelle course est vivante chez Turbo — ne surtout pas l'annuler.
+      return this.ack(WebhookEvent.DELIVERY_CANCELLED);
+    }
     if (delivery) {
-      await this.prisma.delivery.update({
-        where: { id: delivery.id },
-        data: { statut: DeliveryStatut.CANCELLED },
+      const claim = await this.prisma.delivery.updateMany({
+        where: { id: delivery.id, statut: { notIn: TERMINAL_DELIVERY } },
+        data: { statut: DeliveryStatut.CANCELLED, turbo_cancelled_reason: raison },
+      });
+
+      if (claim.count === 1 && delivery.course_id) {
+        await this.cancelCourseIfNoDeliveryLeft(delivery.course_id, raison);
+        this.notifierAnnulationTurbo(delivery.course_id, [String(data?.numero)], raison);
+      }
+      // ⚠️ La COMMANDE n'est plus touchée : décision humaine (relance ou
+      // annulation manuelle depuis le backoffice).
+      return this.ack(WebhookEvent.DELIVERY_CANCELLED);
+    }
+
+    // ── Portée GROUPE : referenceCourse sans numero résolvable ───────────────
+    const referenceCourse = data?.referenceCourse ?? data?.reference;
+    if (referenceCourse) {
+      const course = await this.prisma.course.findFirst({
+        where: { reference: String(referenceCourse) },
+        select: {
+          id: true,
+          deliveries: {
+            where: { statut: { notIn: TERMINAL_DELIVERY } },
+            select: { id: true, order: { select: { reference: true } } },
+          },
+        },
+      });
+      if (course) {
+        const cancelled = await this.prisma.delivery.updateMany({
+          where: { course_id: course.id, statut: { notIn: TERMINAL_DELIVERY } },
+          data: { statut: DeliveryStatut.CANCELLED, turbo_cancelled_reason: raison },
+        });
+        await this.cancelCourseIfNoDeliveryLeft(course.id, raison);
+        // Cloche uniquement si l'événement a réellement changé quelque chose
+        // (un webhook rejoué ne re-notifie pas le staff).
+        if (cancelled.count > 0) {
+          this.notifierAnnulationTurbo(
+            course.id,
+            course.deliveries.map((d) => d.order.reference),
+            raison,
+          );
+        }
+        return this.ack(WebhookEvent.DELIVERY_CANCELLED);
+      }
+    }
+
+    // ── Legacy : commande envoyée à Turbo SANS course interne (ancien flux
+    // direct). La commande reste vivante aussi — on alerte le staff pour
+    // qu'un humain tranche.
+    const order = await this.resolveOrder(data?.numero);
+    if (order) {
+      this.logger.warn(
+        `Webhook Turbo cancelled (flux direct, sans course) — commande ${order.reference} : ${raison}. Commande laissée intacte.`,
+      );
+      this.notificationsSender
+        .sendTurboCourseCancelledBell({
+          courseReference: null,
+          restaurantId: order.restaurant_id,
+          orderReferences: [order.reference],
+          raison,
+        })
+        .catch(() => undefined);
+      return this.ack(WebhookEvent.DELIVERY_CANCELLED);
+    }
+
+    this.logger.warn(
+      `Webhook Turbo cancelled : cible introuvable (numero=${data?.numero ?? '—'}, referenceCourse=${referenceCourse ?? '—'}).`,
+    );
+    return this.ack(WebhookEvent.DELIVERY_CANCELLED, false);
+  }
+
+  /**
+   * Passe la Course CN en CANCELLED (raison Turbo) s'il ne lui reste plus
+   * aucune livraison active. Claim conditionné : jamais de régression depuis
+   * COMPLETED, idempotent, sûr avec 2 backends.
+   */
+  private async cancelCourseIfNoDeliveryLeft(courseId: string, raison: string): Promise<void> {
+    const actives = await this.prisma.delivery.count({
+      where: {
+        course_id: courseId,
+        statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
+      },
+    });
+    if (actives > 0) return;
+
+    const claim = await this.prisma.course.updateMany({
+      where: {
+        id: courseId,
+        statut: { notIn: [CourseStatut.COMPLETED, CourseStatut.CANCELLED, CourseStatut.EXPIRED] },
+      },
+      data: {
+        statut: CourseStatut.CANCELLED,
+        cancelled_at: new Date(),
+        cancelled_by: 'turbo',
+        cancelled_reason: raison,
+      },
+    });
+    if (claim.count === 1) {
+      this.appGateway.emitToBackoffice(CourseChannels.COURSE_STATUT_CHANGED, {
+        course_id: courseId,
+        statut: CourseStatut.CANCELLED,
+        source: 'turbo',
+        raison,
       });
     }
-    return this.syncStatus(data?.numero, OrderStatus.CANCELLED, WebhookEvent.DELIVERY_CANCELLED);
+  }
+
+  /** Cloche staff « Turbo a annulé » — les commandes restent actives. */
+  private notifierAnnulationTurbo(
+    courseId: string,
+    orderReferences: string[],
+    raison: string,
+  ): void {
+    this.prisma.course
+      .findUnique({
+        where: { id: courseId },
+        select: { reference: true, restaurant_id: true },
+      })
+      .then((course) => {
+        if (!course) return;
+        return this.notificationsSender.sendTurboCourseCancelledBell({
+          courseReference: course.reference,
+          restaurantId: course.restaurant_id,
+          orderReferences,
+          raison,
+        });
+      })
+      .catch(() => undefined);
   }
 
   /**
@@ -449,6 +755,10 @@ export class TurboWebhookService {
     numero: string;
     code: string;
     apiKey: string;
+    /** Moyen de paiement encaissé par le livreur (code fermé du contrat). */
+    moyenPaiement?: string;
+    /** Montant réellement encaissé (défaut : montant TTC de la commande). */
+    montantEncaisse?: number;
   }): Promise<{ valid: boolean; message: string }> {
     const { numero, code, apiKey } = params;
     if (!numero || !code) {
@@ -461,7 +771,10 @@ export class TurboWebhookService {
         order: {
           select: {
             id: true,
+            reference: true,
+            amount: true,
             paied: true,
+            status: true,
             customer_id: true,
             restaurant_id: true,
             restaurant: { select: { apikey: true } },
@@ -471,6 +784,19 @@ export class TurboWebhookService {
     });
     if (!delivery) {
       return { valid: false, message: 'Livraison introuvable.' };
+    }
+
+    // Commande annulée côté CN pendant que le livreur roulait : il ne doit PAS
+    // livrer (ni encaisser). Message explicite plutôt qu'un « code invalide ».
+    if (delivery.order.status === OrderStatus.CANCELLED) {
+      return {
+        valid: false,
+        message:
+          'Commande annulée côté Chicken Nation — ne pas livrer. Contactez le restaurant.',
+      };
+    }
+    if (delivery.order.status === OrderStatus.COMPLETED) {
+      return { valid: true, message: 'Livraison déjà confirmée.' }; // idempotent
     }
 
     // Cloisonnement : la clé doit être celle du restaurant de la commande.
@@ -525,21 +851,25 @@ export class TurboWebhookService {
       };
     }
 
-    // Code correct → clôture identique au flux interne (COMPLETED si déjà payée,
-    // COLLECTED sinon : le paiement à la livraison reste à encaisser).
+    // Code correct → clôture identique au flux interne. La transition de la
+    // COMMANDE passe par `syncStatus` (mêmes sockets et effets métier que les
+    // webhooks) : COMPLETED si déjà payée, sinon COLLECTED + encaissement
+    // livreur enregistré EN ATTENTE (confirmation backoffice → COMPLETED).
     const now = new Date();
-    await this.prisma.$transaction([
-      this.prisma.delivery.update({
-        where: { id: delivery.id },
-        data: { statut: DeliveryStatut.DELIVERED, delivered_at: now },
-      }),
-      this.prisma.order.update({
-        where: { id: delivery.order_id },
-        data: delivery.order.paied
-          ? { status: OrderStatus.COMPLETED, collected_at: now, completed_at: now }
-          : { status: OrderStatus.COLLECTED, collected_at: now },
-      }),
-    ]);
+    await this.prisma.delivery.update({
+      where: { id: delivery.id },
+      data: { statut: DeliveryStatut.DELIVERED, delivered_at: now },
+    });
+
+    if (delivery.order.paied) {
+      await this.syncStatus(numero, OrderStatus.COMPLETED, WebhookEvent.DELIVERY_DELIVERED);
+    } else {
+      await this.enregistrerEncaissementLivreur(delivery.order, {
+        moyenPaiement: params.moyenPaiement,
+        montantEncaisse: params.montantEncaisse,
+      });
+      await this.syncStatus(numero, OrderStatus.COLLECTED, WebhookEvent.DELIVERY_DELIVERED);
+    }
 
     if (delivery.order.customer_id) {
       this.appGateway.emitToUser(

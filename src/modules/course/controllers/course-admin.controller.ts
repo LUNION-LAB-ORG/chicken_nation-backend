@@ -84,6 +84,19 @@ export class CourseAdminController {
   }
 
   @ApiOperation({
+    summary: 'Relancer une course annulée (nouvelle course, nouvelle référence)',
+    description:
+      "Après une annulation (typiquement par Turbo), crée une NOUVELLE course avec les commandes " +
+      "encore actives et relance l'affectation (livreurs internes ou envoi à Turbo selon la flotte). " +
+      "La référence est neuve : une referenceCourse déjà envoyée à Turbo n'est jamais réutilisée.",
+  })
+  @Patch(':id/relancer')
+  async relancerCourseAnnulee(@Param('id', new ParseUUIDPipe()) id: string) {
+    const r = await this.offerService.relancerCourseAnnulee(id);
+    return { success: r.ok, message: r.message, newCourseId: r.newCourseId };
+  }
+
+  @ApiOperation({
     summary: 'Confier la course à la flotte externe Turbo',
     description:
       "Bascule manuelle, sans attendre le délai automatique. Utile quand le staff " +

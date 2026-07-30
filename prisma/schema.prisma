@@ -71,6 +71,7 @@ enum PaiementStatus {
   REVERTED // ANNULÉ
   SUCCESS // SUCCÈS
   FAILED // ÉCHEC
+  PENDING // EN ATTENTE — encaissement livreur déclaré, à confirmer par le backoffice
 }
 
 enum SupplementCategory {
@@ -644,6 +645,11 @@ model Delivery {
   /// quiconque détient une clé API. Au-delà du seuil, la validation est bloquée
   /// et le staff alerté.
   turbo_code_attempts       Int       @default(0)
+  /// Raison transmise par Turbo quand ILS annulent la course (webhook
+  /// `cancelled`). Depuis le découplage, l'annulation Turbo n'annule PLUS la
+  /// commande : seule la livraison/course est annulée et la raison est montrée
+  /// au staff, qui décide (relancer ou annuler la commande manuellement).
+  turbo_cancelled_reason    String?   @db.VarChar(500)
 
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)

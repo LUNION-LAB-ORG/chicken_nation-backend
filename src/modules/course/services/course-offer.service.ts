@@ -76,7 +76,7 @@ export class CourseOfferService {
         entity_status: { not: EntityStatus.DELETED },
         delivery: null, // pas déjà dans une Course
       },
-      select: { id: true, delivery_fee: true, address: true },
+      select: { id: true, delivery_fee: true, address: true, delivery_service: true },
     });
 
     if (orders.length === 0) {
@@ -115,8 +115,19 @@ export class CourseOfferService {
 
     this.logger.log(`Course ${course.reference} créée pour ${orders.length} order(s)`);
 
-    // 3. Démarrer l'affectation
-    await this.offerNextDeliverer(course.id);
+    // 3. Démarrer l'affectation — bifurcation par flotte (le batching ne
+    //    mélange jamais les services dans une même course) :
+    //    - TURBO          → envoi du GROUPE à Turbo (protocole unifié : code de
+    //                       retrait + referenceCourse, un livreur accepte en bloc) ;
+    //    - CHICKEN_NATION → offres aux livreurs internes (inchangé).
+    const isTurboNative = orders.every(
+      (o) => o.delivery_service === DeliveryService.TURBO,
+    );
+    if (isTurboNative) {
+      await this.escalateToTurbo(course.id, 0, { nativeTurbo: true });
+    } else {
+      await this.offerNextDeliverer(course.id);
+    }
 
     return course;
   }
@@ -534,6 +545,10 @@ export class CourseOfferService {
         created_at: true,
         no_deliverer_alerted_at: true,
         restaurant_id: true,
+        offer_expires_at: true,
+        deliveries: {
+          select: { order: { select: { delivery_service: true } } },
+        },
       },
       orderBy: { created_at: 'asc' }, // la plus ancienne d'abord (équité client)
       take: 50, // garde-fou
@@ -558,6 +573,53 @@ export class CourseOfferService {
           );
         }
         continue;
+      }
+
+      // 1bis. COURSE TURBO D'ORIGINE encore non transmise (échec d'envoi au
+      //       flush) : on RE-TENTE l'envoi du groupe — jamais d'offres internes
+      //       sur ces courses. `offer_expires_at` = « pas avant » (cadence ~2
+      //       min posée à l'échec précédent) ; cloche coupée sur les relances
+      //       (la première tentative a déjà alerté). L'alerte staff (étape 3)
+      //       reste active si rien ne passe.
+      const isTurboNative =
+        course.deliveries.length > 0 &&
+        course.deliveries.every(
+          (d) => d.order.delivery_service === DeliveryService.TURBO,
+        );
+      if (isTurboNative) {
+        if (!course.offer_expires_at || course.offer_expires_at <= now) {
+          const escalated = await this.escalateToTurbo(course.id, Math.round(waitingMin), {
+            nativeTurbo: true,
+            muteFailureBell: true,
+          });
+          if (escalated) {
+            retried++;
+            continue;
+          }
+        }
+        // Alerte staff « toujours rien » — même claim atomique que l'interne.
+        if (
+          !course.no_deliverer_alerted_at &&
+          waitingMin >= settings.noDelivererAlertAfterMin
+        ) {
+          const alertClaim = await this.prisma.course.updateMany({
+            where: { id: course.id, no_deliverer_alerted_at: null },
+            data: { no_deliverer_alerted_at: now },
+          });
+          if (alertClaim.count === 1) {
+            this.notificationsSender
+              .sendCourseNoDelivererBell({
+                courseId: course.id,
+                reference: course.reference,
+                restaurantId: course.restaurant_id,
+                waitingMinutes: Math.round(waitingMin),
+              })
+              .catch((e) =>
+                this.logger.warn(`Alerte « course Turbo en attente » non envoyée : ${e?.message}`),
+              );
+          }
+        }
+        continue; // jamais d'offres internes pour une course TURBO
       }
 
       // 2. SATURATION INTERNE → bascule sur la flotte externe Turbo.
@@ -638,7 +700,14 @@ export class CourseOfferService {
   async basculerVersTurbo(courseId: string): Promise<{ ok: boolean; message: string }> {
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
-      select: { id: true, reference: true, statut: true, turbo_escalated_at: true, created_at: true },
+      select: {
+        id: true,
+        reference: true,
+        statut: true,
+        turbo_escalated_at: true,
+        created_at: true,
+        deliveries: { select: { order: { select: { delivery_service: true } } } },
+      },
     });
     if (!course) throw new NotFoundException('Course introuvable');
 
@@ -656,7 +725,12 @@ export class CourseOfferService {
       0,
       Math.round((Date.now() - course.created_at.getTime()) / 60000),
     );
-    const ok = await this.escalateToTurbo(courseId, attente);
+    // Course TURBO d'origine (relance manuelle pendant la fenêtre de retry) :
+    // un échec ne doit PAS rebasculer ses commandes en interne.
+    const isTurboNative =
+      course.deliveries.length > 0 &&
+      course.deliveries.every((d) => d.order.delivery_service === DeliveryService.TURBO);
+    const ok = await this.escalateToTurbo(courseId, attente, { nativeTurbo: isTurboNative });
     return ok
       ? { ok: true, message: `Course ${course.reference} confiée à Turbo.` }
       : {
@@ -670,12 +744,16 @@ export class CourseOfferService {
    * RETOUR EN INTERNE, déclenché depuis le back office.
    *
    * Reprend une course confiée a Turbo pour la reproposer aux livreurs Chicken
-   * Nation. Autorisé UNIQUEMENT tant qu'aucun livreur Turbo n'a été affecté :
-   * au-dela, un livreur externe est deja en route et le reprendre créerait deux
-   * livreurs sur la même commande.
-   *
-   * ⚠️ La course reste ouverte chez Turbo : prévenez-les pour qu'ils l'annulent
-   * de leur côté (aucun endpoint d'annulation ne nous est exposé aujourd'hui).
+   * Nation. Séquence sécurisée « jamais deux livreurs » :
+   *   1. gardes locales (aucun livreur Turbo connu via webhooks) ;
+   *   2. ANNULATION du groupe CHEZ TURBO (`/annuler`, contrat validé) — 409 =
+   *      un livreur a déjà accepté chez eux → reprise REFUSÉE ; issue
+   *      incertaine (réseau) → reprise REFUSÉE aussi (leur course est
+   *      peut-être vivante) ;
+   *   3. bascule locale + ROTATION de la référence : la dédup Turbo consomme
+   *      définitivement toute referenceCourse déjà reçue (même annulée) — un
+   *      futur « Confier à Turbo » doit donc partir avec une référence VIERGE,
+   *      sinon il serait accepté en replay no-op (groupe mort, aucun livreur).
    */
   async revenirEnInterne(courseId: string): Promise<{ ok: boolean; message: string }> {
     const course = await this.prisma.course.findUnique({
@@ -685,6 +763,7 @@ export class CourseOfferService {
         reference: true,
         statut: true,
         turbo_escalated_at: true,
+        restaurant: { select: { apikey: true } },
         deliveries: { select: { order_id: true, turbo_courier_id: true } },
       },
     });
@@ -706,30 +785,83 @@ export class CourseOfferService {
       );
     }
 
-    await this.prisma.$transaction([
-      this.prisma.order.updateMany({
-        where: { id: { in: course.deliveries.map((d) => d.order_id) } },
-        data: { delivery_service: DeliveryService.CHICKEN_NATION },
-      }),
-      this.prisma.course.update({
-        where: { id: courseId },
-        data: { turbo_escalated_at: null, no_deliverer_alerted_at: null },
-      }),
-    ]);
+    // 2. Annuler le groupe CHEZ TURBO avant toute bascule locale.
+    const annulation = await this.turboService.annulerCourseGroupe({
+      referenceCourse: course.reference,
+      apikey: course.restaurant.apikey ?? '',
+    });
+    if (!annulation.ok) {
+      if (annulation.courierAssigned) {
+        return {
+          ok: false,
+          message:
+            'Turbo refuse l\'annulation : un livreur a déjà accepté la mission chez eux. Reprise impossible.',
+        };
+      }
+      return {
+        ok: false,
+        message:
+          "Impossible de confirmer l'annulation côté Turbo (réseau). Reprise refusée pour " +
+          'éviter deux livreurs sur la même commande — réessayez dans un instant.',
+      };
+    }
+
+    // 3. Bascule locale + rotation de référence (dédup Turbo — cf. docstring).
+    const ancienneReference = course.reference;
+    let rotated = false;
+    for (let attempt = 0; attempt < 3 && !rotated; attempt++) {
+      try {
+        await this.prisma.$transaction([
+          this.prisma.order.updateMany({
+            where: { id: { in: course.deliveries.map((d) => d.order_id) } },
+            data: { delivery_service: DeliveryService.CHICKEN_NATION },
+          }),
+          this.prisma.course.update({
+            where: { id: courseId },
+            data: {
+              turbo_escalated_at: null,
+              no_deliverer_alerted_at: null,
+              reference: this.helper.generateReference(),
+            },
+          }),
+        ]);
+        rotated = true;
+      } catch (err: any) {
+        if (err?.code === 'P2002' && err?.meta?.target?.includes('reference')) continue;
+        throw err;
+      }
+    }
+    if (!rotated) throw new HttpException('Génération reference impossible', 500);
 
     // Relance immédiate de la recherche interne.
     await this.offerNextDeliverer(courseId).catch(() => undefined);
 
-    this.logger.log(`Course ${course.reference} reprise en interne depuis Turbo.`);
+    this.logger.log(
+      `Course ${ancienneReference} reprise en interne depuis Turbo (groupe annulé chez eux, nouvelle référence attribuée).`,
+    );
     return {
       ok: true,
-      message:
-        `Course ${course.reference} reprise en interne. ` +
-        'Prévenez Turbo pour qu\'ils annulent la course de leur côté.',
+      message: `Course ${ancienneReference} reprise en interne — le groupe Turbo a été annulé automatiquement.`,
     };
   }
 
-  private async escalateToTurbo(courseId: string, waitingMinutes: number): Promise<boolean> {
+  /**
+   * Envoie la course à Turbo (groupe). Deux usages :
+   *  - **fallback** (défaut) : saturation interne — en cas d'échec certain, les
+   *    commandes REVIENNENT en recherche interne (rollback CHICKEN_NATION) ;
+   *  - **nativeTurbo** : la course est en service TURBO dès l'origine — en cas
+   *    d'échec certain, les commandes RESTENT en TURBO et le cron re-tente
+   *    l'envoi (cadence `offer_expires_at`, inutilisé par les offres internes
+   *    sur ces courses). Jamais de repli interne implicite : la flotte a été
+   *    choisie par la zone ou par l'admin.
+   */
+  private async escalateToTurbo(
+    courseId: string,
+    waitingMinutes: number,
+    opts: { nativeTurbo?: boolean; muteFailureBell?: boolean } = {},
+  ): Promise<boolean> {
+    const { nativeTurbo = false, muteFailureBell = false } = opts;
+
     // Claim ATOMIQUE : un seul backend sous-traite (2 instances // même base).
     const claim = await this.prisma.course.updateMany({
       where: {
@@ -783,7 +915,11 @@ export class CourseOfferService {
     let sent: string[] = [];
     let uncertain = false;
     try {
-      const res = await this.turboService.creerCourseGroupe({ courseId, apikey });
+      const res = await this.turboService.creerCourseGroupe({
+        courseId,
+        apikey,
+        muteFailureBell,
+      });
       sent = res.sentOrderIds;
       uncertain = res.uncertain === true;
     } catch (err) {
@@ -813,9 +949,28 @@ export class CourseOfferService {
 
     const failed = orderIds.filter((id) => !sent.includes(id));
 
-    // Turbo totalement injoignable → rollback COMPLET : la recherche interne
-    // reprend et le staff sera alerté. Aucune commande n'est perdue.
+    // ÉCHEC TOTAL CERTAIN (Turbo a répondu une erreur — le groupe n'existe pas).
     if (sent.length === 0) {
+      if (nativeTurbo) {
+        // Course en service TURBO d'origine : PAS de repli interne implicite.
+        // On relâche le claim et on programme la prochaine tentative du cron
+        // (`offer_expires_at` = « pas avant » — inutilisé par les offres
+        // internes sur une course TURBO).
+        await this.prisma.course.updateMany({
+          where: { id: courseId },
+          data: {
+            turbo_escalated_at: null,
+            offer_expires_at: new Date(Date.now() + 120_000),
+          },
+        });
+        this.logger.error(
+          `Envoi Turbo ÉCHOUÉ pour ${course.reference} (course TURBO) — nouvelle tentative dans ~2 min`,
+        );
+        return false;
+      }
+
+      // Fallback interne : rollback COMPLET, la recherche interne reprend et
+      // le staff sera alerté. Aucune commande n'est perdue.
       await this.prisma.$transaction([
         this.prisma.order.updateMany({
           where: { id: { in: orderIds } },
@@ -832,15 +987,21 @@ export class CourseOfferService {
       return false;
     }
 
-    // Échec PARTIEL : les commandes non transmises repassent en interne pour
-    // être re-proposées à un livreur CN (elles ne doivent pas rester orphelines).
-    if (failed.length > 0) {
+    // Échec PARTIEL : commandes non transmises (généralement annulées entre
+    // temps). En fallback interne, elles repassent côté livreurs CN pour ne pas
+    // rester orphelines ; en course TURBO d'origine, elles restent TURBO (pas
+    // de repli implicite) et seront re-tentées ou traitées manuellement.
+    if (failed.length > 0 && !nativeTurbo) {
       await this.prisma.order.updateMany({
         where: { id: { in: failed } },
         data: { delivery_service: DeliveryService.CHICKEN_NATION },
       });
       this.logger.warn(
         `Bascule Turbo partielle sur ${course.reference} : ${failed.length} commande(s) restée(s) en interne`,
+      );
+    } else if (failed.length > 0) {
+      this.logger.warn(
+        `Envoi Turbo partiel sur ${course.reference} (course TURBO) : ${failed.length} commande(s) non transmise(s)`,
       );
     }
 
@@ -850,6 +1011,16 @@ export class CourseOfferService {
     // client gardent donc exactement le même suivi qu'avec un livreur interne.
     // `turbo_escalated_at` (déjà posé par le claim) exclut la course de la
     // recherche de livreur interne.
+
+    if (nativeTurbo) {
+      // Course TURBO d'origine : envoi NORMAL, pas une bascule de secours — on
+      // ne dérange pas le staff. Le process restaurant est inchangé (le livreur
+      // Turbo annonce le code de retrait à la caissière).
+      this.logger.log(
+        `Course ${course.reference} envoyée à Turbo : ${sent.length} commande(s) (service TURBO).`,
+      );
+      return true;
+    }
 
     this.notificationsSender
       .sendCourseTurboFallbackBell({
@@ -902,6 +1073,168 @@ export class CourseOfferService {
     this.logger.log(`Course ${course.reference} relancée manuellement par admin — reset des tentatives`);
 
     await this.offerNextDeliverer(courseId);
+  }
+
+  /**
+   * RELANCE une course ANNULÉE (typiquement annulée par Turbo — découplage :
+   * les commandes restent vivantes) en créant une **NOUVELLE course**.
+   *
+   * ⚠️ Contrat Turbo : une `referenceCourse` déjà envoyée ne doit JAMAIS être
+   * réutilisée, même annulée (leur déduplication porte dessus — un renvoi de la
+   * même référence serait accepté en no-op silencieux : aucun livreur ne
+   * viendrait jamais). On génère donc une course neuve (référence + code de
+   * retrait) et on y DÉPLACE les livraisons encore relançables — même mécanique
+   * que le re-balancing, qui préserve la relation 1-1 commande↔livraison.
+   *
+   * L'affectation repart selon la flotte des commandes (offres internes ou
+   * envoi du groupe à Turbo).
+   */
+  async relancerCourseAnnulee(
+    courseId: string,
+  ): Promise<{ ok: boolean; message: string; newCourseId?: string }> {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: {
+        id: true,
+        reference: true,
+        statut: true,
+        restaurant_id: true,
+        deliveries: {
+          select: {
+            id: true,
+            statut: true,
+            order: {
+              select: {
+                id: true,
+                status: true,
+                delivery_fee: true,
+                delivery_service: true,
+                entity_status: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!course) throw new NotFoundException('Course introuvable');
+
+    // Cibles : les livraisons ANNULÉES dont la commande est toujours vivante
+    // (READY). Couvre les DEUX portées d'annulation Turbo : groupe entier
+    // (course CANCELLED) ET annulation partielle (course encore vivante avec
+    // une livraison annulée dedans). Les commandes annulées manuellement ou
+    // supprimées sont exclues d'office.
+    const relancables = course.deliveries.filter(
+      (d) =>
+        d.statut === DeliveryStatut.CANCELLED &&
+        d.order.status === OrderStatus.READY &&
+        d.order.entity_status !== EntityStatus.DELETED,
+    );
+    if (relancables.length === 0) {
+      return {
+        ok: false,
+        message:
+          'Aucune livraison annulée avec une commande encore active sur cette course. ' +
+          'Annulez ou traitez les commandes individuellement.',
+      };
+    }
+
+    // Nouvelle course (retry sur collision de référence, comme à la création).
+    const totalFee = relancables.reduce((sum, d) => sum + d.order.delivery_fee, 0);
+    let nouvelle: Course | null = null;
+    for (let attempt = 0; attempt < 3 && !nouvelle; attempt++) {
+      try {
+        nouvelle = await this.prisma.course.create({
+          data: {
+            reference: this.helper.generateReference(),
+            pickup_code: this.helper.generatePickupCode(),
+            restaurant_id: course.restaurant_id,
+            statut: CourseStatut.PENDING_ASSIGNMENT,
+            total_delivery_fee: totalFee,
+          },
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2002' && err?.meta?.target?.includes('reference')) continue;
+        throw err;
+      }
+    }
+    if (!nouvelle) throw new HttpException('Génération reference impossible', 500);
+
+    // Déplacer les livraisons — CLAIM ATOMIQUE : chaque update est conditionné
+    // sur le rattachement d'origine (course_id) ET le statut CANCELLED. Deux
+    // relances concurrentes (double-clic, 2 backends) : la seconde perd le
+    // claim (count=0) → rollback complet + suppression de sa course vide.
+    // Sans ce claim, deux groupes Turbo seraient créés pour les MÊMES
+    // commandes → deux livreurs (invariant absolu du projet).
+    // On repart PROPRE (statut, tentatives de code, identité du livreur Turbo
+    // précédent, raison d'annulation) — le PIN client est CONSERVÉ (déjà
+    // communiqué au client à la création de la commande).
+    let claimPerdu = false;
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        for (const [index, d] of relancables.entries()) {
+          const claimed = await tx.delivery.updateMany({
+            where: {
+              id: d.id,
+              course_id: course.id,
+              statut: DeliveryStatut.CANCELLED,
+            },
+            data: {
+              course_id: nouvelle!.id,
+              sequence_order: index + 1,
+              statut: DeliveryStatut.PENDING,
+              in_route_at: null,
+              arrived_at: null,
+              turbo_course_id: null,
+              turbo_courier_id: null,
+              turbo_courier_name: null,
+              turbo_courier_phone: null,
+              turbo_courier_lat: null,
+              turbo_courier_lng: null,
+              turbo_courier_location_at: null,
+              turbo_code_attempts: 0,
+              turbo_cancelled_reason: null,
+            },
+          });
+          if (claimed.count !== 1) {
+            throw new Error('RELANCE_CLAIM_PERDU');
+          }
+        }
+      });
+    } catch (err) {
+      if ((err as Error)?.message !== 'RELANCE_CLAIM_PERDU') throw err;
+      claimPerdu = true;
+    }
+
+    if (claimPerdu) {
+      // La transaction a tout annulé — la course neuve est vide, on la retire.
+      await this.prisma.course
+        .delete({ where: { id: nouvelle.id } })
+        .catch(() => undefined);
+      return {
+        ok: false,
+        message: 'Course déjà relancée par un autre opérateur.',
+      };
+    }
+
+    // Affectation selon la flotte (le batching ne mélange jamais les services,
+    // donc toutes les livraisons relançables partagent celui de la première).
+    const isTurboNative = relancables.every(
+      (d) => d.order.delivery_service === DeliveryService.TURBO,
+    );
+    if (isTurboNative) {
+      await this.escalateToTurbo(nouvelle.id, 0, { nativeTurbo: true });
+    } else {
+      await this.offerNextDeliverer(nouvelle.id).catch(() => undefined);
+    }
+
+    this.logger.log(
+      `Course ${course.reference} (annulée) relancée → nouvelle course ${nouvelle.reference} (${relancables.length} livraison(s)).`,
+    );
+    return {
+      ok: true,
+      message: `Nouvelle course ${nouvelle.reference} créée (${relancables.length} commande(s) relancée(s)).`,
+      newCourseId: nouvelle.id,
+    };
   }
 
   /** Accès direct au helper pour les autres services du module */

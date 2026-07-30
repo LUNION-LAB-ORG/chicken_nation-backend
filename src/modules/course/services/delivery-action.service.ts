@@ -10,11 +10,14 @@ import {
   DeliveryFailureReason,
   DeliveryStatut,
   OrderStatus,
+  PaiementStatus,
 } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer-queue.service';
+import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
+import { resoudreMoyenPaiement } from 'src/turbo/constantes/turbo.constante';
 
 import { ConfirmDeliveryDto } from '../dto/confirm-delivery.dto';
 import { FailDeliveryDto } from '../dto/fail-delivery.dto';
@@ -36,6 +39,8 @@ export class DeliveryActionService {
     private readonly queueService: DelivererQueueService,
     // P-push livreur : push "Course terminée — bravo !" à la fin
     private readonly pushService: DelivererPushService,
+    // Cloche staff « encaissement à confirmer » (livraison non payée)
+    private readonly notificationsSender: NotificationsSenderService,
   ) {}
 
   /** Le livreur démarre une livraison vers ce client (PENDING → IN_ROUTE) */
@@ -111,9 +116,79 @@ export class DeliveryActionService {
       }),
     ]);
 
+    // ENCAISSEMENT À LA LIVRAISON : commande non payée → le livreur a choisi le
+    // moyen de paiement du client dans l'app. On enregistre un Paiement
+    // EN ATTENTE — le backoffice le confirme (bouton), ce qui marque la
+    // commande payée et la termine. Même mécanique que la flotte Turbo :
+    // codes fermés, défaut espèces, un seul PENDING par commande (index
+    // unique partiel — le doublon concurrent tombe en P2002 = no-op).
+    if (!isPaid) {
+      await this.enregistrerEncaissementLivreur(delivery.order, dto).catch((e) =>
+        this.logger.error(
+          `Encaissement livreur non enregistré pour ${delivery.order.reference}: ${(e as Error)?.message}`,
+        ),
+      );
+    }
+
     await this.emitDeliveryStatut(updated, delivery.statut);
     await this.checkCourseCompletion(delivery.course_id);
     return updated;
+  }
+
+  /** Enregistre l'encaissement déclaré par le livreur INTERNE (Paiement PENDING + cloche). */
+  private async enregistrerEncaissementLivreur(
+    order: {
+      id: string;
+      reference: string;
+      amount: number;
+      restaurant_id: string;
+      customer_id: string;
+    },
+    dto: ConfirmDeliveryDto,
+  ): Promise<void> {
+    const dejaDeclare = await this.prisma.paiement.findFirst({
+      where: { order_id: order.id, status: PaiementStatus.PENDING },
+      select: { id: true },
+    });
+    if (dejaDeclare) return;
+
+    const moyen = resoudreMoyenPaiement(dto.moyen_paiement);
+    const montantBrut = Number(dto.montant_encaisse);
+    const montant =
+      Number.isFinite(montantBrut) && montantBrut > 0 ? montantBrut : order.amount;
+
+    try {
+      await this.prisma.paiement.create({
+        data: {
+          reference: `LIVREUR-${order.reference}-${Date.now()}`,
+          amount: montant,
+          total: montant,
+          fees: 0,
+          mode: moyen.mode,
+          source: moyen.source,
+          status: PaiementStatus.PENDING,
+          order_id: order.id,
+          client_id: order.customer_id,
+        },
+      });
+    } catch (err: any) {
+      if (err?.code === 'P2002') return; // un PENDING concurrent a déjà gagné
+      throw err;
+    }
+
+    this.logger.log(
+      `Encaissement livreur interne enregistré (EN ATTENTE) — commande ${order.reference} : ${montant} XOF en ${moyen.label}.`,
+    );
+
+    this.notificationsSender
+      .sendTurboPaymentPendingBell({
+        reference: order.reference,
+        restaurantId: order.restaurant_id,
+        montant,
+        moyenLabel: moyen.label,
+        livreurLabel: 'le livreur Chicken Nation',
+      })
+      .catch(() => undefined);
   }
 
   /** Échec de livraison (client absent, refus, etc.) */
@@ -218,7 +293,18 @@ export class DeliveryActionService {
       where: { id: deliveryId },
       include: {
         course: true,
-        order: { select: { id: true, paied: true, payment_method: true } },
+        order: {
+          select: {
+            id: true,
+            paied: true,
+            payment_method: true,
+            // Encaissement à la livraison (commande non payée)
+            reference: true,
+            amount: true,
+            restaurant_id: true,
+            customer_id: true,
+          },
+        },
       },
     });
     if (!delivery) throw new NotFoundException('Delivery non trouvée');

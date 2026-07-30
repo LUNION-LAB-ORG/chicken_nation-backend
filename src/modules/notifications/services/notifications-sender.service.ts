@@ -529,6 +529,126 @@ export class NotificationsSenderService {
     }
 
     /**
+     * 🚫 TURBO A ANNULÉ UNE COURSE — les commandes restent VIVANTES (découplage).
+     * Le staff doit trancher : relancer une livraison ou annuler la commande
+     * manuellement. La raison transmise par Turbo est affichée telle quelle.
+     */
+    async sendTurboCourseCancelledBell(params: {
+        /** Référence de la course CN, null pour le flux legacy sans course. */
+        courseReference: string | null;
+        restaurantId: string;
+        orderReferences: string[];
+        raison: string;
+    }) {
+        try {
+            const { courseReference, restaurantId, orderReferences, raison } = params;
+
+            const [restoUsers, backofficeUsers] = await Promise.all([
+                this.notificationRecipientService.getAllUsersByRestaurantAndRole(
+                    restaurantId,
+                    [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+                ),
+                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+            ]);
+
+            const byId = new Map<string, NotificationRecipient>();
+            for (const r of [...restoUsers, ...backofficeUsers]) byId.set(r.id, r);
+            const recipients = [...byId.values()].filter(
+                (r) => r.in_app_notifications_enabled !== false,
+            );
+            if (recipients.length === 0) return;
+
+            const commandes = orderReferences.filter(Boolean).join(', ') || 'inconnue(s)';
+            const cible = courseReference ? `la course ${courseReference}` : 'une livraison';
+            const template: NotificationTemplate<any> = {
+                title: () => '🚫 Course annulée par Turbo',
+                message: () =>
+                    `Turbo a annulé ${cible} (commande(s) ${commandes}) : ${raison}. ` +
+                    `Les commandes restent actives — relancez une livraison ou annulez-les manuellement.`,
+                icon: () => notificationIcons.delivery.url,
+                iconBgColor: () => notificationIcons.delivery.color,
+            };
+
+            const notifications = await this.notificationsService.sendNotificationToMultiple(
+                template,
+                {
+                    actor: recipients[0],
+                    recipients,
+                    data: { courseReference, orderReferences, raison },
+                    meta: { kind: 'course', reference: courseReference ?? commandes, turbo_cancelled: true },
+                },
+                NotificationType.SYSTEM,
+            );
+            notifications.forEach((notif, i) => {
+                this.notificationsWebSocketService.emitNotification(notif, recipients[i]);
+            });
+        } catch (e) {
+            this.logger.warn(`Alerte « annulation Turbo » non envoyée : ${(e as Error)?.message}`);
+        }
+    }
+
+    /**
+     * 💰 ENCAISSEMENT LIVREUR À CONFIRMER — un livreur Turbo a encaissé le client
+     * à la livraison (commande non payée en ligne). Le paiement est enregistré
+     * EN ATTENTE : la commande reste « récupérée » tant que le backoffice n'a
+     * pas confirmé (bouton → paiement validé → commande terminée).
+     */
+    async sendTurboPaymentPendingBell(params: {
+        reference: string;
+        restaurantId: string;
+        montant: number;
+        moyenLabel: string;
+        /** « le livreur Turbo » (défaut) ou « le livreur Chicken Nation ». */
+        livreurLabel?: string;
+    }) {
+        try {
+            const { reference, restaurantId, montant, moyenLabel } = params;
+            const livreurLabel = params.livreurLabel ?? 'le livreur Turbo';
+
+            const [restoUsers, backofficeUsers] = await Promise.all([
+                this.notificationRecipientService.getAllUsersByRestaurantAndRole(
+                    restaurantId,
+                    [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+                ),
+                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+            ]);
+
+            const byId = new Map<string, NotificationRecipient>();
+            for (const r of [...restoUsers, ...backofficeUsers]) byId.set(r.id, r);
+            const recipients = [...byId.values()].filter(
+                (r) => r.in_app_notifications_enabled !== false,
+            );
+            if (recipients.length === 0) return;
+
+            const template: NotificationTemplate<any> = {
+                title: () => '💰 Encaissement à confirmer',
+                message: () =>
+                    `Commande ${reference} livrée : ${livreurLabel} déclare avoir encaissé ` +
+                    `${montant.toLocaleString('fr-FR')} XOF en ${moyenLabel}. ` +
+                    `Confirmez le paiement pour terminer la commande.`,
+                icon: () => notificationIcons.delivery.url,
+                iconBgColor: () => notificationIcons.delivery.color,
+            };
+
+            const notifications = await this.notificationsService.sendNotificationToMultiple(
+                template,
+                {
+                    actor: recipients[0],
+                    recipients,
+                    data: { reference, montant, moyenLabel },
+                    meta: { kind: 'order', reference, turbo_payment_pending: true },
+                },
+                NotificationType.SYSTEM,
+            );
+            notifications.forEach((notif, i) => {
+                this.notificationsWebSocketService.emitNotification(notif, recipients[i]);
+            });
+        } catch (e) {
+            this.logger.warn(`Alerte « encaissement à confirmer » non envoyée : ${(e as Error)?.message}`);
+        }
+    }
+
+    /**
      * Notifie le STAFF (cloche in-app + email) qu'un CLIENT a écrit un nouveau
      * message. Destinataires = staff du restaurant concerné + tout le back office.
      * Chaque canal est filtré par la préférence du membre

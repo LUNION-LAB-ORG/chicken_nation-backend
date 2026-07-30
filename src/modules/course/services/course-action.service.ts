@@ -280,7 +280,21 @@ export class CourseActionService {
     const activeStatuts: CourseStatut[] = [CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT];
 
     const course = await this.prisma.course.findFirst({
-      where: { pickup_code: dto.pickup_code, statut: { in: activeStatuts } },
+      where: {
+        pickup_code: dto.pickup_code,
+        OR: [
+          { statut: { in: activeStatuts } },
+          // Course SOUS-TRAITÉE encore PENDING_ASSIGNMENT : le livreur Turbo
+          // peut se présenter AVANT que leurs webhooks (courier_assigned…)
+          // n'aient fait avancer la course. Le code de retrait reste le
+          // garde-fou — la caissière ne doit jamais être bloquée par un
+          // webhook en retard.
+          {
+            statut: CourseStatut.PENDING_ASSIGNMENT,
+            turbo_escalated_at: { not: null },
+          },
+        ],
+      },
       include: COURSE_FULL_INCLUDE,
       orderBy: { assigned_at: 'desc' },
     });

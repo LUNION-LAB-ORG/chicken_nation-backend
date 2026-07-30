@@ -50,6 +50,10 @@ export class TurboService {
           "modePaiement": order.paiements.length ? mappingMethodPayment[order.paiements[0].mode] : PaiementMethode.ESPECE,
           "prix": order.amount - order.delivery_fee,
           "livraisonPaye": order.paied,
+          // Encaissement à la livraison : montant TTC dû par le client (frais de
+          // livraison inclus), 0 si déjà payée. Champ explicite du contrat — le
+          // livreur Turbo ne doit rien déduire de prix/frais lui-même.
+          "montantAEncaisser": order.paied ? 0 : order.amount,
           "statut": "EN_ATTENTE_RECUPERATION"
         }]
       }
@@ -112,6 +116,13 @@ export class TurboService {
   async creerCourseGroupe(params: {
     courseId: string;
     apikey: string;
+    /**
+     * Coupe la cloche staff en cas d'échec. À poser sur les RELANCES
+     * automatiques (cron toutes les 30 s) : la première tentative alerte,
+     * les suivantes journalisent seulement — sinon le staff reçoit la même
+     * cloche en boucle tant que Turbo est injoignable.
+     */
+    muteFailureBell?: boolean;
   }): Promise<{
     sentOrderIds: string[];
     response: CommandeResponse | null;
@@ -123,7 +134,7 @@ export class TurboService {
      */
     uncertain?: boolean;
   }> {
-    const { courseId, apikey } = params;
+    const { courseId, apikey, muteFailureBell = false } = params;
 
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
@@ -184,6 +195,10 @@ export class TurboService {
           : PaiementMethode.ESPECE,
         prix: order.amount - order.delivery_fee,
         livraisonPaye: order.paied,
+        // Encaissement à la livraison : montant TTC dû par le client (frais de
+        // livraison inclus), 0 si déjà payée. Champ explicite du contrat — le
+        // livreur Turbo ne doit rien déduire de prix/frais lui-même.
+        montantAEncaisser: order.paied ? 0 : order.amount,
         statut: 'EN_ATTENTE_RECUPERATION',
       };
     });
@@ -207,14 +222,30 @@ export class TurboService {
         !response.ok || (data && typeof data === 'object' && 'statut' in data);
       if (isError) {
         const reason = (data && (data.message || data.error)) || `HTTP ${response.status}`;
-        // Alerte portée par la 1re commande (le staff identifie la course).
-        await this.reportDispatchFailure(eligibles[0], String(reason));
+        if (muteFailureBell) {
+          this.logger.warn(
+            `Relance groupe Turbo ${course.reference} échouée (silencieuse) : ${String(reason)}`,
+          );
+        } else {
+          // Alerte portée par la 1re commande (le staff identifie la course).
+          await this.reportDispatchFailure(eligibles[0], String(reason));
+        }
         return { sentOrderIds: [], response: null };
       }
 
-      this.logger.log(
-        `Groupe Turbo créé pour la course ${course.reference} (code ${course.pickup_code}) : ${commandes.length} commande(s).`,
-      );
+      // Marqueur de replay (contrat Turbo) : 200 + { replay: true } = cette
+      // referenceCourse avait DÉJÀ été reçue — le groupe existe chez eux
+      // (typiquement : notre envoi précédent avait échoué côté réseau après
+      // leur création). On le traite comme un succès : le groupe est vivant.
+      if (data && typeof data === 'object' && (data as any).replay === true) {
+        this.logger.warn(
+          `Groupe Turbo ${course.reference} : REPLAY détecté (groupe déjà existant chez Turbo, id ${(data as any).groupeId ?? '?'}).`,
+        );
+      } else {
+        this.logger.log(
+          `Groupe Turbo créé pour la course ${course.reference} (code ${course.pickup_code}) : ${commandes.length} commande(s).`,
+        );
+      }
       return {
         sentOrderIds: eligibles.map((o) => o.id),
         response: data as CommandeResponse,
@@ -222,11 +253,74 @@ export class TurboService {
     } catch (error) {
       // Coupure réseau / timeout : leur groupe a PEUT-ÊTRE été créé. On le
       // signale comme INCERTAIN pour interdire tout repli en interne.
-      await this.reportDispatchFailure(
-        eligibles[0],
-        (error as Error)?.message ?? 'erreur réseau',
-      );
+      if (muteFailureBell) {
+        this.logger.warn(
+          `Relance groupe Turbo ${course.reference} : issue incertaine (silencieuse) — ${(error as Error)?.message ?? 'erreur réseau'}`,
+        );
+      } else {
+        await this.reportDispatchFailure(
+          eligibles[0],
+          (error as Error)?.message ?? 'erreur réseau',
+        );
+      }
       return { sentOrderIds: [], response: null, uncertain: true };
+    }
+  }
+
+  /**
+   * ANNULATION DU GROUPE côté Turbo (CN → Turbo) — utilisée par la REPRISE EN
+   * INTERNE du backoffice : avant de reproposer la course aux livreurs CN, on
+   * annule le groupe chez Turbo pour ne JAMAIS avoir deux livreurs sur les
+   * mêmes commandes.
+   *
+   * Contrat (validé avec Turbo) : POST sans body, X-API-KEY ;
+   *   - 200 → annulé chez eux (idempotent, aucun webhook en écho) ;
+   *   - 409 → un livreur a DÉJÀ accepté la mission : reprise impossible ;
+   *   - 404 → référence inconnue chez eux (groupe jamais créé) : reprise sûre.
+   * Erreur réseau / 401 / autre → issue INCERTAINE : l'appelant doit REFUSER
+   * la reprise (leur course est peut-être toujours vivante).
+   */
+  async annulerCourseGroupe(params: {
+    referenceCourse: string;
+    apikey: string;
+  }): Promise<{
+    ok: boolean;
+    courierAssigned?: boolean;
+    notFound?: boolean;
+    uncertain?: boolean;
+  }> {
+    const { referenceCourse, apikey } = params;
+    try {
+      const response = await fetch(TURBO_API.ANNULATION_COURSE(referenceCourse), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-KEY': apikey },
+      });
+
+      if (response.ok) {
+        this.logger.log(`Groupe Turbo ${referenceCourse} annulé côté Turbo (reprise en interne).`);
+        return { ok: true };
+      }
+      if (response.status === 409) {
+        this.logger.warn(
+          `Annulation Turbo refusée pour ${referenceCourse} : un livreur a déjà accepté la mission.`,
+        );
+        return { ok: false, courierAssigned: true };
+      }
+      if (response.status === 404) {
+        this.logger.warn(
+          `Annulation Turbo ${referenceCourse} : référence inconnue chez Turbo (groupe jamais créé).`,
+        );
+        return { ok: true, notFound: true };
+      }
+      this.logger.error(
+        `Annulation Turbo ${referenceCourse} : réponse inattendue HTTP ${response.status}.`,
+      );
+      return { ok: false, uncertain: true };
+    } catch (error) {
+      this.logger.error(
+        `Annulation Turbo ${referenceCourse} : erreur réseau — ${(error as Error)?.message}.`,
+      );
+      return { ok: false, uncertain: true };
     }
   }
 

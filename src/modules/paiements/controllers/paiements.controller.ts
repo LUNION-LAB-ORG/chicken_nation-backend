@@ -47,6 +47,18 @@ export class PaiementsController {
     return this.paiementsService.refundPaiement(paiementId);
   }
 
+  @Patch(':id/confirmer-encaissement')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: "Confirmer un encaissement livreur en attente",
+    description:
+      "Un livreur (Turbo) a encaissé le client à la livraison : le paiement est PENDING. " +
+      "La confirmation le passe en SUCCESS, marque la commande payée et la termine si elle est livrée.",
+  })
+  confirmerEncaissement(@Req() req: Request, @Param('id') paiementId: string) {
+    return this.paiementsService.confirmerEncaissement(req, paiementId);
+  }
+
   @Get('free')
   @ApiOperation({ summary: 'Obtenir les paiements libres' })
   getFreePaiements(@Req() req: Request) {

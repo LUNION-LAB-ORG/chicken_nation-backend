@@ -14,7 +14,14 @@ import { CourseGroupingService } from '../services/course-grouping.service';
  * Conditions :
  *  - `Order.status === READY`
  *  - `Order.type === DELIVERY` (pas PICKUP ni TABLE)
- *  - `Order.delivery_service === CHICKEN_NATION` (livreurs internes uniquement)
+ *
+ * TOUTES les commandes à livrer passent par une Course CN — y compris celles
+ * en service TURBO (protocole unifié validé avec Turbo) : code de retrait,
+ * fenêtre de regroupement (~3 min) et chaînage identiques. À la création de la
+ * course, l'affectation bifurque selon la flotte :
+ *  - CHICKEN_NATION → offres aux livreurs internes ;
+ *  - TURBO          → envoi du GROUPE à Turbo (`creerCourseGroupe`).
+ * Le batching ne mélange JAMAIS les deux services dans une même course.
  *
  * Flow :
  *  - `CourseGroupingService.tryGroupOrder()` rattache l'order à un batch existant
@@ -35,7 +42,12 @@ export class OrderBridgeListenerService {
 
     if (order.status !== OrderStatus.READY) return;
     if (order.type !== OrderType.DELIVERY) return;
-    if (order.delivery_service !== DeliveryService.CHICKEN_NATION) return;
+    if (
+      order.delivery_service !== DeliveryService.CHICKEN_NATION &&
+      order.delivery_service !== DeliveryService.TURBO
+    ) {
+      return;
+    }
 
     this.logger.log(`Order ${order.reference} READY → tryGroupOrder`);
 

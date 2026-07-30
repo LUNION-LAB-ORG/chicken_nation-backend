@@ -15,7 +15,6 @@ import { OrderWebSocketService } from './websockets/order-websocket.service';
 import { RestaurantModule } from '../restaurant/restaurant.module';
 import { ReceiptsService } from './services/receipts.service';
 import { TurboModule } from 'src/turbo/turbo.module';
-import { TurboListenerService } from './listeners/turbo.listener.service';
 import { KkiapayOrderListenerService } from './listeners/kkiapay-order.listener.service';
 import { OrderV2Helper } from './helpers/orderv2.helper';
 import { DeliveryFeeHelper } from './helpers/delivery-fee.helper';
@@ -53,7 +52,6 @@ import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.m
     OrderTask,
     OrderWebSocketService,
     ReceiptsService,
-    TurboListenerService,
     KkiapayOrderListenerService,
   ],
 })

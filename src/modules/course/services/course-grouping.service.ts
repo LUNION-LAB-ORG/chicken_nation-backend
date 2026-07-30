@@ -6,6 +6,7 @@ import {
   EntityStatus,
   OrderStatus,
   type CourseBatch,
+  type DeliveryService,
   type Order,
 } from '@prisma/client';
 
@@ -63,6 +64,7 @@ export class CourseGroupingService {
         address: true,
         batch_id: true,
         created_at: true,
+        delivery_service: true,
       },
     });
 
@@ -87,7 +89,7 @@ export class CourseGroupingService {
       },
       include: {
         orders: {
-          select: { id: true, address: true, created_at: true, status: true },
+          select: { id: true, address: true, created_at: true, status: true, delivery_service: true },
         },
       },
     });
@@ -327,9 +329,12 @@ export class CourseGroupingService {
       CourseStatut.AT_RESTAURANT,
     ];
 
-    // Fetch courses ajustables avec leurs deliveries non terminales
+    // Fetch courses ajustables avec leurs deliveries non terminales.
+    // ⚠️ `turbo_escalated_at: null` : une course déjà sous-traitée à Turbo vit
+    // au rythme de LEURS webhooks — déplacer ses livraisons créerait un écart
+    // entre leur groupe et notre course (livreur externe déjà engagé).
     const courses = await this.prisma.course.findMany({
-      where: { statut: { in: ADJUSTABLE } },
+      where: { statut: { in: ADJUSTABLE }, turbo_escalated_at: null },
       include: {
         deliveries: {
           where: { statut: { in: [DeliveryStatut.PENDING, DeliveryStatut.IN_ROUTE] } },
@@ -342,6 +347,7 @@ export class CourseGroupingService {
                 address: true,
                 created_at: true,
                 status: true,
+                delivery_service: true,
               },
             },
           },
@@ -423,14 +429,23 @@ export class CourseGroupingService {
    * chaque destination existante.
    */
   private canTransferDelivery(
-    targetDeliveries: { order: { address: unknown } }[],
-    candidate: { order: { address: unknown } },
+    targetDeliveries: { order: { address: unknown; delivery_service?: DeliveryService } }[],
+    candidate: { order: { address: unknown; delivery_service?: DeliveryService } },
     settings: { maxDetourMeters: number },
   ): boolean {
     const candidateCoords = parseOrderLatLng(candidate.order.address);
     if (!candidateCoords) return false;
 
     for (const td of targetDeliveries) {
+      // Pas de mélange de flottes : une course est livrée en bloc par un
+      // livreur interne OU sous-traitée à Turbo, jamais les deux.
+      if (
+        td.order.delivery_service &&
+        candidate.order.delivery_service &&
+        td.order.delivery_service !== candidate.order.delivery_service
+      ) {
+        return false;
+      }
       const tCoords = parseOrderLatLng(td.order.address);
       if (!tCoords) continue;
       if (haversineMeters(candidateCoords, tCoords) > settings.maxDetourMeters) {
@@ -507,8 +522,8 @@ export class CourseGroupingService {
    * Directions à chaque ajout). Vérification faite au flush final.
    */
   private isCompatible(
-    existing: readonly Pick<Order, 'id' | 'address' | 'status'>[],
-    candidate: Pick<Order, 'id' | 'address'>,
+    existing: readonly Pick<Order, 'id' | 'address' | 'status' | 'delivery_service'>[],
+    candidate: Pick<Order, 'id' | 'address' | 'delivery_service'>,
     settings: { maxOrdersPerCourse: number; maxDetourMeters: number },
   ): boolean {
     if (existing.length >= settings.maxOrdersPerCourse) return false;
@@ -518,6 +533,14 @@ export class CourseGroupingService {
 
     for (const prev of existing) {
       if (prev.status !== OrderStatus.READY) continue; // on ignore les annulées dans le batch
+      // Jamais de mélange de flottes dans une même course : une course est
+      // livrée EN BLOC par un livreur interne OU sous-traitée à Turbo.
+      if (prev.delivery_service !== candidate.delivery_service) {
+        this.logger.debug(
+          `Candidat refusé : service ${candidate.delivery_service} ≠ ${prev.delivery_service} (pas de mélange de flottes)`,
+        );
+        return false;
+      }
       const prevCoords = parseOrderLatLng(prev.address);
       if (!prevCoords) continue;
       const distance = haversineMeters(candidateCoords, prevCoords);

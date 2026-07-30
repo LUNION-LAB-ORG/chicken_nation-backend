@@ -16,6 +16,14 @@ export const TURBO_API = {
      */
     CONFIRMATION_RETRAIT: (reference: string) =>
         `${TURBO_BASE}/api/restaurant/course-externe/${encodeURIComponent(reference)}/retrait-confirme`,
+    /**
+     * Annulation du groupe côté Turbo (CN → Turbo), utilisée par la REPRISE EN
+     * INTERNE. Contrat : POST sans body, X-API-KEY ; 200 = annulé (idempotent),
+     * 409 = un livreur a déjà accepté → reprise impossible, 404 = référence
+     * inconnue. N'émet AUCUN webhook `cancelled` en écho (découplage).
+     */
+    ANNULATION_COURSE: (reference: string) =>
+        `${TURBO_BASE}/api/restaurant/course-externe/${encodeURIComponent(reference)}/annuler`,
 }
 
 export const TURBO_API_KEY = 'jq3JVrMe10Isbdo2PR0OvdFUKRIFI61S';
@@ -26,4 +34,30 @@ export const mappingMethodPayment: Record<PaiementMode, PaiementMethode> = {
     [PaiementMode.WALLET]: PaiementMethode.WAVE,
     [PaiementMode.CARD]: PaiementMethode.CARTE,
     [PaiementMode.CASH]: PaiementMethode.ESPECE,
+}
+
+/**
+ * ENCAISSEMENT À LA LIVRAISON (Turbo → CN).
+ *
+ * Contrat validé avec Turbo : le livreur choisit le moyen de paiement du client
+ * dans une liste FERMÉE de codes — les mêmes que le référentiel caissière du
+ * backoffice (`paiement-data-select`). Turbo n'envoie JAMAIS la catégorie
+ * comptable : c'est CN qui la dérive du code (piège évité : Wave = WALLET chez
+ * nous, pas MOBILE_MONEY — classification KKiaPay).
+ *
+ * Tolérance déploiement asymétrique : code absent ou inconnu → espèces.
+ */
+export const ENCAISSEMENT_LIVREUR: Record<string, { mode: PaiementMode; source: string; label: string }> = {
+    'cash': { mode: PaiementMode.CASH, source: 'cash', label: 'Espèces' },
+    'orange-ci': { mode: PaiementMode.MOBILE_MONEY, source: 'orange-ci', label: 'Orange Money' },
+    'mtn-ci': { mode: PaiementMode.MOBILE_MONEY, source: 'mtn-ci', label: 'MTN Mobile Money' },
+    'moov-ci': { mode: PaiementMode.MOBILE_MONEY, source: 'moov-ci', label: 'MOOV Money' },
+    'wave': { mode: PaiementMode.WALLET, source: 'wave', label: 'Wave' },
+    'card': { mode: PaiementMode.CARD, source: 'card', label: 'Carte bancaire' },
+}
+
+/** Code Turbo → {mode, source, label} CN. Inconnu/absent = espèces (lecture tolérante). */
+export function resoudreMoyenPaiement(code?: string | null): { mode: PaiementMode; source: string; label: string } {
+    const cle = String(code ?? '').trim().toLowerCase();
+    return ENCAISSEMENT_LIVREUR[cle] ?? ENCAISSEMENT_LIVREUR['cash'];
 }
