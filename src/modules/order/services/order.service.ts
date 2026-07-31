@@ -242,6 +242,8 @@ export class OrderService {
             customer_id: customerData.customer_id,
             type: RewardType.GIFT,
             status: RewardStatus.SCRATCHED,
+            // Un cadeau expiré entre la vérification et le claim est refusé aussi.
+            OR: [{ expires_at: null }, { expires_at: { gt: new Date() } }],
           },
           data: {
             status: RewardStatus.CONSUMED,

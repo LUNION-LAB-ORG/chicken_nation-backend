@@ -342,6 +342,15 @@ export class ScratchEngineService {
      * pas de conflit avec l'index unique partiel Reward(order_id) WHERE type=POINTS.
      */
     private async createRewardFromLot(lot: ScratchLot, order: ScratchOrderInput, client: any = this.prisma) {
+        // VALIDITÉ DU LOT (décision 30/07) : chaque gain expire après
+        // `scratch.lot_expiry_days` jours (défaut 7, réglable au backoffice).
+        // Déjà honoré partout en aval : listes de gains filtrées, bon créé au
+        // grattage HÉRITE de cette échéance, consommation d'un cadeau refusée
+        // après expiration. 0 = sans expiration.
+        const joursRaw = await this.settings.get('scratch.lot_expiry_days');
+        const jours = this.numOr(joursRaw, 7);
+        const expiresAt = jours > 0 ? new Date(Date.now() + jours * 24 * 60 * 60 * 1000) : null;
+
         return client.reward.create({
             data: {
                 customer_id: order.customer_id,
@@ -350,6 +359,7 @@ export class ScratchEngineService {
                 payload: lot.payload as Prisma.InputJsonValue,
                 reason: `🎉 ${lot.label} — commande #${order.reference}`,
                 order_id: order.id,
+                expires_at: expiresAt,
             },
         });
     }
