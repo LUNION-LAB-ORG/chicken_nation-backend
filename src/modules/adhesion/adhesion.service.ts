@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CardRequestService } from 'src/modules/card-nation/services/card-request.service';
@@ -34,8 +34,18 @@ export class AdhesionService {
     const phone = this.normalizePhone(dto.phone);
     const now = new Date();
 
-    // Découpe simple du nom déclaré en prénom / reste (best-effort d'affichage).
-    const { firstName, lastName } = this.splitName(dto.name);
+    // Prénom / nom : les champs EXPLICITES du formulaire priment (un prénom
+    // composé « Jean Marc » n'est plus coupé) ; `name` (legacy, ancien site
+    // encore déployé) reste accepté en secours via la découpe best-effort.
+    const explicitFirst = dto.first_name?.trim() || null;
+    const explicitLast = dto.last_name?.trim() || null;
+    const { firstName, lastName } =
+      explicitFirst || explicitLast
+        ? { firstName: explicitFirst, lastName: explicitLast }
+        : this.splitName(dto.name ?? '');
+    if (!firstName && !lastName) {
+      throw new BadRequestException('Le nom est requis.');
+    }
 
     // Pré-inscription IDEMPOTENTE par téléphone (unique). Un numéro déjà présent
     // (créé par un login OTP antérieur ou une adhésion précédente) est mis à

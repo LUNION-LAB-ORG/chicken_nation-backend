@@ -19,16 +19,39 @@ import { ProfileType } from '@prisma/client';
  * pré-créé et le login OTP ultérieur (RG-07).
  */
 export class CreateAdhesionDto {
-  @ApiProperty({
-    description: 'Nom (ou prénom) déclaré du client',
+  @ApiPropertyOptional({
+    description:
+      'Nom complet déclaré (LEGACY — préférer first_name/last_name). Découpé côté serveur : premier mot = prénom, reste = nom.',
     example: 'Awa Koné',
     maxLength: 255,
   })
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   @MaxLength(255)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  name: string;
+  name?: string;
+
+  @ApiPropertyOptional({
+    description: 'Prénom(s) du client — prioritaire sur `name` quand fourni.',
+    example: 'Awa',
+    maxLength: 100,
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(100)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  first_name?: string;
+
+  @ApiPropertyOptional({
+    description: 'Nom de famille du client — prioritaire sur `name` quand fourni.',
+    example: 'Koné',
+    maxLength: 100,
+  })
+  @IsString()
+  @IsOptional()
+  @MaxLength(100)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  last_name?: string;
 
   @ApiProperty({
     description:
