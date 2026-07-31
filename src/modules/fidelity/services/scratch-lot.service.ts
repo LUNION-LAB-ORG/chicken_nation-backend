@@ -44,6 +44,8 @@ export class ScratchLotService {
                 frequency_cap: dto.frequency_cap ?? null,
                 stock: dto.stock ?? null,
                 level_min: dto.level_min ?? null,
+                min_paid_orders: dto.min_paid_orders ?? 0,
+                min_revenue: dto.min_revenue ?? 0,
                 is_floor: dto.is_floor ?? false,
                 active: dto.active ?? true,
             },
@@ -73,6 +75,8 @@ export class ScratchLotService {
                 ...(dto.frequency_cap !== undefined && { frequency_cap: dto.frequency_cap }),
                 ...(dto.stock !== undefined && { stock: dto.stock }),
                 ...(dto.level_min !== undefined && { level_min: dto.level_min }),
+                ...(dto.min_paid_orders !== undefined && { min_paid_orders: dto.min_paid_orders }),
+                ...(dto.min_revenue !== undefined && { min_revenue: dto.min_revenue }),
                 ...(dto.active !== undefined && { active: dto.active }),
             },
         });

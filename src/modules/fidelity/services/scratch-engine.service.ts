@@ -29,6 +29,7 @@ interface ScratchConfig {
     enabled: boolean;
     envelopePct: number; // % du panier = surcoût moyen ciblé
     windowDays: number; // fenêtre glissante de la compta d'enveloppe
+    eligibilityWindowDays: number; // fenêtre de la fidélité requise (récurrence / CA)
     floorWeight: number; // poids implicite (élevé) du plancher
 }
 
@@ -89,17 +90,20 @@ export class ScratchEngineService {
     // ─────────────────────────────── CONFIG ────────────────────────────────
 
     private async getConfig(): Promise<ScratchConfig> {
-        const [enabledRaw, pctRaw, windowRaw, floorRaw] = await Promise.all([
+        const [enabledRaw, pctRaw, windowRaw, floorRaw, eligWindowRaw] = await Promise.all([
             this.settings.get('scratch.enabled'),
             this.settings.get('scratch.envelope_pct'),
             this.settings.get('scratch.window_days'),
             this.settings.get('scratch.floor_weight'),
+            this.settings.get('scratch.eligibility_window_days'),
         ]);
         return {
             // Défaut activé : un réglage absent ne doit PAS désactiver le grattage.
             enabled: enabledRaw === null || enabledRaw.trim() === '' ? true : enabledRaw === 'true',
             envelopePct: this.numOr(pctRaw, 4),
             windowDays: this.numOr(windowRaw, 30),
+            // Fenêtre de la fidélité requise (min_paid_orders / min_revenue).
+            eligibilityWindowDays: Math.max(1, this.numOr(eligWindowRaw, 90)),
             // Plancher ≥ 1 : un poids de plancher nul casserait la garantie du plancher
             // (division par 0 dans l'enveloppe + gros lots servis quasi-systématiquement).
             floorWeight: Math.max(1, this.numOr(floorRaw, 1000)),
@@ -140,7 +144,7 @@ export class ScratchEngineService {
 
         // Lots gros éligibles (si grattage activé). Sinon → plancher direct.
         const grosLots = cfg.enabled
-            ? await this.findEligibleGrosLots(order, cfg.windowDays)
+            ? await this.findEligibleGrosLots(order, cfg.windowDays, cfg.eligibilityWindowDays)
             : [];
 
         if (grosLots.length === 0) {
@@ -356,7 +360,11 @@ export class ScratchEngineService {
      * Gros lots éligibles pour une commande : actifs, non-plancher, panier suffisant
      * (RG-09), stock disponible, niveau atteint, plafond de fréquence par client OK.
      */
-    private async findEligibleGrosLots(order: ScratchOrderInput, windowDays: number): Promise<ScratchLot[]> {
+    private async findEligibleGrosLots(
+        order: ScratchOrderInput,
+        windowDays: number,
+        eligibilityWindowDays: number,
+    ): Promise<ScratchLot[]> {
         const level = order.customer?.loyalty_level ?? null;
         const lots = await this.prisma.scratchLot.findMany({
             where: {
@@ -393,9 +401,46 @@ export class ScratchEngineService {
         const countByLot = new Map<string, number>(
             counts.map((c) => [c.scratch_lot_id as string, c._count._all]),
         );
-        return stockOk.filter((l) => {
+        const apresCap = stockOk.filter((l) => {
             if (l.frequency_cap === null) return true;
             return (countByLot.get(l.id) ?? 0) < l.frequency_cap;
+        });
+
+        return this.filtrerParFidelite(apresCap, order.customer_id, eligibilityWindowDays);
+    }
+
+    /**
+     * FIDÉLITÉ REQUISE (décision 30/07) : les lots exigeants (les CADEAUX)
+     * demandent un client un peu récurrent — `min_paid_orders` commandes
+     * payées OU `min_revenue` FCFA de CA (net) cumulé sur la fenêtre
+     * d'éligibilité. L'UN des deux critères suffit ; 0 = critère inactif.
+     * Une seule requête d'agrégation, uniquement si nécessaire.
+     */
+    private async filtrerParFidelite(
+        lots: ScratchLot[],
+        customerId: string,
+        eligibilityWindowDays: number,
+    ): Promise<ScratchLot[]> {
+        const exigeants = lots.filter((l) => l.min_paid_orders > 0 || l.min_revenue > 0);
+        if (exigeants.length === 0) return lots;
+
+        const depuis = new Date(Date.now() - eligibilityWindowDays * 24 * 60 * 60 * 1000);
+        const agg = await this.prisma.order.aggregate({
+            where: { customer_id: customerId, paied: true, created_at: { gte: depuis } },
+            _count: { _all: true },
+            _sum: { net_amount: true },
+        });
+        const nbCommandes = agg._count._all;
+        const ca = agg._sum.net_amount ?? 0;
+
+        return lots.filter((l) => {
+            const besoinRecurrence = l.min_paid_orders > 0;
+            const besoinCA = l.min_revenue > 0;
+            if (!besoinRecurrence && !besoinCA) return true;
+            return (
+                (besoinRecurrence && nbCommandes >= l.min_paid_orders) ||
+                (besoinCA && ca >= l.min_revenue)
+            );
         });
     }
 

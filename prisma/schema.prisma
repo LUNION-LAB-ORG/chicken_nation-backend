@@ -1616,6 +1616,13 @@ model ScratchLot {
   unit_cost     Int           @default(0) // Coût réel FCFA du SURCOÛT (compté dans l'enveloppe)
   min_cart      Int           @default(0) // RG-09 : panier minimum (order.amount) pour être éligible
   frequency_cap Int? // Nb max de fois qu'un même client peut gagner CE lot sur la fenêtre (null = illimité)
+  /// FIDÉLITÉ REQUISE (décision 30/07, pensée pour les CADEAUX) : le client
+  /// doit être un peu récurrent — au moins `min_paid_orders` commandes payées
+  /// OU `min_revenue` FCFA de CA (net) sur la fenêtre d'éligibilité
+  /// (`scratch.eligibility_window_days`, défaut 90 j). L'UN des deux suffit ;
+  /// 0 = critère inactif.
+  min_paid_orders Int         @default(0)
+  min_revenue     Int         @default(0)
   stock         Int? // Stock total (null = illimité)
   stock_used    Int           @default(0)
   level_min     LoyaltyLevel? // Niveau de fidélité minimum requis (null = tous)

@@ -68,6 +68,28 @@ export class CreateScratchLotDto {
   @IsEnum(LoyaltyLevel)
   level_min?: LoyaltyLevel | null;
 
+  @ApiProperty({
+    description:
+      "Fidélité requise : commandes payées minimum sur la fenêtre d'éligibilité (0 = inactif). L'UN des deux critères (commandes OU CA) suffit.",
+    example: 3,
+    default: 0,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  min_paid_orders?: number;
+
+  @ApiProperty({
+    description:
+      "Fidélité requise : CA net minimum (FCFA) sur la fenêtre d'éligibilité (0 = inactif). L'UN des deux critères (commandes OU CA) suffit.",
+    example: 25000,
+    default: 0,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  min_revenue?: number;
+
   @ApiProperty({ description: 'Lot plancher (révélation des points de base)', default: false })
   @IsOptional()
   @IsBoolean()
