@@ -531,6 +531,39 @@ export class CommentService {
         };
     }
 
+    /**
+     * CORRECTION STAFF : modifie le TEXTE d'un avis (faute de frappe, coquille)
+     * avant/après sa mise en avant sur le site. La NOTE n'est JAMAIS modifiée —
+     * elle appartient au client. Avis actifs uniquement.
+     */
+    async updateMessageAsStaff(commentId: string, message: string) {
+        const texte = (message ?? '').trim();
+        if (!texte) {
+            throw new BadRequestException('Le message ne peut pas être vide.');
+        }
+        if (texte.length > 1000) {
+            throw new BadRequestException('Le message ne doit pas dépasser 1000 caractères.');
+        }
+
+        const comment = await this.prisma.comment.findFirst({
+            where: { id: commentId, entity_status: { not: EntityStatus.DELETED } },
+            select: { id: true },
+        });
+        if (!comment) {
+            throw new NotFoundException('Commentaire non trouvé');
+        }
+
+        const updated = await this.prisma.comment.update({
+            where: { id: commentId },
+            data: { message: texte, updated_at: new Date() },
+        });
+        return {
+            id: updated.id,
+            message: updated.message,
+            site_visible: updated.site_visible,
+        };
+    }
+
     // Mapper vers DTO de réponse
     private mapToResponseDto(comment: any): CommentResponseDto {
         return {

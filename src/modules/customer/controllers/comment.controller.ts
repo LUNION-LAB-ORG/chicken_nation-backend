@@ -106,6 +106,20 @@ export class CommentController {
         return this.commentService.setSiteVisible(commentId, body?.visible === true);
     }
 
+    @ApiOperation({
+        summary: "Correction staff : modifier le TEXTE d'un avis (faute de frappe…) — la note n'est jamais modifiée",
+    })
+    @ApiParam({ name: 'id', description: 'ID du commentaire' })
+    @ApiResponse({ status: 200, description: 'Message corrigé' })
+    @UseGuards(JwtAuthGuard)
+    @Patch(':id/message')
+    async updateMessageAsStaff(
+        @Param('id') commentId: string,
+        @Body() body: { message: string },
+    ) {
+        return this.commentService.updateMessageAsStaff(commentId, body?.message ?? '');
+    }
+
     @ApiOperation({ summary: 'Récupérer un commentaire par ID' })
     @ApiParam({ name: 'id', description: 'ID du commentaire' })
     @ApiResponse({ status: 200, description: 'Commentaire trouvé', type: CommentResponseDto })
