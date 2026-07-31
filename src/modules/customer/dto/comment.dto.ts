@@ -46,6 +46,9 @@ export class CommentResponseDto {
     @ApiProperty()
     rating: number;
 
+    @ApiProperty({ description: 'Avis approuvé pour la section Témoignages du site (curation backoffice)' })
+    site_visible: boolean;
+
     @ApiProperty()
     customer_id: string;
 

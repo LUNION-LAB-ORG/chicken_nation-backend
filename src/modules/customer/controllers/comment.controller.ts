@@ -92,6 +92,20 @@ export class CommentController {
         return this.commentService.getBestComments(query);
     }
 
+    @ApiOperation({
+        summary: "Curation site (staff) : afficher ou retirer un avis de la section Témoignages",
+    })
+    @ApiParam({ name: 'id', description: 'ID du commentaire' })
+    @ApiResponse({ status: 200, description: 'Visibilité mise à jour' })
+    @UseGuards(JwtAuthGuard)
+    @Patch(':id/site-visible')
+    async setSiteVisible(
+        @Param('id') commentId: string,
+        @Body() body: { visible: boolean },
+    ) {
+        return this.commentService.setSiteVisible(commentId, body?.visible === true);
+    }
+
     @ApiOperation({ summary: 'Récupérer un commentaire par ID' })
     @ApiParam({ name: 'id', description: 'ID du commentaire' })
     @ApiResponse({ status: 200, description: 'Commentaire trouvé', type: CommentResponseDto })

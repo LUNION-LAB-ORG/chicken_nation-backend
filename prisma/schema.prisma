@@ -315,6 +315,11 @@ model Comment {
   message String @db.Text
   rating  Float // Note de 1 à 5
 
+  /// CURATION SITE VITRINE : seuls les avis explicitement approuvés au
+  /// backoffice (toggle « Visible sur le site ») apparaissent dans la section
+  /// Témoignages — plus aucune sélection automatique (note/longueur).
+  site_visible Boolean @default(false)
+
   // Relations
   customer_id String   @db.Uuid
   order_id    String   @db.Uuid
@@ -328,6 +333,7 @@ model Comment {
   @@index([order_id])
   @@index([customer_id])
   @@index([rating])
+  @@index([site_visible])
 }
 
 model Customer {

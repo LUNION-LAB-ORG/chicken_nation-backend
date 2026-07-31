@@ -457,11 +457,12 @@ export class CommentService {
         const { page = 1, limit = 10 } = query;
         const skip = (page - 1) * limit;
 
+        // CURATION BACKOFFICE : uniquement les avis explicitement approuvés
+        // (toggle « Visible sur le site »). Plus AUCUNE sélection automatique
+        // — ni note minimale, ni filtre de longueur : l'admin décide.
         const whereClause: Prisma.CommentWhereInput = {
             entity_status: EntityStatus.ACTIVE,
-            rating: {
-                gte: 4
-            }
+            site_visible: true,
         };
 
         const [comments, total] = await Promise.all([
@@ -485,7 +486,8 @@ export class CommentService {
                         },
                     },
                 },
-                orderBy: { rating: 'desc' },
+                // Les plus récemment approuvés/modifiés d'abord.
+                orderBy: { updated_at: 'desc' },
                 skip,
                 take: limit,
             }),
@@ -493,7 +495,8 @@ export class CommentService {
         ]);
 
         return {
-            data: comments.filter(comment => comment.message.length > 20 && comment.message.length < 350).map(comment => this.mapToResponseDto(comment)),
+            // Plus de filtre de longueur : la sélection est HUMAINE (backoffice).
+            data: comments.map(comment => this.mapToResponseDto(comment)),
             meta: {
                 total,
                 page,
@@ -503,12 +506,38 @@ export class CommentService {
         };
     }
 
+    /**
+     * CURATION SITE (staff) : rend un avis visible sur le site vitrine — ou
+     * l'en retire. Seuls les avis actifs sont éligibles.
+     */
+    async setSiteVisible(commentId: string, visible: boolean) {
+        const comment = await this.prisma.comment.findFirst({
+            where: { id: commentId, entity_status: { not: EntityStatus.DELETED } },
+            select: { id: true },
+        });
+        if (!comment) {
+            throw new NotFoundException('Commentaire non trouvé');
+        }
+        const updated = await this.prisma.comment.update({
+            where: { id: commentId },
+            data: { site_visible: visible, updated_at: new Date() },
+        });
+        return {
+            id: updated.id,
+            site_visible: updated.site_visible,
+            message: visible
+                ? 'Avis rendu visible sur le site.'
+                : 'Avis retiré du site.',
+        };
+    }
+
     // Mapper vers DTO de réponse
     private mapToResponseDto(comment: any): CommentResponseDto {
         return {
             id: comment.id,
             message: comment.message,
             rating: comment.rating,
+            site_visible: comment.site_visible,
             customer_id: comment.customer_id,
             order_id: comment.order_id,
             created_at: comment.created_at,
