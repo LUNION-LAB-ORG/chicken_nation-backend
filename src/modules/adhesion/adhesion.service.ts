@@ -127,19 +127,24 @@ export class AdhesionService {
   }
 
   /**
-   * Normalise un téléphone ivoirien en `+225XXXXXXXXXX` (E.164).
+   * Normalise un téléphone en E.164 `+<indicatif><numéro>` — INTERNATIONAL,
+   * défaut CI (décision 30/07 : plus aucune contrainte de pays).
    *
-   * On garde les 10 derniers chiffres (le numéro national CI) et on préfixe
-   * `+225` : c'est le format que le login OTP de l'app écrit en base → la
-   * pré-inscription et le compte créé au login se rejoignent (RG-07), et
-   * l'appel est idempotent quel que soit le format saisi sur le site.
-   * ⚠️ L'ancien format `225…` (sans `+`) créait des DOUBLONS : résorbé par la
-   * migration de fusion + les lookups tolérants (customerPhoneVariants).
+   *  - saisie LOCALE ivoirienne (10 chiffres commençant par 0) → `+225…` ;
+   *  - `00` initial → `+` (graphie internationale historique) ;
+   *  - sinon → `+<chiffres>` tel que saisi (l'indicatif pays fait partie de
+   *    la saisie : +221 77 123 45 67 reste +221771234567 — plus JAMAIS
+   *    tronqué/re-préfixé +225 comme avant, ce qui corrompait les numéros
+   *    étrangers).
+   * Même canonique que le login OTP de l'app (canonicalizeCustomerPhone) → la
+   * pré-inscription et le compte créé au login se rejoignent (RG-07).
    */
   private normalizePhone(raw: string): string {
-    const digits = (raw || '').replace(/\D/g, '');
-    const national = digits.slice(-10); // 10 derniers = numéro CI
-    return `+225${national}`;
+    let cleaned = (raw || '').trim();
+    if (cleaned.startsWith('00')) cleaned = `+${cleaned.slice(2)}`;
+    const digits = cleaned.replace(/\D/g, '');
+    if (/^0\d{9}$/.test(digits)) return `+225${digits}`; // local CI
+    return `+${digits}`;
   }
 
   private splitName(name: string): {

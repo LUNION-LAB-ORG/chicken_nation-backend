@@ -31,7 +31,8 @@ export class CreateAdhesionDto {
   name: string;
 
   @ApiProperty({
-    description: 'Téléphone CI : 07xxxxxxxx (10 chiffres) ou +2250700000000',
+    description:
+      'Téléphone : local CI (0700000000) ou INTERNATIONAL avec indicatif (+221771234567). Plus aucune contrainte de pays.',
     example: '+2250700000000',
     maxLength: 20,
   })
@@ -39,10 +40,12 @@ export class CreateAdhesionDto {
   @IsNotEmpty()
   @MaxLength(20)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  // Accepte : 07xxxxxxxx / 0700000000 (10 chiffres) OU +225 / 225 + 10 chiffres.
-  @Matches(/^(\+?225)?\d{10}$/, {
+  // INTERNATIONAL (décision 30/07) : 8 à 15 chiffres, `+`/`00` optionnels,
+  // espaces/points/tirets tolérés. La normalisation (défaut CI pour une saisie
+  // locale à 10 chiffres) est faite dans AdhesionService.normalizePhone.
+  @Matches(/^(\+|00)?[\d\s.\-()]{8,20}$/, {
     message:
-      'Téléphone invalide. Attendu : 07xxxxxxxx (10 chiffres) ou +2250700000000',
+      "Téléphone invalide. Attendu : 0700000000 (Côte d'Ivoire) ou indicatif pays complet (ex : +221771234567)",
   })
   phone: string;
 
