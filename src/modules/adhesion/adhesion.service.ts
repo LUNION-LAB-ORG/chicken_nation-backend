@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { S3Service } from 'src/s3/s3.service';
 import { CardRequestService } from 'src/modules/card-nation/services/card-request.service';
 import { CreateAdhesionDto } from './dto/create-adhesion.dto';
 import { customerPhoneVariants } from 'src/common/utils/customer-phone.util';
@@ -26,6 +27,7 @@ export class AdhesionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cardRequestService: CardRequestService,
+    private readonly s3service: S3Service,
   ) {}
 
   async register(dto: CreateAdhesionDto, photo?: Express.Multer.File) {
@@ -78,6 +80,29 @@ export class AdhesionService {
     // par le sien dans l'app (le placeholder n'est posé que si l'email manque).
     const placeholderEmail = `${phone.replace('+', '')}@client.chicken-nation.com`;
 
+    // 📸 Photo soumise → PHOTO DE PROFIL du compte (décision 30/07) : uploadée
+    // dans le dossier avatar client (le même que l'app), posée à la création ou
+    // en complément d'un compte existant SANS image (on n'écrase jamais un
+    // avatar choisi par le client). La photo de VÉRIFICATION de la demande de
+    // carte reste gérée par createRequest (usage distinct). Best-effort : un
+    // échec S3 ne bloque jamais l'adhésion.
+    let avatarKey: string | null = null;
+    if (photo?.buffer?.length) {
+      try {
+        const upload = await this.s3service.uploadFile({
+          buffer: photo.buffer,
+          path: 'chicken-nation/customer-avatar',
+          originalname: photo.originalname || 'adhesion-photo.jpg',
+          mimetype: photo.mimetype || 'image/jpeg',
+        });
+        avatarKey = upload?.key ?? null;
+      } catch (e: any) {
+        this.logger.warn(
+          `[Adhesion] Avatar non uploadé (best-effort) pour ${phone} : ${e?.message || e}`,
+        );
+      }
+    }
+
     const customer = existing
       ? // À la mise à jour : on ne réécrit le nom que s'il n'était pas déjà connu
         // (ne pas écraser un profil déjà renseigné par le client dans l'app).
@@ -87,17 +112,19 @@ export class AdhesionService {
             first_name: existing.first_name?.trim() ? undefined : (firstName ?? undefined),
             last_name: existing.last_name?.trim() ? undefined : (lastName ?? undefined),
             email: existing.email?.trim() ? undefined : placeholderEmail,
+            image: existing.image?.trim() ? undefined : (avatarKey ?? undefined),
             profile_type: dto.profile_type,
             ...optInData,
           },
         })
-      : // À la création : on pose nom + profil + opt-in.
+      : // À la création : on pose nom + profil + opt-in + photo de profil.
         await this.prisma.customer.create({
           data: {
             phone,
             first_name: firstName,
             last_name: lastName,
             email: placeholderEmail,
+            image: avatarKey,
             profile_type: dto.profile_type,
             whatsapp_opt_in: dto.whatsapp_opt_in === true,
             whatsapp_opt_in_at: dto.whatsapp_opt_in === true ? now : null,
