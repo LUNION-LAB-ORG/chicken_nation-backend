@@ -2127,6 +2127,34 @@ export class OrderService {
    * Une ligne par commande DELIVERY : frais plein / remise offre / facturé + infos
    * livraison (service, zone, origine, destination, statut, livré le).
    */
+  /**
+   * Adresse d'une commande, lue de façon TOLÉRANTE.
+   *
+   * `Order.address` est une colonne `Json` qui contient en pratique une CHAÎNE
+   * JSON (`JSON.stringify` côté app/backoffice/site). Selon l'origine de la
+   * commande on peut donc recevoir une string OU un objet — d'où ce helper,
+   * qui renvoie toujours un objet exploitable (vide si illisible).
+   */
+  private parseOrderAddress(raw: unknown): {
+    title?: string;
+    address?: string;
+    street?: string;
+    city?: string;
+    note?: string;
+  } {
+    if (!raw) return {};
+    if (typeof raw === 'object') return raw as Record<string, string>;
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : { address: raw };
+      } catch {
+        return { address: raw }; // adresse en texte libre (ancien format)
+      }
+    }
+    return {};
+  }
+
   async exportDeliveriesToExcel(filters: QueryOrderDto, user?: User) {
     const {
       restaurantId,
@@ -2149,16 +2177,15 @@ export class OrderService {
         lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
       };
     }
-    // PENDING (brouillons app non payés) : EXCLU de l'export, SAUF si un ADMIN le
-    // demande EXPLICITEMENT via status=PENDING. Un export SANS filtre n'en contient
-    // jamais (exigence : « pas dans l'exportation sans filtrage »). Cohérent avec findAll.
-    const adminWantsPending =
-      user?.role === UserRole.ADMIN && status === OrderStatus.PENDING;
-    if (!adminWantsPending) {
-      where.AND = [
-        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
-        { status: { not: OrderStatus.PENDING } },
-      ];
+    // FACTURATION : par défaut, UNIQUEMENT les livraisons RÉELLEMENT EFFECTUÉES —
+    // COLLECTED (livrée, encaissement à confirmer) et COMPLETED (livrée + soldée).
+    // Une commande en cours ou annulée n'a pas à peser dans le rapprochement Turbo.
+    // Un statut explicitement demandé dans les filtres prime (l'admin sait ce
+    // qu'il fait) ; PENDING reste réservé à l'ADMIN.
+    if (!status) {
+      where.status = { in: [OrderStatus.COLLECTED, OrderStatus.COMPLETED] };
+    } else if (status === OrderStatus.PENDING && user?.role !== UserRole.ADMIN) {
+      where.status = { in: [OrderStatus.COLLECTED, OrderStatus.COMPLETED] };
     }
 
     const orders = await this.prisma.order.findMany({
@@ -2182,8 +2209,8 @@ export class OrderService {
       { header: 'Frais de base (FCFA)', key: 'fee_base', width: 20 },
       { header: 'Remise offre (FCFA)', key: 'fee_discount', width: 20 },
       { header: 'Frais facturé (FCFA)', key: 'fee_billed', width: 20 },
-      { header: 'Service', key: 'service', width: 14 },
-      { header: 'Zone', key: 'zone', width: 18 },
+      // Service et Zone RETIRÉS : toutes les livraisons sont assurées par les
+      // livreurs Turbo, la colonne n'apportait aucune information.
       { header: 'Restaurant', key: 'restaurant', width: 24 },
       { header: 'Destination', key: 'destination', width: 32 },
       { header: 'Client', key: 'client', width: 22 },
@@ -2207,10 +2234,16 @@ export class OrderService {
     let totalBilled = 0;
 
     orders.forEach((order) => {
-      // Order.address = JSON { title, address, street?, city?, longitude, latitude, note }
-      const addr = (order.address as any) || {};
+      // ⚠️ `Order.address` est une colonne Json qui contient une CHAÎNE JSON
+      // (l'app et le backoffice envoient `JSON.stringify(...)`). Sans ce parse,
+      // `addr.address` valait toujours undefined → toute la colonne Destination
+      // affichait « N/A ».
+      const addr = this.parseOrderAddress(order.address);
       const destination =
-        [addr.address, addr.note].filter(Boolean).join(' — ') || addr.title || 'N/A';
+        [addr.address, addr.note].filter(Boolean).join(' — ') ||
+        addr.title ||
+        [addr.street, addr.city].filter(Boolean).join(', ') ||
+        'N/A';
       const clientName =
         [order.customer?.first_name, order.customer?.last_name].filter(Boolean).join(' ') || 'N/A';
       const base = order.delivery_fee_base ?? 0;
@@ -2223,16 +2256,19 @@ export class OrderService {
         fee_base: base,
         fee_discount: discount,
         fee_billed: billed,
-        service: order.delivery_service,
-        zone: order.zone_id || '—',
         restaurant: order.restaurant?.name || 'N/A',
         destination,
         client: clientName,
         phone: order.customer?.phone || 'N/A',
         delivery_status: order.delivery?.statut || order.status,
-        delivered_at: order.delivery?.delivered_at
-          ? format(new Date(order.delivery.delivered_at), 'dd/MM/yyyy HH:mm', { locale: fr })
-          : '',
+        // « Livré le » : la Delivery interne n'existe pas quand Turbo livre en
+        // direct → repli sur les horodatages de la commande (collectée/terminée),
+        // sinon la colonne restait systématiquement vide.
+        delivered_at: (() => {
+          const d =
+            order.delivery?.delivered_at ?? order.collected_at ?? order.completed_at;
+          return d ? format(new Date(d), 'dd/MM/yyyy HH:mm', { locale: fr }) : '';
+        })(),
         source: order.auto ? 'Appli' : 'Téléphone',
         paid: order.paied ? 'Oui' : 'Non',
       });
@@ -2254,8 +2290,6 @@ export class OrderService {
       fee_base: totalBase,
       fee_discount: totalDiscount,
       fee_billed: totalBilled,
-      service: '',
-      zone: '',
       restaurant: '',
       destination: '',
       client: '',
