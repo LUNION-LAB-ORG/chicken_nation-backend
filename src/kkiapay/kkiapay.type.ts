@@ -94,6 +94,11 @@ export class KkiapayWebhookDto {
   @IsString()
   stateData: string;
 
+  /** MULTI-COMPTES : posé par la route /kkiapay/webhook/:restaurantId — identifie
+   *  le compte KKiaPay (restaurant) qui a émis ce webhook. Absent sur la route
+   *  legacy (compte global). */
+  restaurantId?: string;
+
   @IsOptional()
   @IsString()
   partnerId?: string;

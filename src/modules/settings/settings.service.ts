@@ -82,11 +82,22 @@ export class SettingsService {
   }
 
   async set(key: string, value: string, description?: string): Promise<Setting> {
-    return this.prisma.setting.upsert({
+    // Un formulaire qui renvoie le MASQUE d'un secret ne doit JAMAIS l'écraser :
+    // no-op, on renvoie l'existant (re-masqué pour ne pas fuir en réponse).
+    if (value === SettingsService.MASK) {
+      const existing = await this.prisma.setting.findUnique({ where: { key } });
+      if (existing) return this.maskSetting(existing);
+      // Masque soumis sur une clé inexistante : on refuse d'enregistrer la
+      // valeur littérale « ******** » comme secret.
+      return { key, value: '', description: description ?? null } as Setting;
+    }
+    const saved = await this.prisma.setting.upsert({
       where: { key },
       update: { value, ...(description !== undefined && { description }) },
       create: { key, value, description },
     });
+    // Ne jamais renvoyer un secret fraîchement écrit en clair dans la réponse.
+    return this.maskSetting(saved);
   }
 
   async setJson(key: string, value: any, description?: string): Promise<Setting> {
@@ -104,11 +115,35 @@ export class SettingsService {
     return result;
   }
 
+  /**
+   * FAILLE CORRIGÉE (31/07) : GET /settings renvoyait TOUTES les valeurs en
+   * clair — les champs « password » du backoffice ne masquaient qu'à l'écran,
+   * les clés privées KKiaPay étaient lisibles dans l'onglet Réseau par tout
+   * compte ayant la lecture des Paramètres. Les valeurs sensibles sont
+   * désormais masquées CÔTÉ SERVEUR (write-only) : le client ne reçoit que
+   * `SettingsService.MASK`, et `set()` ignore une soumission du masque (le
+   * formulaire peut renvoyer tous ses champs sans écraser les secrets).
+   */
+  static readonly MASK = '********';
+
+  /** Une clé est sensible si elle désigne un secret — jamais une clé publique. */
+  static isSensitiveKey(key: string): boolean {
+    const k = key.toLowerCase();
+    if (k.includes('public')) return false;
+    return /(private_key|secret_key|webhook_secret|secret|token|password|apikey|api_key)/.test(k);
+  }
+
+  private maskSetting(setting: Setting): Setting {
+    if (!SettingsService.isSensitiveKey(setting.key) || !setting.value) return setting;
+    return { ...setting, value: SettingsService.MASK };
+  }
+
   async getAll(prefix?: string): Promise<Setting[]> {
-    return this.prisma.setting.findMany({
+    const settings = await this.prisma.setting.findMany({
       where: prefix ? { key: { startsWith: prefix } } : undefined,
       orderBy: { key: 'asc' },
     });
+    return settings.map((s) => this.maskSetting(s));
   }
 
   async delete(key: string): Promise<void> {

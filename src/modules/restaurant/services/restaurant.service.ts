@@ -131,13 +131,44 @@ export class RestaurantService {
   }
 
   /**
+   * FAILLE CORRIGÉE (audit 31/07) : GET /restaurants et GET /restaurants/:id
+   * sont PUBLICS (app cliente, site) mais renvoyaient TOUTES les colonnes —
+   * dont la clé API Turbo (`apikey`) et le token OAuth HubRise — et `findOne`
+   * incluait `users` AVEC le hash des mots de passe du personnel. N'importe qui
+   * sur Internet pouvait les récupérer. Les deux routes ne servent plus que
+   * cette LISTE BLANCHE ; les lecteurs internes (Turbo, HubRise) continuent de
+   * lire les colonnes sensibles par leurs propres requêtes.
+   */
+  private static readonly PUBLIC_SELECT = {
+    id: true,
+    name: true,
+    manager: true,
+    description: true,
+    image: true,
+    address: true,
+    latitude: true,
+    longitude: true,
+    phone: true,
+    email: true,
+    schedule: true,
+    entity_status: true,
+    created_at: true,
+    updated_at: true,
+  } as const;
+
+  /**
    * Récupérer tous les restaurants
    */
   async findAll(
     page = 1,
     limit = 10,
   ): Promise<
-    QueryResponseDto<Restaurant & { rating: number; reviews_count: number; is_open: boolean }>
+    QueryResponseDto<
+      Omit<
+        Restaurant,
+        'apikey' | 'hubrise_access_token' | 'hubrise_location_id' | 'hubrise_catalog_id' | 'hubrise_customer_list_id'
+      > & { rating: number; reviews_count: number; is_open: boolean }
+    >
   > {
     const skip = (page - 1) * limit;
 
@@ -146,6 +177,7 @@ export class RestaurantService {
         where: {
           entity_status: { not: EntityStatus.DELETED },
         },
+        select: RestaurantService.PUBLIC_SELECT,
         skip,
         take: limit,
         orderBy: { created_at: 'desc' },
@@ -208,8 +240,21 @@ export class RestaurantService {
         id,
         entity_status: { not: EntityStatus.DELETED },
       },
-      include: {
-        users: true,
+      select: {
+        ...RestaurantService.PUBLIC_SELECT,
+        // Personnel : champs d'affichage uniquement — JAMAIS password ni jetons.
+        users: {
+          select: {
+            id: true,
+            fullname: true,
+            email: true,
+            role: true,
+            type: true,
+            image: true,
+            entity_status: true,
+            created_at: true,
+          },
+        },
       },
     });
 

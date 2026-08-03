@@ -1284,10 +1284,17 @@ model Paiement {
   failure_message String?
   order_id        String?        @db.Uuid
   order           Order?         @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  /// MULTI-COMPTES KKiaPay : restaurant dont le COMPTE a encaissé cette
+  /// transaction (tracé au moment de la vérification). null = compte global
+  /// historique. Sert à rembourser depuis le BON compte et à réconcilier
+  /// l'argent par restaurant. Colonne scalaire volontairement sans relation.
+  restaurant_id   String?        @db.Uuid
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([restaurant_id])
 }
 
 model Restaurant {

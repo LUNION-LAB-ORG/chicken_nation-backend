@@ -4,6 +4,13 @@ import { PaiementMode, PaiementStatus } from "@prisma/client";
 import { ApiProperty, ApiPropertyOptional, PickType } from "@nestjs/swagger";
 
 export class CreatePaiementDto {
+    @ApiPropertyOptional({
+        description: "Compte KKiaPay encaisseur (id restaurant, null = compte global)",
+    })
+    @IsString()
+    @IsOptional()
+    restaurant_id?: string | null;
+
 
     @ApiProperty({ description: 'Référence du paiement' })
     @IsString()

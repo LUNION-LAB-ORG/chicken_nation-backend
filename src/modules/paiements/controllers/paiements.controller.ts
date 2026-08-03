@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { User, UserRole } from '@prisma/client';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { AddPaiementDto, CreatePaiementDto } from 'src/modules/paiements/dto/create-paiement.dto';
 import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
 import { UpdatePaiementDto } from 'src/modules/paiements/dto/update-paiement.dto';
@@ -35,6 +36,9 @@ export class PaiementsController {
   }
 
   @Post('pay')
+  // Guard AJOUTÉ (audit 31/07) : la route lisait `req.user as Customer` sans
+  // aucune authentification — client_id indéfini pour un appel anonyme.
+  @UseGuards(JwtCustomerAuthGuard)
   @ApiOperation({ summary: 'Payer avec Kkiapay' })
   payWithKkiapay(@Req() req: Request, @Body() createPaiementKkiapayDto: CreatePaiementKkiapayDto) {
     return this.paiementsService.payWithKkiapay(req, createPaiementKkiapayDto);

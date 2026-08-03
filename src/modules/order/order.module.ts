@@ -1,3 +1,4 @@
+import { KkiapayModule } from 'src/kkiapay/kkiapay.module';
 import { Module } from '@nestjs/common';
 import { OrderService } from './services/order.service';
 import { OrderDelivererService } from './services/order-deliverer.service';
@@ -28,6 +29,7 @@ import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.m
 @Module({
   imports: [
     JsonWebTokenModule,
+    KkiapayModule,
     AuthDelivererModule,
     PaiementsModule,
     FidelityModule,

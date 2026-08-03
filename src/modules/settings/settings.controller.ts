@@ -30,6 +30,12 @@ export class SettingsController {
   @RequirePermission(Modules.SETTINGS, Action.READ)
   async getOne(@Param('key') key: string) {
     const value = await this.settingsService.get(key);
+    // Les secrets ne sortent JAMAIS en clair par l'API (write-only) ; les
+    // lecteurs INTERNES (moteur KKiaPay…) passent par get()/getMany() qui,
+    // eux, restent en clair.
+    if (value && SettingsService.isSensitiveKey(key)) {
+      return { key, value: SettingsService.MASK };
+    }
     return { key, value };
   }
 

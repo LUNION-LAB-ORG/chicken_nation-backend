@@ -1,3 +1,4 @@
+import { KkiapayService } from 'src/kkiapay/kkiapay.service';
 import { UserScopedCacheInterceptor } from '../interceptors/user-scoped-cache.interceptor';
 import {
   Body,
@@ -52,6 +53,7 @@ import { OrderWebSocketService } from '../websockets/order-websocket.service';
 @UseInterceptors(UserScopedCacheInterceptor)
 export class OrderController {
   constructor(
+    private readonly kkiapayService: KkiapayService,
     private readonly orderService: OrderService,
     private readonly receiptsService: ReceiptsService,
     private readonly orderWebSocketService: OrderWebSocketService,
@@ -73,7 +75,28 @@ export class OrderController {
   @ApiBody({ type: OrderCreateDto })
   async createorderv2(@Req() req: Request, @Body() createOrderDto: OrderCreateDto) {
     const customer_id = (req.user as Customer).id;
-    return this.orderService.createv2(customer_id, createOrderDto);
+    const order = await this.orderService.createv2(customer_id, createOrderDto);
+    return this.attachPaymentConfig(order);
+  }
+
+  /**
+   * MULTI-COMPTES KKiaPay : embarque la configuration PUBLIQUE de paiement du
+   * restaurant de la commande (clé publique + sandbox — jamais de secret) dans
+   * les réponses destinées à l'app. La commande étant créée AVANT le paiement,
+   * l'app n'a AUCUN appel supplémentaire à faire — indispensable en livraison,
+   * où c'est le serveur qui affecte le restaurant. Ne casse jamais la réponse :
+   * en cas d'échec de résolution, la commande part sans bloc `payment` et
+   * l'app retombe sur sa clé embarquée (compte global).
+   */
+  private async attachPaymentConfig<T extends { restaurant_id?: string | null }>(order: T) {
+    try {
+      const payment = await this.kkiapayService.getPublicPaymentConfig(
+        order?.restaurant_id ?? null,
+      );
+      return { ...order, payment };
+    } catch {
+      return order;
+    }
   }
 
 
@@ -270,8 +293,11 @@ export class OrderController {
   }
   @Get(':id/client')
   @UseGuards(JwtCustomerAuthGuard)
-  findOneClient(@Param('id') id: string) {
-    return this.orderService.findById(id);
+  async findOneClient(@Param('id') id: string) {
+    // Chemin de RELANCE de paiement (ActionRequiredCard) : embarque aussi la
+    // config de paiement du restaurant.
+    const order = await this.orderService.findById(id);
+    return this.attachPaymentConfig(order);
   }
 
   @Patch(':id')

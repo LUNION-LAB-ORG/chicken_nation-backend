@@ -50,13 +50,25 @@ export class PaiementsService {
     createPaiementKkiapayDto: CreatePaiementKkiapayDto,
   ) {
 
-    const transaction = await this.kkiapay.verifyTransaction(
+    // MULTI-COMPTES : la transaction se vérifie auprès du compte KKiaPay du
+    // RESTAURANT de la commande (repli global automatique pendant la transition —
+    // anciennes versions d'app). Sans orderId (paiement libre), compte global.
+    const restaurantId = createPaiementKkiapayDto.orderId
+      ? (await this.prisma.order.findUnique({
+          where: { id: createPaiementKkiapayDto.orderId },
+          select: { restaurant_id: true },
+        }))?.restaurant_id ?? null
+      : null;
+
+    const { transaction, collectedBy } = await this.kkiapay.verifyTransactionForRestaurant(
       createPaiementKkiapayDto.transactionId,
+      restaurantId,
     );
 
     const customer = req.user as Customer;
 
     const result = await this.create({
+      restaurant_id: collectedBy, // compte encaisseur TRACÉ (null = global)
       reference: transaction.transactionId,
       amount: transaction.amount,
       fees: transaction.fees,
@@ -382,11 +394,22 @@ export class PaiementsService {
     data: CreatePaiementKkiapayDto & { customer_id: string },
   ) {
 
-    const transaction = await this.kkiapay.verifyTransaction(
+    // MULTI-COMPTES : le compte du restaurant de la commande fait foi, avec
+    // repli global (transaction encaissée par une ancienne version de l'app).
+    const restaurantId = data.orderId
+      ? (await this.prisma.order.findUnique({
+          where: { id: data.orderId },
+          select: { restaurant_id: true },
+        }))?.restaurant_id ?? null
+      : null;
+
+    const { transaction, collectedBy } = await this.kkiapay.verifyTransactionForRestaurant(
       data.transactionId,
+      restaurantId,
     );
 
     const result = await this.create({
+      restaurant_id: collectedBy, // compte encaisseur TRACÉ (null = global)
       reference: transaction.transactionId,
       amount: transaction.amount,
       fees: transaction.fees,
@@ -520,8 +543,12 @@ export class PaiementsService {
       };
     }
     try {
+      // Rembourse depuis le compte qui a ENCAISSÉ (tracé à la vérification ;
+      // null = compte global historique). Jamais de repli : rembourser depuis
+      // un autre compte serait une erreur comptable.
       const transaction = await this.kkiapay.refundTransaction(
         paiement.reference,
+        paiement.restaurant_id ?? null,
       );
 
       const updatedPaiement = await this.update(paiementId, {
