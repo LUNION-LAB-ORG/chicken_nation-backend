@@ -749,7 +749,7 @@ export class OrderHelper {
   }
 
   // Calculer le montant à payer avec les points
-  async calculateLoyaltyFee(total_points: number, points: number) {
+  async calculateLoyaltyFee(total_points: number, points: number, netAmount?: number) {
     // Pas de points demandés → aucune réduction.
     if (!points || points <= 0) return 0;
 
@@ -762,7 +762,12 @@ export class OrderHelper {
     if (points < config.minimum_redemption_points) return 0;
     if (total_points < points) return 0;
 
-    return this.loyaltyService.calculateAmountForPoints(points);
+    const brut = await this.loyaltyService.calculateAmountForPoints(points);
+    // Plafond anti-abus : la remise fidélité ne peut pas rendre la commande
+    // (quasi) gratuite. Sans netAmount (appelants historiques), pas de plafond.
+    return netAmount === undefined
+      ? brut
+      : this.loyaltyService.capLoyaltyDiscount(brut, netAmount);
   }
 
   //Calculer le prix si promotion et création de l'utilisation de la promotion

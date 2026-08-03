@@ -217,8 +217,12 @@ export class LoyaltyService {
                 });
 
 
-                // Vérifier et mettre à jour le niveau de fidélité
-                await this.updateCustomerLoyaltyLevel(customer, tx);
+                // Vérifier et mettre à jour le niveau de fidélité. On PROPAGE la
+                // commande déclenchante : le bonus de palier lui est rattaché et
+                // devient donc RÉVOCABLE si elle est annulée (sinon un client
+                // pouvait payer, encaisser le bonus, annuler — et repartir avec
+                // des points offerts pour une commande jamais honorée).
+                await this.updateCustomerLoyaltyLevel(customer, tx, order_id ?? null);
 
                 // Evenement d'ajout de points
                 this.loyaltyEvent.addPointsEvent({
@@ -288,6 +292,19 @@ export class LoyaltyService {
         }
 
         return Math.floor(points * config.point_value_in_xof);
+    }
+
+    /**
+     * Réduction MAXIMALE autorisée par les points sur un panier donné.
+     * Garde-fou anti-commande-quasi-gratuite : une remise fidélité ne peut pas
+     * dépasser `max_redemption_pct` % du montant des plats (défaut 50 %).
+     * 0 ou 100 = pas de plafond.
+     */
+    async capLoyaltyDiscount(amount: number, netAmount: number): Promise<number> {
+        const config = await this.getConfig();
+        const pct = config.max_redemption_pct ?? 50;
+        if (!pct || pct >= 100 || netAmount <= 0) return amount;
+        return Math.min(amount, Math.floor((pct / 100) * netAmount));
     }
 
     // Utiliser des points
@@ -485,10 +502,14 @@ export class LoyaltyService {
      * `lifetime_points` n'est PAS décrémenté (évite un déclassement de niveau).
      */
     async revokeEarnedPointsForOrder(order_id: string, reason: string) {
+        // On révoque les points GAGNÉS sur la commande ET le BONUS de palier
+        // qu'elle a déclenché : payer puis annuler ne doit jamais laisser des
+        // points offerts au client (faille constatée le 31/07 — bonus d'entrée
+        // conservé après annulation, puis dépensé sur une nouvelle commande).
         const earnedPoints = await this.prisma.loyaltyPoint.findMany({
             where: {
                 order_id,
-                type: LoyaltyPointType.EARNED,
+                type: { in: [LoyaltyPointType.EARNED, LoyaltyPointType.BONUS] },
                 is_used: { in: [LoyaltyPointIsUsed.NO, LoyaltyPointIsUsed.PARTIAL] },
             },
         });
@@ -841,7 +862,13 @@ export class LoyaltyService {
     }
 
     // Mettre à jour le niveau de fidélité d'un client
-    private async updateCustomerLoyaltyLevel(customer: Customer, tx: any) {
+    private async updateCustomerLoyaltyLevel(
+        customer: Customer,
+        tx: any,
+        /** Commande à l'origine du changement de palier — rattachée au bonus
+         *  pour permettre sa révocation si elle est annulée. */
+        triggeringOrderId: string | null = null,
+    ) {
         const config = await this.getConfig();
 
         // Re-lecture DANS la transaction : le `customer` reçu en argument est
@@ -913,7 +940,9 @@ export class LoyaltyService {
                 await tx.loyaltyPoint.create({
                     data: {
                         customer_id: fresh.id,
-                        order_id: null,
+                        // Rattaché à la commande qui a déclenché la montée →
+                        // révoqué avec elle en cas d'annulation.
+                        order_id: triggeringOrderId,
                         points: bonusPoints,
                         type: LoyaltyPointType.BONUS,
                         reason: `Bonus palier ${newLevel}`,

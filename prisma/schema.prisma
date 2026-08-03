@@ -1851,6 +1851,10 @@ model LoyaltyConfig {
   points_expiration_days    Int?   @default(365) // Points expirent après X jours
   minimum_redemption_points Int    @default(100) // Pour 100 points, on peut acheter un plat de 2000 XOF
   point_value_in_xof        Float  @default(20) // 1 point = 20 XOF
+  /// Plafond anti-abus : part MAXIMALE du panier (plats) qu'une remise
+  /// fidélité peut couvrir. 100 = pas de plafond. Empêche qu'une commande
+  /// devienne quasi gratuite en cumulant points + livraison offerte.
+  max_redemption_pct        Int    @default(50)
 
   // Seuils pour les niveaux de fidélité (comparés à status_points, compteur annuel)
   // NB : les CHAMPS gardent leurs noms historiques premium_threshold/gold_threshold

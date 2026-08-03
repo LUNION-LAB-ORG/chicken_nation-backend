@@ -129,6 +129,7 @@ export class OrderService {
     const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(
       customerData.total_points,
       points ?? 0,
+      netAmount, // plafond anti-abus (% du panier)
     );
 
     // ==========================================
@@ -560,6 +561,7 @@ export class OrderService {
     const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(
       customerData.total_points,
       points ?? 0,
+      netAmount, // plafond anti-abus (% du panier)
     );
 
     // Calcul de la remise

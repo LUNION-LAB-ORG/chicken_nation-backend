@@ -48,6 +48,19 @@ export class UpdateLoyaltyConfigDto {
     point_value_in_xof?: number;
 
     @ApiPropertyOptional({
+        description:
+            "Plafond anti-abus : part MAXIMALE du panier qu'une remise fidélité peut couvrir (%). 100 = pas de plafond.",
+        example: 50,
+        minimum: 0,
+        maximum: 100,
+    })
+    @IsOptional()
+    @IsNumber()
+    @Min(0)
+    @Transform(({ value }) => Number(value))
+    max_redemption_pct?: number;
+
+    @ApiPropertyOptional({
         description: 'Seuil de points pour niveau Standard',
         example: 300,
         minimum: 0
