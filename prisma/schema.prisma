@@ -1856,6 +1856,14 @@ model LoyaltyConfig {
   /// devienne quasi gratuite en cumulant points + livraison offerte.
   max_redemption_pct        Int    @default(50)
 
+  /// Bonus de points crédité à la MONTÉE de palier (0 = aucun bonus).
+  /// STANDARD étant le niveau d'ENTRÉE depuis le 23/07, son bonus tombait dès
+  /// la 1re commande : il vaut 0 par défaut (décision 31/07). VIP/VVIP
+  /// récompensent une vraie progression et gardent le leur.
+  bonus_standard            Int    @default(0)
+  bonus_vip                 Int    @default(150)
+  bonus_vvip                Int    @default(200)
+
   // Seuils pour les niveaux de fidélité (comparés à status_points, compteur annuel)
   // NB : les CHAMPS gardent leurs noms historiques premium_threshold/gold_threshold
   // (compat backoffice/config JSON) mais correspondent désormais aux niveaux VIP/VVIP.

@@ -61,6 +61,39 @@ export class UpdateLoyaltyConfigDto {
     max_redemption_pct?: number;
 
     @ApiPropertyOptional({
+        description: "Bonus de points à l'accès au palier STANDARD (0 = aucun)",
+        example: 0,
+        minimum: 0,
+    })
+    @IsOptional()
+    @IsNumber()
+    @Min(0)
+    @Transform(({ value }) => Number(value))
+    bonus_standard?: number;
+
+    @ApiPropertyOptional({
+        description: 'Bonus de points à la montée en palier VIP',
+        example: 150,
+        minimum: 0,
+    })
+    @IsOptional()
+    @IsNumber()
+    @Min(0)
+    @Transform(({ value }) => Number(value))
+    bonus_vip?: number;
+
+    @ApiPropertyOptional({
+        description: 'Bonus de points à la montée en palier VVIP',
+        example: 200,
+        minimum: 0,
+    })
+    @IsOptional()
+    @IsNumber()
+    @Min(0)
+    @Transform(({ value }) => Number(value))
+    bonus_vvip?: number;
+
+    @ApiPropertyOptional({
         description: 'Seuil de points pour niveau Standard',
         example: 300,
         minimum: 0

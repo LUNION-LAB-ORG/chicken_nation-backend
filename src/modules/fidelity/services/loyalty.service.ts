@@ -902,17 +902,21 @@ export class LoyaltyService {
             const isUpgrade = levelRank(newLevel) > levelRank(fresh.loyalty_level);
 
             // Montant du bonus de palier à CRÉDITER réellement — UNIQUEMENT en montée.
+            // Montants RÉGLABLES (backoffice) et non plus codés en dur. Le bonus
+            // STANDARD vaut 0 par défaut : le palier d'entrée est atteint dès la
+            // 1re commande, un bonus y était disproportionné (100 pts = l'équivalent
+            // de 50 000 F d'achats) et exploitable par annulation.
             let bonusPoints = 0;
             if (isUpgrade) {
                 switch (newLevel) {
                     case LoyaltyLevel.STANDARD:
-                        bonusPoints = 100;
+                        bonusPoints = config.bonus_standard ?? 0;
                         break;
                     case LoyaltyLevel.VIP:
-                        bonusPoints = 150;
+                        bonusPoints = config.bonus_vip ?? 150;
                         break;
                     case LoyaltyLevel.VVIP:
-                        bonusPoints = 200;
+                        bonusPoints = config.bonus_vvip ?? 200;
                         break;
                 }
             }
