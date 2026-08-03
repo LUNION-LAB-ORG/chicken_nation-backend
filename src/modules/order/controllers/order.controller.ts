@@ -189,11 +189,20 @@ export class OrderController {
   @Get('/customer')
   @UseGuards(JwtCustomerAuthGuard)
   @ApiOperation({ summary: 'Rechercher commandes d’un client' })
-  findAllByCustomer(
+  async findAllByCustomer(
     @Req() req: Request,
     @Query() queryOrderDto: QueryOrderCustomerDto,
   ) {
-    return this.orderService.findAllByCustomer(req, queryOrderDto);
+    const result = await this.orderService.findAllByCustomer(req, queryOrderDto);
+    // Relance de paiement depuis la LISTE (ActionRequiredCard) : chaque commande
+    // embarque la config publique de paiement de son restaurant. resolveAccount
+    // est mémoïsé 60 s → coût négligeable sur une page de commandes.
+    if (Array.isArray((result as any)?.data)) {
+      (result as any).data = await Promise.all(
+        (result as any).data.map((o: any) => this.attachPaymentConfig(o)),
+      );
+    }
+    return result;
   }
 
   @Get('/statistics')
