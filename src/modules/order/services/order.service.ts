@@ -2262,7 +2262,15 @@ export class OrderService {
         destination,
         client: clientName,
         phone: order.customer?.phone || 'N/A',
-        delivery_status: order.delivery?.statut || order.status,
+        // Statut de la COMMANDE, pas de la fiche de livraison interne : quand
+        // Turbo livre, la Delivery interne reste PENDING à vie alors que la
+        // commande est terminée — la colonne semblait pleine de non-livrées.
+        delivery_status:
+          order.status === OrderStatus.COMPLETED
+            ? 'Terminée'
+            : order.status === OrderStatus.COLLECTED
+              ? 'Livrée (encaissement à confirmer)'
+              : order.status,
         // « Livré le » : la Delivery interne n'existe pas quand Turbo livre en
         // direct → repli sur les horodatages de la commande (collectée/terminée),
         // sinon la colonne restait systématiquement vide.
