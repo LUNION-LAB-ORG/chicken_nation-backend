@@ -2188,7 +2188,7 @@ export class OrderService {
         type: OrderType.DELIVERY,
         entity_status: { not: EntityStatus.DELETED },
         status: { in: [OrderStatus.COLLECTED, OrderStatus.COMPLETED] },
-        OR: [{ delivery_fee_base: null }, { delivery_fee_base: 0 }],
+        delivery_fee_base: 0,
         ...(opts.startDate || opts.endDate
           ? {
               created_at: {
@@ -2269,7 +2269,7 @@ export class OrderService {
 
       if (!dryRun) {
         const claim = await this.prisma.order.updateMany({
-          where: { id: order.id, OR: [{ delivery_fee_base: null }, { delivery_fee_base: 0 }] },
+          where: { id: order.id, delivery_fee_base: 0 },
           data: { delivery_fee_base: base, delivery_discount: remise },
         });
         if (claim.count > 0) updated++;
