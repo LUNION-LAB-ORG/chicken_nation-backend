@@ -14,8 +14,7 @@ import {
   Req,
   Res,
   UseGuards,
-  UseInterceptors
-} from '@nestjs/common';
+  UseInterceptors, NotFoundException } from '@nestjs/common';
 import {
   assertCanAccessRestaurant,
   resolveRestaurantScope,
@@ -302,10 +301,17 @@ export class OrderController {
   }
   @Get(':id/client')
   @UseGuards(JwtCustomerAuthGuard)
-  async findOneClient(@Param('id') id: string) {
+  async findOneClient(@Req() req: Request, @Param('id') id: string) {
     // Chemin de RELANCE de paiement (ActionRequiredCard) : embarque aussi la
     // config de paiement du restaurant.
     const order = await this.orderService.findById(id);
+    // OWNERSHIP (revue 31/07) : tout client authentifié pouvait lire la
+    // commande de n'importe qui (adresse, téléphone, contenu) en énumérant
+    // des ids. 404 — pas 403 — pour ne pas confirmer l'existence de l'id.
+    const customerId = (req.user as Customer)?.id;
+    if (!order || (order as any).customer_id !== customerId) {
+      throw new NotFoundException('Commande introuvable');
+    }
     return this.attachPaymentConfig(order);
   }
 

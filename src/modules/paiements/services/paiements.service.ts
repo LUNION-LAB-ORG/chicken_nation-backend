@@ -391,17 +391,28 @@ export class PaiementsService {
 
   // Lier un paiement à une commande
   async linkPaiementToOrder(
-    data: CreatePaiementKkiapayDto & { customer_id: string },
+    data: CreatePaiementKkiapayDto & {
+      customer_id: string;
+      /** Compte annoncé par la ROUTE webhook /kkiapay/webhook/:restaurantId —
+       *  il a validé le secret de ce compte, c'est donc lui qui a ENCAISSÉ.
+       *  Prioritaire sur le restaurant de la commande (revue 31/07 : une
+       *  commande réaffectée à un autre restaurant après paiement rendait la
+       *  transaction introuvable — vérifiée sur [nouveau restaurant, global]
+       *  mais jamais sur le compte qui avait réellement reçu l'argent). */
+      collectorRestaurantId?: string | null;
+    },
   ) {
 
-    // MULTI-COMPTES : le compte du restaurant de la commande fait foi, avec
-    // repli global (transaction encaissée par une ancienne version de l'app).
-    const restaurantId = data.orderId
-      ? (await this.prisma.order.findUnique({
-          where: { id: data.orderId },
-          select: { restaurant_id: true },
-        }))?.restaurant_id ?? null
-      : null;
+    // MULTI-COMPTES : compte annoncé par le webhook d'abord, sinon le compte du
+    // restaurant de la commande — avec repli global dans les deux cas
+    // (transaction encaissée par une ancienne version de l'app).
+    const restaurantId = data.collectorRestaurantId
+      ?? (data.orderId
+        ? (await this.prisma.order.findUnique({
+            where: { id: data.orderId },
+            select: { restaurant_id: true },
+          }))?.restaurant_id ?? null
+        : null);
 
     const { transaction, collectedBy } = await this.kkiapay.verifyTransactionForRestaurant(
       data.transactionId,

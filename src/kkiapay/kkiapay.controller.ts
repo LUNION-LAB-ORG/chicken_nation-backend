@@ -6,6 +6,7 @@ import type { Response } from 'express';
 import { KkiapayService } from './kkiapay.service';
 import { KkiapayResponse, KkiapayWebhookDto } from './kkiapay.type';
 import { SettingsService } from 'src/modules/settings/settings.service';
+import { PrismaService } from 'src/database/services/prisma.service';
 
 @Controller('kkiapay')
 export class KkiapayController {
@@ -14,6 +15,7 @@ export class KkiapayController {
     constructor(
         private readonly kkiapayService: KkiapayService,
         private readonly settingsService: SettingsService,
+        private readonly prisma: PrismaService,
         @InjectQueue('kkiapay-webhooks') private readonly webhooksQueue: Queue,
     ) { }
 
@@ -30,7 +32,18 @@ export class KkiapayController {
     @Post('refund')
     @UseGuards(JwtAuthGuard)
     async refundTransaction(@Body() body: { transactionId: string }): Promise<KkiapayResponse> {
-        return this.kkiapayService.refundTransaction(body.transactionId);
+        // MULTI-COMPTES (revue 31/07) : cette route remboursait TOUJOURS depuis le
+        // compte global, même une transaction encaissée par un compte restaurant.
+        // On retrouve le paiement par sa référence pour rembourser depuis le
+        // compte TRACÉ ; sans trace, comportement historique (global).
+        const paiement = await this.prisma.paiement.findFirst({
+            where: { reference: body.transactionId },
+            select: { restaurant_id: true },
+        });
+        return this.kkiapayService.refundTransaction(
+            body.transactionId,
+            paiement?.restaurant_id ?? null,
+        );
     }
 
     /**
@@ -82,7 +95,10 @@ export class KkiapayController {
         // la saisie du secret au backoffice, les webhooks passeront dès la saisie ;
         // et un blip DB ne doit jamais devenir un paiement perdu (incident 14/07).
         const webhookSecret = await this.kkiapayService.getWebhookSecret(restaurantId);
-        if (webhookSecret === null && restaurantId !== null) {
+        // 503 sur les DEUX routes (legacy comprise, revue 31/07) : « aucun secret
+        // disponible » (pas encore configuré, ou DB injoignable sans cache ni env)
+        // doit faire RETENTER KKiaPay, jamais rejeter en 403 définitif.
+        if (webhookSecret === null) {
             this.logger.warn(
                 `Webhook KKiaPay [${restaurantId}] : secret indisponible (non configuré ou DB injoignable sans cache)`,
             );

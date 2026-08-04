@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Observable, tap } from 'rxjs';
 import { AuditService, AuditEntry } from './audit.service';
+import { SettingsService } from 'src/modules/settings/settings.service';
 
 /** Clés dont la valeur ne doit JAMAIS être journalisée (secrets / PII sensible). */
 const REDACT_KEYS = new Set(
@@ -163,7 +164,16 @@ export class AuditInterceptor implements NestInterceptor {
   /** Snapshot { body, query } redacté + tronqué (jamais de secret, jamais énorme). */
   private buildMetadata(req: any) {
     const meta: Record<string, unknown> = {};
-    const body = this.redact(req.body);
+    let body = this.redact(req.body);
+    // FAILLE FERMÉE (revue 31/07) : le masquage write-only de GET /settings
+    // était contourné par CE journal — PUT /settings/<clé> journalisait
+    // body.value EN CLAIR (le champ s'appelle « value », pas « password »).
+    // Toute écriture d'une clé sensible est donc redactée ici aussi.
+    const url: string = req.originalUrl ?? req.url ?? '';
+    const settingKey = decodeURIComponent(url.split('?')[0].split('/settings/')[1] ?? '');
+    if (settingKey && SettingsService.isSensitiveKey(settingKey) && body && typeof body === 'object') {
+      body = { ...body, value: '***' };
+    }
     const query = this.redact(req.query);
     if (body && Object.keys(body).length) meta.body = body;
     if (query && Object.keys(query).length) meta.query = query;

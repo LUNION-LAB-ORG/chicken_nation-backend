@@ -70,18 +70,26 @@ export class PaiementsController {
   }
 
   @Post()
+  // Guard AJOUTÉ (revue 31/07) : la route ANONYME permettait de FABRIQUER un
+  // Paiement SUCCESS arbitraire — contournant le contrôle « montant couvert »
+  // (fraude au paiement-jeton) et polluant la traçabilité multi-comptes.
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Créer un paiement' })
   create(@Body() createPaiementDto: CreatePaiementDto) {
     return this.paiementsService.create(createPaiementDto);
   }
 
   @Get()
+  // Guard AJOUTÉ (revue 31/07) : la liste ANONYME fuyait références, montants
+  // et coordonnées clients de tous les paiements.
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Lister tous les paiements' })
   findAll(@Query() queryDto: QueryPaiementDto) {
     return this.paiementsService.findAll(queryDto);
   }
 
   @Get(':id')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Obtenir un paiement par son ID' })
   findOne(@Param('id') id: string) {
     return this.paiementsService.findOne(id);

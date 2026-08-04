@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { KkiapayChannels } from 'src/kkiapay/kkiapay-channels';
 import { KkiapayWebhookDto } from 'src/kkiapay/kkiapay.type';
@@ -124,12 +124,24 @@ export class KkiapayOrderListenerService {
                 transactionId: payload.transactionId,
                 orderId: order.id,
                 customer_id: order.customer_id,
+                // Compte annoncé par la route webhook (a validé SON secret).
+                collectorRestaurantId: payload.restaurantId ?? null,
             });
             paiement = linked.paiement;
             justPaid = linked.justPaid;
             isPaid = linked.isPaid;
             notPaidReason = linked.notPaidReason;
         } catch (error) {
+            // KKiaPay INJOIGNABLE (réseau/5xx, levé par KkiapayService.rawVerify) :
+            // transitoire au même titre qu'un blip Neon → relance → retry BullMQ.
+            // L'ancien SDK écrasait ce cas en « Transaction non trouvée » → ACK
+            // définitif → paiement PERDU (revue 31/07).
+            if (error instanceof ServiceUnavailableException) {
+                this.logger.warn(
+                    `KKiaPay injoignable pour la commande ${order.reference} — relance pour retry BullMQ.`,
+                );
+                throw error;
+            }
             if (this.isTransientDbError(error)) {
                 this.logger.warn(
                     `Erreur DB transitoire (${(error as any)?.code ?? (error as any)?.errorCode}) ` +
@@ -256,6 +268,16 @@ export class KkiapayOrderListenerService {
         try {
             await this.referralService.accrueForPaidOrder(order.customer_id, order.id);
         } catch (error) {
+            // KKiaPay INJOIGNABLE (réseau/5xx, levé par KkiapayService.rawVerify) :
+            // transitoire au même titre qu'un blip Neon → relance → retry BullMQ.
+            // L'ancien SDK écrasait ce cas en « Transaction non trouvée » → ACK
+            // définitif → paiement PERDU (revue 31/07).
+            if (error instanceof ServiceUnavailableException) {
+                this.logger.warn(
+                    `KKiaPay injoignable pour la commande ${order.reference} — relance pour retry BullMQ.`,
+                );
+                throw error;
+            }
             if (this.isTransientDbError(error)) {
                 this.logger.warn(
                     `Erreur DB transitoire à l'accrual parrainage (commande ${order.reference}) — ` +

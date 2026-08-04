@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Setting } from '@prisma/client';
@@ -84,6 +84,17 @@ export class SettingsService {
   async set(key: string, value: string, description?: string): Promise<Setting> {
     // Un formulaire qui renvoie le MASQUE d'un secret ne doit JAMAIS l'écraser :
     // no-op, on renvoie l'existant (re-masqué pour ne pas fuir en réponse).
+    if (
+      value !== SettingsService.MASK &&
+      value.startsWith(SettingsService.MASK) &&
+      SettingsService.isSensitiveKey(key)
+    ) {
+      // L'utilisateur a TAPÉ à la suite du masque affiché (« ********sk_… ») :
+      // enregistrer tel quel casserait la clé silencieusement. Refus explicite.
+      throw new BadRequestException(
+        'Effacez le masque (« ******** ») avant de saisir la nouvelle valeur.',
+      );
+    }
     if (value === SettingsService.MASK) {
       const existing = await this.prisma.setting.findUnique({ where: { key } });
       if (existing) return this.maskSetting(existing);

@@ -796,7 +796,10 @@ export class ProspectService {
       msg_relance_2:
         v['prospect.msg.relance_2'] || DEFAULT_MESSAGES.RELANCE_2_FIDELITE,
       scan_engine: v['prospect.scan_engine'] || 'TESSERACT',
-      scan_api_key: v['prospect.scan_api_key'] || '',
+      // Masqué (revue 31/07) : ce GET renvoyait la clé OCR en clair au
+      // navigateur. Write-only comme les autres secrets — l'écriture d'un
+      // masque est un no-op (SettingsService.set).
+      scan_api_key: v['prospect.scan_api_key'] ? SettingsService.MASK : '',
       scan_model: v['prospect.scan_model'] || '',
     };
   }

@@ -274,12 +274,16 @@ export class RestaurantService {
 
     const uploadResult = await this.uploadImage(image);
 
+    // Liste blanche aussi sur la MUTATION (revue 31/07) : la réponse ET
+    // l'événement émis (relayé en WebSocket) ne doivent jamais transporter
+    // apikey Turbo / tokens HubRise — vecteur exact de l'ancienne fuite WS.
     const updatedRestaurant = await this.prisma.restaurant.update({
       where: { id },
       data: {
         ...updateRestaurantDto,
         image: uploadResult?.key ?? updateRestaurantDto.image,
       },
+      select: RestaurantService.PUBLIC_SELECT,
     });
 
     // Emettre l'événement de mise à jour de restaurant
@@ -302,6 +306,7 @@ export class RestaurantService {
             ? EntityStatus.INACTIVE
             : EntityStatus.ACTIVE,
       },
+      select: RestaurantService.PUBLIC_SELECT,
     });
 
     // Emettre l'événement de activation/désactivation de restaurant
@@ -319,6 +324,7 @@ export class RestaurantService {
     const deletedRestaurant = await this.prisma.restaurant.update({
       where: { id },
       data: { entity_status: EntityStatus.DELETED },
+      select: RestaurantService.PUBLIC_SELECT,
     });
 
     // Emettre l'événement de suppression de restaurant
@@ -331,10 +337,24 @@ export class RestaurantService {
    * Obtenir tous les utilisateurs (staff) d'un restaurant
    */
   async getRestaurantUsers(id: string) {
+    // Champs d'affichage uniquement — JAMAIS le hash de mot de passe, même
+    // pour un staff autorisé (revue 31/07).
     return this.prisma.user.findMany({
       where: {
         restaurant_id: id,
         entity_status: { not: EntityStatus.DELETED },
+      },
+      select: {
+        id: true,
+        fullname: true,
+        email: true,
+        role: true,
+        type: true,
+        image: true,
+        restaurant_id: true,
+        entity_status: true,
+        created_at: true,
+        updated_at: true,
       },
     });
   }

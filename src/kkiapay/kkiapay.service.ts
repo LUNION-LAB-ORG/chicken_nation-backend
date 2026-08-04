@@ -1,10 +1,21 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { kkiapay } from "@kkiapay-org/nodejs-sdk"
+import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import axios, { AxiosInstance } from 'axios';
 import { KkiapayResponse, KkiapayWebhookDto } from './kkiapay.type';
 import { KkiapayEvent } from './kkiapay.event';
 import { SettingsService } from 'src/modules/settings/settings.service';
 
-type KkiapayInstance = { verify: (id: string) => Promise<any>; refund: (id: string) => Promise<any> };
+/**
+ * Client HTTP DIRECT vers l'API KKiaPay (remplace le SDK officiel, qui écrase
+ * TOUTES les erreurs en « Transaction Not Found » — y compris un timeout réseau
+ * ou un 5xx. Or confondre « KKiaPay injoignable » avec « transaction inconnue »
+ * transforme un blip en paiement PERDU : le webhook est ACKé sans retry).
+ * Mêmes baseURL/headers que le SDK (@kkiapay-org/nodejs-sdk/dist/lib/index.js).
+ */
+const KKIAPAY_URL_LIVE = 'https://api.kkiapay.me';
+const KKIAPAY_URL_SANDBOX = 'https://api-sandbox.kkiapay.me';
+const VERIFY_PATH = '/api/v1/transactions/status';
+const REFUND_PATH = '/api/v1/transactions/revert';
 
 /**
  * Compte KKiaPay résolu (global ou dédié à un restaurant).
@@ -13,7 +24,7 @@ type KkiapayInstance = { verify: (id: string) => Promise<any>; refund: (id: stri
 interface ResolvedAccount {
     /** null = compte global ; sinon l'id du restaurant dont les clés sont utilisées. */
     restaurantId: string | null;
-    instance: KkiapayInstance;
+    http: AxiosInstance;
     publicKey: string;
     sandbox: boolean;
     expiresAt: number;
@@ -37,18 +48,54 @@ interface ResolvedAccount {
 export class KkiapayService {
 
     private readonly accountCache = new Map<string, ResolvedAccount>();
-    private readonly webhookSecretCache = new Map<string, { value: string; expiresAt: number }>();
+    /** Secret webhook par restaurant : `freshUntil` borne la FRAÎCHEUR (60 s —
+     *  une rotation de secret converge en ≤ 60 s sur les deux backends) ; la
+     *  valeur elle-même est conservée SANS limite comme copie de DERNIER RECOURS
+     *  quand Neon est injoignable — un blip DB ne doit pas transformer la
+     *  vérification de secret en 403/500 (paiement perdu, cf. incident 14/07). */
+    private readonly webhookSecretCache = new Map<string, { value: string; freshUntil: number }>();
     private static readonly ACCOUNT_TTL_MS = 60_000;
-    /** Les secrets de webhook gardent une copie mémoire longue (4 h) utilisée en
-     *  DERNIER RECOURS si Neon est injoignable — un blip DB ne doit pas transformer
-     *  la vérification de secret en 403/500 (paiement perdu, cf. incident 14/07). */
-    private static readonly WEBHOOK_SECRET_STALE_MS = 4 * 60 * 60 * 1000;
+    private static readonly WEBHOOK_SECRET_FRESH_MS = 60_000;
     private readonly logger = new Logger(KkiapayService.name);
 
     constructor(
         private readonly settingsService: SettingsService,
         private readonly eventEmitter: KkiapayEvent,
+        private readonly configService: ConfigService,
     ) {}
+
+    /** Client HTTP d'un jeu de clés (mêmes en-têtes que le SDK officiel). */
+    private buildHttp(keys: { publickey: string; privatekey: string; secretkey: string; sandbox: boolean }): AxiosInstance {
+        return axios.create({
+            baseURL: keys.sandbox ? KKIAPAY_URL_SANDBOX : KKIAPAY_URL_LIVE,
+            timeout: 15_000,
+            headers: {
+                'x-api-key': keys.publickey,
+                'x-secret-key': keys.secretkey,
+                'x-private-key': keys.privatekey,
+            },
+        });
+    }
+
+    /**
+     * Appel verify BRUT avec la sémantique d'erreur qui manquait au SDK :
+     *   • pas de réponse HTTP (réseau/timeout) ou 5xx → ServiceUnavailableException
+     *     — l'appelant (worker BullMQ) RETENTE, le paiement n'est jamais perdu ;
+     *   • 4xx avec réponse → BadRequestException « Transaction non trouvée »
+     *     (transaction réellement inconnue de CE compte).
+     */
+    private async rawVerify(http: AxiosInstance, transactionId: string): Promise<KkiapayResponse> {
+        try {
+            const res = await http.post(VERIFY_PATH, { transactionId });
+            return res.data as KkiapayResponse;
+        } catch (error: any) {
+            const status = error?.response?.status;
+            if (!error?.response || status >= 500) {
+                throw new ServiceUnavailableException('KKiaPay injoignable (verify)');
+            }
+            throw new BadRequestException('Transaction non trouvée');
+        }
+    }
 
     /** Clés de réglage d'un compte restaurant. */
     static settingKeys(restaurantId: string) {
@@ -76,7 +123,7 @@ export class KkiapayService {
             publicKey: config.kkiapay_public_key ?? '',
             sandbox,
             expiresAt: Date.now() + KkiapayService.ACCOUNT_TTL_MS,
-            instance: kkiapay({
+            http: this.buildHttp({
                 privatekey: config.kkiapay_private_key ?? '',
                 publickey: config.kkiapay_public_key ?? '',
                 secretkey: config.kkiapay_secret_key ?? '',
@@ -115,15 +162,23 @@ export class KkiapayService {
                         publicKey: pub,
                         sandbox,
                         expiresAt: Date.now() + KkiapayService.ACCOUNT_TTL_MS,
-                        instance: kkiapay({ privatekey: priv, publickey: pub, secretkey: sec, sandbox }),
+                        http: this.buildHttp({ privatekey: priv, publickey: pub, secretkey: sec, sandbox }),
                     };
                 }
             } catch (e) {
-                // Neon injoignable : on retombe sur le cache périmé si présent, sinon global.
+                // Neon injoignable : cache périmé si présent, sinon on RELANCE.
+                // ⚠️ ANTI-EMPOISONNEMENT (revue 31/07) : retomber ici sur le compte
+                // global CACHERAIT le global sous la clé du restaurant pendant 60 s —
+                // un webhook arrivant pendant un flap Neon vérifierait alors en
+                // global-only, échouerait, et serait ACKé DÉFINITIVEMENT (paiement
+                // perdu). L'erreur transitoire doit remonter au worker BullMQ, qui
+                // retente. Le repli global reste réservé au cas « lecture RÉUSSIE
+                // mais clés incomplètes » (restaurant pas encore configuré).
                 if (hit) return hit;
                 this.logger.warn(
-                    `resolveAccount(${restaurantId}) : lecture Settings impossible, repli global : ${(e as any)?.message}`,
+                    `resolveAccount(${restaurantId}) : lecture Settings impossible, erreur relancée : ${(e as any)?.message}`,
                 );
+                throw e;
             }
         }
 
@@ -156,30 +211,40 @@ export class KkiapayService {
      * l'appelant doit alors répondre 503 (retry KKiaPay), jamais 403.
      */
     async getWebhookSecret(restaurantId: string | null): Promise<string | null> {
-        if (restaurantId === null) {
-            const secret = await this.settingsService.getOrEnvSafe(
-                'kkiapay_webhook_secret', 'KKIA_PAY_WEBHOOK_SECRET', '',
-            );
-            return secret || null;
-        }
-        const cacheKey = restaurantId;
+        // GLOBAL : DB-FIRST (revue 31/07) — l'ancien chemin env-first rendait la
+        // rotation du secret au backoffice SANS EFFET tant que la variable d'env
+        // restait posée (403 systématique après rotation = paiements plus jamais
+        // confirmés). Même mécanique de cache que par-restaurant ; l'env ne sert
+        // plus que de DERNIER recours (première installation, DB down sans cache).
+        const cacheKey = restaurantId ?? '__global__';
         const cached = this.webhookSecretCache.get(cacheKey);
-        if (cached && cached.expiresAt > Date.now()) return cached.value;
+        if (cached && cached.freshUntil > Date.now()) return cached.value;
+        const envFallback = restaurantId === null
+            ? this.configService.get<string>('KKIA_PAY_WEBHOOK_SECRET')
+            : undefined;
         try {
-            const key = KkiapayService.settingKeys(restaurantId).webhook_secret;
-            const value = await this.settingsService.get(key);
+            const key = restaurantId === null
+                ? 'kkiapay_webhook_secret'
+                : KkiapayService.settingKeys(restaurantId).webhook_secret;
+            const dbValue = await this.settingsService.get(key);
+            const value = dbValue || envFallback || '';
             if (value) {
                 this.webhookSecretCache.set(cacheKey, {
                     value,
-                    expiresAt: Date.now() + KkiapayService.WEBHOOK_SECRET_STALE_MS,
+                    freshUntil: Date.now() + KkiapayService.WEBHOOK_SECRET_FRESH_MS,
                 });
                 return value;
             }
-            return null; // restaurant sans secret configuré → l'appelant tranche
+            // Secret retiré / jamais posé : on purge la copie de secours pour ne
+            // pas accepter indéfiniment un secret révoqué.
+            this.webhookSecretCache.delete(cacheKey);
+            return null; // aucun secret configuré → l'appelant tranche (503)
         } catch (e) {
-            // Neon injoignable : dernier recours = copie mémoire même périmée.
+            // Neon injoignable : dernier recours = copie mémoire même périmée,
+            // puis l'env (global uniquement).
             if (cached) return cached.value;
-            this.logger.warn(`getWebhookSecret(${restaurantId}) : DB injoignable et aucun cache`);
+            if (envFallback) return envFallback;
+            this.logger.warn(`getWebhookSecret(${restaurantId ?? 'global'}) : DB injoignable et aucun cache`);
             return null;
         }
     }
@@ -207,23 +272,24 @@ export class KkiapayService {
 
         const account = await this.resolveAccount(restaurantId);
         try {
-            const response = await account.instance.verify(transactionId);
-            return { transaction: response as KkiapayResponse, collectedBy: account.restaurantId };
+            const transaction = await this.rawVerify(account.http, transactionId);
+            return { transaction, collectedBy: account.restaurantId };
         } catch (error) {
-            // Compte dédié → transaction possiblement encaissée sur le compte global
-            // (ancienne app, commande d'avant la bascule). On retente UNE fois en global.
+            // KKiaPay INJOIGNABLE (réseau/5xx) : on remonte tel quel — le worker
+            // BullMQ retente. Ne JAMAIS interpréter comme « transaction inconnue »
+            // (c'est ce que faisait le SDK : blip = paiement perdu, revue 31/07).
+            if (error instanceof ServiceUnavailableException) throw error;
+            // Transaction réellement inconnue de CE compte. Compte dédié →
+            // possiblement encaissée sur le compte global (ancienne app, commande
+            // d'avant la bascule). On retente UNE fois en global.
             if (account.restaurantId !== null) {
                 const global = await this.resolveAccount(null);
-                try {
-                    const response = await global.instance.verify(transactionId);
-                    this.logger.log(
-                        `Transaction ${transactionId} inconnue du compte ${account.restaurantId}, ` +
-                        `trouvée sur le compte global (transition).`,
-                    );
-                    return { transaction: response as KkiapayResponse, collectedBy: null };
-                } catch {
-                    throw new BadRequestException("Transaction non trouvée");
-                }
+                const transaction = await this.rawVerify(global.http, transactionId);
+                this.logger.log(
+                    `Transaction ${transactionId} inconnue du compte ${account.restaurantId}, ` +
+                    `trouvée sur le compte global (transition).`,
+                );
+                return { transaction, collectedBy: null };
             }
             throw new BadRequestException("Transaction non trouvée");
         }
@@ -240,11 +306,22 @@ export class KkiapayService {
         }
 
         const account = await this.resolveAccount(restaurantId);
+        // STRICT (revue 31/07) : si le compte du restaurant n'est plus configuré,
+        // resolveAccount replie sur le global — rembourser depuis ce compte-là
+        // serait une erreur comptable. On refuse explicitement.
+        if (restaurantId !== null && account.restaurantId !== restaurantId) {
+            throw new BadRequestException(
+                'Le compte KKiaPay de ce restaurant n\'est plus configuré : impossible de rembourser depuis le compte encaisseur. Reconfigurez ses clés avant de rembourser.',
+            );
+        }
 
         try {
-            const response = await account.instance.refund(transactionId);
-            return response as KkiapayResponse;
-        } catch (error) {
+            const res = await account.http.post(REFUND_PATH, { transactionId });
+            return res.data as KkiapayResponse;
+        } catch (error: any) {
+            if (!error?.response || error.response.status >= 500) {
+                throw new ServiceUnavailableException('KKiaPay injoignable (refund)');
+            }
             throw new BadRequestException("Transaction non trouvée");
         }
     }
