@@ -547,12 +547,15 @@ export class OrderService {
     const hasFeeOverride = delivery_fee != null;
     const deliveryFee = hasFeeOverride ? Number(delivery_fee) : (delivery ? delivery?.montant : 0);
     // Frais PLEIN (avant offre) + remise, côté serveur → bilan fiable (call center inclus).
-    // Si l'admin FORCE un frais (override), on ne lui attribue PAS la remise d'une offre
-    // serveur : base = facturé, remise = 0 → invariant bilan (base = facturé + remise) préservé.
-    const deliveryFeeBase = hasFeeOverride
-      ? Number(deliveryFee)
-      : (delivery ? (delivery.original_montant ?? delivery.montant) : Number(deliveryFee));
-    const deliveryDiscount = hasFeeOverride ? 0 : (delivery?.discount ?? 0);
+    // ⚠️ CORRIGÉ (04/08) : l'override posait base = facturé et remise = 0 — une
+    // livraison offerte à la main disparaissait du bilan (lignes à 0 F dans
+    // l'export, « point des réductions » faux). Désormais la BASE reste le tarif
+    // plein CALCULÉ quel que soit l'override ; l'override ne force que le
+    // FACTURÉ, et la remise absorbe l'écart. Invariant base = facturé + remise
+    // toujours vérifié.
+    const computedBase = delivery ? (delivery.original_montant ?? delivery.montant) : null;
+    const deliveryFeeBase = computedBase ?? Number(deliveryFee);
+    const deliveryDiscount = Math.max(0, deliveryFeeBase - Number(deliveryFee));
 
     // Vérifier le paiement
     const payment = await this.orderHelper.checkPayment(createOrderDto);
@@ -2155,6 +2158,130 @@ export class OrderService {
       }
     }
     return {};
+  }
+
+  /**
+   * RATTRAPAGE (04/08) : recalcule le frais de livraison PLEIN des commandes
+   * livrées enregistrées SANS coût (delivery_fee_base nul/0) — héritage de
+   * l'ancien override staff (base = facturé forcé = 0) et des saisies
+   * manuelles d'avant le calcul serveur. Pose delivery_fee_base = tarif de la
+   * GRILLE interne (déterministe, sans offre ni appel Turbo — c'est la
+   * référence tarifaire CN) et delivery_discount = base − facturé.
+   *
+   * NE TOUCHE JAMAIS aux montants clients (amount, net_amount, delivery_fee) :
+   * uniquement les deux champs de bilan. UPDATE conditionné sur base nul/0
+   * (claim atomique : idempotent, sûr en double backend, ne réécrase jamais
+   * une valeur posée entre-temps). Dry-run par défaut.
+   */
+  async backfillDeliveryFees(opts: {
+    dryRun?: boolean;
+    startDate?: string;
+    endDate?: string;
+    limit?: number;
+  } = {}) {
+    const { dryRun = true, limit = 500 } = opts;
+
+    const orders = await this.prisma.order.findMany({
+      where: {
+        type: OrderType.DELIVERY,
+        entity_status: { not: EntityStatus.DELETED },
+        status: { in: [OrderStatus.COLLECTED, OrderStatus.COMPLETED] },
+        OR: [{ delivery_fee_base: null }, { delivery_fee_base: 0 }],
+        ...(opts.startDate || opts.endDate
+          ? {
+              created_at: {
+                ...(opts.startDate ? { gte: new Date(opts.startDate) } : {}),
+                ...(opts.endDate
+                  ? { lte: new Date(new Date(opts.endDate).setHours(23, 59, 59, 999)) }
+                  : {}),
+              },
+            }
+          : {}),
+      },
+      select: {
+        id: true,
+        reference: true,
+        address: true,
+        delivery_fee: true,
+        created_at: true,
+        restaurant: {
+          select: { id: true, name: true, latitude: true, longitude: true, schedule: true },
+        },
+      },
+      orderBy: { created_at: 'asc' },
+      take: limit,
+    });
+
+    let updated = 0;
+    const skipped: { reference: string; raison: string }[] = [];
+    const details: {
+      reference: string;
+      date: string;
+      base_calculee: number;
+      facture: number;
+      remise: number;
+    }[] = [];
+
+    for (const order of orders) {
+      const addr = this.parseOrderAddress(order.address) as Record<string, unknown>;
+      const lat = Number(addr?.latitude);
+      const long = Number(addr?.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(long) || (lat === 0 && long === 0)) {
+        skipped.push({ reference: order.reference, raison: 'adresse sans coordonnées' });
+        continue;
+      }
+      if (!order.restaurant) {
+        skipped.push({ reference: order.reference, raison: 'restaurant absent' });
+        continue;
+      }
+
+      let base = 0;
+      try {
+        const grille = await this.deliveryFeeHelper.calculeFraisLivraisonPersonnalise({
+          lat,
+          long,
+          restaurant: order.restaurant,
+        });
+        base = Number(grille?.montant ?? 0);
+      } catch (e) {
+        skipped.push({ reference: order.reference, raison: `grille : ${(e as any)?.message}` });
+        continue;
+      }
+      if (!(base > 0)) {
+        skipped.push({ reference: order.reference, raison: 'grille sans tarif pour cette distance' });
+        continue;
+      }
+
+      const facture = Number(order.delivery_fee ?? 0);
+      const remise = Math.max(0, base - facture);
+      details.push({
+        reference: order.reference,
+        date: order.created_at.toISOString().slice(0, 10),
+        base_calculee: base,
+        facture,
+        remise,
+      });
+
+      if (!dryRun) {
+        const claim = await this.prisma.order.updateMany({
+          where: { id: order.id, OR: [{ delivery_fee_base: null }, { delivery_fee_base: 0 }] },
+          data: { delivery_fee_base: base, delivery_discount: remise },
+        });
+        if (claim.count > 0) updated++;
+      }
+    }
+
+    const totalRemise = details.reduce((s2, d) => s2 + d.remise, 0);
+    return {
+      dry_run: dryRun,
+      scannees: orders.length,
+      corrigees: dryRun ? 0 : updated,
+      corrigeables: details.length,
+      ignorees: skipped.length,
+      remise_totale_rattrapee: totalRemise,
+      ignorees_detail: skipped.slice(0, 30),
+      apercu: details.slice(0, 50),
+    };
   }
 
   async exportDeliveriesToExcel(filters: QueryOrderDto, user?: User) {

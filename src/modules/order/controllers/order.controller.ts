@@ -251,6 +251,27 @@ export class OrderController {
     res.status(HttpStatus.OK).send(buffer);
   }
 
+  @Post('/backfill-delivery-fees')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE)
+  @ApiOperation({
+    summary:
+      'RATTRAPAGE : recalcule le frais plein (grille) des commandes livrées à base 0 — dry-run par défaut, ?apply=true pour écrire. Ne touche jamais aux montants clients.',
+  })
+  backfillDeliveryFees(
+    @Query('apply') apply?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.orderService.backfillDeliveryFees({
+      dryRun: apply !== 'true',
+      startDate,
+      endDate,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
   @Get('/export-deliveries')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.DASHBOARD, Action.EXPORT)
