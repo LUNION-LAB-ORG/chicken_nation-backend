@@ -2164,9 +2164,11 @@ export class OrderService {
    * RATTRAPAGE (04/08) : recalcule le frais de livraison PLEIN des commandes
    * livrées enregistrées SANS coût (delivery_fee_base nul/0) — héritage de
    * l'ancien override staff (base = facturé forcé = 0) et des saisies
-   * manuelles d'avant le calcul serveur. Pose delivery_fee_base = tarif de la
-   * GRILLE interne (déterministe, sans offre ni appel Turbo — c'est la
-   * référence tarifaire CN) et delivery_discount = base − facturé.
+   * manuelles d'avant le calcul serveur. Pose delivery_fee_base = tarif PLEIN
+   * de production : zone TURBO si activée, GRILLE interne en secours — même
+   * chaîne que la création de commande, SANS offre (contexte channel absent).
+   * delivery_discount = base − facturé. Les zones Turbo sont mémoïsées 60 s
+   * par restaurant (5 fetchs par passage, pas un par commande).
    *
    * NE TOUCHE JAMAIS aux montants clients (amount, net_amount, delivery_fee) :
    * uniquement les deux champs de bilan. UPDATE conditionné sur base nul/0
@@ -2205,7 +2207,7 @@ export class OrderService {
         delivery_fee: true,
         created_at: true,
         restaurant: {
-          select: { id: true, name: true, latitude: true, longitude: true, schedule: true },
+          select: { id: true, name: true, latitude: true, longitude: true, schedule: true, apikey: true },
         },
       },
       orderBy: { created_at: 'asc' },
@@ -2237,18 +2239,21 @@ export class OrderService {
 
       let base = 0;
       try {
-        const grille = await this.deliveryFeeHelper.calculeFraisLivraisonPersonnalise({
+        // Même chaîne tarifaire que la production : zone Turbo si activée,
+        // grille en secours. Pas de channel/orderAmount → aucune offre
+        // appliquée, on obtient le tarif PLEIN.
+        const frais = await this.deliveryFeeHelper.calculeFraisLivraison({
           lat,
           long,
           restaurant: order.restaurant,
         });
-        base = Number(grille?.montant ?? 0);
+        base = Number(frais?.original_montant ?? frais?.montant ?? 0);
       } catch (e) {
-        skipped.push({ reference: order.reference, raison: `grille : ${(e as any)?.message}` });
+        skipped.push({ reference: order.reference, raison: `tarif : ${(e as any)?.message}` });
         continue;
       }
       if (!(base > 0)) {
-        skipped.push({ reference: order.reference, raison: 'grille sans tarif pour cette distance' });
+        skipped.push({ reference: order.reference, raison: 'aucun tarif (zone/grille) pour cette adresse' });
         continue;
       }
 

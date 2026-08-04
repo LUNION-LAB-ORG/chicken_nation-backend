@@ -81,6 +81,15 @@ export const DELIVERY_FEE_SETTING_KEYS = {
 export class DeliveryFeeHelper {
   private readonly logger = new Logger(DeliveryFeeHelper.name);
 
+  /** Zones Turbo par restaurant, mémoïsées 60 s : la grille de zones ne bouge
+   *  pas d'une commande à l'autre — évite un appel API Turbo par commande
+   *  (création en rafale, rattrapage des frais). TTL court : une mise à jour
+   *  de zones côté Turbo converge en ≤ 60 s. */
+  private readonly zonesTurboCache = new Map<
+    string,
+    { zones: Array<{ id: string; name: string; latitude: number; longitude: number; prix: number }>; expiresAt: number }
+  >();
+
   constructor(
     private readonly settingsService: SettingsService,
     private readonly generateDataService: GenerateDataService,
@@ -327,12 +336,19 @@ export class DeliveryFeeHelper {
     // Zones Turbo (si activées) : remplace la grille par la zone la plus proche.
     const feeSettings = await this.load();
     if (feeSettings.turboZonesEnabled) {
-      const resultTurbo = await this.turboService.obtenirFraisLivraisonParRestaurant(
-        restaurant.apikey ?? '',
-        0,
-        200,
-      );
-      const zones = resultTurbo ? resultTurbo.content : [];
+      const memo = this.zonesTurboCache.get(restaurant.id);
+      let zones: { id: string; name: string; latitude: number; longitude: number; prix: number }[];
+      if (memo && memo.expiresAt > Date.now()) {
+        zones = memo.zones;
+      } else {
+        const resultTurbo = await this.turboService.obtenirFraisLivraisonParRestaurant(
+          restaurant.apikey ?? '',
+          0,
+          200,
+        );
+        zones = resultTurbo ? resultTurbo.content : [];
+        this.zonesTurboCache.set(restaurant.id, { zones, expiresAt: Date.now() + 60_000 });
+      }
       if (zones.length > 0) {
         const zone = zones.reduce((prev, current) => {
           const prevDistance = this.generateDataService.haversineDistance(
