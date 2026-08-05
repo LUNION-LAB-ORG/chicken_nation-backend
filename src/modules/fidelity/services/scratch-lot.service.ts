@@ -191,4 +191,110 @@ export class ScratchLotService {
 
         throw new BadRequestException('Type de lot non supporté.');
     }
+
+    /**
+     * HISTORIQUE DES TIRAGES (05/08) : qui a gagné quoi, sur quelle commande,
+     * et ce que le gain est devenu. Par défaut on ne liste que les GROS LOTS
+     * (le plancher = simple révélation des points, sans intérêt de pilotage) ;
+     * `include_floor=true` pour tout voir. Le statut du gain est dérivé du
+     * Reward : à gratter / gratté / utilisé / révoqué / expiré. Pour un cadeau
+     * UTILISÉ, Reward.order_id pointe la commande de CONSOMMATION (le claim la
+     * réécrit) — la commande d'ORIGINE reste celle du tirage.
+     */
+    async listDraws(opts: {
+        page?: number;
+        limit?: number;
+        lotId?: string;
+        startDate?: string;
+        endDate?: string;
+        includeFloor?: boolean;
+    } = {}) {
+        const page = Math.max(1, opts.page ?? 1);
+        const limit = Math.min(100, Math.max(1, opts.limit ?? 20));
+
+        const where: Prisma.ScratchDrawWhereInput = {
+            ...(opts.includeFloor ? {} : { scratch_lot_id: { not: null } }),
+            ...(opts.lotId ? { scratch_lot_id: opts.lotId } : {}),
+            ...(opts.startDate || opts.endDate
+                ? {
+                    created_at: {
+                        ...(opts.startDate ? { gte: new Date(opts.startDate) } : {}),
+                        ...(opts.endDate
+                            ? { lte: new Date(new Date(opts.endDate).setHours(23, 59, 59, 999)) }
+                            : {}),
+                    },
+                }
+                : {}),
+        };
+
+        const [draws, total] = await Promise.all([
+            this.prisma.scratchDraw.findMany({
+                where,
+                orderBy: { created_at: 'desc' },
+                skip: (page - 1) * limit,
+                take: limit,
+                include: {
+                    lot: { select: { id: true, label: true, reward_type: true, unit_cost: true } },
+                    customer: {
+                        select: { id: true, first_name: true, last_name: true, phone: true, image: true },
+                    },
+                    order: { select: { id: true, reference: true } },
+                    reward: {
+                        select: {
+                            id: true,
+                            status: true,
+                            scratched_at: true,
+                            consumed_at: true,
+                            expires_at: true,
+                            payload: true,
+                            order: { select: { id: true, reference: true } },
+                        },
+                    },
+                },
+            }),
+            this.prisma.scratchDraw.count({ where }),
+        ]);
+
+        const now = Date.now();
+        const data = draws.map((d) => {
+            const r = d.reward;
+            let statut: string;
+            if (!r) statut = 'SANS_GAIN';
+            else if (r.status === 'REVOKED') statut = 'REVOQUE';
+            else if (r.status === 'CONSUMED') statut = 'UTILISE';
+            else if (r.status === 'SCRATCHED') statut = 'GRATTE';
+            else if (r.expires_at && r.expires_at.getTime() < now) statut = 'EXPIRE';
+            else statut = 'A_GRATTER';
+
+            // Commande d'utilisation : celle du Reward quand elle DIFFÈRE de la
+            // commande d'origine (le claim de consommation la réécrit).
+            const usageOrder =
+                r?.order && r.order.id !== d.order_id ? r.order : null;
+
+            return {
+                id: d.id,
+                date_tirage: d.created_at,
+                lot: d.lot,
+                cout: d.cost,
+                client: d.customer && {
+                    id: d.customer.id,
+                    name: [d.customer.first_name, d.customer.last_name].filter(Boolean).join(' '),
+                    phone: d.customer.phone,
+                    image: d.customer.image,
+                },
+                commande_origine: d.order,
+                statut,
+                gratte_le: r?.scratched_at ?? null,
+                utilise_le: r?.consumed_at ?? null,
+                commande_utilisation: usageOrder,
+                expire_le: r?.expires_at ?? null,
+                stock_restaure: d.restored_at != null,
+            };
+        });
+
+        return {
+            data,
+            meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+        };
+    }
 }

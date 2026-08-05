@@ -55,7 +55,19 @@ export class TicketService {
     participants: { include: { user: { select: this.userSelect } } },
     messages: {
       orderBy: { createdAt: 'desc' },
-      take: 10,
+      take: 50,
+      // AUTEURS inclus (bug 05/08) : sans eux, le backoffice n'avait que les ids
+      // et affichait l'utilisateur CONNECTÉ sur chaque message d'agent — un
+      // agent semblait avoir répondu à la place de son collègue.
+      include: {
+        authorUser: { select: this.userSelect },
+        authorCustomer: {
+          select: { id: true, first_name: true, last_name: true, image: true },
+        },
+        authorDeliverer: {
+          select: { id: true, first_name: true, last_name: true, image: true },
+        },
+      },
     },
     order: { select: { id: true, reference: true, restaurant_id: true } },
     category: { select: { id: true, name: true } },

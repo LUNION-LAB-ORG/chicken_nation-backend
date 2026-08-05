@@ -48,6 +48,33 @@ export class ScratchLotController {
         return this.scratchEngine.simulate(Number(amount) || 0, level ?? null);
     }
 
+    @Get('draws')
+    @RequirePermission(Modules.FIDELITE, Action.READ)
+    @ApiOperation({ summary: 'Historique des tirages : lot, client, commande, statut du gain, utilisation' })
+    @ApiQuery({ name: 'page', required: false })
+    @ApiQuery({ name: 'limit', required: false })
+    @ApiQuery({ name: 'lotId', required: false })
+    @ApiQuery({ name: 'startDate', required: false })
+    @ApiQuery({ name: 'endDate', required: false })
+    @ApiQuery({ name: 'include_floor', required: false, description: 'true = inclure les tirages plancher (points)' })
+    listDraws(
+        @Query('page') page?: string,
+        @Query('limit') limit?: string,
+        @Query('lotId') lotId?: string,
+        @Query('startDate') startDate?: string,
+        @Query('endDate') endDate?: string,
+        @Query('include_floor') includeFloor?: string,
+    ) {
+        return this.scratchLotService.listDraws({
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+            lotId,
+            startDate,
+            endDate,
+            includeFloor: includeFloor === 'true',
+        });
+    }
+
     @Get('envelope')
     @RequirePermission(Modules.FIDELITE, Action.READ)
     @ApiOperation({ summary: "Moniteur d'enveloppe : surcoût moyen réalisé sur la fenêtre vs cible" })
