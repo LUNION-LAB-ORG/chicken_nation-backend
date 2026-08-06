@@ -1,4 +1,5 @@
-import { Body, Controller, Headers, HttpStatus, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
+import { ApiOperation } from '@nestjs/swagger';
+import { Body, Controller, Get, Headers, HttpStatus, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -23,6 +24,49 @@ export class KkiapayController {
     // REMBOURSEMENT était déclenchable anonymement avec un simple transactionId.
     // Aucun client (app/backoffice/site) ne les consommait ; le remboursement
     // officiel passe par POST /paiements/refund/:id (gardé + tracé par compte).
+    /**
+     * DIAGNOSTIC (06/08) : quel compte KKiaPay sert réellement un restaurant, et
+     * pourquoi. Sans cet outil, un repli silencieux sur le compte global ne se
+     * constate qu'après un vrai paiement parti au mauvais endroit.
+     * Ne renvoie AUCUN secret : uniquement des présences et des empreintes.
+     */
+    @Get('diagnostic/:restaurantId')
+    @UseGuards(JwtAuthGuard)
+    @ApiOperation({ summary: 'Compte KKiaPay effectivement utilisé pour un restaurant' })
+    async diagnostic(@Param('restaurantId') restaurantId: string) {
+        const cles = KkiapayService.settingKeys(restaurantId);
+        const valeurs = await this.settingsService.getMany([
+            cles.public_key, cles.private_key, cles.secret_key,
+            cles.webhook_secret, cles.sandbox,
+        ]);
+        const presence = (v?: string) => ({
+            renseigne: !!v && v.trim() !== '',
+            longueur: v?.length ?? 0,
+        });
+
+        const compte = await this.kkiapayService.resolveAccount(restaurantId);
+        const dedie = compte.restaurantId === restaurantId;
+
+        return {
+            restaurant_id: restaurantId,
+            compte_utilise: dedie ? 'DEDIE' : 'GLOBAL',
+            // Les 4 premiers caractères suffisent à distinguer deux comptes.
+            cle_publique_servie: compte.publicKey
+                ? `${compte.publicKey.slice(0, 8)}…`
+                : '(vide)',
+            sandbox: compte.sandbox,
+            cles_enregistrees: {
+                public_key: presence(valeurs[cles.public_key]),
+                private_key: presence(valeurs[cles.private_key]),
+                secret_key: presence(valeurs[cles.secret_key]),
+                webhook_secret: presence(valeurs[cles.webhook_secret]),
+            },
+            explication: dedie
+                ? 'Les paiements de ce restaurant partent sur son propre compte.'
+                : "Repli sur le compte global : les trois clés d'API (publique, privée, secrète) doivent toutes être renseignées pour que le compte dédié serve.",
+        };
+    }
+
     @Post('verify')
     @UseGuards(JwtAuthGuard)
     async verifyTransaction(@Body() body: { transactionId: string }): Promise<KkiapayResponse> {
