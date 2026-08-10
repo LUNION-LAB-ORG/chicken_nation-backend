@@ -289,6 +289,24 @@ export class DishService {
       include: {
         category: true,
         favorites: { select: { customer_id: true } },
+        // MENUS COMPOSABLES : les questions posées au client avant le panier.
+        // Servies UNIQUEMENT sur le détail, jamais dans les listes : une carte
+        // de cinquante plats n'a pas à transporter leurs options.
+        //
+        // Les choix indisponibles sont envoyés avec leur drapeau plutôt que
+        // filtrés : l'écran de composition les grise, ce qui explique au client
+        // pourquoi sa sauce habituelle manque, au lieu de la faire disparaître.
+        option_groups: {
+          orderBy: { position: 'asc' },
+          include: {
+            items: {
+              orderBy: { position: 'asc' },
+              include: {
+                supplement: { select: { id: true, name: true, price: true } },
+              },
+            },
+          },
+        },
       },
     });
 
