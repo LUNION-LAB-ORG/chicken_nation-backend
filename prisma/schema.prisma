@@ -1216,6 +1216,11 @@ model OrderItem {
   order_id      String   @db.Uuid
   dish_id       String   @db.Uuid
   supplements   Json?    @db.Json
+  /// MENUS COMPOSABLES : les choix retenus par le client, figés à la commande
+  /// ([{ id, label, group_name, price_delta }]). Le catalogue peut changer de
+  /// sauce ou de tarif ensuite, la cuisine et le reçu gardent ce qui a été
+  /// commandé et payé ce jour-là.
+  options       Json?    @db.Json
   dish          Dish     @relation(fields: [dish_id], references: [id])
   order         Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
   cooking_time  Int?     @db.Integer // en minutes

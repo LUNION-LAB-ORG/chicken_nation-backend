@@ -1,3 +1,4 @@
+import { MenuModule } from 'src/modules/menu/menu.module';
 import { KkiapayModule } from 'src/kkiapay/kkiapay.module';
 import { Module } from '@nestjs/common';
 import { OrderService } from './services/order.service';
@@ -29,6 +30,8 @@ import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.m
 @Module({
   imports: [
     JsonWebTokenModule,
+    // MENUS COMPOSABLES : DishOptionService résout le prix des choix côté serveur.
+    MenuModule,
     KkiapayModule,
     AuthDelivererModule,
     PaiementsModule,

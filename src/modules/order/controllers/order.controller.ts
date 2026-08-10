@@ -59,13 +59,39 @@ export class OrderController {
     private readonly kkiapayOrderListenerService: KkiapayOrderListenerService,
   ) { }
 
+  /**
+   * Création de commande par un CLIENT (ancienne route, encore utilisée par les
+   * applications installées avant `/create-v2`).
+   *
+   * ⚠️ FAILLE FERMÉE (10/08). Cette route partage son traitement avec la route
+   * du centre d'appel `/orders/create`, qui est réservée au personnel. Le corps
+   * de requête portait donc des champs de personnel que le client contrôlait :
+   *
+   *  - `delivery_fee` : un client qui postait 0 se faisait livrer gratuitement
+   *    (c'est la cause des commandes à 0 franc de frais rattrapées le 06/08) ;
+   *  - `user_id` : renseigné, il annule la TVA, bascule le paiement en espèces
+   *    et passe la commande en ACCEPTED sans qu'un franc soit encaissé ;
+   *  - `customer_id` : librement choisi, il permettait de commander au nom d'un
+   *    autre client, avec ses points de fidélité.
+   *
+   * On neutralise ces trois champs ici plutôt que dans le service, pour que la
+   * route du personnel garde ses prérogatives légitimes.
+   */
   @Post()
   @UseGuards(JwtCustomerAuthGuard) // client peut créer ses propres commandes
   @ApiOperation({ summary: 'Créer une nouvelle commande' })
   @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
   @ApiBody({ type: CreateOrderDto })
   async create(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
-    return this.orderService.create(req, createOrderDto);
+    const client = req.user as Customer;
+    return this.orderService.create(req, {
+      ...createOrderDto,
+      // Le client commande pour LUI, quoi qu'annonce le corps de la requête.
+      customer_id: client.id,
+      // Frais de livraison et exonération de TVA : décisions du personnel.
+      delivery_fee: undefined,
+      user_id: undefined,
+    });
   }
   @Post("/create-v2")
   @UseGuards(JwtCustomerAuthGuard)

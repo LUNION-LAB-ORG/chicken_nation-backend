@@ -310,6 +310,13 @@ export class DishOptionService {
     dishId: string,
     optionItemIds: string[],
     tx?: Prisma.TransactionClient,
+    /**
+     * Mode ÉDITION : on relit le prix de choix DÉJÀ commandés et payés, sans
+     * revérifier les règles de vente. Une sauce passée en rupture ou un groupe
+     * retiré du catalogue ne doit pas rendre une commande impossible à
+     * modifier au backoffice, des heures après l'encaissement.
+     */
+    edition = false,
   ): Promise<{ total: number; items: { id: string; label: string; price_delta: number; group_name: string; supplement_id: string | null }[] }> {
     const client = tx ?? this.prisma;
 
@@ -326,6 +333,16 @@ export class DishOptionService {
       return { total: 0, items: [] };
     }
 
+    // Aucun choix transmis alors que le plat en exige : ce n'est pas une erreur
+    // de saisie, c'est un appelant qui ne sait pas composer (application non
+    // mise à jour, prise de commande backoffice, ligne créée par une
+    // promotion). Le message doit donc parler de mise à jour, pas de bornes.
+    if (!edition && optionItemIds.length === 0 && groups.some((g) => g.min_select > 0)) {
+      throw new BadRequestException(
+        "Ce plat se commande maintenant en choisissant ses options. Mettez à jour l'application pour le composer.",
+      );
+    }
+
     const demandes = new Set(optionItemIds);
     const retenus: { id: string; label: string; price_delta: number; group_name: string; supplement_id: string | null }[] = [];
     let total = 0;
@@ -335,17 +352,17 @@ export class DishOptionService {
       const choisis = groupe.items.filter((i) => demandes.has(i.id));
       reconnus += choisis.length;
 
-      if (choisis.length < groupe.min_select) {
+      if (!edition && choisis.length < groupe.min_select) {
         throw new BadRequestException(
           `« ${groupe.name} » : ${groupe.min_select} choix attendu(s) au minimum`,
         );
       }
-      if (choisis.length > groupe.max_select) {
+      if (!edition && choisis.length > groupe.max_select) {
         throw new BadRequestException(
           `« ${groupe.name} » : ${groupe.max_select} choix au maximum`,
         );
       }
-      const indisponible = choisis.find((i) => !i.available);
+      const indisponible = edition ? undefined : choisis.find((i) => !i.available);
       if (indisponible) {
         throw new BadRequestException(
           `« ${indisponible.label} » n'est plus disponible`,
@@ -366,7 +383,7 @@ export class DishOptionService {
 
     // Un identifiant qui n'appartient à aucun groupe de CE plat est une erreur
     // franche, pas une ligne à ignorer en silence.
-    if (reconnus !== demandes.size) {
+    if (!edition && reconnus !== demandes.size) {
       throw new BadRequestException("Un des choix envoyés n'appartient pas à ce plat");
     }
 

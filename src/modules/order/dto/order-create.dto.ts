@@ -52,6 +52,18 @@ export class OrderItemDto {
     @IsOptional()
     @IsUUID()
     reward_id?: string;
+
+    @ApiPropertyOptional({
+        description:
+            "MENUS COMPOSABLES : identifiants des choix retenus par le client (sauce, format). " +
+            "Le serveur retrouve leur prix en base et refuse ce qui ne respecte pas les bornes " +
+            "du plat. Obligatoire pour un plat composable, interdit pour les autres.",
+        type: [String],
+    })
+    @IsOptional()
+    @IsArray()
+    @IsUUID(undefined, { each: true })
+    option_item_ids?: string[];
 }
 
 export class OrderCreateDto {

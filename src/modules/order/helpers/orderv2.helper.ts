@@ -14,7 +14,8 @@ import {
 } from '@prisma/client';
 import { JsonValue } from '@prisma/client/runtime/library';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
-import { assertDishesAvailableNow, assertDishesNotComposable, assertOrderTypeAllowed } from 'src/common/utils/dish-availability.util';
+import { assertDishesAvailableNow, assertOrderTypeAllowed } from 'src/common/utils/dish-availability.util';
+import { DishOptionService } from 'src/modules/menu/services/dish-option.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
@@ -34,6 +35,7 @@ export class OrderV2Helper {
     private readonly turboService: TurboService,
     private voucherService: VoucherService,
     private promoCodeService: PromoCodeService,
+    private readonly dishOptionService: DishOptionService,
   ) {}
 
   private async getTaxRate(): Promise<number> {
@@ -131,9 +133,11 @@ export class OrderV2Helper {
     // Créneau horaire de disponibilité : blocage serveur (l'app ne fait que masquer)
     assertDishesAvailableNow(dishes);
 
-    // Verrou menus composables : aucun canal ne transmet encore les choix
-    // d'options, donc aucune commande ne doit porter un plat composable.
-    assertDishesNotComposable(dishes);
+    // ⚠️ PAS de verrou composable global ici : depuis que la commande sait
+    // porter les choix d'options, la règle est PAR LIGNE (« un plat composable
+    // doit être composé »), appliquée dans calculateOrderDetails. Une
+    // application qui ne sait pas composer n'envoie aucun choix et se fait
+    // refuser là-bas, avec un message qui l'invite à se mettre à jour.
 
     return dishes;
   }
@@ -313,6 +317,23 @@ export class OrderV2Helper {
         }
       }
 
+      // 1 bis. MENUS COMPOSABLES : choix retenus par le client.
+      //
+      // Le prix vient de la BASE, jamais de ce que l'application annonce : un
+      // client qui trafiquerait sa requête pour s'offrir un format XL à zéro
+      // franc paierait quand même le vrai tarif. Les bornes du plat sont
+      // vérifiées au passage (une sauce et une seule, format obligatoire).
+      //
+      // Un plat ordinaire ne déclenche AUCUNE requête : tant que le catalogue
+      // n'a pas de menu composable, ce chemin est strictement neutre.
+      const { total: optionsUnitaire, items: optionsRetenues } =
+        dish.composable || (item.option_item_ids?.length ?? 0) > 0
+          ? await this.dishOptionService.resoudreSelection(
+              dish.id,
+              item.option_item_ids ?? [],
+            )
+          : { total: 0, items: [] };
+
       // 2. Prix de base du plat — 0 fr pour un cadeau, sinon prix (promotion plat éventuelle).
       const dishBasePrice = isGift
         ? 0
@@ -326,8 +347,17 @@ export class OrderV2Helper {
       // 4. Prix unitaire global (Prix unitaire * Quantité)
       const singleItemTotal = dishBasePrice * quantity;
 
-      // 5. Prix total pour cette ligne (Prix global du plat + Prix des suppléments) → 0 pour un cadeau
-      const lineTotal = singleItemTotal + supplementsTotal;
+      // 4 bis. Options : elles appartiennent à CHAQUE exemplaire, donc elles
+      // suivent la quantité. Deux burgers en format Menu se facturent deux
+      // fois le supplément de format, pas une seule.
+      //
+      // Un cadeau couvre le PLAT DE BASE, pas ce que le client ajoute par
+      // dessus : ses options payantes restent dues. Sans cette règle, un burger
+      // offert emporterait aussi son format à deux mille francs.
+      const optionsTotal = optionsUnitaire * quantity;
+
+      // 5. Prix total pour cette ligne (plat + options + suppléments)
+      const lineTotal = singleItemTotal + optionsTotal + supplementsTotal;
       netAmount += lineTotal;
 
       orderItems.push({
@@ -335,11 +365,15 @@ export class OrderV2Helper {
         quantity,
         amount: singleItemTotal,
         dishPrice: dishBasePrice,
-        supplementsPrice: supplementsTotal,
+        // Prix unitaire des seules options, isolé du prix du plat : les
+        // promotions ciblées s'appuient dessus pour remiser la ligne réelle.
+        optionsUnitPrice: optionsUnitaire,
+        supplementsPrice: optionsTotal + supplementsTotal,
         // Ce que la ligne a RÉELLEMENT coûté, figé à la commande.
         lineTotal,
         epice: item.epice,
         supplements: supplementsData,
+        options: optionsRetenues,
       });
     }
 
@@ -347,7 +381,16 @@ export class OrderV2Helper {
     const totalSupplements = orderItems.reduce((sum, item) => sum + item.supplementsPrice, 0);
     const totalDishes = orderItems.reduce((sum, item) => sum + item.amount, 0);
 
-    return { orderItems, netAmount, totalDishes, totalSupplements };
+    // Assiette des remises : plats ET options, suppléments à la carte exclus.
+    // Elle doit correspondre EXACTEMENT au prix unitaire transmis aux moteurs
+    // de promotion, sinon le seuil de panier minimum se juge sur un montant et
+    // la remise se calcule sur un autre.
+    const totalDishesEtOptions = orderItems.reduce(
+      (sum, item) => sum + (item.dishPrice + (item.optionsUnitPrice ?? 0)) * item.quantity,
+      0,
+    );
+
+    return { orderItems, netAmount, totalDishes, totalDishesEtOptions, totalSupplements };
   }
 
 

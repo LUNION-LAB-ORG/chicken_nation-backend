@@ -170,8 +170,39 @@ export class KkiapayOrderListenerService {
             return { confirmed: false, reason: notPaidReason ?? 'paiement non abouti' };
         }
 
+        /**
+         * Assiette des remises rejouée au paiement, alignée sur celle du calcul :
+         * prix du plat ET options du menu composable, suppléments à la carte
+         * exclus.
+         *
+         * ⚠️ L'ancienne formule `amount * quantity` comptait la quantité DEUX
+         * FOIS sur ce chemin : `amount` y vaut déjà prix unitaire fois quantité
+         * (commandes passées depuis l'application, les seules payées en ligne).
+         * Deux plats identiques gonflaient donc l'assiette au carré, et l'usage
+         * de promotion enregistré ne correspondait pas à la remise accordée.
+         * Les colonnes de prix figé permettent enfin de la calculer juste.
+         */
+        const assietteLigne = (item: {
+            amount: number;
+            quantity: number;
+            unit_price: number | null;
+            options: unknown;
+        }) => {
+            const optionsUnitaire = Array.isArray(item.options)
+                ? (item.options as { price_delta?: number }[]).reduce(
+                    (somme, choix) => somme + (Number(choix.price_delta) || 0),
+                    0,
+                )
+                : 0;
+            // Repli pour les rares lignes antérieures au prix figé : sur ce
+            // chemin, `amount` porte le total de la ligne, donc on redivise.
+            const unitaire = item.unit_price
+                ?? (item.quantity > 0 ? item.amount / item.quantity : item.amount);
+            return (unitaire + optionsUnitaire) * item.quantity;
+        };
+
         const totalDishes = order.order_items.reduce(
-            (sum, item) => sum + item.amount * item.quantity,
+            (sum, item) => sum + assietteLigne(item),
             0,
         );
 
@@ -191,7 +222,12 @@ export class KkiapayOrderListenerService {
                 payment_id: paiement?.id,
                 loyalty_level: order.customer.loyalty_level!,
                 totalDishes: totalDishes,
-                orderItems: order.order_items.map(item => ({ dish_id: item.dish_id, quantity: item.quantity, price: item.amount })),
+                orderItems: order.order_items.map(item => ({
+                    dish_id: item.dish_id,
+                    quantity: item.quantity,
+                    // Prix UNITAIRE, options comprises : même assiette que ci-dessus.
+                    price: item.quantity > 0 ? assietteLigne(item) / item.quantity : assietteLigne(item),
+                })),
             });
 
             this.orderWebSocketService.emitOrderCreated(order);

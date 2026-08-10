@@ -6,7 +6,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
-import { assertDishesAvailableNow, assertDishesNotComposable, assertOrderTypeAllowed } from 'src/common/utils/dish-availability.util';
+import { assertDishesAvailableNow, assertOrderTypeAllowed } from 'src/common/utils/dish-availability.util';
+import { DishOptionService } from 'src/modules/menu/services/dish-option.service';
 import {
   OrderStatus,
   OrderType,
@@ -48,6 +49,7 @@ export class OrderHelper {
     private restaurantService: RestaurantService,
     private readonly turboService: TurboService,
     private readonly voucherService: VoucherService,
+    private readonly dishOptionService: DishOptionService,
   ) {}
 
   private async getTaxRate(): Promise<number> {
@@ -197,9 +199,10 @@ export class OrderHelper {
     // Créneau horaire de disponibilité : blocage serveur (l'app ne fait que masquer)
     assertDishesAvailableNow(dishes);
 
-    // Verrou menus composables : aucun canal ne transmet encore les choix
-    // d'options, donc aucune commande ne doit porter un plat composable.
-    assertDishesNotComposable(dishes);
+    // ⚠️ PAS de verrou composable global : la règle est PAR LIGNE (« un plat
+    // composable doit être composé »), appliquée dans calculateOrderDetails.
+    // La prise de commande du backoffice ne sait pas encore composer : elle se
+    // fera donc refuser tant qu'elle n'enverra pas les choix.
 
     return dishes;
   }
@@ -266,6 +269,16 @@ export class OrderHelper {
       supplementsPrice: number;
       /** Prix réellement dû par la ligne, figé à la commande. */
       lineTotal: number;
+      /** Prix unitaire des seules options, isolé pour les remises ciblées. */
+      optionsUnitPrice: number;
+      /** Choix retenus par le client, figés à la commande. */
+      options: {
+        id: string;
+        label: string;
+        price_delta: number;
+        group_name: string;
+        supplement_id: string | null;
+      }[];
       epice: boolean;
       supplements: {
         id: string;
@@ -367,6 +380,22 @@ export class OrderHelper {
         );
       }
 
+      // MENUS COMPOSABLES : choix retenus, dont le prix vient de la BASE et
+      // jamais de ce que l'appelant annonce. Les bornes du plat sont vérifiées
+      // au passage : une sauce et une seule, format obligatoire.
+      //
+      // Un plat ordinaire ne déclenche AUCUNE requête : ce chemin est neutre
+      // tant que le catalogue n'a pas de menu composable.
+      const { total: optionsUnitaire, items: optionsRetenues } =
+        dish.composable || (item.option_item_ids?.length ?? 0) > 0
+          ? await this.dishOptionService.resoudreSelection(
+              dish.id,
+              item.option_item_ids ?? [],
+              undefined,
+              options?.skipExclusionCheck === true,
+            )
+          : { total: 0, items: [] };
+
       // Calculer le prix du plat
       const itemPrice =
         dish.is_promotion && dish.promotion_price !== null
@@ -377,7 +406,11 @@ export class OrderHelper {
       // Plus tard on devrait faire (QuantitéArticle * (PrixArticle + PrixSupplément)) ou (QuantitéArticle*PrixArticle + QuantitéSupplément*PrixSupplément)
       let itemAmount = itemPrice * item.quantity; // prix un item (article+supplement) mais ici c'est le prix du plat sans les suppléments
 
-      const lineTotal = itemAmount + supplementsTotal; // prix total d'un item
+      // Les options appartiennent à CHAQUE exemplaire : elles suivent la
+      // quantité, contrairement aux suppléments qui portent la leur.
+      const optionsTotal = optionsUnitaire * item.quantity;
+
+      const lineTotal = itemAmount + optionsTotal + supplementsTotal; // prix total d'un item
 
       netAmount += lineTotal;
 
@@ -386,10 +419,12 @@ export class OrderHelper {
         quantity: item.quantity,
         amount: itemPrice,
         dishPrice: itemPrice,
-        supplementsPrice: supplementsTotal,
+        optionsUnitPrice: optionsUnitaire,
+        supplementsPrice: optionsTotal + supplementsTotal,
         // Ce que la ligne a RÉELLEMENT coûté, figé à la commande : le catalogue
         // peut changer de prix ensuite sans réécrire l'historique.
         lineTotal,
+        options: optionsRetenues,
         epice: item.epice,
         supplements: supplementsData,
       });
@@ -407,7 +442,16 @@ export class OrderHelper {
       0,
     );
 
-    return { orderItems, netAmount, totalDishes, totalSupplements };
+    // Assiette des remises : plats ET options, suppléments à la carte exclus.
+    // Elle doit correspondre EXACTEMENT au prix unitaire transmis aux moteurs
+    // de promotion, sinon le seuil de panier minimum se juge sur un montant et
+    // la remise se calcule sur un autre.
+    const totalDishesEtOptions = orderItems.reduce(
+      (sum, item) => sum + (item.dishPrice + (item.optionsUnitPrice ?? 0)) * item.quantity,
+      0,
+    );
+
+    return { orderItems, netAmount, totalDishes, totalDishesEtOptions, totalSupplements };
   }
 
   /**

@@ -45,4 +45,15 @@ export class CreateOrderItemDto {
     @Transform(({ value }) => String(value).trim() == "true" ? true : false)
     @IsBoolean()
     epice: boolean;
+
+    @ApiPropertyOptional({
+        description:
+            "MENUS COMPOSABLES : identifiants des choix retenus (sauce, format). Le serveur " +
+            "retrouve leur prix en base et vérifie les bornes du plat.",
+        type: [String],
+    })
+    @IsOptional()
+    @IsArray()
+    @IsUUID(undefined, { each: true })
+    option_item_ids?: string[];
 }

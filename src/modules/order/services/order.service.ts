@@ -108,15 +108,21 @@ export class OrderService {
     // On passe `type` pour faire respecter `available_order_types` côté serveur :
     // un plat marqué "pas à livrer" ne doit pas pouvoir être commandé en DELIVERY
     // même via payload direct.
-    const { orderItems, netAmount, totalDishes } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails, type, gifts.dishLineIndexes, gifts.suppByLine);
+    const { orderItems, netAmount, totalDishes, totalDishesEtOptions } = await this.orderHelperV2.calculateOrderDetails(items, dishesWithDetails, type, gifts.dishLineIndexes, gifts.suppByLine);
+    void totalDishes;
 
     // Pour le ciblage par plat/catégorie d'un code promo, on transmet la liste
-    // simplifiée des items (dish_id, quantity, prix unitaire). Le prix retenu est
-    // le prix unitaire du plat (avec promotion plat éventuelle), hors suppléments.
+    // simplifiée des items (dish_id, quantity, prix unitaire).
+    //
+    // ASSIETTE (10/08) : le prix retenu inclut désormais les OPTIONS du menu
+    // composable. Un burger à 3 000 pris en format Menu à 2 000 vaut 5 000 pour
+    // le client : lui remiser 20 % de 3 000 seulement serait incompréhensible,
+    // d'autant qu'une remise « sur tout » porte, elle, sur le panier entier.
+    // Les suppléments à la carte restent hors assiette, comme avant.
     const promoItems = orderItems.map((oi) => ({
       dish_id: oi.dish_id,
       quantity: oi.quantity,
-      price: oi.dishPrice,
+      price: oi.dishPrice + (oi.optionsUnitPrice ?? 0),
     }));
     const promoResult = await this.orderHelperV2.applyPromoCode(
       code_promo,
@@ -227,6 +233,9 @@ export class OrderService {
               line_total: item.lineTotal,
               epice: item.epice,
               supplements: item.supplements,
+              // Choix du menu composable, figés : la cuisine et le reçu doivent
+              // savoir quelle sauce et quel format ont été commandés.
+              options: item.options ?? [],
             })),
           },
           entity_status: EntityStatus.ACTIVE,
@@ -315,12 +324,9 @@ export class OrderService {
       order,
       expo_token: customerData.expo_token,
       loyalty_level: customerData.loyalty_level,
-      totalDishes,
-      orderItems: orderItems.map((item) => ({
-        dish_id: item.dish_id,
-        quantity: item.quantity,
-        price: item.dishPrice,
-      })),
+      // Assiette homogène avec celle des remises : options comprises.
+      totalDishes: totalDishesEtOptions,
+      orderItems: promoItems,
     });
 
     // Émettre l'événement WebSocket de création de commande
@@ -474,10 +480,23 @@ export class OrderService {
 
     // Calculer les montants et préparer les order items.
     // orderType : fait respecter available_order_types (plats + suppléments) côté serveur.
-    const { orderItems, netAmount, totalDishes } =
+    const { orderItems, netAmount, totalDishes, totalDishesEtOptions } =
       await this.orderHelper.calculateOrderDetails(items, dishesWithDetails, {
         orderType: orderData.type,
       });
+    void totalDishes;
+
+    // Assiette des remises, construite UNE SEULE FOIS : options comprises,
+    // suppléments à la carte exclus. Elle sert au calcul de la promotion, puis
+    // au rejeu qui enregistre l'usage de la promotion. Deux assiettes
+    // différentes pour la même commande donnaient une remise accordée et une
+    // remise enregistrée qui ne coïncidaient pas, donc un plafond de campagne
+    // consommé trop lentement et un coût sous-estimé au backoffice.
+    const assiettePromotion = orderItems.map((item) => ({
+      dish_id: item.dish_id,
+      quantity: item.quantity,
+      price: item.dishPrice + (item.optionsUnitPrice ?? 0),
+    }));
 
     //Calculer la promotion et la création de l'utilisation de la promotion
     const promotion = await this.orderHelper.calculatePromotionPrice(
@@ -486,12 +505,8 @@ export class OrderService {
         customer_id: customerData.customer_id,
         loyalty_level: customerData.loyalty_level,
       },
-      totalDishes,
-      orderItems.map((item) => ({
-        dish_id: item.dish_id,
-        quantity: item.quantity,
-        price: item.dishPrice,
-      })),
+      totalDishesEtOptions,
+      assiettePromotion,
     );
 
     const discountPromotion = promotion ? promotion.discount_amount : 0;
@@ -667,6 +682,7 @@ export class OrderService {
                 line_total: item.lineTotal,
                 epice: item.epice,
                 supplements: item.supplements,
+                options: item.options ?? [],
               })),
               // Plats offerts par une promotion : figés à 0 explicitement, pour
               // qu'aucun calcul ultérieur ne les revalorise au prix catalogue.
@@ -713,12 +729,11 @@ export class OrderService {
         order,
         payment_id: payment?.id,
         loyalty_level: customerData.loyalty_level,
-        totalDishes,
-        orderItems: orderItems.map((item) => ({
-          dish_id: item.dish_id,
-          quantity: item.quantity,
-          price: item.dishPrice,
-        })),
+        // MÊME assiette que le calcul de la remise, sinon l'usage enregistré ne
+        // correspond pas à la remise réellement accordée : le plafond de la
+        // campagne se consomme trop lentement et son coût est sous-estimé.
+        totalDishes: totalDishesEtOptions,
+        orderItems: assiettePromotion,
       });
 
       // Émettre l'événement de création de commande
@@ -1512,12 +1527,20 @@ export class OrderService {
     }
 
     // Si des items sont fournis, recalculer les order_items
+    // Les colonnes de prix figé voyagent avec la ligne recréée. Sans elles, une
+    // simple modification de commande au backoffice effaçait ce que le client
+    // avait payé, et le chiffre d'affaires se remettait à lire le prix VIVANT
+    // du catalogue pour cette commande.
     let orderItemsData: {
       dish_id: string;
       quantity: number;
       amount: number;
+      unit_price: number;
+      options_price: number;
+      line_total: number;
       epice: boolean;
       supplements: any[];
+      options: any[];
     }[] | null = null;
     let newNetAmount: number | null = null;
 
@@ -1531,11 +1554,38 @@ export class OrderService {
         },
       });
 
+      // MENUS COMPOSABLES : le backoffice ne renvoie pas les choix du client,
+      // il ne sait pas encore les afficher. Sans cette reprise, modifier la
+      // quantité d'une ligne effacerait la sauce et le format déjà payés, et
+      // amputerait le montant de la commande d'autant.
+      //
+      // Appariement par plat, dans l'ordre : deux lignes du même plat sur une
+      // commande sont interchangeables du point de vue des options, puisque
+      // c'est justement ce qui les distingue qui est repris.
+      const optionsParPlat = new Map<string, string[][]>();
+      for (const ligne of (order as { order_items?: { dish_id: string; options?: unknown }[] }).order_items ?? []) {
+        const choix = Array.isArray(ligne.options)
+          ? (ligne.options as { id?: string }[]).map((o) => o.id).filter((v): v is string => !!v)
+          : [];
+        if (!choix.length) continue;
+        const file = optionsParPlat.get(ligne.dish_id) ?? [];
+        file.push(choix);
+        optionsParPlat.set(ligne.dish_id, file);
+      }
+      const itemsAvecOptions = items.map((item) => {
+        if (item.option_item_ids?.length) return item;
+        const file = optionsParPlat.get(item.dish_id);
+        const repris = file?.shift();
+        return repris ? { ...item, option_item_ids: repris } : item;
+      });
+
       // Calculer les détails de la commande.
       // skipExclusionCheck : on édite une commande existante — un supplément
       // acheté légitimement avant d'être exclu du plat doit pouvoir être conservé.
+      // Il vaut aussi mode ÉDITION pour les options : une sauce passée en
+      // rupture depuis la commande ne doit pas empêcher de la modifier.
       const { orderItems, netAmount } =
-        await this.orderHelper.calculateOrderDetails(items, dishes, {
+        await this.orderHelper.calculateOrderDetails(itemsAvecOptions, dishes, {
           skipExclusionCheck: true,
         });
 
@@ -1543,8 +1593,12 @@ export class OrderService {
         dish_id: item.dish_id,
         quantity: item.quantity,
         amount: item.amount,
+        unit_price: item.dishPrice,
+        options_price: item.supplementsPrice,
+        line_total: item.lineTotal,
         epice: item.epice,
         supplements: item.supplements,
+        options: item.options ?? [],
       }));
       newNetAmount = netAmount;
     }
