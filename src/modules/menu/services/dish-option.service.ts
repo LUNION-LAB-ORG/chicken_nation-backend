@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, RewardStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { DishOptionGroupDto } from '../dto/dish-option-group.dto';
 
@@ -239,7 +239,7 @@ export class DishOptionService {
    * cadeaux.
    */
   private async assertPasUtiliseCommeCadeau(dishId: string) {
-    const [lots, campagnes] = await Promise.all([
+    const [lots, campagnes, cadeauxEnMain] = await Promise.all([
       this.prisma.scratchLot.findMany({
         where: {
           reward_type: 'GIFT',
@@ -254,11 +254,25 @@ export class DishOptionService {
         },
         select: { name: true },
       }),
+      // Cadeaux DÉJÀ DISTRIBUÉS et pas encore utilisés. Un lot repointé vers un
+      // autre plat laisse derrière lui des récompenses qui, elles, désignent
+      // toujours l'ancien plat : sans ce contrôle, il suffirait de repointer le
+      // lot pour rendre le plat composable et casser ces cadeaux-là.
+      this.prisma.reward.count({
+        where: {
+          type: 'GIFT',
+          status: { in: [RewardStatus.PENDING, RewardStatus.SCRATCHED] },
+          payload: { path: ['dish_id'], equals: dishId },
+        },
+      }),
     ]);
 
     const usages = [
       ...lots.map((l) => `lot « ${l.label} »`),
       ...campagnes.map((c) => `campagne « ${c.name} »`),
+      ...(cadeauxEnMain > 0
+        ? [`${cadeauxEnMain} cadeau${cadeauxEnMain > 1 ? 'x' : ''} déjà distribué${cadeauxEnMain > 1 ? 's' : ''} et non utilisé${cadeauxEnMain > 1 ? 's' : ''}`]
+        : []),
     ];
     if (usages.length === 0) return;
 
