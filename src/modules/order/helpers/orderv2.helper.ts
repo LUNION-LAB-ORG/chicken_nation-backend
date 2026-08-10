@@ -332,6 +332,8 @@ export class OrderV2Helper {
         amount: singleItemTotal,
         dishPrice: dishBasePrice,
         supplementsPrice: supplementsTotal,
+        // Ce que la ligne a RÉELLEMENT coûté, figé à la commande.
+        lineTotal,
         epice: item.epice,
         supplements: supplementsData,
       });

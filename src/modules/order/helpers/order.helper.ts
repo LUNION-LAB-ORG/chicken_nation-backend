@@ -381,6 +381,9 @@ export class OrderHelper {
         amount: itemPrice,
         dishPrice: itemPrice,
         supplementsPrice: supplementsTotal,
+        // Ce que la ligne a RÉELLEMENT coûté, figé à la commande : le catalogue
+        // peut changer de prix ensuite sans réécrire l'historique.
+        lineTotal,
         epice: item.epice,
         supplements: supplementsData,
       });

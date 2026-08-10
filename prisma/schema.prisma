@@ -1133,6 +1133,18 @@ model OrderItem {
 
   quantity     Int      @default(1)
   amount       Float
+  /// PRIX FIGÉ À LA COMMANDE (06/08). Avant, une ligne ne gardait que
+  /// `amount`, dont le sens diffère selon le canal (prix unitaire côté call
+  /// center, prix unitaire fois quantité côté application), et le prix des
+  /// suppléments n'était enregistré NULLE PART : il était calculé puis jeté.
+  /// Conséquence, tous les calculs de chiffre d'affaires, le reçu PDF et les
+  /// tickets relisaient le prix VIVANT du catalogue, donc l'historique se
+  /// réécrivait à chaque changement de prix. Ces trois colonnes gravent la
+  /// vérité comptable de la ligne, quoi qu'il advienne du catalogue ensuite.
+  /// Elles deviennent indispensables avec des options payantes.
+  unit_price    Float?  // prix unitaire du plat, promotion appliquée
+  options_price Float?  // total des suppléments et options de la ligne
+  line_total    Float?  // unit_price × quantity + options_price
   epice        Boolean  @default(false)
   order_id     String   @db.Uuid
   dish_id      String   @db.Uuid

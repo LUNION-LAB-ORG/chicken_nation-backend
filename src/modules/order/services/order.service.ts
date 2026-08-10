@@ -219,6 +219,11 @@ export class OrderService {
               dish_id: item.dish_id,
               quantity: item.quantity,
               amount: item.amount,
+              // Prix figé : ce que le client a payé pour cette ligne, quoi
+              // qu'il advienne du catalogue ensuite.
+              unit_price: item.dishPrice,
+              options_price: item.supplementsPrice,
+              line_total: item.lineTotal,
               epice: item.epice,
               supplements: item.supplements,
             })),
@@ -644,13 +649,21 @@ export class OrderService {
                 dish_id: item.dish_id,
                 quantity: item.quantity,
                 amount: item.amount,
+                unit_price: item.dishPrice,
+                options_price: item.supplementsPrice,
+                line_total: item.lineTotal,
                 epice: item.epice,
                 supplements: item.supplements,
               })),
+              // Plats offerts par une promotion : figés à 0 explicitement, pour
+              // qu'aucun calcul ultérieur ne les revalorise au prix catalogue.
               ...offersDishes.map((item) => ({
                 dish_id: item.dish_id,
                 quantity: item.quantity,
                 amount: 0,
+                unit_price: 0,
+                options_price: 0,
+                line_total: 0,
                 supplements: [],
               })),
             ],
