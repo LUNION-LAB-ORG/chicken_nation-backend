@@ -28,8 +28,8 @@ export class CategoryService {
   ) { }
 
   /** Passe-plat vers {@link DishService.resolveAudience} (même règle de masque). */
-  resolveAudience(principal?: Customer | User, customerId?: string) {
-    return this.dishService.resolveAudience(principal, customerId);
+  resolveAudience(principal?: Customer | User, customerId?: string, headers?: unknown) {
+    return this.dishService.resolveAudience(principal, customerId, headers);
   }
 
   private async uploadImage(image?: Express.Multer.File) {

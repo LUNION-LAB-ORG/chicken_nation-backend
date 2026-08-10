@@ -76,6 +76,7 @@ export class CategoryController {
     const audience = await this.categoryService.resolveAudience(
       req.user as Customer | User | undefined,
       customerId,
+      req.headers,
     );
     return this.categoryService.findOne(id, audience);
   }

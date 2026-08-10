@@ -111,7 +111,9 @@ export class RestaurantController {
   @RequirePermission(Modules.MENUS, Action.READ)
   async getAllDishesByRestaurant(@Param('restaurantId') restaurantId: string) {
     // Modèle "tout par défaut − exclusions" : plats actifs non exclus de ce restaurant.
-    return this.dishService.findByRestaurant(restaurantId);
+    // Route gardée par un jeton de PERSONNEL : les menus composables sont donc
+    // visibles ici, sans quoi le backoffice ne pourrait pas les vendre.
+    return this.dishService.findByRestaurant(restaurantId, { apply: false, staff: true });
   }
 
   @Get(':id/open')

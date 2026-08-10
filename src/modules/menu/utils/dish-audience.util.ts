@@ -20,7 +20,31 @@ export type AudienceContext = {
    * vaut aussi pour les appels internes sans principal.
    */
   staff?: boolean;
+  /**
+   * L'application appelante sait afficher un écran de composition et
+   * transmettre les choix du client. Déclaré par l'en-tête `x-app-composable`.
+   * Voir {@link litCapaciteComposable}.
+   */
+  composable?: boolean;
 };
+
+/**
+ * MENUS COMPOSABLES — la capacité déclarée par l'application appelante.
+ *
+ * Une application déjà installée sur un téléphone ne peut plus gagner d'en-tête.
+ * Celle qui envoie celui-ci a donc forcément été publiée après l'écran de
+ * composition : c'est une preuve, pas une déclaration de bonne foi.
+ *
+ * La version native ne convient pas comme critère : les mises à jour à distance
+ * changent le code sans la changer. Un en-tête posé dans le paquet JavaScript,
+ * lui, suit exactement le code réellement exécuté.
+ */
+export function litCapaciteComposable(headers: unknown): boolean {
+  if (!headers || typeof headers !== 'object') return false;
+  const brut = (headers as Record<string, unknown>)['x-app-composable'];
+  const valeur = Array.isArray(brut) ? brut[0] : brut;
+  return valeur === '1' || valeur === 'true';
+}
 
 /**
  * Ciblage d'audience des plats.
@@ -67,16 +91,21 @@ export function customerAudiences(customer: AudienceCustomer): DishAudience[] {
  * téléphones ne l'ont pas : elles afficheraient un burger à son prix de base,
  * sans sauce ni format, et enverraient une commande au mauvais prix.
  *
- * La règle est donc VERROUILLÉE PAR DÉFAUT : seul le personnel authentifié voit
- * les plats composables (pour les configurer au backoffice). Tout le reste, y
- * compris les appels internes et les routes sans authentification, ne les voit
- * pas. L'ouverture se fera application par application, quand chacune saura se
- * déclarer capable.
+ * La règle est donc VERROUILLÉE PAR DÉFAUT. Deux appelants seulement passent :
+ *
+ *  - le PERSONNEL authentifié, qui configure ces plats et prend des commandes ;
+ *  - une APPLICATION qui déclare savoir composer, par l'en-tête
+ *    `x-app-composable` ({@link litCapaciteComposable}).
+ *
+ * Tout le reste, y compris les appels internes et les routes sans
+ * authentification, ne les voit pas. Une version installée avant l'écran de
+ * composition n'envoie pas cet en-tête et reste donc aveugle sans qu'on ait à
+ * tenir la moindre liste de versions.
  *
  * Renvoie `{}` quand il n'y a rien à filtrer, pour ne pas polluer les `where`.
  */
 export function composableClause(audience: AudienceContext): Prisma.DishWhereInput {
-  return audience.staff ? {} : { composable: false };
+  return audience.staff || audience.composable ? {} : { composable: false };
 }
 
 /**

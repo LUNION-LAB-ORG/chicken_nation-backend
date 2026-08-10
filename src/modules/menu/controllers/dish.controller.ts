@@ -58,14 +58,27 @@ export class DishController {
     const audience = await this.dishService.resolveAudience(
       req.user as Customer | User | undefined,
       customerId,
+      req.headers,
     );
     return this.dishService.findAll(undefined, audience);
   }
 
   @Get('get-all')
-  @ApiOperation({ summary: 'Récupération de tous les plats (backoffice, sans filtre audience)' })
-  findAllBackoffice() {
-    return this.dishService.findAll({ all: true });
+  @ApiOperation({ summary: 'Récupération de tous les plats (sans filtre audience)' })
+  // Garde optionnelle AJOUTÉE (10/08) : cette route n'en avait aucune, si bien
+  // qu'un jeton de personnel n'y était pas reconnu et que le backoffice y était
+  // traité en invité. Le verrou composable ne pouvait donc jamais s'ouvrir, y
+  // compris pour la prise de commande. Le comportement des appelants existants
+  // ne change pas : sans principal ni en-tête, on retombe exactement sur
+  // l'ancien contexte.
+  @UseGuards(JwtCustomerOrStaffOptionalAuthGuard)
+  async findAllBackoffice(@Req() req: Request) {
+    const audience = await this.dishService.resolveAudience(
+      req.user as Customer | User | undefined,
+      undefined,
+      req.headers,
+    );
+    return this.dishService.findAll({ all: true }, audience);
   }
 
   @Get('search')
@@ -79,6 +92,7 @@ export class DishController {
     const audience = await this.dishService.resolveAudience(
       req.user as Customer | User | undefined,
       customerId,
+      req.headers,
     );
     return this.dishService.findMany(filter, audience);
   }
@@ -98,6 +112,7 @@ export class DishController {
     const audience = await this.dishService.resolveAudience(
       req.user as Customer | User | undefined,
       customerId,
+      req.headers,
     );
     return this.dishService.findPopular(parsedDays, parsedLimit, audience);
   }
@@ -117,6 +132,8 @@ export class DishController {
   ) {
     const audience = await this.dishService.resolveAudience(
       req.user as Customer | User | undefined,
+      undefined,
+      req.headers,
     );
     return this.dishService.findOne(id, query?.customerId, audience);
   }

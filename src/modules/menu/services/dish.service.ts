@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Customer, EntityStatus, OrderStatus, Prisma, SpiceLevel, User } from '@prisma/client';
 import type { Request } from 'express';
-import { AudienceContext, composableClause, dishAudienceClause } from '../utils/dish-audience.util';
+import { AudienceContext, composableClause, dishAudienceClause, litCapaciteComposable } from '../utils/dish-audience.util';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
@@ -40,18 +40,30 @@ export class DishService {
   async resolveAudience(
     principal?: Customer | User,
     customerId?: string,
+    /**
+     * En-têtes de la requête, pour lire la capacité déclarée par l'application
+     * (`x-app-composable`). Absents sur les appels internes, ce qui laisse le
+     * verrou composable fermé par défaut.
+     */
+    headers?: unknown,
   ): Promise<AudienceContext> {
+    const composable = litCapaciteComposable(headers);
     const isStaff = !!principal && 'role' in principal;
     if (isStaff) {
       if (customerId) {
         const customer = await this.prisma.customer.findUnique({
           where: { id: customerId },
         });
-        return { apply: true, customer: customer ?? undefined, staff: true };
+        return { apply: true, customer: customer ?? undefined, staff: true, composable };
       }
-      return { apply: false, staff: true };
+      return { apply: false, staff: true, composable };
     }
-    return { apply: true, customer: principal as Customer | undefined, staff: false };
+    return {
+      apply: true,
+      customer: principal as Customer | undefined,
+      staff: false,
+      composable,
+    };
   }
 
   /**
@@ -323,7 +335,10 @@ export class DishService {
    * Plats vendus dans un restaurant = plats actifs non privés qui NE sont PAS exclus
    * de ce restaurant (avec leurs suppléments effectifs).
    */
-  async findByRestaurant(restaurantId: string) {
+  async findByRestaurant(
+    restaurantId: string,
+    audience: AudienceContext = { apply: false, staff: false },
+  ) {
     const excluded = await this.prisma.dishExcludedRestaurant.findMany({
       where: { restaurant_id: restaurantId },
       select: { dish_id: true },
@@ -334,8 +349,9 @@ export class DishService {
       where: {
         entity_status: EntityStatus.ACTIVE,
         private: false,
-        // Carte d'un restaurant : servie aux applications, donc sans composable.
-        composable: false,
+        // Verrou composable selon l'appelant. Fermé par défaut, ouvert pour le
+        // personnel : cette route sert la carte d'un restaurant au backoffice.
+        ...composableClause(audience),
         ...(excludedDishIds.length ? { id: { notIn: excludedDishIds } } : {}),
       },
       include: { category: true },
