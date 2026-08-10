@@ -83,7 +83,17 @@ export class CategoryService {
       // juste pour compter (N+1).
       include: {
         _count: {
-          select: { dishes: { where: { entity_status: EntityStatus.ACTIVE } } },
+          select: {
+            dishes: {
+              where: {
+                entity_status: EntityStatus.ACTIVE,
+                // Verrou composable jusque dans le COMPTEUR : sans lui, une
+                // catégorie annoncerait « 12 plats » à une application qui n'en
+                // afficherait que 11. Le backoffice (`all`) les compte, lui.
+                ...(query.all ? {} : { composable: false }),
+              },
+            },
+          },
         },
       },
       orderBy: {
