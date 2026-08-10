@@ -260,6 +260,8 @@ export class OrderHelper {
       amount: number;
       dishPrice: number;
       supplementsPrice: number;
+      /** Prix réellement dû par la ligne, figé à la commande. */
+      lineTotal: number;
       epice: boolean;
       supplements: {
         id: string;
