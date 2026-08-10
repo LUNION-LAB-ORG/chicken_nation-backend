@@ -6,7 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
-import { assertDishesAvailableNow, assertOrderTypeAllowed } from 'src/common/utils/dish-availability.util';
+import { assertDishesAvailableNow, assertDishesNotComposable, assertOrderTypeAllowed } from 'src/common/utils/dish-availability.util';
 import {
   OrderStatus,
   OrderType,
@@ -196,6 +196,10 @@ export class OrderHelper {
 
     // Créneau horaire de disponibilité : blocage serveur (l'app ne fait que masquer)
     assertDishesAvailableNow(dishes);
+
+    // Verrou menus composables : aucun canal ne transmet encore les choix
+    // d'options, donc aucune commande ne doit porter un plat composable.
+    assertDishesNotComposable(dishes);
 
     return dishes;
   }

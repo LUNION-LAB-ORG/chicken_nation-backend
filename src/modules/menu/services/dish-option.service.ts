@@ -126,6 +126,14 @@ export class DishOptionService {
 
     this.valider(groups);
 
+    // Verrou inverse : rendre composable un plat déjà promis comme cadeau
+    // rendrait ce cadeau invalide en silence, puisqu'un plat composable ne
+    // s'offre pas tant que le cadeau ne sait pas couvrir la seule base. On
+    // refuse le passage tant que les lots concernés n'ont pas été repointés.
+    if (groups.length > 0) {
+      await this.assertPasUtiliseCommeCadeau(dishId);
+    }
+
     // Les suppléments rattachés doivent exister, sinon la clé étrangère lâche
     // au milieu de la transaction avec un message illisible pour le gestionnaire.
     const supplementIds = [
@@ -222,6 +230,41 @@ export class DishOptionService {
       `Configuration composable du plat ${dishId} : ${groups.length} groupe(s)`,
     );
     return this.findByDish(dishId);
+  }
+
+  /**
+   * Refuse de rendre composable un plat encore désigné comme cadeau, que ce
+   * soit par un lot du jeu ou par une campagne de récompense. Le lien vit dans
+   * un champ JSON, sous la clé `dish_id` posée par les deux constructeurs de
+   * cadeaux.
+   */
+  private async assertPasUtiliseCommeCadeau(dishId: string) {
+    const [lots, campagnes] = await Promise.all([
+      this.prisma.scratchLot.findMany({
+        where: {
+          reward_type: 'GIFT',
+          payload: { path: ['dish_id'], equals: dishId },
+        },
+        select: { label: true },
+      }),
+      this.prisma.rewardCampaign.findMany({
+        where: {
+          type: 'GIFT',
+          payload: { path: ['dish_id'], equals: dishId },
+        },
+        select: { name: true },
+      }),
+    ]);
+
+    const usages = [
+      ...lots.map((l) => `lot « ${l.label} »`),
+      ...campagnes.map((c) => `campagne « ${c.name} »`),
+    ];
+    if (usages.length === 0) return;
+
+    throw new BadRequestException(
+      `Ce plat est offert par ${usages.join(', ')}. Faites pointer ${usages.length > 1 ? 'ces cadeaux' : 'ce cadeau'} sur un autre plat avant de le rendre composable.`,
+    );
   }
 
   /**

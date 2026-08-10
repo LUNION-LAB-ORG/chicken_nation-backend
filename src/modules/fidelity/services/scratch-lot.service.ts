@@ -153,6 +153,16 @@ export class ScratchLotService {
             if (!dish || dish.entity_status === EntityStatus.DELETED) {
                 throw new BadRequestException('Plat introuvable ou indisponible.');
             }
+            // MENUS COMPOSABLES : un plat composable n'a de prix qu'une fois
+            // ses options choisies. L'offrir reviendrait à offrir aussi ses
+            // options payantes, format compris, puisque la ligne cadeau est
+            // mise à zéro en entier. Tant que le cadeau ne sait pas couvrir le
+            // seul plat de base, il se refuse ici plutôt qu'à la commande.
+            if (dish.composable) {
+                throw new BadRequestException(
+                    `${dish.name} se compose par le client (sauce, format). Choisissez un plat sans options comme cadeau.`,
+                );
+            }
             return {
                 item_type: 'DISH',
                 dish_id: dish.id,

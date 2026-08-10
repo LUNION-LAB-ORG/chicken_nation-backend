@@ -54,6 +54,31 @@ export function assertDishesAvailableNow(
   );
 }
 
+/**
+ * MENUS COMPOSABLES — refus d'une commande portant un plat composable.
+ *
+ * Un plat composable n'a de prix juste qu'une fois ses options choisies. Tant
+ * qu'aucun canal ne sait transmettre ces choix, laisser passer la commande
+ * reviendrait à envoyer en cuisine un burger sans sauce ni format, facturé au
+ * prix de base. Trois chemins y menaient : un cadeau, un plat offert par une
+ * promotion, et une application ancienne qui garde le plat en favori ou dans
+ * un panier enregistré.
+ *
+ * Ce garde-fou vaut pour les DEUX flux de commande. Il tombera plat par plat
+ * quand la prise de commande saura résoudre les options.
+ */
+export function assertDishesNotComposable(
+  dishes: { name: string; composable?: boolean }[],
+): void {
+  const composables = dishes.filter((d) => d.composable);
+  if (composables.length === 0) return;
+
+  const noms = composables.map((d) => d.name).join(', ');
+  throw new BadRequestException(
+    `${noms} se commande maintenant en choisissant ses options. Mettez à jour l'application pour le composer.`,
+  );
+}
+
 const ORDER_TYPE_LABELS: Record<OrderType, string> = {
   [OrderType.DELIVERY]: 'en livraison',
   [OrderType.PICKUP]: 'à emporter',

@@ -14,7 +14,7 @@ import {
 } from '@prisma/client';
 import { JsonValue } from '@prisma/client/runtime/library';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
-import { assertDishesAvailableNow, assertOrderTypeAllowed } from 'src/common/utils/dish-availability.util';
+import { assertDishesAvailableNow, assertDishesNotComposable, assertOrderTypeAllowed } from 'src/common/utils/dish-availability.util';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { RestaurantService } from 'src/modules/restaurant/services/restaurant.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
@@ -130,6 +130,10 @@ export class OrderV2Helper {
 
     // Créneau horaire de disponibilité : blocage serveur (l'app ne fait que masquer)
     assertDishesAvailableNow(dishes);
+
+    // Verrou menus composables : aucun canal ne transmet encore les choix
+    // d'options, donc aucune commande ne doit porter un plat composable.
+    assertDishesNotComposable(dishes);
 
     return dishes;
   }

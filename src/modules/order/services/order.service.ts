@@ -1,3 +1,4 @@
+import { assertDishesNotComposable } from 'src/common/utils/dish-availability.util';
 import {
   BadRequestException,
   ConflictException,
@@ -496,6 +497,18 @@ export class OrderService {
     const discountPromotion = promotion ? promotion.discount_amount : 0;
     const offersDishes = promotion ? promotion.offers_dishes : [];
     const applicable = promotion ? promotion.applicable : false;
+
+    // MENUS COMPOSABLES : les plats offerts par une promotion « deux achetés,
+    // un offert » sont écrits directement en lignes à zéro, sans passer par le
+    // contrôle des plats du panier. Un plat composable arriverait donc en
+    // cuisine sans sauce ni format. On le refuse ici aussi.
+    if (offersDishes.length > 0) {
+      const platsOfferts = await this.prisma.dish.findMany({
+        where: { id: { in: offersDishes.map((o) => o.dish_id) } },
+        select: { name: true, composable: true },
+      });
+      assertDishesNotComposable(platsOfferts);
+    }
 
     // Calculer les frais de livraison selon la distance
     let delivery: {
