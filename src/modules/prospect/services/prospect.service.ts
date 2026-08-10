@@ -25,7 +25,10 @@ import { MarkCallDto } from '../dto/mark-call.dto';
 import { QueryProspectDto } from '../dto/query-prospect.dto';
 import { UpdateProspectSettingsDto } from '../dto/update-prospect-settings.dto';
 
-const DEFAULT_APP_LINK = 'https://chicken.turbodeliveryapp.com';
+// Lien envoyé aux prospects par SMS et WhatsApp. Pointait `chicken.turbodeliveryapp.com`,
+// domaine hors service depuis la migration : les prospects tombaient dans le vide.
+// Le réglage `prospect.app_link` reste prioritaire s'il est renseigné.
+const DEFAULT_APP_LINK = 'https://www.chicken-nation.com/fr/app-mobile';
 
 const DEFAULT_MESSAGES: Record<ProspectMessageKind, string> = {
   DECOUVERTE:
