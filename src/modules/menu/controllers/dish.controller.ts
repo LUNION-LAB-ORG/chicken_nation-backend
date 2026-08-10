@@ -104,8 +104,21 @@ export class DishController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Obtenir un plat par ID' })
-  findOne(@Param('id') id: string, @Query() query?: { customerId?: string }) {
-    return this.dishService.findOne(id, query?.customerId);
+  // Garde optionnelle AJOUTÉE (06/08) : sans principal, impossible de savoir si
+  // l'appelant est le backoffice (qui doit voir un menu composable pour
+  // l'éditer) ou une application cliente (qui ne doit pas). Le masque
+  // d'audience reste volontairement inappliqué ici, seul le verrou composable
+  // s'appuie sur ce contexte.
+  @UseGuards(JwtCustomerOrStaffOptionalAuthGuard)
+  async findOne(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Query() query?: { customerId?: string },
+  ) {
+    const audience = await this.dishService.resolveAudience(
+      req.user as Customer | User | undefined,
+    );
+    return this.dishService.findOne(id, query?.customerId, audience);
   }
 
   @Patch(':id')

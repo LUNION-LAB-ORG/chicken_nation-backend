@@ -339,22 +339,22 @@ model Comment {
 model Customer {
   id String @id @default(uuid()) @db.Uuid
 
-  phone                 String               @unique @db.VarChar
-  first_name            String?              @db.VarChar(255)
-  last_name             String?              @db.VarChar(255)
-  birth_day             DateTime?            @db.Date
-  email                 String?              @unique @db.VarChar
-  image                 String?              @db.Text
+  phone      String    @unique @db.VarChar
+  first_name String?   @db.VarChar(255)
+  last_name  String?   @db.VarChar(255)
+  birth_day  DateTime? @db.Date
+  email      String?   @unique @db.VarChar
+  image      String?   @db.Text
 
   // ================================
   // TUNNEL D'ADHÉSION (Phase 4) — pré-inscription silencieuse depuis le site
   // ================================
   // Consentement WhatsApp recueilli au moment de l'adhésion (conformité opt-in).
-  whatsapp_opt_in    Boolean   @default(false)
-  whatsapp_opt_in_at DateTime? @db.Timestamp(6) // horodatage du consentement (preuve)
+  whatsapp_opt_in       Boolean              @default(false)
+  whatsapp_opt_in_at    DateTime?            @db.Timestamp(6) // horodatage du consentement (preuve)
   // Profil DÉCLARATIF choisi à l'adhésion (avant toute demande de carte / login).
   // Sert de valeur par défaut à la 1re CardRequest. Nullable = jamais déclaré.
-  profile_type       ProfileType?
+  profile_type          ProfileType?
   addresses             Address[]
   favorites             Favorite[]
   orders                Order[]
@@ -565,9 +565,9 @@ model Course {
 
   // === Mécanique d'affectation ===
   /// Moment où l'offer PENDING actuelle expire
-  offer_expires_at DateTime? @db.Timestamp(6)
+  offer_expires_at        DateTime? @db.Timestamp(6)
   /// Cumul des livreurs ayant refusé (stat de difficulté)
-  refusal_count    Int       @default(0)
+  refusal_count           Int       @default(0)
   /// Horodatage de l'alerte « aucun livreur disponible » envoyée au staff.
   /// Non null ⇒ alerte déjà émise, on ne la renvoie pas à chaque relance du cron.
   no_deliverer_alerted_at DateTime? @db.Timestamp(6)
@@ -939,6 +939,60 @@ model DishExcludedSupplement {
   @@unique([dish_id, supplement_id])
 }
 
+/// Un GROUPE D'OPTIONS d'un plat composable : « Choix de sauce », « Format »,
+/// « Épicé ou non ». Le groupe porte la contrainte, pas l'option.
+model DishOptionGroup {
+  id      String @id @default(uuid()) @db.Uuid
+  dish_id String @db.Uuid
+  dish    Dish   @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+
+  name        String  @db.VarChar // « Choix de sauce »
+  description String? @db.VarChar // aide affichée sous le titre
+  /// Le client DOIT répondre à ce groupe pour pouvoir commander.
+  required    Boolean @default(true)
+  /// Bornes de sélection. « exactement une sauce » = min 1, max 1 ;
+  /// « jusqu'à trois sauces » = min 0, max 3.
+  min_select  Int     @default(1)
+  max_select  Int     @default(1)
+  /// Ordre d'affichage dans l'écran de composition.
+  position    Int     @default(0)
+
+  items DishOptionItem[]
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([dish_id, position])
+}
+
+/// Un CHOIX possible dans un groupe. Le prix vit ICI, donc il dépend du plat :
+/// le format « Menu » vaut +1000 sur un poulet pané et +2000 sur un burger,
+/// ce que le prix unique de `Supplement` ne pouvait pas exprimer.
+model DishOptionItem {
+  id       String          @id @default(uuid()) @db.Uuid
+  group_id String          @db.Uuid
+  group    DishOptionGroup @relation(fields: [group_id], references: [id], onDelete: Cascade)
+
+  label         String      @db.VarChar // « Mayonnaise », « XL (3 pcs) »
+  /// Supplément facturé POUR CE PLAT. 0 = choix inclus (une sauce offerte).
+  price_delta   Float       @default(0)
+  /// Rattachement facultatif au catalogue de suppléments, pour que la cuisine,
+  /// les tickets et HubRise retrouvent un article connu. Un choix purement
+  /// descriptif (« Épicé ») n'en a pas besoin.
+  supplement_id String?     @db.Uuid
+  supplement    Supplement? @relation(fields: [supplement_id], references: [id])
+
+  /// Présélectionné à l'ouverture de l'écran de composition.
+  is_default Boolean @default(false)
+  available  Boolean @default(true)
+  position   Int     @default(0)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([group_id, position])
+}
+
 model DishExcludedRestaurant {
   id            String     @id @default(uuid()) @db.Uuid
   dish_id       String     @db.Uuid
@@ -952,29 +1006,42 @@ model DishExcludedRestaurant {
 model Dish {
   id String @id @default(uuid()) @db.Uuid
 
-  name                      String                   @db.VarChar
-  reference                 String?                  @unique @db.VarChar
-  description               String?                  @db.VarChar
-  price                     Float
-  image                     String?                  @db.Text
-  is_promotion              Boolean                  @default(false)
-  is_alway_epice            Boolean                  @default(false)
-  spice_level               SpiceLevel               @default(OPTIONAL)
-  available_order_types     OrderType[]              @default([DELIVERY, PICKUP, TABLE])
+  name                  String            @db.VarChar
+  reference             String?           @unique @db.VarChar
+  description           String?           @db.VarChar
+  price                 Float
+  image                 String?           @db.Text
+  is_promotion          Boolean           @default(false)
+  is_alway_epice        Boolean           @default(false)
+  spice_level           SpiceLevel        @default(OPTIONAL)
+  available_order_types OrderType[]       @default([DELIVERY, PICKUP, TABLE])
   // Créneau horaire de disponibilité « HH:mm » (NULL = toujours disponible)
-  available_from            String?                  @db.VarChar
-  available_until           String?                  @db.VarChar
-  promotion_price           Float?
-  category_id               String                   @db.Uuid
-  cooking_time              Int?                     @db.Integer // en minutes
-  private                   Boolean                  @default(false)
+  available_from        String?           @db.VarChar
+  available_until       String?           @db.VarChar
+  promotion_price       Float?
+  category_id           String            @db.Uuid
+  cooking_time          Int?              @db.Integer // en minutes
+  private               Boolean           @default(false)
   // Ciblage d'audience : [] = PUBLIC (tout le monde). Sinon le plat n'est
   // visible que pour les clients dont l'audience (ETUDIANT si étudiant, ou
   // leur niveau de fidélité exact) figure dans la liste. Match STRICT (un plat
   // [VIP] n'est PAS vu par VVIP tant que VVIP n'est pas coché aussi).
-  audiences                 DishAudience[]           @default([])
-  hubrise_sku               String?                  @unique @db.VarChar
-  category                  Category                 @relation(fields: [category_id], references: [id], onDelete: Cascade)
+  audiences             DishAudience[]    @default([])
+  hubrise_sku           String?           @unique @db.VarChar
+  category              Category          @relation(fields: [category_id], references: [id], onDelete: Cascade)
+  /// MENUS COMPOSABLES (06/08). Un plat composable se configure par des
+  /// GROUPES D'OPTIONS (sauce, format, épicé) avant d'être commandé, au lieu
+  /// d'exister en huit déclinaisons figées. Tant que ce marqueur est faux, le
+  /// plat se comporte exactement comme avant.
+  ///
+  /// ⚠️ SÉCURITÉ : un plat composable est EXCLU de tous les endpoints qui
+  /// servent les applications clientes, car les versions déjà installées ne
+  /// savent pas afficher ses options et produiraient une commande au prix
+  /// faux. La levée de cette exclusion se fera version par version, quand les
+  /// applications sauront se déclarer.
+  composable            Boolean           @default(false)
+  option_groups         DishOptionGroup[]
+
   dish_excluded_supplements DishExcludedSupplement[]
   dish_excluded_restaurants DishExcludedRestaurant[]
   favorites                 Favorite[]
@@ -1131,8 +1198,8 @@ model PushSegment {
 model OrderItem {
   id String @id @default(uuid()) @db.Uuid
 
-  quantity     Int      @default(1)
-  amount       Float
+  quantity      Int      @default(1)
+  amount        Float
   /// PRIX FIGÉ À LA COMMANDE (06/08). Avant, une ligne ne gardait que
   /// `amount`, dont le sens diffère selon le canal (prix unitaire côté call
   /// center, prix unitaire fois quantité côté application), et le prix des
@@ -1142,18 +1209,18 @@ model OrderItem {
   /// réécrivait à chaque changement de prix. Ces trois colonnes gravent la
   /// vérité comptable de la ligne, quoi qu'il advienne du catalogue ensuite.
   /// Elles deviennent indispensables avec des options payantes.
-  unit_price    Float?  // prix unitaire du plat, promotion appliquée
-  options_price Float?  // total des suppléments et options de la ligne
-  line_total    Float?  // unit_price × quantity + options_price
-  epice        Boolean  @default(false)
-  order_id     String   @db.Uuid
-  dish_id      String   @db.Uuid
-  supplements  Json?    @db.Json
-  dish         Dish     @relation(fields: [dish_id], references: [id])
-  order        Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
-  cooking_time Int?     @db.Integer // en minutes
-  created_at   DateTime @default(now()) @db.Timestamp(6)
-  updated_at   DateTime @default(now()) @db.Timestamp(6)
+  unit_price    Float? // prix unitaire du plat, promotion appliquée
+  options_price Float? // total des suppléments et options de la ligne
+  line_total    Float? // unit_price × quantity + options_price
+  epice         Boolean  @default(false)
+  order_id      String   @db.Uuid
+  dish_id       String   @db.Uuid
+  supplements   Json?    @db.Json
+  dish          Dish     @relation(fields: [dish_id], references: [id])
+  order         Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  cooking_time  Int?     @db.Integer // en minutes
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+  updated_at    DateTime @default(now()) @db.Timestamp(6)
 }
 
 model Order {
@@ -1362,6 +1429,8 @@ model Supplement {
   available_order_types     OrderType[]              @default([DELIVERY, PICKUP, TABLE])
   hubrise_sku               String?                  @unique @db.VarChar
   dish_excluded_supplements DishExcludedSupplement[]
+  /// Choix de menus composables qui pointent ce supplément.
+  dish_option_items         DishOptionItem[]
 }
 
 model User {
@@ -1631,20 +1700,20 @@ model ScratchLot {
   //   PROMO_CODE { code, ... }
   payload     Json
 
-  weight        Int           @default(1) // Poids de tirage (proba relative, > 0)
-  unit_cost     Int           @default(0) // Coût réel FCFA du SURCOÛT (compté dans l'enveloppe)
-  min_cart      Int           @default(0) // RG-09 : panier minimum (order.amount) pour être éligible
-  frequency_cap Int? // Nb max de fois qu'un même client peut gagner CE lot sur la fenêtre (null = illimité)
+  weight          Int           @default(1) // Poids de tirage (proba relative, > 0)
+  unit_cost       Int           @default(0) // Coût réel FCFA du SURCOÛT (compté dans l'enveloppe)
+  min_cart        Int           @default(0) // RG-09 : panier minimum (order.amount) pour être éligible
+  frequency_cap   Int? // Nb max de fois qu'un même client peut gagner CE lot sur la fenêtre (null = illimité)
   /// FIDÉLITÉ REQUISE (décision 30/07, pensée pour les CADEAUX) : le client
   /// doit être un peu récurrent — au moins `min_paid_orders` commandes payées
   /// OU `min_revenue` FCFA de CA (net) sur la fenêtre d'éligibilité
   /// (`scratch.eligibility_window_days`, défaut 90 j). L'UN des deux suffit ;
   /// 0 = critère inactif.
-  min_paid_orders Int         @default(0)
-  min_revenue     Int         @default(0)
-  stock         Int? // Stock total (null = illimité)
-  stock_used    Int           @default(0)
-  level_min     LoyaltyLevel? // Niveau de fidélité minimum requis (null = tous)
+  min_paid_orders Int           @default(0)
+  min_revenue     Int           @default(0)
+  stock           Int? // Stock total (null = illimité)
+  stock_used      Int           @default(0)
+  level_min       LoyaltyLevel? // Niveau de fidélité minimum requis (null = tous)
 
   is_floor Boolean @default(false) // Lot PLANCHER = révélation des points de base (un seul attendu, unit_cost=0)
   active   Boolean @default(true)
@@ -1661,12 +1730,12 @@ model ScratchLot {
 // Journal des tirages — audit + comptabilité d'enveloppe (fenêtre glissante sur
 // `cost`) + application des plafonds de fréquence (compte par client/lot).
 model ScratchDraw {
-  id             String  @id @default(uuid()) @db.Uuid
-  order_id       String  @unique @db.Uuid // 1 tirage par commande (idempotence du moteur)
-  customer_id    String  @db.Uuid
-  scratch_lot_id String? @db.Uuid // null si plancher servi sans lot configuré (fallback legacy)
-  reward_id      String? @db.Uuid
-  cost           Int     @default(0) // 0 pour le plancher ; unit_cost du lot pour un gros lot
+  id             String    @id @default(uuid()) @db.Uuid
+  order_id       String    @unique @db.Uuid // 1 tirage par commande (idempotence du moteur)
+  customer_id    String    @db.Uuid
+  scratch_lot_id String?   @db.Uuid // null si plancher servi sans lot configuré (fallback legacy)
+  reward_id      String?   @db.Uuid
+  cost           Int       @default(0) // 0 pour le plancher ; unit_cost du lot pour un gros lot
   // Horodatage de restitution du stock (annulation) — idempotence PAR TIRAGE : un
   // event CANCELLED rejoué ne re-décrémente pas stock_used (claim atomique sur NULL).
   restored_at    DateTime? @db.Timestamp(6)
@@ -1787,9 +1856,9 @@ enum ComboGameStatus {
 }
 
 model ComboGame {
-  id          String  @id @default(uuid()) @db.Uuid
-  title       String  @db.VarChar
-  description String? @db.Text
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String   @db.VarChar
+  description String?  @db.Text
   clues       Json // Liste d'indices révélés progressivement (string[])
   solution    Json // Combinaison-solution : [{ type: 'DISH'|'SUPPLEMENT', id }] (ordre indifférent)
   starts_at   DateTime @db.Timestamp(6)
@@ -1879,9 +1948,9 @@ model LoyaltyConfig {
   /// STANDARD étant le niveau d'ENTRÉE depuis le 23/07, son bonus tombait dès
   /// la 1re commande : il vaut 0 par défaut (décision 31/07). VIP/VVIP
   /// récompensent une vraie progression et gardent le leur.
-  bonus_standard            Int    @default(0)
-  bonus_vip                 Int    @default(150)
-  bonus_vvip                Int    @default(200)
+  bonus_standard Int @default(0)
+  bonus_vip      Int @default(150)
+  bonus_vvip     Int @default(200)
 
   // Seuils pour les niveaux de fidélité (comparés à status_points, compteur annuel)
   // NB : les CHAMPS gardent leurs noms historiques premium_threshold/gold_threshold

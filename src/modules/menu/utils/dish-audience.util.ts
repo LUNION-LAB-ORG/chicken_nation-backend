@@ -10,7 +10,17 @@ import { Customer, DishAudience, LoyaltyLevel, Prisma, ProfileType } from '@pris
  *
  * Voir {@link DishService.resolveAudience} pour la résolution depuis la requête.
  */
-export type AudienceContext = { apply: boolean; customer?: Customer };
+export type AudienceContext = {
+  apply: boolean;
+  customer?: Customer;
+  /**
+   * Vrai UNIQUEMENT si un membre du personnel authentifié est à l'origine de la
+   * requête. Sert à décider qui a le droit de voir les plats composables
+   * ({@link composableClause}). Volontairement distinct de `apply: false`, qui
+   * vaut aussi pour les appels internes sans principal.
+   */
+  staff?: boolean;
+};
 
 /**
  * Ciblage d'audience des plats.
@@ -47,6 +57,26 @@ export function customerAudiences(customer: AudienceCustomer): DishAudience[] {
   const level = customer.loyalty_level ?? LoyaltyLevel.STANDARD;
   set.push(LEVEL_TO_AUDIENCE[level]);
   return set;
+}
+
+/**
+ * MENUS COMPOSABLES — verrou de visibilité.
+ *
+ * Un plat composable ne se commande correctement qu'avec un écran capable
+ * d'afficher ses groupes d'options. Les applications déjà installées sur les
+ * téléphones ne l'ont pas : elles afficheraient un burger à son prix de base,
+ * sans sauce ni format, et enverraient une commande au mauvais prix.
+ *
+ * La règle est donc VERROUILLÉE PAR DÉFAUT : seul le personnel authentifié voit
+ * les plats composables (pour les configurer au backoffice). Tout le reste, y
+ * compris les appels internes et les routes sans authentification, ne les voit
+ * pas. L'ouverture se fera application par application, quand chacune saura se
+ * déclarer capable.
+ *
+ * Renvoie `{}` quand il n'y a rien à filtrer, pour ne pas polluer les `where`.
+ */
+export function composableClause(audience: AudienceContext): Prisma.DishWhereInput {
+  return audience.staff ? {} : { composable: false };
 }
 
 /**

@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Customer, EntityStatus, OrderStatus, Prisma, SpiceLevel, User } from '@prisma/client';
 import type { Request } from 'express';
-import { AudienceContext, dishAudienceClause } from '../utils/dish-audience.util';
+import { AudienceContext, composableClause, dishAudienceClause } from '../utils/dish-audience.util';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
@@ -47,12 +47,20 @@ export class DishService {
         const customer = await this.prisma.customer.findUnique({
           where: { id: customerId },
         });
-        return { apply: true, customer: customer ?? undefined };
+        return { apply: true, customer: customer ?? undefined, staff: true };
       }
-      return { apply: false };
+      return { apply: false, staff: true };
     }
-    return { apply: true, customer: principal as Customer | undefined };
+    return { apply: true, customer: principal as Customer | undefined, staff: false };
   }
+
+  /**
+   * Contexte des relectures INTERNES au service (retour de create/update). Le
+   * plat vient d'être écrit par un membre du personnel : il doit être relu
+   * intégralement, plat composable compris, sinon créer un menu composable
+   * renverrait « Plat non trouvé ».
+   */
+  private static readonly INTERNE: AudienceContext = { apply: false, staff: true };
 
   private async uploadImage(image?: Express.Multer.File) {
     if (!image || !image.buffer) return null;
@@ -178,7 +186,7 @@ export class DishService {
       dish,
     });
 
-    return this.findOne(dish.id);
+    return this.findOne(dish.id, undefined, DishService.INTERNE);
   }
 
   async findAll(
@@ -188,6 +196,9 @@ export class DishService {
     const where: Prisma.DishWhereInput = {
       private: query.all ? undefined : false,
       entity_status: EntityStatus.ACTIVE,
+      // Verrou composable : `all=true` (route publique `/dishes/get-all`,
+      // consommée par l'application cliente) N'ouvre PAS ce filtre-là.
+      ...composableClause(audience),
     };
     // Filtre audience : jamais pour le backoffice `all=true`, sinon selon le
     // contexte résolu (client → par lui ; invité → publics ; staff → aucun).
@@ -211,6 +222,7 @@ export class DishService {
     const where: Prisma.DishWhereInput = {
       entity_status: EntityStatus.ACTIVE,
       private: false,
+      ...composableClause(audience),
     };
     // Masque audience : appliqué UNIQUEMENT pour un client cible (client app,
     // ou client d'une prise de commande). Staff en gestion des menus → non.
@@ -260,11 +272,20 @@ export class DishService {
     };
   }
 
-  async findOne(id: string, customerId?: string) {
+  /**
+   * Détail d'un plat. `audience` sert UNIQUEMENT au verrou composable ici : le
+   * masque d'audience n'est volontairement pas appliqué sur cette route, qui
+   * n'a jamais filtré et sert aussi les favoris et les liens directs.
+   */
+  async findOne(
+    id: string,
+    customerId?: string,
+    audience: AudienceContext = { apply: false, staff: false },
+  ) {
     const whereCondition = id.length > 10 ? { id } : { reference: id };
 
     const dish = await this.prisma.dish.findFirst({
-      where: whereCondition,
+      where: { ...whereCondition, ...composableClause(audience) },
       include: {
         category: true,
         favorites: { select: { customer_id: true } },
@@ -295,6 +316,8 @@ export class DishService {
       where: {
         entity_status: EntityStatus.ACTIVE,
         private: false,
+        // Carte d'un restaurant : servie aux applications, donc sans composable.
+        composable: false,
         ...(excludedDishIds.length ? { id: { notIn: excludedDishIds } } : {}),
       },
       include: { category: true },
@@ -307,7 +330,7 @@ export class DishService {
   async update(req: Request, id: string, updateDishDto: UpdateDishDto, image?: Express.Multer.File) {
     const user = req.user as User;
     void user;
-    const dish = await this.findOne(id);
+    const dish = await this.findOne(id, undefined, DishService.INTERNE);
 
     const uploadResult = await this.uploadImage(image);
 
@@ -372,11 +395,11 @@ export class DishService {
 
     this.dishEvent.updateDish(dishUpdated);
 
-    return this.findOne(dish.id);
+    return this.findOne(dish.id, undefined, DishService.INTERNE);
   }
 
   async remove(id: string) {
-    const dish = await this.findOne(id);
+    const dish = await this.findOne(id, undefined, DishService.INTERNE);
 
     // Soft-delete : le plat passe en entity_status=DELETED, ses FK OrderItem restent
     // valides (Dish reste en base). Inutile de bloquer si des commandes existent —
@@ -431,6 +454,7 @@ export class DishService {
       id: { in: dishIds },
       entity_status: EntityStatus.ACTIVE,
       private: false,
+      ...composableClause(audience),
     };
     if (audience.apply) {
       where.AND = [dishAudienceClause(audience.customer)];

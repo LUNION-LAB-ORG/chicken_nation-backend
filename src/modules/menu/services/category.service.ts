@@ -13,7 +13,7 @@ import type { Request } from 'express';
 import { S3Service } from '../../../s3/s3.service';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { DishService } from 'src/modules/menu/services/dish.service';
-import { AudienceContext, dishAudienceClause } from '../utils/dish-audience.util';
+import { AudienceContext, composableClause, dishAudienceClause } from '../utils/dish-audience.util';
 
 @Injectable()
 export class CategoryService {
@@ -103,7 +103,12 @@ export class CategoryService {
       ? { id }
       : { reference: id };
 
-    const dishWhere: Prisma.DishWhereInput = { entity_status: EntityStatus.ACTIVE };
+    const dishWhere: Prisma.DishWhereInput = {
+      entity_status: EntityStatus.ACTIVE,
+      // Verrou composable, appliqué même quand le masque d'audience ne l'est
+      // pas : cette route sert la carte à l'application cliente.
+      ...composableClause(audience),
+    };
     if (audience.apply) {
       dishWhere.private = false;
       dishWhere.AND = [dishAudienceClause(audience.customer)];

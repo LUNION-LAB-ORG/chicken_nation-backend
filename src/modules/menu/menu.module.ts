@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
 import { CategoryController } from 'src/modules/menu/controllers/category.controller';
 import { DishController } from 'src/modules/menu/controllers/dish.controller';
+import { DishOptionController } from 'src/modules/menu/controllers/dish-option.controller';
 import { SupplementController } from 'src/modules/menu/controllers/supplement.controller';
 import { CategoryService } from 'src/modules/menu/services/category.service';
 import { DishService } from 'src/modules/menu/services/dish.service';
+import { DishOptionService } from 'src/modules/menu/services/dish-option.service';
 import { SupplementService } from 'src/modules/menu/services/supplement.service';
 import { CategoryListenerService } from 'src/modules/menu/listeners/category-listener.service';
 import { DishListenerService } from 'src/modules/menu/listeners/dish-listener.service';
@@ -15,10 +17,11 @@ import { DishNotificationsTemplate } from './templates/dish-notifications.templa
 
 @Module({
   imports: [],
-  controllers: [CategoryController, DishController, SupplementController],
+  controllers: [CategoryController, DishController, DishOptionController, SupplementController],
   providers: [
     CategoryService,
     DishService,
+    DishOptionService,
     SupplementService,
     DishEvent,
     CategoryEvent,
@@ -28,6 +31,6 @@ import { DishNotificationsTemplate } from './templates/dish-notifications.templa
     CategoryNotificationsTemplate,
     DishNotificationsTemplate,
   ],
-  exports: [DishService],
+  exports: [DishService, DishOptionService],
 })
 export class MenuModule { }
