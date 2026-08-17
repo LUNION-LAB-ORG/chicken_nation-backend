@@ -1,3 +1,5 @@
+import { sanitizeOrderForBroadcast } from 'src/common/utils/order-broadcast.util';
+import { OrderDepartureNotifierService } from 'src/common/services/order-departure-notifier.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { WebhookResponseDto } from '../dto/turbo-webhook.dto';
@@ -49,6 +51,7 @@ export class TurboWebhookService {
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
     private readonly notificationsSender: NotificationsSenderService,
+    private readonly departNotifier: OrderDepartureNotifierService,
   ) { }
 
   private ack(event: WebhookEvent, process = true): WebhookResponseDto {
@@ -186,8 +189,30 @@ export class TurboWebhookService {
     orderId?: string,
   ): Promise<void> {
     const now = new Date();
-    await this.prisma.delivery.update({
-      where: { id: deliveryId },
+
+    // ANTI-RÉGRESSION ET ANTI-DOUBLON. Cette méthode n'avait pas le garde de
+    // rang que possèdent `advanceCourse` et `syncStatus` juste à côté. Deux
+    // conséquences : `picked_up` et `in_transit` visent tous deux IN_ROUTE,
+    // donc un départ partait DEUX fois ; et un webhook rejoué après la
+    // livraison ramenait la course « en route » chez un client déjà servi.
+    //
+    // Le `updateMany` conditionné rend l'avancement atomique : `count` vaut 1
+    // à la PREMIÈRE transition seulement, ce qui sert aussi de verrou d'envoi.
+    const RANG: DeliveryStatut[] = [
+      DeliveryStatut.PENDING,
+      DeliveryStatut.IN_ROUTE,
+      DeliveryStatut.ARRIVED,
+      DeliveryStatut.DELIVERED,
+    ];
+    const cible = RANG.indexOf(next);
+    const precedents = cible === -1 ? [] : RANG.slice(0, cible);
+
+    const { count } = await this.prisma.delivery.updateMany({
+      where: {
+        id: deliveryId,
+        // Statut terminal ou déjà au moins aussi avancé : on ne touche à rien.
+        ...(cible === -1 ? {} : { statut: { in: precedents } }),
+      },
       data: {
         statut: next,
         ...(next === DeliveryStatut.IN_ROUTE && { in_route_at: now }),
@@ -195,6 +220,8 @@ export class TurboWebhookService {
         ...(next === DeliveryStatut.DELIVERED && { delivered_at: now }),
       },
     });
+    // Rien n'a bougé : webhook rejoué ou hors séquence, on n'informe personne.
+    if (count === 0) return;
     // Même canal que le suivi interne → l'app cliente n'a rien à changer.
     if (customerId) {
       this.appGateway.emitToUser(
@@ -203,6 +230,15 @@ export class TurboWebhookService {
         CourseChannels.CUSTOMER_DELIVERY_STATUT_CHANGED,
         { orderId, deliveryStatut: next, source: 'turbo' },
       );
+    }
+
+    // Client sans application : départ du livreur Turbo, on lui envoie son code
+    // de récupération. Le garde de rang ci-dessus garantit qu'on ne passe ici
+    // qu'à la PREMIÈRE transition vers IN_ROUTE, donc un seul message même si
+    // Turbo envoie `picked_up` puis `in_transit`. Non attendu, pour ne pas
+    // retarder l'accusé de réception du webhook.
+    if (next === DeliveryStatut.IN_ROUTE && orderId) {
+      void this.departNotifier.notifier(orderId);
     }
   }
 
@@ -278,9 +314,12 @@ export class TurboWebhookService {
       message: this.statusMessage(newStatus),
       previousStatus,
     };
+    // Diffusion large sans le code de récupération : la room du restaurant est
+    // aussi écoutée par ses livreurs.
+    const statusDataDiffusion = { ...statusData, order: sanitizeOrderForBroadcast(updated) };
     this.appGateway.emitToUser(updated.customer_id, 'customer', OrderChannels.ORDER_STATUS_UPDATED, statusData);
-    this.appGateway.emitToBackoffice(OrderChannels.ORDER_STATUS_UPDATED, statusData);
-    this.appGateway.emitToRestaurant(updated.restaurant_id, OrderChannels.ORDER_STATUS_UPDATED, statusData);
+    this.appGateway.emitToBackoffice(OrderChannels.ORDER_STATUS_UPDATED, statusDataDiffusion);
+    this.appGateway.emitToRestaurant(updated.restaurant_id, OrderChannels.ORDER_STATUS_UPDATED, statusDataDiffusion);
 
     // Effets métier (fidélité sur COMPLETED, notifications…) : même événement que
     // partout ailleurs → réutilise les listeners existants. Le listener Turbo

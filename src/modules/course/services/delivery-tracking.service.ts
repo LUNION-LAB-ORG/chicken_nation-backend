@@ -1,3 +1,4 @@
+import { OrderDepartureNotifierService } from 'src/common/services/order-departure-notifier.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { CourseStatut, DeliveryStatut } from '@prisma/client';
@@ -70,6 +71,7 @@ export class DeliveryTrackingService {
     private readonly prisma: PrismaService,
     private readonly appGateway: AppGateway,
     private readonly maps: MapsService,
+    private readonly departNotifier: OrderDepartureNotifierService,
   ) {}
 
   // ── 1. Position live livreur → client(s) ───────────────────────────────────
@@ -281,6 +283,11 @@ export class DeliveryTrackingService {
       let etaMin: number | null = null;
       if (payload.new_statut === DeliveryStatut.IN_ROUTE) {
         etaMin = await this.etaAuDepart(payload.course_id, order.id).catch(() => null);
+
+        // Client sans application : c'est ici qu'il reçoit son code de
+        // récupération, par WhatsApp. Volontairement non attendu, pour ne pas
+        // retarder l'événement temps réel des clients qui, eux, ont l'app.
+        void this.departNotifier.notifier(order.id);
       }
 
       this.appGateway.emitToUser(

@@ -1231,6 +1231,19 @@ model OrderItem {
 model Order {
   id                         String          @id @default(uuid()) @db.Uuid
   reference                  String          @unique @db.VarChar
+  /// CODE DE RÉCUPÉRATION (12/08). Quatre chiffres remis au client, qu'il
+  /// présente pour récupérer sa commande : dicté au livreur à la remise, ou
+  /// donné au comptoir pour un retrait.
+  ///
+  /// Porté par la COMMANDE et non par la livraison, pour trois raisons : il
+  /// existe dès la création, donc on peut l'annoncer tout de suite ; il vaut
+  /// pour tous les modes de commande, y compris à emporter et sur place ; et il
+  /// reste unique, `Delivery.delivery_pin` en recevant une copie plutôt qu'un
+  /// tirage indépendant, ce qui évitait au client d'avoir deux codes.
+  ///
+  /// Nullable pour les commandes antérieures que le rattrapage n'aurait pas
+  /// couvertes ; tout lecteur doit tolérer l'absence.
+  recovery_code              String?         @db.VarChar
   customer_id                String          @db.Uuid
   paied                      Boolean         @default(false)
   delivery_fee               Float

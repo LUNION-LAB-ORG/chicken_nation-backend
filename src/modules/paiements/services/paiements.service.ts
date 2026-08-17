@@ -1,3 +1,4 @@
+import { sanitizeOrderForBroadcast } from 'src/common/utils/order-broadcast.util';
 import {
   BadRequestException,
   Injectable,
@@ -345,11 +346,14 @@ export class PaiementsService {
         OrderChannels.ORDER_STATUS_UPDATED,
         statusData,
       );
-      this.appGateway.emitToBackoffice(OrderChannels.ORDER_STATUS_UPDATED, statusData);
+      // Sans le code de récupération : la room du restaurant est aussi écoutée
+      // par ses livreurs, à qui ce code doit rester inconnu.
+      const statusDataDiffusion = { ...statusData, order: sanitizeOrderForBroadcast(updatedOrder) };
+      this.appGateway.emitToBackoffice(OrderChannels.ORDER_STATUS_UPDATED, statusDataDiffusion);
       this.appGateway.emitToRestaurant(
         updatedOrder.restaurant_id,
         OrderChannels.ORDER_STATUS_UPDATED,
-        statusData,
+        statusDataDiffusion,
       );
       this.eventEmitter.emit(OrderChannels.ORDER_STATUS_UPDATED, {
         order: updatedOrder,

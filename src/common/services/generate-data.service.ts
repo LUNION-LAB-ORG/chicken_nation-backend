@@ -74,6 +74,19 @@ export class GenerateDataService {
      * Génère un numéro de commande unique
      * @returns Un numéro de commande au format ORD-YYMMDD-XXXXX
      */
+    /**
+     * CODE DE RÉCUPÉRATION à quatre chiffres, remis au client.
+     *
+     * Volontairement court : le client le dicte de vive voix au livreur, ou le
+     * montre au comptoir. Il n'a aucune valeur de sécurité forte, il sert à
+     * s'assurer qu'on remet la bonne commande à la bonne personne.
+     */
+    generateRecoveryCode(): string {
+        return Math.floor(Math.random() * 10000)
+            .toString()
+            .padStart(4, '0');
+    }
+
     generateReference(name: string): string {
         const random = Math.floor(10000 + Math.random() * 90000);
 

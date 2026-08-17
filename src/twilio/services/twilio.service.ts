@@ -27,6 +27,26 @@ export class TwilioService {
                 }
             ]
         },
+        // DÉPART DU LIVREUR (12/08). Remplace `tracking_order` pour les
+        // commandes À LIVRER, et n'est envoyé qu'au moment où le livreur part,
+        // seul instant où le code de récupération existe et a du sens.
+        // ⚠️ Ne pas confondre avec `tracking_order` juste en dessous : la 3e
+        // variable est ici dans le CORPS (le code), alors qu'elle est une
+        // variable de BOUTON dans l'autre. Intervertir les deux enverrait la
+        // référence de commande à la place du code, sans aucune erreur.
+        order_tracking: {
+            name: "order_tracking",
+            sid: "HX051fe8f8890042ae6528829ccea6bc1b",
+            language: "fr",
+            bodyVariables: [
+                { name: "1", description: "Prenom du client" },
+                { name: "2", description: "Référence de la commande" },
+                { name: "3", description: "Code de récupération" },
+            ]
+        },
+        // CONFIRMATION À LA CRÉATION. Conservé pour les commandes qui ne sont
+        // PAS à livrer (à emporter, sur place) : il n'y a pas de départ de
+        // livreur pour déclencher `order_tracking`.
         tracking_order: {
             name: "tracking_order",
             sid: "HX3601e215533e74979a7848ff0ff723ce",
@@ -58,7 +78,7 @@ export class TwilioService {
         // est ignore proprement (log) et l'adhesion reussit quand meme.
         // Body attendu {{1}}=prenom ; bouton URL STATIQUE (deep link), sans variable.
         card_ready: {
-            name: "card_ready",
+            name: "carte_nation",
             sid: "HXe9862c82d4f61ef109794e98dd41ba37", // template Meta APPROUVE (carte_nation, MARKETING, fr) — surchargeable via setting twilio_card_ready_template_sid / env
             language: "fr",
             bodyVariables: [
@@ -212,6 +232,70 @@ export class TwilioService {
             return await this.sendSmsMessage({ phoneNumber, message: smsMessage });
         } catch (error: any) {
             console.error(`[TrackingOrder] Erreur envoi SMS: ${error?.message || error}`);
+            return null;
+        }
+    }
+
+    /**
+     * Message de DÉPART du livreur, avec le code de récupération.
+     *
+     * Envoyé uniquement aux clients qui n'ont PAS l'application : ceux qui
+     * l'ont voient le code directement à l'écran, sans attendre un message.
+     *
+     * Repli SMS si WhatsApp est coupé ou échoue, avec le code en clair : c'est
+     * l'information la plus utile du message, elle ne doit pas se perdre.
+     */
+    async sendOrderTracking({ phoneNumber, customerName, orderReference, recoveryCode }: {
+        phoneNumber: string;
+        customerName: string;
+        orderReference: string;
+        recoveryCode: string;
+    }) {
+        const env = this.configService.get<string>('NODE_ENV');
+        if (env !== 'production') {
+            console.log(`[OrderTracking] Départ livreur pour ${customerName} (${phoneNumber}) - Commande ${orderReference} - Code ${recoveryCode}`);
+            return true;
+        }
+
+        if (!(await this.isPostOrderEnabled())) {
+            console.log(`[OrderTracking] Envoi post-commande désactivé, message ignoré pour ${phoneNumber}`);
+            return null;
+        }
+
+        const name = customerName || "Client";
+        const code = recoveryCode || "";
+        const smsMessage = code
+            ? `Bonjour ${name}, votre commande ${orderReference} est en route. Code de récupération : ${code}. - Chicken Nation`
+            : `Bonjour ${name}, votre commande ${orderReference} est en route. - Chicken Nation`;
+
+        if (await this.isWhatsAppEnabled()) {
+            const template = this.twilioWhatsappTemplate.order_tracking;
+            try {
+                const whatsappResult = await this.sendWhatsappMessage({
+                    phoneNumber,
+                    contentSid: template.sid,
+                    contentVariables: JSON.stringify({
+                        "1": name,
+                        "2": orderReference || "N/A",
+                        // 3e variable de CORPS : le code de récupération. Ce
+                        // template n'a pas de variable de bouton.
+                        "3": code || "N/A",
+                    }),
+                });
+
+                if (whatsappResult) return whatsappResult;
+            } catch (error: any) {
+                console.warn(`[OrderTracking] WhatsApp échoué: ${error?.message || error}`);
+            }
+            console.log(`[OrderTracking] Bascule sur SMS pour ${name} (${phoneNumber})`);
+        } else {
+            console.log(`[OrderTracking] WhatsApp désactivé, envoi par SMS pour ${name} (${phoneNumber})`);
+        }
+
+        try {
+            return await this.sendSmsMessage({ phoneNumber, message: smsMessage });
+        } catch (error: any) {
+            console.error(`[OrderTracking] Erreur envoi SMS: ${error?.message || error}`);
             return null;
         }
     }

@@ -20,6 +20,7 @@
  *   et un log d'erreur est émis
  */
 
+import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { EntityStatus, OrderStatus, Prisma } from '@prisma/client';
@@ -42,6 +43,7 @@ export class HubriseOrderSyncService {
     private readonly prisma: PrismaService,
     private readonly hubriseApi: HubriseApiService,
     private readonly settingsService: SettingsService,
+    private readonly generateDataService: GenerateDataService,
   ) {}
 
   // ─── HubRise → Chicken Nation ──────────────────────────────────────
@@ -119,6 +121,10 @@ export class HubriseOrderSyncService {
     await this.prisma.order.create({
       data: {
         reference,
+        // Troisième et dernier chemin de création de commande du backend. Sans
+        // cette ligne, une commande venue de HubRise n'aurait jamais de code de
+        // récupération : le rattrapage de la migration ne s'exécute qu'une fois.
+        recovery_code: this.generateDataService.generateRecoveryCode(),
         hubrise_order_id: mapped.hubriseOrderId,
         customer_id: customerId,
         restaurant_id: restaurantId,

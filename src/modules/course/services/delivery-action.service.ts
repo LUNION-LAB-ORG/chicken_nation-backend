@@ -52,6 +52,10 @@ export class DeliveryActionService {
 
     const updated = await this.prisma.delivery.update({
       where: { id: deliveryId },
+      // Le livreur ne doit JAMAIS lire le code : c'est le client qui le lui
+      // dicte, et c'est ce qui prouve la remise. Sans cette omission, la
+      // reponse de la route lui donnait de quoi valider sans voir personne.
+      omit: { delivery_pin: true },
       data: { statut: DeliveryStatut.IN_ROUTE, in_route_at: new Date() },
     });
 
@@ -65,6 +69,10 @@ export class DeliveryActionService {
 
     const updated = await this.prisma.delivery.update({
       where: { id: deliveryId },
+      // Le livreur ne doit JAMAIS lire le code : c'est le client qui le lui
+      // dicte, et c'est ce qui prouve la remise. Sans cette omission, la
+      // reponse de la route lui donnait de quoi valider sans voir personne.
+      omit: { delivery_pin: true },
       data: { statut: DeliveryStatut.ARRIVED, arrived_at: new Date() },
     });
 
@@ -111,6 +119,7 @@ export class DeliveryActionService {
     const [updated] = await this.prisma.$transaction([
       this.prisma.delivery.update({
         where: { id: deliveryId },
+        omit: { delivery_pin: true },
         data: { statut: DeliveryStatut.DELIVERED, delivered_at: now },
       }),
       this.prisma.order.update({
@@ -228,6 +237,7 @@ export class DeliveryActionService {
     const [updated] = await this.prisma.$transaction([
       this.prisma.delivery.update({
         where: { id: deliveryId },
+        omit: { delivery_pin: true },
         data: {
           statut: DeliveryStatut.FAILED,
           failed_at: now,
@@ -288,6 +298,10 @@ export class DeliveryActionService {
 
     const updated = await this.prisma.delivery.update({
       where: { id: deliveryId },
+      // Le livreur ne doit JAMAIS lire le code : c'est le client qui le lui
+      // dicte, et c'est ce qui prouve la remise. Sans cette omission, la
+      // reponse de la route lui donnait de quoi valider sans voir personne.
+      omit: { delivery_pin: true },
       data: {
         customer_rating: dto.rating,
         customer_rating_note: dto.note ?? null,

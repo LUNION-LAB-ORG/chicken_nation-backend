@@ -76,7 +76,7 @@ export class CourseOfferService {
         entity_status: { not: EntityStatus.DELETED },
         delivery: null, // pas déjà dans une Course
       },
-      select: { id: true, delivery_fee: true, address: true, delivery_service: true },
+      select: { id: true, delivery_fee: true, address: true, delivery_service: true, recovery_code: true },
     });
 
     if (orders.length === 0) {
@@ -100,7 +100,11 @@ export class CourseOfferService {
               create: orders.map((order, index) => ({
                 order_id: order.id,
                 sequence_order: index + 1,
-                delivery_pin: this.helper.generateDeliveryPin(),
+                // Le code du client vient de la COMMANDE : il l'a déjà sous les
+                // yeux dans l'application depuis la création. Tirer un second
+                // code ici lui en donnerait deux, dont un seul serait accepté.
+                // Repli sur un tirage pour les commandes antérieures au champ.
+                delivery_pin: order.recovery_code ?? this.helper.generateDeliveryPin(),
                 statut: DeliveryStatut.PENDING,
               })),
             },
@@ -112,6 +116,23 @@ export class CourseOfferService {
       }
     }
     if (!course) throw new HttpException('Génération reference impossible', 500);
+
+    // RÉPARATION DE L'INVARIANT. Une commande antérieure au champ n'a pas de
+    // code : la livraison vient d'en tirer un, il faut le recopier sur la
+    // commande, sinon le client ne le connaîtra jamais alors que le livreur
+    // l'exigera à la remise.
+    const aReparer = await this.prisma.delivery.findMany({
+      where: { course_id: course.id, order: { recovery_code: null } },
+      select: { order_id: true, delivery_pin: true },
+    });
+    for (const d of aReparer) {
+      if (!d.delivery_pin) continue;
+      await this.prisma.order
+        .update({ where: { id: d.order_id }, data: { recovery_code: d.delivery_pin } })
+        .catch((e) =>
+          this.logger.error(`Report du code sur la commande ${d.order_id} échoué : ${e?.message}`),
+        );
+    }
 
     this.logger.log(`Course ${course.reference} créée pour ${orders.length} order(s)`);
 

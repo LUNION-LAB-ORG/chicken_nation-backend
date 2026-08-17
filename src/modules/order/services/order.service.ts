@@ -198,6 +198,9 @@ export class OrderService {
           customer: { connect: { id: customerData.customer_id } },
           restaurant: { connect: { id: restaurant.id } },
           reference: orderNumber,
+          // Code de récupération, posé dès la création : le client peut le voir
+          // immédiatement dans l'application, quel que soit le mode de commande.
+          recovery_code: this.generateDataService.generateRecoveryCode(),
           address: address ?? '',
           delivery_fee: Number(finalDeliveryFee),
           delivery_fee_base: Number(deliveryFeeBase),
@@ -652,6 +655,7 @@ export class OrderService {
             },
           },
           reference: orderNumber,
+          recovery_code: this.generateDataService.generateRecoveryCode(),
           ...(payment && { paiements: { connect: { id: payment.id } } }),
           address: address ?? '',
           // `deliveryFee` intègre déjà l'override staff (0 inclus) ou le frais recalculé.
@@ -739,15 +743,23 @@ export class OrderService {
       // Émettre l'événement de création de commande
       this.orderWebSocketService.emitOrderCreated(order);
 
-      // WhatsApp tracking : uniquement si le client n'a PAS l'app
-      this.sendTrackingWhatsAppIfNoApp(
-        customerData.customer_id,
-        customerData.fullname || order.phone || 'Client',
-        order.phone || '',
-        order.reference || '',
-      ).catch((err) =>
-        this.logger.error(`Erreur envoi WhatsApp tracking: ${err.message}`),
-      );
+      // WhatsApp de confirmation : uniquement si le client n'a PAS l'app, et
+      // uniquement pour les commandes qui NE SONT PAS à livrer.
+      //
+      // Une commande à livrer reçoit à la place le message de DÉPART du
+      // livreur, qui porte le code de récupération. L'envoyer aussi à la
+      // création ferait deux messages pour la même commande, dont le premier
+      // sans le code, donc sans l'information la plus utile.
+      if (order.type !== OrderType.DELIVERY) {
+        this.sendTrackingWhatsAppIfNoApp(
+          customerData.customer_id,
+          customerData.fullname || order.phone || 'Client',
+          order.phone || '',
+          order.reference || '',
+        ).catch((err) =>
+          this.logger.error(`Erreur envoi WhatsApp tracking: ${err.message}`),
+        );
+      }
     }
 
     // Commande backoffice créée directement ACCEPTED → comptabiliser l'usage

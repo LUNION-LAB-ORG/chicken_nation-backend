@@ -1,3 +1,4 @@
+import { sanitizeOrderForBroadcast } from 'src/common/utils/order-broadcast.util';
 import { Injectable } from '@nestjs/common';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { Order, OrderStatus } from '@prisma/client';
@@ -18,13 +19,13 @@ export class OrderWebSocketService {
 
         // Notifier le backoffice
         this.appGateway.emitToBackoffice(OrderChannels.ORDER_CREATED, {
-            order,
+            order: sanitizeOrderForBroadcast(order),
             message: 'Nouvelle commande reçue'
         });
 
         // Notifier le restaurant
         this.appGateway.emitToRestaurant(order.restaurant_id, OrderChannels.ORDER_CREATED, {
-            order,
+            order: sanitizeOrderForBroadcast(order),
             message: 'Nouvelle commande pour votre restaurant'
         });
     }
@@ -46,18 +47,24 @@ export class OrderWebSocketService {
             message: statusMessages[order.status] || 'Statut mis à jour',
             previousStatus: previousStatus
         };
+        // Le client reçoit la commande entière, il est le destinataire du code
+        // de récupération. Le restaurant et le backoffice reçoivent une version
+        // sans ce code : la room du restaurant est aussi écoutée par ses
+        // livreurs, à qui le code doit rester inconnu.
+        const statusDataDiffusion = { ...statusData, order: sanitizeOrderForBroadcast(order) };
 
         this.appGateway.emitToUser(order.customer_id, 'customer', OrderChannels.ORDER_STATUS_UPDATED, statusData);
-        this.appGateway.emitToBackoffice(OrderChannels.ORDER_STATUS_UPDATED, statusData);
-        this.appGateway.emitToRestaurant(order.restaurant_id, OrderChannels.ORDER_STATUS_UPDATED, statusData);
+        this.appGateway.emitToBackoffice(OrderChannels.ORDER_STATUS_UPDATED, statusDataDiffusion);
+        this.appGateway.emitToRestaurant(order.restaurant_id, OrderChannels.ORDER_STATUS_UPDATED, statusDataDiffusion);
     }
 
     emitOrderUpdated(order: Order) {
         const data = { order, message: 'Commande mise à jour' };
+        const dataDiffusion = { ...data, order: sanitizeOrderForBroadcast(order) };
 
         this.appGateway.emitToUser(order.customer_id, 'customer', OrderChannels.ORDER_UPDATED, data);
-        this.appGateway.emitToBackoffice(OrderChannels.ORDER_UPDATED, data);
-        this.appGateway.emitToRestaurant(order.restaurant_id, OrderChannels.ORDER_UPDATED, data);
+        this.appGateway.emitToBackoffice(OrderChannels.ORDER_UPDATED, dataDiffusion);
+        this.appGateway.emitToRestaurant(order.restaurant_id, OrderChannels.ORDER_UPDATED, dataDiffusion);
     }
 
     emitOrderDeleted(order: Order) {
