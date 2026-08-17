@@ -11,8 +11,23 @@ import {
   Matches,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { DeliveryOfferChannel, DeliveryOfferType } from '@prisma/client';
+
+/** Un palier de prix imposé : « jusqu'à N km, la livraison coûte P ». */
+export class PalierPrixDto {
+  @ApiProperty({ description: 'Distance maximale du palier, en kilomètres' })
+  @IsNumber()
+  @Min(0.1)
+  max_km: number;
+
+  @ApiProperty({ description: 'Prix de la livraison dans ce palier (FCFA)' })
+  @IsNumber()
+  @Min(0)
+  price: number;
+}
 
 export class CreateDeliveryOfferDto {
   @ApiProperty({ description: 'Nom de l\'offre (interne)' })
@@ -29,11 +44,32 @@ export class CreateDeliveryOfferDto {
   @IsEnum(DeliveryOfferType)
   type: DeliveryOfferType;
 
-  @ApiPropertyOptional({ description: '% (PERCENTAGE) ou FCFA (FIXED_AMOUNT) ; ignoré pour FREE_DELIVERY' })
+  @ApiPropertyOptional({
+    description:
+      '% (PERCENTAGE) ou FCFA (FIXED_AMOUNT, FIXED_PRICE) ; ignoré pour FREE_DELIVERY. ' +
+      'Pour FIXED_PRICE sans palier, c\'est le prix appliqué à toute distance.',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
   value?: number;
+
+  /**
+   * FIXED_PRICE seulement : prix imposé par palier de distance.
+   *
+   * Le premier palier dont `max_km` couvre la distance donne le prix. Au-delà
+   * du dernier palier l'offre ne s'applique pas, et la livraison suit le
+   * système habituel (grille Chicken ou zones Turbo selon le paramétrage).
+   */
+  @ApiPropertyOptional({
+    type: [PalierPrixDto],
+    description: 'Paliers de prix imposé par distance (FIXED_PRICE)',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PalierPrixDto)
+  price_tiers?: PalierPrixDto[];
 
   @ApiPropertyOptional({ description: 'Sous-total minimum requis (FCFA)' })
   @IsOptional()

@@ -2683,6 +2683,7 @@ enum DeliveryOfferType {
   FREE_DELIVERY // Livraison gratuite
   PERCENTAGE // % de réduction sur le frais
   FIXED_AMOUNT // Montant fixe déduit du frais
+  FIXED_PRICE // Prix de livraison IMPOSÉ (remplace la grille, pas une remise)
 }
 
 enum DeliveryOfferChannel {
@@ -2696,7 +2697,17 @@ model DeliveryOffer {
   name        String            @db.VarChar
   description String?           @db.Text
   type        DeliveryOfferType
-  value       Float             @default(0) // % (PERCENTAGE) ou FCFA (FIXED_AMOUNT) ; ignoré pour FREE_DELIVERY
+  value       Float             @default(0) // % (PERCENTAGE) ou FCFA (FIXED_AMOUNT/FIXED_PRICE) ; ignoré pour FREE_DELIVERY
+
+  /// FIXED_PRICE seulement : prix imposé PAR PALIER DE DISTANCE.
+  ///
+  /// Forme : [{ "max_km": 2, "price": 1000 }, { "max_km": 5, "price": 1500 }]
+  /// Le premier palier dont `max_km` couvre la distance donne le prix. Au-delà
+  /// du dernier palier, l'offre ne s'applique PAS et la livraison retombe sur
+  /// le système habituel, grille Chicken ou zones Turbo selon le paramétrage.
+  ///
+  /// Vide ou absent : `value` s'applique à toute distance (« 1000 F partout »).
+  price_tiers Json? @db.Json
 
   // Conditions
   min_order_amount Float?               @default(0)

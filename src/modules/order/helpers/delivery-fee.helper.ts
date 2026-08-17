@@ -31,7 +31,16 @@ export interface IDeliveryFeeSettings {
 export interface DeliveryFeeResult {
   montant: number;
   zone: string;
+  /** Distance restaurant → client, ARRONDIE au kilomètre. Champ d'affichage. */
   distance: number;
+  /**
+   * Distance exacte, en kilomètres, telle que la grille la calcule.
+   *
+   * `distance` est arrondie : une course de 2,4 km y devient 2. Un palier
+   * « jusqu'à 2 km » l'aurait donc facturée au tarif le plus bas, sur une
+   * course qui n'y a pas droit. Les décisions de prix se prennent ici.
+   */
+  distance_exacte?: number;
   service: DeliveryService;
   zone_id: string | null;
   // Offre de livraison appliquée (le cas échéant)
@@ -288,6 +297,7 @@ export class DeliveryFeeHelper {
       montant: this.priceForDistance(feeSettings.grid, distance),
       zone: this.zoneLabel(feeSettings.grid, distance, restaurant.name),
       distance: Math.round(distance),
+      distance_exacte: distance,
       service: this.serviceFor(feeSettings, restaurant.id),
       zone_id: null,
     };
@@ -368,6 +378,9 @@ export class DeliveryFeeHelper {
         result = {
           montant: zone.prix,
           distance: config.distance,
+          // La zone Turbo remplace le PRIX, pas la géographie : la distance
+          // reste celle du restaurant au client.
+          distance_exacte: config.distance_exacte,
           zone: restaurant.name + ' - ' + zone.name,
           service: this.serviceFor(feeSettings, restaurant.id),
           zone_id: zone.id,
@@ -379,6 +392,10 @@ export class DeliveryFeeHelper {
     if (channel && orderAmount != null) {
       const applicable = await this.deliveryOfferService.findApplicableOffer({
         baseFee: result.montant,
+        // Les offres à prix imposé raisonnent par palier de distance. On leur
+        // donne la distance EXACTE : l'arrondi au kilomètre ferait basculer de
+        // palier une course sur deux, au détriment de la maison.
+        distanceKm: result.distance_exacte ?? result.distance,
         restaurantId: restaurant.id,
         channel,
         orderAmount,
