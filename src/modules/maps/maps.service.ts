@@ -51,6 +51,13 @@ export interface IPlaceDetailsResult {
   latitude: number;
   longitude: number;
   addressComponents: Array<{ long_name: string; short_name: string; types: string[] }>;
+  /** Nature du lieu selon Google : `route`, `premise`, `sublocality`, `locality`... */
+  types: string[];
+  /** Emprise que Google juge representative du lieu. Absente sur certains lieux. */
+  viewport: {
+    northeast: { lat: number; lng: number };
+    southwest: { lat: number; lng: number };
+  } | null;
 }
 
 // ─── TTLs (millisecondes) ────────────────────────────────────────────────────
@@ -423,7 +430,14 @@ export class MapsService {
 
     const url = new URL(`${BASE_URL}/place/details/json`);
     url.searchParams.set('place_id', placeId);
-    url.searchParams.set('fields', 'geometry,formatted_address,name,address_components');
+    // `types` et le `viewport` de la geometrie disent la PRECISION du lieu : une
+    // rue n'est pas un quartier. Sans eux, l'application cadre la carte de la
+    // meme facon sur un portail et sur un quartier entier, et le client croit
+    // verifier un point alors qu'il regarde un centroide a un kilometre.
+    url.searchParams.set(
+      'fields',
+      'geometry,formatted_address,name,address_components,types',
+    );
     url.searchParams.set('language', 'fr');
     url.searchParams.set('key', this.apiKey);
     if (sessionToken) url.searchParams.set('sessiontoken', sessionToken);
@@ -435,8 +449,15 @@ export class MapsService {
           place_id: string;
           name: string;
           formatted_address: string;
-          geometry: { location: { lat: number; lng: number } };
+          geometry: {
+            location: { lat: number; lng: number };
+            viewport?: {
+              northeast: { lat: number; lng: number };
+              southwest: { lat: number; lng: number };
+            };
+          };
           address_components: any[];
+          types?: string[];
         };
       }>(url.toString());
 
@@ -453,6 +474,8 @@ export class MapsService {
         latitude: r.geometry.location.lat,
         longitude: r.geometry.location.lng,
         addressComponents: r.address_components,
+        types: r.types ?? [],
+        viewport: r.geometry.viewport ?? null,
       };
 
       await this.cache.set(cacheKey, result, TTL.PLACE_DETAILS);
