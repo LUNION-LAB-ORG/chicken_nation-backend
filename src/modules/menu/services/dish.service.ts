@@ -109,7 +109,12 @@ export class DishService {
 
     const dishIds = dishes.map((d) => d.id);
     const [allSupplements, allRestaurants, exclSupp, exclResto] = await Promise.all([
-      this.prisma.supplement.findMany({ where: { available: true } }),
+      // Ordre voulu par le gestionnaire, appliqué DÈS LA SOURCE : c'est cette
+      // liste qui alimente les suppléments du détail d'un plat côté mobile.
+      this.prisma.supplement.findMany({
+        where: { available: true },
+        orderBy: [{ position: 'asc' }, { name: 'asc' }],
+      }),
       this.prisma.restaurant.findMany({ where: { entity_status: EntityStatus.ACTIVE } }),
       this.prisma.dishExcludedSupplement.findMany({ where: { dish_id: { in: dishIds } } }),
       this.prisma.dishExcludedRestaurant.findMany({ where: { dish_id: { in: dishIds } } }),

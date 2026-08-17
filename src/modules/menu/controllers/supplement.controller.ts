@@ -20,6 +20,7 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { CreateSupplementDto } from 'src/modules/menu/dto/create-supplement.dto';
 import { UpdateSupplementDto } from 'src/modules/menu/dto/update-supplement.dto';
+import { ReorderSupplementsDto } from 'src/modules/menu/dto/reorder-supplements.dto';
 import { SupplementService } from 'src/modules/menu/services/supplement.service';
 
 @ApiTags('Supplements')
@@ -41,6 +42,21 @@ export class SupplementController {
   }
 
   @ApiOperation({ summary: 'Récupération de tous les suppléments' })
+  /**
+   * Ordre d'affichage des suppléments dans l'application.
+   *
+   * On reçoit la liste complète des identifiants dans l'ordre voulu : le
+   * gestionnaire déplace, le serveur renumérote. Réservé à la gestion de
+   * l'inventaire, comme la création et la modification.
+   */
+  @Post('reorder')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.INVENTAIRE, Action.UPDATE)
+  @ApiOperation({ summary: "Réordonner l'affichage des suppléments" })
+  reorder(@Body() dto: ReorderSupplementsDto) {
+    return this.supplementService.reorder(dto.ids);
+  }
+
   @Get()
   findAll() {
     return this.supplementService.findAll();

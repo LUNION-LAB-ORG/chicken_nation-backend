@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { OrderType, SpiceLevel, SupplementCategory } from '@prisma/client';
 import { Transform } from 'class-transformer';
-import { IsArray, IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsEnum, IsInt, IsNotEmpty, IsOptional, IsString, Min } from 'class-validator';
 
 export class CreateSupplementDto {
     @ApiProperty({ description: 'Nom du supplément' })
@@ -28,6 +28,19 @@ export class CreateSupplementDto {
     @IsNotEmpty()
     @IsEnum(SupplementCategory)
     category: SupplementCategory;
+
+    @ApiPropertyOptional({
+        description:
+            "Ordre d'affichage dans sa catégorie. Plus petit vient en premier. " +
+            "Permet par exemple de faire passer les sodas avant les glaces, là où " +
+            "l'ordre alphabétique imposait l'inverse.",
+        example: 1,
+    })
+    @IsOptional()
+    @IsInt()
+    @Min(0)
+    @Transform(({ value }) => (value === '' || value === null || value === undefined ? undefined : Number(value)))
+    position?: number;
 
     @ApiPropertyOptional({
         enum: SpiceLevel,

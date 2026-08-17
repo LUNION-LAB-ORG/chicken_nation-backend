@@ -1443,12 +1443,19 @@ model Supplement {
   image                     String?                  @db.Text
   available                 Boolean                  @default(true)
   category                  SupplementCategory
+  /// ORDRE D'AFFICHAGE dans sa catégorie (17/08). Plus petit vient en premier.
+  /// Sert à décider, par exemple, que les sodas passent avant les glaces, là où
+  /// l'ordre alphabétique imposait l'inverse. À égalité, on retombe sur le nom,
+  /// pour que deux suppléments jamais classés gardent un ordre stable.
+  position                  Int                      @default(0)
   spice_level               SpiceLevel               @default(NEVER)
   available_order_types     OrderType[]              @default([DELIVERY, PICKUP, TABLE])
   hubrise_sku               String?                  @unique @db.VarChar
   dish_excluded_supplements DishExcludedSupplement[]
   /// Choix de menus composables qui pointent ce supplément.
   dish_option_items         DishOptionItem[]
+
+  @@index([category, position])
 }
 
 model User {
