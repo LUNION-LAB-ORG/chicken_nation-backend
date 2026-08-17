@@ -322,6 +322,20 @@ export class OrderController {
     return { success: true, message: 'Rafraîchissement des commandes émis' };
   }
 
+  /**
+   * GET /orders/itineraire-livraison
+   *
+   * Le restaurant retenu, les frais et le trajet, en une seule requête, pour
+   * la page qui fait vérifier son adresse au client avant qu'il paie.
+   * Doit rester AVANT `@Get(':id')`, sinon Nest prend « itineraire-livraison »
+   * pour un identifiant de commande.
+   */
+  @Get('/itineraire-livraison')
+  @ApiOperation({ summary: "Itinéraire du restaurant retenu jusqu'à l'adresse" })
+  async obtenirItineraireLivraison(@Query() params: FraisLivraisonDto) {
+    return this.orderService.obtenirItineraireLivraison(params);
+  }
+
   @Get('/frais-livraison')
   @ApiOperation({ summary: 'Obtenir le prix des frais de livraison' })
   @ApiResponse({

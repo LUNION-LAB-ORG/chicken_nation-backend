@@ -26,6 +26,7 @@ import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
 import { ReferralModule } from 'src/modules/referral/referral.module';
 import { UsersModule } from 'src/modules/users/users.module';
 import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.module';
+import { MapsModule } from 'src/modules/maps/maps.module';
 
 @Module({
   imports: [
@@ -44,6 +45,8 @@ import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.m
     PromoCodeModule,
     UsersModule,
     DeliveryOfferModule,
+    // L'aperçu du trajet avant paiement a besoin de Directions.
+    MapsModule,
   ],
   controllers: [OrderController, OrderDelivererController],
   providers: [

@@ -36,6 +36,7 @@ import { OrderWebSocketService } from '../websockets/order-websocket.service';
 import { OrderV2Helper } from '../helpers/orderv2.helper';
 import { DeliveryFeeHelper } from '../helpers/delivery-fee.helper';
 import { DeliveryOfferService } from 'src/modules/delivery-offer/services/delivery-offer.service';
+import { MapsService } from 'src/modules/maps/maps.service';
 import { PromoCodeUsageStatus, RewardType, RewardStatus } from '@prisma/client';
 import { OrderCreateDto, OrderItemDto } from '../dto/order-create.dto';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
@@ -57,7 +58,7 @@ export class OrderService {
     private voucherService: VoucherService,
     private promoCodeService: PromoCodeService,
     private twilioService: TwilioService,
-
+    private readonly mapsService: MapsService,
   ) { }
 
   async createv2(customer_id: string, createOrderDto: OrderCreateDto): Promise<Order> {
@@ -2741,6 +2742,70 @@ export class OrderService {
   }
 
   // Obtenir les frais de livraison, API utilisée avant de passer la commande
+  /**
+   * Tout ce qu'il faut pour la page qui fait vérifier son adresse au client
+   * avant de payer : le restaurant RÉELLEMENT retenu, les frais, et le trajet.
+   *
+   * Le calcul du restaurant vit ici depuis toujours, mais restait invisible :
+   * l'application ne connaissait pas son point de départ et ne pouvait donc
+   * rien montrer. C'est le serveur qui tranche, c'est donc à lui de dire
+   * d'où part la course.
+   */
+  async obtenirItineraireLivraison(body: FraisLivraisonDto) {
+    const restaurant = await this.orderHelper.getClosestRestaurant({
+      restaurant_id: body.restaurant_id,
+      address: JSON.stringify({ latitude: body.lat, longitude: body.long }),
+    });
+
+    const frais = await this.deliveryFeeHelper.calculeFraisLivraison({
+      lat: body.lat,
+      long: body.long,
+      restaurant,
+      channel: 'APP',
+      orderAmount: body.order_amount ?? 0,
+    });
+
+    // Le trajet n'est pas indispensable : sans lui la page montre quand même
+    // les deux points et les frais. On ne fait donc jamais échouer l'appel.
+    let itineraire: {
+      coordinates: { latitude: number; longitude: number }[];
+      distanceMeters: number;
+      durationSeconds: number;
+    } | null = null;
+
+    if (
+      typeof restaurant?.latitude === 'number' &&
+      typeof restaurant?.longitude === 'number'
+    ) {
+      const trajet = await this.mapsService.getDirections({
+        originLat: restaurant.latitude,
+        originLng: restaurant.longitude,
+        destLat: body.lat,
+        destLng: body.long,
+      });
+      if (trajet) {
+        itineraire = {
+          coordinates: trajet.coordinates,
+          distanceMeters: trajet.totalDistanceMeters,
+          durationSeconds: trajet.totalDurationSeconds,
+        };
+      }
+    }
+
+    return {
+      restaurant: restaurant
+        ? {
+            id: restaurant.id,
+            name: restaurant.name,
+            latitude: restaurant.latitude,
+            longitude: restaurant.longitude,
+          }
+        : null,
+      frais,
+      itineraire,
+    };
+  }
+
   async obtenirFraisLivraison(body: FraisLivraisonDto): Promise<{
     montant: number;
     zone: string;
