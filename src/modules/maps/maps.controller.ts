@@ -1,14 +1,18 @@
 import {
   Controller,
   Get,
+  Header,
   Param,
   Query,
   NotFoundException,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 
 import { DirectionsQueryDto } from './dto/directions.dto';
+import { StaticRouteQueryDto } from './dto/static-route.dto';
 import { GeocodeReverseQueryDto } from './dto/geocode-reverse.dto';
 import { PlacesAutocompleteQueryDto, PlaceDetailsQueryDto } from './dto/places-autocomplete.dto';
 import { AnyJwtAuthGuard } from './guards/any-jwt-auth.guard';
@@ -41,6 +45,35 @@ export class MapsController {
    *   GET /maps/directions?originLat=5.36&originLng=-4.01&destLat=5.38&destLng=-3.99
    *   GET /maps/directions?...&waypoints=[{"latitude":5.37,"longitude":-4.0}]
    */
+  /**
+   * GET /maps/static-route
+   *
+   * Vignette PNG du trajet restaurant → client, pour l'aperçu du panier.
+   * L'image est fabriquée côté serveur : la clé Google ne part jamais dans
+   * l'application, qui reçoit des octets et non une URL signée.
+   */
+  @Get('static-route')
+  @ApiOperation({ summary: "Vignette PNG d'un itinéraire (Static Maps)" })
+  @Header('Cache-Control', 'private, max-age=600')
+  async getStaticRoute(@Query() query: StaticRouteQueryDto, @Res() res: Response) {
+    const image = await this.mapsService.staticRoute({
+      originLat: query.originLat,
+      originLng: query.originLng,
+      destLat: query.destLat,
+      destLng: query.destLng,
+      width: query.width ?? 400,
+      height: query.height ?? 200,
+      scale: query.scale ?? 2,
+    });
+
+    if (!image) {
+      throw new NotFoundException('Vignette indisponible');
+    }
+
+    res.setHeader('Content-Type', 'image/png');
+    res.send(image);
+  }
+
   @Get('directions')
   @ApiOperation({ summary: 'Itinéraire routier (proxy Directions API)' })
   async getDirections(@Query() query: DirectionsQueryDto) {

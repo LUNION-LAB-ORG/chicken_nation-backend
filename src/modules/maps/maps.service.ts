@@ -417,6 +417,93 @@ export class MapsService {
     }
   }
 
+  // ── Vignette d'itinéraire (Static Maps) ─────────────────────────────────
+
+  /**
+   * Image PNG du trajet restaurant → client, pour l'aperçu du panier.
+   *
+   * Une carte NATIVE ne convient pas à cet emplacement : elle vit dans un
+   * défilement, et sur iOS une seconde `MKMapView` montée pendant la fermeture
+   * d'un modal fait tomber l'application (`AIRMapManager`, SIGSEGV). Une image
+   * n'a aucun de ces défauts et suffit largement pour vérifier un trajet.
+   *
+   * L'image est fabriquée ICI pour que la clé Google ne quitte jamais le
+   * serveur : l'application reçoit des octets, pas une URL signée.
+   */
+  async staticRoute(params: {
+    originLat: number;
+    originLng: number;
+    destLat: number;
+    destLng: number;
+    width: number;
+    height: number;
+    scale: number;
+  }): Promise<Buffer | null> {
+    const { originLat, originLng, destLat, destLng } = params;
+    const width = Math.min(Math.max(Math.round(params.width) || 400, 100), 640);
+    const height = Math.min(Math.max(Math.round(params.height) || 200, 80), 640);
+    const scale = params.scale === 2 ? 2 : 1;
+
+    const cacheKey = this.key(
+      'static_route',
+      `${originLat.toFixed(5)},${originLng.toFixed(5)}_${destLat.toFixed(5)},${destLng.toFixed(5)}_${width}x${height}@${scale}`,
+    );
+
+    const cached = await this.cache.get<string>(cacheKey);
+    if (cached) return Buffer.from(cached, 'base64');
+
+    const itineraire = await this.getDirections({
+      originLat,
+      originLng,
+      destLat,
+      destLng,
+    });
+
+    const url = new URL('https://maps.googleapis.com/maps/api/staticmap');
+    url.searchParams.set('size', `${width}x${height}`);
+    url.searchParams.set('scale', String(scale));
+    url.searchParams.set('language', 'fr');
+    url.searchParams.set('key', this.apiKey);
+    url.searchParams.append(
+      'markers',
+      `color:0xF17922|label:R|${originLat},${originLng}`,
+    );
+    url.searchParams.append(
+      'markers',
+      `color:0x0F172A|label:C|${destLat},${destLng}`,
+    );
+
+    if (itineraire?.coordinates?.length) {
+      // On échantillonne : l'URL d'une Static Map est plafonnée à 8192
+      // caractères, et une trace urbaine compte plusieurs centaines de points.
+      const points = itineraire.coordinates;
+      const pas = Math.max(1, Math.ceil(points.length / 70));
+      const retenus = points.filter((_, i) => i % pas === 0);
+      const dernier = points[points.length - 1];
+      if (retenus[retenus.length - 1] !== dernier) retenus.push(dernier);
+
+      url.searchParams.set(
+        'path',
+        `color:0xF17922C0|weight:4|` +
+          retenus.map((p) => `${p.latitude.toFixed(5)},${p.longitude.toFixed(5)}`).join('|'),
+      );
+    }
+
+    try {
+      const reponse = await fetch(url.toString());
+      if (!reponse.ok) {
+        this.logger.warn(`[Maps] StaticRoute HTTP ${reponse.status}`);
+        return null;
+      }
+      const image = Buffer.from(await reponse.arrayBuffer());
+      await this.cache.set(cacheKey, image.toString('base64'), TTL.PLACE_DETAILS);
+      return image;
+    } catch (err) {
+      this.logger.warn(`[Maps] StaticRoute error: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
   // ── Place Details ────────────────────────────────────────────────────────
 
   async placeDetails(placeId: string, sessionToken?: string): Promise<IPlaceDetailsResult | null> {
