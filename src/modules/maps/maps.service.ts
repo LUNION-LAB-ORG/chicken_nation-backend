@@ -586,19 +586,42 @@ export class MapsService {
       }
 
       /**
-       * Point INVISIBLE au nord, pour réserver la bande du haut.
+       * CADRAGE MAÎTRISÉ, plutôt que l'ajustement automatique de Google.
        *
-       * Pour que le contenu réel occupe les (1 - p) du bas, il faut étendre le
-       * cadre vers le nord de p/(1-p) fois sa hauteur. Un plancher en degrés
-       * couvre le cas d'un trajet est-ouest, dont la hauteur est presque nulle.
+       * Laissé à lui-même, Google colle le trajet aux bords : nos pastilles
+       * font 56 px et sont accrochées par leur CENTRE, donc la moitié déborde
+       * et se fait couper. Et il ne connaît aucune notion de marge, si bien que
+       * le marqueur du restaurant passait sous le bandeau de titre de l'écran.
+       *
+       * On lui donne donc une boîte explicite, via deux points `visible` :
+       * l'emprise réelle du trajet, élargie d'une marge sur les quatre côtés,
+       * plus la bande demandée en haut par l'écran.
        */
-      if (topPad > 0) {
-        const lats = [originLat, destLat, ...(itineraire?.coordinates ?? []).map((c) => c.latitude)];
-        const nord = Math.max(...lats);
-        const sud = Math.min(...lats);
-        const extension = Math.max(((nord - sud) * topPad) / (1 - topPad), 0.0012);
-        url.searchParams.append('visible', `${(nord + extension).toFixed(6)},${originLng}`);
-      }
+      const lats = [originLat, destLat, ...(itineraire?.coordinates ?? []).map((c) => c.latitude)];
+      const lngs = [originLng, destLng, ...(itineraire?.coordinates ?? []).map((c) => c.longitude)];
+      const nord = Math.max(...lats);
+      const sud = Math.min(...lats);
+      const est = Math.max(...lngs);
+      const ouest = Math.min(...lngs);
+
+      // Marge de respiration : de quoi contenir une pastille entière, même sur
+      // un trajet très court dont l'emprise est presque un point.
+      const margeLat = Math.max((nord - sud) * 0.18, 0.0009);
+      const margeLng = Math.max((est - ouest) * 0.18, 0.0009);
+
+      // Bande du haut : pour que le trajet occupe les (1 - p) du bas, le cadre
+      // doit monter de p/(1-p) fois sa hauteur.
+      const hauteur = nord - sud + 2 * margeLat;
+      const bandeHaute = topPad > 0 ? (hauteur * topPad) / (1 - topPad) : 0;
+
+      url.searchParams.append(
+        'visible',
+        `${(nord + margeLat + bandeHaute).toFixed(6)},${(ouest - margeLng).toFixed(6)}`,
+      );
+      url.searchParams.append(
+        'visible',
+        `${(sud - margeLat).toFixed(6)},${(est + margeLng).toFixed(6)}`,
+      );
 
       return url.toString();
     };
