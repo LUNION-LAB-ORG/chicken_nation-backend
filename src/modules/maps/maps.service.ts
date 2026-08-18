@@ -434,6 +434,9 @@ export class MapsService {
    * leurs noms, qui sont le seul repère utile, et on désature le fond pour que
    * l'orange du trajet et les deux marqueurs soient la seule chose vive.
    */
+  /** Évite de répéter l'avertissement `BASE_URL` à chaque vignette. */
+  private static baseUrlSignalee = false;
+
   private static readonly STYLE_VIGNETTE = [
     'feature:poi|visibility:off',
     'feature:transit|visibility:off',
@@ -520,6 +523,22 @@ export class MapsService {
        */
       // `urlApi` gère les deux formes de `BASE_URL`, avec ou sans préfixe.
       const racine = racinePublique();
+      if (avecPastilles && !racine) {
+        /**
+         * Dégradation SILENCIEUSE, et c'est précisément ce qui a coûté une
+         * après-midi : sans `BASE_URL`, les pastilles ne sont même pas
+         * demandées, Google ne signale donc rien, et l'image revient avec les
+         * lettres sans qu'aucune trace n'existe. On le dit, une fois par
+         * démarrage pour ne pas noyer le journal.
+         */
+        if (!MapsService.baseUrlSignalee) {
+          MapsService.baseUrlSignalee = true;
+          this.logger.warn(
+            '[Maps] BASE_URL absente de l\'environnement : vignette servie avec les ' +
+              'marqueurs de secours (lettres R et C) au lieu des pastilles.',
+          );
+        }
+      }
       if (avecPastilles && racine) {
         url.searchParams.append(
           'markers',
