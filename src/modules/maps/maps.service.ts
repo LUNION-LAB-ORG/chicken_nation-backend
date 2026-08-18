@@ -328,6 +328,9 @@ export class MapsService {
     url.searchParams.set('latlng', `${lat},${lng}`);
     url.searchParams.set('language', 'fr');
     url.searchParams.set('key', this.apiKey);
+    for (const regle of MapsService.STYLE_VIGNETTE) {
+      url.searchParams.append('style', regle);
+    }
 
     try {
       const data = await this.googleFetch<{
@@ -417,6 +420,35 @@ export class MapsService {
     }
   }
 
+  /**
+   * Style de la vignette d'itinéraire : une carte CALME.
+   *
+   * Par défaut Google couvre le quartier de pastilles de commerces, et sur
+   * Abidjan cela donne une dizaine de restaurants, hôtels et cafés autour du
+   * trajet. Le client ne cherche pas un café, il cherche à reconnaître sa rue :
+   * tout ce qui n'aide pas à ça lui vole l'attention et cache le tracé.
+   *
+   * On coupe donc les points d'intérêt et les transports, on garde les rues et
+   * leurs noms, qui sont le seul repère utile, et on désature le fond pour que
+   * l'orange du trajet et les deux marqueurs soient la seule chose vive.
+   */
+  private static readonly STYLE_VIGNETTE = [
+    'feature:poi|visibility:off',
+    'feature:transit|visibility:off',
+    // Les parcs restent visibles, sans étiquette : ce sont de vrais repères.
+    'feature:poi.park|element:geometry|visibility:on|color:0xe7eee2',
+    'feature:landscape|color:0xf6f4f1',
+    'feature:water|color:0xdbe8f2',
+    'feature:road|element:geometry|color:0xffffff',
+    'feature:road.highway|element:geometry|color:0xf2ede6',
+    'feature:road|element:geometry.stroke|color:0xe9e5df',
+    'feature:road|element:labels.icon|visibility:off',
+    'feature:road|element:labels.text.fill|color:0x9ca3af',
+    'feature:road|element:labels.text.stroke|color:0xffffff',
+    'feature:administrative|element:geometry|visibility:off',
+    'feature:administrative.locality|element:labels.text.fill|color:0x9ca3af',
+  ];
+
   // ── Vignette d'itinéraire (Static Maps) ─────────────────────────────────
 
   /**
@@ -444,8 +476,10 @@ export class MapsService {
     const height = Math.min(Math.max(Math.round(params.height) || 200, 80), 640);
     const scale = params.scale === 2 ? 2 : 1;
 
+    // `v2` : le style a changé, les vignettes déjà en cache montreraient encore
+    // l'ancienne carte chargée pendant toute la durée de vie du cache.
     const cacheKey = this.key(
-      'static_route',
+      'static_route_v2',
       `${originLat.toFixed(5)},${originLng.toFixed(5)}_${destLat.toFixed(5)},${destLng.toFixed(5)}_${width}x${height}@${scale}`,
     );
 
