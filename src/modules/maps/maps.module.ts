@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { MapsAssetsController } from './maps-assets.controller';
 import { MapsController } from './maps.controller';
 import { MapsService } from './maps.service';
 
@@ -16,7 +17,7 @@ import { MapsService } from './maps.service';
  * La clé Google Maps est lue depuis `process.env.GOOGLE_MAPS_API_KEY`.
  */
 @Module({
-  controllers: [MapsController],
+  controllers: [MapsController, MapsAssetsController],
   providers: [MapsService],
   exports: [MapsService],
 })

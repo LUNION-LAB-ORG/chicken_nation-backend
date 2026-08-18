@@ -70,6 +70,10 @@ const TTL = {
   REVERSE_GEOCODE:  24 * 60 * 60 * 1000,    //  24h     — l'adresse d'un point reste stable
   AUTOCOMPLETE:      5 * 60 * 1000,         //   5 min  — suggestions fraîches
   PLACE_DETAILS:     7 * 24 * 60 * 60 * 1000, // 7 jours — les détails d'un lieu sont immuables
+  // 12h et non 7 jours : une vignette dépend de choses qui peuvent casser (nos
+  // pastilles, notre URL publique). Une image dégradée figée une semaine, c'est
+  // la panne multipliée par la durée du cache.
+  STATIC_ROUTE:     12 * 60 * 60 * 1000,    //  12h     — image d'itinéraire
 } as const;
 
 const BASE_URL = 'https://maps.googleapis.com/maps/api';
@@ -476,10 +480,10 @@ export class MapsService {
     const height = Math.min(Math.max(Math.round(params.height) || 200, 80), 640);
     const scale = params.scale === 2 ? 2 : 1;
 
-    // `v2` : le style a changé, les vignettes déjà en cache montreraient encore
+    // `v3` : style et marqueurs ont changé, les vignettes déjà en cache montreraient encore
     // l'ancienne carte chargée pendant toute la durée de vie du cache.
     const cacheKey = this.key(
-      'static_route_v2',
+      'static_route_v3',
       `${originLat.toFixed(5)},${originLng.toFixed(5)}_${destLat.toFixed(5)},${destLng.toFixed(5)}_${width}x${height}@${scale}`,
     );
 
@@ -493,45 +497,106 @@ export class MapsService {
       destLng,
     });
 
-    const url = new URL('https://maps.googleapis.com/maps/api/staticmap');
-    url.searchParams.set('size', `${width}x${height}`);
-    url.searchParams.set('scale', String(scale));
-    url.searchParams.set('language', 'fr');
-    url.searchParams.set('key', this.apiKey);
-    url.searchParams.append(
-      'markers',
-      `color:0xF17922|label:R|${originLat},${originLng}`,
-    );
-    url.searchParams.append(
-      'markers',
-      `color:0x0F172A|label:C|${destLat},${destLng}`,
-    );
+    const construireUrl = (avecPastilles: boolean) => {
+      const url = new URL('https://maps.googleapis.com/maps/api/staticmap');
+      url.searchParams.set('size', `${width}x${height}`);
+      url.searchParams.set('scale', String(scale));
+      url.searchParams.set('language', 'fr');
+      url.searchParams.set('key', this.apiKey);
+      for (const regle of MapsService.STYLE_VIGNETTE) {
+        url.searchParams.append('style', regle);
+      }
 
-    if (itineraire?.coordinates?.length) {
-      // On échantillonne : l'URL d'une Static Map est plafonnée à 8192
-      // caractères, et une trace urbaine compte plusieurs centaines de points.
-      const points = itineraire.coordinates;
-      const pas = Math.max(1, Math.ceil(points.length / 70));
-      const retenus = points.filter((_, i) => i % pas === 0);
-      const dernier = points[points.length - 1];
-      if (retenus[retenus.length - 1] !== dernier) retenus.push(dernier);
+      /**
+       * Pastilles maison plutôt que les lettres « R » et « C ».
+       *
+       * Google va CHERCHER ces images sur notre serveur. S'il n'y arrive pas il
+       * ne signale rien dans le code HTTP : il répond 200, remplace nos
+       * pastilles par ses épingles rouges, incruste un bandeau « Map error »
+       * dans l'image, et ne le dit QUE dans l'en-tête `x-staticmap-api-warning`.
+       * D'où la seconde tentative sans pastilles, plus bas.
+       *
+       * `anchor:center` : ce sont des pastilles rondes, pas des gouttes. Sans
+       * cette précision Google les accroche par le bas et le point désigné se
+       * retrouve décalé d'une demi-icône.
+       */
+      const racine = (process.env.BASE_URL ?? '').replace(/\/+$/, '');
+      if (avecPastilles && racine) {
+        url.searchParams.append(
+          'markers',
+          `anchor:center|icon:${racine}/api/v1/maps/pin/restaurant.png|${originLat},${originLng}`,
+        );
+        url.searchParams.append(
+          'markers',
+          `anchor:center|icon:${racine}/api/v1/maps/pin/client.png|${destLat},${destLng}`,
+        );
+      } else {
+        url.searchParams.append(
+          'markers',
+          `color:0xF17922|label:R|${originLat},${originLng}`,
+        );
+        url.searchParams.append(
+          'markers',
+          `color:0x0F172A|label:C|${destLat},${destLng}`,
+        );
+      }
 
-      url.searchParams.set(
-        'path',
-        `color:0xF17922C0|weight:4|` +
-          retenus.map((p) => `${p.latitude.toFixed(5)},${p.longitude.toFixed(5)}`).join('|'),
-      );
-    }
+      if (itineraire?.coordinates?.length) {
+        // On échantillonne : l'URL d'une Static Map est plafonnée à 8192
+        // caractères, et une trace urbaine compte plusieurs centaines de points.
+        const points = itineraire.coordinates;
+        const pas = Math.max(1, Math.ceil(points.length / 70));
+        const retenus = points.filter((_, i) => i % pas === 0);
+        const dernier = points[points.length - 1];
+        if (retenus[retenus.length - 1] !== dernier) retenus.push(dernier);
 
-    try {
-      const reponse = await fetch(url.toString());
+        url.searchParams.set(
+          'path',
+          `color:0xF17922C0|weight:4|` +
+            retenus.map((p) => `${p.latitude.toFixed(5)},${p.longitude.toFixed(5)}`).join('|'),
+        );
+      }
+
+      return url.toString();
+    };
+
+    /** Télécharge et rapporte l'avertissement que Google glisse en en-tête. */
+    const telecharger = async (url: string) => {
+      const reponse = await fetch(url);
       if (!reponse.ok) {
         this.logger.warn(`[Maps] StaticRoute HTTP ${reponse.status}`);
         return null;
       }
-      const image = Buffer.from(await reponse.arrayBuffer());
-      await this.cache.set(cacheKey, image.toString('base64'), TTL.PLACE_DETAILS);
-      return image;
+      return {
+        image: Buffer.from(await reponse.arrayBuffer()),
+        avertissement: reponse.headers.get('x-staticmap-api-warning'),
+      };
+    };
+
+    try {
+      let resultat = await telecharger(construireUrl(true));
+      if (!resultat) return null;
+
+      /**
+       * Google a répondu 200 mais signale un problème : nos pastilles n'ont pas
+       * pu être chargées, et l'image porte ses épingles rouges plus un bandeau
+       * d'erreur. On rejoue SANS pastilles : les marqueurs couleur et lettre ne
+       * dépendent de rien, l'image reste propre.
+       */
+      if (resultat.avertissement) {
+        this.logger.warn(`[Maps] StaticRoute avertissement Google: ${resultat.avertissement}`);
+        const repli = await telecharger(construireUrl(false));
+        if (repli && !repli.avertissement) {
+          resultat = repli;
+        } else {
+          // Toujours dégradée : on la rend au client pour ne pas laisser un
+          // écran vide, mais on ne la fige SURTOUT PAS en cache.
+          return (repli ?? resultat).image;
+        }
+      }
+
+      await this.cache.set(cacheKey, resultat.image.toString('base64'), TTL.STATIC_ROUTE);
+      return resultat.image;
     } catch (err) {
       this.logger.warn(`[Maps] StaticRoute error: ${(err as Error).message}`);
       return null;
