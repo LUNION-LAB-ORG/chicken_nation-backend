@@ -475,17 +475,27 @@ export class MapsService {
     width: number;
     height: number;
     scale: number;
+    /**
+     * Part HAUTE de l'image à laisser libre, entre 0 et 0.4.
+     *
+     * L'écran pose un bandeau de titre et un bouton retour par-dessus la carte.
+     * Google cadre au plus juste et ignore toute notion de marge : le marqueur
+     * du restaurant se retrouvait sous le bandeau. On agrandit donc le cadre
+     * vers le NORD pour que le trajet redescende sous cette zone.
+     */
+    topPad?: number;
   }): Promise<Buffer | null> {
     const { originLat, originLng, destLat, destLng } = params;
     const width = Math.min(Math.max(Math.round(params.width) || 400, 100), 640);
     const height = Math.min(Math.max(Math.round(params.height) || 200, 80), 640);
     const scale = params.scale === 2 ? 2 : 1;
+    const topPad = Math.min(Math.max(Number(params.topPad) || 0, 0), 0.4);
 
     // `v3` : style et marqueurs ont changé, les vignettes déjà en cache montreraient encore
     // l'ancienne carte chargée pendant toute la durée de vie du cache.
     const cacheKey = this.key(
       'static_route_v3',
-      `${originLat.toFixed(5)},${originLng.toFixed(5)}_${destLat.toFixed(5)},${destLng.toFixed(5)}_${width}x${height}@${scale}`,
+      `${originLat.toFixed(5)},${originLng.toFixed(5)}_${destLat.toFixed(5)},${destLng.toFixed(5)}_${width}x${height}@${scale}_t${topPad.toFixed(2)}`,
     );
 
     const cached = await this.cache.get<string>(cacheKey);
@@ -573,6 +583,21 @@ export class MapsService {
           `color:0xF17922C0|weight:4|` +
             retenus.map((p) => `${p.latitude.toFixed(5)},${p.longitude.toFixed(5)}`).join('|'),
         );
+      }
+
+      /**
+       * Point INVISIBLE au nord, pour réserver la bande du haut.
+       *
+       * Pour que le contenu réel occupe les (1 - p) du bas, il faut étendre le
+       * cadre vers le nord de p/(1-p) fois sa hauteur. Un plancher en degrés
+       * couvre le cas d'un trajet est-ouest, dont la hauteur est presque nulle.
+       */
+      if (topPad > 0) {
+        const lats = [originLat, destLat, ...(itineraire?.coordinates ?? []).map((c) => c.latitude)];
+        const nord = Math.max(...lats);
+        const sud = Math.min(...lats);
+        const extension = Math.max(((nord - sud) * topPad) / (1 - topPad), 0.0012);
+        url.searchParams.append('visible', `${(nord + extension).toFixed(6)},${originLng}`);
       }
 
       return url.toString();

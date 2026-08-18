@@ -1,6 +1,6 @@
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsLatitude, IsLongitude, IsOptional, Max, Min } from 'class-validator';
+import { IsInt, IsLatitude, IsLongitude, IsNumber, IsOptional, Max, Min } from 'class-validator';
 
 /**
  * Vignette d'itinéraire pour l'aperçu du panier.
@@ -21,6 +21,13 @@ export class StaticRouteQueryDto {
   @ApiPropertyOptional({ default: 200 })
   @IsOptional() @Type(() => Number) @IsInt() @Min(80) @Max(640)
   height?: number;
+
+  @ApiPropertyOptional({
+    default: 0,
+    description: "Part haute de l'image à laisser libre, 0 à 0.4 (bandeau de l'écran)",
+  })
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(0.4)
+  topPad?: number;
 
   @ApiPropertyOptional({ default: 2, description: '1 ou 2 (écrans à haute densité)' })
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(2)

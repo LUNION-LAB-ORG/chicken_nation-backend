@@ -64,6 +64,7 @@ export class MapsController {
       width: query.width ?? 400,
       height: query.height ?? 200,
       scale: query.scale ?? 2,
+      topPad: query.topPad ?? 0,
     });
 
     if (!image) {
