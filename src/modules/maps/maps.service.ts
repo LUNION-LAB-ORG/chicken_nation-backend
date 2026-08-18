@@ -333,9 +333,6 @@ export class MapsService {
     url.searchParams.set('latlng', `${lat},${lng}`);
     url.searchParams.set('language', 'fr');
     url.searchParams.set('key', this.apiKey);
-    for (const regle of MapsService.STYLE_VIGNETTE) {
-      url.searchParams.append('style', regle);
-    }
 
     try {
       const data = await this.googleFetch<{
