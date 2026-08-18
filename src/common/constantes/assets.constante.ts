@@ -1,13 +1,13 @@
-import { join } from "path";
+import { urlPublique } from '../../common/utils/url-publique.util';
 
 export const AssetsImages = {
     logo: {
-        url: join(process.env.BASE_URL ?? "", 'uploads/assets/logo.png'),
+        url: urlPublique('uploads/assets/logo.png'),
     },
     frontend: {
         url: process.env.FRONTEND_URL ?? "https://chicken-nation-dashboard.vercel.app"
     },
     banner: {
-        url: join(process.env.BASE_URL ?? "", 'uploads/assets/banner.png'),
+        url: urlPublique('uploads/assets/banner.png'),
     }
 }

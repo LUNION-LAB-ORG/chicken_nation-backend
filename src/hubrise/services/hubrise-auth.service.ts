@@ -1,3 +1,4 @@
+import { urlApiDepuis } from '../../common/utils/url-publique.util';
 /**
  * Service d'authentification OAuth 2.0 HubRise.
  *
@@ -63,7 +64,8 @@ export class HubriseAuthService {
 
     const clientId = config.hubrise_client_id;
     const baseUrl = config.base_url || '';
-    const redirectUri = `${baseUrl}/api/v1/hubrise/auth/callback`;
+    // `base_url` peut déjà porter le préfixe : on ne le rajoute pas deux fois.
+    const redirectUri = urlApiDepuis(baseUrl, 'hubrise/auth/callback');
 
     if (!clientId) {
       throw new Error('HUBRISE_CLIENT_ID non configuré.');

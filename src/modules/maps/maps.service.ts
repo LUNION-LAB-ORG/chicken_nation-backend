@@ -1,4 +1,5 @@
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { racinePublique, urlApi } from 'src/common/utils/url-publique.util';
 import { Inject, Injectable, Logger, BadGatewayException } from '@nestjs/common';
 import type { Cache } from 'cache-manager';
 
@@ -520,24 +521,16 @@ export class MapsService {
        * cette précision Google les accroche par le bas et le point désigné se
        * retrouve décalé d'une demi-icône.
        */
-      /**
-       * `BASE_URL` n'a pas la même forme partout : la production y met DÉJÀ
-       * `/api/v1`, le poste de développement non. Ajouter le préfixe sans
-       * regarder donnait `…/api/v1/api/v1/maps/pin/…`, donc un 404 côté Google,
-       * donc ses épingles rouges à la place de nos pastilles.
-       */
-      const racine = (process.env.BASE_URL ?? '')
-        .trim()
-        .replace(/\/+$/, '')
-        .replace(/\/api\/v1$/, '');
+      // `urlApi` gère les deux formes de `BASE_URL`, avec ou sans préfixe.
+      const racine = racinePublique();
       if (avecPastilles && racine) {
         url.searchParams.append(
           'markers',
-          `anchor:center|icon:${racine}/api/v1/maps/pin/restaurant.png|${originLat},${originLng}`,
+          `anchor:center|icon:${urlApi('maps/pin/restaurant.png')}|${originLat},${originLng}`,
         );
         url.searchParams.append(
           'markers',
-          `anchor:center|icon:${racine}/api/v1/maps/pin/client.png|${destLat},${destLng}`,
+          `anchor:center|icon:${urlApi('maps/pin/client.png')}|${destLat},${destLng}`,
         );
       } else {
         url.searchParams.append(

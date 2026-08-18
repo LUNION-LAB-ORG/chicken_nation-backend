@@ -1,3 +1,4 @@
+import { urlApiDepuis } from '../../common/utils/url-publique.util';
 /**
  * Client HTTP pour l'API HubRise.
  *
@@ -64,7 +65,8 @@ export class HubriseApiService {
   async getWebhookUrl(): Promise<string> {
     const config = await this.getHubriseConfig();
     const baseUrl = config.base_url || '';
-    return `${baseUrl}/api/v1/hubrise/webhook`;
+    // `base_url` peut déjà porter le préfixe : on ne le rajoute pas deux fois.
+    return urlApiDepuis(baseUrl, 'hubrise/webhook');
   }
 
   async getWebhookSecret(): Promise<string> {
