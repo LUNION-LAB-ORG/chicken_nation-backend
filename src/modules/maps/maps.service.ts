@@ -520,7 +520,16 @@ export class MapsService {
        * cette précision Google les accroche par le bas et le point désigné se
        * retrouve décalé d'une demi-icône.
        */
-      const racine = (process.env.BASE_URL ?? '').replace(/\/+$/, '');
+      /**
+       * `BASE_URL` n'a pas la même forme partout : la production y met DÉJÀ
+       * `/api/v1`, le poste de développement non. Ajouter le préfixe sans
+       * regarder donnait `…/api/v1/api/v1/maps/pin/…`, donc un 404 côté Google,
+       * donc ses épingles rouges à la place de nos pastilles.
+       */
+      const racine = (process.env.BASE_URL ?? '')
+        .trim()
+        .replace(/\/+$/, '')
+        .replace(/\/api\/v1$/, '');
       if (avecPastilles && racine) {
         url.searchParams.append(
           'markers',
