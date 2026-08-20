@@ -14,30 +14,30 @@ import { Prisma } from '@prisma/client';
  */
 
 /**
- * Ce qu'est « un plat en promotion » : le PRIX et le PRIX RÉDUIT en décident,
- * pas le drapeau `is_promotion`.
+ * Ce qu'est « un plat en promotion ».
  *
- * ⚠️ Deux bornes, et les deux sont nécessaires.
+ * ⚠️ Cette clause RECOPIE volontairement la règle de facturation, celle qui
+ * décide du prix réellement porté sur la commande :
  *
- * `> 0` d'abord. Un plat sans promotion ne porte pas un prix réduit ABSENT, il
- * le porte à **0** : c'est ce que le formulaire du backoffice enregistre. Sur la
- * carte du 20/08, 12 plats sur 18 étaient dans ce cas. Se contenter de
- * « prix réduit inférieur au prix » aurait donc mis la carte ENTIÈRE en
- * vitrine, puisque 0 est inférieur à tout. La comparaison exclut aussi `null`
- * d'elle-même : en SQL, `NULL > 0` ne vaut pas vrai.
+ *   `dish.is_promotion && dish.promotion_price !== null ? promotion_price : price`
+ *   (`order/helpers/order.helper.ts` et `order/helpers/orderv2.helper.ts`)
  *
- * `< prix` ensuite, sinon une saisie où le prix réduit dépasse le prix afficherait
- * en promotion un plat devenu plus cher.
+ * La vitrine doit montrer ce qui sera facturé comme promotion, ni plus ni
+ * moins. Toute divergence produirait un plat annoncé en promotion et encaissé
+ * plein tarif, ou l'inverse. Si la règle de facturation change un jour, celle-ci
+ * change avec elle, et pas séparément.
  *
- * La comparaison entre deux colonnes passe par une référence de champ Prisma,
- * d'où le paramètre : elle se lit sur le client (`prisma.dish.fields.price`) et
- * ne peut pas être écrite en constante.
+ * À savoir en la lisant : `promotion_price` vaut **0**, et non `null`, quand il
+ * n'y a pas de promotion — c'est ce que le formulaire du backoffice enregistre.
+ * Le `not: null` ne filtre donc presque rien en pratique ; c'est `is_promotion`
+ * qui porte la décision. Un plat coché en promotion avec un prix réduit resté à
+ * 0 apparaîtra ici, ce qui est cohérent avec la facturation et rend la saisie
+ * fautive VISIBLE sur la page des promotions plutôt que silencieuse.
  */
-export function platEnPromotion(
-  refPrix: Prisma.FloatFieldRefInput<'Dish'>,
-): Prisma.DishWhereInput {
-  return { promotion_price: { gt: 0, lt: refPrix } };
-}
+export const PLAT_EN_PROMOTION: Prisma.DishWhereInput = {
+  is_promotion: true,
+  promotion_price: { not: null },
+};
 
 /**
  * Portée des plats d'une catégorie : la sienne, plus les promotions si elle est
@@ -53,8 +53,7 @@ export function platEnPromotion(
 export function porteeCategorie(
   categoryId: string,
   vitrine: boolean,
-  refPrix: Prisma.FloatFieldRefInput<'Dish'>,
 ): Prisma.DishWhereInput {
   if (!vitrine) return { category_id: categoryId };
-  return { OR: [{ category_id: categoryId }, platEnPromotion(refPrix)] };
+  return { OR: [{ category_id: categoryId }, PLAT_EN_PROMOTION] };
 }
