@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Customer, EntityStatus, OrderStatus, Prisma, SpiceLevel, User } from '@prisma/client';
 import type { Request } from 'express';
 import { AudienceContext, composableClause, dishAudienceClause, litCapaciteComposable } from '../utils/dish-audience.util';
+import { porteeCategorie } from '../utils/vitrine-promotions.util';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateDishDto } from 'src/modules/menu/dto/create-dish.dto';
@@ -241,10 +242,16 @@ export class DishService {
       private: false,
       ...composableClause(audience),
     };
+    // Conditions cumulables, empilées puis posées en `AND`. La portée par
+    // catégorie a besoin d'un `OR` quand la catégorie est une vitrine de
+    // promotions, or `where.OR` est déjà pris par la recherche par nom :
+    // l'écraser ferait disparaître l'un des deux filtres sans bruit.
+    const conditions: Prisma.DishWhereInput[] = [];
+
     // Masque audience : appliqué UNIQUEMENT pour un client cible (client app,
     // ou client d'une prise de commande). Staff en gestion des menus → non.
     if (audience.apply) {
-      where.AND = [dishAudienceClause(audience.customer)];
+      conditions.push(dishAudienceClause(audience.customer));
     }
     if (search) {
       where.OR = [
@@ -256,13 +263,25 @@ export class DishService {
       where.entity_status = status;
     }
     if (categoryId) {
-      where.category_id = categoryId;
+      const vitrine = await this.prisma.category.findFirst({
+        where: {
+          id: categoryId,
+          auto_promotions: true,
+          entity_status: EntityStatus.ACTIVE,
+        },
+        select: { id: true },
+      });
+      conditions.push(porteeCategorie(categoryId, vitrine !== null));
     }
     if (minPrice) {
       where.price = { gte: minPrice };
     }
     if (maxPrice) {
       where.price = { lte: maxPrice };
+    }
+
+    if (conditions.length > 0) {
+      where.AND = conditions;
     }
 
     const [count, dishesRaw] = await Promise.all([

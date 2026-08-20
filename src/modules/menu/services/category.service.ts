@@ -14,6 +14,7 @@ import { S3Service } from '../../../s3/s3.service';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { DishService } from 'src/modules/menu/services/dish.service';
 import { AudienceContext, composableClause, dishAudienceClause } from '../utils/dish-audience.util';
+import { PLAT_EN_PROMOTION, porteeCategorie } from '../utils/vitrine-promotions.util';
 
 @Injectable()
 export class CategoryService {
@@ -73,7 +74,7 @@ export class CategoryService {
   }
 
   async findAll(query: { all: boolean } = { all: false }) {
-    return this.prisma.category.findMany({
+    const categories = await this.prisma.category.findMany({
       where: {
         private: query.all ? undefined : false,
         entity_status: EntityStatus.ACTIVE,
@@ -100,6 +101,31 @@ export class CategoryService {
         name: 'asc',
       },
     });
+
+    // Le compteur ci-dessus ne sait compter que la RELATION. Une vitrine de
+    // promotions annoncerait donc le nombre de plats qu'on y a déplacés à la
+    // main, souvent zéro, alors qu'elle en présente vingt. On ajoute les
+    // promotions rattachées ailleurs.
+    const vitrines = categories.filter((categorie) => categorie.auto_promotions);
+    if (vitrines.length > 0) {
+      const filtreCommun: Prisma.DishWhereInput = {
+        entity_status: EntityStatus.ACTIVE,
+        // Même verrou composable que le compteur de la relation, sinon la
+        // vitrine annoncerait des plats que l'application n'affiche pas.
+        ...(query.all ? {} : { composable: false }),
+        ...PLAT_EN_PROMOTION,
+      };
+      await Promise.all(
+        vitrines.map(async (categorie) => {
+          const horsCategorie = await this.prisma.dish.count({
+            where: { ...filtreCommun, NOT: { category_id: categorie.id } },
+          });
+          categorie._count.dishes += horsCategorie;
+        }),
+      );
+    }
+
+    return categories;
   }
 
   // `audience.apply` : true uniquement pour la requête APP (client) ou une prise
@@ -126,24 +152,27 @@ export class CategoryService {
 
     const category = await this.prisma.category.findFirst({
       where: whereCondition,
-      include: {
-        dishes: {
-          where: dishWhere,
-          orderBy: {
-            created_at: 'desc',
-          },
-        },
-      },
     });
 
     if (!category || category.entity_status !== EntityStatus.ACTIVE) {
       throw new NotFoundException(`Catégorie non trouvée`);
     }
 
+    // Les plats sont demandés à part, et non plus par `include`, parce qu'une
+    // vitrine de promotions n'est justement PAS la relation : elle rassemble
+    // aussi des plats rattachés ailleurs. Voir `vitrine-promotions.util`.
+    const dishes = await this.prisma.dish.findMany({
+      where: {
+        ...dishWhere,
+        ...porteeCategorie(category.id, category.auto_promotions),
+      },
+      orderBy: { created_at: 'desc' },
+    });
+
     // Populater chaque plat avec ses suppléments/restaurants effectifs (modèle exclusion)
     // + excluded_supplement_ids / excluded_restaurant_ids. Sans ça, les consumers (modal
     // création de commande, etc.) reçoivent des dishes "nus" sans dish_supplements.
-    const dishesWithEffective = await this.dishService.withEffective(category.dishes);
+    const dishesWithEffective = await this.dishService.withEffective(dishes);
     return { ...category, dishes: dishesWithEffective };
   }
 
@@ -186,10 +215,16 @@ export class CategoryService {
   async remove(id: string) {
     const category = await this.findOne(id);
 
-    // Vérifier si la catégorie est liée à des plats
-    if (category.dishes && category.dishes.length > 0) {
+    // Compte demandé à la RELATION, et surtout pas à `category.dishes` : sur une
+    // vitrine de promotions, cette liste contient des plats rattachés ailleurs,
+    // qui n'empêchent en rien de la supprimer. S'y fier rendrait la vitrine
+    // indéracinable dès qu'une promotion existe quelque part.
+    const platsRattaches = await this.prisma.dish.count({
+      where: { category_id: category.id, entity_status: EntityStatus.ACTIVE },
+    });
+    if (platsRattaches > 0) {
       throw new BadRequestException(
-        `Catégorie ${category.name} non supprimée car liée à ${category.dishes.length} plats`,
+        `Catégorie ${category.name} non supprimée car liée à ${platsRattaches} plats`,
       );
     }
 

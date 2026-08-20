@@ -21,6 +21,15 @@ export class CreateCategoryDto {
   @IsBoolean()
   private?: boolean;
 
+  @ApiPropertyOptional({
+    description:
+      "Vitrine : la catégorie rassemble d'elle-même les plats en promotion, sans qu'on ait à les y déplacer",
+  })
+  @IsOptional()
+  @Transform(({ value }) => (String(value).trim() == 'true'))
+  @IsBoolean()
+  auto_promotions?: boolean;
+
   @ApiPropertyOptional({ description: 'SKU HubRise pour la correspondance catalogue' })
   @IsOptional()
   @IsString()

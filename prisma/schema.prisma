@@ -295,6 +295,11 @@ model Category {
   private     Boolean @default(false)
   hubrise_sku String? @unique @db.VarChar
 
+  /// Vitrine : la catégorie rassemble d'elle-même les plats en promotion, sans
+  /// qu'on ait à les y déplacer. Le plat reste dans SA catégorie et apparaît
+  /// aussi ici. Rien n'est déplacé en base, c'est une lecture élargie.
+  auto_promotions Boolean @default(false)
+
   dishes Dish[]
 
   entity_status                  EntityStatus                @default(ACTIVE)
