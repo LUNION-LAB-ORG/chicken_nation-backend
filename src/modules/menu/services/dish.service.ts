@@ -271,7 +271,9 @@ export class DishService {
         },
         select: { id: true },
       });
-      conditions.push(porteeCategorie(categoryId, vitrine !== null));
+      conditions.push(
+        porteeCategorie(categoryId, vitrine !== null, this.prisma.dish.fields.price),
+      );
     }
     if (minPrice) {
       where.price = { gte: minPrice };

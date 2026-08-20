@@ -14,7 +14,7 @@ import { S3Service } from '../../../s3/s3.service';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { DishService } from 'src/modules/menu/services/dish.service';
 import { AudienceContext, composableClause, dishAudienceClause } from '../utils/dish-audience.util';
-import { PLAT_EN_PROMOTION, porteeCategorie } from '../utils/vitrine-promotions.util';
+import { platEnPromotion, porteeCategorie } from '../utils/vitrine-promotions.util';
 
 @Injectable()
 export class CategoryService {
@@ -113,7 +113,7 @@ export class CategoryService {
         // Même verrou composable que le compteur de la relation, sinon la
         // vitrine annoncerait des plats que l'application n'affiche pas.
         ...(query.all ? {} : { composable: false }),
-        ...PLAT_EN_PROMOTION,
+        ...platEnPromotion(this.prisma.dish.fields.price),
       };
       await Promise.all(
         vitrines.map(async (categorie) => {
@@ -164,7 +164,11 @@ export class CategoryService {
     const dishes = await this.prisma.dish.findMany({
       where: {
         ...dishWhere,
-        ...porteeCategorie(category.id, category.auto_promotions),
+        ...porteeCategorie(
+          category.id,
+          category.auto_promotions,
+          this.prisma.dish.fields.price,
+        ),
       },
       orderBy: { created_at: 'desc' },
     });
