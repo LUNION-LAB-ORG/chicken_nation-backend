@@ -5,6 +5,7 @@ import { LoyaltyService } from './services/loyalty.service';
 import { LoyaltyController } from './controllers/loyalty.controller';
 import { RewardService } from './services/reward.service';
 import { RewardController } from './controllers/reward.controller';
+import { RewardAdminController } from './controllers/reward-admin.controller';
 import { RewardCampaignService } from './services/reward-campaign.service';
 import { RewardCampaignController } from './controllers/reward-campaign.controller';
 import { ScratchEngineService } from './services/scratch-engine.service';
@@ -23,7 +24,7 @@ import { VoucherModule } from '../voucher/voucher.module';
 
 @Module({
     imports: [VoucherModule],
-    controllers: [PromotionController, LoyaltyController, RewardController, RewardCampaignController, ScratchLotController],
+    controllers: [PromotionController, LoyaltyController, RewardController, RewardAdminController, RewardCampaignController, ScratchLotController],
     providers: [
         PromotionService,
         LoyaltyService,

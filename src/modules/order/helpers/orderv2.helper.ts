@@ -326,13 +326,55 @@ export class OrderV2Helper {
       //
       // Un plat ordinaire ne déclenche AUCUNE requête : tant que le catalogue
       // n'a pas de menu composable, ce chemin est strictement neutre.
-      const { total: optionsUnitaire, items: optionsRetenues } =
-        dish.composable || (item.option_item_ids?.length ?? 0) > 0
-          ? await this.dishOptionService.resoudreSelection(
-              dish.id,
-              item.option_item_ids ?? [],
-            )
+      /**
+       * CADEAU sur un plat composable : le client n'a composé nulle part.
+       *
+       * Un cadeau ne passe par aucun écran de composition, l'application
+       * l'envoie sans le moindre choix. La commande ENTIÈRE était donc refusée,
+       * articles payants compris, avec un message demandant d'ouvrir depuis le
+       * panier un article qui ne s'y trouve pas. On applique ici la composition
+       * par défaut du plat, celle que le gestionnaire a désignée.
+       */
+      const choixOfferts =
+        isGift && dish.composable && (item.option_item_ids?.length ?? 0) === 0
+          ? await this.dishOptionService.choixParDefaut(dish.id)
+          : null;
+
+      // `null` signifie qu'un groupe obligatoire n'a aucun choix disponible :
+      // le plat est mal configuré. Le dire ici, plutôt que de laisser tomber le
+      // refus générique « mettez à jour l'application », qui n'a aucun sens
+      // pour un cadeau et enverrait le client dans un écran inexistant.
+      if (isGift && dish.composable && choixOfferts === null) {
+        throw new BadRequestException(
+          `${dish.name} ne peut pas être offert pour le moment : un de ses choix obligatoires n'a aucune option disponible.`,
+        );
+      }
+
+      const choixDemandes = choixOfferts ?? item.option_item_ids ?? [];
+
+      const { total: optionsBrutes, items: optionsBrutesRetenues } =
+        dish.composable || choixDemandes.length > 0
+          ? await this.dishOptionService.resoudreSelection(dish.id, choixDemandes)
           : { total: 0, items: [] };
+
+      /**
+       * Composition offerte : le supplément de prix de chaque choix est remis à
+       * zéro sur la ligne enregistrée. Sans cela, le reçu et le détail de la
+       * commande afficheraient « XL +1 000 F » sur une ligne où rien n'a été
+       * encaissé, et le total ne se retrouverait pas à la lecture.
+       */
+      const optionsRetenues = choixOfferts
+        ? optionsBrutesRetenues.map((o) => ({ ...o, price_delta: 0 }))
+        : optionsBrutesRetenues;
+
+      /**
+       * La composition par défaut d'un cadeau ne se facture PAS : le client n'a
+       * rien ajouté, il reçoit le plat tel que la maison le sert. La règle
+       * « un cadeau couvre la base, pas ce que le client ajoute par dessus »
+       * garde tout son sens dès qu'il compose lui-même, cas où
+       * `choixOfferts` vaut null et où le total est facturé comme avant.
+       */
+      const optionsUnitaire = choixOfferts ? 0 : optionsBrutes;
 
       // 2. Prix de base du plat — 0 fr pour un cadeau, sinon prix (promotion plat éventuelle).
       const dishBasePrice = isGift

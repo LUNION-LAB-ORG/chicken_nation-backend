@@ -1,6 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, RewardStatus, RewardType } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { platOffrable } from 'src/modules/menu/utils/plat-offrable.util';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
 
 /**
@@ -497,5 +498,111 @@ export class RewardService {
             this.logger.log(`Cadeau(x) restauré(s) après annulation (commande ${order_id}): ${res.count}`);
         }
         return res;
+    }
+
+    /**
+     * Repointe un cadeau DÉJÀ DISTRIBUÉ vers un autre plat.
+     *
+     * Ce geste n'existait nulle part. Le backoffice refusait de rendre un plat
+     * composable tant qu'un cadeau le désignait, en demandant « faites pointer
+     * ce cadeau sur un autre plat », alors qu'aucun écran ne le permettait :
+     * repointer le lot ou la campagne ne touche pas les cadeaux déjà émis, dont
+     * le contenu est un instantané figé au moment du tirage.
+     *
+     * ⚠️ Les cinq clés du contenu se repointent ENSEMBLE. Ne changer que
+     * `dish_id` laisserait l'application afficher l'ancien nom, l'ancien prix
+     * et l'ancienne image sur un cadeau qui en offre un autre. Seul `dish_id`
+     * fait foi au panier, l'écart serait donc invisible jusqu'à la réclamation.
+     */
+    async repointerCadeauVersPlat(rewardId: string, nouveauPlatId: string) {
+        const reward = await this.prisma.reward.findUnique({
+            where: { id: rewardId },
+            select: { id: true, type: true, status: true, payload: true },
+        });
+        if (!reward) throw new NotFoundException('Cadeau introuvable');
+        if (reward.type !== RewardType.GIFT) {
+            throw new BadRequestException("Cette récompense n'est pas un cadeau");
+        }
+        const utilisable: RewardStatus[] = [RewardStatus.PENDING, RewardStatus.SCRATCHED];
+        if (!utilisable.includes(reward.status)) {
+            throw new BadRequestException(
+                'Ce cadeau est déjà utilisé ou annulé, il ne se repointe plus',
+            );
+        }
+
+        const plat = await this.prisma.dish.findUnique({
+            where: { id: nouveauPlatId },
+            select: { id: true, name: true, price: true, image: true, composable: true, entity_status: true },
+        });
+        if (!plat) throw new NotFoundException('Plat de remplacement introuvable');
+        if (plat.entity_status !== 'ACTIVE') {
+            throw new BadRequestException("Ce plat n'est plus actif");
+        }
+        // Un plat composable s'offre : le serveur applique sa composition par
+        // défaut au moment de la commande. Reste à écarter celui dont un groupe
+        // obligatoire n'offre aucun choix disponible.
+        const offrable = await platOffrable(this.prisma, plat.id);
+        if (!offrable.ok) {
+            throw new BadRequestException(
+                `Ce plat ne peut pas être offert : ${offrable.raison}.`,
+            );
+        }
+
+        const ancien = (reward.payload ?? {}) as Record<string, unknown>;
+        const contenu: Record<string, unknown> = {
+            ...ancien,
+            item_type: 'DISH',
+            dish_id: plat.id,
+            label: plat.name,
+            name: plat.name,
+            price: plat.price,
+        };
+        // L'ancienne image ne doit pas survivre si le nouveau plat n'en a pas.
+        if (plat.image) contenu.image = plat.image;
+        else delete contenu.image;
+
+        const maj = await this.prisma.reward.update({
+            where: { id: reward.id },
+            data: { payload: contenu as Prisma.InputJsonValue, updated_at: new Date() },
+            select: { id: true, status: true, payload: true },
+        });
+
+        this.logger.log(
+            `Cadeau ${reward.id} repointé vers le plat ${plat.id} (${plat.name})`,
+        );
+        return maj;
+    }
+
+    /**
+     * Annule un cadeau déjà distribué.
+     *
+     * Dernier recours quand aucun plat de remplacement ne convient. Le client
+     * ne reçoit aucune notification : il le découvre en ouvrant « Mes cadeaux »,
+     * où la ligne bascule en « Annulé ». À réserver aux cadeaux qu'il ne voyait
+     * de toute façon plus, et à compenser autrement dans le cas contraire.
+     */
+    async revoquerCadeau(rewardId: string, motif?: string) {
+        const reward = await this.prisma.reward.findUnique({
+            where: { id: rewardId },
+            select: { id: true, type: true, status: true, reason: true },
+        });
+        if (!reward) throw new NotFoundException('Cadeau introuvable');
+        if (reward.type !== RewardType.GIFT) {
+            throw new BadRequestException("Cette récompense n'est pas un cadeau");
+        }
+        const utilisable: RewardStatus[] = [RewardStatus.PENDING, RewardStatus.SCRATCHED];
+        if (!utilisable.includes(reward.status)) {
+            throw new BadRequestException('Ce cadeau est déjà utilisé ou annulé');
+        }
+
+        return this.prisma.reward.update({
+            where: { id: reward.id },
+            data: {
+                status: RewardStatus.REVOKED,
+                reason: motif ? `${reward.reason ?? ''} | ${motif}`.trim() : reward.reason,
+                updated_at: new Date(),
+            },
+            select: { id: true, status: true },
+        });
     }
 }

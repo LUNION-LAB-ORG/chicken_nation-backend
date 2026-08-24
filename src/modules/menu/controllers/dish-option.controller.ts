@@ -39,6 +39,15 @@ export class DishOptionController {
     return this.dishOptionService.replaceForDish(dishId, dto.groups);
   }
 
+  @Get('usages-cadeau')
+  @ApiOperation({
+    summary: "Ce qui empêche ce plat de devenir composable (lots, campagnes, cadeaux déjà distribués)",
+  })
+  @RequirePermission(Modules.MENUS, Action.READ)
+  usagesCadeau(@Param('dishId') dishId: string) {
+    return this.dishOptionService.usagesCadeau(dishId);
+  }
+
   @Post('copier-vers/:cibleId')
   @ApiOperation({ summary: "Copier cette configuration sur un autre plat" })
   @RequirePermission(Modules.MENUS, Action.UPDATE)

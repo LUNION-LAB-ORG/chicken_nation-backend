@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EntityStatus, Prisma, RewardStatus, RewardType } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { platOffrable } from 'src/modules/menu/utils/plat-offrable.util';
 import { ExpoPushService } from 'src/expo-push/expo-push.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { CreateRewardCampaignDto } from '../dto/create-reward-campaign.dto';
@@ -248,14 +249,16 @@ export class RewardCampaignService {
       if (!dish || dish.entity_status === EntityStatus.DELETED) {
         throw new BadRequestException('Plat introuvable ou indisponible.');
       }
-      // MENUS COMPOSABLES : un plat composable n'a de prix qu'une fois ses
-      // options choisies. L'offrir reviendrait à offrir aussi ses options
-      // payantes, format compris, puisque la ligne cadeau est mise à zéro en
-      // entier. Tant que le cadeau ne sait pas couvrir le seul plat de base,
-      // il se refuse à la configuration plutôt qu'à la commande.
-      if (dish.composable) {
+      /**
+       * MENUS COMPOSABLES : un plat composable s'offre désormais. Le serveur
+       * applique sa composition PAR DÉFAUT au moment de la commande, sans la
+       * facturer puisque le client n'a rien ajouté. Ne reste refusé que le plat
+       * dont un groupe obligatoire n'offre aucun choix disponible.
+       */
+      const offrable = await platOffrable(this.prisma, dish.id);
+      if (!offrable.ok) {
         throw new BadRequestException(
-          `${dish.name} se compose par le client (sauce, format). Choisissez un plat sans options comme cadeau.`,
+          `${dish.name} ne peut pas être offert : ${offrable.raison}.`,
         );
       }
       return {

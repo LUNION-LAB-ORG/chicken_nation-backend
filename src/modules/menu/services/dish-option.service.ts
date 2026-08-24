@@ -1,6 +1,11 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, RewardStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import {
+  choixParDefaut,
+  compositionOffrable,
+  platOffrable,
+} from '../utils/plat-offrable.util';
 import { DishOptionGroupDto } from '../dto/dish-option-group.dto';
 
 /**
@@ -126,12 +131,18 @@ export class DishOptionService {
 
     this.valider(groups);
 
-    // Verrou inverse : rendre composable un plat déjà promis comme cadeau
-    // rendrait ce cadeau invalide en silence, puisqu'un plat composable ne
-    // s'offre pas tant que le cadeau ne sait pas couvrir la seule base. On
-    // refuse le passage tant que les lots concernés n'ont pas été repointés.
+    /**
+     * Verrou inverse, désormais BEAUCOUP plus étroit.
+     *
+     * Rendre un plat composable ne casse plus les cadeaux qui le désignent : le
+     * serveur applique leur composition par défaut au moment de la commande.
+     * Reste un seul cas à refuser, celui où la configuration entrante ne
+     * pourrait pas être composée du tout, parce qu'un groupe obligatoire n'y
+     * offre aucun choix disponible.
+     */
     if (groups.length > 0) {
-      await this.assertPasUtiliseCommeCadeau(dishId);
+      const composable = compositionOffrable(groups);
+      if (!composable.ok) await this.assertPasUtiliseCommeCadeau(dishId, composable.raison);
     }
 
     // Les suppléments rattachés doivent exister, sinon la clé étrangère lâche
@@ -233,52 +244,117 @@ export class DishOptionService {
   }
 
   /**
-   * Refuse de rendre composable un plat encore désigné comme cadeau, que ce
-   * soit par un lot du jeu ou par une campagne de récompense. Le lien vit dans
-   * un champ JSON, sous la clé `dish_id` posée par les deux constructeurs de
-   * cadeaux.
+   * Tout ce qui désigne ce plat comme cadeau, en clair.
+   *
+   * Sert à deux choses : refuser de le rendre composable, et DIRE au
+   * gestionnaire ce qui bloque exactement. L'ancienne version ne renvoyait
+   * qu'une phrase, or elle demandait « faites pointer ce cadeau sur un autre
+   * plat » alors qu'aucun écran du backoffice ne permet de toucher un cadeau
+   * déjà distribué. Le message envoyait donc dans le mur.
+   *
+   * Le lien vit dans un champ JSON, sous la clé `dish_id` posée par tous les
+   * constructeurs de cadeaux.
    */
-  private async assertPasUtiliseCommeCadeau(dishId: string) {
-    const [lots, campagnes, cadeauxEnMain] = await Promise.all([
+  async usagesCadeau(dishId: string) {
+    const [lots, campagnes, cadeaux, combos] = await Promise.all([
       this.prisma.scratchLot.findMany({
         where: {
           reward_type: 'GIFT',
           payload: { path: ['dish_id'], equals: dishId },
         },
-        select: { label: true },
+        select: { id: true, label: true, active: true },
       }),
       this.prisma.rewardCampaign.findMany({
         where: {
           type: 'GIFT',
           payload: { path: ['dish_id'], equals: dishId },
         },
-        select: { name: true },
+        select: { id: true, name: true, status: true },
       }),
-      // Cadeaux DÉJÀ DISTRIBUÉS et pas encore utilisés. Un lot repointé vers un
-      // autre plat laisse derrière lui des récompenses qui, elles, désignent
-      // toujours l'ancien plat : sans ce contrôle, il suffirait de repointer le
-      // lot pour rendre le plat composable et casser ces cadeaux-là.
-      this.prisma.reward.count({
+      /**
+       * Cadeaux DÉJÀ DISTRIBUÉS et encore utilisables. Un lot repointé vers un
+       * autre plat laisse derrière lui des récompenses qui, elles, désignent
+       * toujours l'ancien plat : sans ce contrôle, il suffirait de repointer le
+       * lot pour rendre le plat composable et casser ces cadeaux-là.
+       *
+       * ⚠️ Les cadeaux EXPIRÉS sont écartés. Le client ne les voit plus depuis
+       * longtemps (`getRedeemableGifts` filtre `expires_at`), ils ne peuvent
+       * plus être utilisés, et pourtant l'ancienne version les comptait : un
+       * seul cadeau périmé bloquait la configuration du plat pour toujours,
+       * sans aucun moyen de s'en défaire depuis le backoffice.
+       */
+      this.prisma.reward.findMany({
         where: {
           type: 'GIFT',
           status: { in: [RewardStatus.PENDING, RewardStatus.SCRATCHED] },
           payload: { path: ['dish_id'], equals: dishId },
+          OR: [{ expires_at: null }, { expires_at: { gt: new Date() } }],
         },
+        select: {
+          id: true,
+          status: true,
+          expires_at: true,
+          created_at: true,
+          customer: { select: { id: true, first_name: true, last_name: true, phone: true } },
+        },
+        orderBy: { created_at: 'desc' },
+      }),
+      /**
+       * Combo Mystère, à titre INFORMATIF seulement. Une partie en cours dont
+       * le lot désigne ce plat redistribuera des cadeaux à sa clôture, et le
+       * blocage reviendra après coup. On le montre pour que le gestionnaire ne
+       * se fasse pas surprendre, sans en faire un refus de plus.
+       */
+      this.prisma.comboGame.findMany({
+        where: { prize: { path: ['payload', 'dish_id'], equals: dishId } },
+        select: { id: true, title: true, status: true },
       }),
     ]);
 
-    const usages = [
-      ...lots.map((l) => `lot « ${l.label} »`),
-      ...campagnes.map((c) => `campagne « ${c.name} »`),
-      ...(cadeauxEnMain > 0
-        ? [`${cadeauxEnMain} cadeau${cadeauxEnMain > 1 ? 'x' : ''} déjà distribué${cadeauxEnMain > 1 ? 's' : ''} et non utilisé${cadeauxEnMain > 1 ? 's' : ''}`]
-        : []),
-    ];
-    if (usages.length === 0) return;
+    return {
+      lots,
+      campagnes,
+      cadeaux: cadeaux.map((r) => ({
+        id: r.id,
+        status: r.status,
+        expires_at: r.expires_at,
+        client: [r.customer?.first_name, r.customer?.last_name]
+          .filter(Boolean)
+          .join(' ')
+          .trim(),
+        telephone: r.customer?.phone ?? null,
+      })),
+      combos,
+      /** Vrai si quelque chose empêche réellement le passage en composable. */
+      bloquant: lots.length > 0 || campagnes.length > 0 || cadeaux.length > 0,
+    };
+  }
 
-    throw new BadRequestException(
-      `Ce plat est offert par ${usages.join(', ')}. Faites pointer ${usages.length > 1 ? 'ces cadeaux' : 'ce cadeau'} sur un autre plat avant de le rendre composable.`,
-    );
+  /**
+   * Refuse de rendre composable un plat encore désigné comme cadeau.
+   *
+   * Le message nomme chaque usage séparément et, pour les cadeaux déjà
+   * distribués, dit qui les détient : c'est la seule information à partir de
+   * laquelle le gestionnaire peut agir.
+   */
+  private async assertPasUtiliseCommeCadeau(dishId: string, raison?: string) {
+    const usages = await this.usagesCadeau(dishId);
+    if (!usages.bloquant) return;
+
+    const parties = [
+      ...usages.lots.map((l) => `le lot « ${l.label} »`),
+      ...usages.campagnes.map((c) => `la campagne « ${c.name} »`),
+      ...usages.cadeaux.map(
+        (r) =>
+          `un cadeau détenu par ${r.client || 'un client'}${r.telephone ? ` (${r.telephone})` : ''}`,
+      ),
+    ];
+
+    throw new BadRequestException({
+      message: `Ce plat est offert par ${parties.join(', ')}, et ${raison ?? "la configuration demandée ne pourrait pas être composée"}.`,
+      code: 'PLAT_OFFERT_EN_CADEAU',
+      usages,
+    });
   }
 
   /**
@@ -310,6 +386,16 @@ export class DishOptionService {
       })),
     }));
     return this.replaceForDish(cibleDishId, copie);
+  }
+
+  /** Composition par défaut d'un plat composable. Voir `plat-offrable.util`. */
+  choixParDefaut(dishId: string) {
+    return choixParDefaut(this.prisma, dishId);
+  }
+
+  /** Ce plat peut-il être offert tel qu'il est configuré ? */
+  peutEtreOffert(dishId: string) {
+    return platOffrable(this.prisma, dishId);
   }
 
   /**
