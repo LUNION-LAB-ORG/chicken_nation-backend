@@ -199,14 +199,34 @@ export class TicketService {
       averageResolutionTime = Math.round(totalMs / resolvedTickets.length / 60000); // en minutes
     }
 
-    // Tickets avec au moins un message non lu (de client)
+    /**
+     * Tickets À TRAITER : au moins un message entrant non lu.
+     *
+     * Deux corrections, car ce compteur pointait vers des tickets que le
+     * gestionnaire ne pouvait pas atteindre.
+     *
+     * ⚠️ Les tickets CLOS sont exclus. Fermer un ticket ne marquait pas ses
+     * messages comme lus : un ticket fermé sans avoir jamais été ouvert
+     * gardait ses messages non lus À VIE et gonflait le badge pour toujours.
+     * Le gestionnaire lisait « 5 » et ne trouvait rien, puisque ces cinq-là
+     * étaient réglés depuis longtemps.
+     *
+     * ⚠️ Les messages de LIVREURS comptent aussi. Le compteur ne regardait que
+     * `authorCustomerId`, alors que le badge posé sur chaque ligne de la liste
+     * accepte les deux (voir `includeFields`). Un ticket livreur non lu
+     * s'affichait donc en gras sans jamais entrer dans le total du menu.
+     */
     const unreadTickets = await this.prisma.ticketThread.count({
       where: {
         ...baseWhere,
+        status: { notIn: [TicketStatus.RESOLVED, TicketStatus.CLOSED] },
         messages: {
           some: {
             isRead: false,
-            authorCustomerId: { not: null },
+            OR: [
+              { authorCustomerId: { not: null } },
+              { authorDelivererId: { not: null } },
+            ],
           },
         },
       },
@@ -451,6 +471,24 @@ export class TicketService {
 
   async closeTicket(id: string): Promise<ResponseTicketDto> {
     // this.logger.log(`Fermeture du ticket ${id}`);
+
+    /**
+     * Fermer un ticket, c'est le déclarer réglé : ses messages entrants ne sont
+     * plus « à lire ». Sans cette écriture, un ticket fermé sans avoir été
+     * ouvert restait compté comme non lu indéfiniment, et le badge du menu
+     * annonçait des tickets que plus personne ne pouvait traiter.
+     */
+    await this.prisma.ticketMessage.updateMany({
+      where: {
+        ticketId: id,
+        isRead: false,
+        OR: [
+          { authorCustomerId: { not: null } },
+          { authorDelivererId: { not: null } },
+        ],
+      },
+      data: { isRead: true },
+    });
 
     const ticket = await this.prisma.ticketThread.update({
       where: { id },

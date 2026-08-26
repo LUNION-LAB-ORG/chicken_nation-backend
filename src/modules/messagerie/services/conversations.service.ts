@@ -482,6 +482,22 @@ export class ConversationsService {
       this.prisma.conversation.findMany({
         where: whereClause,
         include: this.createConversationInclude(),
+        /**
+         * ⚠️ Tri INDISPENSABLE, et pas seulement confortable.
+         *
+         * Sans `orderBy`, Postgres renvoie les lignes dans l'ordre physique du
+         * heap, qui n'est ni stable ni reproductible d'une requête à l'autre.
+         * Combiné à une pagination par décalage (`skip`/`take`), cela produit
+         * des conversations vues deux fois sur deux pages et d'autres jamais
+         * vues. Le défaut passait inaperçu tant que le backoffice demandait 50
+         * conversations d'un coup, c'est-à-dire presque tout : il éclate dès
+         * qu'on pagine réellement.
+         *
+         * `updatedAt` est bien la bonne clé ici : `message.service` l'écrit à
+         * chaque message (voir `conversation.update`), donc la conversation la
+         * plus active remonte en tête, ce qu'attend le gestionnaire.
+         */
+        orderBy: { updatedAt: 'desc' },
         skip: skip,
         take: limit,
       }),
@@ -578,6 +594,22 @@ export class ConversationsService {
       this.prisma.conversation.findMany({
         where: whereClause,
         include: this.createConversationInclude(),
+        /**
+         * ⚠️ Tri INDISPENSABLE, et pas seulement confortable.
+         *
+         * Sans `orderBy`, Postgres renvoie les lignes dans l'ordre physique du
+         * heap, qui n'est ni stable ni reproductible d'une requête à l'autre.
+         * Combiné à une pagination par décalage (`skip`/`take`), cela produit
+         * des conversations vues deux fois sur deux pages et d'autres jamais
+         * vues. Le défaut passait inaperçu tant que le backoffice demandait 50
+         * conversations d'un coup, c'est-à-dire presque tout : il éclate dès
+         * qu'on pagine réellement.
+         *
+         * `updatedAt` est bien la bonne clé ici : `message.service` l'écrit à
+         * chaque message (voir `conversation.update`), donc la conversation la
+         * plus active remonte en tête, ce qu'attend le gestionnaire.
+         */
+        orderBy: { updatedAt: 'desc' },
         skip: skip,
         take: limit,
       }),

@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Transform, Type } from "class-transformer";
-import { IsArray, IsDateString, IsEnum, IsNumber, IsOptional, IsString, IsUUID, Min } from "class-validator";
+import { IsArray, IsDateString, IsEnum, IsNumber, IsOptional, IsString, IsUUID, Max, Min } from "class-validator";
 import { TicketPriority, TicketStatus } from "@prisma/client";
 
 export class QueryTicketsDto {
@@ -9,9 +9,20 @@ export class QueryTicketsDto {
     @Min(1) @Type(() => Number)
     page?: number = 1;
 
+    /**
+     * ⚠️ Bornes resserrées, `@Min(0)` était deux fois piégeux.
+     *
+     * `limit=0` donnait une liste vide ET `totalPages = Math.ceil(total / 0)`,
+     * soit `Infinity`, sérialisé en `null` dans le JSON : un défilement infini
+     * qui lit `meta.totalPages` s'arrête net ou tourne en rond.
+     *
+     * Et sans plafond, chaque ticket de la liste embarquant jusqu'à cinquante
+     * messages avec leurs auteurs, une page de 200 tickets ferait dix mille
+     * messages dans une seule réponse.
+     */
     @ApiProperty({ required: false, default: 10 })
     @IsOptional()
-    @IsNumber() @Min(0)
+    @IsNumber() @Min(1) @Max(50)
     @Type(() => Number)
     limit?: number = 10;
 

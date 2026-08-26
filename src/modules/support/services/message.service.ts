@@ -68,8 +68,25 @@ export class TicketMessageService {
                 },
                 include: this.MessageInclude,
             }),
-            this.prisma.ticketThread.findUnique({
+            /**
+             * ⚠️ `update` et non `findUnique` : on a besoin des mêmes champs,
+             * mais SURTOUT de faire remonter le ticket dans la liste.
+             *
+             * La liste du backoffice est triée par `updatedAt desc`, or
+             * `TicketThread.updatedAt` est un `@updatedAt` Prisma : il ne bouge
+             * que si la LIGNE DU THREAD est écrite. Créer un message n'y
+             * touchait pas. Résultat, un ticket qui recevait un message frais
+             * ne remontait pas d'un pixel, pendant que les tickets simplement
+             * fermés remontaient en tête parce que `closeTicket`, lui, écrit le
+             * thread. La première page ne montrait donc que des tickets clos, et
+             * les tickets à traiter coulaient hors de portée : le gestionnaire
+             * voyait « 5 non lus » au menu sans jamais pouvoir les trouver.
+             *
+             * `data: {}` suffit : Prisma pose `updatedAt` de lui-même.
+             */
+            this.prisma.ticketThread.update({
                 where: { id: ticketId },
+                data: {},
                 select: {
                     customerId: true,
                     delivererId: true,
