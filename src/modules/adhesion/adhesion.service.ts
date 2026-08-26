@@ -4,7 +4,10 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { S3Service } from 'src/s3/s3.service';
 import { CardRequestService } from 'src/modules/card-nation/services/card-request.service';
 import { CreateAdhesionDto } from './dto/create-adhesion.dto';
-import { customerPhoneVariants } from 'src/common/utils/customer-phone.util';
+import {
+  customerPhoneVariants,
+  normaliserTelephoneCI,
+} from 'src/common/utils/customer-phone.util';
 
 /**
  * Tunnel d'adhésion (Phase 4) — PRÉ-INSCRIPTION SILENCIEUSE depuis le site.
@@ -164,24 +167,21 @@ export class AdhesionService {
   }
 
   /**
-   * Normalise un téléphone en E.164 `+<indicatif><numéro>` — INTERNATIONAL,
-   * défaut CI (décision 30/07 : plus aucune contrainte de pays).
+   * Normalise un téléphone en E.164 `+<indicatif><numéro>`, Côte d'Ivoire par
+   * défaut. La règle vit dans `customer-phone.util` et est la MÊME que celle du
+   * formulaire du site, pour que les deux ne divergent jamais.
    *
-   *  - saisie LOCALE ivoirienne (10 chiffres commençant par 0) → `+225…` ;
-   *  - `00` initial → `+` (graphie internationale historique) ;
-   *  - sinon → `+<chiffres>` tel que saisi (l'indicatif pays fait partie de
-   *    la saisie : +221 77 123 45 67 reste +221771234567 — plus JAMAIS
-   *    tronqué/re-préfixé +225 comme avant, ce qui corrompait les numéros
-   *    étrangers).
-   * Même canonique que le login OTP de l'app (canonicalizeCustomerPhone) → la
-   * pré-inscription et le compte créé au login se rejoignent (RG-07).
+   * Refuse au lieu d'enregistrer un numéro injoignable : voir le commentaire de
+   * `normaliserTelephoneCI` pour les cas écartés et pourquoi.
    */
   private normalizePhone(raw: string): string {
-    let cleaned = (raw || '').trim();
-    if (cleaned.startsWith('00')) cleaned = `+${cleaned.slice(2)}`;
-    const digits = cleaned.replace(/\D/g, '');
-    if (/^0\d{9}$/.test(digits)) return `+225${digits}`; // local CI
-    return `+${digits}`;
+    const normalise = normaliserTelephoneCI(raw);
+    if (!normalise) {
+      throw new BadRequestException(
+        "Ce numéro n'est pas exploitable. Saisissez vos dix chiffres (ex. 07 07 00 00 00), ou ajoutez l'indicatif du pays pour un numéro étranger.",
+      );
+    }
+    return normalise;
   }
 
   private splitName(name: string): {
