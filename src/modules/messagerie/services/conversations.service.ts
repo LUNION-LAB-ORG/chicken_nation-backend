@@ -430,6 +430,17 @@ export class ConversationsService {
           conversation: conversationWhere,
           isRead: false,
           authorUserId: { not: user.id },
+          /**
+           * ⚠️ Même exclusion que dans les compteurs par conversation.
+           *
+           * Sans elle, chaque destinataire d'une diffusion ajoute un message
+           * « non lu » à la pastille du menu, alors que ce message a été
+           * envoyé PAR le personnel. Et comme la conversation est justement
+           * masquée de la boîte de réception tant que le client n'a pas
+           * répondu, aucun agent ne peut aller la lire : la pastille resterait
+           * gonflée pour toujours, et s'additionnerait à chaque diffusion.
+           */
+          broadcastId: null,
         },
       }),
     ]);
@@ -442,6 +453,8 @@ export class ConversationsService {
           some: {
             isRead: false,
             authorUserId: { not: user.id },
+            // Voir ci-dessus : un message de diffusion n'est pas à lire.
+            broadcastId: null,
           },
         },
       },
@@ -592,7 +605,21 @@ export class ConversationsService {
 
     const [conversations, total] = await Promise.all([
       this.prisma.conversation.findMany({
-        where: whereClause,
+      /**
+       * ⚠️ Les canaux de DIFFUSION sont écartés de la boîte de réception tant
+       * que le client n'a pas répondu.
+       *
+       * Une diffusion à mille clients crée mille conversations. Sans ce filtre,
+       * une seule campagne noierait entièrement le service client, et la
+       * suivante recommencerait. Dès la première réponse, `hasReply` passe à
+       * vrai et la conversation redevient ordinaire : elle remonte alors avec le
+       * message diffusé en première ligne d'historique, pour que l'agent voie à
+       * quoi le client répond.
+       *
+       * Le client, lui, voit toujours ses diffusions : ce filtre ne s'applique
+       * qu'au chemin backoffice (`getUserConversations`).
+       */
+      where: { AND: [whereClause, { OR: [{ isBroadcast: false }, { hasReply: true }] }] },
         include: this.createConversationInclude(),
         /**
          * ⚠️ Tri INDISPENSABLE, et pas seulement confortable.
@@ -613,7 +640,9 @@ export class ConversationsService {
         skip: skip,
         take: limit,
       }),
-      this.prisma.conversation.count({ where: whereClause }),
+      this.prisma.conversation.count({
+        where: { AND: [whereClause, { OR: [{ isBroadcast: false }, { hasReply: true }] }] },
+      }),
     ]);
 
     // this.logger.debug('Liste des conversations user: ', conversations, total);
@@ -723,7 +752,13 @@ export class ConversationsService {
       where: {
         conversationId,
         isRead: false,
-        ...(type === 'user' ? { authorUserId: { not: authId } } : {}),
+        /**
+         * ⚠️ Un message de DIFFUSION n'est pas « non lu » pour le personnel :
+         * c'est le personnel qui l'a envoyé. Sans cette exclusion, chaque
+         * diffusion ferait apparaître autant de conversations non lues qu'elle
+         * a de destinataires, et le compteur du menu deviendrait inutilisable.
+         */
+        ...(type === 'user' ? { authorUserId: { not: authId }, broadcastId: null } : {}),
         ...(type === 'customer' ? { authorCustomerId: { not: authId } } : {}),
       },
     });
@@ -744,7 +779,8 @@ export class ConversationsService {
       where: {
         conversationId: { in: conversationIds },
         isRead: false,
-        ...(type === 'user' ? { authorUserId: { not: authId } } : {}),
+        // Même exclusion que ci-dessus : voir `countUnreadMessages`.
+        ...(type === 'user' ? { authorUserId: { not: authId }, broadcastId: null } : {}),
         ...(type === 'customer' ? { authorCustomerId: { not: authId } } : {}),
       },
       _count: { id: true },

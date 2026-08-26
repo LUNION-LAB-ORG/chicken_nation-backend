@@ -404,6 +404,9 @@ model Customer {
   retentionCallbacks RetentionCallback[]
   prospects          Prospect[]
   scratch_draws      ScratchDraw[]
+
+  /// Diffusions de messages dont ce client est destinataire.
+  broadcast_recipients MessageBroadcastRecipient[]
 }
 
 // -------------------- Livreurs (deliverers) ------------------------------
@@ -755,6 +758,17 @@ model Conversation {
   id      String  @id @default(uuid()) @db.Uuid
   subject String? @db.VarChar
 
+  /// Canal officiel de diffusion : cette conversation a été créée par une
+  /// diffusion, pas par un échange. Elle reste HORS de la boîte de réception
+  /// du backoffice tant que le client n'a pas répondu, sinon une seule
+  /// diffusion à mille clients noierait le service client pour de bon.
+  isBroadcast Boolean @default(false)
+
+  /// Le client a répondu au moins une fois. La conversation redevient alors
+  /// ordinaire et réapparaît dans la boîte de réception, le message diffusé
+  /// en première ligne d'historique pour que l'agent voie à quoi il répond.
+  hasReply Boolean @default(false)
+
   restaurantId String?     @db.Uuid
   restaurant   Restaurant? @relation(fields: [restaurantId], references: [id])
 
@@ -800,6 +814,12 @@ model Message {
   isRead    Boolean  @default(false) // Si le message a été lu
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  /// Message issu d'une diffusion. Sert à l'exclure des compteurs de non lus
+  /// du backoffice, et à garantir qu'une même diffusion n'écrit qu'une seule
+  /// fois dans une conversation (index unique partiel posé en SQL brut).
+  broadcastId String?           @db.Uuid
+  broadcast   MessageBroadcast? @relation(fields: [broadcastId], references: [id], onDelete: SetNull)
 
   @@index([conversationId, createdAt])
   @@index([authorUserId])
@@ -2795,4 +2815,83 @@ model AuditLog {
   @@index([action])
   @@index([status_code])
   @@map("audit_logs")
+}
+
+
+/// DIFFUSION DE MESSAGES — envoyer le même message à une liste de clients.
+///
+/// Calqué sur `PushCampaign` pour le ciblage, mais l'envoi n'est pas un ticket
+/// Expo : c'est une écriture en base, une conversation par client et un message
+/// par destinataire, posée par une file en lots.
+model MessageBroadcast {
+  id   String @id @default(uuid()) @db.Uuid
+  name String @db.VarChar // Nom interne, vu du backoffice seulement
+  body String @db.Text // Le message envoyé, variables {{first_name}} comprises
+
+  /// Ciblage, même contrat que `PushCampaign` : all | segment | ids.
+  /// Le mode « filtres libres » n'est PAS exposé : son moteur ignore
+  /// l'opérateur et ne gère que 4 champs sur 15. Les critères libres passent
+  /// par un segment enregistré, qui utilise le vrai moteur.
+  target_type   String @db.VarChar
+  target_config Json
+
+  /// draft | scheduled | sending | sent | failed
+  status       String    @default("draft") @db.VarChar
+  scheduled_at DateTime? @db.Timestamp(6)
+  started_at   DateTime? @db.Timestamp(6)
+  sent_at      DateTime? @db.Timestamp(6)
+
+  /// Nombre de destinataires retenus au moment de la création. Les compteurs
+  /// d'envoyés et d'échecs ne sont PAS stockés : ils dérivent d'un `count()`
+  /// sur les destinataires. Un compteur incrémenté dérive au premier
+  /// redémarrage et devient un instrument qui ment.
+  total_targeted Int @default(0)
+
+  /// Incrémenté à chaque mise en file. Entre dans l'identifiant de tâche, sinon
+  /// une relance réutiliserait le même identifiant et BullMQ l'avalerait en
+  /// silence, sans erreur et sans job créé.
+  enqueue_seq Int @default(0)
+
+  created_by String   @db.VarChar
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  recipients MessageBroadcastRecipient[]
+  messages   Message[]
+
+  @@index([status, created_at])
+  @@index([status, scheduled_at])
+}
+
+/// Un destinataire d'une diffusion. Matérialisé à la création, ce qui fige
+/// l'audience : un client qui remplit le segment le lendemain ne recevra pas
+/// une diffusion partie la veille.
+model MessageBroadcastRecipient {
+  id           String           @id @default(uuid()) @db.Uuid
+  broadcast_id String           @db.Uuid
+  broadcast    MessageBroadcast @relation(fields: [broadcast_id], references: [id], onDelete: Cascade)
+
+  customer_id String   @db.Uuid
+  customer    Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  /// pending | sending | sent | failed
+  status String @default("pending") @db.VarChar
+
+  /// Horodatage de la réservation. Un destinataire resté en `sending` au-delà
+  /// d'un délai est repris : sans cela, un redémarrage en cours de lot les
+  /// condamnerait à ne jamais rien recevoir, sans que rien ne le signale.
+  claimed_at DateTime? @db.Timestamp(6)
+  sent_at    DateTime? @db.Timestamp(6)
+  error      String?   @db.Text
+
+  conversation_id String? @db.Uuid
+  message_id      String? @db.Uuid
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  /// Un client ne peut figurer qu'une fois dans une diffusion.
+  @@unique([broadcast_id, customer_id])
+  @@index([broadcast_id, status])
+  @@index([status, claimed_at])
 }

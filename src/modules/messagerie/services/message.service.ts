@@ -268,6 +268,21 @@ export class MessageService {
       },
       data: {
         updatedAt: new Date(),
+        /**
+         * ⚠️ Première réponse du CLIENT dans un canal de diffusion : la
+         * conversation cesse d'être une diffusion muette et redevient un
+         * échange ordinaire.
+         *
+         * C'est ce seul drapeau qui la fait réapparaître dans la boîte de
+         * réception du backoffice, laquelle écarte les diffusions sans réponse
+         * (voir `getUserConversations`). Sans lui, un client pourrait répondre
+         * à une promotion et n'obtenir jamais de réponse, sa question restant
+         * invisible du service client.
+         *
+         * Volontairement à sens unique : une conversation qui a servi ne
+         * retourne pas au silence.
+         */
+        ...(authType === 'customer' ? { hasReply: true } : {}),
       },
     });
 

@@ -29,6 +29,7 @@ import { SocketIoModule } from 'src/socket-io/socket-io.module';
 import { TwilioModule } from 'src/twilio/twilio.module';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
 import { MessagerieModule } from 'src/modules/messagerie/messagerie.module';
+import { MessageBroadcastModule } from 'src/modules/message-broadcast/message-broadcast.module';
 import { SupportModule } from 'src/modules/support/support.module';
 import { VoucherModule } from 'src/modules/voucher/voucher.module';
 import { TurboModule } from 'src/turbo/turbo.module';
@@ -115,6 +116,7 @@ import { CallsModule } from 'src/modules/calls/calls.module';
     FidelityModule,
     StatisticsModule,
     MessagerieModule,
+    MessageBroadcastModule,
     SupportModule,
     VoucherModule,
     ReferralModule,
