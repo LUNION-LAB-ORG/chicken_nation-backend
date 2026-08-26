@@ -160,36 +160,14 @@ export class ProspectService {
       limit = 20,
     } = query;
 
-    const where: Prisma.ProspectWhereInput = {
-      entity_status: { not: EntityStatus.DELETED },
-      ...(platform && { platform }),
-      ...(status && { status }),
-    };
-
-    // Cloisonnement : agent store -> son restaurant ; admin -> filtre optionnel
-    if (this.isStoreUser(user)) {
-      where.restaurant_id = user.restaurant_id!;
-    } else if (restaurantId) {
-      where.restaurant_id = restaurantId;
-    }
-
-    if (search) {
-      const s = search.trim();
-      where.OR = [
-        { name: { contains: s, mode: 'insensitive' } },
-        { phone: { contains: s.replace(/\D/g, '') } },
-        { order_number: { contains: s } },
-      ];
-    }
-
-    if (startDate || endDate) {
-      where.created_at = {
-        ...(startDate && { gte: new Date(startDate) }),
-        ...(endDate && {
-          lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
-        }),
-      };
-    }
+    const where = this.construireFiltre(user, {
+      restaurantId,
+      platform,
+      status,
+      search,
+      startDate,
+      endDate,
+    });
 
     const [data, total] = await Promise.all([
       this.prisma.prospect.findMany({
@@ -595,6 +573,56 @@ export class ProspectService {
   // PHASE 3 — ANALYTICS
   // ============================================================
 
+  /**
+   * Filtre commun à la LISTE et à l'EXPORT.
+   *
+   * ⚠️ Il vivait uniquement dans `findAll`. L'export, lui, ne recevait que le
+   * restaurant : demander les contacts GLOVO et obtenir un fichier plein de
+   * contacts Yango n'était donc pas un hasard, la plateforme n'était jamais
+   * transmise. Même chose pour le statut, la recherche et les dates.
+   *
+   * Une seule construction pour les deux, sinon elles redivergeront.
+   */
+  private construireFiltre(
+    user: User,
+    filtres: Omit<QueryProspectDto, 'page' | 'limit'>,
+  ): Prisma.ProspectWhereInput {
+    const { restaurantId, platform, status, search, startDate, endDate } = filtres;
+
+    const where: Prisma.ProspectWhereInput = {
+      entity_status: { not: EntityStatus.DELETED },
+      ...(platform && { platform }),
+      ...(status && { status }),
+    };
+
+    // Cloisonnement : agent store -> son restaurant ; admin -> filtre optionnel
+    if (this.isStoreUser(user)) {
+      where.restaurant_id = user.restaurant_id!;
+    } else if (restaurantId) {
+      where.restaurant_id = restaurantId;
+    }
+
+    if (search) {
+      const s = search.trim();
+      where.OR = [
+        { name: { contains: s, mode: 'insensitive' } },
+        { phone: { contains: s.replace(/\D/g, '') } },
+        { order_number: { contains: s } },
+      ];
+    }
+
+    if (startDate || endDate) {
+      where.created_at = {
+        ...(startDate && { gte: new Date(startDate) }),
+        ...(endDate && {
+          lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
+        }),
+      };
+    }
+
+    return where;
+  }
+
   private scopeFor(user: User, restaurantId?: string): Prisma.ProspectWhereInput {
     if (this.isStoreUser(user)) return { restaurant_id: user.restaurant_id! };
     if (restaurantId) return { restaurant_id: restaurantId };
@@ -692,20 +720,30 @@ export class ProspectService {
     };
   }
 
-  /** Suivi des coupons émis (cahier §4.6). */
-  async getCoupons(user: User, restaurantId?: string) {
+  /**
+   * Suivi des coupons émis (cahier §4.6).
+   *
+   * ⚠️ `limite` est explicite : à `undefined`, la requête n'est PAS plafonnée.
+   * L'écran demande 500 lignes, l'export les veut toutes. Un plafond en dur
+   * dans cette méthode tronquait le fichier exporté en silence.
+   */
+  async getCoupons(
+    user: User,
+    filtres: Omit<QueryProspectDto, 'page' | 'limit'> = {},
+    limite: number | undefined = 500,
+  ) {
     const rows = await this.prisma.prospect.findMany({
       where: {
         entity_status: { not: EntityStatus.DELETED },
         promo_code_id: { not: null },
-        ...this.scopeFor(user, restaurantId),
+        ...this.construireFiltre(user, filtres),
       },
       include: {
         restaurant: { select: { id: true, name: true } },
         promo_code: { select: { code: true, expiration_date: true } },
       },
       orderBy: { coupon_sent_at: 'desc' },
-      take: 500,
+      ...(limite ? { take: limite } : {}),
     });
     const now = new Date();
     return rows.map((p) => {
@@ -728,19 +766,23 @@ export class ProspectService {
   }
 
   /** Ventes attribuées à l'opération (cahier §4.7). */
-  async getSales(user: User, restaurantId?: string) {
+  async getSales(
+    user: User,
+    filtres: Omit<QueryProspectDto, 'page' | 'limit'> = {},
+    limite: number | undefined = 500,
+  ) {
     const rows = await this.prisma.prospect.findMany({
       where: {
         entity_status: { not: EntityStatus.DELETED },
         converted_at: { not: null },
-        ...this.scopeFor(user, restaurantId),
+        ...this.construireFiltre(user, filtres),
       },
       include: {
         restaurant: { select: { id: true, name: true } },
         promo_code: { select: { code: true } },
       },
       orderBy: { converted_at: 'desc' },
-      take: 500,
+      ...(limite ? { take: limite } : {}),
     });
     const ca = rows.reduce((s, p) => s + (p.first_order_amount ?? 0), 0);
     const data = rows.map((p) => ({
@@ -832,13 +874,25 @@ export class ProspectService {
   }
 
   /** Export CSV (contacts | coupons | sales). */
+  /**
+   * Export CSV.
+   *
+   * ⚠️ Reçoit les MÊMES filtres que la liste, et n'est PLUS plafonné.
+   *
+   * Deux défauts se cumulaient et se voyaient à l'usage : demander les contacts
+   * GLOVO rendait un fichier plein de contacts Yango, parce que la plateforme
+   * n'était jamais transmise ; et le fichier s'arrêtait à 5 000 lignes sans
+   * que rien ne le dise, 500 pour les coupons et les ventes. Un export
+   * silencieusement tronqué est pire qu'un export refusé : on travaille dessus
+   * en croyant l'avoir en entier.
+   */
   async exportCsv(
     user: User,
     type: string,
-    restaurantId?: string,
+    filtres: Omit<QueryProspectDto, 'page' | 'limit'> = {},
   ): Promise<string> {
     if (type === 'coupons') {
-      const rows = await this.getCoupons(user, restaurantId);
+      const rows = await this.getCoupons(user, filtres, undefined);
       return this.toCsv(
         ['Code', 'Contact', 'Plateforme', 'Emis le', 'Expire le', 'Store', 'Etat'],
         rows.map((r) => [
@@ -853,7 +907,7 @@ export class ProspectService {
       );
     }
     if (type === 'sales') {
-      const { data } = await this.getSales(user, restaurantId);
+      const { data } = await this.getSales(user, filtres, undefined);
       return this.toCsv(
         ['Date', 'Client', 'Plateforme', 'Coupon', 'Store', 'Montant'],
         data.map((r) => [
@@ -868,13 +922,9 @@ export class ProspectService {
     }
     // contacts (défaut) — même ordre que la table : plus récents en premier.
     const rows = await this.prisma.prospect.findMany({
-      where: {
-        entity_status: { not: EntityStatus.DELETED },
-        ...this.scopeFor(user, restaurantId),
-      },
+      where: this.construireFiltre(user, filtres),
       include: { restaurant: { select: { name: true } } },
       orderBy: { created_at: 'desc' },
-      take: 5000,
     });
     return this.toCsv(
       ['Date', 'Plateforme', 'Nom', 'N commande', 'Telephone', 'Store', 'Statut'],

@@ -94,15 +94,19 @@ export class ProspectController {
   @Get('coupons')
   @RequirePermission(Modules.BASE_DONNEES, Action.READ)
   @ApiOperation({ summary: 'Suivi des coupons émis' })
-  coupons(@Req() req: Request, @Query('restaurantId') restaurantId?: string) {
-    return this.prospectService.getCoupons(req.user as User, restaurantId);
+  coupons(@Req() req: Request, @Query() query: QueryProspectDto) {
+    // Les écrans passent les mêmes filtres que la liste : plateforme, statut,
+    // recherche et dates s'appliquent ici aussi.
+    const { page: _p, limit: _l, ...filtres } = query;
+    return this.prospectService.getCoupons(req.user as User, filtres);
   }
 
   @Get('sales')
   @RequirePermission(Modules.BASE_DONNEES, Action.READ)
   @ApiOperation({ summary: 'Ventes générées attribuées' })
-  sales(@Req() req: Request, @Query('restaurantId') restaurantId?: string) {
-    return this.prospectService.getSales(req.user as User, restaurantId);
+  sales(@Req() req: Request, @Query() query: QueryProspectDto) {
+    const { page: _p, limit: _l, ...filtres } = query;
+    return this.prospectService.getSales(req.user as User, filtres);
   }
 
   @Get('settings')
@@ -125,13 +129,17 @@ export class ProspectController {
   async export(
     @Req() req: Request,
     @Res() res: Response,
+    @Query() query: QueryProspectDto,
     @Query('type') type = 'contacts',
-    @Query('restaurantId') restaurantId?: string,
   ) {
+    // ⚠️ L'export reçoit les MÊMES filtres que la liste. Il n'en recevait que
+    // le restaurant : l'écran filtrait sur GLOVO et le fichier sortait avec
+    // tout le monde dedans.
+    const { page: _page, limit: _limit, ...filtres } = query;
     const csv = await this.prospectService.exportCsv(
       req.user as User,
       type,
-      restaurantId,
+      filtres,
     );
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
