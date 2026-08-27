@@ -1,6 +1,7 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { CustomerAudienceService } from 'src/common/services/customer-audience.service';
+import { S3Module } from 'src/s3/s3.module';
 import { MessageBroadcastConsumer } from './consumers/message-broadcast.consumer';
 import { MessageBroadcastController } from './message-broadcast.controller';
 import { MessageBroadcastService } from './message-broadcast.service';
@@ -8,6 +9,7 @@ import { MessageBroadcastScheduledTask } from './tasks/message-broadcast-schedul
 
 @Module({
   imports: [
+    S3Module,
     BullModule.registerQueue({
       name: 'message-broadcast',
       defaultJobOptions: { removeOnComplete: true, removeOnFail: false },

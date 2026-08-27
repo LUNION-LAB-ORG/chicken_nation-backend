@@ -1,5 +1,17 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { User } from '@prisma/client';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
@@ -40,6 +52,13 @@ export class MessageBroadcastController {
     return this.service.lister(status);
   }
 
+  @Get('clients')
+  @ApiOperation({ summary: 'Chercher des clients pour une sélection personnalisée' })
+  @RequirePermission(Modules.MARKETING, Action.READ)
+  chercherClients(@Query('search') search = '') {
+    return this.service.chercherClients(search);
+  }
+
   @Post('apercu')
   @ApiOperation({ summary: "Combien de clients ce ciblage désigne-t-il (sans rien écrire)" })
   @RequirePermission(Modules.MARKETING, Action.READ)
@@ -49,10 +68,16 @@ export class MessageBroadcastController {
 
   @Post()
   @ApiOperation({ summary: 'Créer une diffusion et figer ses destinataires' })
+  @ApiConsumes('multipart/form-data')
   @RequirePermission(Modules.MARKETING, Action.CREATE)
-  creer(@Req() req: Request, @Body() dto: CreerDiffusionDto) {
+  @UseInterceptors(FileInterceptor('image'))
+  creer(
+    @Req() req: Request,
+    @Body() dto: CreerDiffusionDto,
+    @UploadedFile() image?: Express.Multer.File,
+  ) {
     const user = req.user as User;
-    return this.service.creer(dto, user?.email ?? user?.id ?? 'inconnu');
+    return this.service.creer(dto, user?.email ?? user?.id ?? 'inconnu', image);
   }
 
   @Get(':id')

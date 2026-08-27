@@ -2828,6 +2828,11 @@ model MessageBroadcast {
   name String @db.VarChar // Nom interne, vu du backoffice seulement
   body String @db.Text // Le message envoyé, variables {{first_name}} comprises
 
+  /// Image jointe, clé S3. Recopiée dans `Message.meta.imageUrl`, exactement
+  /// comme une image de conversation ordinaire : l'application sait déjà
+  /// l'afficher, rien à livrer de ce côté.
+  image_url String? @db.VarChar
+
   /// Ciblage, même contrat que `PushCampaign` : all | segment | ids.
   /// Le mode « filtres libres » n'est PAS exposé : son moteur ignore
   /// l'opérateur et ne gère que 4 champs sur 15. Les critères libres passent

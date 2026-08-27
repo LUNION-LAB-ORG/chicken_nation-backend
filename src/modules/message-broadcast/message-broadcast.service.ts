@@ -2,6 +2,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { S3Service } from 'src/s3/s3.service';
 import {
   CriteresAudience,
   CustomerAudienceService,
@@ -21,6 +22,7 @@ export class MessageBroadcastService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audience: CustomerAudienceService,
+    private readonly s3: S3Service,
     @InjectQueue('message-broadcast') private readonly file: Queue,
   ) {}
 
@@ -33,7 +35,20 @@ export class MessageBroadcastService {
    * écarte donc les clients sans jeton. Utiliser ici le compteur du module push
    * afficherait un effectif amputé, sans que personne ne comprenne pourquoi.
    */
-  async resoudreCible(target_type: string, target_config: Record<string, any>): Promise<string[]> {
+  async resoudreCible(
+    target_type: string,
+    target_config: Record<string, any>,
+  ): Promise<string[]> {
+    const ids = await this.resoudreCibleBrute(target_type, target_config);
+    // Seuls ceux qui ont ouvert l'application peuvent voir un message.
+    return this.audience.filtrerJoignablesParMessage(ids);
+  }
+
+  /** Le ciblage AVANT le filtre de joignabilité. Sert à montrer l'écart. */
+  private async resoudreCibleBrute(
+    target_type: string,
+    target_config: Record<string, any>,
+  ): Promise<string[]> {
     if (target_type === 'all') {
       return this.audience.resoudre({});
     }
@@ -59,10 +74,23 @@ export class MessageBroadcastService {
     throw new BadRequestException(`Ciblage inconnu : ${target_type}`);
   }
 
-  /** Compte sans rien écrire, pour l'aperçu de l'écran de création. */
-  async apercu(dto: ApercuAudienceDto): Promise<{ total: number }> {
-    const ids = await this.resoudreCible(dto.target_type, dto.target_config);
-    return { total: ids.length };
+  /**
+   * Compte sans rien écrire, pour l'aperçu de l'écran de création.
+   *
+   * Renvoie DEUX nombres, et c'est important : le ciblage désigne des clients,
+   * mais seuls ceux qui ont ouvert l'application verront le message. Afficher
+   * le seul total ferait espérer une portée qui n'existe pas.
+   */
+  async apercu(
+    dto: ApercuAudienceDto,
+  ): Promise<{ total: number; cibles: number; sans_application: number }> {
+    const brut = await this.resoudreCibleBrute(dto.target_type, dto.target_config);
+    const joignables = await this.audience.filtrerJoignablesParMessage(brut);
+    return {
+      total: joignables.length,
+      cibles: brut.length,
+      sans_application: brut.length - joignables.length,
+    };
   }
 
   /**
@@ -73,16 +101,34 @@ export class MessageBroadcastService {
    * d'avoir un rapport d'envoi qui veut dire quelque chose, et de pouvoir
    * reprendre un envoi interrompu sans recalculer une cible qui a bougé.
    */
-  async creer(dto: CreerDiffusionDto, auteur: string) {
+  async creer(
+    dto: CreerDiffusionDto,
+    auteur: string,
+    image?: Express.Multer.File,
+  ) {
     const ids = await this.resoudreCible(dto.target_type, dto.target_config);
     if (ids.length === 0) {
       throw new BadRequestException("Ce ciblage ne désigne aucun client. Rien à envoyer.");
+    }
+
+    // L'image part sur S3 AVANT la création : une diffusion enregistrée avec
+    // une image manquante partirait amputée sans que rien ne le signale.
+    let cleImage: string | null = null;
+    if (image?.buffer) {
+      const envoi = await this.s3.uploadFile({
+        buffer: image.buffer,
+        path: 'chicken-nation/messagerie',
+        originalname: image.originalname,
+        mimetype: image.mimetype,
+      });
+      cleImage = envoi?.key ?? null;
     }
 
     const diffusion = await this.prisma.messageBroadcast.create({
       data: {
         name: dto.name.trim(),
         body: dto.body.trim(),
+        image_url: cleImage,
         target_type: dto.target_type,
         target_config: dto.target_config as any,
         status: dto.scheduled_at ? 'scheduled' : 'draft',
@@ -287,6 +333,33 @@ export class MessageBroadcastService {
         echecs: compteur('failed'),
       },
     };
+  }
+
+  /**
+   * Recherche de clients pour la sélection personnalisée.
+   *
+   * Ne renvoie que des clients JOIGNABLES : proposer quelqu'un qui n'a jamais
+   * ouvert l'application serait proposer un destinataire qui ne lira rien.
+   */
+  async chercherClients(terme: string) {
+    const t = (terme ?? '').trim();
+    if (t.length < 2) return { data: [] };
+
+    const clients = await this.prisma.customer.findMany({
+      where: {
+        entity_status: 'ACTIVE',
+        last_login_at: { not: null },
+        OR: [
+          { first_name: { contains: t, mode: 'insensitive' } },
+          { last_name: { contains: t, mode: 'insensitive' } },
+          { phone: { contains: t.replace(/\D/g, '') || t } },
+        ],
+      },
+      select: { id: true, first_name: true, last_name: true, phone: true },
+      orderBy: { last_login_at: 'desc' },
+      take: 20,
+    });
+    return { data: clients };
   }
 
   async lister(status?: string) {

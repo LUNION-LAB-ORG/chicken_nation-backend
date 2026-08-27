@@ -30,7 +30,7 @@ export class MessageBroadcastConsumer extends WorkerHost {
 
     const diffusion = await this.prisma.messageBroadcast.findUnique({
       where: { id: broadcastId },
-      select: { id: true, body: true },
+      select: { id: true, body: true, image_url: true },
     });
     if (!diffusion) {
       this.logger.warn(`Diffusion ${broadcastId} disparue, lot ignoré`);
@@ -38,13 +38,18 @@ export class MessageBroadcastConsumer extends WorkerHost {
     }
 
     for (const recipientId of recipientIds) {
-      await this.livrerUn(diffusion.id, diffusion.body, recipientId);
+      await this.livrerUn(diffusion.id, diffusion.body, diffusion.image_url, recipientId);
     }
 
     await this.service.cloturerSiTermine(broadcastId);
   }
 
-  private async livrerUn(broadcastId: string, corps: string, recipientId: string) {
+  private async livrerUn(
+    broadcastId: string,
+    corps: string,
+    image: string | null,
+    recipientId: string,
+  ) {
     /**
      * VERROU 1, la réservation. Un seul processus peut prendre ce destinataire.
      * La branche `sending` périmée récupère ceux qu'un processus tombé en cours
@@ -127,6 +132,9 @@ export class MessageBroadcastConsumer extends WorkerHost {
             body: texte,
             broadcastId: destinataire.broadcast_id,
             isRead: false,
+            // Même forme que `message.service` : l'application sait déjà
+            // afficher `meta.imageUrl`, rien à livrer de ce côté.
+            meta: { imageUrl: image ?? null, orderId: null },
           },
           select: { id: true },
         });

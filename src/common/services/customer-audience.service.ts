@@ -229,6 +229,37 @@ export class CustomerAudienceService {
     return actifs.map((c) => c.id);
   }
 
+  /**
+   * Parmi ces clients, ceux qui peuvent RÉELLEMENT recevoir un message.
+   *
+   * ⚠️ Un message s'écrit dans l'application. Un client qui ne l'a jamais
+   * ouverte ne le verra donc jamais, et compter sur lui est une illusion
+   * d'audience.
+   *
+   * Or la table `Customer` ne contient pas que des utilisateurs de
+   * l'application : le tunnel d'adhésion du site en crée une ligne à chaque
+   * demande de Carte Nation, le backoffice peut en créer à la main, et
+   * l'acquisition en fait naître depuis les captures Glovo et Yango. Annoncer
+   * « 15 563 clients » sur cette base ferait espérer une portée qui n'existe
+   * pas.
+   *
+   * `last_login_at` est le seul signal fiable : il n'est écrit qu'à la
+   * connexion depuis l'application (`auth.service`). Non nul veut dire que la
+   * personne a ouvert l'application au moins une fois.
+   */
+  async filtrerJoignablesParMessage(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const joignables = await this.prisma.customer.findMany({
+      where: {
+        id: { in: ids },
+        entity_status: 'ACTIVE',
+        last_login_at: { not: null },
+      },
+      select: { id: true },
+    });
+    return joignables.map((c) => c.id);
+  }
+
   /** Combien de clients pour ces critères. */
   async compter(criteres: CriteresAudience = {}): Promise<number> {
     const ids = await this.resoudre(criteres);

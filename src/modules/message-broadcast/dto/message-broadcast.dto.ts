@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
   IsArray,
   IsDateString,
@@ -40,9 +41,22 @@ export class CreerDiffusionDto {
   @IsIn(CIBLAGES as unknown as string[])
   target_type: Ciblage;
 
-  @ApiProperty({
-    description:
-      "Selon le ciblage : {} pour « all », { segment: 'custom_<uuid>' | '<systeme>' }, ou { ids: ['<uuid>'] }",
+  /**
+   * Selon le ciblage : `{}` pour « all », `{ segment: '<clé>' }`, ou
+   * `{ ids: ['<uuid>'] }`.
+   *
+   * ⚠️ La création passe en multipart, à cause de l'image jointe. Un formulaire
+   * multipart ne transporte que des chaînes : sans cette conversion, l'objet
+   * arriverait sous forme de texte et la validation le rejetterait.
+   */
+  @ApiProperty()
+  @Transform(({ value }) => {
+    if (typeof value !== 'string') return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
   })
   @IsObject()
   target_config: Record<string, any>;
