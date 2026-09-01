@@ -245,7 +245,11 @@ export class MessageService {
     const authorId =
       authType === 'user' ? (auth as User).id : (auth as Customer).id;
 
-    if (!image && !imageUrl && !orderId) {
+    // ⚠️ L'AUDIO désactive aussi la déduplication, au même titre que l'image.
+    // Il avait été oublié à l'ouverture de la vanne des notes vocales : deux
+    // notes vocales portant le même texte, envoyées à moins de dix secondes
+    // d'intervalle, voyaient la seconde avalée en silence.
+    if (!image && !imageUrl && !orderId && !audio && !audioUrl) {
       const recentDuplicate = await this.prismaService.message.findFirst({
         where: {
           conversationId: conversation.id,

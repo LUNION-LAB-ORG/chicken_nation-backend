@@ -1,9 +1,10 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, Req, UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { LoyaltyService } from '../services/loyalty.service';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AddLoyaltyPointDto } from '../dto/add-loyalty-point.dto';
 import { LoyaltyQueryDto } from '../dto/loyalty-query.dto';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { JwtCustomerOrStaffOptionalAuthGuard } from 'src/modules/auth/guards/jwt-customer-or-staff-optional-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
@@ -11,7 +12,7 @@ import { Action } from 'src/modules/auth/enums/action.enum';
 import { UpdateLoyaltyConfigDto } from '../dto/loyalty-config.dto';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import type { Request } from 'express';
-import { Customer } from '@prisma/client';
+import { Customer, User } from '@prisma/client';
 
 @ApiTags('Loyalty')
 @Controller('fidelity/loyalty')
@@ -71,6 +72,9 @@ export class LoyaltyController {
     return this.loyaltyService.getAllLoyaltyPoints({ ...query, customer_id: customerId });
   }
 
+  // ⚠️ Route sans aucune garde, vérifiée joignable en production sans jeton.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.FIDELITE, Action.READ)
   @Get('customer/:customerId')
   @ApiOperation({ summary: 'Obtenir les informations de fidélité d\'un client' })
   @ApiOkResponse({
@@ -80,12 +84,30 @@ export class LoyaltyController {
     return this.loyaltyService.getCustomerLoyaltyInfo(customerId);
   }
 
+  /**
+   * ⚠️ Route sans aucune garde, et appelée par l'application COMME par le
+   * backoffice : une garde unique aurait cassé l'un des deux.
+   *
+   * On accepte donc les deux jetons, puis on tranche à la main : le personnel
+   * consulte n'importe quel client, un client ne consulte QUE lui même. Sans ce
+   * contrôle, l'identifiant venant de l'URL, n'importe qui pouvait lire le
+   * solde et le détail des points de n'importe quel client.
+   */
   @Get('customer/:customerId/points/breakdown')
+  @UseGuards(JwtCustomerOrStaffOptionalAuthGuard)
   @ApiOperation({ summary: 'Obtenir les points utilisables d\'un client' })
   @ApiOkResponse({
     description: 'Points utilisables d\'un client obtenus'
   })
-  getAvailablePointsBreakdown(@Param('customerId') customerId: string) {
+  getAvailablePointsBreakdown(@Param('customerId') customerId: string, @Req() req: Request) {
+    const appelant = req.user as (Customer | User) | undefined;
+    if (!appelant) {
+      throw new UnauthorizedException('Authentification requise');
+    }
+    const estPersonnel = 'role' in appelant;
+    if (!estPersonnel && (appelant as Customer).id !== customerId) {
+      throw new ForbiddenException("Vous ne pouvez consulter que vos propres points");
+    }
     return this.loyaltyService.getAvailablePointsBreakdown(customerId);
   }
 

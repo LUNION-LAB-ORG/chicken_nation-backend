@@ -36,12 +36,18 @@ export class AddressController {
   }
 
   @ApiOperation({ summary: 'Obtenir une adresse par ID' })
+  // ⚠️ Route sans aucune garde, vérifiée joignable en production sans jeton.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.CLIENTS, Action.READ)
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.addressService.findOne(id);
   }
 
   @ApiOperation({ summary: 'Obtenir toutes les adresses d un client' })
+  // ⚠️ Route sans aucune garde, vérifiée joignable en production sans jeton.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.CLIENTS, Action.READ)
   @Get('customer/:customerId')
   findByCustomer(@Param('customerId') customerId: string) {
     return this.addressService.findByCustomer(customerId);

@@ -1,4 +1,9 @@
-import { Controller, Post, Body, Headers, HttpCode, UnauthorizedException, Query } from '@nestjs/common';
+import { Controller, Post, Body, Headers, HttpCode, UnauthorizedException, Query, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
 import { TurboService } from '../services/turbo.service';
 import { ApiBody, ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { WebhookEventDto, WebhookResponseDto } from '../dto/turbo-webhook.dto';
@@ -12,7 +17,18 @@ export class TurboController {
     private readonly turboWebhookService: TurboWebhookService
   ) { }
 
+  /**
+   * ⚠️ Route sans aucune garde, et sans appelant identifié dans les trois
+   * façades. La clé passée dans le corps n'est pas vérifiée côté Chicken
+   * Nation, elle est seulement transmise à Turbo : le seul garde-fou était
+   * l'état de la commande. Réservée au personnel.
+   *
+   * ⚠️ Le webhook du même contrôleur reste volontairement hors garde : il est
+   * appelé par Turbo, et son contrôle passe par la clé d'API.
+   */
   @Post('creer-course')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.CREATE)
   async creerCourse(@Body() body: { order_id: string, apikey: string }) {
     return this.turboService.creerCourse(body.order_id, body.apikey);
   }

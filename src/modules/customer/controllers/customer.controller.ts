@@ -122,6 +122,9 @@ export class CustomerController {
     return this.customerService.update(req, updateCustomerDto, image);
   }
 
+  // ⚠️ Route sans aucune garde, vérifiée joignable en production sans jeton.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.CLIENTS, Action.READ)
   @Get('phone/:phone')
   @ApiOperation({ summary: 'Obtenir un client par numéro de téléphone' })
   findByPhone(@Param('phone') phone: string) {

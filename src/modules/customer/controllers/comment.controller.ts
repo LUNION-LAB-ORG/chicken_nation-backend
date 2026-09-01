@@ -76,7 +76,11 @@ export class CommentController {
     @ApiParam({ name: 'id', description: 'ID du commentaire' })
     @ApiResponse({ status: 204, description: 'Commentaire supprimé avec succès' })
     @ApiResponse({ status: 404, description: 'Commentaire non trouvé' })
-    @Delete(':id')
+    // ⚠️ Sans garde, n'importe qui pouvait supprimer un avis. Le
+  // @ApiBearerAuth documentait un jeton que RIEN ne vérifiait.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMENTAIRES, Action.DELETE)
+  @Delete(':id')
     async deleteComment(@Param('id') commentId: string): Promise<CommentResponseDto> {
         return this.commentService.deleteComment(commentId);
     }

@@ -35,12 +35,18 @@ export class FavoriteController {
   }
 
   @ApiOperation({ summary: 'Obtenir une favorite par ID' })
+  // ⚠️ Route sans aucune garde, vérifiée joignable en production sans jeton.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.CLIENTS, Action.READ)
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.favoriteService.findOne(id);
   }
 
   @ApiOperation({ summary: 'Obtenir toutes les favorites d un client' })
+  // ⚠️ Route sans aucune garde, vérifiée joignable en production sans jeton.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.CLIENTS, Action.READ)
   @Get('customer/:customerId')
   findByCustomer(@Param('customerId') customerId: string, @Query() query?: { page?: number, limit?: number }) {
     return this.favoriteService.findByCustomer(customerId, query?.page ?? 1, query?.limit ?? 10);

@@ -63,6 +63,9 @@ export class PaiementsController {
     return this.paiementsService.confirmerEncaissement(req, paiementId);
   }
 
+  // ⚠️ Sans garde alors que la méthode lit `req.user` : l'appel anonyme
+  // partait en 500. Toutes les routes voisines sont gardées.
+  @UseGuards(JwtCustomerAuthGuard)
   @Get('free')
   @ApiOperation({ summary: 'Obtenir les paiements libres' })
   getFreePaiements(@Req() req: Request) {
