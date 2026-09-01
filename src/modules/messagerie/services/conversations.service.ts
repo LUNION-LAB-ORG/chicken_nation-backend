@@ -809,7 +809,23 @@ export class ConversationsService {
          * a de destinataires, et le compteur du menu deviendrait inutilisable.
          */
         ...(type === 'user' ? { authorUserId: { not: authId }, broadcastId: null } : {}),
-        ...(type === 'customer' ? { authorCustomerId: { not: authId } } : {}),
+        /**
+         * ⚠️ Côté CLIENT, on compte les messages du PERSONNEL, et le test porte
+         * sur la nullité de l'auteur.
+         *
+         * Le filtre était `authorCustomerId != moi`. Or un message du personnel
+         * et un message de diffusion ont tous deux un auteur client NUL : la
+         * valeur du compteur dépendait donc entièrement de la façon dont Prisma
+         * traite `not` face à une colonne nulle, et un changement de
+         * comportement aurait éteint le badge du client sans que rien ne le
+         * signale. C'est aussi exactement l'ensemble que vise le marquage de
+         * lecture : les deux doivent coïncider, sinon un badge peut rester
+         * allumé pour toujours.
+         *
+         * Les diffusions comptent bien ici, contrairement au personnel : pour
+         * le client, c'est un message reçu comme un autre.
+         */
+        ...(type === 'customer' ? { authorUserId: { not: null } } : {}),
       },
     });
   }
@@ -831,7 +847,8 @@ export class ConversationsService {
         isRead: false,
         // Même exclusion que ci-dessus : voir `countUnreadMessages`.
         ...(type === 'user' ? { authorUserId: { not: authId }, broadcastId: null } : {}),
-        ...(type === 'customer' ? { authorCustomerId: { not: authId } } : {}),
+        // Même raisonnement que ci-dessus : voir `countUnreadMessages`.
+        ...(type === 'customer' ? { authorUserId: { not: null } } : {}),
       },
       _count: { id: true },
     });
