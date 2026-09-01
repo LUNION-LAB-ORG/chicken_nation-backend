@@ -123,6 +123,36 @@ export class MessageService {
       this.logger.debug(`Messages mappés: ${JSON.stringify(mappedMessages)}`);
     }
 
+    /**
+     * ⚠️ L'ouverture d'une conversation par le CLIENT vaut lecture.
+     *
+     * L'application installée ne prévient jamais le serveur qu'un message est
+     * lu : elle n'écrit que dans le stockage local du téléphone, et la route
+     * prévue pour cela n'est appelée par personne. Conséquence visible par tous
+     * les clients : leur badge de messages non lus ne retombait à zéro que si
+     * un agent du backoffice ouvrait la conversation par hasard.
+     *
+     * Le seul signal dont on dispose sans livrer une nouvelle version est
+     * celui-ci : le téléphone réclame les messages, donc l'écran est ouvert.
+     *
+     * Vocabulaire honnête : cela signifie « le client a ouvert la
+     * conversation », pas « il a lu ce message précis ».
+     *
+     * Ecriture NON BLOQUANTE et erreur avalée : une lecture ne doit jamais
+     * échouer parce qu'un marquage a échoué.
+     */
+    if (req.user && getAuthType(req.user) === 'customer') {
+      void this.markMessagesAsRead(
+        conversation.id,
+        'CUSTOMER',
+        (req.user as Customer).id,
+      ).catch((e) =>
+        this.logger.warn(
+          `Marquage de lecture ignoré pour la conversation ${conversation.id} : ${e?.message}`,
+        ),
+      );
+    }
+
     // Return the paginated response
     return {
       data: mappedMessages,
@@ -236,7 +266,17 @@ export class MessageService {
     // Create a new message in the database
     const message = await this.prismaService.message.create({
       data: {
-        body,
+        /**
+         * ⚠️ Corps de REPLI quand seule une pièce jointe est envoyée.
+         *
+         * L'app reconstruit le message reçu par socket sans recopier `meta`,
+         * puis le jette si le corps est vide : une photo envoyée par un agent
+         * n'apparaissait donc PAS en direct chez le client, et l'aperçu de la
+         * conversation restait vide. Le mot apparaîtra sous l'image dans la
+         * bulle : c'est le prix d'un message qui arrive au lieu d'un message
+         * qui disparaît.
+         */
+        body: body || (finalImageUrl ? 'Photo' : body),
         conversationId: conversation.id,
         authorUserId: authType === 'user' ? (auth as User).id : null, // Set user ID if authenticated as user
         authorCustomerId:
@@ -351,7 +391,9 @@ export class MessageService {
   }
 
   async markMessagesAsRead(conversationId: string, type: 'USER' | 'CUSTOMER', authorId: string): Promise<boolean> {
-    this.logger.log(`Marquer les messages de la conversation ${conversationId} comme lus`);
+    this.logger.log(
+      `Marquer comme lus les messages de la conversation ${conversationId} (lecteur ${type} ${authorId})`,
+    );
     const conversation = await this.prismaService.conversation.findUnique({
       where: { id: conversationId },
       include: {
@@ -364,18 +406,46 @@ export class MessageService {
       throw new NotFoundException('Conversation not found');
     }
 
-    await this.prismaService.message.updateMany({
+    /**
+     * ⚠️ On vise les messages de l'AUTRE partie, pas « ceux que je n'ai pas
+     * écrits ».
+     *
+     * L'ancien filtre était `authorUserId != moi`. Entre agents, l'agent B
+     * blanchissait donc les messages de l'agent A, et le compteur du client
+     * dépendait de qui avait ouvert quoi. On raisonne désormais par camp :
+     * quand le client lit, ce sont les messages du personnel qui deviennent
+     * lus ; quand le personnel lit, ce sont ceux du client. Le test porte sur
+     * la NULLITE de l'auteur, sans dépendre de la façon dont Prisma traite
+     * `not` face à une colonne nulle.
+     */
+    const { count } = await this.prismaService.message.updateMany({
       where: {
         conversationId,
         isRead: false,
-        ...(type === 'USER' ? { authorUserId: { not: authorId } } : { authorCustomerId: { not: authorId } })
+        ...(type === 'USER'
+          ? { authorCustomerId: { not: null } }
+          : { authorUserId: { not: null } }),
       },
-      data: { isRead: true },
+      data: { isRead: true, readAt: new Date() },
     });
 
-
-
-    this.messageWebSocketService.emitMessagesRead(conversation);
+    /**
+     * ⚠️ On n'émet QUE si quelque chose a réellement changé.
+     *
+     * Le téléphone recharge la conversation à chaque retour au premier plan.
+     * Sans cette condition, chaque retour ferait invalider les caches du
+     * backoffice en boucle pour rien.
+     *
+     * Et on se tait sur une diffusion sans réponse : une campagne crée une
+     * conversation par client, mille ouvertures produiraient mille évènements
+     * vers un backoffice qui n'affiche même pas ces conversations. Dès que le
+     * client répond, la conversation redevient ordinaire et l'agent reçoit
+     * bien l'accusé.
+     */
+    const diffusionMuette = conversation.isBroadcast && !conversation.hasReply;
+    if (count > 0 && !diffusionMuette) {
+      this.messageWebSocketService.emitMessagesRead(conversation);
+    }
 
     return true;
   }
@@ -406,7 +476,10 @@ export class MessageService {
       body: message.body?.substring(0, 150) || 'Nouveau message',
       sound: 'default',
       data: {
-        type: 'new_message',
+        // ⚠️ `new_message` ne correspond à AUCUN cas du routeur de l'app : le
+        // client touchait la notification et atterrissait sur l'accueil.
+        // `message` est le type que le routeur sait traiter.
+        type: 'message',
         conversationId: message.conversation?.id || '',
         messageId: message.id,
       },

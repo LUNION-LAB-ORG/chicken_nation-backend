@@ -812,6 +812,10 @@ model Message {
   body      String
   meta      Json? // Image, vidéo, fichier, etc.
   isRead    Boolean  @default(false) // Si le message a été lu
+  /// Horodatage de la lecture. Colonne NOUVELLE plutôt que réinterprétation de
+  /// `isRead`, qui pilote déjà tous les compteurs de non lus : la toucher
+  /// casserait les badges. Sert à afficher l'heure sous la coche « Vu ».
+  readAt    DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1104,10 +1108,23 @@ model NotificationSetting {
   promotions                Boolean  @default(true)
   system                    Boolean  @default(true)
   expo_push_token           String?  @db.VarChar
+  /// Jeton Expo REVOQUE, conservé pour pouvoir revenir en arrière.
+  ///
+  /// Quand Expo répond `DeviceNotRegistered`, le téléphone a désinstallé
+  /// l'application ou réinitialisé son jeton : continuer à le viser brûle du
+  /// quota dans le vide et gonfle la cible des campagnes. On déplace donc la
+  /// valeur ici au lieu de la perdre, ce qui a deux vertus : les dix et
+  /// quelques endroits qui testent déjà `expo_push_token != null` cessent
+  /// automatiquement de viser un appareil mort, sans être modifiés, et la
+  /// valeur reste consultable si la révocation s'avérait fautive.
+  expo_push_token_revoked    String?   @db.VarChar
+  expo_push_token_revoked_at DateTime?
   onesignal_id              String?  @db.VarChar
   onesignal_subscription_id String?  @db.VarChar
   customer                  Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
   active                    Boolean  @default(true)
+
+  @@index([expo_push_token])
 }
 
 model Notification {

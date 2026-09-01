@@ -20,9 +20,23 @@ export class NotificationSettingService {
             });
         }
 
+        /**
+         * ⚠️ Un nouveau jeton ANNULE une révocation précédente.
+         *
+         * Un client qui réinstalle l'application obtient un nouveau jeton et le
+         * transmet ici. Si son ancien jeton avait été révoqué parce qu'Expo le
+         * disait inconnu, laisser la trace en place n'aurait pas d'effet
+         * technique, mais fausserait toute lecture ultérieure de l'historique
+         * de révocation. On repart donc d'une ardoise propre.
+         */
         return this.prisma.notificationSetting.update({
             where: { customer_id: customerId },
-            data: dto,
+            data: {
+                ...dto,
+                ...(dto.expo_push_token
+                    ? { expo_push_token_revoked: null, expo_push_token_revoked_at: null }
+                    : {}),
+            },
         });
     }
 }
