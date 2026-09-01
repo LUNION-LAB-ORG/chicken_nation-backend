@@ -474,6 +474,26 @@ export class MessageService {
     }
 
     /**
+     * ⚠️ La route de marquage client ne vérifiait PAS à qui appartient la
+     * conversation.
+     *
+     * Le chemin de lecture est protégé, lui, car il passe par
+     * `getConversationById` qui restreint au client propriétaire. Mais la route
+     * dédiée appelle ce service directement : n'importe quel client authentifié
+     * pouvait donc, avec un identifiant de conversation, blanchir les messages
+     * d'un autre et éteindre son badge.
+     *
+     * On répond « introuvable » plutôt que « interdit », pour ne pas confirmer
+     * l'existence de la conversation à qui la cherche.
+     */
+    if (type === 'CUSTOMER' && conversation.customerId !== authorId) {
+      this.logger.warn(
+        `Marquage refusé : le client ${authorId} n'est pas propriétaire de la conversation ${conversationId}`,
+      );
+      throw new NotFoundException('Conversation not found');
+    }
+
+    /**
      * ⚠️ On vise les messages de l'AUTRE partie, pas « ceux que je n'ai pas
      * écrits ».
      *
@@ -490,8 +510,14 @@ export class MessageService {
         conversationId,
         isRead: false,
         ...(type === 'USER'
-          ? { authorCustomerId: { not: null } }
-          : { authorUserId: { not: null } }),
+          ? { authorCustomerId: { not: null }, broadcastId: null }
+          : {
+              // ⚠️ Une diffusion n'a AUCUN auteur : sans ce second cas, elle
+              // resterait non lue pour toujours et le badge du client ne
+              // retomberait jamais. Cet ensemble DOIT rester identique à celui
+              // que compte `countUnreadMessages`.
+              OR: [{ authorUserId: { not: null } }, { broadcastId: { not: null } }],
+            }),
       },
       data: { isRead: true, readAt: new Date() },
     });

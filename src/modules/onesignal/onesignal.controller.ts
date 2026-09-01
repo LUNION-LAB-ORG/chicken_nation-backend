@@ -12,6 +12,10 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { OnesignalService } from './onesignal.service';
 import { OnesignalTagsTask } from './tasks/onesignal-tags.task';
@@ -33,7 +37,17 @@ import { ViewUsersQueryDto } from './dto/view-users-query.dto';
 @ApiTags('OneSignal')
 @ApiBearerAuth()
 @Controller('onesignal')
-@UseGuards(JwtAuthGuard)
+/**
+ * ⚠️ Ce contrôleur était la PORTE JUMELLE de celui des campagnes push, laissée
+ * intacte : `JwtAuthGuard` seul, aucune permission sur 32 routes. N'importe
+ * quel membre du personnel connecté, caissier compris, pouvait pousser une
+ * notification à toute la base clients.
+ *
+ * Même permission que `push-campaign` : `SETTINGS`, celle qui garde déjà le
+ * menu Notifications du backoffice, pour fermer sans retirer l'accès à
+ * personne.
+ */
+@UseGuards(JwtAuthGuard, UserPermissionsGuard)
 export class OnesignalController {
   constructor(
     private readonly onesignalService: OnesignalService,
@@ -45,30 +59,35 @@ export class OnesignalController {
   // ── Messages ──
 
   @Post('messages')
+  @RequirePermission(Modules.SETTINGS, Action.CREATE)
   @ApiOperation({ summary: 'Envoyer une notification (push/email/sms)' })
   createMessage(@Body() dto: CreateOneSignalMessageDto) {
     return this.onesignalService.createMessage(dto);
   }
 
   @Get('messages')
+  @RequirePermission(Modules.SETTINGS, Action.READ)
   @ApiOperation({ summary: 'Liste des messages envoyés' })
   viewMessages(@Query() query: ViewMessagesQueryDto) {
     return this.onesignalService.viewMessages(query);
   }
 
   @Get('messages/:id')
+  @RequirePermission(Modules.SETTINGS, Action.READ)
   @ApiOperation({ summary: 'Détail d\'un message' })
   viewMessage(@Param('id') id: string) {
     return this.onesignalService.viewMessage(id);
   }
 
   @Delete('messages/:id')
+  @RequirePermission(Modules.SETTINGS, Action.DELETE)
   @ApiOperation({ summary: 'Annuler un message planifié' })
   cancelMessage(@Param('id') id: string) {
     return this.onesignalService.cancelMessage(id);
   }
 
   @Post('messages/:id/history')
+  @RequirePermission(Modules.SETTINGS, Action.CREATE)
   @ApiOperation({ summary: 'Historique d\'envoi d\'un message' })
   messageHistory(
     @Param('id') id: string,
@@ -80,30 +99,35 @@ export class OnesignalController {
   // ── Templates ──
 
   @Post('templates')
+  @RequirePermission(Modules.SETTINGS, Action.CREATE)
   @ApiOperation({ summary: 'Créer un template' })
   createTemplate(@Body() dto: CreateOneSignalTemplateDto) {
     return this.onesignalService.createTemplate(dto);
   }
 
   @Get('templates')
+  @RequirePermission(Modules.SETTINGS, Action.READ)
   @ApiOperation({ summary: 'Liste des templates' })
   viewTemplates(@Query() query: ViewTemplatesQueryDto) {
     return this.onesignalService.viewTemplates(query);
   }
 
   @Get('templates/:id')
+  @RequirePermission(Modules.SETTINGS, Action.READ)
   @ApiOperation({ summary: 'Détail d\'un template' })
   viewTemplate(@Param('id') id: string) {
     return this.onesignalService.viewTemplate(id);
   }
 
   @Patch('templates/:id')
+  @RequirePermission(Modules.SETTINGS, Action.UPDATE)
   @ApiOperation({ summary: 'Modifier un template' })
   updateTemplate(@Param('id') id: string, @Body() dto: UpdateOneSignalTemplateDto) {
     return this.onesignalService.updateTemplate(id, dto);
   }
 
   @Delete('templates/:id')
+  @RequirePermission(Modules.SETTINGS, Action.DELETE)
   @ApiOperation({ summary: 'Supprimer un template' })
   deleteTemplate(@Param('id') id: string) {
     return this.onesignalService.deleteTemplate(id);
@@ -112,24 +136,28 @@ export class OnesignalController {
   // ── Segments ──
 
   @Get('segments')
+  @RequirePermission(Modules.SETTINGS, Action.READ)
   @ApiOperation({ summary: 'Liste des segments' })
   viewSegments(@Query() query: ViewSegmentsQueryDto) {
     return this.onesignalService.viewSegments(query);
   }
 
   @Post('segments')
+  @RequirePermission(Modules.SETTINGS, Action.CREATE)
   @ApiOperation({ summary: 'Créer un segment' })
   createSegment(@Body() dto: CreateOneSignalSegmentDto) {
     return this.onesignalService.createSegment(dto);
   }
 
   @Patch('segments/:id')
+  @RequirePermission(Modules.SETTINGS, Action.UPDATE)
   @ApiOperation({ summary: 'Modifier un segment' })
   updateSegment(@Param('id') id: string, @Body() dto: UpdateOneSignalSegmentDto) {
     return this.onesignalService.updateSegment(id, dto);
   }
 
   @Delete('segments/:id')
+  @RequirePermission(Modules.SETTINGS, Action.DELETE)
   @ApiOperation({ summary: 'Supprimer un segment' })
   deleteSegment(@Param('id') id: string) {
     return this.onesignalService.deleteSegment(id);
@@ -138,6 +166,7 @@ export class OnesignalController {
   // ── Scheduled Notifications ──
 
   @Post('scheduled')
+  @RequirePermission(Modules.SETTINGS, Action.CREATE)
   @ApiOperation({ summary: 'Créer une notification planifiée / récurrente' })
   createScheduled(@Req() req: Request, @Body() dto: CreateScheduledNotificationDto) {
     const user = req.user as { id: string };
@@ -145,6 +174,7 @@ export class OnesignalController {
   }
 
   @Get('scheduled')
+  @RequirePermission(Modules.SETTINGS, Action.READ)
   @ApiOperation({ summary: 'Liste des notifications planifiées' })
   listScheduled(
     @Query('page') page?: string,
@@ -157,24 +187,28 @@ export class OnesignalController {
   }
 
   @Get('scheduled/:id')
+  @RequirePermission(Modules.SETTINGS, Action.READ)
   @ApiOperation({ summary: 'Détail d\'une notification planifiée' })
   getScheduled(@Param('id') id: string) {
     return this.scheduledNotificationService.findOne(id);
   }
 
   @Patch('scheduled/:id')
+  @RequirePermission(Modules.SETTINGS, Action.UPDATE)
   @ApiOperation({ summary: 'Modifier une notification planifiée' })
   updateScheduled(@Param('id') id: string, @Body() dto: UpdateScheduledNotificationDto) {
     return this.scheduledNotificationService.update(id, dto);
   }
 
   @Patch('scheduled/:id/toggle')
+  @RequirePermission(Modules.SETTINGS, Action.UPDATE)
   @ApiOperation({ summary: 'Activer / désactiver une notification planifiée' })
   toggleScheduled(@Param('id') id: string, @Body('active') active: boolean) {
     return this.scheduledNotificationService.toggleActive(id, active);
   }
 
   @Delete('scheduled/:id')
+  @RequirePermission(Modules.SETTINGS, Action.DELETE)
   @ApiOperation({ summary: 'Supprimer une notification planifiée' })
   removeScheduled(@Param('id') id: string) {
     return this.scheduledNotificationService.remove(id);
@@ -183,6 +217,7 @@ export class OnesignalController {
   // ── Users ──
 
   @Get('users')
+  @RequirePermission(Modules.SETTINGS, Action.READ)
   @ApiOperation({ summary: 'Liste des utilisateurs OneSignal (depuis DB locale)' })
   listUsers(@Query() query: ViewUsersQueryDto) {
     return this.onesignalService.listUsers({
@@ -193,12 +228,14 @@ export class OnesignalController {
   }
 
   @Get('users/:externalId')
+  @RequirePermission(Modules.SETTINGS, Action.READ)
   @ApiOperation({ summary: 'Détail d\'un utilisateur OneSignal (subscriptions, tags, aliases)' })
   viewUser(@Param('externalId') externalId: string) {
     return this.onesignalService.viewUser(externalId);
   }
 
   @Patch('users/:externalId')
+  @RequirePermission(Modules.SETTINGS, Action.UPDATE)
   @ApiOperation({ summary: 'Modifier tags/properties d\'un utilisateur OneSignal' })
   updateUser(
     @Param('externalId') externalId: string,
@@ -208,6 +245,7 @@ export class OnesignalController {
   }
 
   @Delete('users/:externalId')
+  @RequirePermission(Modules.SETTINGS, Action.DELETE)
   @ApiOperation({ summary: 'Supprimer un utilisateur OneSignal' })
   deleteUser(@Param('externalId') externalId: string) {
     return this.onesignalService.deleteUser(externalId);
@@ -216,12 +254,14 @@ export class OnesignalController {
   // ── Aliases ──
 
   @Get('users/:externalId/aliases')
+  @RequirePermission(Modules.SETTINGS, Action.READ)
   @ApiOperation({ summary: 'Voir les aliases d\'un utilisateur' })
   fetchAliases(@Param('externalId') externalId: string) {
     return this.onesignalService.fetchAliases(externalId);
   }
 
   @Post('users/:externalId/aliases')
+  @RequirePermission(Modules.SETTINGS, Action.CREATE)
   @ApiOperation({ summary: 'Ajouter un alias à un utilisateur' })
   createAlias(
     @Param('externalId') externalId: string,
@@ -231,6 +271,7 @@ export class OnesignalController {
   }
 
   @Delete('users/:externalId/aliases/:label')
+  @RequirePermission(Modules.SETTINGS, Action.DELETE)
   @ApiOperation({ summary: 'Supprimer un alias d\'un utilisateur' })
   deleteAlias(
     @Param('externalId') externalId: string,
@@ -242,6 +283,7 @@ export class OnesignalController {
   // ── Subscriptions ──
 
   @Patch('subscriptions/:subscriptionId')
+  @RequirePermission(Modules.SETTINGS, Action.UPDATE)
   @ApiOperation({ summary: 'Modifier une subscription (activer/désactiver, token)' })
   updateSubscription(
     @Param('subscriptionId') subscriptionId: string,
@@ -251,6 +293,7 @@ export class OnesignalController {
   }
 
   @Delete('subscriptions/:subscriptionId')
+  @RequirePermission(Modules.SETTINGS, Action.DELETE)
   @ApiOperation({ summary: 'Supprimer une subscription' })
   deleteSubscription(@Param('subscriptionId') subscriptionId: string) {
     return this.onesignalService.deleteSubscription(subscriptionId);
@@ -259,6 +302,7 @@ export class OnesignalController {
   // ── Analytics ──
 
   @Get('analytics/outcomes')
+  @RequirePermission(Modules.SETTINGS, Action.READ)
   @ApiOperation({ summary: 'Résultats des campagnes (outcomes)' })
   viewOutcomes(
     @Query('outcome_names') outcomeNames: string,
@@ -275,6 +319,7 @@ export class OnesignalController {
   }
 
   @Post('analytics/export/players')
+  @RequirePermission(Modules.SETTINGS, Action.CREATE)
   @ApiOperation({ summary: 'Export CSV des utilisateurs' })
   exportCsvPlayers(
     @Body('extra_fields') extraFields?: string[],
@@ -286,6 +331,7 @@ export class OnesignalController {
   // ── Tags Sync ──
 
   @Post('tags/sync')
+  @RequirePermission(Modules.SETTINGS, Action.CREATE)
   @ApiOperation({ summary: 'Déclencher manuellement la synchronisation des tags OneSignal' })
   async triggerTagsSync(@Body('full') full?: boolean) {
     // Si full=true, forcer un full sync

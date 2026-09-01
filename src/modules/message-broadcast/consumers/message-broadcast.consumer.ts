@@ -39,18 +39,26 @@ export class MessageBroadcastConsumer extends WorkerHost {
       return;
     }
 
-    const livres: string[] = [];
+    /**
+     * ⚠️ On garde le texte REELLEMENT écrit pour chaque client, pas le gabarit.
+     *
+     * Le corps stocké contient des variables du type {{first_name}}, que
+     * l'écran de création propose lui même. Notifier avec le gabarit brut
+     * affichait « Bonjour {{first_name}}, ... » sur le téléphone, alors que le
+     * message ouvert dans le fil disait « Bonjour Awa, ... ».
+     */
+    const livres: { clientId: string; texte: string }[] = [];
     for (const recipientId of recipientIds) {
-      const clientId = await this.livrerUn(
+      const livre = await this.livrerUn(
         diffusion.id,
         diffusion.body,
         diffusion.image_url,
         recipientId,
       );
-      if (clientId) livres.push(clientId);
+      if (livre) livres.push(livre);
     }
 
-    await this.notifier(diffusion.body, livres);
+    await this.notifier(livres);
     await this.service.cloturerSiTermine(broadcastId);
   }
 
@@ -59,7 +67,7 @@ export class MessageBroadcastConsumer extends WorkerHost {
     corps: string,
     image: string | null,
     recipientId: string,
-  ): Promise<string | null> {
+  ): Promise<{ clientId: string; texte: string } | null> {
     /**
      * VERROU 1, la réservation. Un seul processus peut prendre ce destinataire.
      * La branche `sending` périmée récupère ceux qu'un processus tombé en cours
@@ -178,7 +186,7 @@ export class MessageBroadcastConsumer extends WorkerHost {
           error: null,
         },
       });
-      return client.id;
+      return { clientId: client.id, texte };
     } catch (e: any) {
       await this.prisma.messageBroadcastRecipient.update({
         where: { id: destinataire.id },
@@ -208,39 +216,51 @@ export class MessageBroadcastConsumer extends WorkerHost {
    * message est déjà en base, une notification perdue ne doit pas remettre le
    * destinataire en attente et provoquer un second message.
    */
-  private async notifier(corps: string, clientIds: string[]) {
-    if (clientIds.length === 0) return;
+  private async notifier(livres: { clientId: string; texte: string }[]) {
+    if (livres.length === 0) return;
     try {
       const reglages = await this.prisma.notificationSetting.findMany({
         where: {
-          customer_id: { in: clientIds },
+          customer_id: { in: livres.map((l) => l.clientId) },
           active: true,
           push: true,
           promotions: true,
           expo_push_token: { not: null },
         },
-        select: { expo_push_token: true },
+        select: { customer_id: true, expo_push_token: true },
       });
-      const jetons = reglages.map((r) => r.expo_push_token!).filter(Boolean);
-      if (jetons.length === 0) return;
+      const jetonParClient = new Map(
+        reglages.map((r) => [r.customer_id, r.expo_push_token!]),
+      );
 
-      await this.push.sendPushNotifications({
-        tokens: jetons,
-        title: 'Chicken Nation',
-        // Une notification n'est pas un roman : on annonce, le fil porte le reste.
-        body: corps.length > 140 ? `${corps.slice(0, 137)}…` : corps,
-        // ⚠️ `message` est le SEUL type que le binaire déjà installé sait
-        // interpréter pour la messagerie. Un type inventé le ferait retomber
-        // sur l'accueil. On n'envoie volontairement pas d'identifiant de fil :
-        // chaque destinataire a sa propre conversation, un envoi groupé ne peut
-        // donc pas en porter un, et la boîte de réception place de toute façon
-        // la conversation qui vient d'arriver en tête de liste.
-        data: { type: 'message' },
-      } as any);
+      /**
+       * ⚠️ Envoi PERSONNALISE et non groupé : chaque client reçoit le texte qui
+       * a été écrit pour lui. Un envoi groupé ne peut porter qu'un seul corps,
+       * donc forcément le gabarit non substitué. Le découpage par lots reste
+       * assuré par le service.
+       */
+      const messages = livres
+        .filter((l) => jetonParClient.has(l.clientId))
+        .map((l) => ({
+          token: jetonParClient.get(l.clientId)!,
+          title: 'Chicken Nation',
+          // Une notification n'est pas un roman : on annonce, le fil porte le reste.
+          body: l.texte.length > 140 ? `${l.texte.slice(0, 137)}…` : l.texte,
+          data: {
+            // ⚠️ `message` est le SEUL type que le routeur de l'app sait
+            // interpréter pour la messagerie. Aucun identifiant de fil : chaque
+            // destinataire a sa propre conversation.
+            type: 'message',
+          },
+        }));
+      if (messages.length === 0) return;
+
+      await this.push.sendPersonalizedPushNotifications(messages as any);
     } catch (e: any) {
       this.logger.warn(`Diffusion : notification non envoyée — ${e?.message}`);
     }
   }
+
 
   /** `{{first_name}}` seulement. Une variable inconnue est laissée telle quelle. */
   private remplacerVariables(texte: string, prenom?: string | null): string {

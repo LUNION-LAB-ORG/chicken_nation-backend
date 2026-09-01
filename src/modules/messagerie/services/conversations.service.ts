@@ -808,7 +808,17 @@ export class ConversationsService {
          * diffusion ferait apparaître autant de conversations non lues qu'elle
          * a de destinataires, et le compteur du menu deviendrait inutilisable.
          */
-        ...(type === 'user' ? { authorUserId: { not: authId }, broadcastId: null } : {}),
+        /**
+         * ⚠️ Cet ensemble DOIT être celui que le marquage blanchit, sinon un
+         * badge reste allumé pour toujours. Le marquage côté personnel ne
+         * touche que les messages du CLIENT ; compter en plus ceux des autres
+         * agents laissait les conversations internes définitivement non lues.
+         *
+         * Les diffusions restent exclues : c'est le personnel qui les envoie,
+         * et une campagne ferait apparaître autant de conversations non lues
+         * qu'elle a de destinataires.
+         */
+        ...(type === 'user' ? { authorCustomerId: { not: null }, broadcastId: null } : {}),
         /**
          * ⚠️ Côté CLIENT, on compte les messages du PERSONNEL, et le test porte
          * sur la nullité de l'auteur.
@@ -825,7 +835,15 @@ export class ConversationsService {
          * Les diffusions comptent bien ici, contrairement au personnel : pour
          * le client, c'est un message reçu comme un autre.
          */
-        ...(type === 'customer' ? { authorUserId: { not: null } } : {}),
+        ...(type === 'customer'
+          ? {
+              // ⚠️ Une diffusion n'a AUCUN auteur, ni personnel ni client : le
+              // seul test sur `authorUserId` la rendait invisible, et le badge
+              // ne s'allumait donc jamais pour la fonctionnalité même de
+              // diffusion. On vise « tout ce qui ne vient pas du client ».
+              OR: [{ authorUserId: { not: null } }, { broadcastId: { not: null } }],
+            }
+          : {}),
       },
     });
   }
@@ -846,9 +864,27 @@ export class ConversationsService {
         conversationId: { in: conversationIds },
         isRead: false,
         // Même exclusion que ci-dessus : voir `countUnreadMessages`.
-        ...(type === 'user' ? { authorUserId: { not: authId }, broadcastId: null } : {}),
+        /**
+         * ⚠️ Cet ensemble DOIT être celui que le marquage blanchit, sinon un
+         * badge reste allumé pour toujours. Le marquage côté personnel ne
+         * touche que les messages du CLIENT ; compter en plus ceux des autres
+         * agents laissait les conversations internes définitivement non lues.
+         *
+         * Les diffusions restent exclues : c'est le personnel qui les envoie,
+         * et une campagne ferait apparaître autant de conversations non lues
+         * qu'elle a de destinataires.
+         */
+        ...(type === 'user' ? { authorCustomerId: { not: null }, broadcastId: null } : {}),
         // Même raisonnement que ci-dessus : voir `countUnreadMessages`.
-        ...(type === 'customer' ? { authorUserId: { not: null } } : {}),
+        ...(type === 'customer'
+          ? {
+              // ⚠️ Une diffusion n'a AUCUN auteur, ni personnel ni client : le
+              // seul test sur `authorUserId` la rendait invisible, et le badge
+              // ne s'allumait donc jamais pour la fonctionnalité même de
+              // diffusion. On vise « tout ce qui ne vient pas du client ».
+              OR: [{ authorUserId: { not: null } }, { broadcastId: { not: null } }],
+            }
+          : {}),
       },
       _count: { id: true },
     });

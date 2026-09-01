@@ -16,6 +16,7 @@
 
 import {
   Controller,
+  UseGuards,
   Get,
   Post,
   Body,
@@ -25,6 +26,12 @@ import {
   HttpStatus,
   BadRequestException,
 } from '@nestjs/common';
+import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
+
 import { HubriseAuthService } from '../services/hubrise-auth.service';
 import {
   HubriseCatalogSyncService,
@@ -47,6 +54,8 @@ export class HubriseSyncController {
    * Nécessite que le restaurant soit connecté à HubRise avec un catalogue configuré.
    */
   @Post('catalog/pull/:restaurantId')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.RESTAURANTS, Action.CREATE)
   @HttpCode(HttpStatus.OK)
   async pullCatalog(@Param('restaurantId') restaurantId: string) {
     this.logger.log(`[HubRise Sync] Pull catalogue pour restaurant ${restaurantId}`);
@@ -77,6 +86,8 @@ export class HubriseSyncController {
    * Nécessite que le restaurant soit connecté à HubRise avec un catalogue configuré.
    */
   @Post('catalog/push/:restaurantId')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.RESTAURANTS, Action.CREATE)
   @HttpCode(HttpStatus.OK)
   async pushCatalog(@Param('restaurantId') restaurantId: string) {
     this.logger.log(`[HubRise Sync] Push catalogue pour restaurant ${restaurantId}`);
@@ -105,6 +116,8 @@ export class HubriseSyncController {
    * Utile pour la synchronisation initiale après connexion.
    */
   @Post('customers/pull/:restaurantId')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.RESTAURANTS, Action.CREATE)
   @HttpCode(HttpStatus.OK)
   async pullCustomers(@Param('restaurantId') restaurantId: string) {
     this.logger.log(`[HubRise Sync] Import clients pour restaurant ${restaurantId}`);
@@ -148,6 +161,8 @@ export class HubriseSyncController {
    * }
    */
   @Get('catalog/match/:restaurantId')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.RESTAURANTS, Action.READ)
   async previewMatch(@Param('restaurantId') restaurantId: string) {
     this.logger.log(`[HubRise Matching] Preview pour restaurant ${restaurantId}`);
 
@@ -184,6 +199,8 @@ export class HubriseSyncController {
    * }
    */
   @Post('catalog/match/:restaurantId')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.RESTAURANTS, Action.CREATE)
   @HttpCode(HttpStatus.OK)
   async applyMatch(
     @Param('restaurantId') _restaurantId: string,

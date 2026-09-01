@@ -58,8 +58,21 @@ import { CallsModule } from 'src/modules/calls/calls.module';
   imports: [
     EventEmitterModule.forRoot({}),
 
-    // Rate limiting (ThrottlerGuard). Défaut global doux (garde-fou) ; les
-    // endpoints publics sensibles (adhésion) posent leur propre @Throttle.
+    /**
+     * ⚠️ ATTENTION, ce module NE LIMITE RIEN aujourd'hui.
+     *
+     * Le commentaire précédent annonçait un « défaut global doux (garde-fou) ».
+     * C'était faux : un module de limitation ne s'applique que si
+     * `ThrottlerGuard` est fourni en `APP_GUARD`, ce qui n'est fait nulle part
+     * dans ce projet. Seules les routes portant explicitement `@Throttle` sont
+     * protégées ; toutes les autres sont sans limite.
+     *
+     * Le brancher globalement est une décision d'exploitation, pas un détail :
+     * il faudrait d'abord poser `@SkipThrottle` sur les webhooks de paiement,
+     * les rappels de Turbo et le trafic de socket, sous peine de rejeter du
+     * trafic légitime en production. Le commentaire est corrigé plutôt que la
+     * protection activée à l'aveugle.
+     */
     ThrottlerModule.forRoot([
       { name: 'default', ttl: 60_000, limit: 60 },
     ]),

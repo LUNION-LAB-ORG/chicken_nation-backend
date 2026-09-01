@@ -1,5 +1,5 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { HttpException, HttpStatus, BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { S3Service } from 'src/s3/s3.service';
@@ -122,6 +122,19 @@ export class MessageBroadcastService {
         mimetype: image.mimetype,
       });
       cleImage = envoi?.key ?? null;
+      /**
+       * ⚠️ Le commentaire ci-dessus promettait une protection qui n'existait
+       * pas. `uploadFile` avale ses exceptions et rend `null` : envoyer l'image
+       * AVANT la création ne sert à rien si personne ne teste le résultat. Une
+       * diffusion partait amputée de son image, à des milliers de clients, sans
+       * que rien ne le signale.
+       */
+      if (!cleImage) {
+        throw new HttpException(
+          "L'image n'a pas pu être envoyée vers le stockage. La diffusion n'a pas été créée.",
+          HttpStatus.BAD_GATEWAY,
+        );
+      }
     }
 
     const diffusion = await this.prisma.messageBroadcast.create({

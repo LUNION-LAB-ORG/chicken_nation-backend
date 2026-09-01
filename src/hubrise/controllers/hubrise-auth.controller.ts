@@ -11,6 +11,7 @@
 
 import {
   Controller,
+  UseGuards,
   Get,
   Post,
   Param,
@@ -21,6 +22,12 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
+
 import { HubriseAuthService } from '../services/hubrise-auth.service';
 import { HubriseWebhookService } from '../services/hubrise-webhook.service';
 
@@ -40,6 +47,8 @@ export class HubriseAuthController {
    * @param restaurantId - ID du restaurant CN à connecter
    */
   @Get('connect/:restaurantId')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.RESTAURANTS, Action.READ)
   async connect(
     @Param('restaurantId') restaurantId: string,
     @Res() res: Response,
@@ -57,6 +66,7 @@ export class HubriseAuthController {
    * @param code - Code d'autorisation retourné par HubRise
    * @param state - ID du restaurant CN (passé dans le state)
    */
+  // ⚠️ VOLONTAIREMENT SANS GARDE : retour OAuth appelé par le navigateur du
   @Get('callback')
   async callback(
     @Query('code') code: string,
@@ -98,6 +108,8 @@ export class HubriseAuthController {
    * Retourne les infos HubRise du restaurant.
    */
   @Get('status/:restaurantId')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.RESTAURANTS, Action.READ)
   async status(@Param('restaurantId') restaurantId: string) {
     const info = await this.authService.getHubriseInfoForRestaurant(restaurantId);
 
@@ -114,6 +126,8 @@ export class HubriseAuthController {
    * Supprime le token et les infos HubRise du restaurant.
    */
   @Post('disconnect/:restaurantId')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.RESTAURANTS, Action.CREATE)
   @HttpCode(HttpStatus.OK)
   async disconnect(@Param('restaurantId') restaurantId: string) {
     await this.authService.disconnectRestaurant(restaurantId);
@@ -128,6 +142,8 @@ export class HubriseAuthController {
    * Liste tous les restaurants connectés à HubRise.
    */
   @Get('connected')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.RESTAURANTS, Action.READ)
   async connected() {
     const restaurants = await this.authService.getConnectedRestaurants();
 
