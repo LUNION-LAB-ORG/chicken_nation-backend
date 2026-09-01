@@ -171,11 +171,22 @@ export class MessageBroadcastConsumer extends WorkerHost {
       }
 
       /**
-       * ⚠️ `updatedAt` de la conversation n'est PAS touché, contrairement à un
-       * message ordinaire. C'est ce qui garde la diffusion hors de la boîte de
-       * réception : la conversation n'y remontera qu'au premier message du
-       * client, écrit par le chemin normal.
+       * ⚠️ `updatedAt` EST touché, contrairement à ce que faisait la première
+       * version.
+       *
+       * Il ne l'était pas, pour garder la diffusion hors de la boîte de
+       * réception du backoffice. Mais cette exclusion est désormais assurée par
+       * le filtre de la liste du personnel, qui écarte les diffusions sans
+       * réponse quel que soit leur horodatage. Le laisser figé avait un effet
+       * de bord chez le CLIENT : sa conversation de diffusion restait datée de
+       * la toute première campagne, donc une promotion fraîche pouvait tomber
+       * hors de la page qu'il consulte, et disparaître avec ses non lus.
        */
+      await this.prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { updatedAt: new Date() },
+      });
+
       await this.prisma.messageBroadcastRecipient.update({
         where: { id: destinataire.id },
         data: {

@@ -58,8 +58,20 @@ export class MessageWebSocketService {
     );
   }
 
-  emitMessagesRead(conversation: ConversationGetPayload) {
-    const payload = { conversationId: conversation.id };
+  /**
+   * ⚠️ La charge utile dit désormais QUI a lu.
+   *
+   * Elle ne portait que l'identifiant de conversation, et l'évènement part aux
+   * DEUX camps. Le destinataire ne pouvait donc pas savoir si la lecture venait
+   * de l'autre partie ou de lui même : un client qui ouvrait sa conversation
+   * déclenchait l'évènement, le recevait, et allumait la double coche sur ses
+   * propres messages alors que personne du service client ne les avait lus.
+   */
+  emitMessagesRead(
+    conversation: ConversationGetPayload,
+    parQui: 'user' | 'customer' = 'user',
+  ) {
+    const payload = { conversationId: conversation.id, by: parQui };
 
     if (conversation.customerId) {
       this.appGateway.emitToUser(

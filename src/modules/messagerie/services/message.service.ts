@@ -541,7 +541,10 @@ export class MessageService {
      */
     const diffusionMuette = conversation.isBroadcast && !conversation.hasReply;
     if (count > 0 && !diffusionMuette) {
-      this.messageWebSocketService.emitMessagesRead(conversation);
+      this.messageWebSocketService.emitMessagesRead(
+        conversation,
+        type === 'USER' ? 'user' : 'customer',
+      );
     }
 
     return true;
