@@ -106,6 +106,8 @@ export class PushScheduledTask {
 
     let totalSent = 0;
     let totalFailed = 0;
+    // Accusés Expo du lot, à rattacher à la campagne une fois celle-ci créée.
+    let recus: { id: string; token: string }[] = [];
     let totalTargeted = 0;
 
     if (hasVars) {
@@ -153,6 +155,7 @@ export class PushScheduledTask {
         const result = await this.expoPushService.sendPersonalizedPushNotifications(messages);
         totalSent = result.ticketsReceived ?? 0;
         totalFailed = result.errorsCount ?? 0;
+        recus = result.recus ?? [];
       }
     } else {
       // Standard batch send
@@ -173,11 +176,17 @@ export class PushScheduledTask {
         });
         totalSent = result.ticketsReceived ?? 0;
         totalFailed = result.errorsCount ?? 0;
+        recus = result.recus ?? [];
       }
     }
 
     // Créer un PushCampaign pour l'historique
-    await this.prisma.pushCampaign.create({
+    /**
+     * ⚠️ Ce troisième chemin d'envoi DOIT être instrumenté comme les deux
+     * autres. En instrumenter un seul laisserait toutes les notifications
+     * planifiées à zéro, et ferait croire à un correctif partiel.
+     */
+    const campagne = await this.prisma.pushCampaign.create({
       data: {
         name: `[Auto] ${notification.name}`,
         title,
@@ -194,6 +203,8 @@ export class PushScheduledTask {
         created_by: notification.created_by,
       },
     });
+
+    await this.pushCampaignService.enregistrerTickets(campagne.id, recus);
 
     // next_run_at + active déjà mis à jour atomiquement au moment du claim.
     // Ici on ne fait que le bookkeeping post-envoi.

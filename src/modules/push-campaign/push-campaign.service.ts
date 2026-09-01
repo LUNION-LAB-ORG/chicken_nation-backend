@@ -130,6 +130,8 @@ export class PushCampaignService {
         priority: 'high',
       });
 
+      await this.enregistrerTickets(id, result.recus);
+
       return this.prisma.pushCampaign.update({
         where: { id },
         data: {
@@ -149,16 +151,68 @@ export class PushCampaignService {
     }
   }
 
+  /**
+   * Garde la trace des accusés Expo d'une campagne.
+   *
+   * ⚠️ Sans cette trace, le compteur « Livrés » ne peut PAS exister. Les
+   * identifiants de reçus sont la seule clé permettant de demander plus tard si
+   * le message a été remis, et Expo ne les conserve qu'environ vingt-quatre
+   * heures. Un envoi non enregistré ici est définitivement non mesurable.
+   *
+   * L'écriture ne doit jamais faire échouer un envoi déjà parti : le message
+   * est chez Expo, perdre la mesure est regrettable, perdre l'envoi le serait
+   * beaucoup plus.
+   */
+  async enregistrerTickets(
+    campaignId: string,
+    recus?: { id: string; token: string }[],
+  ) {
+    if (!recus?.length) return;
+    try {
+      await this.prisma.pushCampaignTicket.createMany({
+        data: recus.map((r) => ({
+          campaign_id: campaignId,
+          expo_push_token: r.token,
+          receipt_id: r.id,
+        })),
+        skipDuplicates: true,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Tickets non enregistrés pour la campagne ${campaignId} : ${error?.message}`,
+      );
+    }
+  }
+
+  /**
+   * Recompte « Livrés » à partir des tickets.
+   *
+   * ⚠️ RECOMPTAGE et non incrément. Une tâche planifiée peut se chevaucher avec
+   * elle même, ou être rejouée après un incident : un incrément produirait des
+   * chiffres gonflés que plus rien ne permettrait de corriger. Un comptage est
+   * idempotent par nature.
+   */
+  async recompterRemises(campaignId: string) {
+    const remises = await this.prisma.pushCampaignTicket.count({
+      where: { campaign_id: campaignId, status: 'delivered' },
+    });
+    await this.prisma.pushCampaign.update({
+      where: { id: campaignId },
+      data: { total_delivered: remises },
+    });
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // STATS
   // ═══════════════════════════════════════════════════════════════════════════
 
   async getStats() {
-    const [totalCampaigns, totalSent, totalFailed, recentCampaigns] =
+    const [totalCampaigns, totalSent, totalFailed, totalDelivered, recentCampaigns] =
       await Promise.all([
         this.prisma.pushCampaign.count(),
         this.prisma.pushCampaign.aggregate({ _sum: { total_sent: true } }),
         this.prisma.pushCampaign.aggregate({ _sum: { total_failed: true } }),
+        this.prisma.pushCampaign.aggregate({ _sum: { total_delivered: true } }),
         this.prisma.pushCampaign.findMany({
           orderBy: { created_at: 'desc' },
           take: 5,
@@ -168,6 +222,7 @@ export class PushCampaignService {
             status: true,
             total_targeted: true,
             total_sent: true,
+            total_delivered: true,
             total_failed: true,
             sent_at: true,
             created_at: true,
@@ -179,6 +234,7 @@ export class PushCampaignService {
       totalCampaigns,
       totalSent: totalSent._sum.total_sent ?? 0,
       totalFailed: totalFailed._sum.total_failed ?? 0,
+      totalDelivered: totalDelivered._sum.total_delivered ?? 0,
       recentCampaigns,
     };
   }
@@ -1336,6 +1392,8 @@ export class PushCampaignService {
       }
 
       const result = await this.expoPushService.sendPersonalizedPushNotifications(messages);
+
+      await this.enregistrerTickets(campaignId, result.recus);
 
       return this.prisma.pushCampaign.update({
         where: { id: campaignId },

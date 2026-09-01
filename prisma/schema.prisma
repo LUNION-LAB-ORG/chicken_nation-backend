@@ -1207,7 +1207,50 @@ model PushCampaign {
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
 
+  tickets PushCampaignTicket[]
+
   @@index([status, created_at])
+}
+
+/// Un accusé d'envoi Expo, une ligne par téléphone visé.
+///
+/// ⚠️ Cette table est la raison pour laquelle le compteur « Livrés » pourra
+/// enfin exister. Jusqu'ici les identifiants de tickets rendus par Expo étaient
+/// collectés en mémoire puis jetés à la fin de la méthode d'envoi. Or c'est la
+/// SEULE clé permettant de demander plus tard si le message a bien été remis.
+/// Sans trace en base, l'information était perdue par construction.
+///
+/// ⚠️ Conséquence à assumer : les campagnes ENVOYEES AVANT cette table
+/// resteront à zéro pour toujours. Les reçus Expo expirent sous vingt-quatre
+/// heures, il n'y a aucun rattrapage possible. L'interface doit le dire au lieu
+/// de laisser croire à une panne.
+model PushCampaignTicket {
+  id          String       @id @default(uuid()) @db.Uuid
+  campaign_id String       @db.Uuid
+  campaign    PushCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+
+  expo_push_token String @db.VarChar
+  /// Identifiant de reçu rendu par Expo à l'acceptation du message.
+  receipt_id      String @db.VarChar
+
+  /// accepted : accepté par Expo, remise encore inconnue.
+  /// delivered : remis à Apple ou Google. Ce n'est PAS « vu par le client ».
+  /// failed : Expo a signalé une non remise.
+  /// unknown : reçu jamais publié dans la fenêtre de vingt-quatre heures.
+  ///           Distinct de `failed` à dessein : une absence d'information n'est
+  ///           pas un échec, et la compter comme telle produirait des chiffres
+  ///           faux et alarmants.
+  status String @default("accepted") @db.VarChar
+
+  checked_at   DateTime? @db.Timestamp(6)
+  delivered_at DateTime? @db.Timestamp(6)
+  error        String?   @db.Text
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@unique([campaign_id, receipt_id])
+  @@index([status, created_at])
+  @@index([campaign_id, status])
 }
 
 model PushTemplate {
