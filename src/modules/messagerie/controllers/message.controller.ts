@@ -7,11 +7,11 @@ import {
   Post,
   Query,
   Req,
-  UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { Customer, User } from '@prisma/client';
 import type { Request } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
@@ -20,6 +20,11 @@ import { Modules } from 'src/modules/auth/enums/module-enum';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
+import {
+  CHAMPS_PIECES_JOINTES,
+  OPTIONS_PIECES_JOINTES,
+  PiecesJointesMessage,
+} from '../utils/pieces-jointes';
 import { CreateMessageDto } from '../dto/createMessageDto';
 import { QueryMessagesDto } from '../dto/query-messages.dto';
 import { MessageService } from '../services/message.service';
@@ -56,36 +61,40 @@ export class MessageController {
   @Post()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.MESSAGES, Action.CREATE)
-  @UseInterceptors(FileInterceptor('image'))
+  @UseInterceptors(
+    FileFieldsInterceptor(CHAMPS_PIECES_JOINTES, OPTIONS_PIECES_JOINTES),
+  )
   async createMessage(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,
     @Body() createMessageDto: CreateMessageDto,
-    @UploadedFile() image: Express.Multer.File,
+    @UploadedFiles() fichiers: PiecesJointesMessage,
   ) {
     return this.handleCreateMessage(
       req,
       conversationId,
       createMessageDto,
-      image,
+      fichiers,
     );
   }
 
   // --- Client : création de ses propres messages ---
   @Post('/client')
   @UseGuards(JwtCustomerAuthGuard)
-  @UseInterceptors(FileInterceptor('image'))
+  @UseInterceptors(
+    FileFieldsInterceptor(CHAMPS_PIECES_JOINTES, OPTIONS_PIECES_JOINTES),
+  )
   async createMessageClient(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,
     @Body() createMessageDto: CreateMessageDto,
-    @UploadedFile() image?: Express.Multer.File, // image peut être undefined ici
+    @UploadedFiles() fichiers?: PiecesJointesMessage,
   ) {
     return this.handleCreateMessage(
       req,
       conversationId,
       createMessageDto,
-      image,
+      fichiers,
     );
   }
 
@@ -119,15 +128,16 @@ export class MessageController {
     req: Request,
     conversationId: string,
     createMessageDto: CreateMessageDto,
-    image?: Express.Multer.File,
+    fichiers?: PiecesJointesMessage,
   ) {
+    const image = fichiers?.image?.[0];
+    const audio = fichiers?.audio?.[0];
     if (this.isDev) {
       this.logger.debug(
         `Requête de création de message reçue: ${JSON.stringify(createMessageDto)}`,
       );
-      if (image) {
-        this.logger.debug(`Image reçue: ${JSON.stringify(image)}`);
-      }
+      if (image) this.logger.debug(`Image reçue: ${image.originalname}`);
+      if (audio) this.logger.debug(`Audio reçu: ${audio.originalname}`);
     }
 
     return await this.messageService.createMessage(
@@ -135,6 +145,7 @@ export class MessageController {
       conversationId,
       createMessageDto,
       image,
+      audio,
     );
   }
 }

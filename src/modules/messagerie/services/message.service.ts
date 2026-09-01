@@ -13,6 +13,11 @@ import { CreateMessageDto } from '../dto/createMessageDto';
 import { QueryMessagesDto } from '../dto/query-messages.dto';
 import { ResponseMessageDto } from '../dto/response-message.dto';
 import { getAuthType } from '../utils/getTypeUser';
+import {
+  TAILLE_MAX_AUDIO,
+  TAILLE_MAX_IMAGE,
+  verifierTaille,
+} from '../utils/pieces-jointes';
 import { MessageWebSocketService } from '../websockets/message-websocket.service';
 import { ConversationsService } from './conversations.service';
 import { S3Service } from '../../../s3/s3.service';
@@ -39,6 +44,23 @@ export class MessageService {
     private readonly expoPushService: ExpoPushService,
     private readonly notificationsSenderService: NotificationsSenderService,
   ) { }
+
+  /**
+   * Note vocale envoyée vers un dossier DEDIE.
+   *
+   * Séparé des images à dessein : les durées de conservation, les tailles et
+   * les règles de cache n'ont aucune raison d'être les mêmes, et un dossier
+   * commun rendrait tout tri ultérieur impossible.
+   */
+  private async uploadAudio(audio?: Express.Multer.File) {
+    if (!audio) return null;
+    return await this.s3service.uploadFile({
+      buffer: audio.buffer,
+      path: 'chicken-nation/messagerie-audio',
+      originalname: audio.originalname,
+      mimetype: audio.mimetype,
+    });
+  }
 
   private async uploadImage(image?: Express.Multer.File) {
     if (!image) return null;
@@ -170,20 +192,31 @@ export class MessageService {
     conversationId: string,
     createMessageDto: CreateMessageDto,
     image?: Express.Multer.File,
+    audio?: Express.Multer.File,
   ): Promise<ResponseMessageDto> {
 
     this.logger.debug(`createMessageDto: ${JSON.stringify(createMessageDto)}, conversation ${conversationId}`);
 
     // Validate the message content : texte OU image (les messages "image seule"
     // sont autorisés ; body est alors stocké vide).
-    const { imageUrl = '', orderId = null } = createMessageDto;
+    const {
+      imageUrl = '',
+      orderId = null,
+      audioUrl = '',
+      audioDurationMs = null,
+    } = createMessageDto;
     const body = createMessageDto.body?.trim() ?? '';
-    if (!body && !image && !imageUrl) {
+    // ⚠️ Une note vocale se suffit à elle même : sans ce cas, un vocal sans
+    // texte serait refusé.
+    if (!body && !image && !imageUrl && !audio && !audioUrl) {
       throw new HttpException(
-        'Message body or image is required',
+        'Message body, image or audio is required',
         HttpStatus.BAD_REQUEST
       );
     }
+
+    verifierTaille(image, TAILLE_MAX_IMAGE, 'Image');
+    verifierTaille(audio, TAILLE_MAX_AUDIO, 'Message vocal');
 
     if (this.isDev) {
       this.logger.debug(`Message body validé: ${body}`);
@@ -245,6 +278,8 @@ export class MessageService {
     // Upload image to S3 if provided
     const uploadResult = await this.uploadImage(image);
     const finalImageUrl = uploadResult?.key ?? imageUrl;
+    const uploadAudioResult = await this.uploadAudio(audio);
+    const finalAudioUrl = uploadAudioResult?.key ?? audioUrl;
 
     // verifier que la commande appartient bien au client de la conversation
     if (orderId) {
@@ -276,14 +311,20 @@ export class MessageService {
          * bulle : c'est le prix d'un message qui arrive au lieu d'un message
          * qui disparaît.
          */
-        body: body || (finalImageUrl ? 'Photo' : body),
+        body: body || (finalAudioUrl ? 'Message vocal' : finalImageUrl ? 'Photo' : body),
         conversationId: conversation.id,
         authorUserId: authType === 'user' ? (auth as User).id : null, // Set user ID if authenticated as user
         authorCustomerId:
           authType === 'customer' ? (auth as Customer).id : null, // Set customer ID if authenticated as customer
+        /**
+         * ⚠️ `meta` est ECRASE en entier à chaque création. Toute nouvelle clé
+         * doit donc figurer ici, sans quoi elle disparaît silencieusement.
+         */
         meta: {
           imageUrl: finalImageUrl || null,
           orderId: orderId,
+          audioUrl: finalAudioUrl || null,
+          audioDurationMs: audioDurationMs ?? null,
         }
       },
       include: {
@@ -500,6 +541,8 @@ export class MessageService {
       meta: message.meta || {},
       body: message.body,
       isRead: message.isRead,
+      // Heure de lecture, pour l'accusé affiché sous la bulle.
+      readAt: message.readAt ?? null,
       createdAt: message.createdAt,
       updatedAt: message.updatedAt,
       authorUser: message.authorUser

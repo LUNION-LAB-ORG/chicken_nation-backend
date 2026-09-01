@@ -18,6 +18,14 @@ export class ResponseMessageDto {
   @ApiProperty()
   isRead: boolean;
 
+  /**
+   * Heure à laquelle l'autre partie a ouvert la conversation.
+   *
+   * ⚠️ Sémantique honnête : « la conversation a été ouverte », et non « ce
+   * message précis a été lu ». C'est le seul signal dont dispose le serveur.
+   */
+  readAt?: Date | string | null;
+
   @ApiProperty()
   createdAt: Date;
 
