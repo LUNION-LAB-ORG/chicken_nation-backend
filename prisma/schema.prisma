@@ -335,6 +335,15 @@ model Comment {
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 
+  /// ⚠️ Ce modèle n'avait AUCUN index, alors que toutes les listes du
+  /// backoffice filtrent sur `entity_status` et trient sur `created_at`.
+  ///
+  /// La pagination n'y changeait rien : pour rendre dix lignes, PostgreSQL
+  /// devait balayer la table entière puis la trier, à chaque page ET une
+  /// seconde fois pour le total. C'est la cause de la lenteur constatée sur le
+  /// module Clients.
+  @@index([entity_status, created_at])
+
   @@index([order_id])
   @@index([customer_id])
   @@index([rating])
