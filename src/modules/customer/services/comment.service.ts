@@ -168,6 +168,10 @@ export class CommentService {
                         select: {
                             id: true,
                             first_name: true,
+                            // ⚠️ Le téléphone ne sort QUE sur les routes réservées au personnel.
+                            // Il avait été retiré partout, y compris ici, ce qui vidait la
+                            // colonne de l'écran « Notes et avis » du backoffice.
+                            phone: true,
                             last_name: true,
                                                 image: true,
                         },
@@ -305,6 +309,10 @@ export class CommentService {
                         select: {
                             id: true,
                             first_name: true,
+                            // ⚠️ Le téléphone ne sort QUE sur les routes réservées au personnel.
+                            // Il avait été retiré partout, y compris ici, ce qui vidait la
+                            // colonne de l'écran « Notes et avis » du backoffice.
+                            phone: true,
                             last_name: true,
                                                 image: true,
                         },
@@ -344,6 +352,10 @@ export class CommentService {
                     select: {
                         id: true,
                         first_name: true,
+                        // ⚠️ Le téléphone ne sort QUE sur les routes réservées au personnel.
+                        // Il avait été retiré partout, y compris ici, ce qui vidait la
+                        // colonne de l'écran « Notes et avis » du backoffice.
+                        phone: true,
                         last_name: true,
                                         image: true,
                     },
@@ -405,6 +417,10 @@ export class CommentService {
                         select: {
                             id: true,
                             first_name: true,
+                            // ⚠️ Le téléphone ne sort QUE sur les routes réservées au personnel.
+                            // Il avait été retiré partout, y compris ici, ce qui vidait la
+                            // colonne de l'écran « Notes et avis » du backoffice.
+                            phone: true,
                             last_name: true,
                                                 image: true,
                         },

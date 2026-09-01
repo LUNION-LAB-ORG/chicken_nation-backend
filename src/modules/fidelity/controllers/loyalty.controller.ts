@@ -72,15 +72,33 @@ export class LoyaltyController {
     return this.loyaltyService.getAllLoyaltyPoints({ ...query, customer_id: customerId });
   }
 
-  // ⚠️ Route sans aucune garde, vérifiée joignable en production sans jeton.
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.FIDELITE, Action.READ)
+  /**
+   * ⚠️ Garde MIXTE, comme la route sœur juste en dessous.
+   *
+   * La route n'avait aucune garde, et ma première correction a posé une garde
+   * PERSONNELLE : or elle alimente le hub Fidélité de l'application, le niveau
+   * de Carte Nation ET la remise en points au moment de payer. Le client aurait
+   * perdu son solde, son palier, et la possibilité de régler une partie de sa
+   * commande en points.
+   *
+   * Le personnel consulte n'importe quel client, un client ne consulte que lui
+   * même.
+   */
+  @UseGuards(JwtCustomerOrStaffOptionalAuthGuard)
   @Get('customer/:customerId')
   @ApiOperation({ summary: 'Obtenir les informations de fidélité d\'un client' })
   @ApiOkResponse({
     description: 'Informations de fidélité d\'un client obtenues'
   })
-  getCustomerLoyaltyInfo(@Param('customerId') customerId: string) {
+  getCustomerLoyaltyInfo(@Param('customerId') customerId: string, @Req() req: Request) {
+    const appelant = req.user as (Customer | User) | undefined;
+    if (!appelant) {
+      throw new UnauthorizedException('Authentification requise');
+    }
+    const estPersonnel = 'role' in appelant;
+    if (!estPersonnel && (appelant as Customer).id !== customerId) {
+      throw new ForbiddenException('Vous ne pouvez consulter que votre propre fidélité');
+    }
     return this.loyaltyService.getCustomerLoyaltyInfo(customerId);
   }
 

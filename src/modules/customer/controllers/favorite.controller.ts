@@ -45,12 +45,13 @@ export class FavoriteController {
   }
 
   @ApiOperation({ summary: 'Obtenir toutes les favorites d un client' })
-  // ⚠️ Route sans aucune garde, vérifiée joignable en production sans jeton.
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.CLIENTS, Action.READ)
+  // ⚠️ Garde CLIENT et non personnelle : c'est l'application qui appelle cette
+  // route, avec son propre jeton. Voir le contrôleur des adresses pour le
+  // détail. Le paramètre d'URL est ignoré au profit du jeton.
+  @UseGuards(JwtCustomerAuthGuard)
   @Get('customer/:customerId')
-  findByCustomer(@Param('customerId') customerId: string, @Query() query?: { page?: number, limit?: number }) {
-    return this.favoriteService.findByCustomer(customerId, query?.page ?? 1, query?.limit ?? 10);
+  findByCustomer(@Req() req: Request, @Param('customerId') customerId: string, @Query() query?: { page?: number, limit?: number }) {
+    return this.favoriteService.findByCustomer((req.user as Customer).id, query?.page ?? 1, query?.limit ?? 10);
   }
 
   @ApiOperation({ summary: 'Mettre à jour une favorite' })

@@ -46,12 +46,22 @@ export class AddressController {
   }
 
   @ApiOperation({ summary: 'Obtenir toutes les adresses d un client' })
-  // ⚠️ Route sans aucune garde, vérifiée joignable en production sans jeton.
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.CLIENTS, Action.READ)
+  /**
+   * ⚠️ Garde CLIENT, pas personnel.
+   *
+   * La route n'avait aucune garde, et ma première correction a posé une garde
+   * PERSONNELLE : or c'est l'application cliente qui l'appelle, avec son propre
+   * jeton. Le carnet d'adresses serait revenu vide, en silence, et plus aucune
+   * commande en livraison n'aurait été possible sans tout ressaisir.
+   *
+   * Le paramètre d'URL est conservé pour ne pas casser l'appel existant, mais
+   * IGNORE : l'identité vient du jeton, ce qui ferme la fuite sans rien
+   * casser.
+   */
+  @UseGuards(JwtCustomerAuthGuard)
   @Get('customer/:customerId')
-  findByCustomer(@Param('customerId') customerId: string) {
-    return this.addressService.findByCustomer(customerId);
+  findByCustomer(@Req() req: Request, @Param('customerId') customerId: string) {
+    return this.addressService.findByCustomer((req.user as Customer).id);
   }
 
   @ApiOperation({ summary: 'Mettre à jour une adresse' })
