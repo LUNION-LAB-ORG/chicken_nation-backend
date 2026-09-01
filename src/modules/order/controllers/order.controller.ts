@@ -14,7 +14,7 @@ import {
   Req,
   Res,
   UseGuards,
-  UseInterceptors, NotFoundException } from '@nestjs/common';
+  UseInterceptors, NotFoundException, ForbiddenException } from '@nestjs/common';
 import {
   assertCanAccessRestaurant,
   resolveRestaurantScope,
@@ -394,10 +394,27 @@ export class OrderController {
       userId: user.id,
     });
   }
+  /**
+   * ⚠️ FAILLE CRITIQUE CORRIGEE : aucun contrôle d'appartenance.
+   *
+   * L'identifiant venait de l'URL et n'était jamais confronté au client du
+   * jeton. Avec un compte créé en trente secondes et l'identifiant d'une
+   * commande tierce, on réécrivait l'adresse de livraison, le téléphone ou le
+   * restaurant d'une commande payée par quelqu'un d'autre : la livraison
+   * partait chez l'attaquant.
+   *
+   * Le contrôle est celui, déjà écrit, de la route de LECTURE juste au dessus :
+   * la version écriture ne l'avait jamais reçu.
+   */
   @Patch(':id/client')
   @UseGuards(JwtCustomerAuthGuard)
   @ApiBody({ type: OrderUpdatedDto })
-  updateClient(@Param('id') id: string, @Body() orderUpdatedDto: OrderUpdatedDto) {
+  async updateClient(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() orderUpdatedDto: OrderUpdatedDto,
+  ) {
+    await this.assertCommandeDuClient(req, id);
     return this.orderService.updateClient(id, orderUpdatedDto);
   }
 
@@ -440,13 +457,51 @@ export class OrderController {
       required: ['status'],
     },
   })
-  updateStatusClient(
+  async updateStatusClient(
     @Req() req: Request,
     @Param('id') id: string,
     @Body() body: { status: OrderStatus; meta?: Record<string, any> },
   ) {
+    /**
+     * ⚠️ FAILLE CRITIQUE CORRIGEE : aucun contrôle d'appartenance, et aucune
+     * restriction de statut.
+     *
+     * Tout client authentifié connaissant l'identifiant d'une commande tierce
+     * pouvait poser CANCELLED, ce qui déclenche un VRAI remboursement KKiaPay
+     * du paiement de la victime, ou faire AVANCER la commande d'autrui étape
+     * par étape et saboter le service du restaurant.
+     */
+    await this.assertCommandeDuClient(req, id);
+
+    /**
+     * ⚠️ Un client ne pose QUE l'annulation. Faire avancer une commande est un
+     * geste de restaurant, jamais de client : la transition était pourtant
+     * ouverte à tous les statuts. La légitimité de l'annulation elle même
+     * (statut de départ) reste tranchée par le service.
+     */
+    if (body.status !== OrderStatus.CANCELLED) {
+      throw new ForbiddenException(
+        "Seule l'annulation de votre commande est possible depuis l'application",
+      );
+    }
+
     const userId = (req.user as Customer).id;
     return this.orderService.updateStatus(id, body.status, { ...body.meta, userId });
+  }
+
+  /**
+   * Refuse l'accès si la commande n'appartient pas au client du jeton.
+   *
+   * On répond « introuvable » et non « interdit » : confirmer l'existence d'un
+   * identifiant permettrait de les énumérer.
+   */
+  private async assertCommandeDuClient(req: Request, orderId: string) {
+    const order = await this.orderService.findById(orderId);
+    const customerId = (req.user as Customer)?.id;
+    if (!order || (order as any).customer_id !== customerId) {
+      throw new NotFoundException('Commande introuvable');
+    }
+    return order;
   }
 
   @Delete(':id')

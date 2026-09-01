@@ -116,7 +116,40 @@ export class DishService {
         where: { available: true },
         orderBy: [{ position: 'asc' }, { name: 'asc' }],
       }),
-      this.prisma.restaurant.findMany({ where: { entity_status: EntityStatus.ACTIVE } }),
+      /**
+       * ⚠️ FAILLE CRITIQUE CORRIGEE : cette requête n'avait AUCUN `select`.
+       *
+       * La ligne Restaurant complète était recollée sous chaque plat, donc
+       * servie telle quelle par les routes PUBLIQUES du catalogue. Vérifié en
+       * production : `GET /dishes` sans jeton renvoyait 284 Ko contenant 85
+       * clés API Turbo et 68 jetons OAuth HubRise, en clair. N'importe qui
+       * pouvait dès lors dispatcher ou annuler des courses et piloter le
+       * catalogue HubRise au nom de Chicken Nation.
+       *
+       * C'est exactement la fuite déclarée fermée le 31/07 sur `/restaurants` :
+       * elle était restée grande ouverte par la charge utile des menus. La
+       * leçon est de ne jamais renvoyer une ligne Restaurant sans liste
+       * blanche, quel que soit le chemin.
+       */
+      this.prisma.restaurant.findMany({
+        where: { entity_status: EntityStatus.ACTIVE },
+        select: {
+          id: true,
+          name: true,
+          manager: true,
+          description: true,
+          image: true,
+          address: true,
+          latitude: true,
+          longitude: true,
+          phone: true,
+          email: true,
+          schedule: true,
+          entity_status: true,
+          created_at: true,
+          updated_at: true,
+        },
+      }),
       this.prisma.dishExcludedSupplement.findMany({ where: { dish_id: { in: dishIds } } }),
       this.prisma.dishExcludedRestaurant.findMany({ where: { dish_id: { in: dishIds } } }),
     ]);

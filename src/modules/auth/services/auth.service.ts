@@ -132,7 +132,21 @@ export class AuthService {
       // this.logger.error(`Échec de l'envoi de l'OTP au numéro ${customer.phone}`);
       throw new HttpException('Envoi de l\'OTP impossible', 500);
     }
-    return { otp };
+    /**
+     * ⚠️ FAILLE CRITIQUE CORRIGEE : le code était renvoyé EN CLAIR dans la
+     * réponse HTTP de cette route PUBLIQUE.
+     *
+     * Il suffisait d'appeler cette route avec un numéro pour lire le code dans
+     * la réponse, puis de le rejouer sur `verify-otp` : prise de contrôle
+     * complète de n'importe quel compte client à partir du seul numéro de
+     * téléphone, sans jamais recevoir le SMS. Et comme la table des codes est
+     * partagée avec le module livreur, le même appel ouvrait aussi la
+     * réinitialisation d'un compte livreur.
+     *
+     * Le code ne doit exister que dans le SMS. L'application ne s'en servait
+     * que pour l'afficher dans sa console.
+     */
+    return { phone: customer.phone, message: 'Code envoyé par SMS' };
   }
 
   // VERIFY OTP

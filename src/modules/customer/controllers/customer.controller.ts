@@ -131,11 +131,23 @@ export class CustomerController {
     return this.customerService.findByPhone(phone);
   }
 
+  /**
+   * ⚠️ FAILLE CRITIQUE CORRIGEE : l'identifiant venait de l'URL, jamais du
+   * jeton. Tout client authentifié supprimait le compte d'un AUTRE en appelant
+   * cette route avec son identifiant : statut DELETED, téléphone suffixé,
+   * historique, points de fidélité et Carte Nation perdus, impossibilité de se
+   * reconnecter. Les identifiants clients étaient énumérables publiquement par
+   * les avis.
+   *
+   * Le paramètre d'URL est conservé pour ne pas casser l'application, mais il
+   * est désormais IGNORE : seul le jeton fait foi. La suppression par le
+   * personnel reste sur `DELETE /customer/admin/:id`, dûment gardée.
+   */
   @Delete(':id')
   @UseGuards(JwtCustomerAuthGuard)
-  @ApiOperation({ summary: 'Supprimer un client (par le client lui-même)' })
-  remove(@Param('id') id: string) {
-    return this.customerService.remove(id);
+  @ApiOperation({ summary: 'Supprimer son propre compte' })
+  remove(@Req() req: Request) {
+    return this.customerService.remove((req.user as Customer).id);
   }
 
   @Patch('admin/:id')

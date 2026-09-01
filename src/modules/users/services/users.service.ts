@@ -202,12 +202,32 @@ export class UsersService {
   async update(req: Request, updateUserDto: UpdateUserDto) {
     const user = req.user as User;
 
+    /**
+     * ⚠️ FAILLE CRITIQUE CORRIGEE : le DTO ENTIER partait dans `data`.
+     *
+     * `UpdateUserDto` dérive de `CreateUserDto`, qui déclare `role`, `type` et
+     * `restaurant_id`. La route ne portant aucune permission, tout membre du
+     * personnel connecté, caissier compris, se promouvait ADMIN avec un simple
+     * `{"role":"ADMIN"}`, ou se rattachait au restaurant de son choix. C'est
+     * une élévation de privilèges en une requête.
+     *
+     * On ne modifie plus que le PROFIL, par liste blanche explicite. Le rôle,
+     * le type et le rattachement restent la prérogative des routes
+     * d'administration, qui portent leurs permissions. `undefined` laisse la
+     * colonne inchangée côté Prisma, donc une absence de champ ne l'efface pas.
+     */
+    const profil = {
+      fullname: updateUserDto.fullname,
+      phone: updateUserDto.phone,
+      address: updateUserDto.address,
+      image: updateUserDto.image,
+    };
 
     const newUser = await this.prisma.user.update({
       where: {
         id: user.id,
       },
-      data: updateUserDto,
+      data: profil,
     });
 
     const { password, ...rest } = newUser;
