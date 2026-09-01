@@ -1196,6 +1196,13 @@ model PushCampaign {
   total_sent      Int @default(0)
   total_delivered Int @default(0)
   total_failed    Int @default(0)
+  /// Ouvertures REELLES, remontées par le téléphone au moment du geste.
+  ///
+  /// ⚠️ Ne se remplit QUE depuis les versions de l'application qui savent la
+  /// remonter. Les téléphones plus anciens resteront muets pour toujours : le
+  /// clic ne quitte jamais le téléphone, aucune donnée serveur ne peut le
+  /// reconstituer. Le chiffre est donc un PLANCHER, jamais un total.
+  total_opened    Int @default(0)
 
   // Scheduling
   status       String    @default("sent") @db.VarChar // draft | sent | scheduled | failed
@@ -1208,8 +1215,30 @@ model PushCampaign {
   updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
 
   tickets PushCampaignTicket[]
+  opens   PushCampaignOpen[]
 
   @@index([status, created_at])
+}
+
+/// Une ouverture de notification, remontée par le téléphone.
+///
+/// ⚠️ C'est la SEULE mesure de clic honnête. Le geste se produit sur le
+/// téléphone et n'en sort jamais tout seul : sans une remontée explicite de
+/// l'application, aucun taux de clic ne peut être calculé, et prétendre le
+/// contraire serait inventer un chiffre.
+model PushCampaignOpen {
+  id          String       @id @default(uuid()) @db.Uuid
+  campaign_id String       @db.Uuid
+  campaign    PushCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+
+  customer_id String?  @db.Uuid
+  platform    String?  @db.VarChar
+  opened_at   DateTime @default(now()) @db.Timestamp(6)
+
+  /// Un client ne compte qu'une fois par campagne : rouvrir la même
+  /// notification n'est pas un second destinataire touché.
+  @@unique([campaign_id, customer_id])
+  @@index([campaign_id])
 }
 
 /// Un accusé d'envoi Expo, une ligne par téléphone visé.

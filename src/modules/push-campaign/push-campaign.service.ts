@@ -125,7 +125,12 @@ export class PushCampaignService {
         tokens,
         title: campaign.title,
         body: campaign.body,
-        data: (campaign.data as Record<string, any>) ?? {},
+        /**
+         * ⚠️ L'identifiant de campagne DOIT voyager dans la charge utile.
+         * C'est lui que le téléphone renvoie à l'ouverture ; sans lui, le geste
+         * est invisible et le compteur d'ouvertures reste vide.
+         */
+        data: { ...((campaign.data as Record<string, any>) ?? {}), campaign_id: id },
         sound: 'default',
         priority: 'high',
       });
@@ -185,6 +190,60 @@ export class PushCampaignService {
   }
 
   /**
+   * Enregistre l'ouverture d'une notification par un client.
+   *
+   * ⚠️ C'est la SEULE mesure de clic honnête. Le geste se produit sur le
+   * téléphone et n'en sort jamais tout seul : sans cette remontée explicite,
+   * aucun taux de clic ne peut être calculé, et prétendre le contraire
+   * reviendrait à inventer un chiffre.
+   *
+   * ⚠️ Le chiffre obtenu est un PLANCHER, jamais un total. Les téléphones
+   * équipés d'une version antérieure à cette remontée resteront muets pour
+   * toujours, et rien ne permet de savoir combien ils sont. Un taux calculé sur
+   * cette base sous estime la réalité d'une quantité inconnue.
+   *
+   * Idempotent : rouvrir la même notification n'est pas un second destinataire
+   * touché, l'index unique s'en charge.
+   */
+  async enregistrerOuverture(
+    campaignId: string,
+    customerId?: string | null,
+    platform?: string | null,
+  ) {
+    const campagne = await this.prisma.pushCampaign.findUnique({
+      where: { id: campaignId },
+      select: { id: true },
+    });
+    if (!campagne) return { enregistre: false };
+
+    try {
+      await this.prisma.pushCampaignOpen.create({
+        data: {
+          campaign_id: campaignId,
+          customer_id: customerId ?? null,
+          platform: platform ?? null,
+        },
+      });
+    } catch (error: any) {
+      // P2002 : ce client avait déjà ouvert cette campagne. Ce n'est pas une
+      // erreur, c'est le comportement attendu.
+      if (error?.code !== 'P2002') throw error;
+      return { enregistre: false };
+    }
+
+    // Recomptage plutôt qu'incrément, pour la même raison que « Remis » : un
+    // rejeu ne doit jamais gonfler le chiffre.
+    const ouvertures = await this.prisma.pushCampaignOpen.count({
+      where: { campaign_id: campaignId },
+    });
+    await this.prisma.pushCampaign.update({
+      where: { id: campaignId },
+      data: { total_opened: ouvertures },
+    });
+    return { enregistre: true };
+  }
+
+  /**
    * Recompte « Livrés » à partir des tickets.
    *
    * ⚠️ RECOMPTAGE et non incrément. Une tâche planifiée peut se chevaucher avec
@@ -207,12 +266,13 @@ export class PushCampaignService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   async getStats() {
-    const [totalCampaigns, totalSent, totalFailed, totalDelivered, recentCampaigns] =
+    const [totalCampaigns, totalSent, totalFailed, totalDelivered, totalOpened, recentCampaigns] =
       await Promise.all([
         this.prisma.pushCampaign.count(),
         this.prisma.pushCampaign.aggregate({ _sum: { total_sent: true } }),
         this.prisma.pushCampaign.aggregate({ _sum: { total_failed: true } }),
         this.prisma.pushCampaign.aggregate({ _sum: { total_delivered: true } }),
+        this.prisma.pushCampaign.aggregate({ _sum: { total_opened: true } }),
         this.prisma.pushCampaign.findMany({
           orderBy: { created_at: 'desc' },
           take: 5,
@@ -223,6 +283,7 @@ export class PushCampaignService {
             total_targeted: true,
             total_sent: true,
             total_delivered: true,
+            total_opened: true,
             total_failed: true,
             sent_at: true,
             created_at: true,
@@ -235,6 +296,7 @@ export class PushCampaignService {
       totalSent: totalSent._sum.total_sent ?? 0,
       totalFailed: totalFailed._sum.total_failed ?? 0,
       totalDelivered: totalDelivered._sum.total_delivered ?? 0,
+      totalOpened: totalOpened._sum.total_opened ?? 0,
       recentCampaigns,
     };
   }
@@ -1387,7 +1449,10 @@ export class PushCampaignService {
           token: setting.expo_push_token!,
           title: this.resolveText(campaign.title, vars),
           body: this.resolveText(campaign.body, vars),
-          data: (campaign.data as Record<string, any>) ?? {},
+          data: {
+            ...((campaign.data as Record<string, any>) ?? {}),
+            campaign_id: campaignId,
+          },
         });
       }
 

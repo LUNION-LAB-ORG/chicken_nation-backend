@@ -106,9 +106,38 @@ export class PushScheduledTask {
 
     let totalSent = 0;
     let totalFailed = 0;
-    // Accusés Expo du lot, à rattacher à la campagne une fois celle-ci créée.
+    // Accusés Expo du lot, rattachés à la campagne après l'envoi.
     let recus: { id: string; token: string }[] = [];
     let totalTargeted = 0;
+
+    /**
+     * ⚠️ La campagne est créée AVANT l'envoi, et non après.
+     *
+     * Son identifiant doit voyager dans la charge utile de la notification :
+     * c'est lui que le téléphone renvoie à l'ouverture. Créée après l'envoi,
+     * elle ne pouvait pas y figurer, et toutes les notifications planifiées
+     * étaient donc structurellement impossibles à mesurer.
+     *
+     * Elle naît en `sending` : une campagne interrompue par un incident reste
+     * ainsi distinguable d'une campagne réellement partie.
+     */
+    const campagne = await this.prisma.pushCampaign.create({
+      data: {
+        name: `[Auto] ${notification.name}`,
+        title,
+        body,
+        data: payload?.data ?? undefined,
+        image_url: payload?.image_url,
+        target_type: targeting?.type ?? 'all',
+        target_config: targeting?.config ?? {},
+        status: 'sending',
+        created_by: notification.created_by,
+      },
+    });
+    const donneesAvecCampagne = {
+      ...(payload?.data ?? {}),
+      campaign_id: campagne.id,
+    };
 
     if (hasVars) {
       // Personalized send — resolve variables per customer
@@ -147,7 +176,7 @@ export class PushScheduledTask {
             token: setting.expo_push_token!,
             title: this.resolveText(title, vars),
             body: this.resolveText(body, vars),
-            data: payload?.data ?? {},
+            data: donneesAvecCampagne,
           };
         });
 
@@ -170,7 +199,7 @@ export class PushScheduledTask {
           tokens,
           title,
           body,
-          data: payload?.data ?? {},
+          data: donneesAvecCampagne,
           sound: 'default',
           priority: 'high',
         });
@@ -186,21 +215,14 @@ export class PushScheduledTask {
      * autres. En instrumenter un seul laisserait toutes les notifications
      * planifiées à zéro, et ferait croire à un correctif partiel.
      */
-    const campagne = await this.prisma.pushCampaign.create({
+    await this.prisma.pushCampaign.update({
+      where: { id: campagne.id },
       data: {
-        name: `[Auto] ${notification.name}`,
-        title,
-        body,
-        data: payload?.data ?? undefined,
-        image_url: payload?.image_url,
-        target_type: targeting?.type ?? 'all',
-        target_config: targeting?.config ?? {},
         status: 'sent',
         total_targeted: totalTargeted,
         total_sent: totalSent,
         total_failed: totalFailed,
         sent_at: now,
-        created_by: notification.created_by,
       },
     });
 
