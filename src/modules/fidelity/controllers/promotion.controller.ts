@@ -77,6 +77,10 @@ export class PromotionController {
     return this.promotionService.findAllForCustomer(req, filters);
   }
 
+  // ⚠️ Aucune garde : le détail d'une promotion, y compris PRIVEE, était
+  // lisible par un tiers non authentifié muni de l'identifiant.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.PROMOTIONS, Action.READ)
   @Get(':id')
   @ApiOperation({ summary: 'Obtenir une promotion par ID' })
   @ApiOkResponse({ type: PromotionResponseDto })

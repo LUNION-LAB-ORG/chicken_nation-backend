@@ -20,6 +20,7 @@ import { GenerateConfigService } from 'src/common/services/generate-config.servi
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
+import { assertCanAccessRestaurant } from 'src/modules/order/helpers/restaurant-scope.helper';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { DishService } from 'src/modules/menu/services/dish.service';
@@ -95,7 +96,13 @@ export class RestaurantController {
   @Get(':id/clients')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.CLIENTS, Action.READ)
-  async getRestaurantCustomers(@Param('id') id: string) {
+  async getRestaurantCustomers(@Req() req: Request, @Param('id') id: string) {
+    /**
+     * ⚠️ Cloisonnement RESTAURANT. La permission CLIENTS.READ est portée par
+     * cinq rôles, dont caissier et centre d'appel : sans ce contrôle, un
+     * employé d'un restaurant listait le fichier clients de tous les autres.
+     */
+    assertCanAccessRestaurant(req.user as User, id);
     return this.restaurantService.getRestaurantCustomers(id);
   }
 

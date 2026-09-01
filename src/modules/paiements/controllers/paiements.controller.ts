@@ -85,6 +85,10 @@ export class PaiementsController {
     return this.paiementsService.getFreePaiements(req);
   }
 
+  // ⚠️ Aucune permission : tout membre du personnel fabriquait un paiement
+  // SUCCESS arbitraire, rattaché à la commande de n'importe quel restaurant.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.CREATE)
   @Post()
   // Guard AJOUTÉ (revue 31/07) : la route ANONYME permettait de FABRIQUER un
   // Paiement SUCCESS arbitraire — contournant le contrôle « montant couvert »

@@ -415,7 +415,17 @@ export class OrderController {
     @Body() orderUpdatedDto: OrderUpdatedDto,
   ) {
     await this.assertCommandeDuClient(req, id);
-    return this.orderService.updateClient(id, orderUpdatedDto);
+    /**
+     * ⚠️ Le STATUT n'est pas modifiable depuis ce chemin.
+     *
+     * `updateClient` faisait passer la commande de PENDING à ACCEPTED sans
+     * jamais regarder si elle était payée. Or le paiement client pose
+     * seulement `paied`, en laissant volontairement le statut à PENDING : un
+     * client pouvait donc valider lui même une commande en ligne NON PAYEE.
+     * L'annulation reste possible par la route de statut dédiée.
+     */
+    const { status, ...champsClient } = orderUpdatedDto as any;
+    return this.orderService.updateClient(id, champsClient);
   }
 
   @Patch(':id/status')
@@ -431,12 +441,21 @@ export class OrderController {
       required: ['status'],
     },
   })
-  updateStatus(
+  async updateStatus(
     @Req() req: Request,
     @Param('id') id: string,
     @Body() body: { status: OrderStatus; meta?: Record<string, any> },
   ) {
     const user = req.user as User;
+    /**
+     * ⚠️ Cloisonnement RESTAURANT. La permission était vérifiée, mais pas le
+     * périmètre : un caissier du restaurant A pouvait faire avancer, ou
+     * ANNULER, une commande du restaurant B — et l'annulation déclenche un
+     * remboursement réel. Le contrôle existait déjà sur la lecture.
+     */
+    const commande = await this.orderService.findById(id);
+    if (!commande) throw new NotFoundException('Commande introuvable');
+    assertCanAccessRestaurant(user, (commande as any).restaurant_id);
     // On transmet le rôle : seul un ADMIN pourra annuler une commande déjà avancée.
     return this.orderService.updateStatus(id, body.status, {
       ...body.meta,
