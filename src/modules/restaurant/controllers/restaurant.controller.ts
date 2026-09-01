@@ -20,6 +20,7 @@ import { GenerateConfigService } from 'src/common/services/generate-config.servi
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
+import { User } from '@prisma/client';
 import { assertCanAccessRestaurant } from 'src/modules/order/helpers/restaurant-scope.helper';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
