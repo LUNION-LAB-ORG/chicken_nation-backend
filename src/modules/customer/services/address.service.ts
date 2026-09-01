@@ -57,18 +57,43 @@ export class AddressService {
     });
   }
 
+  /**
+   * ⚠️ FAILLE CORRIGEE : `req` était reçu mais JAMAIS utilisé. Tout client
+   * authentifié modifiait l'adresse de livraison d'un autre en connaissant son
+   * identifiant, et pouvait ainsi détourner une livraison.
+   *
+   * L'écriture est désormais CONDITIONNEE au propriétaire dans le `where` :
+   * c'est la base qui tranche, en une seule requête, sans fenêtre entre la
+   * vérification et l'écriture.
+   */
   async update(req: Request, id: string, updateAddressDto: UpdateAddressDto) {
-    // Vérifier si l'adresse existe
-    await this.findOne(id);
-
-    return this.prisma.address.update({
-      where: { id },
+    const customerId = (req.user as { id?: string })?.id;
+    const { count } = await this.prisma.address.updateMany({
+      where: { id, customer_id: customerId },
       data: updateAddressDto,
     });
+    if (count === 0) {
+      throw new NotFoundException('Adresse introuvable');
+    }
+    return this.findOne(id);
   }
 
-  async remove(id: string) {
-    // Vérifier si l'adresse existe
+  /**
+   * ⚠️ FAILLE CORRIGEE : aucune vérification de propriétaire, sur une
+   * suppression DEFINITIVE. Tout client authentifié effaçait irréversiblement
+   * les adresses d'un autre.
+   */
+  async remove(id: string, customerId?: string) {
+    if (customerId) {
+      const { count } = await this.prisma.address.deleteMany({
+        where: { id, customer_id: customerId },
+      });
+      if (count === 0) {
+        throw new NotFoundException('Adresse introuvable');
+      }
+      return { id };
+    }
+    // Chemin PERSONNEL, déjà gardé par une permission au niveau de la route.
     await this.findOne(id);
 
     // Sinon, suppression définitive

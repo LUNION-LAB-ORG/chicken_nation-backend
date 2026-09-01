@@ -5,6 +5,7 @@ import { UpdateAddressDto } from 'src/modules/customer/dto/update-address.dto';
 import type { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { Customer } from '@prisma/client';
 import { CacheInterceptor } from '@nestjs/cache-manager';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
@@ -63,7 +64,9 @@ export class AddressController {
   @ApiOperation({ summary: 'Supprimer une adresse' })
   @Delete(':id')
   @UseGuards(JwtCustomerAuthGuard)
-  remove(@Param('id') id: string) {
-    return this.addressService.remove(id);
+  remove(@Req() req: Request, @Param('id') id: string) {
+    // L'identité vient du jeton : la suppression est conditionnée au
+    // propriétaire dans la requête elle même.
+    return this.addressService.remove(id, (req.user as Customer).id);
   }
 }

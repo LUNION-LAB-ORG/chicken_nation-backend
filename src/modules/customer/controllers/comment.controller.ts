@@ -102,7 +102,10 @@ export class CommentController {
     @ApiParam({ name: 'id', description: 'ID du commentaire' })
     @ApiResponse({ status: 200, description: 'Visibilité mise à jour' })
     @UseGuards(JwtAuthGuard)
-    @Patch(':id/site-visible')
+    // ⚠️ Aucune permission : tout membre du personnel réécrivait ou publiait un avis client.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMENTAIRES, Action.UPDATE)
+  @Patch(':id/site-visible')
     async setSiteVisible(
         @Param('id') commentId: string,
         @Body() body: { visible: boolean },
@@ -116,7 +119,10 @@ export class CommentController {
     @ApiParam({ name: 'id', description: 'ID du commentaire' })
     @ApiResponse({ status: 200, description: 'Message corrigé' })
     @UseGuards(JwtAuthGuard)
-    @Patch(':id/message')
+    // ⚠️ Aucune permission : tout membre du personnel réécrivait ou publiait un avis client.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMENTAIRES, Action.UPDATE)
+  @Patch(':id/message')
     async updateMessageAsStaff(
         @Param('id') commentId: string,
         @Body() body: { message: string },
@@ -148,6 +154,11 @@ export class CommentController {
             },
         },
     })
+    // ⚠️ Route sans aucune garde : n'importe qui lisait les avis d'une commande
+    // arbitraire, avec l'identité du client. Réservée au personnel, les avis
+    // publics restant servis par la route « par plat ».
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.COMMENTAIRES, Action.READ)
     @Get('order/:orderId')
     async getOrderComments(
         @Param('orderId') orderId: string,

@@ -4,6 +4,7 @@ import { CreateFavoriteDto } from 'src/modules/customer/dto/create-favorite.dto'
 import { UpdateFavoriteDto } from 'src/modules/customer/dto/update-favorite.dto';
 import type { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Customer } from '@prisma/client';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { CacheInterceptor } from '@nestjs/cache-manager';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
@@ -69,10 +70,17 @@ export class FavoriteController {
   @ApiOperation({ summary: 'Supprimer une favorite par client et plat' })
   @UseGuards(JwtCustomerAuthGuard)
   @Delete('customer/:customerId/dish/:dishId')
+  // ⚠️ L'identifiant client venait de l'URL : tout client vidait les favoris
+  // d'un autre. Le paramètre est conservé pour ne pas casser l'application,
+  // mais IGNORE : seul le jeton fait foi.
   removeByCustomerAndDish(
+    @Req() req: Request,
     @Param('customerId') customerId: string,
     @Param('dishId') dishId: string,
   ) {
-    return this.favoriteService.removeByCustomerAndDish(customerId, dishId);
+    return this.favoriteService.removeByCustomerAndDish(
+      (req.user as Customer).id,
+      dishId,
+    );
   }
 }

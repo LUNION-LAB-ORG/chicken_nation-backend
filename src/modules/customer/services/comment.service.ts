@@ -49,8 +49,7 @@ export class CommentService {
                         id: true,
                         first_name: true,
                         last_name: true,
-                        phone: true,
-                        image: true,
+                                        image: true,
                     },
                 },
                 order: {
@@ -98,8 +97,7 @@ export class CommentService {
                         id: true,
                         first_name: true,
                         last_name: true,
-                        phone: true,
-                        image: true,
+                                        image: true,
                     },
                 },
                 order: {
@@ -171,8 +169,7 @@ export class CommentService {
                             id: true,
                             first_name: true,
                             last_name: true,
-                            phone: true,
-                            image: true,
+                                                image: true,
                         },
                     },
                     order: {
@@ -243,8 +240,7 @@ export class CommentService {
                         id: true,
                         first_name: true,
                         last_name: true,
-                        phone: true,
-                        image: true,
+                                        image: true,
                     },
                 },
                 order: {
@@ -310,8 +306,7 @@ export class CommentService {
                             id: true,
                             first_name: true,
                             last_name: true,
-                            phone: true,
-                            image: true,
+                                                image: true,
                         },
                     },
                     order: {
@@ -350,8 +345,7 @@ export class CommentService {
                         id: true,
                         first_name: true,
                         last_name: true,
-                        phone: true,
-                        image: true,
+                                        image: true,
                     },
                 },
                 order: {
@@ -412,8 +406,7 @@ export class CommentService {
                             id: true,
                             first_name: true,
                             last_name: true,
-                            phone: true,
-                            image: true,
+                                                image: true,
                         },
                     },
                     order: {
@@ -474,8 +467,7 @@ export class CommentService {
                             id: true,
                             first_name: true,
                             last_name: true,
-                            phone: true,
-                            image: true,
+                                                image: true,
                         },
                     },
                     order: {

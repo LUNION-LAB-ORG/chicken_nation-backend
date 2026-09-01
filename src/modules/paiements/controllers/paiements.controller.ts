@@ -1,5 +1,9 @@
 import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { User, UserRole } from '@prisma/client';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { AddPaiementDto, CreatePaiementDto } from 'src/modules/paiements/dto/create-paiement.dto';
@@ -28,6 +32,9 @@ function assertAdmin(req: Request) {
 export class PaiementsController {
   constructor(private readonly paiementsService: PaiementsService) { }
 
+  // ⚠️ Aucune permission : tout jeton personnel, cuisine comprise, agissait sur l'argent.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE)
   @Post('add')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Payer via backoffice' })
@@ -44,6 +51,9 @@ export class PaiementsController {
     return this.paiementsService.payWithKkiapay(req, createPaiementKkiapayDto);
   }
 
+  // ⚠️ Aucune permission : tout jeton personnel, cuisine comprise, agissait sur l'argent.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.DELETE)
   @Post('refund/:id')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Remboursement d\'un paiement par Kkiapay' })
@@ -51,6 +61,9 @@ export class PaiementsController {
     return this.paiementsService.refundPaiement(paiementId);
   }
 
+  // ⚠️ Aucune permission : tout jeton personnel, cuisine comprise, agissait sur l'argent.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE)
   @Patch(':id/confirmer-encaissement')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({
