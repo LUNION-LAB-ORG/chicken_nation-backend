@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Job } from 'bullmq';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { ExpoPushService } from 'src/expo-push/expo-push.service';
 import { DELAI_REPRISE_MS, MessageBroadcastService } from '../message-broadcast.service';
 
 /**
@@ -21,6 +22,7 @@ export class MessageBroadcastConsumer extends WorkerHost {
   constructor(
     private readonly prisma: PrismaService,
     private readonly service: MessageBroadcastService,
+    private readonly push: ExpoPushService,
   ) {
     super();
   }
@@ -30,17 +32,25 @@ export class MessageBroadcastConsumer extends WorkerHost {
 
     const diffusion = await this.prisma.messageBroadcast.findUnique({
       where: { id: broadcastId },
-      select: { id: true, body: true, image_url: true },
+      select: { id: true, name: true, body: true, image_url: true },
     });
     if (!diffusion) {
       this.logger.warn(`Diffusion ${broadcastId} disparue, lot ignoré`);
       return;
     }
 
+    const livres: string[] = [];
     for (const recipientId of recipientIds) {
-      await this.livrerUn(diffusion.id, diffusion.body, diffusion.image_url, recipientId);
+      const clientId = await this.livrerUn(
+        diffusion.id,
+        diffusion.body,
+        diffusion.image_url,
+        recipientId,
+      );
+      if (clientId) livres.push(clientId);
     }
 
+    await this.notifier(diffusion.body, livres);
     await this.service.cloturerSiTermine(broadcastId);
   }
 
@@ -49,7 +59,7 @@ export class MessageBroadcastConsumer extends WorkerHost {
     corps: string,
     image: string | null,
     recipientId: string,
-  ) {
+  ): Promise<string | null> {
     /**
      * VERROU 1, la réservation. Un seul processus peut prendre ce destinataire.
      * La branche `sending` périmée récupère ceux qu'un processus tombé en cours
@@ -66,13 +76,13 @@ export class MessageBroadcastConsumer extends WorkerHost {
       },
       data: { status: 'sending', claimed_at: new Date() },
     });
-    if (reserve.count === 0) return; // déjà traité, ou pris par quelqu'un d'autre
+    if (reserve.count === 0) return null; // déjà traité, ou pris par quelqu'un d'autre
 
     const destinataire = await this.prisma.messageBroadcastRecipient.findUnique({
       where: { id: recipientId },
       select: { id: true, customer_id: true, broadcast_id: true },
     });
-    if (!destinataire) return;
+    if (!destinataire) return null;
 
     try {
       const client = await this.prisma.customer.findUnique({
@@ -168,6 +178,7 @@ export class MessageBroadcastConsumer extends WorkerHost {
           error: null,
         },
       });
+      return client.id;
     } catch (e: any) {
       await this.prisma.messageBroadcastRecipient.update({
         where: { id: destinataire.id },
@@ -176,6 +187,58 @@ export class MessageBroadcastConsumer extends WorkerHost {
       this.logger.warn(
         `Diffusion ${broadcastId} : échec pour le client ${destinataire.customer_id} — ${e?.message}`,
       );
+      return null;
+    }
+  }
+
+  /**
+   * Notification poussée aux clients qui viennent de recevoir le message.
+   *
+   * ⚠️ Sans elle, une diffusion est muette : le message est bien écrit, mais le
+   * client ne le découvre qu'en ouvrant l'écran Messages de lui-même. C'était
+   * le cas de la première version, et c'est exactement ce qui a été remonté.
+   *
+   * ⚠️ L'OPT-IN est respecté, et c'est le point sensible. Trois réglages
+   * doivent être vrais : `active` (notifications activées), `push` (canal
+   * poussé) et surtout `promotions`, qui est l'interrupteur que le client
+   * contrôle pour ce type de message. Une diffusion est du marketing : passer
+   * outre reviendrait à envoyer une promotion à quelqu'un qui a dit non.
+   *
+   * L'envoi est GROUPÉ par lot et ne fait jamais échouer la livraison : le
+   * message est déjà en base, une notification perdue ne doit pas remettre le
+   * destinataire en attente et provoquer un second message.
+   */
+  private async notifier(corps: string, clientIds: string[]) {
+    if (clientIds.length === 0) return;
+    try {
+      const reglages = await this.prisma.notificationSetting.findMany({
+        where: {
+          customer_id: { in: clientIds },
+          active: true,
+          push: true,
+          promotions: true,
+          expo_push_token: { not: null },
+        },
+        select: { expo_push_token: true },
+      });
+      const jetons = reglages.map((r) => r.expo_push_token!).filter(Boolean);
+      if (jetons.length === 0) return;
+
+      await this.push.sendPushNotifications({
+        tokens: jetons,
+        title: 'Chicken Nation',
+        // Une notification n'est pas un roman : on annonce, le fil porte le reste.
+        body: corps.length > 140 ? `${corps.slice(0, 137)}…` : corps,
+        // ⚠️ `message` est le SEUL type que le binaire déjà installé sait
+        // interpréter pour la messagerie. Un type inventé le ferait retomber
+        // sur l'accueil. On n'envoie volontairement pas d'identifiant de fil :
+        // chaque destinataire a sa propre conversation, un envoi groupé ne peut
+        // donc pas en porter un, et la boîte de réception place de toute façon
+        // la conversation qui vient d'arriver en tête de liste.
+        data: { type: 'message' },
+      } as any);
+    } catch (e: any) {
+      this.logger.warn(`Diffusion : notification non envoyée — ${e?.message}`);
     }
   }
 

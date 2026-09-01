@@ -13,7 +13,14 @@ export class ResponseConversationsDto {
   customerId: string;
 
   @ApiProperty()
+  /** Date du dernier message : c'est sur elle que l'application trie. */
   createdAt: Date;
+
+  /** Même valeur, sous un nom honnête, pour les futures versions. */
+  lastMessageAt?: Date;
+
+  /** Dernière activité de la conversation, côté serveur. */
+  updatedAt?: Date;
 
   @ApiProperty({ type: [Object] })
   messages: Omit<ResponseMessageDto, 'conversationId' | 'conversation'>[];

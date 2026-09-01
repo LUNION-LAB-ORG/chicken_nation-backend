@@ -687,7 +687,24 @@ export class ConversationsService {
       id: conversation.id,
       unreadNumber,
       customerId: conversation.customerId,
-      createdAt: conversation.createdAt,
+      /**
+       * ⚠️ Date du DERNIER MESSAGE, et non date de création de la conversation.
+       *
+       * L'application trie sa liste sur ce champ. En y mettant la date de
+       * création, une conversation qui reçoit un message frais ne remontait
+       * pas : le client voyait une ligne marquée « il y a 2 min » coincée en
+       * bas de liste, ce qui est exactement la plainte remontée. L'heure
+       * AFFICHÉE, elle, vient déjà du dernier message, il n'y a donc aucun
+       * écart visible, seulement un tri qui redevient juste.
+       *
+       * Corriger ici plutôt que dans l'application évite une livraison : le
+       * téléphone déjà installé trie correctement dès le déploiement du
+       * serveur. `lastMessageAt` et `updatedAt` sont exposés juste en dessous
+       * pour qu'une future version s'appuie sur un champ au nom honnête.
+       */
+      createdAt: this.dateDeTri(conversation),
+      lastMessageAt: this.dateDernierMessage(conversation),
+      updatedAt: conversation.updatedAt ?? conversation.createdAt,
       messages: conversation.messages.map(
         (
           message: any,
@@ -716,13 +733,27 @@ export class ConversationsService {
           updatedAt: message.updatedAt,
         }),
       ),
+      /**
+       * ⚠️ Une conversation de DIFFUSION n'a pas de restaurant, et l'application
+       * en tire son titre : `item.restaurant?.name || 'Support Technique'`.
+       * Vos promotions arrivaient donc signées « Support Technique », avec une
+       * icône de casque d'assistance.
+       *
+       * On lui donne ici un expéditeur de marque. Sans risque : l'application
+       * n'affiche JAMAIS l'image du restaurant dans cette liste, elle utilise
+       * une icône locale, un `image: null` ne peut donc rien casser. Et c'est
+       * la seule correction qui vaut pour les téléphones DÉJÀ installés, sans
+       * passer par une livraison.
+       */
       restaurant: conversation.restaurant
         ? {
           id: conversation.restaurant.id,
           name: conversation.restaurant.name,
           image: conversation.restaurant.image,
         }
-        : null,
+        : conversation.isBroadcast
+          ? { id: null, name: 'Chicken Nation', image: null }
+          : null,
       customer: conversation.customer
         ? {
           id: conversation.customer.id,
@@ -740,6 +771,25 @@ export class ConversationsService {
         role: user.user.role,
       })),
     };
+  }
+
+  /** Date du dernier message, ou à défaut celle de la conversation. */
+  private dateDernierMessage(conversation: any): Date {
+    const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+    let derniere: Date | null = null;
+    for (const m of messages) {
+      const d = m?.createdAt ? new Date(m.createdAt) : null;
+      if (d && (!derniere || d > derniere)) derniere = d;
+    }
+    return derniere ?? conversation.updatedAt ?? conversation.createdAt;
+  }
+
+  /**
+   * Date sur laquelle l'application trie. Voir le commentaire de `createdAt`
+   * dans `mapConversationField`.
+   */
+  private dateDeTri(conversation: any): Date {
+    return this.dateDernierMessage(conversation);
   }
 
   private countUnreadMessages(params: {
