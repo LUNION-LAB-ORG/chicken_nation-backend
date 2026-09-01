@@ -281,6 +281,32 @@ export class MessageService {
     const uploadAudioResult = await this.uploadAudio(audio);
     const finalAudioUrl = uploadAudioResult?.key ?? audioUrl;
 
+    /**
+     * ⚠️ Un envoi de pièce jointe qui échoue doit ECHOUER, visiblement.
+     *
+     * `S3Service.uploadFile` avale ses exceptions et rend `null`. Sans ce
+     * contrôle, une panne de stockage produisait un message au corps vide et
+     * sans pièce jointe, créé en base, renvoyé en 200, notifié au client, et
+     * affiché comme une bulle vide : l'agent croyait avoir envoyé sa photo ou
+     * sa note vocale, le client ne recevait rien d'exploitable, et rien nulle
+     * part ne signalait le problème.
+     *
+     * Mieux vaut un envoi en erreur, que l'agent peut refaire, qu'un message
+     * vide livré et notifié.
+     */
+    if (image && !uploadResult?.key) {
+      throw new HttpException(
+        "L'image n'a pas pu être envoyée vers le stockage. Réessayez.",
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
+    if (audio && !uploadAudioResult?.key) {
+      throw new HttpException(
+        "La note vocale n'a pas pu être envoyée vers le stockage. Réessayez.",
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
+
     // verifier que la commande appartient bien au client de la conversation
     if (orderId) {
       const order = await this.prismaService.order.findUnique({
