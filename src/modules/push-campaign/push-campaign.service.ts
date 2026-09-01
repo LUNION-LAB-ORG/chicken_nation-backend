@@ -174,11 +174,37 @@ export class PushCampaignService {
   ) {
     if (!recus?.length) return;
     try {
+      /**
+       * Résolution du client à partir du jeton, en UNE requête pour tout le
+       * lot. C'est ce qui matérialise l'audience : sans elle, on saurait
+       * combien de téléphones ont été visés, mais pas lesquels, et mesurer
+       * après coup l'effet d'une campagne serait impossible.
+       *
+       * ⚠️ `expo_push_token` ne porte aucune contrainte d'unicité. Un même
+       * jeton peut donc théoriquement pointer sur plusieurs réglages ; on
+       * retient le premier, et l'absence de correspondance laisse simplement
+       * la colonne vide plutôt que de faire échouer la trace.
+       */
+      const jetons = [...new Set(recus.map((r) => r.token).filter(Boolean))];
+      const reglages = jetons.length
+        ? await this.prisma.notificationSetting.findMany({
+            where: { expo_push_token: { in: jetons } },
+            select: { customer_id: true, expo_push_token: true },
+          })
+        : [];
+      const clientParJeton = new Map<string, string>();
+      for (const r of reglages) {
+        if (r.expo_push_token && !clientParJeton.has(r.expo_push_token)) {
+          clientParJeton.set(r.expo_push_token, r.customer_id);
+        }
+      }
+
       await this.prisma.pushCampaignTicket.createMany({
         data: recus.map((r) => ({
           campaign_id: campaignId,
           expo_push_token: r.token,
           receipt_id: r.id,
+          customer_id: clientParJeton.get(r.token) ?? null,
         })),
         skipDuplicates: true,
       });

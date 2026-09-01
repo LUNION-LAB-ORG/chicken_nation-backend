@@ -1262,6 +1262,15 @@ model PushCampaignTicket {
   /// Identifiant de reçu rendu par Expo à l'acceptation du message.
   receipt_id      String @db.VarChar
 
+  /// Client visé, résolu à partir du jeton au moment de l'enregistrement.
+  ///
+  /// ⚠️ C'est ce qui MATERIALISE l'audience d'une campagne. Sans lui, on sait
+  /// combien de téléphones ont été visés mais pas lesquels, et il devient
+  /// impossible de mesurer après coup si les destinataires ont commandé.
+  /// Nullable à dessein : un jeton orphelin, ou révoqué entre l'envoi et
+  /// l'enregistrement, ne doit pas faire échouer la trace.
+  customer_id String? @db.Uuid
+
   /// accepted : accepté par Expo, remise encore inconnue.
   /// delivered : remis à Apple ou Google. Ce n'est PAS « vu par le client ».
   /// failed : Expo a signalé une non remise.
@@ -1280,6 +1289,7 @@ model PushCampaignTicket {
   @@unique([campaign_id, receipt_id])
   @@index([status, created_at])
   @@index([campaign_id, status])
+  @@index([customer_id])
 }
 
 model PushTemplate {
