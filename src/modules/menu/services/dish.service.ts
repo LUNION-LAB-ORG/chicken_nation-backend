@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
 import { Customer, EntityStatus, OrderStatus, Prisma, SpiceLevel, User } from '@prisma/client';
 import type { Request } from 'express';
 import { AudienceContext, composableClause, dishAudienceClause, litCapaciteComposable } from '../utils/dish-audience.util';
@@ -351,7 +352,7 @@ export class DishService {
     customerId?: string,
     audience: AudienceContext = { apply: false, staff: false },
   ) {
-    const whereCondition = id.length > 10 ? { id } : { reference: id };
+    const whereCondition = parIdentifiantOuReference(id);
 
     const dish = await this.prisma.dish.findFirst({
       where: { ...whereCondition, ...composableClause(audience) },

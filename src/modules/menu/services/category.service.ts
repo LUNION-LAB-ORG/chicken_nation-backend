@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { CreateCategoryDto } from 'src/modules/menu/dto/create-category.dto';
+import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
 import { UpdateCategoryDto } from 'src/modules/menu/dto/update-category.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Customer, EntityStatus, Prisma, User } from '@prisma/client';
@@ -135,9 +136,7 @@ export class CategoryService {
     if (!id) {
       throw new NotFoundException(`Catégorie non trouvée`);
     }
-    const whereCondition = id.length > 10
-      ? { id }
-      : { reference: id };
+    const whereCondition = parIdentifiantOuReference(id);
 
     const dishWhere: Prisma.DishWhereInput = {
       entity_status: EntityStatus.ACTIVE,

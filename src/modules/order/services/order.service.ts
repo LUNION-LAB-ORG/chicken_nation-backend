@@ -1,4 +1,5 @@
 import { assertDishesNotComposable } from 'src/common/utils/dish-availability.util';
+import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
 import {
   BadRequestException,
   ConflictException,
@@ -914,9 +915,7 @@ export class OrderService {
       throw new BadRequestException("L'identifiant de la commande est requis");
     }
 
-    const whereCondition = id.length > 10
-      ? { id }
-      : { reference: id };
+    const whereCondition = parIdentifiantOuReference(id);
 
     const order = await this.prisma.order.findFirst({
       where: {

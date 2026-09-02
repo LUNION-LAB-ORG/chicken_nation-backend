@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
 import { CreateCommentDto, UpdateCommentDto, CommentResponseDto, DishCommentsResponseDto, GetCommentsQueryDto } from '../dto/comment.dto';
 import { EntityStatus, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -12,9 +13,7 @@ export class CommentService {
     async createComment(customerId: string, createCommentDto: CreateCommentDto): Promise<CommentResponseDto> {
         const { message, rating, order_id } = createCommentDto;
 
-        const whereCondition = order_id.length > 10
-            ? { id: order_id }
-            : { reference: order_id };
+        const whereCondition = parIdentifiantOuReference(order_id);
 
         // Vérifier que la commande existe et appartient au client
         const order = await this.prisma.order.findFirst({
