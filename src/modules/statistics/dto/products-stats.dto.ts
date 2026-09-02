@@ -14,6 +14,21 @@ export class ProductsStatsQueryDto extends BaseStatsQueryDto {
   @IsOptional()
   categoryId?: string;
 
+  /**
+   * Restreint la statistique à UN plat.
+   *
+   * Sert la fiche d'un plat dans le backoffice, dont le graphique affichait
+   * jusqu'ici des valeurs écrites en dur. Sans ce filtre, la tendance agrège
+   * tout le catalogue et ne dit rien du plat consulté.
+   */
+  @ApiPropertyOptional({
+    description: 'Filtrer par plat',
+    example: 'uuid-dish-id',
+  })
+  @IsUUID()
+  @IsOptional()
+  dishId?: string;
+
   @ApiPropertyOptional({
     description: 'Nombre de résultats à retourner',
     default: 10,

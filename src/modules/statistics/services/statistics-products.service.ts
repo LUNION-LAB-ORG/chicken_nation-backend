@@ -554,9 +554,14 @@ export class StatisticsProductsService {
       created_at: buildDateFilter(dateRange),
     };
 
-    // Récupérer tous les OrderItems avec la date de commande et les infos plat
+    // Récupérer les OrderItems avec la date de commande et les infos plat.
+    // `dishId` restreint la tendance à un seul plat : c'est ce que consulte la
+    // fiche d'un plat dans le backoffice.
     const items = await this.prisma.orderItem.findMany({
-      where: { order: baseOrderWhere },
+      where: {
+        order: baseOrderWhere,
+        ...(query.dishId ? { dish_id: query.dishId } : {}),
+      },
       select: {
         quantity: true,
         dish: { select: { price: true, promotion_price: true, is_promotion: true } },
