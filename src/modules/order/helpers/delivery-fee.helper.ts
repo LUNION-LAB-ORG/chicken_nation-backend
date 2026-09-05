@@ -375,8 +375,24 @@ export class DeliveryFeeHelper {
           );
           return currentDistance < prevDistance ? current : prev;
         }, zones[0]);
+        /**
+         * ⚠️ VERROU 1 : une zone dont le prix n'est pas STRICTEMENT POSITIF
+         * ne s'applique pas.
+         *
+         * Le prix vient de Turbo, pas de nous. Une zone à zéro, un champ
+         * absent qui devient zéro, une réponse partielle : et toute livraison
+         * rattachée à cette zone devient gratuite en silence. C'est la cause
+         * de la commande à 22,6 km facturée « Gratuite ». La gratuité doit
+         * être une décision, jamais un effet de bord.
+         */
+        const prixZone = Number(zone?.prix);
+        if (!Number.isFinite(prixZone) || prixZone <= 0) {
+          this.logger.error(
+            `Zone Turbo « ${zone?.name} » du restaurant ${restaurant.name} : prix inexploitable (${zone?.prix}). Grille interne appliquée.`,
+          );
+        } else {
         result = {
-          montant: zone.prix,
+          montant: prixZone,
           distance: config.distance,
           // La zone Turbo remplace le PRIX, pas la géographie : la distance
           // reste celle du restaurant au client.
@@ -385,6 +401,7 @@ export class DeliveryFeeHelper {
           service: this.serviceFor(feeSettings, restaurant.id),
           zone_id: zone.id,
         };
+        }
       }
     }
 
@@ -412,6 +429,37 @@ export class DeliveryFeeHelper {
           offer_name: applicable.offer.name,
         };
       }
+    }
+
+    /**
+     * ⚠️ VERROU 2, le filet de sécurité : une livraison n'est JAMAIS gratuite
+     * par accident.
+     *
+     * La gratuité est légitime dans un seul cas : une offre s'est appliquée.
+     * C'est alors une décision commerciale assumée, quel que soit son type,
+     * livraison offerte, remise de cent pour cent ou montant fixe supérieur au
+     * tarif.
+     *
+     * Hors de ce cas, un frais nul ne peut venir que d'un défaut : zone au
+     * prix absent, grille mal configurée, ou une cause qu'on n'a pas encore
+     * vue. Ce verrou ne corrige pas une cause en particulier, il garantit
+     * l'invariant, aujourd'hui et pour les défauts à venir.
+     *
+     * On retombe sur la grille interne, et à défaut sur la grille par défaut :
+     * mieux vaut un tarif conservateur qu'une course offerte.
+     */
+    const offreAppliquee = result.offer_id != null;
+    if (!offreAppliquee && (!Number.isFinite(result.montant) || result.montant <= 0)) {
+      const secours =
+        config.montant > 0
+          ? config.montant
+          : this.priceForDistance(DELIVERY_FEE_DEFAULT_GRID, config.distance_exacte ?? config.distance);
+      this.logger.error(
+        `FRAIS DE LIVRAISON NUL SANS OFFRE — restaurant ${restaurant.name}, ` +
+          `${(config.distance_exacte ?? config.distance).toFixed(1)} km, zone « ${result.zone} ». ` +
+          `Corrigé à ${secours} FCFA. A INVESTIGUER : une livraison gratuite doit venir d'une offre.`,
+      );
+      result = { ...result, montant: secours };
     }
 
     return result;
