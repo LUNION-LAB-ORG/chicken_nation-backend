@@ -207,6 +207,8 @@ export class OrderService {
           delivery_fee: Number(finalDeliveryFee),
           delivery_fee_base: Number(deliveryFeeBase),
           delivery_discount: Number(deliveryDiscount),
+          // Distance ayant servi à facturer, pour pouvoir vérifier après coup.
+          delivery_distance_km: delivery?.distance_exacte ?? delivery?.distance ?? null,
           // Override client/admin > auto-détection zone > fallback TURBO
           delivery_service: overrideDeliveryService ?? (delivery ? delivery.service : DeliveryService.TURBO),
           zone_id: delivery?.zone_id,
@@ -664,6 +666,8 @@ export class OrderService {
           delivery_fee: Number(deliveryFee),
           delivery_fee_base: Number(deliveryFeeBase),
           delivery_discount: Number(deliveryDiscount),
+          // Distance ayant servi à facturer, pour pouvoir vérifier après coup.
+          delivery_distance_km: delivery?.distance_exacte ?? delivery?.distance ?? null,
           // Override admin > auto-détection zone > fallback TURBO
           delivery_service: overrideDeliveryService ?? (delivery ? delivery.service : DeliveryService.TURBO),
           zone_id: delivery ? delivery.zone_id : undefined,

@@ -1382,6 +1382,17 @@ model Order {
   delivery_fee               Float
   delivery_fee_base          Float           @default(0) // frais de livraison PLEIN (avant offre) — pour le bilan
   delivery_discount          Float           @default(0) // remise de l'offre de livraison appliquée (base - facturé)
+  /// Distance qui a SERVI A FACTURER, en kilomètres, à vol d'oiseau.
+  ///
+  /// ⚠️ Ce n'est PAS la distance affichée sur les écrans : celle-ci vient de
+  /// Google et suit la ROUTE. Les deux diffèrent d'un bon tiers en ville. Un
+  /// trajet de 15,6 km par la route fait environ 12 km à vol d'oiseau, et
+  /// tombe donc dans un palier « jusqu'à 13 km » que le gestionnaire croyait
+  /// réservé aux courses proches.
+  ///
+  /// La stocker rend la facturation VERIFIABLE après coup : sans elle, aucune
+  /// commande ne dit sur quelle distance elle a été tarifée.
+  delivery_distance_km       Float?
   delivery_service           DeliveryService @default(FREE)
   zone_id                    String?         @db.VarChar
   points                     Int             @default(0)
