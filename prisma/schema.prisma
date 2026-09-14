@@ -1382,13 +1382,16 @@ model Order {
   delivery_fee               Float
   delivery_fee_base          Float           @default(0) // frais de livraison PLEIN (avant offre) — pour le bilan
   delivery_discount          Float           @default(0) // remise de l'offre de livraison appliquée (base - facturé)
-  /// Distance qui a SERVI A FACTURER, en kilomètres, à vol d'oiseau.
+  /// Distance qui a SERVI A FACTURER, en kilomètres, PAR LA ROUTE.
   ///
-  /// ⚠️ Ce n'est PAS la distance affichée sur les écrans : celle-ci vient de
-  /// Google et suit la ROUTE. Les deux diffèrent d'un bon tiers en ville. Un
-  /// trajet de 15,6 km par la route fait environ 12 km à vol d'oiseau, et
-  /// tombe donc dans un palier « jusqu'à 13 km » que le gestionnaire croyait
-  /// réservé aux courses proches.
+  /// C'est la même distance que celle affichée sur les écrans, fournie par
+  /// Google. Elle l'est devenue : les frais s'adossaient auparavant au vol
+  /// d'oiseau, plus court d'un bon tiers en ville. Un trajet de 15,6 km par la
+  /// route fait environ 12 km à vol d'oiseau et tombait donc deux paliers plus
+  /// bas que ce que le gestionnaire croyait appliquer.
+  ///
+  /// Quand Google ne répond pas, le vol d'oiseau sert de repli, redressé du
+  /// facteur de détour (`delivery.facteur_detour`) pour rester comparable.
   ///
   /// La stocker rend la facturation VERIFIABLE après coup : sans elle, aucune
   /// commande ne dit sur quelle distance elle a été tarifée.
@@ -2846,6 +2849,7 @@ model DeliveryOffer {
   /// FIXED_PRICE seulement : prix imposé PAR PALIER DE DISTANCE.
   ///
   /// Forme : [{ "max_km": 2, "price": 1000 }, { "max_km": 5, "price": 1500 }]
+  /// Distances PAR LA ROUTE, comme la grille Chicken et comme les écrans.
   /// Le premier palier dont `max_km` couvre la distance donne le prix. Au-delà
   /// du dernier palier, l'offre ne s'applique PAS et la livraison retombe sur
   /// le système habituel, grille Chicken ou zones Turbo selon le paramétrage.

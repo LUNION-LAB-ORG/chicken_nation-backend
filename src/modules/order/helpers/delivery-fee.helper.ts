@@ -5,10 +5,11 @@ import { SettingsService } from 'src/modules/settings/settings.service';
 import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { TurboService } from 'src/turbo/services/turbo.service';
 import { DeliveryOfferService } from 'src/modules/delivery-offer/services/delivery-offer.service';
+import { MapsService } from 'src/modules/maps/maps.service';
 
 /**
  * Un palier de la grille de frais de livraison : tout trajet dont la distance
- * (km, à vol d'oiseau) est <= `maxKm` est facturé `price`. `maxKm: null` = palier
+ * (km, PAR LA ROUTE) est <= `maxKm` est facturé `price`. `maxKm: null` = palier
  * « au-delà » (catch-all, doit être en dernier).
  */
 export interface IDeliveryFeeTier {
@@ -41,6 +42,12 @@ export interface DeliveryFeeResult {
    * course qui n'y a pas droit. Les décisions de prix se prennent ici.
    */
   distance_exacte?: number;
+  /**
+   * D'où vient la distance facturée. `ROUTE` = itinéraire Google, le cas
+   * normal. `VOL_OISEAU_CORRIGE` = Google n'a pas répondu, on a appliqué le
+   * facteur de détour. Sert à mesurer la fréquence du repli.
+   */
+  distance_source?: 'ROUTE' | 'VOL_OISEAU_CORRIGE';
   service: DeliveryService;
   zone_id: string | null;
   // Offre de livraison appliquée (le cas échéant)
@@ -63,6 +70,20 @@ export const DELIVERY_FEE_DEFAULT_GRID: IDeliveryFeeTier[] = [
   { maxKm: null, price: 5000 },
 ];
 
+/**
+ * Indice de détour : de combien la route rallonge le vol d'oiseau.
+ *
+ * Sert UNIQUEMENT de repli, quand Google n'a pas pu donner l'itinéraire. Il
+ * ne s'agit pas d'une majoration commerciale mais d'un redressement : depuis
+ * que les paliers s'entendent PAR LA ROUTE, leur appliquer une distance à vol
+ * d'oiseau les décale systématiquement vers le bas, toujours au détriment de
+ * la maison. Une valeur de 1 revient à assumer ce biais.
+ *
+ * 1,3 correspond à ce qu'on observe à Abidjan : lagune, ponts et sens uniques
+ * rallongent d'environ un tiers. Réglable par `delivery.facteur_detour`.
+ */
+const FACTEUR_DETOUR_DEFAUT = 1.3;
+
 const DEFAULTS = {
   turbo_zones_enabled: 1,
   fee_grid: JSON.stringify(DELIVERY_FEE_DEFAULT_GRID),
@@ -75,6 +96,7 @@ export const DELIVERY_FEE_SETTING_KEYS = {
   feeGrid: 'delivery.fee_grid',
   defaultService: 'delivery.default_service',
   serviceByRestaurant: 'delivery.service_by_restaurant',
+  facteurDetour: 'delivery.facteur_detour',
 } as const;
 
 /**
@@ -104,6 +126,7 @@ export class DeliveryFeeHelper {
     private readonly generateDataService: GenerateDataService,
     private readonly turboService: TurboService,
     private readonly deliveryOfferService: DeliveryOfferService,
+    private readonly mapsService: MapsService,
   ) {}
 
   // ───────────────────────────── Réglages ─────────────────────────────
@@ -261,6 +284,77 @@ export class DeliveryFeeHelper {
     }
   }
 
+  /** Facteur de détour du repli, borné à [1 ; 2] — hors de là, c'est une saisie fautive. */
+  private async facteurDetour(): Promise<number> {
+    const map = await this.settingsService.getMany([DELIVERY_FEE_SETTING_KEYS.facteurDetour]);
+    const brut = Number(map[DELIVERY_FEE_SETTING_KEYS.facteurDetour]);
+    if (!Number.isFinite(brut) || brut < 1 || brut > 2) return FACTEUR_DETOUR_DEFAUT;
+    return brut;
+  }
+
+  /**
+   * LA DISTANCE QUI SERT À FACTURER, en kilomètres.
+   *
+   * Par la route, comme ce que le client lit à l'écran. Tous nos affichages,
+   * app comme backoffice, montrent l'itinéraire Google ; adosser les frais au
+   * vol d'oiseau revenait à facturer une autre course que celle annoncée, et
+   * l'écart penche toujours du même côté : 15,6 km par la route font environ
+   * 12 km à vol d'oiseau, soit deux paliers plus bas. C'est ainsi qu'une
+   * course de 22 km a pu se retrouver au tarif d'une course courte.
+   *
+   * ⚠️ Ce calcul est sur le chemin de création d'une commande. Il ne doit ni
+   * la faire échouer, ni la faire attendre : l'appel est plafonné en temps et
+   * ne lève jamais. Google muet ou lent → vol d'oiseau redressé du facteur de
+   * détour, et une trace pour qu'un repli durable se voie.
+   */
+  private async distanceFacturableKm(
+    restaurant: { name: string; latitude: number | null; longitude: number | null },
+    lat: number,
+    long: number,
+  ): Promise<{ km: number; source: 'ROUTE' | 'VOL_OISEAU_CORRIGE' }> {
+    const volOiseau = this.generateDataService.haversineDistance(
+      restaurant.latitude ?? 0,
+      restaurant.longitude ?? 0,
+      lat,
+      long,
+    );
+
+    // Restaurant sans coordonnées : le vol d'oiseau est déjà faux (il part de
+    // 0,0), inutile de payer Google pour confirmer. Le verrou en aval fera le
+    // reste.
+    if (restaurant.latitude == null || restaurant.longitude == null) {
+      return { km: volOiseau, source: 'VOL_OISEAU_CORRIGE' };
+    }
+
+    let metres: number | null = null;
+    try {
+      metres = await this.mapsService.distanceRoutiereMetres({
+        originLat: restaurant.latitude,
+        originLng: restaurant.longitude,
+        destLat: lat,
+        destLng: long,
+      });
+    } catch (err) {
+      // `distanceRoutiereMetres` est censée ne jamais lever. Ce filet couvre le
+      // jour où quelqu'un l'oublie : aucune commande ne doit tomber pour ça.
+      this.logger.warn(
+        `Distance routière en échec (${(err as Error).message}) — repli sur le vol d'oiseau.`,
+      );
+    }
+
+    if (metres != null && Number.isFinite(metres) && metres > 0) {
+      return { km: metres / 1000, source: 'ROUTE' };
+    }
+
+    const facteur = await this.facteurDetour();
+    const corrige = volOiseau * facteur;
+    this.logger.warn(
+      `Distance routière indisponible pour ${restaurant.name} → ${lat},${long}. ` +
+        `Repli : ${volOiseau.toFixed(1)} km à vol d'oiseau × ${facteur} = ${corrige.toFixed(1)} km facturés.`,
+    );
+    return { km: corrige, source: 'VOL_OISEAU_CORRIGE' };
+  }
+
   // ──────────────────────────── Calcul du frais ────────────────────────────
 
   /** Frais via la grille interne distance→prix (réglage `delivery.fee_grid`). */
@@ -285,12 +379,7 @@ export class DeliveryFeeHelper {
       throw new BadRequestException('Aucun restaurant disponible');
     }
 
-    const distance = this.generateDataService.haversineDistance(
-      restaurant.latitude ?? 0,
-      restaurant.longitude ?? 0,
-      lat,
-      long,
-    );
+    const { km: distance, source } = await this.distanceFacturableKm(restaurant, lat, long);
 
     const feeSettings = await this.load();
     return {
@@ -298,6 +387,7 @@ export class DeliveryFeeHelper {
       zone: this.zoneLabel(feeSettings.grid, distance, restaurant.name),
       distance: Math.round(distance),
       distance_exacte: distance,
+      distance_source: source,
       service: this.serviceFor(feeSettings, restaurant.id),
       zone_id: null,
     };
@@ -397,6 +487,7 @@ export class DeliveryFeeHelper {
           // La zone Turbo remplace le PRIX, pas la géographie : la distance
           // reste celle du restaurant au client.
           distance_exacte: config.distance_exacte,
+          distance_source: config.distance_source,
           zone: restaurant.name + ' - ' + zone.name,
           service: this.serviceFor(feeSettings, restaurant.id),
           zone_id: zone.id,

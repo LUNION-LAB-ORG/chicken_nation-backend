@@ -68,6 +68,11 @@ const TTL = {
   // mettre en cache trop longtemps reviendrait à servir un temps périmé, ce qui
   // annulerait l'intérêt de la demander. Compromis entre fraîcheur et coût.
   DIRECTIONS:        3 * 60 * 1000,         //   3 min  — durée avec trafic, doit rester fraîche
+  // 30 jours. La distance ROUTIÈRE entre deux points fixes ne bouge pas d'un
+  // jour à l'autre : contrairement à la durée, elle ne dépend pas du trafic.
+  // Un cache long est ici gratuit en fraîcheur et décisif sur la facture
+  // Google, puisque cet appel est sur le chemin de CHAQUE commande livrée.
+  ROAD_DISTANCE:    30 * 24 * 60 * 60 * 1000, // 30 jours — la route entre deux points est stable
   REVERSE_GEOCODE:  24 * 60 * 60 * 1000,    //  24h     — l'adresse d'un point reste stable
   AUTOCOMPLETE:      5 * 60 * 1000,         //   5 min  — suggestions fraîches
   PLACE_DETAILS:     7 * 24 * 60 * 60 * 1000, // 7 jours — les détails d'un lieu sont immuables
@@ -86,6 +91,15 @@ const BASE_URL = 'https://maps.googleapis.com/maps/api';
  * Ajustable via `MAPS_STOP_SECONDS`.
  */
 const STOP_SECONDS_PER_DELIVERY = Number(process.env.MAPS_STOP_SECONDS ?? 180);
+
+/**
+ * Plafond d'attente de Google pour la distance de FACTURATION. Court par
+ * construction : cet appel se produit pendant qu'un client attend la
+ * validation de sa commande. Passé ce délai on facture au vol d'oiseau
+ * corrigé plutôt que de faire patienter. Ajustable via
+ * `MAPS_ROAD_DISTANCE_TIMEOUT_MS`.
+ */
+const ROAD_DISTANCE_TIMEOUT_MS = Number(process.env.MAPS_ROAD_DISTANCE_TIMEOUT_MS ?? 2500);
 
 // ─── Service ─────────────────────────────────────────────────────────────────
 
@@ -109,13 +123,28 @@ export class MapsService {
     return `maps:${prefix}:${parts.join('_')}`;
   }
 
-  private async googleFetch<T>(url: string): Promise<T> {
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new BadGatewayException(`Google Maps API a répondu ${res.status}`);
+  /**
+   * `timeoutMs` : plafond d'attente. Sans lui, un Google qui ne répond pas
+   * laisse l'appel pendre jusqu'aux délais par défaut de Node, soit plusieurs
+   * minutes. Acceptable pour un écran de carte, inacceptable sur le chemin de
+   * création d'une commande. Les appelants historiques n'en passent pas et
+   * gardent exactement leur comportement.
+   */
+  private async googleFetch<T>(url: string, timeoutMs?: number): Promise<T> {
+    const controleur = timeoutMs ? new AbortController() : undefined;
+    const minuterie = controleur
+      ? setTimeout(() => controleur.abort(), timeoutMs)
+      : undefined;
+    try {
+      const res = await fetch(url, controleur ? { signal: controleur.signal } : undefined);
+      if (!res.ok) {
+        throw new BadGatewayException(`Google Maps API a répondu ${res.status}`);
+      }
+      const data = await res.json() as T;
+      return data;
+    } finally {
+      if (minuterie) clearTimeout(minuterie);
     }
-    const data = await res.json() as T;
-    return data;
   }
 
   // ── Décodeur polyline Google Encoded ────────────────────────────────────
@@ -248,6 +277,84 @@ export class MapsService {
       return result;
     } catch (err) {
       this.logger.warn(`[Maps] Directions error: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  // ── Distance routière (facturation) ──────────────────────────────────────
+
+  /**
+   * Distance PAR LA ROUTE entre deux points, en mètres. Destinée au CALCUL DES
+   * FRAIS DE LIVRAISON, et distincte de `getDirections` à dessein.
+   *
+   * `getDirections` transporte le trafic temps réel : il est facturé au tarif
+   * Directions Advanced et ne peut être mis en cache que quelques minutes,
+   * sans quoi il servirait une durée périmée. Facturer n'a besoin que d'une
+   * distance, qui elle ne dépend pas du trafic et ne change pas d'un jour à
+   * l'autre entre deux points fixes. D'où, ici : pas de `departure_time`
+   * (tarif de base) et un cache de 30 jours. Une adresse enregistrée n'est
+   * donc payée à Google qu'une fois par mois, quel que soit le nombre de
+   * commandes qu'elle reçoit.
+   *
+   * Ne lève jamais : renvoie `null` si la clé manque, si Google n'a pas
+   * répondu dans le délai imparti, ou s'il n'existe pas d'itinéraire. Cet
+   * appel est sur le chemin de création d'une commande — il doit pouvoir
+   * échouer sans la faire échouer.
+   */
+  async distanceRoutiereMetres(params: {
+    originLat: number;
+    originLng: number;
+    destLat: number;
+    destLng: number;
+  }): Promise<number | null> {
+    if (!this.apiKey) return null;
+
+    // 4 décimales ≈ 11 m. Assez fin pour ne pas confondre deux adresses
+    // voisines, assez grossier pour que deux commandes à la même adresse
+    // partagent la même entrée de cache.
+    const cacheKey = this.key(
+      'road-distance',
+      params.originLat.toFixed(4),
+      params.originLng.toFixed(4),
+      params.destLat.toFixed(4),
+      params.destLng.toFixed(4),
+    );
+
+    // `Number(...)` et non un test de type : selon le store, un nombre peut
+    // revenir sérialisé en chaîne. Une valeur absente donne NaN ou 0 et
+    // retombe naturellement sur l'appel.
+    const cached = Number(await this.cache.get<number>(cacheKey));
+    if (Number.isFinite(cached) && cached > 0) {
+      return cached;
+    }
+
+    const url = new URL(`${BASE_URL}/directions/json`);
+    url.searchParams.set('origin', `${params.originLat},${params.originLng}`);
+    url.searchParams.set('destination', `${params.destLat},${params.destLng}`);
+    url.searchParams.set('mode', 'driving');
+    url.searchParams.set('key', this.apiKey);
+
+    try {
+      const data = await this.googleFetch<{
+        status: string;
+        routes?: { legs: { distance: { value: number } }[] }[];
+      }>(url.toString(), ROAD_DISTANCE_TIMEOUT_MS);
+
+      if (data.status !== 'OK' || !data.routes?.[0]?.legs?.length) {
+        this.logger.warn(`[Maps] Distance routière indisponible (status=${data.status})`);
+        return null;
+      }
+
+      const metres = data.routes[0].legs.reduce((somme, l) => somme + (l.distance?.value ?? 0), 0);
+      if (!Number.isFinite(metres) || metres <= 0) {
+        this.logger.warn('[Maps] Distance routière renvoyée nulle ou invalide.');
+        return null;
+      }
+
+      await this.cache.set(cacheKey, metres, TTL.ROAD_DISTANCE);
+      return metres;
+    } catch (err) {
+      this.logger.warn(`[Maps] Distance routière en échec : ${(err as Error).message}`);
       return null;
     }
   }
