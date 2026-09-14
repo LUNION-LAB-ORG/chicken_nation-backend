@@ -667,7 +667,12 @@ export class OrderService {
           delivery_fee_base: Number(deliveryFeeBase),
           delivery_discount: Number(deliveryDiscount),
           // Distance ayant servi à facturer, pour pouvoir vérifier après coup.
-          delivery_distance_km: delivery?.distance_exacte ?? delivery?.distance ?? null,
+          // Ce chemin reçoit un objet au type plus étroit, d'où la lecture
+          // prudente : la distance exacte n'y est pas toujours déclarée.
+          delivery_distance_km:
+            (delivery as { distance_exacte?: number } | undefined)?.distance_exacte ??
+            delivery?.distance ??
+            null,
           // Override admin > auto-détection zone > fallback TURBO
           delivery_service: overrideDeliveryService ?? (delivery ? delivery.service : DeliveryService.TURBO),
           zone_id: delivery ? delivery.zone_id : undefined,
