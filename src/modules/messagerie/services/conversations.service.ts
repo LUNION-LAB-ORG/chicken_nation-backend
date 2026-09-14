@@ -429,7 +429,20 @@ export class ConversationsService {
         where: {
           conversation: conversationWhere,
           isRead: false,
-          authorUserId: { not: user.id },
+          /**
+           * ⚠️ CET ENSEMBLE DOIT ETRE CELUI QUE LE MARQUAGE BLANCHIT.
+           *
+           * Le filtre était `authorUserId != moi`, donc « tout ce que je n'ai
+           * pas écrit », ce qui inclut les messages des AUTRES AGENTS. Or le
+           * marquage côté personnel ne blanchit que les messages du CLIENT :
+           * la pastille comptait donc des messages qu'aucune lecture ne
+           * pouvait éteindre. Elle restait figée, pendant que les lignes de la
+           * boîte de réception, elles, n'affichaient rien, puisque leur
+           * compteur vise déjà le bon ensemble.
+           *
+           * Les deux comptes disent enfin la même chose.
+           */
+          authorCustomerId: { not: null },
           /**
            * ⚠️ Même exclusion que dans les compteurs par conversation.
            *
@@ -452,7 +465,8 @@ export class ConversationsService {
         messages: {
           some: {
             isRead: false,
-            authorUserId: { not: user.id },
+            // Même ensemble que ci-dessus, et que le marquage.
+            authorCustomerId: { not: null },
             // Voir ci-dessus : un message de diffusion n'est pas à lire.
             broadcastId: null,
           },
