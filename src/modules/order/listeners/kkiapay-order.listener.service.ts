@@ -77,7 +77,10 @@ export class KkiapayOrderListenerService {
      */
     @OnEvent(KkiapayChannels.TRANSACTION_SUCCESS, { suppressErrors: false })
     async orderStatutReady(payload: KkiapayWebhookDto) {
-        await this.processTransactionSuccess(payload);
+        // Le résultat est RENDU au bus (emitAsync le collecte) : le worker s'en
+        // sert pour journaliser l'issue RÉELLE. Un abandon délibéré
+        // (`confirmed: false`) ne lève pas et resterait sinon invisible.
+        return await this.processTransactionSuccess(payload);
     }
 
     /**

@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, ServiceUnavailableException } 
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
 import { KkiapayResponse, KkiapayWebhookDto } from './kkiapay.type';
-import { KkiapayEvent } from './kkiapay.event';
+import { KkiapayEvent, IssueTraitementPaiement } from './kkiapay.event';
 import { SettingsService } from 'src/modules/settings/settings.service';
 
 /**
@@ -326,7 +326,7 @@ export class KkiapayService {
         }
     }
 
-    async handleEvent(payload: KkiapayWebhookDto): Promise<void> {
+    async handleEvent(payload: KkiapayWebhookDto): Promise<IssueTraitementPaiement | null> {
         this.logger.log({ "Kkiapay event": payload });
 
         // Exemple de traitement : selon l'event on met à jour la base de données, etc.
@@ -336,7 +336,7 @@ export class KkiapayService {
             // (ex : erreur transitoire Neon relancée par le processeur) → le worker
             // BullMQ voit l'échec et retente. Le chemin critique de paiement est ainsi
             // synchrone à l'ack du job.
-            await this.eventEmitter.kkiapayTransactionSuccessEvent(payload);
+            return await this.eventEmitter.kkiapayTransactionSuccessEvent(payload);
 
         } else if (payload.event === 'transaction.failed') {
             this.logger.warn(`Transaction failed: ${payload.transactionId} – ${payload.failureCode} / ${payload.failureMessage}`);
@@ -344,5 +344,6 @@ export class KkiapayService {
         } else {
             this.logger.warn(`Unhandled event type: ${payload.event}`);
         }
+        return null;
     }
 }

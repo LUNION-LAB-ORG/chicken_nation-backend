@@ -1,13 +1,15 @@
 import { ApiOperation } from '@nestjs/swagger';
-import { Body, Controller, Get, Headers, HttpStatus, Logger, Param, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpStatus, Logger, Param, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { KkiapayService } from './kkiapay.service';
 import { KkiapayResponse, KkiapayWebhookDto } from './kkiapay.type';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { AuditService } from 'src/modules/audit/audit.service';
+import { journalRefusWebhook } from './kkiapay-audit.helper';
 
 @Controller('kkiapay')
 export class KkiapayController {
@@ -17,6 +19,7 @@ export class KkiapayController {
         private readonly kkiapayService: KkiapayService,
         private readonly settingsService: SettingsService,
         private readonly prisma: PrismaService,
+        private readonly auditService: AuditService,
         @InjectQueue('kkiapay-webhooks') private readonly webhooksQueue: Queue,
     ) { }
 
@@ -103,11 +106,12 @@ export class KkiapayController {
      */
     @Post("webhook")
     async handleWebhook(
+        @Req() request: Request,
         @Res() response: Response,
         @Headers('x-kkiapay-secret') receivedSecret: string,
         @Body() body: KkiapayWebhookDto,
     ) {
-        return this.ingestWebhook(response, receivedSecret, body, null);
+        return this.ingestWebhook(request, response, receivedSecret, body, null);
     }
 
     /**
@@ -118,20 +122,49 @@ export class KkiapayController {
      */
     @Post("webhook/:restaurantId")
     async handleWebhookForRestaurant(
+        @Req() request: Request,
         @Res() response: Response,
         @Headers('x-kkiapay-secret') receivedSecret: string,
         @Body() body: KkiapayWebhookDto,
         @Param('restaurantId') restaurantId: string,
     ) {
-        return this.ingestWebhook(response, receivedSecret, body, restaurantId);
+        return this.ingestWebhook(request, response, receivedSecret, body, restaurantId);
     }
 
     private async ingestWebhook(
+        request: Request,
         response: Response,
         receivedSecret: string,
         body: KkiapayWebhookDto,
         restaurantId: string | null,
     ) {
+        /**
+         * Tout refus est JOURNALISÉ (Audits → Logs).
+         *
+         * Un webhook repoussé ne laissait de trace que dans les logs du
+         * conteneur : il fallait un accès SSH à la production pour découvrir
+         * qu'un secret était désaligné, pendant que des commandes payées
+         * restaient en attente sans explication visible. Écriture
+         * fire-and-forget : elle ne peut ni ralentir ni casser l'ingestion.
+         * Le secret reçu n'est JAMAIS journalisé.
+         */
+        const tracerRefus = (statut: number, motif: string, compteReconnu: boolean) => {
+            // `null` = refus bridé : une ligne récente couvre déjà ce cas. La route
+            // est publique et sans limitation de débit, et le refus survient
+            // justement quand l'appelant n'est pas authentifié : sans cette bride,
+            // n'importe qui ferait grossir la table d'audit à volonté.
+            const entree = journalRefusWebhook({
+                payload: body ?? {},
+                restaurantId,
+                statut,
+                motif,
+                compteReconnu,
+                path: request?.originalUrl ?? request?.url ?? '/kkiapay/webhook',
+                ip: request?.ip ?? null,
+                userAgent: request?.headers?.['user-agent'] ?? null,
+            });
+            if (entree) this.auditService.record(entree);
+        };
         // Secret : global (env-first Neon-indépendant) ou par restaurant (Settings
         // + cache mémoire longue durée). `null` = aucune source disponible
         // (restaurant pas encore configuré OU Neon injoignable sans cache) → 503
@@ -146,12 +179,27 @@ export class KkiapayController {
             this.logger.warn(
                 `Webhook KKiaPay [${restaurantId}] : secret indisponible (non configuré ou DB injoignable sans cache)`,
             );
+            // Compte NON reconnu : aucun secret n'existe pour cet identifiant, qui
+            // peut donc être n'importe quoi. Tous ces refus partagent une clé.
+            tracerRefus(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                'secret de webhook indisponible (non configuré, ou base injoignable sans cache)',
+                false,
+            );
             return response.status(HttpStatus.SERVICE_UNAVAILABLE).send('Secret unavailable');
         }
 
         // Vérification simple : Kkiapay renvoie le secret en clair.
         if (!webhookSecret || receivedSecret !== webhookSecret) {
             this.logger.warn(`Webhook KKiaPay${restaurantId ? ` [${restaurantId}]` : ''} : secret invalide`);
+            // Compte RECONNU : on n'arrive ici que si un secret existe pour cet
+            // identifiant, donc l'espace de clés est borné par le nombre de
+            // restaurants configurés, et l'identifiant reste utile au diagnostic.
+            tracerRefus(
+                HttpStatus.FORBIDDEN,
+                'secret invalide : la valeur envoyée par KKiaPay ne correspond pas à celle enregistrée pour ce compte',
+                true,
+            );
             return response.status(HttpStatus.FORBIDDEN).send('Invalid secret');
         }
 
@@ -170,6 +218,12 @@ export class KkiapayController {
         } catch (err) {
             // Redis injoignable → 503 pour que KKiaPay retente (NE PAS avaler en 200).
             this.logger.error('Échec enfilement webhook KKiaPay', err as any);
+            // Le secret a été validé plus haut : compte reconnu.
+            tracerRefus(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                `file d'attente indisponible : ${(err as Error)?.message ?? 'cause inconnue'}`,
+                true,
+            );
             return response.status(HttpStatus.SERVICE_UNAVAILABLE).send('Queue unavailable');
         }
     }

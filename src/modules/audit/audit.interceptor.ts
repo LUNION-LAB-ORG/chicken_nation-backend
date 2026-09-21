@@ -88,10 +88,24 @@ export class AuditInterceptor implements NestInterceptor {
     const user = req.user;
     const isStaff = !!user && typeof user === 'object' && 'role' in user && !!user.role;
 
+    const path: string = (req.originalUrl || req.url || '').split('?')[0];
+
+    /**
+     * Le webhook KKiaPay tient son PROPRE journal, et il le tient mieux.
+     *
+     * Ses lignes portent le montant, la commande et le motif, là où celles-ci
+     * seraient anonymes ; surtout, elles sont BRIDÉES. La route est publique,
+     * sans limitation de débit, et répond 503 à tout identifiant de restaurant
+     * inconnu : la règle « toute erreur serveur est journalisée, même sans
+     * utilisateur » y devient un moyen d'inonder la table d'audit à raison d'une
+     * ligne par requête, depuis n'importe où sur Internet. On laisse donc ces
+     * routes au module qui sait les brider. Une requête de STAFF sur ce chemin
+     * reste journalisée ici, elle n'a rien d'anonyme.
+     */
+    if (!isStaff && /\/kkiapay\/webhook(\/|$)/.test(path)) return;
+
     // Filtre : staff (mutation ou erreur) OU erreur serveur pour tous.
     if (!((isStaff && (isMutation || isError)) || isServerError)) return;
-
-    const path: string = (req.originalUrl || req.url || '').split('?')[0];
     const segments = this.pathSegments(path);
     const module = segments[0] ?? null;
     const entity_id = segments.find((s) => UUID_RE.test(s)) ?? null;
