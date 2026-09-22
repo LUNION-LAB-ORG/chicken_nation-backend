@@ -776,6 +776,14 @@ model Conversation {
   /// tiers, qui héritait de tout l'historique privé des deux autres.
   isGroup Boolean @default(false)
 
+  /// Ce groupe reçoit les ALERTES du système (paiement encaissé sans commande
+  /// confirmée, commande terminée sans paiement, webhook refusé…).
+  ///
+  /// Porté par la conversation plutôt que par un réglage global : le responsable
+  /// l'active d'un interrupteur dans le groupe qu'il a sous les yeux, au lieu de
+  /// coller un identifiant quelque part. Plusieurs groupes peuvent en recevoir.
+  receivesAlerts Boolean @default(false)
+
   /// Canal officiel de diffusion : cette conversation a été créée par une
   /// diffusion, pas par un échange. Elle reste HORS de la boîte de réception
   /// du backoffice tant que le client n'a pas répondu, sinon une seule
@@ -801,6 +809,8 @@ model Conversation {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([receivesAlerts])
 }
 
 model ConversationUser {

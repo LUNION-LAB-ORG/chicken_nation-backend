@@ -1,4 +1,5 @@
 import { assertDishesNotComposable } from 'src/common/utils/dish-availability.util';
+import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
 import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
 import {
   BadRequestException,
@@ -48,6 +49,7 @@ import { TwilioService } from 'src/twilio/services/twilio.service';
 export class OrderService {
   private readonly logger = new Logger(OrderService.name);
   constructor(
+    private readonly alertes: AlertesService,
     private prisma: PrismaService,
     private generateDataService: GenerateDataService,
     private orderHelper: OrderHelper,
@@ -913,7 +915,70 @@ export class OrderService {
     // Émettre l'événement de mise à jour de statut avec l'ancien statut
     this.orderWebSocketService.emitStatusUpdate(updatedOrder, order.status);
 
+    this.signalerAnomaliePaiement(updatedOrder, status);
+
     return updatedOrder;
+  }
+
+  /**
+   * Une commande qui s'achève doit être payée. Sinon, on le dit.
+   *
+   * Vérifié au moment où la commande atteint son terme, remise au client ou
+   * clôturée : c'est le dernier instant où quelqu'un peut encore agir, le
+   * client étant encore là ou joignable. Passé ce point, un manque se découvre
+   * à la caisse du soir, quand il est trop tard pour rattraper quoi que ce soit.
+   *
+   * Effet de bord PUR : jamais d'exception, jamais d'attente. Signaler un
+   * problème ne doit pas empêcher la commande de se clôturer.
+   */
+  private signalerAnomaliePaiement(
+    commande: { id: string; reference: string; amount: number; restaurant_id?: string | null; paiements?: { status: PaiementStatus; amount: number; total?: number | null }[] },
+    status: OrderStatus,
+  ): void {
+    try {
+      if (status !== OrderStatus.COLLECTED && status !== OrderStatus.COMPLETED) return;
+
+      const encaisse = (commande.paiements ?? [])
+        .filter((p) => p.status === PaiementStatus.SUCCESS)
+        .reduce((somme, p) => somme + (p.total ?? p.amount ?? 0), 0);
+
+      const du = Number(commande.amount) || 0;
+      if (du <= 0) return;
+
+      // Même tolérance que la vérification de paiement : un écart d'arrondi de
+      // taxe entre l'application et le serveur n'est pas un impayé.
+      const TOLERANCE = 50;
+
+      if (encaisse <= 0) {
+        this.alertes.signaler({
+          code: CodeAlerte.COMMANDE_SANS_PAIEMENT,
+          restaurantId: commande.restaurant_id ?? null,
+          reference: commande.reference,
+          details: [
+            `Montant dû : ${du} F`,
+            'Aucun paiement enregistré sur cette commande.',
+          ],
+          meta: { orderId: commande.id, du, encaisse },
+        });
+        return;
+      }
+
+      if (encaisse < du - TOLERANCE) {
+        this.alertes.signaler({
+          code: CodeAlerte.PAIEMENT_PARTIEL,
+          restaurantId: commande.restaurant_id ?? null,
+          reference: commande.reference,
+          details: [
+            `Encaissé ${encaisse} F sur ${du} F`,
+            `Manque ${du - encaisse} F.`,
+          ],
+          meta: { orderId: commande.id, du, encaisse },
+        });
+      }
+    } catch (e) {
+      // Une alerte ratée ne doit jamais remonter jusqu'au client.
+      this.logger.warn(`Contrôle de paiement non effectué pour ${commande?.reference} : ${(e as Error)?.message}`);
+    }
   }
 
   /**

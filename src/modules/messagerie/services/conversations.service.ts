@@ -454,6 +454,7 @@ export class ConversationsService {
         restaurantId: true,
         subject: true,
         isGroup: true,
+        receivesAlerts: true,
         users: { select: { userId: true } },
       },
     });
@@ -657,6 +658,33 @@ export class ConversationsService {
       conversation.id,
       membres.filter((id) => id !== userId),
     );
+  }
+
+  /**
+   * Fait de ce groupe un canal d'ALERTES, ou l'en retire.
+   *
+   * Le système y écrira quand un paiement part de travers, qu'une commande se
+   * clôture sans être payée, ou que les notifications de paiement sont
+   * refusées. Ça reste une conversation ordinaire : les membres y répondent, se
+   * répartissent le travail, disent que c'est traité.
+   */
+  async basculerAlertes(
+    req: Request,
+    conversationId: string,
+    recevoir: boolean,
+  ): Promise<ResponseConversationsDto> {
+    const { conversation, membres } = await this.chargerGroupePourGestion(
+      req.user!,
+      conversationId,
+      true,
+    );
+
+    await this.prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { receivesAlerts: recevoir },
+    });
+
+    return this.renvoyerEtNotifier(conversation.id, membres);
   }
 
   /** Renomme un groupe. Le nom est ce que tout le monde lit dans sa liste. */
@@ -1134,6 +1162,7 @@ export class ConversationsService {
       isGroup:
         conversation.isGroup ??
         (!conversation.customerId && (conversation.users?.length ?? 0) > 2),
+      receivesAlerts: conversation.receivesAlerts ?? false,
       /**
        * ⚠️ Date du DERNIER MESSAGE, et non date de création de la conversation.
        *

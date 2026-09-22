@@ -6,6 +6,7 @@ import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { TurboService } from 'src/turbo/services/turbo.service';
 import { DeliveryOfferService } from 'src/modules/delivery-offer/services/delivery-offer.service';
 import { MapsService } from 'src/modules/maps/maps.service';
+import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
 
 /**
  * Un palier de la grille de frais de livraison : tout trajet dont la distance
@@ -127,6 +128,7 @@ export class DeliveryFeeHelper {
     private readonly turboService: TurboService,
     private readonly deliveryOfferService: DeliveryOfferService,
     private readonly mapsService: MapsService,
+    private readonly alertes: AlertesService,
   ) {}
 
   // ───────────────────────────── Réglages ─────────────────────────────
@@ -550,6 +552,19 @@ export class DeliveryFeeHelper {
           `${(config.distance_exacte ?? config.distance).toFixed(1)} km, zone « ${result.zone} ». ` +
           `Corrigé à ${secours} FCFA. A INVESTIGUER : une livraison gratuite doit venir d'une offre.`,
       );
+      // Le verrou a rattrapé le tarif, mais la cause reste : une zone au prix
+      // absent, une grille mal réglée. Sans ce signal, on ne le découvre qu'en
+      // relisant les logs du serveur, ce que personne ne fait.
+      this.alertes.signaler({
+        code: CodeAlerte.LIVRAISON_GRATUITE_ANORMALE,
+        restaurant: restaurant.name,
+        restaurantId: restaurant.id,
+        details: [
+          `${(config.distance_exacte ?? config.distance).toFixed(1)} km, zone « ${result.zone} »`,
+          `Tarif corrigé automatiquement à ${secours} F.`,
+          'Vérifier le prix de la zone Turbo ou la grille de frais.',
+        ],
+      });
       result = { ...result, montant: secours };
     }
 

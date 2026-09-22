@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
   ArrayMaxSize,
+  IsBoolean,
   ArrayMinSize,
   IsArray,
   IsString,
@@ -28,4 +29,11 @@ export class RenommerGroupeDto {
   @MinLength(1)
   @MaxLength(120)
   subject: string;
+}
+
+/** Fait de ce groupe un canal d'alertes du système, ou l'en retire. */
+export class BasculerAlertesDto {
+  @ApiProperty({ description: 'Recevoir les alertes du système dans ce groupe' })
+  @IsBoolean()
+  receives_alerts: boolean;
 }

@@ -2,6 +2,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { AuditService } from 'src/modules/audit/audit.service';
+import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
 import { KkiapayService } from './kkiapay.service';
 import { KkiapayWebhookDto } from './kkiapay.type';
 import {
@@ -31,6 +32,7 @@ export class KkiapayWebhookConsumer extends WorkerHost {
   constructor(
     private readonly kkiapayService: KkiapayService,
     private readonly auditService: AuditService,
+    private readonly alertes: AlertesService,
   ) {
     super();
   }
@@ -70,6 +72,26 @@ export class KkiapayWebhookConsumer extends WorkerHost {
             ? journalPaiementConfirme(payload)
             : journalPaiementNonConfirme(payload, issue?.reason),
         );
+
+        /**
+         * L'argent est chez KKiaPay, la commande ne s'est pas confirmée, et
+         * personne ne le saura sans qu'on le dise : le traitement a renoncé
+         * DÉLIBÉRÉMENT, sans lever d'exception. C'est exactement le cas où un
+         * client a payé et attend, pendant que le restaurant ne voit rien.
+         */
+        if (!issue?.confirmed) {
+          this.alertes.signaler({
+            code: CodeAlerte.PAIEMENT_NON_CONFIRME,
+            restaurantId: payload.restaurantId ?? null,
+            reference: payload.stateData ?? null,
+            details: [
+              `Montant : ${payload.amount} F par ${payload.method}`,
+              `Motif : ${issue?.reason ?? 'non précisé'}`,
+              `Transaction : ${payload.transactionId}`,
+            ],
+            meta: { transactionId: payload.transactionId, motif: issue?.reason ?? null },
+          });
+        }
       }
     } catch (err) {
       /**

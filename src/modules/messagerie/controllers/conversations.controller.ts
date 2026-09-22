@@ -26,7 +26,7 @@ import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.g
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
 import { CreateConversationDto } from '../dto/create-conversation.dto';
-import { AjouterParticipantsDto, RenommerGroupeDto } from '../dto/gerer-groupe.dto';
+import { AjouterParticipantsDto, BasculerAlertesDto, RenommerGroupeDto } from '../dto/gerer-groupe.dto';
 import { QueryConversationsDto } from '../dto/query-conversations.dto';
 import { ConversationsService } from '../services/conversations.service';
 
@@ -156,6 +156,19 @@ export class ConversationsController {
     @Param('userId') userId: string,
   ) {
     return await this.conversationsService.retirerParticipant(req, id, userId);
+  }
+
+  @Patch(':id/alerts')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.MESSAGES, Action.CREATE)
+  @ApiOperation({ summary: 'Faire de ce groupe un canal d\'alertes du système' })
+  @ApiBody({ type: BasculerAlertesDto })
+  async basculerAlertes(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() dto: BasculerAlertesDto,
+  ) {
+    return await this.conversationsService.basculerAlertes(req, id, dto.receives_alerts);
   }
 
   @Patch(':id/subject')

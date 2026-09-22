@@ -30,6 +30,10 @@ export class ResponseConversationsDto {
   @ApiProperty()
   isGroup: boolean;
 
+  /** Ce groupe reçoit les alertes du système. */
+  @ApiProperty()
+  receivesAlerts?: boolean;
+
   @ApiProperty()
   /** Date du dernier message : c'est sur elle que l'application trie. */
   createdAt: Date;

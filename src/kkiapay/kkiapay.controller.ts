@@ -10,6 +10,7 @@ import { SettingsService } from 'src/modules/settings/settings.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { journalRefusWebhook } from './kkiapay-audit.helper';
+import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
 
 @Controller('kkiapay')
 export class KkiapayController {
@@ -20,6 +21,7 @@ export class KkiapayController {
         private readonly settingsService: SettingsService,
         private readonly prisma: PrismaService,
         private readonly auditService: AuditService,
+        private readonly alertes: AlertesService,
         @InjectQueue('kkiapay-webhooks') private readonly webhooksQueue: Queue,
     ) { }
 
@@ -164,6 +166,23 @@ export class KkiapayController {
                 userAgent: request?.headers?.['user-agent'] ?? null,
             });
             if (entree) this.auditService.record(entree);
+
+            /**
+             * Le refus est aussi annoncé dans le groupe. Un secret désaligné se
+             * voyait jusqu'ici dans les logs du conteneur, c'est-à-dire nulle
+             * part : trois paiements ont été perdus le 21/09 avant que
+             * quiconque s'en aperçoive. Le service brime lui-même les
+             * répétitions, une panne ne produira pas cent messages.
+             */
+            this.alertes.signaler({
+                code: CodeAlerte.WEBHOOK_REFUSE,
+                restaurantId: restaurantId,
+                details: [
+                    motif,
+                    "Les paiements de ce compte ne confirment plus les commandes.",
+                ],
+                meta: { statut, transactionId: body?.transactionId ?? null },
+            });
         };
         // Secret : global (env-first Neon-indépendant) ou par restaurant (Settings
         // + cache mémoire longue durée). `null` = aucune source disponible
