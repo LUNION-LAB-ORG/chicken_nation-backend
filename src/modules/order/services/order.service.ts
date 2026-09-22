@@ -932,11 +932,28 @@ export class OrderService {
    * problème ne doit pas empêcher la commande de se clôturer.
    */
   private signalerAnomaliePaiement(
-    commande: { id: string; reference: string; amount: number; restaurant_id?: string | null; paiements?: { status: PaiementStatus; amount: number; total?: number | null }[] },
+    commande: { id: string; reference: string; amount: number; paied?: boolean; restaurant_id?: string | null; paiements?: { status: PaiementStatus; amount: number; total?: number | null }[] },
     status: OrderStatus,
   ): void {
     try {
       if (status !== OrderStatus.COLLECTED && status !== OrderStatus.COMPLETED) return;
+
+      /**
+       * ⚠️ `paied` FAIT FOI, et rien d'autre.
+       *
+       * Premier signalement en production, première fausse alerte : une
+       * commande manuelle réglée au restaurant est marquée payée sans qu'une
+       * ligne de paiement existe forcément. Ne regarder que ces lignes faisait
+       * donc crier « aucun paiement » sur une commande que tous les écrans
+       * affichent « Payé », puisque le badge lit ce même drapeau
+       * (backoffice, orderMapper.getPaymentStatus).
+       *
+       * Une alerte qui contredit l'écran n'alerte plus personne : elle apprend
+       * à ignorer le canal. On se tait donc dès que la maison considère la
+       * commande payée. Un drapeau posé à tort reste un problème comptable, à
+       * traiter par un rapprochement, pas par une alerte opérationnelle.
+       */
+      if (commande.paied) return;
 
       const encaisse = (commande.paiements ?? [])
         .filter((p) => p.status === PaiementStatus.SUCCESS)
