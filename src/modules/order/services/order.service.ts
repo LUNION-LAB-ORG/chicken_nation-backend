@@ -1,5 +1,12 @@
 import { assertDishesNotComposable } from 'src/common/utils/dish-availability.util';
 import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
+import {
+  acheminementInterpelle,
+  courseTresLongue,
+  ecartTarifInexplique,
+  pointExploitable,
+  TOLERANCE_FCFA,
+} from 'src/modules/order/helpers/livraison-controles';
 import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
 import {
   BadRequestException,
@@ -337,6 +344,10 @@ export class OrderService {
       totalDishes: totalDishesEtOptions,
       orderItems: promoItems,
     });
+
+    // Contrôles de livraison : tarif, acheminement, distance. Fire-and-forget,
+    // ils ne peuvent pas faire échouer la commande qu'ils examinent.
+    void this.signalerAnomalieLivraison(order);
 
     // Émettre l'événement WebSocket de création de commande
     this.orderWebSocketService.emitOrderCreated(order);
@@ -756,6 +767,10 @@ export class OrderService {
       // Émettre l'événement de création de commande
       this.orderWebSocketService.emitOrderCreated(order);
 
+      // Contrôles de livraison : tarif, acheminement, distance. Fire-and-forget,
+      // ils ne peuvent pas faire échouer la commande qu'ils examinent.
+      void this.signalerAnomalieLivraison(order);
+
       // WhatsApp de confirmation : uniquement si le client n'a PAS l'app, et
       // uniquement pour les commandes qui NE SONT PAS à livrer.
       //
@@ -931,6 +946,212 @@ export class OrderService {
    * Effet de bord PUR : jamais d'exception, jamais d'attente. Signaler un
    * problème ne doit pas empêcher la commande de se clôturer.
    */
+  /**
+   * Contrôles de livraison sur une commande qui vient d'être créée.
+   *
+   * FIRE-AND-FORGET, comme toutes les alertes : cette méthode ne doit jamais
+   * empêcher une commande de passer. Tout est enveloppé, rien ne remonte.
+   *
+   * ── Pourquoi APRÈS la création, et pas dans le calcul des frais ──────────
+   * Les deux routes d'aperçu (`obtenirFraisLivraison`, `obtenirItineraireLivraison`)
+   * appellent le helper de tarification sans créer de commande : un contrôle
+   * posé là crierait sur de simples simulations, et son message n'aurait aucune
+   * référence à citer. C'est le défaut que porte LIVRAISON_GRATUITE_ANORMALE.
+   * Surtout, l'override du caissier est appliqué APRÈS le retour du helper : de
+   * l'intérieur, il est invisible.
+   *
+   * ── Une seule alerte par commande ───────────────────────────────────────
+   * Une course lointaine mal acheminée et mal facturée déclenche les trois
+   * contrôles. On n'écrit qu'un message, celui du motif le plus grave, et les
+   * autres constats deviennent des lignes de détail. Trois messages partiels
+   * valent moins qu'un message complet, et le canal reste lisible.
+   */
+  private async signalerAnomalieLivraison(commande: {
+    id: string;
+    reference: string;
+    type: string;
+    user_id?: string | null;
+    restaurant_id?: string | null;
+    delivery_fee?: number | null;
+    delivery_fee_base?: number | null;
+    delivery_discount?: number | null;
+    delivery_distance_km?: number | null;
+    zone_id?: string | null;
+  }): Promise<void> {
+    try {
+      if (commande.type !== OrderType.DELIVERY) return;
+
+      const facture = Number(commande.delivery_fee ?? 0);
+      const base = Number(commande.delivery_fee_base ?? 0);
+      const remise = Number(commande.delivery_discount ?? 0);
+      const distance = commande.delivery_distance_km ?? null;
+
+      const details: string[] = [];
+      let code: CodeAlerte | null = null;
+
+      // ── 1. Tarif : l'écart est-il EXPLIQUÉ par la remise enregistrée ? ────
+      //
+      // On ne compare pas le facturé à la grille : avec les zones Turbo
+      // actives, la grille ne fixe le prix que d'une commande sur quatre, et
+      // rejouer la grille produirait des centaines de faux écarts.
+      //
+      // On ne se contente pas non plus d'un seuil en francs : sur neuf jours,
+      // 123 écarts sur 135 sont des remises parfaitement enregistrées, donc des
+      // gestes commerciaux normaux. Les alerter serait du bruit.
+      //
+      // La seule question qui vaille est : `facturé + remise` se recolle-t-il à
+      // la base ? Quand non, de l'argent a bougé sans que rien ne l'explique.
+      // C'est notamment le seul moyen de voir une SURFACTURATION, que
+      // `deliveryDiscount = Math.max(0, base - facturé)` écrase à zéro.
+      const tarif = ecartTarifInexplique(facture, base, remise);
+      if (tarif.motif) {
+        code = CodeAlerte.TARIF_LIVRAISON_INCOHERENT;
+        details.push(
+          tarif.motif === 'surfacture'
+            ? `Surfacturé de ${tarif.montant} F : facturé ${facture} F alors que le calcul donnait ${base} F.`
+            : `Manque ${tarif.montant} F : facturé ${facture} F + remise ${remise} F ne font pas les ${base} F calculés.`,
+        );
+      }
+
+      // ── 1 bis. Garde-fou de grille, hors zone Turbo ───────────────────────
+      //
+      // Quand aucune zone Turbo n'a fixé le prix, c'est la grille qui l'a fait,
+      // et la base DOIT valoir exactement le palier. Ce contrôle ne dit rien
+      // aujourd'hui — zéro écart sur neuf jours — et c'est sa raison d'être :
+      // il ne parlera que si la grille est mal saisie ou si une régression
+      // casse le calcul.
+      if (!commande.zone_id && distance != null && base > 0) {
+        const reglages = await this.deliveryFeeHelper.load().catch(() => null);
+        // Une grille illisible retombe silencieusement sur celle du code, qui
+        // n'est pas celle appliquée : mieux vaut ne rien dire que comparer à la
+        // mauvaise référence.
+        if (reglages?.grid?.length) {
+          const attendu = this.deliveryFeeHelper.priceForDistance(reglages.grid, distance);
+          if (Math.abs(base - attendu) > TOLERANCE_FCFA) {
+            code = code ?? CodeAlerte.TARIF_LIVRAISON_INCOHERENT;
+            details.push(
+              `Hors zone Turbo, la grille prévoit ${attendu} F pour ${distance.toFixed(1)} km, la base vaut ${base} F.`,
+            );
+          }
+        }
+      }
+
+      // ── 2. Acheminement, uniquement sur saisie humaine ────────────────────
+      //
+      // Sur le chemin application, le serveur choisit lui-même le restaurant le
+      // plus proche parmi les ouverts qui vendent tous les plats : il ne peut
+      // pas se tromper, et contrôler son propre choix n'apprendrait rien.
+      // Au centre d'appel, le restaurant saisi n'est vérifié par RIEN.
+      if (commande.user_id && commande.restaurant_id) {
+        const suspect = await this.acheminementSuspect(
+          commande.restaurant_id,
+          commande.id,
+        );
+        if (suspect) {
+          code = code ?? CodeAlerte.ACHEMINEMENT_SUSPECT;
+          details.push(suspect);
+        }
+      }
+
+      // ── 3. Distance ───────────────────────────────────────────────────────
+      if (courseTresLongue(distance)) {
+        code = code ?? CodeAlerte.LIVRAISON_TRES_LOIN;
+        details.push(`Course de ${(distance as number).toFixed(1)} km par la route.`);
+      }
+
+      if (!code) return;
+
+      this.alertes.signaler({
+        code,
+        restaurantId: commande.restaurant_id ?? null,
+        reference: commande.reference,
+        details,
+        // Une clé par COMMANDE : sans elle, deux commandes du même restaurant
+        // dans la même fenêtre de cinq minutes se feraient taire l'une l'autre.
+        cleBridage: `${code}:${commande.reference}`,
+        meta: {
+          orderId: commande.id,
+          facture,
+          base,
+          remise,
+          distance_km: distance,
+          zone_turbo: Boolean(commande.zone_id),
+          canal: commande.user_id ? 'centre d\'appel' : 'application',
+        },
+      });
+    } catch (e) {
+      // Un contrôle raté ne doit jamais remonter jusqu'au client.
+      this.logger.warn(
+        `Contrôle de livraison non effectué pour ${commande?.reference} : ${(e as Error)?.message}`,
+      );
+    }
+  }
+
+  /**
+   * Le restaurant retenu est-il nettement plus loin que le plus proche ?
+   *
+   * Renvoie la ligne de détail à afficher, ou null si rien à signaler.
+   *
+   * ⚠️ Comparaison à VOL D'OISEAU, alors que la facturation se fait par la
+   *    route. C'est assumé : chercher le plus proche par la route coûterait
+   *    cinq appels Google par commande, sur le chemin de création, pour
+   *    départager des candidats que le vol d'oiseau sépare déjà largement au
+   *    seuil retenu. Le message le dit, pour qu'on ne le lise pas comme une
+   *    certitude.
+   */
+  private async acheminementSuspect(
+    restaurantId: string,
+    orderId: string,
+  ): Promise<string | null> {
+    // Le point de livraison n'est pas en colonnes : il vit dans le JSON
+    // `address`, aux côtés du libellé. Un JSON libre peut arriver vide ou mal
+    // formé, d'où la lecture prudente — sans point, pas de contrôle, et c'est
+    // préférable à un contrôle qui compare des zéros.
+    const commande = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { address: true },
+    });
+    const point = commande?.address as { latitude?: number; longitude?: number } | null;
+    if (!pointExploitable(point?.latitude, point?.longitude)) return null;
+    const lat = point!.latitude as number;
+    const lon = point!.longitude as number;
+
+    const restaurants = await this.prisma.restaurant.findMany({
+      where: { entity_status: EntityStatus.ACTIVE },
+      select: { id: true, name: true, latitude: true, longitude: true, schedule: true },
+    });
+
+    const retenu = restaurants.find((r) => r.id === restaurantId);
+    if (!retenu?.latitude || !retenu?.longitude) return null;
+
+    const distanceDe = (r: { latitude: number | null; longitude: number | null }) =>
+      r.latitude == null || r.longitude == null
+        ? null
+        : this.generateDataService.haversineDistance(lat, lon, r.latitude, r.longitude);
+
+    const distanceRetenu = distanceDe(retenu);
+    if (distanceRetenu == null) return null;
+
+    // On ne compare qu'aux restaurants OUVERTS : reprocher d'avoir évité un
+    // restaurant fermé serait un faux positif garanti.
+    let meilleur: { nom: string; km: number } | null = null;
+    for (const r of restaurants) {
+      if (r.id === restaurantId) continue;
+      const km = distanceDe(r);
+      if (km == null) continue;
+      if (!this.orderHelper.estOuvert(r.schedule)) continue;
+      if (!meilleur || km < meilleur.km) meilleur = { nom: r.name, km };
+    }
+
+    if (!meilleur || !acheminementInterpelle(distanceRetenu, meilleur.km)) return null;
+
+    return (
+      `Rattachée à ${retenu.name} (${distanceRetenu.toFixed(1)} km à vol d'oiseau) ` +
+      `alors que ${meilleur.nom} est à ${meilleur.km.toFixed(1)} km. ` +
+      `À vérifier : le plus proche à vol d'oiseau n'est pas toujours le plus rapide.`
+    );
+  }
+
   private signalerAnomaliePaiement(
     commande: { id: string; reference: string; amount: number; paied?: boolean; restaurant_id?: string | null; paiements?: { status: PaiementStatus; amount: number; total?: number | null }[] },
     status: OrderStatus,

@@ -36,7 +36,29 @@ export enum CodeAlerte {
   LIVRAISON_GRATUITE_ANORMALE = 'LIVRAISON_GRATUITE_ANORMALE',
   /** Commande en ligne en attente de paiement depuis trop longtemps. */
   COMMANDE_EN_ATTENTE = 'COMMANDE_EN_ATTENTE',
+  /** Facturé et base ne se recollent pas par la remise enregistrée. */
+  TARIF_LIVRAISON_INCOHERENT = 'TARIF_LIVRAISON_INCOHERENT',
+  /** Commande rattachée à un restaurant nettement plus loin que le plus proche. */
+  ACHEMINEMENT_SUSPECT = 'ACHEMINEMENT_SUSPECT',
+  /** Course exceptionnellement longue. */
+  LIVRAISON_TRES_LOIN = 'LIVRAISON_TRES_LOIN',
 }
+
+/**
+ * Les codes qui viennent de la livraison.
+ *
+ * Ils partagent un sous-plafond : trois contrôles tournent sur CHAQUE commande,
+ * là où les codes de paiement ne parlent qu'en cas d'incident. Sans cette
+ * séparation, une grille mal réglée qui ferait crier une commande sur deux
+ * consommerait le plafond global et ferait taire les alertes de paiement, qui
+ * sont les plus graves.
+ */
+const FAMILLE_LIVRAISON: ReadonlySet<CodeAlerte> = new Set([
+  CodeAlerte.TARIF_LIVRAISON_INCOHERENT,
+  CodeAlerte.ACHEMINEMENT_SUSPECT,
+  CodeAlerte.LIVRAISON_TRES_LOIN,
+  CodeAlerte.LIVRAISON_GRATUITE_ANORMALE,
+]);
 
 /** Intitulé lisible, affiché en première ligne du message. */
 const TITRES: Record<CodeAlerte, string> = {
@@ -46,6 +68,9 @@ const TITRES: Record<CodeAlerte, string> = {
   [CodeAlerte.WEBHOOK_REFUSE]: 'Notifications de paiement refusées',
   [CodeAlerte.LIVRAISON_GRATUITE_ANORMALE]: 'Livraison facturée 0 F sans offre',
   [CodeAlerte.COMMANDE_EN_ATTENTE]: 'Commande en attente de paiement',
+  [CodeAlerte.TARIF_LIVRAISON_INCOHERENT]: 'Frais de livraison incohérents',
+  [CodeAlerte.ACHEMINEMENT_SUSPECT]: 'Commande partie au mauvais restaurant ?',
+  [CodeAlerte.LIVRAISON_TRES_LOIN]: 'Livraison très éloignée',
 };
 
 /**
@@ -56,8 +81,23 @@ const TITRES: Record<CodeAlerte, string> = {
  */
 const FENETRE_BRIDE_MS = 5 * 60 * 1000;
 
-/** Garde-fou global, toutes alertes confondues, par fenêtre. */
-const PLAFOND_GLOBAL = 12;
+/**
+ * Garde-fou global, toutes alertes confondues, par fenêtre.
+ *
+ * Porté de 12 à 20 en même temps que les contrôles de livraison : ceux-là
+ * s'exécutent sur chaque commande, et le pic mesuré est de 6 commandes par
+ * fenêtre de 5 minutes.
+ */
+const PLAFOND_GLOBAL = 20;
+
+/**
+ * Sous-plafond de la famille livraison, par fenêtre.
+ *
+ * Quoi qu'il arrive côté livraison, il reste donc au moins 16 créneaux pour les
+ * alertes de paiement. Un canal saturé par des frais mal calculés ne doit pas
+ * masquer un encaissement perdu.
+ */
+const PLAFOND_LIVRAISON = 4;
 
 /** Au-delà, la table de bridage est purgée : elle ne doit pas enfler sans fin. */
 const PLAFOND_CLES = 200;
@@ -79,6 +119,19 @@ export interface Alerte {
   details?: (string | null | undefined)[];
   /** Données brutes, conservées dans le message pour un diagnostic ultérieur. */
   meta?: Record<string, unknown>;
+  /**
+   * Clé de bridage, quand celle par défaut ne convient pas.
+   *
+   * Par défaut la clé vaut `code:restaurant`, ce qui est juste pour un incident
+   * d'infrastructure — une panne KKiaPay doit écrire une ligne, pas une par
+   * transaction. C'est faux pour un contrôle qui porte sur UNE commande : deux
+   * commandes du même restaurant dans la même fenêtre de cinq minutes se
+   * feraient taire l'une l'autre, et 9 % des fenêtres comptent plus d'une
+   * commande au même restaurant.
+   *
+   * Les contrôles par commande passent donc `code:reference`.
+   */
+  cleBridage?: string;
 }
 
 @Injectable()
@@ -86,7 +139,7 @@ export class AlertesService {
   private readonly logger = new Logger(AlertesService.name);
 
   private readonly derniere = new Map<string, { le: number; tues: number }>();
-  private fenetreGlobale = { debut: 0, ecrites: 0 };
+  private fenetreGlobale = { debut: 0, ecrites: 0, livraison: 0 };
 
   constructor(
     private readonly prisma: PrismaService,
@@ -106,7 +159,7 @@ export class AlertesService {
   }
 
   /** `null` = alerte à taire, une ligne récente couvre déjà ce cas. */
-  private brider(cle: string, maintenant: number): number | null {
+  private brider(cle: string, maintenant: number, code: CodeAlerte): number | null {
     const vu = this.derniere.get(cle);
     if (vu && maintenant - vu.le < FENETRE_BRIDE_MS) {
       vu.tues += 1;
@@ -114,10 +167,20 @@ export class AlertesService {
     }
 
     if (maintenant - this.fenetreGlobale.debut >= FENETRE_BRIDE_MS) {
-      this.fenetreGlobale = { debut: maintenant, ecrites: 0 };
+      this.fenetreGlobale = { debut: maintenant, ecrites: 0, livraison: 0 };
     }
-    if (this.fenetreGlobale.ecrites >= PLAFOND_GLOBAL) {
+
+    const familleLivraison = FAMILLE_LIVRAISON.has(code);
+    const sature =
+      this.fenetreGlobale.ecrites >= PLAFOND_GLOBAL ||
+      (familleLivraison && this.fenetreGlobale.livraison >= PLAFOND_LIVRAISON);
+
+    if (sature) {
       if (vu) vu.tues += 1;
+      // Une clé inconnue perdue au plafond ne serait comptée nulle part : elle
+      // n'a pas d'entrée où incrémenter `tues`, et la prochaine alerte de cette
+      // clé annoncerait « 0 occurrence tue ». On le journalise au moins.
+      else this.logger.warn(`Alerte ${code} perdue : plafond de fenêtre atteint (${cle}).`);
       return null;
     }
 
@@ -132,6 +195,7 @@ export class AlertesService {
 
     this.derniere.set(cle, { le: maintenant, tues: 0 });
     this.fenetreGlobale.ecrites += 1;
+    if (familleLivraison) this.fenetreGlobale.livraison += 1;
     return tues;
   }
 
@@ -159,7 +223,8 @@ export class AlertesService {
     // Le bridage porte sur l'identifiant quand on l'a : il est stable, là où le
     // nom peut manquer sur un appel et pas sur le suivant.
     const cleRestaurant = alerte.restaurantId ?? alerte.restaurant ?? 'reseau';
-    const tues = this.brider(`${alerte.code}:${cleRestaurant}`, Date.now());
+    const cle = alerte.cleBridage ?? `${alerte.code}:${cleRestaurant}`;
+    const tues = this.brider(cle, Date.now(), alerte.code);
     if (tues === null) return;
 
     let nomRestaurant = alerte.restaurant ?? null;

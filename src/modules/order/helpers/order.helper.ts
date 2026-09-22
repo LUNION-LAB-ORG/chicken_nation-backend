@@ -52,6 +52,18 @@ export class OrderHelper {
     private readonly dishOptionService: DishOptionService,
   ) {}
 
+  /**
+   * Le restaurant est-il ouvert à cet instant ?
+   *
+   * Exposé pour les contrôles a posteriori : `OrderService` en a besoin pour ne
+   * pas reprocher à une commande d'avoir évité un restaurant fermé, et injecter
+   * `RestaurantService` directement dans le service toucherait au graphe de
+   * modules pour une seule ligne.
+   */
+  estOuvert(schedule: unknown): boolean {
+    return this.restaurantService.isRestaurantOpen(schedule as never);
+  }
+
   private async getTaxRate(): Promise<number> {
     const val = await this.settingsService.getOrEnv('order_tax_rate', 'ORDER_TAX_RATE', '0.05');
     return Number(val);
