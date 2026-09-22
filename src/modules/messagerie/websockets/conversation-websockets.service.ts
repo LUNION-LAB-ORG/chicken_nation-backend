@@ -16,7 +16,15 @@ export class ConversationWebsocketsService {
       );
     }
 
-    if (conversation.restaurant?.id) {
+    /**
+     * ⚠️ Réservé aux conversations CLIENT, comme le dit le nom de l'évènement.
+     *
+     * La salle `restaurant_<id>` est rejointe par les LIVREURS autant que par
+     * le personnel : y publier une conversation interne leur livrerait le
+     * groupe et son premier message. Les participants sont notifiés un par un
+     * juste en dessous, ils ne perdent rien.
+     */
+    if (conversation.restaurant?.id && conversation.customerId) {
       this.appGateway.emitToRestaurant(
         conversation.restaurant.id,
         'new:customer_conversation',

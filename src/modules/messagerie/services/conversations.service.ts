@@ -10,13 +10,26 @@ import type { Request } from 'express';
 import { QueryConversationsDto } from '../dto/query-conversations.dto';
 import { QueryResponseDto } from '../../../common/dto/query-response.dto';
 import { ResponseConversationsDto } from '../dto/response-conversations.dto';
-import { Customer, Prisma, User, UserType } from '@prisma/client';
+import { Customer, Prisma, User, UserRole, UserType } from '@prisma/client';
 import { CreateConversationDto } from '../dto/create-conversation.dto';
 import { getAuthType } from '../utils/getTypeUser';
 import { ConversationWebsocketsService } from '../websockets/conversation-websockets.service';
 import { ResponseMessageDto } from '../dto/response-message.dto';
 
 type ConversationWhereUniqueInput = Prisma.ConversationWhereUniqueInput;
+
+/**
+ * Rôles autorisés à ouvrir un GROUPE interne.
+ *
+ * Un groupe alerte tous ses membres à chaque message : c'est une décision
+ * d'organisation, pas un geste de tous les jours. Le tête-à-tête, lui, reste
+ * ouvert à qui a accès à la messagerie.
+ */
+const ROLES_CREATION_GROUPE: UserRole[] = [
+  UserRole.ADMIN,
+  UserRole.MANAGER,
+  UserRole.ASSISTANT_MANAGER,
+];
 
 @Injectable()
 export class ConversationsService {
@@ -152,6 +165,7 @@ export class ConversationsService {
       restaurant_id: restaurantId = null,
       seed_message,
       receiver_user_id: receiverUserId,
+      participant_user_ids: participantUserIds,
       subject,
       customer_to_contact_id,
     } = createConversationDto;
@@ -213,6 +227,11 @@ export class ConversationsService {
     }
 
     let whereClause: Prisma.ConversationWhereInput = {};
+    /** Destinataires internes (hors créateur). Vide pour une conversation client. */
+    let destinataires: string[] = [];
+    let estGroupe = false;
+    /** Un groupe est toujours neuf : on ne cherche pas d'existante. */
+    let rechercherExistante = true;
 
     // CAS 1 — client ↔ restaurant : unique par (restaurantId, customerId)
     let customerIdToUse: string | null = null;
@@ -226,47 +245,123 @@ export class ConversationsService {
       }
       whereClause = { restaurantId, customerId: customerIdToUse };
     } else {
-      // CAS 2 — interne (DM 1–1) : unique par paire (userId, receiver)
-      if (!userId || !receiverUserId) {
+      // CAS 2 et 3 — interne : tête-à-tête ou GROUPE.
+      if (!userId) {
+        throw new HttpException('No userId', HttpStatus.BAD_REQUEST);
+      }
+
+      /**
+       * Destinataires : la liste explicite si elle est fournie, sinon le
+       * destinataire unique historique. On déduplique et on s'exclut soi-même
+       * plutôt que de refuser la demande : cocher son propre nom dans une liste
+       * est une maladresse d'écran, pas une erreur qui mérite un échec.
+       */
+      destinataires = [
+        ...new Set(
+          (participantUserIds?.length
+            ? participantUserIds
+            : receiverUserId
+              ? [receiverUserId]
+              : []
+          ).filter((id) => !!id && id !== userId),
+        ),
+      ];
+
+      if (destinataires.length === 0) {
         throw new HttpException(
-          'No userId or receiverUserId',
+          'Aucun destinataire : indiquez au moins un collègue.',
           HttpStatus.BAD_REQUEST,
         );
       }
-      if (userId === receiverUserId) {
-        throw new HttpException(
-          'Vous ne pouvez pas vous envoyer un message à vous-même',
-          HttpStatus.BAD_REQUEST,
-        );
-      }
-      // Verifier que le receiverUserId est bien un employé du restaurant
-      const isReceiverInRestaurant = await this.prisma.user.findFirst({
+
+      /**
+       * CLOISONNEMENT PAR RESTAURANT.
+       *
+       * Un gestionnaire dirige UN point de vente : il ne constitue pas un
+       * groupe avec le personnel d'un autre. Le contrôle ne portait que sur
+       * l'existence des identifiants, or la liste vient du navigateur et peut
+       * contenir n'importe qui. Le siège (comptes BACKOFFICE), lui, coordonne
+       * le réseau et n'est pas borné.
+       */
+      const createur = auth as User;
+      const bornerAuRestaurant =
+        createur.type !== UserType.BACKOFFICE && !!createur.restaurant_id;
+
+      const existants = await this.prisma.user.findMany({
         where: {
-          id: receiverUserId,
+          id: { in: destinataires },
+          ...(bornerAuRestaurant
+            ? { restaurant_id: createur.restaurant_id }
+            : {}),
         },
+        select: { id: true },
       });
-
-      if (!isReceiverInRestaurant) {
-        throw new NotFoundException("Le destinataire n'existe pas");
+      if (existants.length !== destinataires.length) {
+        throw new NotFoundException(
+          bornerAuRestaurant
+            ? "Un des destinataires n'existe pas ou n'appartient pas à votre restaurant"
+            : "Un des destinataires n'existe pas",
+        );
       }
 
-      whereClause = {
-        restaurantId,
-        subject: subject,
-        customerId: null, // interne
-        AND: [
-          { users: { some: { userId } } },
-          { users: { some: { userId: receiverUserId } } },
-        ],
-      };
+      estGroupe = destinataires.length >= 2;
+
+      if (estGroupe) {
+        /**
+         * CAS 3 — GROUPE.
+         *
+         * Réservé aux responsables : un groupe notifie tout le monde à chaque
+         * message, on ne laisse pas n'importe qui en ouvrir un.
+         */
+        const role = (auth as User).role;
+        if (!ROLES_CREATION_GROUPE.includes(role)) {
+          throw new HttpException(
+            "Seuls les administrateurs et les gestionnaires peuvent créer un groupe.",
+            HttpStatus.FORBIDDEN,
+          );
+        }
+        if (!subject || !subject.trim()) {
+          throw new HttpException(
+            'Un groupe doit porter un nom.',
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+        /**
+         * AUCUNE déduplication pour un groupe, contrairement au tête-à-tête.
+         *
+         * Deux groupes peuvent réunir exactement les mêmes personnes pour deux
+         * sujets différents, « Service du soir » et « Inventaire » par exemple,
+         * et ce sont bien deux conversations. Réutiliser l'existante mêlerait
+         * les deux fils. Et la clause du tête-à-tête, bâtie sur deux `some`,
+         * aurait de toute façon accroché n'importe quel groupe contenant ces
+         * deux personnes.
+         */
+        rechercherExistante = false;
+      } else {
+        // CAS 2 — tête-à-tête : unique par paire (userId, destinataire).
+        whereClause = {
+          restaurantId,
+          subject: subject,
+          customerId: null, // interne
+          AND: [
+            { users: { some: { userId } } },
+            { users: { some: { userId: destinataires[0] } } },
+            // Un groupe contient aussi ces deux personnes : sans cette borne,
+            // un tête-à-tête retomberait sur un groupe existant.
+            { users: { every: { userId: { in: [userId, destinataires[0]] } } } },
+          ],
+        };
+      }
     }
 
     // Utiliser une transaction pour éviter les race conditions (création en double)
     const result = await this.prisma.$transaction(async (tx) => {
-      const existingConversation = await tx.conversation.findFirst({
-        where: whereClause,
-        include: this.createConversationInclude(),
-      });
+      const existingConversation = rechercherExistante
+        ? await tx.conversation.findFirst({
+            where: whereClause,
+            include: this.createConversationInclude(),
+          })
+        : null;
 
       if (existingConversation) {
         return { conversation: existingConversation, isNew: false };
@@ -288,9 +383,11 @@ export class ConversationsService {
             ? {
               users: {
                 createMany: {
+                  // Le créateur, puis tous les destinataires : un seul pour un
+                  // tête-à-tête, autant que voulu pour un groupe.
                   data: [
                     { userId: userId },
-                    ...(receiverUserId ? [{ userId: receiverUserId }] : []),
+                    ...destinataires.map((id) => ({ userId: id })),
                   ],
                 },
               },
@@ -342,8 +439,25 @@ export class ConversationsService {
         customerId: (auth as Customer).id,
       };
     } else if (authType === 'user') {
-      // BACKOFFICE peut voir n'importe quelle conversation
-      if ((auth as User).type !== UserType.BACKOFFICE) {
+      if ((auth as User).type === UserType.BACKOFFICE) {
+        /**
+         * Le siège supervise tout ce qui touche un CLIENT : c'est sa fonction,
+         * et rien ne change de ce côté.
+         *
+         * Un échange INTERNE, lui, n'est pas une conversation de service. Le
+         * filtre s'arrêtait à l'identifiant pour un compte backoffice, si bien
+         * que n'importe lequel pouvait ouvrir le tête-à-tête de deux collègues,
+         * et demain le groupe privé des gestionnaires, sans en être membre. On
+         * y entre désormais comme tout le monde : en y ayant été mis.
+         */
+        whereClause = {
+          ...whereClause,
+          OR: [
+            { customerId: { not: null } },
+            { users: { some: { userId: (auth as User).id } } },
+          ],
+        };
+      } else {
         whereClause = {
           ...whereClause,
           OR: [
@@ -474,11 +588,56 @@ export class ConversationsService {
       },
     });
 
+    /**
+     * LES CONVERSATIONS INTERNES manquaient entièrement à cette pastille.
+     *
+     * Les deux comptes ci-dessus ne retiennent que les messages du CLIENT, ce
+     * qui est juste pour une conversation de service client mais laisse un
+     * groupe d'équipe totalement muet : il faudrait ouvrir l'écran Messages
+     * pour découvrir qu'on y a été interpellé. On ajoute donc les non-lus
+     * internes, comptés par participant à partir de sa propre date de lecture.
+     *
+     * Les deux ensembles sont disjoints : une conversation a un client, ou elle
+     * n'en a pas. Aucun double comptage possible.
+     */
+    let nonLusInternes = 0;
+    let conversationsInternesNonLues = 0;
+    if (getAuthType(auth) === 'user') {
+      /**
+       * BORNÉ, et par les plus récentes.
+       *
+       * Sans plafond, un agent présent dans des centaines de fils internes
+       * ferait construire une clause `OR` d'autant de branches, sur une requête
+       * appelée à chaque affichage de la pastille. Deux cents conversations
+       * internes couvrent très largement l'usage réel ; au-delà, la pastille
+       * ignore les plus anciennes, ce qui est sans conséquence puisque
+       * l'activité se concentre sur les récentes.
+       */
+      const internes = await this.prisma.conversation.findMany({
+        where: { customerId: null, users: { some: { userId: user.id } } },
+        select: { id: true },
+        orderBy: { updatedAt: 'desc' },
+        take: 200,
+      });
+      if (internes.length > 0) {
+        const compte = await this.compterNonLusInternes(
+          internes.map((c) => c.id),
+          user.id,
+        );
+        compte.forEach((valeur) => {
+          if (valeur > 0) {
+            nonLusInternes += valeur;
+            conversationsInternesNonLues += 1;
+          }
+        });
+      }
+    }
+
     return {
       total_conversations: totalConversations,
-      unread_conversations: conversationsWithUnread,
+      unread_conversations: conversationsWithUnread + conversationsInternesNonLues,
       total_messages: totalMessages,
-      unread_messages: unreadMessages,
+      unread_messages: unreadMessages + nonLusInternes,
     };
   }
 
@@ -701,6 +860,14 @@ export class ConversationsService {
       id: conversation.id,
       unreadNumber,
       customerId: conversation.customerId,
+      subject: conversation.subject ?? null,
+      /**
+       * GROUPE = interne (aucun client) ET plus de deux participants. La règle
+       * est tranchée ici, côté serveur, pour qu'aucun écran n'ait à la
+       * redécouvrir et que tous s'accordent.
+       */
+      isGroup:
+        !conversation.customerId && (conversation.users?.length ?? 0) > 2,
       /**
        * ⚠️ Date du DERNIER MESSAGE, et non date de création de la conversation.
        *
@@ -806,12 +973,85 @@ export class ConversationsService {
     return this.dateDernierMessage(conversation);
   }
 
-  private countUnreadMessages(params: {
+  /**
+   * NON-LUS D'UNE CONVERSATION INTERNE, pour UN agent donné.
+   *
+   * Compté à part, et autrement, pour une raison de fond : `Message.isRead` est
+   * un drapeau porté par le message, pas par le lecteur. Dans un groupe de
+   * cinq, le premier qui ouvre éteindrait la pastille des quatre autres. On
+   * s'appuie donc sur `ConversationUser.lastReadAt`, propre à chacun : est non
+   * lu ce qui a été posté depuis MA dernière ouverture et que je n'ai pas
+   * écrit. Jamais ouverte, tout est non lu.
+   *
+   * Les conversations CLIENT gardent leur comptage historique, intact : elles
+   * n'ont qu'un interlocuteur, le drapeau du message y suffit, et y toucher
+   * risquerait des régressions sur des compteurs déjà éprouvés.
+   */
+  private async compterNonLusInternes(
+    conversationIds: string[],
+    userId: string,
+  ): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (conversationIds.length === 0) return map;
+
+    const participations = await this.prisma.conversationUser.findMany({
+      where: {
+        userId,
+        conversationId: { in: conversationIds },
+        conversation: { customerId: null }, // interne uniquement
+      },
+      select: { conversationId: true, lastReadAt: true },
+    });
+    if (participations.length === 0) return map;
+
+    /**
+     * Chaque conversation a SA date de dernière lecture : impossible de
+     * l'exprimer par un seul `createdAt > X`. On énumère donc les couples
+     * (conversation, date), ce qui reste une requête unique et une page de
+     * conversations à la fois.
+     */
+    const counts = await this.prisma.message.groupBy({
+      by: ['conversationId'],
+      where: {
+        // Mes propres messages ne me sont pas « non lus ».
+        authorUserId: { not: userId },
+        OR: participations.map((p) => ({
+          conversationId: p.conversationId,
+          ...(p.lastReadAt ? { createdAt: { gt: p.lastReadAt } } : {}),
+        })),
+      },
+      _count: { id: true },
+    });
+
+    counts.forEach((c) => map.set(c.conversationId, c._count.id));
+    return map;
+  }
+
+  private async countUnreadMessages(params: {
     conversationId: string;
     authId: string;
     type: 'user' | 'customer';
   }): Promise<number> {
     const { conversationId, authId, type } = params;
+
+    // Conversation interne : comptage par participant (voir ci-dessus).
+    if (type === 'user') {
+      const internes = await this.compterNonLusInternes([conversationId], authId);
+      if (internes.has(conversationId)) return internes.get(conversationId)!;
+      /**
+       * Absente de la carte : soit la conversation a un client et relève du
+       * comptage historique ci-dessous, soit elle est interne et n'a rien de
+       * neuf. On distingue les deux en vérifiant la participation, sans quoi un
+       * groupe à jour retomberait sur le filtre client et compterait zéro par
+       * un chemin qui ne veut rien dire.
+       */
+      const estInterne = await this.prisma.conversationUser.findFirst({
+        where: { userId: authId, conversationId, conversation: { customerId: null } },
+        select: { conversationId: true },
+      });
+      if (estInterne) return 0;
+    }
+
     return this.prisma.message.count({
       where: {
         conversationId,
@@ -905,6 +1145,19 @@ export class ConversationsService {
 
     const map = new Map<string, number>();
     counts.forEach((c) => map.set(c.conversationId, c._count.id));
+
+    /**
+     * Les conversations INTERNES ne sont pas dans le compte ci-dessus : son
+     * filtre ne retient que les messages du client, et un message d'agent n'en
+     * a pas. Elles sont comptées séparément, par participant, puis fusionnées.
+     * Les deux ensembles sont disjoints, une conversation ayant un client ou
+     * n'en ayant pas.
+     */
+    if (type === 'user') {
+      const internes = await this.compterNonLusInternes(conversationIds, authId);
+      internes.forEach((valeur, id) => map.set(id, valeur));
+    }
+
     return map;
   }
 }

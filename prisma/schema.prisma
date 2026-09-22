@@ -803,6 +803,14 @@ model ConversationUser {
 
   joinedAt DateTime @default(now()) // Date de jointure
 
+  /// Dernière fois que CE participant a ouvert la conversation.
+  ///
+  /// `Message.isRead` est un drapeau porté par le message, pas par le lecteur :
+  /// dans un groupe, le premier qui lit éteindrait la pastille de tous les
+  /// autres. Le non-lu se calcule donc ici, par personne : les messages postés
+  /// après cette date et qu'elle n'a pas écrits. `null` = jamais ouverte.
+  lastReadAt DateTime?
+
   @@id([conversationId, userId])
   @@index([userId])
 }

@@ -397,8 +397,18 @@ export class MessageService {
       },
     });
 
-    // Ajouter l'utilisateur à la conversation s'il n'y est pas déjà
-    if (authType === 'user') {
+    /**
+     * Ajouter l'auteur à la conversation s'il n'y est pas déjà — UNIQUEMENT
+     * pour les conversations CLIENT.
+     *
+     * C'est voulu là : le service client est une boîte partagée, l'agent qui
+     * prend la main rejoint le fil. Ça ne l'est pas du tout sur une
+     * conversation INTERNE : écrire suffirait alors à s'inviter dans un groupe
+     * privé, définitivement, et la règle qui réserve la création d'un groupe
+     * aux responsables ne vaudrait plus rien. Dans une conversation interne, on
+     * est membre parce qu'on y a été mis, pas parce qu'on y a parlé.
+     */
+    if (authType === 'user' && conversation.customerId) {
       try {
         await this.prismaService.conversationUser.upsert({
           where: {
@@ -527,6 +537,53 @@ export class MessageService {
     });
 
     /**
+     * POSITION DE LECTURE DU LECTEUR, pour les conversations internes.
+     *
+     * Le `updateMany` ci-dessus blanchit des MESSAGES : dans un groupe, il
+     * éteindrait la pastille de tous les membres d'un coup. C'est pourquoi il
+     * ne vise, côté personnel, que les messages du client — il ne touche donc
+     * rien dans une conversation interne. La lecture d'un agent s'enregistre
+     * ici, sur SA ligne de participation et sur elle seule : ouvrir la
+     * conversation n'a aucun effet sur l'état de ses collègues.
+     *
+     * Écrit systématiquement, même quand `count` vaut zéro : dans un groupe,
+     * `count` est toujours zéro, et c'est pourtant là que la date compte.
+     */
+    let lectureInterneEnregistree = false;
+    if (type === 'USER' && !conversation.customerId) {
+      const participation = await this.prismaService.conversationUser.findUnique({
+        where: { conversationId_userId: { conversationId, userId: authorId } },
+        select: { lastReadAt: true },
+      });
+      if (participation) {
+        /**
+         * ⚠️ On ne date la lecture QUE s'il y avait réellement quelque chose à
+         * lire. `updateMany` renvoie le nombre de lignes TROUVÉES, or la ligne
+         * de participation existe toujours : s'y fier ferait partir un accusé
+         * de lecture à tous les membres du groupe à CHAQUE ouverture de
+         * l'écran, y compris quand rien n'a bougé, et déclencherait autant de
+         * rafraîchissements inutiles chez chacun.
+         */
+        const nouveaux = await this.prismaService.message.count({
+          where: {
+            conversationId,
+            authorUserId: { not: authorId },
+            ...(participation.lastReadAt
+              ? { createdAt: { gt: participation.lastReadAt } }
+              : {}),
+          },
+        });
+        if (nouveaux > 0) {
+          await this.prismaService.conversationUser.update({
+            where: { conversationId_userId: { conversationId, userId: authorId } },
+            data: { lastReadAt: new Date() },
+          });
+          lectureInterneEnregistree = true;
+        }
+      }
+    }
+
+    /**
      * ⚠️ On n'émet QUE si quelque chose a réellement changé.
      *
      * Le téléphone recharge la conversation à chaque retour au premier plan.
@@ -540,7 +597,9 @@ export class MessageService {
      * bien l'accusé.
      */
     const diffusionMuette = conversation.isBroadcast && !conversation.hasReply;
-    if (count > 0 && !diffusionMuette) {
+    // `count` reste à zéro dans une conversation interne (rien à blanchir) :
+    // sans ce second cas, aucun accusé ne partirait jamais d'un groupe.
+    if ((count > 0 || lectureInterneEnregistree) && !diffusionMuette) {
       this.messageWebSocketService.emitMessagesRead(
         conversation,
         type === 'USER' ? 'user' : 'customer',

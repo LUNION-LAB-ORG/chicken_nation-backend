@@ -95,6 +95,19 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
       [Modules.MENUS]: [Action.READ],
       [Modules.CLIENTS]: [Action.READ],
+      /**
+       * Messagerie : indispensable pour les GROUPES internes, que seuls les
+       * responsables peuvent ouvrir. Sans ce droit, un gestionnaire ne pouvait
+       * même pas atteindre l'écran Messages, et la règle « les gestionnaires
+       * créent les groupes » serait restée lettre morte.
+       *
+       * ⚠️ READ et CREATE seulement, et c'est délibéré : la messagerie
+       * n'utilise rien d'autre, tandis que `Modules.MESSAGES` garde AUSSI les
+       * catégories de tickets du support, où UPDATE et DELETE donneraient le
+       * routage des tickets de tout le réseau. On n'accorde que le strict
+       * nécessaire.
+       */
+      [Modules.MESSAGES]: [Action.READ, Action.CREATE],
       // Appels internes : le manager appelle le call center et reçoit ses appels.
       [Modules.CALLS]: [Action.READ],
     },
@@ -111,6 +124,19 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
       [Modules.MENUS]: [Action.READ],
       [Modules.CLIENTS]: [Action.READ],
+      /**
+       * Messagerie : indispensable pour les GROUPES internes, que seuls les
+       * responsables peuvent ouvrir. Sans ce droit, un gestionnaire ne pouvait
+       * même pas atteindre l'écran Messages, et la règle « les gestionnaires
+       * créent les groupes » serait restée lettre morte.
+       *
+       * ⚠️ READ et CREATE seulement, et c'est délibéré : la messagerie
+       * n'utilise rien d'autre, tandis que `Modules.MESSAGES` garde AUSSI les
+       * catégories de tickets du support, où UPDATE et DELETE donneraient le
+       * routage des tickets de tout le réseau. On n'accorde que le strict
+       * nécessaire.
+       */
+      [Modules.MESSAGES]: [Action.READ, Action.CREATE],
       // Appels internes : l'assistant manager appelle le call center et reçoit ses appels.
       [Modules.CALLS]: [Action.READ],
     },

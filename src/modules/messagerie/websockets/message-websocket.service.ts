@@ -44,8 +44,18 @@ export class MessageWebSocketService {
       }
     });
 
-    // 3. Notifier le restaurant (pour le backoffice)
-    if (conversation.restaurantId) {
+    /**
+     * 3. Notifier le restaurant — UNIQUEMENT pour les conversations CLIENT.
+     *
+     * ⚠️ La salle `restaurant_<id>` n'est pas réservée au personnel du
+     * backoffice : les LIVREURS affectés au restaurant la rejoignent aussi
+     * (app.gateway.ts, à la connexion). Diffuser ici un message INTERNE, c'est
+     * envoyer en clair à tous les livreurs connectés ce que deux agents
+     * s'écrivent. Les participants sont déjà servis un par un à l'étape 2 :
+     * cette diffusion ne sert qu'à rafraîchir la boîte de réception du
+     * personnel sur les échanges avec un client. On la borne donc à ce cas.
+     */
+    if (conversation.restaurantId && conversation.customerId) {
       this.appGateway.emitToRestaurant(
         conversation.restaurantId,
         'new:message',
@@ -82,7 +92,9 @@ export class MessageWebSocketService {
       );
     }
 
-    if (conversation.restaurantId) {
+    // Même borne qu'à l'émission d'un message : la salle du restaurant contient
+    // aussi les livreurs, elle ne doit rien apprendre d'une conversation interne.
+    if (conversation.restaurantId && conversation.customerId) {
       this.appGateway.emitToRestaurant(
         conversation.restaurantId,
         'messages:read',
