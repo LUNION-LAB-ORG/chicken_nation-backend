@@ -20,7 +20,8 @@ export class MessagesController {
     @UseGuards(JwtAuthGuard)
     @Get()
     async getMessagesByTicketId(@Param('ticketId') ticketId: string, @Query() filter: FilterQueryDto) {
-        return this.messageService.getMessagesByTicketId(ticketId, filter);
+        // Personnel : les notes internes lui sont destinées.
+        return this.messageService.getMessagesByTicketId(ticketId, filter, true);
     }
 
     /**
@@ -32,7 +33,8 @@ export class MessagesController {
     @Get('customer')
     async getCustomerMessagesByTicketId(@Req() req: Request, @Param('ticketId') ticketId: string, @Query() filter: FilterQueryDto) {
         await this.assertTicketDuClient(req, ticketId);
-        return this.messageService.getMessagesByTicketId(ticketId, filter);
+        // Client : jamais les notes internes du personnel.
+        return this.messageService.getMessagesByTicketId(ticketId, filter, false);
     }
 
     /**

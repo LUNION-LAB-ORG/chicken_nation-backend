@@ -122,17 +122,33 @@ export class TicketMessageService {
         return messageDto;
     }
 
-    async getMessagesByTicketId(ticketId: string, filter: FilterQueryDto): Promise<QueryResponseDto<ResponseTicketMessageDto>> {
+    /**
+     * ⚠️ `inclureInternes` n'a pas de valeur par défaut, et c'est délibéré.
+     *
+     * Cette méthode sert TROIS publics par trois routes distinctes : le
+     * personnel, le client et le livreur. Elle ne filtrait pas `internal`, si
+     * bien qu'une note écrite entre agents pour usage interne était servie
+     * telle quelle au client dans son propre ticket. Un défaut par défaut
+     * aurait laissé le prochain appelant hériter du trou en silence : ici,
+     * chacun doit dire pour qui il lit.
+     */
+    async getMessagesByTicketId(ticketId: string, filter: FilterQueryDto, inclureInternes: boolean): Promise<QueryResponseDto<ResponseTicketMessageDto>> {
         const { page = 1, limit = 10 } = filter;
+        const where: Prisma.TicketMessageWhereInput = {
+            ticketId,
+            ...(inclureInternes ? {} : { internal: false }),
+        };
         const [messages, total] = await Promise.all([
             this.prisma.ticketMessage.findMany({
-                where: { ticketId },
+                where,
                 orderBy: { createdAt: 'desc' },
                 include: this.MessageInclude,
                 skip: (page - 1) * limit,
                 take: limit,
             }),
-            this.prisma.ticketMessage.count({ where: { ticketId } })
+            // ⚠️ MÊME `where` que la liste : un compte plus large ferait
+            // promettre une pagination qui ne se remplit jamais.
+            this.prisma.ticketMessage.count({ where })
         ]);
 
         if (!messages) {

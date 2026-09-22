@@ -402,6 +402,8 @@ model Customer {
   TicketMessage TicketMessage[] @relation("TicketMsgAuthorCustomer")
 
   Message Message[] @relation("MessageAuthorCustomer")
+  MessageReaction       MessageReaction[]
+  TicketMessageReaction TicketMessageReaction[]
 
   TicketThread TicketThread[]
 
@@ -520,6 +522,7 @@ model Deliverer {
   // recevoir des messages d'agents support depuis le backoffice.
   support_tickets         TicketThread[]  @relation("DelivererTickets")
   support_ticket_messages TicketMessage[] @relation("DelivererTicketMessages")
+  ticket_message_reactions TicketMessageReaction[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -861,9 +864,71 @@ model Message {
   broadcastId String?           @db.Uuid
   broadcast   MessageBroadcast? @relation(fields: [broadcastId], references: [id], onDelete: SetNull)
 
+  reactions MessageReaction[]
+
   @@index([conversationId, createdAt])
   @@index([authorUserId])
   @@index([authorCustomerId])
+}
+
+/// RÉACTION à un message, comme sur WhatsApp : un emoji posé par une personne.
+///
+/// UNE seule par personne et par message. C'est l'unicité qui porte la règle,
+/// pas le code : deux clics simultanés ne peuvent pas créer de doublon.
+///
+/// ⚠️ Les deux contraintes d'unicité sont SÉPARÉES, et c'est volontaire. En
+/// PostgreSQL deux NULL ne sont jamais égaux : `@@unique([messageId, userId])`
+/// n'empêche donc pas mille clients de réagir au même message, puisque leur
+/// `userId` est nul. Chaque contrainte ne borne que son propre camp, ce qui
+/// est exactement le comportement voulu.
+model MessageReaction {
+  id        String  @id @default(uuid()) @db.Uuid
+  messageId String  @db.Uuid
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  /// L'emoji lui-même. `Text` et non `VarChar(n)` : un emoji composé (drapeau,
+  /// teinte de peau, famille assemblée par des liants invisibles) compte
+  /// plusieurs points de code, et une borne en caractères le tronquerait au
+  /// milieu d'une séquence, produisant un symbole inintelligible.
+  emoji String @db.Text
+
+  /// Qui a réagi. Exactement UN des deux est renseigné.
+  userId     String?   @db.Uuid
+  user       User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerId String?   @db.Uuid
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId])
+  @@unique([messageId, customerId])
+  @@index([messageId])
+}
+
+/// Même chose pour les messages de ticket, qui ont un auteur de plus : le
+/// livreur. Table distincte plutôt que polymorphe, parce que les deux messages
+/// sont deux tables distinctes et qu'une clé étrangère vaut mieux qu'un
+/// discriminant qu'aucune contrainte ne vérifie.
+model TicketMessageReaction {
+  id              String        @id @default(uuid()) @db.Uuid
+  ticketMessageId String        @db.Uuid
+  ticketMessage   TicketMessage @relation(fields: [ticketMessageId], references: [id], onDelete: Cascade)
+
+  emoji String @db.Text
+
+  userId      String?    @db.Uuid
+  user        User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerId  String?    @db.Uuid
+  customer    Customer?  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  delivererId String?    @db.Uuid
+  deliverer   Deliverer? @relation(fields: [delivererId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([ticketMessageId, userId])
+  @@unique([ticketMessageId, customerId])
+  @@unique([ticketMessageId, delivererId])
+  @@index([ticketMessageId])
 }
 
 // ---------- Tickets (support) ----------
@@ -953,6 +1018,8 @@ model TicketMessage {
 
   isRead   Boolean @default(false) // Si le message a été lu
   internal Boolean @default(false) // Si le message est pour usage interne
+
+  reactions TicketMessageReaction[]
 
   @@index([ticketId, createdAt])
   @@index([authorUserId])
@@ -1671,6 +1738,8 @@ model User {
   TicketParticipant   TicketParticipant[]
   Message             Message[]           @relation("MessageAuthorUser")
   ConversationUser    ConversationUser[]
+  MessageReaction       MessageReaction[]
+  TicketMessageReaction TicketMessageReaction[]
   TicketThread        TicketThread[]      @relation("TicketAssignee")
   Voucher             Voucher[]
   TicketUserSkill     TicketUserSkill[]   @relation("CategoryAgents")

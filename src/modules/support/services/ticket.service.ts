@@ -247,6 +247,22 @@ export class TicketService {
     };
   }
 
+  /**
+   * Même jeu d'inclusions que pour le personnel, MOINS les notes internes.
+   *
+   * `includeFields` embarque les cinquante derniers messages du ticket. Servi
+   * tel quel au client, il lui livrait les notes que les agents s'écrivent
+   * entre eux. On dérive donc une variante pour ce public plutôt que de
+   * toucher à l'original, dont le personnel a besoin entier.
+   */
+  private get includeFieldsClient(): Prisma.TicketThreadInclude {
+    const messages = this.includeFields.messages as Prisma.TicketThread$messagesArgs;
+    return {
+      ...this.includeFields,
+      messages: { ...messages, where: { internal: false } },
+    };
+  }
+
   async getCustomerTickets(customerId: string, filter: QueryTicketsDto): Promise<QueryResponseDto<ResponseTicketDto>> {
     const { page = 1, limit = 10 } = filter;
     const where = this.buildWhereClause(filter, { customerId });
@@ -254,7 +270,8 @@ export class TicketService {
     const [tickets, total] = await Promise.all([
       this.prisma.ticketThread.findMany({
         where,
-        include: this.includeFields,
+        // Variante CLIENT : sans les notes internes du personnel.
+        include: this.includeFieldsClient,
         orderBy: { updatedAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,

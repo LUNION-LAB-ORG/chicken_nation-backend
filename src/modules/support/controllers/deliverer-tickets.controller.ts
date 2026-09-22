@@ -79,7 +79,8 @@ export class DelivererTicketsController {
     ) {
         // Garde : vérifie l'appartenance via getTicketDetail (qui throw 403 sinon)
         await this.ticketsService.getTicketDetail(id, deliverer.id);
-        return this.messageService.getMessagesByTicketId(id, filter);
+        // Livreur : jamais les notes internes du personnel.
+        return this.messageService.getMessagesByTicketId(id, filter, false);
     }
 
     @ApiOperation({ summary: 'Envoyer un message dans un de mes tickets' })

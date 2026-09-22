@@ -39,6 +39,9 @@ export class DelivererTicketsService {
             select: { id: true, fullname: true, image: true, role: true },
         },
         messages: {
+            // ⚠️ Le livreur ne voit PAS les notes internes du personnel : ce
+            // fil est le sien, pas la main courante du support.
+            where: { internal: false },
             orderBy: { createdAt: 'desc' },
             take: 5,
             include: {
