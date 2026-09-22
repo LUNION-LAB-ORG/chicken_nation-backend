@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import { agregerReactions } from 'src/common/constantes/emojis-reaction';
 import { ResponseTicketDto } from '../dtos/response-ticket.dto';
 import { ResponseTicketMessageDto } from '../dtos/response-ticket-message.dto';
 
@@ -40,6 +41,51 @@ export class SupportWebSocketService {
 
     if (ticket.order?.restaurantId) {
       this.appGateway.emitToRestaurant(ticket.order.restaurantId, 'update:ticket', ticket);
+    }
+  }
+
+  /**
+   * Les réactions d'un message de ticket ont changé.
+   *
+   * ⚠️ Diffusion NOMINATIVE, contrairement aux autres évènements de ce service.
+   * Deux raisons. `mine` dépend de qui regarde : une charge unique afficherait
+   * « j'ai réagi » chez tout le monde dès qu'une seule personne l'a fait. Et la
+   * salle `restaurant_<id>` utilisée ailleurs ici contient AUSSI les livreurs :
+   * y publier les réactions d'un message interne les leur livrerait.
+   *
+   * Le backoffice, lui, reçoit l'évènement globalement : il n'affiche jamais
+   * « ma » réaction sur un fil de ticket qu'il ne fait que superviser, et c'est
+   * ainsi que tous les autres évènements de tickets lui parviennent.
+   */
+  emitReactionsChanged(
+    ticketId: string,
+    messageId: string,
+    reactions: { emoji: string; userId?: string | null; customerId?: string | null; delivererId?: string | null }[],
+  ) {
+    const charge = (pourQui: string | null) => ({
+      ticketId,
+      messageId,
+      reactions: agregerReactions(reactions, pourQui),
+    });
+
+    this.appGateway.emitToBackoffice('ticket_message:reactions', charge(null));
+
+    // Chaque personne ayant réagi reçoit SA vue : c'est elle qui a besoin de
+    // voir sa propre pastille allumée.
+    const vus = new Set<string>();
+    for (const r of reactions) {
+      if (r.userId && !vus.has(r.userId)) {
+        vus.add(r.userId);
+        this.appGateway.emitToUser(r.userId, 'user', 'ticket_message:reactions', charge(r.userId));
+      }
+      if (r.customerId && !vus.has(r.customerId)) {
+        vus.add(r.customerId);
+        this.appGateway.emitToUser(r.customerId, 'customer', 'ticket_message:reactions', charge(r.customerId));
+      }
+      if (r.delivererId && !vus.has(r.delivererId)) {
+        vus.add(r.delivererId);
+        this.appGateway.emitToUser(r.delivererId, 'deliverer', 'ticket_message:reactions', charge(r.delivererId));
+      }
     }
   }
 

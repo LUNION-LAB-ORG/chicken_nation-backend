@@ -1,6 +1,12 @@
 import { ApiProperty } from "@nestjs/swagger";
 
 export class ResponseTicketMessageDto {
+  /**
+   * Réactions déjà AGRÉGÉES : un emoji, son compte, et « l'ai-je posé ».
+   * Champ optionnel : les consommateurs qui l'ignorent ne voient rien changer.
+   */
+  reactions?: { emoji: string; count: number; mine: boolean }[];
+
     @ApiProperty()
     id: string;
 

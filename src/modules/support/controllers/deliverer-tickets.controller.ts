@@ -8,6 +8,7 @@ import {
     Post,
     Query,
     UseGuards,
+  Put,
 } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Deliverer } from '@prisma/client';
@@ -18,6 +19,7 @@ import { FilterQueryDto } from 'src/common/dto/filter-query.dto';
 
 import { CreateDelivererTicketDto } from '../dtos/create-deliverer-ticket.dto';
 import { CreateTicketMessageDto } from '../dtos/create-ticket-message.dto';
+import { BasculerReactionDto } from '../../messagerie/dto/reaction.dto';
 import { QueryTicketsDto } from '../dtos/query-tickets.dto';
 import { DelivererTicketsService } from '../services/deliverer-tickets.service';
 import { TicketMessageService } from '../services/message.service';
@@ -80,7 +82,7 @@ export class DelivererTicketsController {
         // Garde : vérifie l'appartenance via getTicketDetail (qui throw 403 sinon)
         await this.ticketsService.getTicketDetail(id, deliverer.id);
         // Livreur : jamais les notes internes du personnel.
-        return this.messageService.getMessagesByTicketId(id, filter, false);
+        return this.messageService.getMessagesByTicketId(id, filter, false, deliverer.id);
     }
 
     @ApiOperation({ summary: 'Envoyer un message dans un de mes tickets' })
@@ -127,5 +129,31 @@ export class DelivererTicketsController {
         @Param('id', new ParseUUIDPipe()) id: string,
     ) {
         return this.ticketsService.closeMyTicket(id, deliverer.id);
+    }
+
+    /**
+     * RÉACTION à un message, côté LIVREUR.
+     *
+     * L'appartenance au ticket passe par `getTicketDetail`, qui lève 403 si le
+     * ticket n'est pas le sien. Le service refuse ensuite de lui-même toute
+     * réaction sur un message interne : le livreur ne le voit pas, il ne doit
+     * pas pouvoir y réagir en connaissant son identifiant.
+     */
+    @Put(':id/messages/:messageId/reactions')
+    @ApiOperation({ summary: 'Réagir à un message dans un de mes tickets' })
+    @ApiBody({ type: BasculerReactionDto })
+    async basculerReaction(
+        @CurrentDeliverer() deliverer: Deliverer,
+        @Param('id', new ParseUUIDPipe()) id: string,
+        @Param('messageId', new ParseUUIDPipe()) messageId: string,
+        @Body() dto: BasculerReactionDto,
+    ) {
+        await this.ticketsService.getTicketDetail(id, deliverer.id);
+        return this.messageService.basculerReaction({
+            ticketId: id,
+            messageId,
+            emoji: dto.emoji,
+            delivererId: deliverer.id,
+        });
     }
 }

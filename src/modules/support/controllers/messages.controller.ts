@@ -1,4 +1,4 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { TicketMessageService } from '../services/message.service';
 import { FilterQueryDto } from 'src/common/dto/filter-query.dto';
@@ -7,7 +7,8 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import type { Request } from 'express';
 import { Customer, User } from '@prisma/client';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { BasculerReactionDto } from '../../messagerie/dto/reaction.dto';
 
 @ApiTags('Support - Messages')
 @Controller('tickets/:ticketId/messages')
@@ -19,9 +20,9 @@ export class MessagesController {
 
     @UseGuards(JwtAuthGuard)
     @Get()
-    async getMessagesByTicketId(@Param('ticketId') ticketId: string, @Query() filter: FilterQueryDto) {
+    async getMessagesByTicketId(@Req() req: Request, @Param('ticketId') ticketId: string, @Query() filter: FilterQueryDto) {
         // Personnel : les notes internes lui sont destinées.
-        return this.messageService.getMessagesByTicketId(ticketId, filter, true);
+        return this.messageService.getMessagesByTicketId(ticketId, filter, true, (req.user as User)?.id);
     }
 
     /**
@@ -34,7 +35,7 @@ export class MessagesController {
     async getCustomerMessagesByTicketId(@Req() req: Request, @Param('ticketId') ticketId: string, @Query() filter: FilterQueryDto) {
         await this.assertTicketDuClient(req, ticketId);
         // Client : jamais les notes internes du personnel.
-        return this.messageService.getMessagesByTicketId(ticketId, filter, false);
+        return this.messageService.getMessagesByTicketId(ticketId, filter, false, (req.user as Customer)?.id);
     }
 
     /**
@@ -85,6 +86,50 @@ export class MessagesController {
      * « Introuvable » plutôt qu'« interdit », pour ne pas confirmer l'existence
      * d'un identifiant à qui l'énumère.
      */
+    /**
+     * RÉACTION à un message de ticket, côté PERSONNEL.
+     *
+     * `PUT` : l'opération décrit un état voulu, « ma réaction est celle-ci »,
+     * et rejouer la requête ne crée jamais de seconde réaction.
+     */
+    @UseGuards(JwtAuthGuard)
+    @Put(':messageId/reactions')
+    @ApiOperation({ summary: 'Réagir à un message de ticket (personnel)' })
+    @ApiBody({ type: BasculerReactionDto })
+    async basculerReaction(
+        @Req() req: Request,
+        @Param('ticketId') ticketId: string,
+        @Param('messageId') messageId: string,
+        @Body() dto: BasculerReactionDto,
+    ) {
+        return this.messageService.basculerReaction({
+            ticketId,
+            messageId,
+            emoji: dto.emoji,
+            userId: (req.user as User).id,
+        });
+    }
+
+    /** Même opération, côté CLIENT, derrière le contrôle d'appartenance. */
+    @UseGuards(JwtCustomerAuthGuard)
+    @Put(':messageId/reactions/customer')
+    @ApiOperation({ summary: 'Réagir à un message de ticket (client)' })
+    @ApiBody({ type: BasculerReactionDto })
+    async basculerReactionClient(
+        @Req() req: Request,
+        @Param('ticketId') ticketId: string,
+        @Param('messageId') messageId: string,
+        @Body() dto: BasculerReactionDto,
+    ) {
+        await this.assertTicketDuClient(req, ticketId);
+        return this.messageService.basculerReaction({
+            ticketId,
+            messageId,
+            emoji: dto.emoji,
+            customerId: (req.user as Customer).id,
+        });
+    }
+
     private async assertTicketDuClient(req: Request, ticketId: string) {
         const ticket = await this.prisma.ticketThread.findUnique({
             where: { id: ticketId },

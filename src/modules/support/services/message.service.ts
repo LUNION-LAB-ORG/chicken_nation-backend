@@ -1,7 +1,13 @@
-import { HttpException, Injectable, Logger } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CreateTicketMessageDto } from '../dtos/create-ticket-message.dto';
 import { Prisma } from '@prisma/client';
+import {
+  agregerReactions,
+  estEmojiAutorise,
+  EMOJIS_REACTION,
+  type ReactionAgregee,
+} from 'src/common/constantes/emojis-reaction';
 import { ResponseTicketMessageDto } from '../dtos/response-ticket-message.dto';
 import { FilterQueryDto } from 'src/common/dto/filter-query.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
@@ -18,6 +24,8 @@ export class TicketMessageService {
     ) { }
 
     private MessageInclude: Prisma.TicketMessageInclude = {
+        // Réactions : agrégées au mapping, jamais renvoyées nominativement.
+        reactions: { select: { emoji: true, userId: true, customerId: true, delivererId: true } },
         authorCustomer: {
             select: {
                 id: true,
@@ -132,7 +140,7 @@ export class TicketMessageService {
      * aurait laissé le prochain appelant hériter du trou en silence : ici,
      * chacun doit dire pour qui il lit.
      */
-    async getMessagesByTicketId(ticketId: string, filter: FilterQueryDto, inclureInternes: boolean): Promise<QueryResponseDto<ResponseTicketMessageDto>> {
+    async getMessagesByTicketId(ticketId: string, filter: FilterQueryDto, inclureInternes: boolean, monId?: string | null): Promise<QueryResponseDto<ResponseTicketMessageDto>> {
         const { page = 1, limit = 10 } = filter;
         const where: Prisma.TicketMessageWhereInput = {
             ticketId,
@@ -156,7 +164,9 @@ export class TicketMessageService {
         }
 
         return {
-            data: messages.map(msg => this.mapMessageToDto(msg)),
+            // `mine` dépend du lecteur : sans lui, aucune pastille n'apparaîtrait
+            // comme étant la sienne.
+            data: messages.map(msg => this.mapMessageToDto(msg, monId ?? null)),
             meta: {
                 total,
                 page,
@@ -246,7 +256,8 @@ export class TicketMessageService {
         });
     }
 
-    private mapMessageToDto(message: any): ResponseTicketMessageDto {
+    /** `monId` : qui lit. `mine` dépend du lecteur, pas du message. */
+    private mapMessageToDto(message: any, monId?: string | null): ResponseTicketMessageDto {
         return {
             id: message.id,
             body: message.body,
@@ -268,7 +279,97 @@ export class TicketMessageService {
             ticket: message.ticket,
             isRead: message.isRead,
             internal: message.internal,
+            reactions: agregerReactions(message.reactions, monId ?? null),
         };
+    }
+
+    // ───────────────────────── Réactions ─────────────────────────
+
+    /**
+     * Pose, remplace ou retire une réaction sur un message de TICKET.
+     *
+     * Trois publics peuvent réagir, et chacun a sa porte d'entrée : le
+     * personnel, le client demandeur, le livreur demandeur. Le contrôle
+     * d'appartenance au ticket est fait par l'appelant, qui seul sait de quel
+     * garde il vient ; ici on vérifie ce que lui ne peut pas voir : que le
+     * message appartient bien au ticket cité, et qu'un message INTERNE reste
+     * hors de portée de qui n'est pas du personnel.
+     */
+    async basculerReaction(params: {
+        ticketId: string;
+        messageId: string;
+        emoji: string;
+        /** Exactement un des trois. */
+        userId?: string | null;
+        customerId?: string | null;
+        delivererId?: string | null;
+    }): Promise<{ messageId: string; reactions: ReactionAgregee[] }> {
+        const { ticketId, messageId, emoji } = params;
+
+        if (!estEmojiAutorise(emoji)) {
+            throw new HttpException(
+                `Réaction non reconnue. Valeurs acceptées : ${EMOJIS_REACTION.join(' ')}`,
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
+        /**
+         * Le message est recoupé avec le ticket de l'URL. Sans ce contrôle,
+         * connaître un seul identifiant de message suffirait à réagir dans le
+         * fil de n'importe quel ticket, le garde d'appartenance ne portant que
+         * sur le ticket.
+         */
+        const message = await this.prisma.ticketMessage.findFirst({
+            where: { id: messageId, ticketId },
+            select: { id: true, internal: true },
+        });
+        if (!message) {
+            throw new HttpException('Message introuvable', HttpStatus.NOT_FOUND);
+        }
+
+        const estPersonnel = !!params.userId;
+        if (message.internal && !estPersonnel) {
+            // Un client ou un livreur ne VOIT pas les notes internes : il ne
+            // doit pas pouvoir y réagir en connaissant leur identifiant.
+            throw new HttpException('Message introuvable', HttpStatus.NOT_FOUND);
+        }
+
+        const qui = params.userId
+            ? { userId: params.userId }
+            : params.customerId
+                ? { customerId: params.customerId }
+                : { delivererId: params.delivererId! };
+        const monId = params.userId ?? params.customerId ?? params.delivererId ?? null;
+
+        await this.prisma.$transaction(async (tx) => {
+            const existante = await tx.ticketMessageReaction.findFirst({
+                where: { ticketMessageId: messageId, ...qui },
+                select: { id: true, emoji: true },
+            });
+
+            if (!existante) {
+                await tx.ticketMessageReaction.create({
+                    data: { ticketMessageId: messageId, emoji, ...qui },
+                });
+            } else if (existante.emoji === emoji) {
+                // Reposer le même emoji le retire.
+                await tx.ticketMessageReaction.delete({ where: { id: existante.id } });
+            } else {
+                await tx.ticketMessageReaction.update({
+                    where: { id: existante.id },
+                    data: { emoji },
+                });
+            }
+        });
+
+        const fraiches = await this.prisma.ticketMessageReaction.findMany({
+            where: { ticketMessageId: messageId },
+            select: { emoji: true, userId: true, customerId: true, delivererId: true },
+        });
+
+        this.supportWebSocketService.emitReactionsChanged(ticketId, messageId, fraiches);
+
+        return { messageId, reactions: agregerReactions(fraiches, monId) };
     }
 }
 
