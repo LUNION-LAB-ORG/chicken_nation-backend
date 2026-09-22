@@ -1,7 +1,9 @@
 import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { AuditService } from 'src/modules/audit/audit.service';
 import { CreateTicketMessageDto } from '../dtos/create-ticket-message.dto';
 import { Prisma } from '@prisma/client';
+import { CORPS_MESSAGE_SUPPRIME } from 'src/common/constantes/message-supprime';
 import {
   agregerReactions,
   estEmojiAutorise,
@@ -21,6 +23,7 @@ export class TicketMessageService {
         private readonly prisma: PrismaService,
         private readonly supportWebSocketService: SupportWebSocketService,
         private readonly expoPushService: ExpoPushService,
+        private readonly auditService: AuditService,
     ) { }
 
     private MessageInclude: Prisma.TicketMessageInclude = {
@@ -258,9 +261,19 @@ export class TicketMessageService {
 
     /** `monId` : qui lit. `mine` dépend du lecteur, pas du message. */
     private mapMessageToDto(message: any, monId?: string | null): ResponseTicketMessageDto {
+        /**
+         * MESSAGE RETIRÉ : le corps est remplacé et la pièce jointe s'en va
+         * avec, une photo vivant dans `meta` sous forme de lien — la laisser
+         * reviendrait à ne rien supprimer. Les réactions partent aussi, des
+         * pastilles accrochées à un contenu disparu n'ayant plus de sens.
+         */
+        const supprime = !!message.deletedAt;
+
         return {
             id: message.id,
-            body: message.body,
+            body: supprime ? CORPS_MESSAGE_SUPPRIME : message.body,
+            deleted: supprime,
+            deletedAt: message.deletedAt ?? null,
             createdAt: message.createdAt,
             updatedAt: message.updatedAt,
             authorUser: message.authorUser ? {
@@ -279,8 +292,88 @@ export class TicketMessageService {
             ticket: message.ticket,
             isRead: message.isRead,
             internal: message.internal,
-            reactions: agregerReactions(message.reactions, monId ?? null),
+            reactions: supprime ? [] : agregerReactions(message.reactions, monId ?? null),
         };
+    }
+
+    // ───────────────────────── Suppression ─────────────────────────
+
+    /**
+     * Retire un message de ticket envoyé par erreur.
+     *
+     * Suppression DOUCE : la ligne reste, son contenu cesse d'être servi. Un
+     * ticket de support est une pièce à conviction quand un litige remonte.
+     *
+     * Son propre message toujours ; n'importe quel message DU PERSONNEL si
+     * l'on est administrateur ; jamais celui d'un client ni d'un livreur,
+     * retirer leurs mots reviendrait à réécrire ce qu'ils ont dit.
+     */
+    async supprimerMessage(params: {
+        ticketId: string;
+        messageId: string;
+        userId: string;
+        estAdmin: boolean;
+        nom?: string | null;
+        role?: string | null;
+    }): Promise<ResponseTicketMessageDto> {
+        const { ticketId, messageId, userId, estAdmin } = params;
+
+        const message = await this.prisma.ticketMessage.findFirst({
+            where: { id: messageId, ticketId },
+            select: { id: true, authorUserId: true, deletedAt: true },
+        });
+        if (!message) {
+            throw new HttpException('Message introuvable', HttpStatus.NOT_FOUND);
+        }
+
+        if (!message.authorUserId) {
+            throw new HttpException(
+                "Seuls les messages du personnel peuvent être retirés : on ne réécrit pas les mots d'un client ou d'un livreur.",
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
+        if (message.authorUserId !== userId && !estAdmin) {
+            throw new HttpException(
+                'Vous ne pouvez retirer que vos propres messages.',
+                HttpStatus.BAD_REQUEST,
+            );
+        }
+
+        // Déjà retiré : rien à faire, et surtout pas d'erreur. Deux clics ou
+        // deux écrans ouverts ne doivent pas produire d'échec.
+        if (!message.deletedAt) {
+            await this.prisma.ticketMessage.update({
+                where: { id: messageId },
+                data: { deletedAt: new Date(), deletedById: userId },
+            });
+
+            // Tracé : retirer un message doit pouvoir s'expliquer trois mois
+            // plus tard, avec qui, quand et dans quel ticket.
+            this.auditService.record({
+                actor_id: userId,
+                actor_name: params.nom ?? null,
+                actor_role: params.role ?? null,
+                action: 'DELETE',
+                module: 'tickets',
+                entity_id: messageId,
+                method: 'DELETE',
+                path: `/tickets/${ticketId}/messages/${messageId}`,
+                status_code: 200,
+                summary: `Message de ticket retiré${message.authorUserId !== userId ? ' (écrit par un collègue)' : ''}`,
+                metadata: { ticketId, messageId, auteur: message.authorUserId },
+            });
+        }
+
+        const frais = await this.prisma.ticketMessage.findUnique({
+            where: { id: messageId },
+            include: this.MessageInclude,
+        });
+        const mappe = this.mapMessageToDto(frais, userId);
+
+        this.supportWebSocketService.emitTicketMessageSupprime(ticketId, mappe);
+
+        return mappe;
     }
 
     // ───────────────────────── Réactions ─────────────────────────

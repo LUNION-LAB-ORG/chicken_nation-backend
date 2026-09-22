@@ -57,6 +57,16 @@ export class SupportWebSocketService {
    * « ma » réaction sur un fil de ticket qu'il ne fait que superviser, et c'est
    * ainsi que tous les autres évènements de tickets lui parviennent.
    */
+  /**
+   * Un message de ticket a été RETIRÉ.
+   *
+   * On diffuse le message DÉJÀ nettoyé par le serveur : aucun client n'a à
+   * décider quoi masquer, et celui qui l'aurait en cache le remplace tel quel.
+   */
+  emitTicketMessageSupprime(ticketId: string, message: unknown) {
+    this.appGateway.emitToBackoffice('ticket_message:supprime', { ticketId, message });
+  }
+
   emitReactionsChanged(
     ticketId: string,
     messageId: string,

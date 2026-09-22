@@ -6,7 +6,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { Customer, User } from '@prisma/client';
+import { Customer, User, UserRole } from '@prisma/client';
 import type { Request } from 'express';
 import { QueryResponseDto } from '../../../common/dto/query-response.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -14,6 +14,7 @@ import { CreateMessageDto } from '../dto/createMessageDto';
 import { QueryMessagesDto } from '../dto/query-messages.dto';
 import { ResponseMessageDto } from '../dto/response-message.dto';
 import { getAuthType } from '../utils/getTypeUser';
+import { CORPS_MESSAGE_SUPPRIME } from 'src/common/constantes/message-supprime';
 import {
   agregerReactions,
   estEmojiAutorise,
@@ -30,6 +31,7 @@ import { ConversationsService } from './conversations.service';
 import { S3Service } from '../../../s3/s3.service';
 import { ExpoPushService } from '../../../expo-push/expo-push.service';
 import { NotificationsSenderService } from '../../notifications/services/notifications-sender.service';
+import { AuditService } from 'src/modules/audit/audit.service';
 
 @Injectable()
 export class MessageService {
@@ -50,6 +52,7 @@ export class MessageService {
     private readonly s3service: S3Service,
     private readonly expoPushService: ExpoPushService,
     private readonly notificationsSenderService: NotificationsSenderService,
+    private readonly auditService: AuditService,
   ) { }
 
   /**
@@ -668,16 +671,35 @@ export class MessageService {
     if (this.isDev) {
       this.logger.debug(`Mapping du message: ${JSON.stringify(message)}`);
     }
+
+    /**
+     * MESSAGE SUPPRIMÉ : on remplace ce qui est servi, ici et nulle part
+     * ailleurs.
+     *
+     * Le texte remplace le corps plutôt que de le vider : une bulle vide
+     * ressemblerait à un défaut d'affichage, et les applications déjà
+     * installées ignorent le drapeau `deleted`. En remplaçant côté serveur,
+     * elles affichent la bonne chose sans mise à jour.
+     *
+     * ⚠️ `meta` part AUSSI : une photo ou une note vocale y vit sous forme de
+     * lien, le laisser reviendrait à ne rien supprimer. Les réactions
+     * disparaissent également, des pastilles accrochées à un contenu qui
+     * n'existe plus n'ayant plus de sens.
+     */
+    const supprime = !!message.deletedAt;
+
     return {
       id: message.id,
-      reactions: agregerReactions(message.reactions, monId ?? null),
+      deleted: supprime,
+      deletedAt: message.deletedAt ?? null,
+      reactions: supprime ? [] : agregerReactions(message.reactions, monId ?? null),
       conversation: {
         id: message.conversationId,
         restaurantId: message.conversation?.restaurantId,
         customerId: message.conversation?.customerId,
       },
-      meta: message.meta || {},
-      body: message.body,
+      meta: supprime ? null : (message.meta || {}),
+      body: supprime ? CORPS_MESSAGE_SUPPRIME : message.body,
       isRead: message.isRead,
       // Heure de lecture, pour l'accusé affiché sous la bulle.
       readAt: message.readAt ?? null,
@@ -704,6 +726,135 @@ export class MessageService {
         }
         : null,
     };
+  }
+
+  // ───────────────────────── Suppression ─────────────────────────
+
+  /**
+   * Retire un message envoyé par erreur.
+   *
+   * Suppression DOUCE : la ligne reste, son contenu cesse d'être servi. Un fil
+   * de support est une pièce à conviction quand un litige remonte, et effacer
+   * vraiment la ligne ferait disparaître jusqu'au fait qu'un message a existé.
+   *
+   * Qui peut retirer quoi :
+   *  - SON PROPRE message, toujours. C'est le cas d'usage : on s'est trompé.
+   *  - N'importe quel message DU PERSONNEL si l'on est administrateur, pour
+   *    rattraper la bévue d'un collègue parti en tournée.
+   *  - JAMAIS le message d'un client. Retirer ses mots reviendrait à réécrire
+   *    ce qu'il a dit, ce qui n'est pas une correction mais une falsification.
+   */
+  async supprimerMessage(
+    req: Request,
+    conversationId: string,
+    messageId: string,
+  ): Promise<ResponseMessageDto> {
+    const auth = req.user!;
+    if (getAuthType(auth) !== 'user') {
+      throw new NotFoundException('Message introuvable');
+    }
+    const moi = auth as User;
+
+    const message = await this.prismaService.message.findFirst({
+      where: { id: messageId, conversationId },
+      select: {
+        id: true,
+        authorUserId: true,
+        deletedAt: true,
+        conversation: {
+          select: {
+            id: true,
+            customerId: true,
+            restaurantId: true,
+            users: { select: { userId: true } },
+          },
+        },
+      },
+    });
+    if (!message) {
+      throw new NotFoundException('Message introuvable');
+    }
+
+    const conversation = message.conversation;
+
+    // Même règle d'accès que la lecture : participant, ou membre du restaurant
+    // quand il s'agit d'un échange avec un client.
+    const estParticipant = conversation.users.some((u) => u.userId === moi.id);
+    if (!estParticipant) {
+      if (!conversation.customerId) {
+        throw new NotFoundException('Message introuvable');
+      }
+      const duRestaurant = conversation.restaurantId
+        ? await this.prismaService.user.findFirst({
+            where: { id: moi.id, restaurant_id: conversation.restaurantId },
+            select: { id: true },
+          })
+        : null;
+      if (!duRestaurant) {
+        throw new NotFoundException('Message introuvable');
+      }
+    }
+
+    if (!message.authorUserId) {
+      throw new BadRequestException(
+        "Seuls les messages du personnel peuvent être retirés : on ne réécrit pas les mots d'un client.",
+      );
+    }
+
+    const estAdmin = moi.role === UserRole.ADMIN;
+    if (message.authorUserId !== moi.id && !estAdmin) {
+      throw new BadRequestException(
+        'Vous ne pouvez retirer que vos propres messages.',
+      );
+    }
+
+    // Déjà retiré : on ne fait rien et on ne se plaint pas. Deux clics ou deux
+    // écrans ouverts ne doivent pas produire d'erreur.
+    if (!message.deletedAt) {
+      await this.prismaService.message.update({
+        where: { id: messageId },
+        data: { deletedAt: new Date(), deletedById: moi.id },
+      });
+
+      /**
+       * Tracé au journal d'audit. Retirer un message est le genre d'action
+       * qu'on doit pouvoir expliquer trois mois plus tard : qui, quand, dans
+       * quelle conversation.
+       */
+      this.auditService.record({
+        actor_id: moi.id,
+        actor_name: moi.fullname ?? moi.email ?? null,
+        actor_role: moi.role ?? null,
+        restaurant_id: conversation.restaurantId ?? null,
+        action: 'DELETE',
+        module: 'messages',
+        entity_id: messageId,
+        method: 'DELETE',
+        path: `/conversations/${conversationId}/messages/${messageId}`,
+        status_code: 200,
+        summary: `Message retiré${message.authorUserId !== moi.id ? " (écrit par un collègue)" : ''}`,
+        metadata: { conversationId, messageId, auteur: message.authorUserId },
+      });
+    }
+
+    const frais = await this.prismaService.message.findUnique({
+      where: { id: messageId },
+      include: {
+        authorUser: true,
+        authorCustomer: true,
+        reactions: { select: { emoji: true, userId: true, customerId: true } },
+        conversation: { select: { customerId: true, restaurantId: true } },
+      },
+    });
+    const mappe = this.mapMessagesField(frais, moi.id);
+
+    this.messageWebSocketService.emitMessageSupprime(
+      { id: conversation.id, customerId: conversation.customerId },
+      conversation.users.map((u) => u.userId),
+      mappe,
+    );
+
+    return mappe;
   }
 
   // ───────────────────────── Réactions ─────────────────────────

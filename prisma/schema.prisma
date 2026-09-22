@@ -864,6 +864,19 @@ model Message {
   broadcastId String?           @db.Uuid
   broadcast   MessageBroadcast? @relation(fields: [broadcastId], references: [id], onDelete: SetNull)
 
+
+  /// Message SUPPRIMÉ, par son auteur ou par un administrateur.
+  ///
+  /// Suppression DOUCE, et c'est délibéré : la ligne reste, seul son contenu
+  /// cesse d'être servi. Un fil de support est une pièce à conviction quand un
+  /// litige remonte — effacer vraiment la ligne ferait disparaître le fait
+  /// qu'un message a existé, et avec lui la possibilité de savoir qui a dit
+  /// quoi. Le client voit un message retiré, la maison garde la trace.
+  deletedAt   DateTime?
+  /// Qui a supprimé. Simple identifiant, sans clé étrangère : la trace doit
+  /// survivre au départ de la personne, comme dans le journal d'audit.
+  deletedById String?   @db.Uuid
+
   reactions MessageReaction[]
 
   @@index([conversationId, createdAt])
@@ -1018,6 +1031,19 @@ model TicketMessage {
 
   isRead   Boolean @default(false) // Si le message a été lu
   internal Boolean @default(false) // Si le message est pour usage interne
+
+
+  /// Message SUPPRIMÉ, par son auteur ou par un administrateur.
+  ///
+  /// Suppression DOUCE, et c'est délibéré : la ligne reste, seul son contenu
+  /// cesse d'être servi. Un fil de support est une pièce à conviction quand un
+  /// litige remonte — effacer vraiment la ligne ferait disparaître le fait
+  /// qu'un message a existé, et avec lui la possibilité de savoir qui a dit
+  /// quoi. Le client voit un message retiré, la maison garde la trace.
+  deletedAt   DateTime?
+  /// Qui a supprimé. Simple identifiant, sans clé étrangère : la trace doit
+  /// survivre au départ de la personne, comme dans le journal d'audit.
+  deletedById String?   @db.Uuid
 
   reactions TicketMessageReaction[]
 

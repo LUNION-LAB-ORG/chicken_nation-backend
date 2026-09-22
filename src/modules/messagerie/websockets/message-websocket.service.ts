@@ -122,6 +122,35 @@ export class MessageWebSocketService {
     );
   }
 
+  /**
+   * Un message a été RETIRÉ.
+   *
+   * On renvoie le message déjà nettoyé par le serveur, corps remplacé et pièce
+   * jointe retirée : aucun client ne doit avoir à décider quoi masquer, et
+   * celui qui l'aurait encore en cache le remplace tel quel.
+   *
+   * ⚠️ Pas de diffusion vers la salle du restaurant, qui contient les
+   * livreurs. Les participants et le client sont servis nominativement.
+   */
+  emitMessageSupprime(
+    conversation: { id: string; customerId: string | null },
+    usersId: string[],
+    message: ResponseMessageDto,
+  ) {
+    const charge = { conversationId: conversation.id, message };
+
+    if (conversation.customerId) {
+      this.appGateway.emitToUser(conversation.customerId, 'customer', 'message:supprime', charge);
+    }
+
+    const vus = new Set<string>();
+    usersId.forEach((userId) => {
+      if (!userId || vus.has(userId)) return;
+      vus.add(userId);
+      this.appGateway.emitToUser(userId, 'user', 'message:supprime', charge);
+    });
+  }
+
   emitMessagesRead(
     conversation: ConversationGetPayload,
     parQui: 'user' | 'customer' = 'user',

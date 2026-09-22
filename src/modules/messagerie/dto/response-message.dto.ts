@@ -17,6 +17,13 @@ export class ResponseMessageDto {
   @ApiProperty({ required: false, type: [Object] })
   reactions?: { emoji: string; count: number; mine: boolean }[];
 
+  /** Message retiré par son auteur ou par un administrateur. */
+  @ApiProperty({ required: false })
+  deleted?: boolean;
+
+  @ApiProperty({ required: false })
+  deletedAt?: Date | null;
+
   @ApiProperty({ type: [Object] })
   conversation: {
     id: string;

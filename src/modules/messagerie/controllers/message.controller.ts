@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Logger,
   Param,
@@ -150,6 +151,30 @@ export class MessageController {
       image,
       audio,
     );
+  }
+
+  /**
+   * RETIRER un message envoyé par erreur.
+   *
+   * Suppression douce : la ligne reste en base, son contenu cesse d'être
+   * servi. Les règles fines — son propre message, ou n'importe quel message du
+   * personnel si l'on est administrateur, jamais celui d'un client — sont
+   * appliquées dans le service, seul endroit à connaître l'auteur.
+   *
+   * ⚠️ Permission `MESSAGES.CREATE` et non `DELETE` : `Modules.MESSAGES` garde
+   * aussi les catégories de tickets du support, où DELETE donnerait bien plus
+   * que ce qu'on accorde ici.
+   */
+  @Delete(':messageId')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.MESSAGES, Action.CREATE)
+  @ApiOperation({ summary: 'Retirer un message envoyé (personnel)' })
+  async supprimerMessage(
+    @Req() req: Request,
+    @Param('conversationId') conversationId: string,
+    @Param('messageId') messageId: string,
+  ) {
+    return await this.messageService.supprimerMessage(req, conversationId, messageId);
   }
 
   /**

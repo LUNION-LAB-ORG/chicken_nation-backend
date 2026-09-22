@@ -1,4 +1,4 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, NotFoundException, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { TicketMessageService } from '../services/message.service';
 import { FilterQueryDto } from 'src/common/dto/filter-query.dto';
@@ -6,7 +6,7 @@ import { CreateTicketMessageDto } from '../dtos/create-ticket-message.dto';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import type { Request } from 'express';
-import { Customer, User } from '@prisma/client';
+import { Customer, User, UserRole } from '@prisma/client';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { BasculerReactionDto } from '../../messagerie/dto/reaction.dto';
 
@@ -86,6 +86,33 @@ export class MessagesController {
      * « Introuvable » plutôt qu'« interdit », pour ne pas confirmer l'existence
      * d'un identifiant à qui l'énumère.
      */
+    /**
+     * RETIRER un message de ticket envoyé par erreur.
+     *
+     * Suppression douce : la ligne reste, son contenu cesse d'être servi. Les
+     * règles fines — son propre message, ou celui d'un collègue si l'on est
+     * administrateur, jamais celui d'un client ni d'un livreur — vivent dans
+     * le service, seul endroit à connaître l'auteur.
+     */
+    @UseGuards(JwtAuthGuard)
+    @Delete(':messageId')
+    @ApiOperation({ summary: 'Retirer un message de ticket (personnel)' })
+    async supprimerMessage(
+        @Req() req: Request,
+        @Param('ticketId') ticketId: string,
+        @Param('messageId') messageId: string,
+    ) {
+        const moi = req.user as User;
+        return this.messageService.supprimerMessage({
+            ticketId,
+            messageId,
+            userId: moi.id,
+            estAdmin: moi.role === UserRole.ADMIN,
+            nom: moi.fullname ?? moi.email ?? null,
+            role: moi.role ?? null,
+        });
+    }
+
     /**
      * RÉACTION à un message de ticket, côté PERSONNEL.
      *

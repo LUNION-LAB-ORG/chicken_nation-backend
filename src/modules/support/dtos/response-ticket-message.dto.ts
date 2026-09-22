@@ -7,6 +7,10 @@ export class ResponseTicketMessageDto {
    */
   reactions?: { emoji: string; count: number; mine: boolean }[];
 
+  /** Message retiré par son auteur ou par un administrateur. */
+  deleted?: boolean;
+  deletedAt?: Date | null;
+
     @ApiProperty()
     id: string;
 
