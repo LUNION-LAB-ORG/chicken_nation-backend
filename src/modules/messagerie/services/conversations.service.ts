@@ -10,7 +10,7 @@ import type { Request } from 'express';
 import { QueryConversationsDto } from '../dto/query-conversations.dto';
 import { QueryResponseDto } from '../../../common/dto/query-response.dto';
 import { ResponseConversationsDto } from '../dto/response-conversations.dto';
-import { Customer, Prisma, User, UserRole, UserType } from '@prisma/client';
+import { Customer, EntityStatus, Prisma, User, UserRole, UserType } from '@prisma/client';
 import { CreateConversationDto } from '../dto/create-conversation.dto';
 import { getAuthType } from '../utils/getTypeUser';
 import { ConversationWebsocketsService } from '../websockets/conversation-websockets.service';
@@ -297,10 +297,14 @@ export class ConversationsService {
         select: { id: true },
       });
       if (existants.length !== destinataires.length) {
-        throw new NotFoundException(
+        // 400 et non 404 : le client ne conserve le message du serveur que sur
+        // les 400, un 404 deviendrait « Ressource non trouvée » et n'apprendrait
+        // rien à qui vient de choisir un collègue d'un autre restaurant.
+        throw new HttpException(
           bornerAuRestaurant
-            ? "Un des destinataires n'existe pas ou n'appartient pas à votre restaurant"
-            : "Un des destinataires n'existe pas",
+            ? "Un des destinataires n'existe pas ou n'appartient pas à votre restaurant."
+            : "Un des destinataires n'existe pas.",
+          HttpStatus.BAD_REQUEST,
         );
       }
 
@@ -568,15 +572,20 @@ export class ConversationsService {
     const existants = await this.prisma.user.findMany({
       where: {
         id: { in: aAjouter },
+        // Un compte désactivé n'a rien à faire dans un groupe : il n'y lira
+        // rien et occupe une place dans la liste des membres.
+        entity_status: EntityStatus.ACTIVE,
         ...(bornerAuRestaurant ? { restaurant_id: moi.restaurant_id } : {}),
       },
       select: { id: true },
     });
     if (existants.length !== aAjouter.length) {
-      throw new NotFoundException(
+      // Voir plus haut : seul un 400 laisse passer l'explication jusqu'à l'écran.
+      throw new HttpException(
         bornerAuRestaurant
-          ? "Une des personnes n'existe pas ou n'appartient pas à votre restaurant"
-          : "Une des personnes n'existe pas",
+          ? "Une des personnes n'existe pas ou n'appartient pas à votre restaurant."
+          : "Une des personnes n'existe pas.",
+        HttpStatus.BAD_REQUEST,
       );
     }
 
@@ -616,7 +625,10 @@ export class ConversationsService {
     );
 
     if (!membres.includes(userId)) {
-      throw new NotFoundException('Cette personne ne fait pas partie du groupe.');
+      throw new HttpException(
+        'Cette personne ne fait pas partie du groupe.',
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     /**
