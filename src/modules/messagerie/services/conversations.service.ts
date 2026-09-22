@@ -372,6 +372,9 @@ export class ConversationsService {
           restaurantId,
           customerId: customerIdToUse, // null si interne
           subject: subject,
+          // Décidé ICI, une fois pour toutes : un groupe le reste, quels que
+          // soient les départs. Voir le commentaire du champ dans le schéma.
+          isGroup: estGroupe,
           messages: {
             create: {
               body: seed_message,
@@ -420,6 +423,268 @@ export class ConversationsService {
     }
 
     return mappedConversation;
+  }
+
+  // ─────────────────── Gestion d'un groupe interne ───────────────────
+
+  /**
+   * Charge un GROUPE et vérifie que l'appelant a le droit d'y toucher.
+   *
+   * Les trois opérations de gestion partagent exactement les mêmes gardes, et
+   * les avoir en un seul endroit évite qu'une des trois prenne du retard sur
+   * les autres. Toutes répondent « introuvable » plutôt qu'« interdit » quand
+   * l'appelant n'est pas membre : confirmer l'existence d'un groupe privé à qui
+   * n'en fait pas partie est déjà une fuite.
+   */
+  private async chargerGroupePourGestion(
+    auth: NonNullable<Request['user']>,
+    conversationId: string,
+    exigerRoleDeGestion: boolean,
+  ) {
+    if (getAuthType(auth) !== 'user') {
+      throw new NotFoundException('Conversation introuvable');
+    }
+    const moi = auth as User;
+
+    const conversation = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: {
+        id: true,
+        customerId: true,
+        restaurantId: true,
+        subject: true,
+        isGroup: true,
+        users: { select: { userId: true } },
+      },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException('Conversation introuvable');
+    }
+
+    /**
+     * Réservé aux conversations INTERNES. Une conversation avec un client est
+     * une boîte partagée du service client : sa composition suit d'autres
+     * règles, et on n'y « retire » personne.
+     */
+    if (conversation.customerId) {
+      throw new HttpException(
+        "La composition d'une conversation avec un client ne se gère pas ici.",
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const membres = conversation.users.map((u) => u.userId);
+    /**
+     * ⚠️ L'appartenance se vérifie AVANT tout le reste.
+     *
+     * Répondre « ce n'est pas un groupe » à qui n'est pas membre lui
+     * apprendrait déjà quelque chose sur une conversation qui ne le regarde
+     * pas. On ne distingue donc jamais « n'existe pas » de « pas pour vous ».
+     */
+    if (!membres.includes(moi.id)) {
+      throw new NotFoundException('Conversation introuvable');
+    }
+
+    /**
+     * ⚠️ Réservé à un vrai GROUPE.
+     *
+     * Sans ce contrôle, on pouvait faire entrer un tiers dans un tête-à-tête,
+     * qui héritait alors de tout l'historique privé des deux autres. Et le
+     * renommer cassait sa déduplication, la recherche d'une conversation
+     * existante portant aussi sur son intitulé.
+     */
+    const estUnGroupe =
+      conversation.isGroup || conversation.users.length > 2;
+    if (!estUnGroupe) {
+      throw new HttpException(
+        "Cette conversation n'est pas un groupe : sa composition ne se modifie pas.",
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (exigerRoleDeGestion && !ROLES_CREATION_GROUPE.includes(moi.role)) {
+      throw new HttpException(
+        'Seuls les administrateurs et les gestionnaires peuvent modifier la composition d\'un groupe.',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    return { conversation, membres, moi };
+  }
+
+  /** Recharge le groupe sous sa forme de réponse, et prévient tout le monde. */
+  private async renvoyerEtNotifier(conversationId: string, aPrevenir: string[]) {
+    const frais = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: this.createConversationInclude({ messageTake: 50 }),
+    });
+    if (!frais) throw new NotFoundException('Conversation introuvable');
+
+    /**
+     * `unreadNumber` à 0 dans la charge diffusée : ce compteur est PROPRE à
+     * chaque destinataire, une valeur unique serait fausse pour presque tous.
+     * Les écrans rafraîchissent leur compte à réception, comme ils le font
+     * déjà à la création d'une conversation.
+     */
+    const reponse = this.mapConversationField(frais, 0);
+    this.conversationWebsockets.emitParticipantsChanged(aPrevenir, reponse);
+    return reponse;
+  }
+
+  /**
+   * Ajoute des collègues à un groupe existant.
+   *
+   * Les nouveaux arrivent avec une date de lecture posée à MAINTENANT : ils
+   * voient tout l'historique, mais n'héritent pas d'une pastille comptant des
+   * mois de messages écrits avant leur arrivée.
+   */
+  async ajouterParticipants(
+    req: Request,
+    conversationId: string,
+    userIds: string[],
+  ): Promise<ResponseConversationsDto> {
+    const { conversation, membres, moi } = await this.chargerGroupePourGestion(
+      req.user!,
+      conversationId,
+      true,
+    );
+
+    const aAjouter = [...new Set((userIds ?? []).filter((id) => !!id))].filter(
+      (id) => !membres.includes(id),
+    );
+    if (aAjouter.length === 0) {
+      throw new HttpException(
+        'Ces personnes font déjà partie du groupe.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    // Même cloisonnement qu'à la création : un gestionnaire ne fait pas entrer
+    // le personnel d'un autre point de vente. Le siège n'est pas borné.
+    const bornerAuRestaurant =
+      moi.type !== UserType.BACKOFFICE && !!moi.restaurant_id;
+    const existants = await this.prisma.user.findMany({
+      where: {
+        id: { in: aAjouter },
+        ...(bornerAuRestaurant ? { restaurant_id: moi.restaurant_id } : {}),
+      },
+      select: { id: true },
+    });
+    if (existants.length !== aAjouter.length) {
+      throw new NotFoundException(
+        bornerAuRestaurant
+          ? "Une des personnes n'existe pas ou n'appartient pas à votre restaurant"
+          : "Une des personnes n'existe pas",
+      );
+    }
+
+    const maintenant = new Date();
+    await this.prisma.conversationUser.createMany({
+      data: aAjouter.map((userId) => ({
+        conversationId: conversation.id,
+        userId,
+        lastReadAt: maintenant,
+      })),
+      // Deux ajouts simultanés ne doivent pas faire échouer le second.
+      skipDuplicates: true,
+    });
+
+    return this.renvoyerEtNotifier(conversation.id, [...membres, ...aAjouter]);
+  }
+
+  /**
+   * Retire quelqu'un d'un groupe, ou le quitte soi-même.
+   *
+   * Se retirer soi-même ne demande aucun rôle particulier : on peut toujours
+   * quitter un groupe. Retirer QUELQU'UN D'AUTRE est une décision
+   * d'organisation, réservée aux responsables.
+   */
+  async retirerParticipant(
+    req: Request,
+    conversationId: string,
+    userId: string,
+  ): Promise<ResponseConversationsDto> {
+    const auth = req.user as User;
+    const estMoi = userId === auth?.id;
+
+    const { conversation, membres } = await this.chargerGroupePourGestion(
+      req.user!,
+      conversationId,
+      !estMoi,
+    );
+
+    if (!membres.includes(userId)) {
+      throw new NotFoundException('Cette personne ne fait pas partie du groupe.');
+    }
+
+    /**
+     * Un groupe garde au moins deux membres quand on en retire quelqu'un :
+     * en dessous, ce n'est plus un groupe et l'écran n'aurait plus de sens.
+     * Quitter de soi-même reste possible dans tous les cas, personne ne doit
+     * être retenu dans une conversation.
+     */
+    /**
+     * Comptage et suppression dans la MÊME transaction.
+     *
+     * Lu en dehors, le compte peut être périmé au moment d'écrire : deux
+     * retraits simultanés voient chacun trois membres, chacun se juge autorisé,
+     * et le groupe tombe à un. On relit donc à l'intérieur.
+     */
+    await this.prisma.$transaction(async (tx) => {
+      if (!estMoi) {
+        const restants = await tx.conversationUser.count({
+          where: { conversationId: conversation.id },
+        });
+        if (restants <= 2) {
+          throw new HttpException(
+            'Un groupe doit conserver au moins deux membres.',
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+      }
+      await tx.conversationUser.delete({
+        where: {
+          conversationId_userId: { conversationId: conversation.id, userId },
+        },
+      });
+    });
+
+    // Le partant reçoit un avis MINIMAL, sans le contenu du groupe qu'il quitte.
+    this.conversationWebsockets.emitRetireDuGroupe(userId, conversation.id);
+
+    return this.renvoyerEtNotifier(
+      conversation.id,
+      membres.filter((id) => id !== userId),
+    );
+  }
+
+  /** Renomme un groupe. Le nom est ce que tout le monde lit dans sa liste. */
+  async renommerGroupe(
+    req: Request,
+    conversationId: string,
+    subject: string,
+  ): Promise<ResponseConversationsDto> {
+    const { conversation, membres } = await this.chargerGroupePourGestion(
+      req.user!,
+      conversationId,
+      true,
+    );
+
+    const nom = (subject ?? '').trim();
+    if (!nom) {
+      throw new HttpException(
+        'Un groupe doit porter un nom.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    await this.prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { subject: nom },
+    });
+
+    return this.renvoyerEtNotifier(conversation.id, membres);
   }
 
   async getConversationById(
@@ -862,12 +1127,13 @@ export class ConversationsService {
       customerId: conversation.customerId,
       subject: conversation.subject ?? null,
       /**
-       * GROUPE = interne (aucun client) ET plus de deux participants. La règle
-       * est tranchée ici, côté serveur, pour qu'aucun écran n'ait à la
-       * redécouvrir et que tous s'accordent.
+       * Le drapeau fait foi. Le repli sur le nombre de participants ne sert
+       * qu'aux conversations créées avant l'existence de la colonne et que la
+       * migration n'aurait pas reprises.
        */
       isGroup:
-        !conversation.customerId && (conversation.users?.length ?? 0) > 2,
+        conversation.isGroup ??
+        (!conversation.customerId && (conversation.users?.length ?? 0) > 2),
       /**
        * ⚠️ Date du DERNIER MESSAGE, et non date de création de la conversation.
        *
@@ -1013,12 +1279,24 @@ export class ConversationsService {
     const counts = await this.prisma.message.groupBy({
       by: ['conversationId'],
       where: {
-        // Mes propres messages ne me sont pas « non lus ».
-        authorUserId: { not: userId },
-        OR: participations.map((p) => ({
-          conversationId: p.conversationId,
-          ...(p.lastReadAt ? { createdAt: { gt: p.lastReadAt } } : {}),
-        })),
+        /**
+         * « Pas écrit par moi », et non « écrit par quelqu'un d'autre ».
+         *
+         * ⚠️ Un message SYSTÈME n'a aucun auteur. Or en base, une comparaison
+         * avec une colonne nulle n'est jamais vraie : le simple test
+         * `authorUserId != moi` excluait donc silencieusement tout message sans
+         * auteur. Une alerte postée par le système n'aurait allumé la pastille
+         * de personne. On vise explicitement les deux cas.
+         */
+        OR: [{ authorUserId: null }, { authorUserId: { not: userId } }],
+        AND: [
+          {
+            OR: participations.map((p) => ({
+              conversationId: p.conversationId,
+              ...(p.lastReadAt ? { createdAt: { gt: p.lastReadAt } } : {}),
+            })),
+          },
+        ],
       },
       _count: { id: true },
     });

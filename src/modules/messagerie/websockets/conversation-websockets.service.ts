@@ -41,4 +41,39 @@ export class ConversationWebsocketsService {
       );
     });
   }
+
+  /**
+   * La composition d'un GROUPE a changé.
+   *
+   * `destinataires` inclut volontairement les partants : c'est le seul moment
+   * où on peut encore les prévenir, et leur écran doit retirer la conversation
+   * de la liste. Pour eux l'évènement vaut « tu n'y es plus », pour les autres
+   * « la liste des membres a bougé » ; le client distingue les deux en
+   * cherchant son propre identifiant dans `conversation.users`.
+   */
+  /**
+   * Prévenir quelqu'un qu'il ne fait plus partie d'un groupe.
+   *
+   * Charge utile RÉDUITE À L'IDENTIFIANT, délibérément : lui renvoyer la
+   * conversation complète lui livrerait les cinquante derniers messages du
+   * groupe dont on vient de le sortir. Son écran n'a besoin que de savoir
+   * lequel retirer de sa liste.
+   */
+  emitRetireDuGroupe(userId: string, conversationId: string) {
+    this.appGateway.emitToUser(userId, 'user', 'conversation:retire', {
+      conversationId,
+    });
+  }
+
+  emitParticipantsChanged(
+    destinataires: string[],
+    conversation: ResponseConversationsDto,
+  ) {
+    const vus = new Set<string>();
+    destinataires.forEach((userId) => {
+      if (!userId || vus.has(userId)) return;
+      vus.add(userId);
+      this.appGateway.emitToUser(userId, 'user', 'conversation:participants', conversation);
+    });
+  }
 }

@@ -767,6 +767,15 @@ model Conversation {
   id      String  @id @default(uuid()) @db.Uuid
   subject String? @db.VarChar
 
+  /// GROUPE interne : décidé à la création, et jamais recalculé.
+  ///
+  /// Le déduire du nombre de participants était une erreur : retirer quelqu'un
+  /// d'un groupe de trois le faisait cesser d'être un groupe, et il devenait
+  /// alors impossible d'y remettre qui que ce soit. C'est aussi ce drapeau qui
+  /// protège un tête-à-tête : sans lui, rien n'empêchait d'y faire entrer un
+  /// tiers, qui héritait de tout l'historique privé des deux autres.
+  isGroup Boolean @default(false)
+
   /// Canal officiel de diffusion : cette conversation a été créée par une
   /// diffusion, pas par un échange. Elle reste HORS de la boîte de réception
   /// du backoffice tant que le client n'a pas répondu, sinon une seule

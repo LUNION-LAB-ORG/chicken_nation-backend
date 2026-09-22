@@ -567,7 +567,10 @@ export class MessageService {
         const nouveaux = await this.prismaService.message.count({
           where: {
             conversationId,
-            authorUserId: { not: authorId },
+            // Même ensemble que `compterNonLusInternes`, messages SYSTÈME (sans
+            // auteur) compris : les deux doivent viser exactement la même chose,
+            // sinon une pastille reste allumée sans rien à lire.
+            OR: [{ authorUserId: null }, { authorUserId: { not: authorId } }],
             ...(participation.lastReadAt
               ? { createdAt: { gt: participation.lastReadAt } }
               : {}),
