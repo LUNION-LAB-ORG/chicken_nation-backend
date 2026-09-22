@@ -5,18 +5,21 @@ import {
   Logger,
   Param,
   Post,
+  Put,
   Query,
   Req,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { ApiBody, ApiOperation } from '@nestjs/swagger';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { Customer, User } from '@prisma/client';
 import type { Request } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
+import { BasculerReactionDto } from '../dto/reaction.dto';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from '../../auth/guards/jwt-customer-auth.guard';
@@ -146,6 +149,57 @@ export class MessageController {
       createMessageDto,
       image,
       audio,
+    );
+  }
+
+  /**
+   * RÉACTION à un message, comme sur WhatsApp : poser, remplacer, retirer.
+   *
+   * `PUT` et non `POST` : l'opération est idempotente au sens où elle décrit un
+   * état voulu, « ma réaction à ce message est celle-ci », et rejouer la même
+   * requête ne crée jamais de seconde réaction.
+   *
+   * ⚠️ Permission `READ` et non `UPDATE` : réagir n'est pas modifier la
+   * conversation, et `Modules.MESSAGES` en UPDATE ouvrirait au passage les
+   * catégories de tickets du support, donc le routage de tout le réseau. La
+   * règle réelle, être participant ou du restaurant, est appliquée dans le
+   * service, seul endroit à connaître la composition de la conversation.
+   */
+  @Put(':messageId/reactions')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.MESSAGES, Action.READ)
+  @ApiOperation({ summary: 'Réagir à un message (personnel)' })
+  @ApiBody({ type: BasculerReactionDto })
+  async basculerReaction(
+    @Req() req: Request,
+    @Param('conversationId') conversationId: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: BasculerReactionDto,
+  ) {
+    return await this.messageService.basculerReaction(
+      req,
+      conversationId,
+      messageId,
+      dto.emoji,
+    );
+  }
+
+  /** Même opération, pour un client depuis l'application. */
+  @Put(':messageId/reactions/client')
+  @UseGuards(JwtCustomerAuthGuard)
+  @ApiOperation({ summary: 'Réagir à un message (client)' })
+  @ApiBody({ type: BasculerReactionDto })
+  async basculerReactionClient(
+    @Req() req: Request,
+    @Param('conversationId') conversationId: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: BasculerReactionDto,
+  ) {
+    return await this.messageService.basculerReaction(
+      req,
+      conversationId,
+      messageId,
+      dto.emoji,
     );
   }
 }

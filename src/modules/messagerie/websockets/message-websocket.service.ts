@@ -1,4 +1,5 @@
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import { agregerReactions } from 'src/common/constantes/emojis-reaction';
 import { Injectable, Logger } from '@nestjs/common';
 import { ResponseMessageDto } from '../dto/response-message.dto';
 import { Prisma } from '@prisma/client';
@@ -77,6 +78,50 @@ export class MessageWebSocketService {
    * déclenchait l'évènement, le recevait, et allumait la double coche sur ses
    * propres messages alors que personne du service client ne les avait lus.
    */
+  /**
+   * Les réactions d'un message ont changé.
+   *
+   * ⚠️ Chaque destinataire reçoit SA charge utile. `mine` dépend de qui
+   * regarde : un agrégat unique afficherait « j'ai réagi » chez tout le monde
+   * dès qu'une seule personne l'a fait. On calcule donc l'agrégat par personne.
+   *
+   * ⚠️ AUCUNE diffusion vers la salle du restaurant. Elle contient les
+   * livreurs, et une réaction sur un échange interne n'a rien à y faire. Les
+   * participants sont servis un par un, ils ne perdent rien.
+   */
+  emitReactionsChanged(
+    conversation: { id: string; customerId: string | null },
+    usersId: string[],
+    messageId: string,
+    reactions: { emoji: string; userId?: string | null; customerId?: string | null }[],
+  ) {
+    const charge = (pourQui: string | null) => ({
+      conversationId: conversation.id,
+      messageId,
+      reactions: agregerReactions(reactions, pourQui),
+    });
+
+    if (conversation.customerId) {
+      this.appGateway.emitToUser(
+        conversation.customerId,
+        'customer',
+        'message:reactions',
+        charge(conversation.customerId),
+      );
+    }
+
+    const vus = new Set<string>();
+    usersId.forEach((userId) => {
+      if (!userId || vus.has(userId)) return;
+      vus.add(userId);
+      this.appGateway.emitToUser(userId, 'user', 'message:reactions', charge(userId));
+    });
+
+    this.logger.debug(
+      `Réactions de ${messageId} diffusées à ${vus.size} agent(s)${conversation.customerId ? ' + client' : ''}`,
+    );
+  }
+
   emitMessagesRead(
     conversation: ConversationGetPayload,
     parQui: 'user' | 'customer' = 'user',

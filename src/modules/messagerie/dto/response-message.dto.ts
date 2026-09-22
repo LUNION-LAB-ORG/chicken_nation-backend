@@ -5,6 +5,18 @@ export class ResponseMessageDto {
   @ApiProperty()
   id: string;
 
+  /**
+   * Réactions déjà AGRÉGÉES : un emoji, son compte, et « l'ai-je posé ».
+   *
+   * Calculé par le serveur plutôt que par chaque écran : les trois applications
+   * qui lisent ces messages en tireraient sinon trois résultats différents. La
+   * liste n'est jamais nominative, savoir qui a mis un pouce n'intéresse
+   * personne et exposerait des identités sans raison. Champ OPTIONNEL : les
+   * consommateurs qui l'ignorent ne voient aucune différence.
+   */
+  @ApiProperty({ required: false, type: [Object] })
+  reactions?: { emoji: string; count: number; mine: boolean }[];
+
   @ApiProperty({ type: [Object] })
   conversation: {
     id: string;

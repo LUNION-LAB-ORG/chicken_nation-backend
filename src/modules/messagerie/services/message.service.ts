@@ -3,6 +3,7 @@ import {
   HttpStatus,
   Injectable,
   Logger,
+  BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
 import { Customer, User } from '@prisma/client';
@@ -13,6 +14,12 @@ import { CreateMessageDto } from '../dto/createMessageDto';
 import { QueryMessagesDto } from '../dto/query-messages.dto';
 import { ResponseMessageDto } from '../dto/response-message.dto';
 import { getAuthType } from '../utils/getTypeUser';
+import {
+  agregerReactions,
+  estEmojiAutorise,
+  EMOJIS_REACTION,
+  type ReactionAgregee,
+} from 'src/common/constantes/emojis-reaction';
 import {
   TAILLE_MAX_AUDIO,
   TAILLE_MAX_IMAGE,
@@ -113,6 +120,8 @@ export class MessageService {
         include: {
           authorUser: true, // Include user details if needed
           authorCustomer: true, // Include customer details if needed
+          // Réactions : agrégées au mapping, jamais renvoyées nominativement.
+          reactions: { select: { emoji: true, userId: true, customerId: true } },
           conversation: {
             select: {
               customerId: true,
@@ -137,8 +146,11 @@ export class MessageService {
     this.logger.log(`Messages récupérés: ${messages.length}/${total}`);
 
     // Map the messages to the ResponseMessageDto format
+    // `mine` dépend du lecteur : on le lui passe, sinon toutes les pastilles
+    // paraîtraient posées par quelqu'un d'autre.
+    const monId = (req.user as User | Customer | undefined)?.id ?? null;
     const mappedMessages = messages.map((message) =>
-      this.mapMessagesField(message),
+      this.mapMessagesField(message, monId),
     );
 
     if (this.isDev) {
@@ -648,12 +660,17 @@ export class MessageService {
     });
   }
 
-  private mapMessagesField(message: any): ResponseMessageDto {
+  /**
+   * `monId` : qui lit. Indispensable pour `mine` sur les réactions, qui dépend
+   * du lecteur et non du message. Absent, tout est simplement à `false`.
+   */
+  private mapMessagesField(message: any, monId?: string | null): ResponseMessageDto {
     if (this.isDev) {
       this.logger.debug(`Mapping du message: ${JSON.stringify(message)}`);
     }
     return {
       id: message.id,
+      reactions: agregerReactions(message.reactions, monId ?? null),
       conversation: {
         id: message.conversationId,
         restaurantId: message.conversation?.restaurantId,
@@ -687,5 +704,134 @@ export class MessageService {
         }
         : null,
     };
+  }
+
+  // ───────────────────────── Réactions ─────────────────────────
+
+  /**
+   * Pose, remplace ou retire une réaction, comme sur WhatsApp.
+   *
+   * Une seule réaction par personne et par message : reposer le même emoji le
+   * retire, en choisir un autre remplace le précédent. La règle est tenue par
+   * une contrainte d'unicité en base, pas par ce code : deux clics simultanés
+   * ne peuvent donc pas produire de doublon.
+   *
+   * ⚠️ Cette opération ne DOIT PAS ressembler à l'envoi d'un message. Elle ne
+   * touche ni `updatedAt` de la conversation, ni `hasReply`, et n'émet aucune
+   * notification : un pouce ne doit pas faire remonter une conversation en tête
+   * de boîte de réception, ni réveiller un téléphone la nuit.
+   */
+  async basculerReaction(
+    req: Request,
+    conversationId: string,
+    messageId: string,
+    emoji: string,
+  ): Promise<{ messageId: string; reactions: ReactionAgregee[] }> {
+    if (!estEmojiAutorise(emoji)) {
+      throw new BadRequestException(
+        `Réaction non reconnue. Valeurs acceptées : ${EMOJIS_REACTION.join(' ')}`,
+      );
+    }
+
+    const auth = req.user!;
+    const type = getAuthType(auth);
+    const monId = (auth as User | Customer).id;
+
+    /**
+     * Le message est chargé AVEC sa conversation : il ne suffit pas qu'il
+     * existe, il doit appartenir à la conversation citée dans l'URL. Sans ce
+     * recoupement, connaître un seul identifiant de message permettrait de
+     * réagir dans n'importe quelle conversation.
+     */
+    const message = await this.prismaService.message.findFirst({
+      where: { id: messageId, conversationId },
+      select: {
+        id: true,
+        conversation: {
+          select: {
+            id: true,
+            customerId: true,
+            restaurantId: true,
+            users: { select: { userId: true } },
+          },
+        },
+      },
+    });
+    if (!message) {
+      throw new NotFoundException('Message introuvable');
+    }
+
+    const conversation = message.conversation;
+
+    /**
+     * Même règle d'accès que la lecture de la conversation : un client n'agit
+     * que dans la sienne ; un agent doit en être participant, ou appartenir au
+     * restaurant s'il s'agit d'un échange avec un client. On répond
+     * « introuvable » plutôt qu'« interdit », pour ne rien apprendre à qui
+     * cherche.
+     */
+    if (type === 'customer') {
+      if (conversation.customerId !== monId) {
+        throw new NotFoundException('Message introuvable');
+      }
+    } else {
+      const estParticipant = conversation.users.some((u) => u.userId === monId);
+      if (!estParticipant && !conversation.customerId) {
+        // Conversation INTERNE : il faut en être membre, sans exception.
+        throw new NotFoundException('Message introuvable');
+      }
+      if (!estParticipant && conversation.customerId) {
+        const duRestaurant = conversation.restaurantId
+          ? await this.prismaService.user.findFirst({
+              where: { id: monId, restaurant_id: conversation.restaurantId },
+              select: { id: true },
+            })
+          : null;
+        if (!duRestaurant) {
+          throw new NotFoundException('Message introuvable');
+        }
+      }
+    }
+
+    const qui = type === 'customer' ? { customerId: monId } : { userId: monId };
+
+    await this.prismaService.$transaction(async (tx) => {
+      const existante = await tx.messageReaction.findFirst({
+        where: { messageId, ...qui },
+        select: { id: true, emoji: true },
+      });
+
+      if (!existante) {
+        await tx.messageReaction.create({ data: { messageId, emoji, ...qui } });
+      } else if (existante.emoji === emoji) {
+        // Reposer le même emoji le retire : c'est la bascule attendue.
+        await tx.messageReaction.delete({ where: { id: existante.id } });
+      } else {
+        await tx.messageReaction.update({
+          where: { id: existante.id },
+          data: { emoji },
+        });
+      }
+    });
+
+    const fraiches = await this.prismaService.messageReaction.findMany({
+      where: { messageId },
+      select: { emoji: true, userId: true, customerId: true },
+    });
+
+    /**
+     * ⚠️ Chaque destinataire reçoit SA propre vue.
+     *
+     * `mine` dépend de qui regarde : une charge unique serait fausse pour tout
+     * le monde sauf un. On diffuse donc un agrégat calculé par personne.
+     */
+    this.messageWebSocketService.emitReactionsChanged(
+      { id: conversation.id, customerId: conversation.customerId },
+      conversation.users.map((u) => u.userId),
+      messageId,
+      fraiches,
+    );
+
+    return { messageId, reactions: agregerReactions(fraiches, monId) };
   }
 }
