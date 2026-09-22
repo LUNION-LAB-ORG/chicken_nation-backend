@@ -612,6 +612,80 @@ export class OrderHelper {
 
 
   // Vérifier la transition d'état
+  /**
+   * Combien de temps AVANT l'heure souhaitée la préparation peut commencer.
+   */
+  private static readonly AVANCE_PREPARATION_MS = 60 * 60 * 1000;
+
+  /**
+   * Moment souhaité par le client, reconstitué depuis `date` et `time`.
+   *
+   * `date` est une date seule (`@db.Date`, donc minuit UTC du jour) et `time`
+   * une chaîne « HH:MM ». La Côte d'Ivoire vit à UTC+0 toute l'année, sans
+   * heure d'été : l'heure stockée est donc l'heure de l'horloge murale, et les
+   * deux se recollent sans conversion.
+   *
+   * ⚠️ Renvoie `null` à la moindre incertitude. Ce moment sert à INTERDIRE une
+   * action : mal le lire reviendrait à bloquer une cuisine sur une donnée
+   * qu'on n'a pas comprise. Dans le doute, on n'empêche rien.
+   */
+  momentSouhaite(date: Date | null | undefined, time: string | null | undefined): Date | null {
+    if (!date || !time) return null;
+
+    const jour = new Date(date);
+    if (Number.isNaN(jour.getTime())) return null;
+
+    const correspondance = /^(\d{1,2})[:hH](\d{2})/.exec(time.trim());
+    if (!correspondance) return null;
+
+    const heures = Number(correspondance[1]);
+    const minutes = Number(correspondance[2]);
+    if (!(heures >= 0 && heures <= 23) || !(minutes >= 0 && minutes <= 59)) return null;
+
+    const moment = new Date(jour);
+    moment.setUTCHours(heures, minutes, 0, 0);
+    return Number.isNaN(moment.getTime()) ? null : moment;
+  }
+
+  /**
+   * On ne prépare pas un plat des heures avant l'heure convenue.
+   *
+   * Sans cette borne, une commande demandée pour 20 h pouvait partir en
+   * préparation à 14 h : le plat attend, refroidit, et le client le reçoit
+   * moins bon que s'il avait été fait au bon moment.
+   *
+   * Ne borne QUE le passage en préparation. Accepter une commande reste
+   * possible à tout instant — c'est un accusé de réception, pas un travail de
+   * cuisine — et l'annulation n'est jamais entravée.
+   *
+   * ⚠️ Cette règle peut EMPÊCHER de travailler : elle ne s'applique donc que
+   * lorsque le moment souhaité est lisible ET encore à venir. Date absente,
+   * heure illisible, moment déjà passé : on laisse faire.
+   */
+  assertPreparationAutorisee(
+    order: { date?: Date | null; time?: string | null; reference?: string },
+    newStatus: OrderStatus,
+    options?: { ignorerAvance?: boolean },
+  ) {
+    if (options?.ignorerAvance) return;
+    if (newStatus !== OrderStatus.IN_PROGRESS) return;
+
+    const moment = this.momentSouhaite(order?.date, order?.time);
+    if (!moment) return;
+
+    const ouverture = moment.getTime() - OrderHelper.AVANCE_PREPARATION_MS;
+    if (Date.now() >= ouverture) return;
+
+    const lisible = (d: Date) =>
+      `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')} à ` +
+      `${String(d.getUTCHours()).padStart(2, '0')}h${String(d.getUTCMinutes()).padStart(2, '0')}`;
+
+    throw new ConflictException(
+      `Cette commande est prévue pour le ${lisible(moment)}. ` +
+        `La préparation pourra commencer à partir de ${lisible(new Date(ouverture))}.`,
+    );
+  }
+
   validateStatusTransition(
     orderType: OrderType,
     currentStatus: OrderStatus,

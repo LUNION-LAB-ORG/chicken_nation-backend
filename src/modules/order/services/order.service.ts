@@ -852,6 +852,18 @@ export class OrderService {
       allowCancelFromAnyStatus: isAdmin,
     });
 
+    /**
+     * On ne lance pas la préparation des heures avant l'heure convenue.
+     *
+     * L'administrateur passe outre : il arrive qu'on doive prendre de l'avance
+     * pour une raison que le logiciel ne connaît pas, un gros service à venir
+     * ou une cuisine qui ferme plus tôt. La règle protège de l'étourderie, elle
+     * ne doit pas empêcher une décision assumée.
+     */
+    this.orderHelper.assertPreparationAutorisee(order, status, {
+      ignorerAvance: isAdmin,
+    });
+
     // Actions spécifiques selon le changement d'état
     await this.orderHelper.handleStatusSpecificActions(order, status, meta);
 
