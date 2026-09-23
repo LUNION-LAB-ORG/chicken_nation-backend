@@ -27,6 +27,7 @@ import { ProspectService } from '../services/prospect.service';
 import { ProspectScanService } from '../services/prospect-scan.service';
 import { CreateProspectDto } from '../dto/create-prospect.dto';
 import { MarkCallDto } from '../dto/mark-call.dto';
+import { BulkCouponDto, BulkMarkCallDto } from '../dto/bulk-action.dto';
 import { QueryProspectDto } from '../dto/query-prospect.dto';
 import { UpdateProspectSettingsDto } from '../dto/update-prospect-settings.dto';
 
@@ -161,6 +162,28 @@ export class ProspectController {
   @ApiOperation({ summary: "Fiche d'un contact + historique" })
   findOne(@Req() req: Request, @Param('id') id: string) {
     return this.prospectService.findOne(req.user as User, id);
+  }
+
+  /**
+   * ACTIONS GROUPÉES.
+   *
+   * ⚠️ Ces deux routes DOIVENT rester déclarées avant leurs équivalents
+   * `:id`. Nest résout dans l'ordre de déclaration : placées après,
+   * `/prospects/bulk/coupon` serait happé par `@Post(':id/coupon')` avec
+   * `id = "bulk"`, et répondrait « contact introuvable ».
+   */
+  @Patch('bulk/call')
+  @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
+  @ApiOperation({ summary: 'Qualifier un lot d\'appels en une fois' })
+  markCallBulk(@Req() req: Request, @Body() dto: BulkMarkCallDto) {
+    return this.prospectService.markCallBulk(req.user as User, dto);
+  }
+
+  @Post('bulk/coupon')
+  @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
+  @ApiOperation({ summary: 'Envoyer le coupon à un lot de contacts joints' })
+  sendCouponBulk(@Req() req: Request, @Body() dto: BulkCouponDto) {
+    return this.prospectService.sendCouponBulk(req.user as User, dto.ids);
   }
 
   @Patch(':id/call')

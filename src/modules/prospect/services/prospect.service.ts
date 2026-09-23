@@ -22,6 +22,11 @@ import { SettingsService } from 'src/modules/settings/settings.service';
 import { TwilioService } from 'src/twilio/services/twilio.service';
 import { CreateProspectDto } from '../dto/create-prospect.dto';
 import { MarkCallDto } from '../dto/mark-call.dto';
+import {
+  BulkMarkCallDto,
+  EchecGroupe,
+  ResultatGroupe,
+} from '../dto/bulk-action.dto';
 import { QueryProspectDto } from '../dto/query-prospect.dto';
 import { UpdateProspectSettingsDto } from '../dto/update-prospect-settings.dto';
 
@@ -523,6 +528,91 @@ export class ProspectService {
   }
 
   /** Renvoie le SMS du coupon EXISTANT (sans en générer un nouveau). */
+  /**
+   * QUALIFIER UN LOT D'APPELS.
+   *
+   * Le call center descend une page de contacts au téléphone et les qualifie
+   * ensuite en bloc. Chaque contact passe par `markCall`, la méthode unitaire :
+   * mêmes règles de cloisonnement, même historique d'appel, même refus de
+   * rétrograder un contact déjà plus avancé dans l'entonnoir. Rien n'est
+   * réécrit ici, donc rien ne peut diverger.
+   */
+  async markCallBulk(user: User, dto: BulkMarkCallDto): Promise<ResultatGroupe> {
+    const ids = [...new Set(dto.ids)];
+    const noms = await this.nomsDesContacts(ids);
+    const echecs: EchecGroupe[] = [];
+    let reussis = 0;
+
+    for (const id of ids) {
+      try {
+        await this.markCall(user, id, { result: dto.result, note: dto.note });
+        reussis += 1;
+      } catch (e) {
+        echecs.push({ id, nom: noms.get(id) ?? null, motif: this.motifEchec(e) });
+      }
+    }
+
+    this.logger.log(
+      `Appels qualifiés en lot (${dto.result}) par ${user.id} : ${reussis}/${ids.length}`,
+    );
+    return { demandes: ids.length, reussis, echecs };
+  }
+
+  /**
+   * ENVOYER LE COUPON À UN LOT.
+   *
+   * Traitement SÉQUENTIEL, délibérément. Chaque coupon crée un code promo,
+   * met à jour le contact et appelle Twilio. Lancer vingt envois de front
+   * multiplierait les connexions à la base et exposerait à une limitation de
+   * débit de la passerelle SMS, pour gagner quelques secondes.
+   *
+   * Un refus n'interrompt jamais le lot : un contact pas encore « joint » ou
+   * déjà pourvu d'un coupon est écarté et nommé dans le compte rendu, les
+   * autres partent.
+   */
+  async sendCouponBulk(user: User, idsDemandes: string[]): Promise<ResultatGroupe> {
+    const ids = [...new Set(idsDemandes)];
+    const noms = await this.nomsDesContacts(ids);
+    const echecs: EchecGroupe[] = [];
+    let reussis = 0;
+    let sansSms = 0;
+
+    for (const id of ids) {
+      try {
+        const res = await this.sendCoupon(user, id);
+        reussis += 1;
+        // Le code existe même si le SMS n'est pas parti : ce n'est pas un
+        // échec, c'est un coupon à communiquer de vive voix. On le compte à
+        // part pour que l'écran le dise.
+        if (!res.smsSent) sansSms += 1;
+      } catch (e) {
+        echecs.push({ id, nom: noms.get(id) ?? null, motif: this.motifEchec(e) });
+      }
+    }
+
+    this.logger.log(
+      `Coupons envoyés en lot par ${user.id} : ${reussis}/${ids.length} (sans SMS : ${sansSms})`,
+    );
+    return { demandes: ids.length, reussis, sansSms, echecs };
+  }
+
+  /** Noms des contacts visés, pour que le compte rendu désigne les écartés. */
+  private async nomsDesContacts(ids: string[]): Promise<Map<string, string>> {
+    const contacts = await this.prisma.prospect.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, name: true },
+    });
+    return new Map(contacts.map((c) => [c.id, c.name]));
+  }
+
+  /** Message porté par l'exception, ou un repli lisible. */
+  private motifEchec(e: unknown): string {
+    const message = (e as { message?: unknown })?.message;
+    return typeof message === 'string' && message.trim()
+      ? message
+      : 'Erreur inattendue';
+  }
+
   async resendCoupon(user: User, id: string) {
     const prospect = await this.prisma.prospect.findUnique({
       where: { id },
@@ -771,20 +861,82 @@ export class ProspectService {
     filtres: Omit<QueryProspectDto, 'page' | 'limit'> = {},
     limite: number | undefined = 500,
   ) {
-    const rows = await this.prisma.prospect.findMany({
-      where: {
-        entity_status: { not: EntityStatus.DELETED },
-        converted_at: { not: null },
-        ...this.construireFiltre(user, filtres),
+    /**
+     * ⚠️ LA PLAGE DE DATES PORTE SUR `converted_at`, PAS SUR `created_at`.
+     *
+     * `construireFiltre` borne la date de CAPTURE du contact, ce qui est juste
+     * pour la liste des contacts. Ici on mesure de l'argent : un contact
+     * ramassé en juin qui commande en septembre a rapporté en septembre.
+     * L'attribuer à juin fausserait exactement la mesure recherchée, celle de
+     * la période où l'opération a porté. On retire donc les dates avant
+     * l'appel et on les repose sur la date d'encaissement.
+     */
+    const { startDate, endDate, ...sansDates } = filtres;
+    const where: Prisma.ProspectWhereInput = {
+      ...this.construireFiltre(user, sansDates),
+      converted_at: {
+        not: null,
+        ...(startDate && { gte: new Date(startDate) }),
+        ...(endDate && {
+          lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
+        }),
       },
-      include: {
-        restaurant: { select: { id: true, name: true } },
-        promo_code: { select: { code: true } },
-      },
-      orderBy: { converted_at: 'desc' },
-      ...(limite ? { take: limite } : {}),
-    });
-    const ca = rows.reduce((s, p) => s + (p.first_order_amount ?? 0), 0);
+    };
+
+    /**
+     * Les totaux se calculent sur TOUT le périmètre, le tableau seul est
+     * borné. Ils lisaient jusqu'ici les mêmes 500 lignes que la liste : au
+     * 501e encaissement, le chiffre d'affaires affiché aurait cessé de monter
+     * sans que rien ne le signale. La seconde requête ne ramène que trois
+     * colonnes, elle reste légère même sur plusieurs milliers de lignes.
+     */
+    const [rows, agregat] = await Promise.all([
+      this.prisma.prospect.findMany({
+        where,
+        include: {
+          restaurant: { select: { id: true, name: true } },
+          promo_code: { select: { code: true } },
+        },
+        orderBy: { converted_at: 'desc' },
+        ...(limite ? { take: limite } : {}),
+      }),
+      this.prisma.prospect.findMany({
+        where,
+        select: {
+          platform: true,
+          first_order_amount: true,
+          converted_at: true,
+        },
+      }),
+    ]);
+
+    const ca = agregat.reduce((s, p) => s + (p.first_order_amount ?? 0), 0);
+
+    // Glovo et Yango côte à côte, plutôt qu'un filtre à basculer pour lire
+    // l'un puis l'autre et faire la soustraction de tête.
+    const parPlateforme = new Map<ProspectPlatform, { count: number; ca: number }>();
+    // La série mensuelle : c'est elle qui montre QUAND l'opération a porté.
+    const parMois = new Map<string, { count: number; ca: number }>();
+
+    for (const p of agregat) {
+      const montant = p.first_order_amount ?? 0;
+
+      const pf = parPlateforme.get(p.platform) ?? { count: 0, ca: 0 };
+      pf.count += 1;
+      pf.ca += montant;
+      parPlateforme.set(p.platform, pf);
+
+      if (p.converted_at) {
+        // Clé AAAA-MM. La Côte d'Ivoire est à UTC+0 toute l'année, sans
+        // heure d'été : la date stockée est déjà la date locale.
+        const cle = p.converted_at.toISOString().slice(0, 7);
+        const m = parMois.get(cle) ?? { count: 0, ca: 0 };
+        m.count += 1;
+        m.ca += montant;
+        parMois.set(cle, m);
+      }
+    }
+
     const data = rows.map((p) => ({
       id: p.id,
       name: p.name,
@@ -794,13 +946,20 @@ export class ProspectService {
       amount: p.first_order_amount ?? 0,
       date: p.converted_at,
     }));
+
     return {
       data,
       totals: {
-        count: rows.length,
+        count: agregat.length,
         ca,
-        average: rows.length ? Math.round(ca / rows.length) : 0,
+        average: agregat.length ? Math.round(ca / agregat.length) : 0,
       },
+      parPlateforme: [...parPlateforme.entries()]
+        .map(([platform, v]) => ({ platform, ...v }))
+        .sort((a, b) => b.ca - a.ca),
+      parMois: [...parMois.entries()]
+        .map(([mois, v]) => ({ mois, ...v }))
+        .sort((a, b) => a.mois.localeCompare(b.mois)),
     };
   }
 
