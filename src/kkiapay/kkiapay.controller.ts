@@ -12,6 +12,19 @@ import { AuditService } from 'src/modules/audit/audit.service';
 import { journalRefusWebhook } from './kkiapay-audit.helper';
 import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
 
+/**
+ * Longueur, bords et 3 premiers/derniers caractères d'un secret, pour
+ * diagnostiquer un désalignement sans jamais écrire la valeur entière.
+ * En dessous de 12 caractères, seule la longueur est donnée.
+ */
+function empreinteSecret(valeur: string | undefined | null): string {
+    if (valeur === undefined || valeur === null) return 'absent';
+    const n = valeur.length;
+    const espaces = valeur !== valeur.trim() ? ', espaces aux bords' : '';
+    if (n < 12) return `${n} car.${espaces}`;
+    return `${n} car. ${JSON.stringify(valeur.slice(0, 3))}…${JSON.stringify(valeur.slice(-3))}${espaces}`;
+}
+
 @Controller('kkiapay')
 export class KkiapayController {
     private readonly logger = new Logger(KkiapayController.name);
@@ -210,7 +223,13 @@ export class KkiapayController {
 
         // Vérification simple : Kkiapay renvoie le secret en clair.
         if (!webhookSecret || receivedSecret !== webhookSecret) {
-            this.logger.warn(`Webhook KKiaPay${restaurantId ? ` [${restaurantId}]` : ''} : secret invalide`);
+            // Empreinte des deux valeurs, jamais la valeur entière : sans elle,
+            // impossible de savoir si KKiaPay envoie un ancien secret, rien, ou
+            // la bonne valeur entourée d'espaces (incident ZONE 4, 24/09).
+            this.logger.warn(
+                `Webhook KKiaPay${restaurantId ? ` [${restaurantId}]` : ''} : secret invalide` +
+                ` (reçu ${empreinteSecret(receivedSecret)}, attendu ${empreinteSecret(webhookSecret)})`,
+            );
             // Compte RECONNU : on n'arrive ici que si un secret existe pour cet
             // identifiant, donc l'espace de clés est borné par le nombre de
             // restaurants configurés, et l'identifiant reste utile au diagnostic.
