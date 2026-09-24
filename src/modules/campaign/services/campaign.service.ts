@@ -1,11 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { TwilioService } from 'src/twilio/services/twilio.service';
 import { CreateCampaignDto } from '../dto/create-campaign.dto';
 import { CampaignStatus } from '@prisma/client';
 
 @Injectable()
 export class CampaignService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private twilioService: TwilioService
+  ) {}
 
   async create(createCampaignDto: CreateCampaignDto) {
     const { agent_ids, ...campaignData } = createCampaignDto;
@@ -107,5 +111,94 @@ export class CampaignService {
     }
 
     return { count: assignedCount, message: `Successfully assigned ${assignedCount} prospects` };
+  }
+
+  async getAgentQueue(agentId: string, status?: string) {
+    const where: any = { assigned_to_id: agentId };
+    
+    // Only return non-converted prospects
+    where.status = { not: 'CONVERTI' };
+
+    if (status) {
+      where.status = status;
+    }
+
+    return this.prisma.prospect.findMany({
+      where,
+      include: {
+        campaign: { select: { id: true, name: true } },
+        calls: { orderBy: { created_at: 'desc' }, take: 1 }, // get latest call
+      },
+      orderBy: { created_at: 'asc' }
+    });
+  }
+
+  async updateCallStatus(prospectId: string, agentId: string, updateData: { status: string; loss_reason_id?: string; comment?: string; }) {
+    const prospect = await this.prisma.prospect.findUnique({
+      where: { id: prospectId }
+    });
+
+    if (!prospect) throw new NotFoundException('Prospect not found');
+
+    // 1. Create the call log
+    await this.prisma.prospectCall.create({
+      data: {
+        prospect_id: prospectId,
+        agent_id: agentId,
+        result: updateData.status as any, // ProspectCallResult enum mapping might be needed
+        note: updateData.comment || '', 
+      }
+    });
+
+    // 2. Update the prospect
+    return this.prisma.prospect.update({
+      where: { id: prospectId },
+      data: {
+        status: updateData.status as any,
+        loss_reason_id: updateData.loss_reason_id,
+        called_at: new Date(),
+        ...(updateData.status === 'JOINT' && !prospect.joined_at ? { joined_at: new Date() } : {})
+      }
+    });
+  }
+
+  async triggerWhatsapp(prospectId: string, agentId: string) {
+    const prospect = await this.prisma.prospect.findUnique({
+      where: { id: prospectId },
+      include: { promo_code: true }
+    });
+
+    if (!prospect) throw new NotFoundException('Prospect not found');
+    
+    let promoCodeId = prospect.promo_code_id;
+    let codeStr = prospect.promo_code?.code;
+
+    if (!promoCodeId) {
+      codeStr = `CN-${prospect.name.substring(0, 3).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    }
+
+    if (prospect.phone) {
+      const smsBody = `Bonjour ${prospect.name.split(' ')[0]} ! Voici votre code cadeau: ${codeStr || 'BIENVENUE10'} pour commander sur l'application Chicken Nation. Lien: https://chickennation.app/dl`;
+      
+      try {
+        await this.twilioService.sendCouponMessage({
+          phoneNumber: prospect.phone,
+          name: prospect.name.split(' ')[0],
+          code: codeStr || 'BIENVENUE10',
+          validityDays: 30,
+          smsBody
+        });
+      } catch (e) {
+        console.error('Failed to send WhatsApp:', e);
+      }
+    }
+    
+    return this.prisma.prospect.update({
+      where: { id: prospectId },
+      data: {
+        status: 'COUPON_ENVOYE',
+        coupon_sent_at: new Date()
+      }
+    });
   }
 }
