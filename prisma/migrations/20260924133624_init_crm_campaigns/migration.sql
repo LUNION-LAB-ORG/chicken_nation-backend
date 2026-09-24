@@ -52,20 +52,6 @@ CREATE TABLE IF NOT EXISTS "ProspectLossReason" (
     CONSTRAINT "ProspectLossReason_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
-CREATE TABLE IF NOT EXISTS "ProspectCall" (
-    "id" UUID NOT NULL,
-    "result" "CallResult" NOT NULL,
-    "rank" INTEGER NOT NULL,
-    "note" TEXT,
-    "agent_id" UUID,
-    "prospect_id" UUID NOT NULL,
-    "created_at" TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "ProspectCall_pkey" PRIMARY KEY ("id")
-);
-
 -- AddForeignKey
 DO $$ BEGIN
     ALTER TABLE "Prospect" ADD CONSTRAINT "Prospect_campaign_id_fkey" FOREIGN KEY ("campaign_id") REFERENCES "ConversionCampaign"("id") ON DELETE SET NULL ON UPDATE CASCADE;
@@ -101,16 +87,3 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
--- AddForeignKey
-DO $$ BEGIN
-    ALTER TABLE "ProspectCall" ADD CONSTRAINT "ProspectCall_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
--- AddForeignKey
-DO $$ BEGIN
-    ALTER TABLE "ProspectCall" ADD CONSTRAINT "ProspectCall_prospect_id_fkey" FOREIGN KEY ("prospect_id") REFERENCES "Prospect"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
