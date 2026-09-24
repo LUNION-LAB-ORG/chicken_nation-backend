@@ -68,7 +68,7 @@ END $$;
 
 -- AddForeignKey
 DO $$ BEGIN
-    ALTER TABLE "ConversionCampaign" ADD CONSTRAINT "ConversionCampaign_lead_agent_id_fkey" FOREIGN KEY ("lead_agent_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+    ALTER TABLE "ConversionCampaign" ADD CONSTRAINT "ConversionCampaign_lead_agent_id_fkey" FOREIGN KEY ("lead_agent_id") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
@@ -82,7 +82,7 @@ END $$;
 
 -- AddForeignKey
 DO $$ BEGIN
-    ALTER TABLE "CampaignAgent" ADD CONSTRAINT "CampaignAgent_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+    ALTER TABLE "CampaignAgent" ADD CONSTRAINT "CampaignAgent_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
