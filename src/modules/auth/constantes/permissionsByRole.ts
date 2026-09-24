@@ -31,8 +31,8 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.COMMANDES]: [Action.READ],
       [Modules.MARKETING]: [Action.CREATE, Action.READ, Action.UPDATE, Action.REPORT],
       [Modules.BASE_DONNEES]: [Action.READ, Action.CREATE, Action.UPDATE, Action.EXPORT, Action.REPORT],
-      // Prospects : pilotage complet (campagnes, listes, exports, tableaux de bord).
-      [Modules.PROSPECTS]: [Action.READ, Action.CREATE, Action.UPDATE, Action.DELETE, Action.EXPORT, Action.REPORT],
+      // CRM : pilotage complet (campagnes, listes, exports, tableaux de bord).
+      [Modules.CRM]: [Action.READ, Action.CREATE, Action.UPDATE, Action.DELETE, Action.EXPORT, Action.REPORT],
     },
   },
 
@@ -83,11 +83,11 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       // coupons, ventes, export, capture, suppression). Limité à BASE_DONNEES.
       [Modules.BASE_DONNEES]: Object.values(Action),
 
-      // Prospects : l'agent traite SES prospects (appel, raison, commentaire,
+      // CRM : l'agent traite SES contacts (appel, raison, commentaire,
       // coupon). Ni création de campagne, ni réglages, ni export : le cahier
       // réserve ces gestes à la direction. Le pilote d'une campagne gère en
       // plus son équipe, contrôlé au cas par cas côté service.
-      [Modules.PROSPECTS]: [Action.READ, Action.UPDATE],
+      [Modules.CRM]: [Action.READ, Action.UPDATE],
     },
   },
 

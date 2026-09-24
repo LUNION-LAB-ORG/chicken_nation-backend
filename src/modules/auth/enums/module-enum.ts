@@ -16,7 +16,7 @@ export enum Modules {
   SETTINGS = 'settings',
   BASE_DONNEES = 'base_donnees',
   /** Conversion des inscrits qui n'ont jamais commandé (module Prospects). */
-  PROSPECTS = 'prospects',
+  CRM = 'crm',
   CALLS = 'calls',
   AUDIT = 'audit',
   ALL = 'all',

@@ -419,7 +419,7 @@ model Customer {
   broadcast_recipients MessageBroadcastRecipient[]
 
   /// Suivi de conversion tant que le client n'a jamais commandé (module Prospects).
-  conversion_prospect ConversionProspect?
+  crm_contact CrmContact?
 }
 
 // -------------------- Livreurs (deliverers) ------------------------------
@@ -1774,17 +1774,17 @@ model User {
   retentionCallbacks    RetentionCallback[]     @relation("RetentionCallbacks")
   prospects_created     Prospect[]              @relation("ProspectCreator")
   prospect_calls        ProspectCall[]          @relation("ProspectCallAgent")
-  campaigns_led         ConversionCampaign[]    @relation("CampaignLead")
-  campaigns_created     ConversionCampaign[]    @relation("CampaignCreator")
-  campaign_agents       CampaignAgent[]         @relation("CampaignAgents")
+  campaigns_led         CrmCampaign[]           @relation("CampaignLead")
+  campaigns_created     CrmCampaign[]           @relation("CampaignCreator")
+  campaign_agents       CrmCampaignAgent[]      @relation("CampaignAgents")
 
   // Module Prospects (conversion des inscrits sans commande)
-  conversion_prospects_assigned ConversionProspect[]       @relation("ConversionProspectAgent")
-  conversion_calls              ConversionCall[]           @relation("ConversionCallAgent")
-  conversion_coupons_sent       ConversionCoupon[]         @relation("ConversionCouponSender")
-  conversion_members            ConversionCampaignMember[] @relation("ConversionMemberAgent")
-  conversion_events             ConversionEvent[]          @relation("ConversionEventActor")
-  conversion_exports            ConversionExport[]         @relation("ConversionExportAuthor")
+  crm_contacts_assigned CrmContact[]        @relation("CrmContactAgent")
+  crm_calls             CrmCall[]           @relation("CrmCallAgent")
+  crm_coupons_sent      CrmCoupon[]         @relation("CrmCouponSender")
+  crm_members           CrmCampaignMember[] @relation("CrmMemberAgent")
+  crm_events            CrmEvent[]          @relation("CrmEventActor")
+  crm_exports           CrmExport[]         @relation("CrmExportAuthor")
 
   // Appels internes (Lunion Meet)
   calls_made     Call[] @relation("CallsMade")
@@ -2340,7 +2340,7 @@ model PromoCode {
   promo_code_targeted_dishes     PromoCodeTargetedDish[]
   promo_code_targeted_categories PromoCodeTargetedCategory[]
   prospects                      Prospect[]
-  conversion_coupon              ConversionCoupon?
+  crm_coupon                     CrmCoupon?
 
   @@index([code])
   @@index([is_active, entity_status])
@@ -2919,7 +2919,7 @@ model Prospect {
 
   // ⚠️ Les colonnes `campaign_id`, `assigned_to_id` et `loss_reason_id`
   // existent encore en base (ajoutées le 24/09) mais ne sont plus lues : le
-  // suivi de conversion vit dans `ConversionProspect`. Elles sont vides ; les
+  // suivi de conversion vit dans `CrmContact`. Elles sont vides ; les
   // supprimer demandera une migration à part, déployée APRÈS ce code.
 
   calls    ProspectCall[]
@@ -3180,12 +3180,20 @@ enum CampaignStatus {
   SUSPENDED
 }
 
+/// Public d'un contact du CRM : d'où il vient et ce qu'on attend de lui.
+enum CrmSegment {
+  JAMAIS_COMMANDE // inscrit sur l'application, aucune commande
+  INACTIF // a déjà commandé, plus rien depuis le délai réglé (30 jours par défaut)
+  GLOVO // numéro relevé sur une commande Glovo (lot 2)
+  YANGO // numéro relevé sur une commande Yango (lot 2)
+}
+
 enum CampaignDistributionMode {
   AUTOMATIQUE // répartition équilibrée entre les agents au lancement
   MANUEL // le pilote répartit lui-même
 }
 
-enum ConversionProspectStatus {
+enum CrmStatus {
   A_APPELER // jamais joint
   A_RAPPELER // joint, demande à être rappelé
   INTERESSE // joint et intéressé : coupon à envoyer
@@ -3196,8 +3204,8 @@ enum ConversionProspectStatus {
 }
 
 /// Effet d'un statut d'appel sur le prospect. Les libellés sont configurables
-/// (ConversionCallStatus), leurs effets non : ce sont eux que les statistiques lisent.
-enum ConversionCallOutcome {
+/// (CrmCallStatus), leurs effets non : ce sont eux que les statistiques lisent.
+enum CrmCallOutcome {
   NON_JOINT
   A_RAPPELER
   INTERESSE
@@ -3205,19 +3213,19 @@ enum ConversionCallOutcome {
   NUMERO_INVALIDE
 }
 
-enum ConversionCouponChannel {
+enum CrmChannel {
   WHATSAPP
   SMS
   AUCUN
 }
 
-enum ConversionReleaseReason {
+enum CrmReleaseReason {
   CONVERTI
   FIN_CAMPAGNE
   RETIRE
 }
 
-enum ConversionEventType {
+enum CrmEventType {
   ENTREE
   ASSIGNATION
   APPEL
@@ -3230,7 +3238,7 @@ enum ConversionEventType {
   ALERTE
 }
 
-model ConversionCampaign {
+model CrmCampaign {
   id          String         @id @default(uuid()) @db.Uuid
   name        String         @db.VarChar(255)
   description String?        @db.Text
@@ -3244,12 +3252,14 @@ model ConversionCampaign {
 
   // Population ciblée au lancement : tous les prospects actifs, ou seulement
   // ceux inscrits sur une période.
-  registered_from DateTime? @db.Timestamp(6)
-  registered_to   DateTime? @db.Timestamp(6)
+  /// Publics visés par la campagne.
+  segments        CrmSegment[] @default([JAMAIS_COMMANDE])
+  registered_from DateTime?    @db.Timestamp(6)
+  registered_to   DateTime?    @db.Timestamp(6)
 
   distribution_mode CampaignDistributionMode @default(AUTOMATIQUE)
   offer_id          String?                  @db.Uuid
-  offer             ConversionOffer?         @relation(fields: [offer_id], references: [id], onDelete: SetNull)
+  offer             CrmOffer?                @relation(fields: [offer_id], references: [id], onDelete: SetNull)
 
   // Vie réelle, pour « durée réelle vs planifiée »
   started_at     DateTime? @db.Timestamp(6)
@@ -3266,55 +3276,59 @@ model ConversionCampaign {
   created_by    User?   @relation("CampaignCreator", fields: [created_by_id], references: [id], onDelete: SetNull)
 
   // Relations
-  assigned_agents CampaignAgent[]
-  prospects       ConversionProspect[]
-  members         ConversionCampaignMember[]
-  calls           ConversionCall[]
-  coupons         ConversionCoupon[]
-  events          ConversionEvent[]
+  assigned_agents CrmCampaignAgent[]
+  contacts        CrmContact[]
+  members         CrmCampaignMember[]
+  calls           CrmCall[]
+  coupons         CrmCoupon[]
+  events          CrmEvent[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @updatedAt @db.Timestamp(6)
 
   @@index([status])
+  @@map("ConversionCampaign")
 }
 
-model CampaignAgent {
-  campaign_id String             @db.Uuid
-  agent_id    String             @db.Uuid
-  campaign    ConversionCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
-  agent       User               @relation("CampaignAgents", fields: [agent_id], references: [id], onDelete: Cascade)
+model CrmCampaignAgent {
+  campaign_id String      @db.Uuid
+  agent_id    String      @db.Uuid
+  campaign    CrmCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+  agent       User        @relation("CampaignAgents", fields: [agent_id], references: [id], onDelete: Cascade)
 
   @@id([campaign_id, agent_id])
+  @@map("CampaignAgent")
 }
 
 /// Raisons de non-commande (liste configurable du module Prospects).
-model ProspectLossReason {
+model CrmReason {
   id          String  @id @default(uuid()) @db.Uuid
   name        String  @db.VarChar(255)
   description String? @db.Text
   is_active   Boolean @default(true)
   position    Int     @default(0)
 
-  conversion_prospects ConversionProspect[]
-  conversion_calls     ConversionCall[]
+  contacts CrmContact[]
+  calls    CrmCall[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@map("ProspectLossReason")
 }
 
 /// Statuts d'appel (liste configurable). Chacun porte un EFFET fixe.
-model ConversionCallStatus {
-  id        String                @id @default(uuid()) @db.Uuid
-  label     String                @db.VarChar(120)
-  outcome   ConversionCallOutcome
-  position  Int                   @default(0)
-  is_active Boolean               @default(true)
+model CrmCallStatus {
+  id        String         @id @default(uuid()) @db.Uuid
+  label     String         @db.VarChar(120)
+  outcome   CrmCallOutcome
+  position  Int            @default(0)
+  is_active Boolean        @default(true)
 
-  calls          ConversionCall[]
-  prospects_last ConversionProspect[]
+  calls         CrmCall[]
+  contacts_last CrmContact[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -3322,7 +3336,7 @@ model ConversionCallStatus {
 }
 
 /// Offres proposables en coupon (liste configurable).
-model ConversionOffer {
+model CrmOffer {
   id                  String       @id @default(uuid()) @db.Uuid
   label               String       @db.VarChar(120)
   description         String?      @db.Text
@@ -3334,64 +3348,74 @@ model ConversionOffer {
   position            Int          @default(0)
   is_active           Boolean      @default(true)
 
-  campaigns ConversionCampaign[]
-  coupons   ConversionCoupon[]
+  campaigns CrmCampaign[]
+  coupons   CrmCoupon[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @updatedAt @db.Timestamp(6)
 }
 
-model ConversionProspect {
-  id            String                   @id @default(uuid()) @db.Uuid
-  customer_id   String                   @unique @db.Uuid
-  customer      Customer                 @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+model CrmContact {
+  id            String     @id @default(uuid()) @db.Uuid
+  customer_id   String     @unique @db.Uuid
+  customer      Customer   @relation(fields: [customer_id], references: [id], onDelete: Cascade)
   /// Date d'inscription du client, recopiée pour trier et filtrer sans jointure.
-  registered_at DateTime                 @db.Timestamp(6)
-  status        ConversionProspectStatus @default(A_APPELER)
+  registered_at DateTime   @db.Timestamp(6)
+  /// Public actuel. Un client reconquis qui décroche à nouveau repart en INACTIF.
+  segment       CrmSegment @default(JAMAIS_COMMANDE)
+  /// Entrée dans le public actuel : l'inscription, ou le jour où le client est devenu inactif.
+  segment_since DateTime   @default(now()) @db.Timestamp(6)
+  /// Nombre de passages dans le CRM (1, puis +1 à chaque retour en inactif).
+  cycle         Int        @default(1)
+  /// Dernière commande effective connue : sert à mesurer l'inactivité.
+  last_order_at DateTime?  @db.Timestamp(6)
+  status        CrmStatus  @default(A_APPELER)
 
   // Affectation (campagne ACTIVE ou SUSPENDUE en cours, et agent)
-  assigned_to_id String?             @db.Uuid
-  assigned_to    User?               @relation("ConversionProspectAgent", fields: [assigned_to_id], references: [id], onDelete: SetNull)
-  assigned_at    DateTime?           @db.Timestamp(6)
-  campaign_id    String?             @db.Uuid
-  campaign       ConversionCampaign? @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
+  assigned_to_id String?      @db.Uuid
+  assigned_to    User?        @relation("CrmContactAgent", fields: [assigned_to_id], references: [id], onDelete: SetNull)
+  assigned_at    DateTime?    @db.Timestamp(6)
+  campaign_id    String?      @db.Uuid
+  campaign       CrmCampaign? @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
 
   // Suivi call center, recopié du dernier appel pour filtrer sans jointure
-  call_count          Int                    @default(0)
-  last_call_at        DateTime?              @db.Timestamp(6)
-  last_call_status_id String?                @db.Uuid
-  last_call_status    ConversionCallStatus?  @relation(fields: [last_call_status_id], references: [id], onDelete: SetNull)
-  last_call_outcome   ConversionCallOutcome?
-  first_reached_at    DateTime?              @db.Timestamp(6)
+  call_count          Int             @default(0)
+  last_call_at        DateTime?       @db.Timestamp(6)
+  last_call_status_id String?         @db.Uuid
+  last_call_status    CrmCallStatus?  @relation(fields: [last_call_status_id], references: [id], onDelete: SetNull)
+  last_call_outcome   CrmCallOutcome?
+  first_reached_at    DateTime?       @db.Timestamp(6)
   /// Première issue définitive (intéressé, pas intéressé, numéro invalide).
-  qualified_at        DateTime?              @db.Timestamp(6)
-  callback_at         DateTime?              @db.Timestamp(6)
-  loss_reason_id      String?                @db.Uuid
-  loss_reason         ProspectLossReason?    @relation(fields: [loss_reason_id], references: [id], onDelete: SetNull)
-  last_comment        String?                @db.Text
+  qualified_at        DateTime?       @db.Timestamp(6)
+  callback_at         DateTime?       @db.Timestamp(6)
+  loss_reason_id      String?         @db.Uuid
+  loss_reason         CrmReason?      @relation(fields: [loss_reason_id], references: [id], onDelete: SetNull)
+  last_comment        String?         @db.Text
 
   // Coupon et conversion
-  coupon_sent_at     DateTime? @db.Timestamp(6)
-  converted_at       DateTime? @db.Timestamp(6)
-  first_order_id     String?   @db.Uuid
-  first_order_amount Float?
+  coupon_sent_at      DateTime? @db.Timestamp(6)
+  converted_at        DateTime? @db.Timestamp(6)
+  conversion_order_id String?   @db.Uuid
+  conversion_amount   Float?
 
   /// Commandes supprimées du client, en pratique des paiements en ligne
   /// abandonnés : un client qui a essayé de payer sans y arriver ne bute pas
   /// sur la même chose qu'un client qui n'a jamais essayé.
   abandoned_orders Int @default(0)
 
-  calls   ConversionCall[]
-  coupons ConversionCoupon[]
-  members ConversionCampaignMember[]
-  events  ConversionEvent[]
+  calls   CrmCall[]
+  coupons CrmCoupon[]
+  members CrmCampaignMember[]
+  events  CrmEvent[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @updatedAt @db.Timestamp(6)
 
   @@index([status, registered_at])
+  @@index([segment, status])
+  @@index([segment, segment_since])
   @@index([assigned_to_id, status])
   @@index([campaign_id, status])
   @@index([last_call_at])
@@ -3401,27 +3425,29 @@ model ConversionProspect {
 
 /// Historique des appels. Libellé et effet recopiés : renommer un statut ne
 /// réécrit pas ce qui s'est dit au téléphone.
-model ConversionCall {
-  id             String                @id @default(uuid()) @db.Uuid
-  prospect_id    String                @db.Uuid
-  prospect       ConversionProspect    @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
-  agent_id       String?               @db.Uuid
-  agent          User?                 @relation("ConversionCallAgent", fields: [agent_id], references: [id], onDelete: SetNull)
-  campaign_id    String?               @db.Uuid
-  campaign       ConversionCampaign?   @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
-  call_status_id String?               @db.Uuid
-  call_status    ConversionCallStatus? @relation(fields: [call_status_id], references: [id], onDelete: SetNull)
-  status_label   String                @db.VarChar(120)
-  outcome        ConversionCallOutcome
-  reached        Boolean               @default(false)
-  attempt        Int                   @default(1)
-  loss_reason_id String?               @db.Uuid
-  loss_reason    ProspectLossReason?   @relation(fields: [loss_reason_id], references: [id], onDelete: SetNull)
-  comment        String?               @db.Text
-  callback_at    DateTime?             @db.Timestamp(6)
-  created_at     DateTime              @default(now()) @db.Timestamp(6)
+model CrmCall {
+  id             String         @id @default(uuid()) @db.Uuid
+  contact_id     String         @db.Uuid
+  contact        CrmContact     @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  /// Public du contact au moment de l\'action, pour des statistiques par public.
+  segment        CrmSegment     @default(JAMAIS_COMMANDE)
+  agent_id       String?        @db.Uuid
+  agent          User?          @relation("CrmCallAgent", fields: [agent_id], references: [id], onDelete: SetNull)
+  campaign_id    String?        @db.Uuid
+  campaign       CrmCampaign?   @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
+  call_status_id String?        @db.Uuid
+  call_status    CrmCallStatus? @relation(fields: [call_status_id], references: [id], onDelete: SetNull)
+  status_label   String         @db.VarChar(120)
+  outcome        CrmCallOutcome
+  reached        Boolean        @default(false)
+  attempt        Int            @default(1)
+  loss_reason_id String?        @db.Uuid
+  loss_reason    CrmReason?     @relation(fields: [loss_reason_id], references: [id], onDelete: SetNull)
+  comment        String?        @db.Text
+  callback_at    DateTime?      @db.Timestamp(6)
+  created_at     DateTime       @default(now()) @db.Timestamp(6)
 
-  @@index([prospect_id, created_at])
+  @@index([contact_id, created_at])
   @@index([campaign_id, created_at])
   @@index([agent_id, created_at])
   @@index([created_at])
@@ -3429,33 +3455,35 @@ model ConversionCall {
 
 /// Coupon envoyé à un prospect. Adossé à un vrai `PromoCode` : c'est lui que
 /// la caisse et l'application acceptent.
-model ConversionCoupon {
-  id             String                  @id @default(uuid()) @db.Uuid
-  prospect_id    String                  @db.Uuid
-  prospect       ConversionProspect      @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
-  campaign_id    String?                 @db.Uuid
-  campaign       ConversionCampaign?     @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
-  offer_id       String?                 @db.Uuid
-  offer          ConversionOffer?        @relation(fields: [offer_id], references: [id], onDelete: SetNull)
-  promo_code_id  String                  @unique @db.Uuid
-  promo_code     PromoCode               @relation(fields: [promo_code_id], references: [id], onDelete: Cascade)
-  code           String                  @db.VarChar
-  offer_label    String                  @db.VarChar(120)
+model CrmCoupon {
+  id             String       @id @default(uuid()) @db.Uuid
+  contact_id     String       @db.Uuid
+  contact        CrmContact   @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  /// Public du contact au moment de l\'action, pour des statistiques par public.
+  segment        CrmSegment   @default(JAMAIS_COMMANDE)
+  campaign_id    String?      @db.Uuid
+  campaign       CrmCampaign? @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
+  offer_id       String?      @db.Uuid
+  offer          CrmOffer?    @relation(fields: [offer_id], references: [id], onDelete: SetNull)
+  promo_code_id  String       @unique @db.Uuid
+  promo_code     PromoCode    @relation(fields: [promo_code_id], references: [id], onDelete: Cascade)
+  code           String       @db.VarChar
+  offer_label    String       @db.VarChar(120)
   discount_type  DiscountType
   discount_value Float
-  sent_by_id     String?                 @db.Uuid
-  sent_by        User?                   @relation("ConversionCouponSender", fields: [sent_by_id], references: [id], onDelete: SetNull)
-  sent_at        DateTime                @default(now()) @db.Timestamp(6)
-  expires_at     DateTime                @db.Timestamp(6)
-  channel        ConversionCouponChannel @default(AUCUN)
-  message_sid    String?                 @db.VarChar
-  send_error     String?                 @db.Text
-  resent_count   Int                     @default(0)
-  used_at        DateTime?               @db.Timestamp(6)
-  order_id       String?                 @db.Uuid
+  sent_by_id     String?      @db.Uuid
+  sent_by        User?        @relation("CrmCouponSender", fields: [sent_by_id], references: [id], onDelete: SetNull)
+  sent_at        DateTime     @default(now()) @db.Timestamp(6)
+  expires_at     DateTime     @db.Timestamp(6)
+  channel        CrmChannel   @default(AUCUN)
+  message_sid    String?      @db.VarChar
+  send_error     String?      @db.Text
+  resent_count   Int          @default(0)
+  used_at        DateTime?    @db.Timestamp(6)
+  order_id       String?      @db.Uuid
   order_amount   Float?
 
-  @@index([prospect_id, sent_at])
+  @@index([contact_id, sent_at])
   @@index([campaign_id])
   @@index([sent_at])
   @@index([used_at])
@@ -3464,48 +3492,48 @@ model ConversionCoupon {
 
 /// Appartenance d'un prospect à une campagne. Reste après la campagne : c'est
 /// ce qui permet de refaire ses statistiques et de la comparer aux suivantes.
-model ConversionCampaignMember {
-  id             String                   @id @default(uuid()) @db.Uuid
-  campaign_id    String                   @db.Uuid
-  campaign       ConversionCampaign       @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
-  prospect_id    String                   @db.Uuid
-  prospect       ConversionProspect       @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
-  agent_id       String?                  @db.Uuid
-  agent          User?                    @relation("ConversionMemberAgent", fields: [agent_id], references: [id], onDelete: SetNull)
-  assigned_at    DateTime?                @db.Timestamp(6)
-  joined_at      DateTime                 @default(now()) @db.Timestamp(6)
-  released_at    DateTime?                @db.Timestamp(6)
-  release_reason ConversionReleaseReason?
-  converted_at   DateTime?                @db.Timestamp(6)
-  alert_sent_at  DateTime?                @db.Timestamp(6)
+model CrmCampaignMember {
+  id             String            @id @default(uuid()) @db.Uuid
+  campaign_id    String            @db.Uuid
+  campaign       CrmCampaign       @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+  contact_id     String            @db.Uuid
+  contact        CrmContact        @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  agent_id       String?           @db.Uuid
+  agent          User?             @relation("CrmMemberAgent", fields: [agent_id], references: [id], onDelete: SetNull)
+  assigned_at    DateTime?         @db.Timestamp(6)
+  joined_at      DateTime          @default(now()) @db.Timestamp(6)
+  released_at    DateTime?         @db.Timestamp(6)
+  release_reason CrmReleaseReason?
+  converted_at   DateTime?         @db.Timestamp(6)
+  alert_sent_at  DateTime?         @db.Timestamp(6)
 
-  @@unique([campaign_id, prospect_id])
+  @@unique([campaign_id, contact_id])
   @@index([campaign_id, agent_id])
-  @@index([prospect_id])
+  @@index([contact_id])
 }
 
 /// Journal horodaté de tout ce qui arrive à un prospect, et de qui l'a fait.
-model ConversionEvent {
-  id          String              @id @default(uuid()) @db.Uuid
-  prospect_id String              @db.Uuid
-  prospect    ConversionProspect  @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
-  type        ConversionEventType
-  actor_id    String?             @db.Uuid
-  actor       User?               @relation("ConversionEventActor", fields: [actor_id], references: [id], onDelete: SetNull)
-  campaign_id String?             @db.Uuid
-  campaign    ConversionCampaign? @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
-  label       String              @db.VarChar(255)
+model CrmEvent {
+  id          String       @id @default(uuid()) @db.Uuid
+  contact_id  String       @db.Uuid
+  contact     CrmContact   @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  type        CrmEventType
+  actor_id    String?      @db.Uuid
+  actor       User?        @relation("CrmEventActor", fields: [actor_id], references: [id], onDelete: SetNull)
+  campaign_id String?      @db.Uuid
+  campaign    CrmCampaign? @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
+  label       String       @db.VarChar(255)
   data        Json?
-  created_at  DateTime            @default(now()) @db.Timestamp(6)
+  created_at  DateTime     @default(now()) @db.Timestamp(6)
 
-  @@index([prospect_id, created_at])
+  @@index([contact_id, created_at])
 }
 
 /// Historique des exports : qui a sorti quelles données personnelles, et quand.
-model ConversionExport {
+model CrmExport {
   id         String   @id @default(uuid()) @db.Uuid
   user_id    String?  @db.Uuid
-  user       User?    @relation("ConversionExportAuthor", fields: [user_id], references: [id], onDelete: SetNull)
+  user       User?    @relation("CrmExportAuthor", fields: [user_id], references: [id], onDelete: SetNull)
   kind       String   @db.VarChar(40) // PROSPECTS | COUPONS | RAPPORT_CAMPAGNE
   format     String   @db.VarChar(10) // CSV | XLSX | PDF
   filters    Json?

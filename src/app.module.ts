@@ -45,12 +45,11 @@ import { HubriseModule } from 'src/hubrise/hubrise.module';
 import { SettingsModule } from 'src/modules/settings/settings.module';
 import { OnesignalModule } from 'src/modules/onesignal/onesignal.module';
 import { PushCampaignModule } from 'src/modules/push-campaign/push-campaign.module';
-import { ConversionModule } from 'src/modules/conversion/conversion.module';
+import { CrmModule } from 'src/modules/crm/crm.module';
 import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
 import { ReferralModule } from 'src/modules/referral/referral.module';
 import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.module';
 import { ProspectModule } from 'src/modules/prospect/prospect.module';
-import { RetentionCallbackModule } from 'src/modules/retention-callback/retention-callback.module';
 import { SchedulingModule } from 'src/modules/schedule/schedule.module';
 import { MapsModule } from 'src/modules/maps/maps.module';
 import { AdhesionModule } from 'src/modules/adhesion/adhesion.module';
@@ -149,11 +148,10 @@ import { CallsModule } from 'src/modules/calls/calls.module';
     PushCampaignModule,
     PromoCodeModule,
     DeliveryOfferModule,
-    RetentionCallbackModule,
     SchedulingModule,
     MapsModule,
     ProspectModule,
-    ConversionModule,
+    CrmModule,
     AdhesionModule,
     CallsModule,
   ],

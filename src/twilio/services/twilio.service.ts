@@ -334,24 +334,28 @@ export class TwilioService {
         return await this.sendSmsMessage({ phoneNumber, message: smsBody });
     }
 
+    /** Modèle WhatsApp des coupons du CRM : celui de l'acquisition, déjà approuvé par Meta. */
+    get modeleCouponCrm(): string {
+        return this.twilioWhatsappTemplate.acquisition_coupon.sid;
+    }
+
     /**
-     * Coupon de bienvenue du module Prospects (cahier §8).
-     *
-     * Le modèle WhatsApp n'est pas codé en dur : son identifiant se règle dans
-     * le backoffice une fois approuvé par Meta. Tant qu'il est vide, ou si
-     * WhatsApp échoue, le SMS part à sa place. Le canal réellement utilisé est
-     * renvoyé pour que la fiche du prospect dise la vérité.
+     * Coupon du CRM (cahier §8). Par défaut, le modèle `acquisition_coupon`
+     * déjà approuvé ({{1}} prénom, {{2}} code, {{3}} validité en jours, bouton
+     * « Télécharger l'app ») ; un autre modèle aux mêmes variables peut être
+     * réglé dans le backoffice. Si WhatsApp échoue, le SMS part à sa place, et
+     * le canal réellement utilisé est renvoyé pour que la fiche dise la vérité.
      */
-    async sendConversionCoupon({ phoneNumber, templateSid, variables, smsBody }: {
+    async sendCrmCoupon({ phoneNumber, templateSid, variables, smsBody }: {
         phoneNumber: string;
-        templateSid: string;
+        templateSid?: string;
         variables: Record<string, string>;
         smsBody: string;
     }): Promise<{ channel: 'WHATSAPP' | 'SMS' | 'AUCUN'; sid: string | null }> {
-        if (templateSid && (await this.isWhatsAppEnabled())) {
+        if (await this.isWhatsAppEnabled()) {
             const whatsapp = await this.sendWhatsappMessage({
                 phoneNumber,
-                contentSid: templateSid,
+                contentSid: templateSid || this.modeleCouponCrm,
                 contentVariables: JSON.stringify(variables),
             });
             if (whatsapp) return { channel: 'WHATSAPP', sid: whatsapp.sid };

@@ -111,7 +111,7 @@ export class ProspectListenerService {
         orderBy: { created_at: 'asc' },
       });
       // Un inscrit sans contact Glovo/Yango n'a rien à faire ici : il est suivi
-      // par le module Prospects (ConversionListener), dans sa propre table.
+      // par le module CRM (CrmListener), dans sa propre table.
       if (!prospect) return;
 
       const res = await this.prisma.prospect.updateMany({
