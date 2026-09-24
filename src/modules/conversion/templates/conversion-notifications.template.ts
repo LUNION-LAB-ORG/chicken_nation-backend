@@ -1,5 +1,6 @@
 import { notificationIcons } from 'src/modules/notifications/constantes/notifications.constante';
 import { NotificationTemplate } from 'src/modules/notifications/interfaces/notifications.interface';
+import { compter } from '../conversion.rules';
 
 /** Notifications « cloche » du module Prospects (cahier §8). */
 export class ConversionNotificationsTemplate {
@@ -17,7 +18,7 @@ export class ConversionNotificationsTemplate {
   static CAMPAGNE_TERMINEE: NotificationTemplate<{ campagne: string; conversions: number; cibles: number }> = {
     title: () => 'Campagne terminée',
     message: (ctx) =>
-      `« ${ctx.data.campagne} » est terminée : ${ctx.data.conversions} conversion${ctx.data.conversions > 1 ? 's' : ''} sur ${ctx.data.cibles} prospects. Le rapport est disponible.`,
+      `« ${ctx.data.campagne} » est terminée : ${compter(ctx.data.conversions, 'conversion')} sur ${compter(ctx.data.cibles, 'prospect')}. Le rapport est disponible.`,
     icon: () => notificationIcons.ok.url,
     iconBgColor: () => notificationIcons.ok.color,
     showChevron: true,

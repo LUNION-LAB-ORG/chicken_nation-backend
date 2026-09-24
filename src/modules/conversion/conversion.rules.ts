@@ -158,6 +158,11 @@ export function dateCourte(d: Date): string {
   return `${jj}/${mm}/${d.getUTCFullYear()}`;
 }
 
+/** Nombre suivi de son nom accordé à la française : singulier sous 2 (« 1 traité », « 3 traités »). */
+export function compter(n: number, singulier: string, pluriel = `${singulier}s`): string {
+  return `${n} ${Math.abs(n) >= 2 ? pluriel : singulier}`;
+}
+
 /**
  * Code dicté au téléphone : sans 0/O ni 1/I/L, qu'on confond à l'oreille comme
  * à l'écrit. Tirage cryptographique, l'unicité est vérifiée par l'appelant.

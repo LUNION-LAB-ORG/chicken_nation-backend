@@ -1,6 +1,7 @@
 import { ConversionCallOutcome as O, ConversionProspectStatus as S } from '@prisma/client';
 import {
   commandeEffective,
+  compter,
   dateCourte,
   genererCodeCoupon,
   prenomPourMessage,
@@ -107,5 +108,14 @@ describe('commandeEffective', () => {
       entity_status: { not: 'DELETED' },
       NOT: { payment_method: 'ONLINE', paied: false, status: 'PENDING' },
     });
+  });
+});
+
+describe('compter', () => {
+  it('accorde à la française : singulier sous 2', () => {
+    expect(compter(0, 'traité')).toBe('0 traité');
+    expect(compter(1, 'conversion')).toBe('1 conversion');
+    expect(compter(2, 'conversion')).toBe('2 conversions');
+    expect(compter(3, 'prospect traité', 'prospects traités')).toBe('3 prospects traités');
   });
 });

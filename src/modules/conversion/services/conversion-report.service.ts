@@ -5,6 +5,7 @@ import * as PDFDocument from 'pdfkit';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { ConversionCampaignStatsService } from './conversion-campaign-stats.service';
 import { ConversionExportService, FichierExport } from './conversion-export.service';
+import { compter } from '../conversion.rules';
 import { nomClient } from './conversion-prospect.query';
 
 type Stats = Awaited<ReturnType<ConversionCampaignStatsService['statistiques']>>;
@@ -150,7 +151,7 @@ export class ConversionReportService {
       if (s.agents.length === 0) doc.text('Aucun agent.');
       for (const a of s.agents) {
         doc.text(
-          `${a.fullname} : ${a.traites} traités, ${a.joints} joints, ${a.coupons} coupons, ${a.conversions} conversions (${a.taux_conversion} %), ${f(a.ca)} F`,
+          `${a.fullname} : ${compter(a.traites, 'traité')}, ${compter(a.joints, 'joint')}, ${compter(a.coupons, 'coupon')}, ${compter(a.conversions, 'conversion')} (${a.taux_conversion} %), ${f(a.ca)} F`,
         );
       }
       doc.moveDown();
@@ -164,7 +165,7 @@ export class ConversionReportService {
       const dernier = s.rythme.serie[s.rythme.serie.length - 1];
       doc.text(
         dernier
-          ? `${dernier.cumul} prospects traités au ${d(dernier.jour)}${dernier.objectif_cumul != null ? `, pour un objectif cumulé de ${dernier.objectif_cumul}` : ''}.`
+          ? `${compter(dernier.cumul, 'prospect traité', 'prospects traités')} au ${d(dernier.jour)}${dernier.objectif_cumul != null ? `, pour un objectif cumulé de ${dernier.objectif_cumul}` : ''}.`
           : 'Aucun appel.',
       );
       doc.end();
