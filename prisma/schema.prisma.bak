@@ -1,0 +1,3217 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres", "relationJoins"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EntityStatus {
+  NEW // NOUVEAU
+  ACTIVE // ACTIF
+  INACTIVE // INACTIF
+  DELETED // SUPPRIMÉ
+}
+
+enum NotificationType {
+  ORDER // COMMANDE
+  PROMOTION // PROMOTION
+  SYSTEM // SYSTÈME
+}
+
+enum NotificationTarget {
+  USER // UTILISATEUR
+  CUSTOMER // CLIENT
+}
+
+enum OrderType {
+  DELIVERY // LIVRAISON
+  PICKUP // RETRAIEMENT
+  TABLE // TABLE
+}
+
+enum SpiceLevel {
+  ALWAYS // Toujours épicé (badge, aucun choix)
+  OPTIONAL // Au choix du client (toggle épicé / non épicé)
+  NEVER // Jamais épicé (aucun affichage)
+}
+
+enum OrderStatus {
+  PENDING // EN ATTENTE
+  CANCELLED // ANNULÉ
+  ACCEPTED // ACCEPTÉ
+  IN_PROGRESS // EN COURS
+  READY // PRÊT
+  PICKED_UP // EN LIVRAISON
+  COLLECTED // COLLECTÉ PAR LE CLIENT
+  COMPLETED // TERMINÉ, LE LIVREUR A L'ARGENT
+}
+
+enum DeliveryService {
+  TURBO // Sous-traité à Turbo Delivery
+  FREE // Legacy — livraison gratuite (compat historique)
+  CHICKEN_NATION // Livreur interne Chicken Nation (module course)
+}
+
+enum PaiementMode {
+  MOBILE_MONEY // MOBILE MONEY
+  WALLET // WALLET
+  CARD // CARD
+  CASH // ESPÈCES
+}
+
+enum PaymentMethod {
+  OFFLINE // Au restaurant
+  ONLINE // En ligne
+}
+
+enum PaiementStatus {
+  REVERTED // ANNULÉ
+  SUCCESS // SUCCÈS
+  FAILED // ÉCHEC
+  PENDING // EN ATTENTE — encaissement livreur déclaré, à confirmer par le backoffice
+}
+
+enum SupplementCategory {
+  FOOD // ALIMENTS
+  DRINK // BOISSONS
+  ACCESSORY // ACCESSOIRES
+}
+
+enum UserType {
+  BACKOFFICE // BACKOFFICE
+  RESTAURANT // RESTAURANT
+}
+
+enum UserRole {
+  ADMIN // ADMINISTRATEUR
+  MARKETING // MARKETING
+  COMPTABLE // COMPTABLE
+  CALL_CENTER // CALL CENTER
+  MANAGER // GESTIONNAIRE
+  ASSISTANT_MANAGER // ASSISTANT GESTIONNAIRE
+  CAISSIER // CAISSIER
+  CUISINE // CUISINE
+}
+
+enum DelivererStatus {
+  PENDING_VALIDATION // Inscrit, docs uploadés, en attente de validation admin
+  ACTIVE // Validé par admin et opérationnel
+  SUSPENDED // Désactivé temporairement
+  REJECTED // Refusé par admin
+}
+
+enum VehiculeType {
+  MOTO // MOTO
+  VELO // VELO
+  VOITURE // VOITURE
+}
+
+enum Genre {
+  HOMME // HOMME
+  FEMME // FEMME
+}
+
+/// Statut de la demande globale de course (vue livreur : le batch entier)
+enum CourseStatut {
+  PENDING_ASSIGNMENT // Créée, recherche active d'un livreur
+  ACCEPTED // Livreur a accepté, en route vers le restaurant
+  AT_RESTAURANT // Livreur sur place, a donné le code de retrait
+  IN_DELIVERY // Colis récupérés, tournée des clients en cours
+  COMPLETED // Toutes les livraisons terminées (succès ou échecs)
+  CANCELLED // Annulée avant accomplissement
+  EXPIRED // Aucun livreur n'a accepté dans le délai imparti
+}
+
+/// Statut d'une livraison individuelle dans le batch d'une course
+enum DeliveryStatut {
+  PENDING // En attente — livreur pas encore parti vers ce client
+  IN_ROUTE // Livreur en route vers ce client
+  ARRIVED // Livreur arrivé à l'adresse
+  DELIVERED // Livrée avec succès (PIN validé ou preuve photo)
+  FAILED // Échec de livraison
+  CANCELLED // Annulée (order client annulée pendant la tournée)
+}
+
+/// Raisons standard d'échec d'une livraison
+enum DeliveryFailureReason {
+  CLIENT_ABSENT // Client injoignable à la porte
+  CLIENT_REFUSED // Client a refusé la commande
+  ADDRESS_NOT_FOUND // Adresse introuvable / fausse
+  CLIENT_UNREACHABLE // Téléphone client non joignable
+  WRONG_ORDER // Erreur de commande détectée sur place
+  OTHER // Motif libre (requiert failure_note)
+}
+
+/// État d'un regroupement d'Orders (batch) en attente de flush.
+enum CourseBatchStatus {
+  PENDING // En cours d'agrégation — d'autres orders peuvent encore rejoindre
+  FLUSHED // Course créée à partir de ce batch (flush réussi)
+  EXPIRED // Fenêtre écoulée avec 0 order (cas rare — batch vidé avant flush)
+}
+
+/// Statut d'une proposition envoyée à UN livreur (audit trail)
+enum CourseOfferStatus {
+  PENDING // Envoyée, en attente de réponse
+  ACCEPTED // Acceptée (devient la course active du livreur)
+  REFUSED // Refusée explicitement
+  EXPIRED // Pas de réponse dans le délai imparti
+}
+
+enum TypeTable {
+  TABLE_SQUARE // TABLE CARRE
+  TABLE_RECTANGLE // TABLE RECTANGLE
+  TABLE_ROUND // TABLE RONDE
+}
+
+enum LoyaltyLevel {
+  STANDARD // STANDARD
+  VIP // VIP (ex-PREMIUM)
+  VVIP // VVIP (ex-GOLD)
+}
+
+// Audience de ciblage d'un plat (Dish.audiences). ETUDIANT = niveau de carte
+// (profil étudiant) ; STANDARD/VIP/VVIP = niveau de fidélité (points). Un plat
+// sans audience ([]) est PUBLIC. Match strict, multi-valeurs possible.
+enum DishAudience {
+  ETUDIANT
+  STANDARD
+  VIP
+  VVIP
+}
+
+enum DiscountType {
+  PERCENTAGE // POURCENTAGE
+  FIXED_AMOUNT // MONTANT FIXE
+  BUY_X_GET_Y // ACHETER X, OBTEindre Y
+}
+
+enum TargetType {
+  ALL_PRODUCTS // TOUT LES PRODUITS
+  SPECIFIC_PRODUCTS // PRODUITS SPECIFiques
+  CATEGORIES // CATEGORIES
+}
+
+enum PromotionStatus {
+  DRAFT // Brouillon
+  ACTIVE // ACTIF
+  EXPIRED // EXPIRÉ
+  PAUSED // PAUSE
+  CANCELLED // ANNULÉ
+}
+
+enum Visibility {
+  PUBLIC // PUBLIC
+  PRIVATE // PRIVE
+}
+
+enum LoyaltyPointType {
+  EARNED // Points gagnés
+  REDEEMED // Points utilisés
+  EXPIRED // Points expirés
+  BONUS // Points bonus
+}
+
+enum LoyaltyPointIsUsed {
+  YES // OUI
+  NO // NON
+  PARTIAL // PARTIEL
+}
+
+// ── Récompenses « à gratter » (couche célébration, AU-DESSUS de la compta) ──
+// Le type est extensible : POINTS aujourd'hui, codes promo / bons / cadeaux demain.
+enum RewardType {
+  POINTS // Points de fidélité (payload: { points })
+  PROMO_CODE // Code promo offert (payload: { code, ... })
+  VOUCHER // Bon d'achat (payload: { code, amount })
+  GIFT // Cadeau libre (payload: { label, image, ... })
+}
+
+enum RewardStatus {
+  PENDING // À gratter (affichée par l'app)
+  SCRATCHED // Grattée — contenu révélé. Pour VOUCHER/PROMO c'est terminal ; pour un
+  // GIFT c'est « révélé, à utiliser » : l'entitlement reste disponible jusqu'à expiration.
+  REVOKED // Révoquée (ex: commande annulée avant grattage)
+  CONSUMED // GIFT ajouté à une commande et facturé à 0 fr → utilisé (order_id + consumed_at)
+}
+
+enum ReferralStatus {
+  PENDING // Filleul inscrit avec le code — en attente de sa 1ère commande payée
+  REWARDED // 1ère commande payée du filleul → parrain récompensé
+  CANCELLED // Annulé (anti-abus / réservé)
+}
+
+// Parrainage — volet MONÉTAIRE (Phase 5). Nature d'un gain de l'ambassadeur.
+enum ReferralEarningType {
+  PRIME // Prime fixe versée à la 1ère commande qualifiante du filleul (RG-11)
+  COMMISSION // % du CA de CHAQUE commande payée du filleul dans la fenêtre (défaut 90 j)
+}
+
+// Cycle de vie d'un gain d'ambassadeur (versement V1 = marquage manuel admin).
+enum ReferralEarningStatus {
+  PENDING // Acquis, pas encore éligible au versement
+  PAYABLE // Éligible au versement (seuil atteint ou passage manuel admin)
+  PAID // Versé (marquage manuel : paid_by / paid_at)
+  CANCELLED // Annulé (commande annulée / revue anti-fraude)
+}
+
+enum TicketStatus {
+  OPEN // OUVERT
+  IN_PROGRESS // EN COURS
+  RESOLVED // RÉSOLU
+  CLOSED // FERMÉ
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Address {
+  id String @id @default(uuid()) @db.Uuid
+
+  title       String    @db.VarChar
+  address     String    @db.VarChar
+  street      String?   @db.VarChar
+  city        String?   @db.VarChar
+  longitude   Float
+  latitude    Float
+  customer_id String?   @db.Uuid
+  customer    Customer? @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+}
+
+model Category {
+  id          String  @id @default(uuid()) @db.Uuid
+  reference   String? @unique @db.VarChar
+  name        String  @db.VarChar
+  description String? @db.VarChar
+  image       String? @db.Text
+  private     Boolean @default(false)
+  hubrise_sku String? @unique @db.VarChar
+
+  /// Vitrine : la catégorie rassemble d'elle-même les plats en promotion, sans
+  /// qu'on ait à les y déplacer. Le plat reste dans SA catégorie et apparaît
+  /// aussi ici. Rien n'est déplacé en base, c'est une lecture élargie.
+  auto_promotions Boolean @default(false)
+
+  dishes Dish[]
+
+  entity_status                  EntityStatus                @default(ACTIVE)
+  created_at                     DateTime                    @default(now()) @db.Timestamp(6)
+  updated_at                     DateTime                    @default(now()) @db.Timestamp(6)
+  promotion_targeted_categories  PromotionTargetedCategory[]
+  promo_code_targeted_categories PromoCodeTargetedCategory[]
+}
+
+model CounterOtp {
+  id      String @id @default(uuid()) @db.Uuid
+  counter Int
+}
+
+model Comment {
+  id String @id @default(uuid()) @db.Uuid
+
+  message String @db.Text
+  rating  Float // Note de 1 à 5
+
+  /// CURATION SITE VITRINE : seuls les avis explicitement approuvés au
+  /// backoffice (toggle « Visible sur le site ») apparaissent dans la section
+  /// Témoignages — plus aucune sélection automatique (note/longueur).
+  site_visible Boolean @default(false)
+
+  // Relations
+  customer_id String   @db.Uuid
+  order_id    String   @db.Uuid
+  customer    Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  order       Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  /// ⚠️ Ce modèle n'avait AUCUN index, alors que toutes les listes du
+  /// backoffice filtrent sur `entity_status` et trient sur `created_at`.
+  ///
+  /// La pagination n'y changeait rien : pour rendre dix lignes, PostgreSQL
+  /// devait balayer la table entière puis la trier, à chaque page ET une
+  /// seconde fois pour le total. C'est la cause de la lenteur constatée sur le
+  /// module Clients.
+  @@index([entity_status, created_at])
+  @@index([order_id])
+  @@index([customer_id])
+  @@index([rating])
+  @@index([site_visible])
+}
+
+model Customer {
+  id String @id @default(uuid()) @db.Uuid
+
+  phone      String    @unique @db.VarChar
+  first_name String?   @db.VarChar(255)
+  last_name  String?   @db.VarChar(255)
+  birth_day  DateTime? @db.Date
+  email      String?   @unique @db.VarChar
+  image      String?   @db.Text
+
+  // ================================
+  // TUNNEL D'ADHÉSION (Phase 4) — pré-inscription silencieuse depuis le site
+  // ================================
+  // Consentement WhatsApp recueilli au moment de l'adhésion (conformité opt-in).
+  whatsapp_opt_in       Boolean              @default(false)
+  whatsapp_opt_in_at    DateTime?            @db.Timestamp(6) // horodatage du consentement (preuve)
+  // Profil DÉCLARATIF choisi à l'adhésion (avant toute demande de carte / login).
+  // Sert de valeur par défaut à la 1re CardRequest. Nullable = jamais déclaré.
+  profile_type          ProfileType?
+  addresses             Address[]
+  favorites             Favorite[]
+  orders                Order[]
+  notification_settings NotificationSetting?
+
+  // ================================
+  // SYSTÈME DE FIDÉLITÉ INTÉGRÉ
+  // ================================
+  loyalty_level     LoyaltyLevel?
+  total_points      Int           @default(0) // Points actuels disponibles (dépensables)
+  lifetime_points   Int           @default(0) // Total des points gagnés depuis l'inscription (cumul historique)
+  status_points     Int           @default(0) // Compteur ANNUEL de points EARNED → sert de base au calcul du NIVEAU (réinitialisé chaque année, cf. loyalty-status-reset.task.ts)
+  last_level_update DateTime?     @db.Timestamp(6)
+
+  // Relations fidélité
+  loyalty_points        LoyaltyPoint[]
+  promotion_usages      PromotionUsage[]
+  loyalty_level_history LoyaltyLevelHistory[]
+  rewards               Reward[]
+  referral_code         String?               @unique @db.VarChar // code de parrainage partageable
+  referrals_made        Referral[]            @relation("Referrer") // filleuls parrainés
+  referral_received     Referral?             @relation("Referee") // parrainage reçu (1 max)
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+  last_login_at DateTime?
+  Comment       Comment[]
+
+  // relations conversations, tickets
+  TicketMessage TicketMessage[] @relation("TicketMsgAuthorCustomer")
+
+  Message               Message[]               @relation("MessageAuthorCustomer")
+  MessageReaction       MessageReaction[]
+  TicketMessageReaction TicketMessageReaction[]
+
+  TicketThread TicketThread[]
+
+  Conversation       Conversation[]
+  Voucher            Voucher[]
+  cardRequests       CardRequest[]
+  nationCards        NationCard[]
+  promo_code_usages  PromoCodeUsage[]
+  retentionCallbacks RetentionCallback[]
+  prospects          Prospect[]
+  scratch_draws      ScratchDraw[]
+
+  /// Diffusions de messages dont ce client est destinataire.
+  broadcast_recipients MessageBroadcastRecipient[]
+}
+
+// -------------------- Livreurs (deliverers) ------------------------------
+
+model Deliverer {
+  id String @id @default(uuid()) @db.Uuid
+
+  // Référence métier affichable (auto-générée : LIV-YYMMDD-XXXXX)
+  reference String @unique @db.VarChar(20)
+
+  // Authentification
+  phone      String  @unique @db.VarChar
+  password   String  @db.VarChar // hash bcrypt du code 4 chiffres
+  first_name String? @db.VarChar(255)
+  last_name  String? @db.VarChar(255)
+  email      String? @unique @db.VarChar
+  genre      Genre?
+  image      String? @db.Text // URL avatar S3
+
+  // Documents et véhicule (uploadés à l'inscription)
+  type_vehicule          VehiculeType?
+  piece_identite         String?       @db.Text // URL S3
+  permis_conduire        String?       @db.Text // URL S3
+  numero_permis          String?       @db.VarChar(100) // Numéro figurant sur le permis
+  numero_immatriculation String?       @db.VarChar(50) // Plaque d'immatriculation du véhicule
+
+  // ── Lieu d'habitation (choisi par le livreur à l'inscription) ──────────
+  // Optionnel. Sert à classer les restaurants par PROXIMITÉ côté admin
+  // (backoffice) pour faciliter l'affectation au restaurant le plus proche.
+  home_location Json? // { lat: number, lng: number }
+  home_address  String? @db.Text
+
+  // Statut métier
+  status           DelivererStatus @default(PENDING_VALIDATION)
+  is_operational   Boolean         @default(false) // calculé côté service
+  // Motif du dernier refus (REJECTED). Posé au refus, effacé à la validation
+  // ou à la resoumission. Affiché au livreur (deli) et à l'admin (backoffice).
+  rejection_reason String?         @db.Text
+
+  // Affectation
+  restaurant_id String?     @db.Uuid
+  restaurant    Restaurant? @relation(fields: [restaurant_id], references: [id], onDelete: SetNull)
+
+  // Courses (demandes) affectées à ce livreur
+  courses        Course[]
+  offer_attempts CourseOfferAttempt[]
+
+  // ── Module Schedule (P7 — créneaux & disponibilité) ────────────────────
+  // Affectations à des shifts d'un planning, jours de repos, check-ins matinaux.
+  schedule_assignments ShiftAssignment[]
+  rest_days            RestDay[]
+  presence_checks      DailyPresenceCheck[]
+
+  // Sessions
+  last_login_at DateTime?
+  refresh_token String?   @db.Text // hash du refresh token actif
+
+  // Suppression différée (RGPD + période de grâce 90j)
+  // Si non null : compte programmé pour suppression définitive à cette date.
+  // Pendant cette période, le user peut se reconnecter et restaurer son compte.
+  deletion_scheduled_at DateTime? @db.Timestamp(6)
+
+  // ── Géolocalisation temps réel ─────────────────────────────────────────
+  // Remontée par le mobile via POST /deliverer/me/location toutes les X sec
+  // (X = `deliverer.gps_update_interval_seconds` en settings, default 60s).
+  // Utilisée par le DelivererScoringService pour pondérer la distance
+  // au restaurant dans le choix du livreur à qui envoyer une offre.
+  last_location    Json? // { lat: number, lng: number }
+  last_location_at DateTime? @db.Timestamp(6)
+  last_speed_kmh   Float? // vitesse instantanée (m/s → km/h côté mobile)
+  last_heading_deg Float? // direction 0-360° (bonus pour flèche map admin)
+
+  // ── File d'attente FIFO & pénalités ────────────────────────────────────
+  // `last_available_at` : timestamp d'entrée en queue (null = pas dispo).
+  // Le tri FIFO est `ORDER BY last_available_at ASC` — plus ancien = servi d'abord.
+  last_available_at DateTime? @db.Timestamp(6)
+
+  // Pause manuelle (bouton "Je prends une pause" côté mobile).
+  pause_until DateTime? @db.Timestamp(6)
+
+  // Pause forcée après N refus consécutifs en X min (auto_pause_*).
+  auto_pause_until DateTime? @db.Timestamp(6)
+
+  // Pénalité queue après un refus : descend de N positions pendant X min.
+  queue_penalty_until     DateTime? @db.Timestamp(6)
+  queue_penalty_positions Int?      @default(0)
+
+  // Historique timestamps des derniers refus/expirations d'offres — JSON
+  // array de strings ISO. Utilisé pour compter les refus dans une fenêtre
+  // glissante (cf. auto_pause_refusals_window_min).
+  recent_refusals Json?
+
+  // ── Push notifications (Expo Push) ─────────────────────────────────────
+  // Token Expo enregistré au login mobile. Sert à `ExpoPushService` pour
+  // envoyer des notifications (nouveau message support, nouvelle course,
+  // auto-pause, etc.). Re-set à chaque login pour suivre les changements
+  // (re-install app, restore device, etc.).
+  expo_push_token String? @db.VarChar(255)
+
+  // ── Tickets support (P-chat livreur ↔ support) ─────────────────────────
+  // Le livreur peut ouvrir des tickets de support via l'app mobile, et
+  // recevoir des messages d'agents support depuis le backoffice.
+  support_tickets          TicketThread[]          @relation("DelivererTickets")
+  support_ticket_messages  TicketMessage[]         @relation("DelivererTicketMessages")
+  ticket_message_reactions TicketMessageReaction[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([phone])
+  @@index([status])
+  @@index([restaurant_id])
+  @@index([deletion_scheduled_at])
+  @@index([last_available_at])
+  @@index([pause_until])
+  @@index([auto_pause_until])
+}
+
+// -------------------- Courses / Livraisons ---------------------------------
+// Modèle central qui représente la "demande de course" envoyée au livreur.
+// Une Course regroupe 1..N Delivery (livraisons individuelles).
+
+/// Demande de course = regroupement de livraisons proposées à un livreur.
+/// La `reference` sert aussi de code de retrait au restaurant.
+model Course {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Référence unique interne : CRS-YYMMDD-XXXXX (tracking + logs + URLs)
+  reference String @unique @db.VarChar(20)
+
+  /// Code de retrait à 3 chiffres donné au restaurant par le livreur.
+  /// NON unique : collisions possibles (1000 codes, tolérables à l'échelle d'un resto).
+  /// En cas de collision, le resto discrimine via le livreur et la commande.
+  pickup_code String @db.VarChar(3)
+
+  statut CourseStatut @default(PENDING_ASSIGNMENT)
+
+  /// Livreur affecté (null tant qu'aucun n'a accepté)
+  deliverer_id String?    @db.Uuid
+  deliverer    Deliverer? @relation(fields: [deliverer_id], references: [id], onDelete: SetNull)
+
+  /// Restaurant d'origine (toutes les livraisons partent du même resto)
+  restaurant_id String     @db.Uuid
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id])
+
+  /// Livraisons groupées dans cette demande (1..N)
+  deliveries Delivery[]
+
+  /// Historique des propositions envoyées aux livreurs
+  offer_attempts CourseOfferAttempt[]
+
+  /// Batch de regroupement d'origine (si la Course est issue du grouping auto).
+  /// Null si créée "en legacy" (1 order = 1 course sans batch).
+  batch CourseBatch?
+
+  // === Timeline ===
+  assigned_at      DateTime? @db.Timestamp(6) // livreur a accepté
+  at_restaurant_at DateTime? @db.Timestamp(6) // livreur arrivé au resto (GPS ou action manuelle)
+  picked_up_at     DateTime? @db.Timestamp(6) // code retrait donné, colis récupérés par la caissière
+  completed_at     DateTime? @db.Timestamp(6) // toutes livraisons terminées
+  cancelled_at     DateTime? @db.Timestamp(6)
+  cancelled_by     String?   @db.VarChar // "admin" | "deliverer" | "restaurant" | "system"
+  cancelled_reason String?   @db.VarChar
+
+  // === Mécanique d'affectation ===
+  /// Moment où l'offer PENDING actuelle expire
+  offer_expires_at        DateTime? @db.Timestamp(6)
+  /// Cumul des livreurs ayant refusé (stat de difficulté)
+  refusal_count           Int       @default(0)
+  /// Horodatage de l'alerte « aucun livreur disponible » envoyée au staff.
+  /// Non null ⇒ alerte déjà émise, on ne la renvoie pas à chaque relance du cron.
+  no_deliverer_alerted_at DateTime? @db.Timestamp(6)
+  /// Horodatage de la bascule vers la flotte externe Turbo (saturation interne).
+  /// Non null ⇒ la course a été sous-traitée : plus aucune recherche interne.
+  turbo_escalated_at      DateTime? @db.Timestamp(6)
+  /// Horodatage de l'alerte « livraison en retard » envoyée au staff.
+  /// Non null ⇒ déjà signalée, on ne la répète pas à chaque passage du cron.
+  delay_alerted_at        DateTime? @db.Timestamp(6)
+
+  // === Financier ===
+  total_delivery_fee     Float
+  estimated_duration_min Int?
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([deliverer_id, statut])
+  @@index([restaurant_id, statut])
+  @@index([statut, offer_expires_at]) // utile pour le cron d'expiration
+}
+
+/// Une livraison individuelle dans le batch d'une course.
+/// 1 Delivery = 1 Order à livrer à 1 client.
+model Delivery {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Course (demande) à laquelle appartient cette livraison
+  course_id String @db.Uuid
+  course    Course @relation(fields: [course_id], references: [id], onDelete: Cascade)
+
+  /// Ordre dans la tournée (1, 2, 3…) — optimisation itinéraire
+  sequence_order Int
+
+  /// Order client livrée (relation 1-1)
+  order_id String @unique @db.Uuid
+  order    Order  @relation(fields: [order_id], references: [id])
+
+  statut DeliveryStatut @default(PENDING)
+
+  /// Code 4 chiffres donné au client via notification pour confirmer la réception.
+  delivery_pin String @db.VarChar(4)
+
+  // === Timeline par livraison ===
+  in_route_at  DateTime? @db.Timestamp(6) // livreur en route vers ce client
+  arrived_at   DateTime? @db.Timestamp(6) // livreur arrivé
+  delivered_at DateTime? @db.Timestamp(6) // PIN validé / preuve fournie
+  failed_at    DateTime? @db.Timestamp(6)
+
+  // === Échec ===
+  failure_reason DeliveryFailureReason?
+  failure_note   String?                @db.VarChar(500)
+
+  // === Preuve (fallback si client sans PIN) ===
+  proof_image String? @db.Text // key S3 sous chicken-nation/deliveries-proof/
+
+  // === Notation du client par le livreur (post-livraison, optionnel) ===
+  // Le livreur peut noter le client après une livraison (DELIVERED ou FAILED)
+  // pour signaler les comportements (ex: client agressif, lieu difficile,
+  // adresse fausse). Utilisé par les ops pour identifier les clients problématiques.
+  customer_rating      Int?      @db.SmallInt // 1-5
+  customer_rating_note String?   @db.VarChar(500)
+  customer_rated_at    DateTime? @db.Timestamp(6)
+
+  // === Sous-traitance TURBO (flotte externe) ===
+  // Dégroupage : 1 Delivery = 1 course Turbo (leur API prend 1 commande).
+  // Ces champs donnent au suivi Turbo la MÊME richesse qu'une livraison interne
+  // (qui livre, comment le joindre, où il est) — alimentés par les webhooks.
+  /// Id de la course côté Turbo (webhook `created`).
+  turbo_course_id           String?   @db.VarChar
+  /// Livreur Turbo affecté (webhook `courier_assigned`).
+  turbo_courier_id          String?   @db.VarChar
+  turbo_courier_name        String?   @db.VarChar
+  turbo_courier_phone       String?   @db.VarChar
+  /// Dernière position connue du livreur Turbo (webhook `location_updated`).
+  turbo_courier_lat         Float?
+  turbo_courier_lng         Float?
+  turbo_courier_location_at DateTime? @db.Timestamp(6)
+  /// Tentatives de saisie du code client par un livreur Turbo. Le code fait 4
+  /// chiffres (10 000 combinaisons) : sans plafond, il est brute-forçable par
+  /// quiconque détient une clé API. Au-delà du seuil, la validation est bloquée
+  /// et le staff alerté.
+  turbo_code_attempts       Int       @default(0)
+  /// Raison transmise par Turbo quand ILS annulent la course (webhook
+  /// `cancelled`). Depuis le découplage, l'annulation Turbo n'annule PLUS la
+  /// commande : seule la livraison/course est annulée et la raison est montrée
+  /// au staff, qui décide (relancer ou annuler la commande manuellement).
+  turbo_cancelled_reason    String?   @db.VarChar(500)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@unique([course_id, sequence_order]) // pas de doublon dans la tournée
+  @@index([course_id, statut])
+  @@index([order_id])
+  @@index([customer_rating]) // stats côté ops
+}
+
+/// Audit trail des propositions envoyées aux livreurs.
+/// - Permet le retry automatique après refus/timeout
+/// - Trace qui a refusé quoi pour stats
+model CourseOfferAttempt {
+  id String @id @default(uuid()) @db.Uuid
+
+  course_id String @db.Uuid
+  course    Course @relation(fields: [course_id], references: [id], onDelete: Cascade)
+
+  deliverer_id String    @db.Uuid
+  deliverer    Deliverer @relation(fields: [deliverer_id], references: [id])
+
+  status         CourseOfferStatus @default(PENDING)
+  offered_at     DateTime          @default(now()) @db.Timestamp(6)
+  expires_at     DateTime          @db.Timestamp(6) // offered_at + 30s
+  responded_at   DateTime?         @db.Timestamp(6)
+  refusal_reason String?           @db.VarChar(500)
+  /// Relances déjà envoyées pendant la fenêtre d'acceptation. Une notification
+  /// unique ne laisse au livreur QU'UNE chance de voir l'offre : s'il est
+  /// distrait à cet instant, la course lui échappe alors qu'il était libre.
+  /// Le compteur rend les relances idempotentes (claim atomique, 2 backends).
+  reminders_sent Int               @default(0)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+
+  /// A1 Fix — Partial unique index ajouté via migration ciblée :
+  ///   CREATE UNIQUE INDEX "CourseOfferAttempt_pending_unique"
+  ///     ON "CourseOfferAttempt" ("course_id", "deliverer_id")
+  ///     WHERE "status" = 'PENDING';
+  /// Garantit qu'au plus UNE offer PENDING existe par couple
+  /// (course, deliverer) à un instant T. Les statuts terminaux
+  /// (ACCEPTED, REFUSED, EXPIRED) restent libres de doublons.
+  /// Prisma 6 ne supporte pas encore les WHERE clauses sur @@unique,
+  /// d'où la migration SQL brute (cf. 20260425101807_course_offer_pending_unique).
+
+  @@index([deliverer_id, status])
+  @@index([course_id])
+  @@index([status, expires_at]) // cron d'expiration
+}
+
+/// Regroupement intelligent de commandes en attente de création de Course.
+///
+/// Flow : quand une Order passe READY, `CourseGroupingService.tryGroupOrder(orderId)`
+/// attache l'order à un batch PENDING existant (même restaurant, compatible) ou
+/// en crée un nouveau avec TTL = `course.batch_window_seconds` (default 180 s).
+///
+/// Le batch est flush (→ Course créée) :
+///   - Immédiatement quand il atteint `course.max_orders_per_course`
+///   - Ou quand `expires_at` est dépassé (cron `CourseBatchTask` toutes les 10 s)
+///
+/// Un batch reste visible en DB même après flush pour audit / debug.
+model CourseBatch {
+  id            String     @id @default(uuid()) @db.Uuid
+  restaurant_id String     @db.Uuid
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  /// État courant du batch (PENDING → FLUSHED ou EXPIRED).
+  status CourseBatchStatus @default(PENDING)
+
+  /// Fenêtre de fermeture automatique : now + `course.batch_window_seconds`.
+  /// Le cron `CourseBatchTask` flush tous les batches PENDING dont `expires_at <= now`.
+  expires_at DateTime @db.Timestamp(6)
+
+  /// Commandes en attente dans ce batch (1..N via relation inverse `Order.batch`).
+  orders Order[]
+
+  /// Course créée au flush (null tant que PENDING ou EXPIRED sans flush).
+  course_id  String?   @unique @db.Uuid
+  course     Course?   @relation(fields: [course_id], references: [id], onDelete: SetNull)
+  flushed_at DateTime? @db.Timestamp(6)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([restaurant_id, status])
+  @@index([status, expires_at]) // cron de flush
+}
+
+// -------------------- Gestion des conversations ------------------------------
+
+model Conversation {
+  id      String  @id @default(uuid()) @db.Uuid
+  subject String? @db.VarChar
+
+  /// GROUPE interne : décidé à la création, et jamais recalculé.
+  ///
+  /// Le déduire du nombre de participants était une erreur : retirer quelqu'un
+  /// d'un groupe de trois le faisait cesser d'être un groupe, et il devenait
+  /// alors impossible d'y remettre qui que ce soit. C'est aussi ce drapeau qui
+  /// protège un tête-à-tête : sans lui, rien n'empêchait d'y faire entrer un
+  /// tiers, qui héritait de tout l'historique privé des deux autres.
+  isGroup Boolean @default(false)
+
+  /// Ce groupe reçoit les ALERTES du système (paiement encaissé sans commande
+  /// confirmée, commande terminée sans paiement, webhook refusé…).
+  ///
+  /// Porté par la conversation plutôt que par un réglage global : le responsable
+  /// l'active d'un interrupteur dans le groupe qu'il a sous les yeux, au lieu de
+  /// coller un identifiant quelque part. Plusieurs groupes peuvent en recevoir.
+  receivesAlerts Boolean @default(false)
+
+  /// Canal officiel de diffusion : cette conversation a été créée par une
+  /// diffusion, pas par un échange. Elle reste HORS de la boîte de réception
+  /// du backoffice tant que le client n'a pas répondu, sinon une seule
+  /// diffusion à mille clients noierait le service client pour de bon.
+  isBroadcast Boolean @default(false)
+
+  /// Le client a répondu au moins une fois. La conversation redevient alors
+  /// ordinaire et réapparaît dans la boîte de réception, le message diffusé
+  /// en première ligne d'historique pour que l'agent voie à quoi il répond.
+  hasReply Boolean @default(false)
+
+  restaurantId String?     @db.Uuid
+  restaurant   Restaurant? @relation(fields: [restaurantId], references: [id])
+
+  customerId String?   @db.Uuid
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  users    ConversationUser[]
+  messages Message[]
+
+  // multi-escalades : 1 conv -> N tickets
+  escalations TicketThread[] @relation("FromConversation")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([receivesAlerts])
+}
+
+model ConversationUser {
+  conversationId String @db.Uuid
+  userId         String @db.Uuid
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  joinedAt DateTime @default(now()) // Date de jointure
+
+  /// Dernière fois que CE participant a ouvert la conversation.
+  ///
+  /// `Message.isRead` est un drapeau porté par le message, pas par le lecteur :
+  /// dans un groupe, le premier qui lit éteindrait la pastille de tous les
+  /// autres. Le non-lu se calcule donc ici, par personne : les messages postés
+  /// après cette date et qu'elle n'a pas écrits. `null` = jamais ouverte.
+  lastReadAt DateTime?
+
+  @@id([conversationId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id             String       @id @default(uuid()) @db.Uuid
+  conversationId String       @db.Uuid
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  // Auteur (les 2 ne peuvent etre null a la fois)
+  authorUserId     String?   @db.Uuid
+  authorUser       User?     @relation("MessageAuthorUser", fields: [authorUserId], references: [id])
+  authorCustomerId String?   @db.Uuid
+  authorCustomer   Customer? @relation("MessageAuthorCustomer", fields: [authorCustomerId], references: [id])
+
+  body      String
+  meta      Json? // Image, vidéo, fichier, etc.
+  isRead    Boolean   @default(false) // Si le message a été lu
+  /// Horodatage de la lecture. Colonne NOUVELLE plutôt que réinterprétation de
+  /// `isRead`, qui pilote déjà tous les compteurs de non lus : la toucher
+  /// casserait les badges. Sert à afficher l'heure sous la coche « Vu ».
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  /// Message issu d'une diffusion. Sert à l'exclure des compteurs de non lus
+  /// du backoffice, et à garantir qu'une même diffusion n'écrit qu'une seule
+  /// fois dans une conversation (index unique partiel posé en SQL brut).
+  broadcastId String?           @db.Uuid
+  broadcast   MessageBroadcast? @relation(fields: [broadcastId], references: [id], onDelete: SetNull)
+
+  /// Message SUPPRIMÉ, par son auteur ou par un administrateur.
+  ///
+  /// Suppression DOUCE, et c'est délibéré : la ligne reste, seul son contenu
+  /// cesse d'être servi. Un fil de support est une pièce à conviction quand un
+  /// litige remonte — effacer vraiment la ligne ferait disparaître le fait
+  /// qu'un message a existé, et avec lui la possibilité de savoir qui a dit
+  /// quoi. Le client voit un message retiré, la maison garde la trace.
+  deletedAt   DateTime?
+  /// Qui a supprimé. Simple identifiant, sans clé étrangère : la trace doit
+  /// survivre au départ de la personne, comme dans le journal d'audit.
+  deletedById String?   @db.Uuid
+
+  reactions MessageReaction[]
+
+  @@index([conversationId, createdAt])
+  @@index([authorUserId])
+  @@index([authorCustomerId])
+}
+
+/// RÉACTION à un message, comme sur WhatsApp : un emoji posé par une personne.
+///
+/// UNE seule par personne et par message. C'est l'unicité qui porte la règle,
+/// pas le code : deux clics simultanés ne peuvent pas créer de doublon.
+///
+/// ⚠️ Les deux contraintes d'unicité sont SÉPARÉES, et c'est volontaire. En
+/// PostgreSQL deux NULL ne sont jamais égaux : `@@unique([messageId, userId])`
+/// n'empêche donc pas mille clients de réagir au même message, puisque leur
+/// `userId` est nul. Chaque contrainte ne borne que son propre camp, ce qui
+/// est exactement le comportement voulu.
+model MessageReaction {
+  id        String  @id @default(uuid()) @db.Uuid
+  messageId String  @db.Uuid
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  /// L'emoji lui-même. `Text` et non `VarChar(n)` : un emoji composé (drapeau,
+  /// teinte de peau, famille assemblée par des liants invisibles) compte
+  /// plusieurs points de code, et une borne en caractères le tronquerait au
+  /// milieu d'une séquence, produisant un symbole inintelligible.
+  emoji String @db.Text
+
+  /// Qui a réagi. Exactement UN des deux est renseigné.
+  userId     String?   @db.Uuid
+  user       User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerId String?   @db.Uuid
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId])
+  @@unique([messageId, customerId])
+  @@index([messageId])
+}
+
+/// Même chose pour les messages de ticket, qui ont un auteur de plus : le
+/// livreur. Table distincte plutôt que polymorphe, parce que les deux messages
+/// sont deux tables distinctes et qu'une clé étrangère vaut mieux qu'un
+/// discriminant qu'aucune contrainte ne vérifie.
+model TicketMessageReaction {
+  id              String        @id @default(uuid()) @db.Uuid
+  ticketMessageId String        @db.Uuid
+  ticketMessage   TicketMessage @relation(fields: [ticketMessageId], references: [id], onDelete: Cascade)
+
+  emoji String @db.Text
+
+  userId      String?    @db.Uuid
+  user        User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerId  String?    @db.Uuid
+  customer    Customer?  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  delivererId String?    @db.Uuid
+  deliverer   Deliverer? @relation(fields: [delivererId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([ticketMessageId, userId])
+  @@unique([ticketMessageId, customerId])
+  @@unique([ticketMessageId, delivererId])
+  @@index([ticketMessageId])
+}
+
+// ---------- Tickets (support) ----------
+
+// Cette table represente les tickets de support
+model TicketThread {
+  id String @id @default(uuid()) @db.Uuid
+
+  subject  String
+  code     String         @unique @db.VarChar // ex: TCK-0001
+  status   TicketStatus   @default(OPEN)
+  priority TicketPriority @default(MEDIUM)
+  source   String? // ex: phone, email, webform, escalation
+
+  // C'est un client qui contacte le support
+  customerId String?   @db.Uuid
+  customer   Customer? @relation(fields: [customerId], references: [id])
+
+  // OU c'est un livreur qui contacte le support (P-chat livreur)
+  // Mutuellement exclusif avec customerId — un ticket vient d'UN seul demandeur.
+  delivererId String?    @db.Uuid
+  deliverer   Deliverer? @relation("DelivererTickets", fields: [delivererId], references: [id])
+
+  // Catégorie du ticket
+  categoryId String?         @db.Uuid
+  category   TicketCategory? @relation(fields: [categoryId], references: [id])
+
+  // Assignation agent support
+  assigneeId String? @db.Uuid
+  assignee   User?   @relation("TicketAssignee", fields: [assigneeId], references: [id])
+
+  // multi-escalades : N tickets peuvent référencer la même conversation
+  fromConversationId String?       @db.Uuid
+  fromConversation   Conversation? @relation("FromConversation", fields: [fromConversationId], references: [id])
+
+  // Participants & messages
+  participants TicketParticipant[]
+  messages     TicketMessage[]
+
+  // commande lié au ticket
+  orderId String? @db.Uuid
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  // SLA / métriques
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, priority])
+  @@index([assigneeId])
+  @@index([customerId])
+  @@index([delivererId])
+  @@index([fromConversationId])
+}
+
+// Cette table represente les "employes" qui repondent au ticket d'un client
+model TicketParticipant {
+  ticketId String       @db.Uuid
+  userId   String       @db.Uuid
+  ticket   TicketThread @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt DateTime     @default(now())
+
+  @@id([ticketId, userId])
+  @@index([userId])
+}
+
+model TicketMessage {
+  id       String       @id @default(uuid()) @db.Uuid
+  ticketId String       @db.Uuid
+  ticket   TicketThread @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  // Les authors sont mutuellement exclusifs — exactement un des trois doit être non-null.
+  authorUserId      String?    @db.Uuid
+  authorUser        User?      @relation("TicketMsgAuthorUser", fields: [authorUserId], references: [id])
+  authorCustomerId  String?    @db.Uuid
+  authorCustomer    Customer?  @relation("TicketMsgAuthorCustomer", fields: [authorCustomerId], references: [id])
+  // Auteur livreur (P-chat livreur) — exclusif avec les 2 autres.
+  authorDelivererId String?    @db.Uuid
+  authorDeliverer   Deliverer? @relation("DelivererTicketMessages", fields: [authorDelivererId], references: [id])
+
+  body      String
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  isRead   Boolean @default(false) // Si le message a été lu
+  internal Boolean @default(false) // Si le message est pour usage interne
+
+  /// Message SUPPRIMÉ, par son auteur ou par un administrateur.
+  ///
+  /// Suppression DOUCE, et c'est délibéré : la ligne reste, seul son contenu
+  /// cesse d'être servi. Un fil de support est une pièce à conviction quand un
+  /// litige remonte — effacer vraiment la ligne ferait disparaître le fait
+  /// qu'un message a existé, et avec lui la possibilité de savoir qui a dit
+  /// quoi. Le client voit un message retiré, la maison garde la trace.
+  deletedAt   DateTime?
+  /// Qui a supprimé. Simple identifiant, sans clé étrangère : la trace doit
+  /// survivre au départ de la personne, comme dans le journal d'audit.
+  deletedById String?   @db.Uuid
+
+  reactions TicketMessageReaction[]
+
+  @@index([ticketId, createdAt])
+  @@index([authorUserId])
+  @@index([authorCustomerId])
+  @@index([authorDelivererId])
+  @@index([isRead])
+}
+
+model TicketCategory {
+  id            String       @id @default(uuid()) @db.Uuid
+  name          String       @unique @db.VarChar
+  description   String?      @db.Text
+  entity_status EntityStatus @default(ACTIVE)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  agents       TicketUserSkill[] @relation("CategoryAgents")
+  TicketThread TicketThread[]
+
+  @@index([name])
+  @@index([entity_status])
+}
+
+model TicketUserSkill {
+  id         String @id @default(uuid()) @db.Uuid
+  userId     String @db.Uuid
+  categoryId String @db.Uuid
+
+  category TicketCategory @relation("CategoryAgents", fields: [categoryId], references: [id], onDelete: Cascade)
+  user     User           @relation("CategoryAgents", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([categoryId])
+  @@index([userId])
+}
+
+// -------------------- Fin Gestion des conversations ------------------------------
+
+// Modèle "tout par défaut − exclusions" : un plat propose TOUS les suppléments / est
+// vendu dans TOUS les restaurants, SAUF ceux listés ici comme exclus.
+// (Ces 2 tables sont les anciennes DishSupplement/DishRestaurant RENOMMÉES — cf. migration.)
+model DishExcludedSupplement {
+  id            String     @id @default(uuid()) @db.Uuid
+  dish_id       String     @db.Uuid
+  supplement_id String     @db.Uuid
+  dish          Dish       @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+  supplement    Supplement @relation(fields: [supplement_id], references: [id], onDelete: Cascade)
+
+  @@unique([dish_id, supplement_id])
+}
+
+/// Un GROUPE D'OPTIONS d'un plat composable : « Choix de sauce », « Format »,
+/// « Épicé ou non ». Le groupe porte la contrainte, pas l'option.
+model DishOptionGroup {
+  id      String @id @default(uuid()) @db.Uuid
+  dish_id String @db.Uuid
+  dish    Dish   @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+
+  name        String  @db.VarChar // « Choix de sauce »
+  description String? @db.VarChar // aide affichée sous le titre
+  /// Le client DOIT répondre à ce groupe pour pouvoir commander.
+  required    Boolean @default(true)
+  /// Bornes de sélection. « exactement une sauce » = min 1, max 1 ;
+  /// « jusqu'à trois sauces » = min 0, max 3.
+  min_select  Int     @default(1)
+  max_select  Int     @default(1)
+  /// Ordre d'affichage dans l'écran de composition.
+  position    Int     @default(0)
+
+  items DishOptionItem[]
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([dish_id, position])
+}
+
+/// Un CHOIX possible dans un groupe. Le prix vit ICI, donc il dépend du plat :
+/// le format « Menu » vaut +1000 sur un poulet pané et +2000 sur un burger,
+/// ce que le prix unique de `Supplement` ne pouvait pas exprimer.
+model DishOptionItem {
+  id       String          @id @default(uuid()) @db.Uuid
+  group_id String          @db.Uuid
+  group    DishOptionGroup @relation(fields: [group_id], references: [id], onDelete: Cascade)
+
+  label         String      @db.VarChar // « Mayonnaise », « XL (3 pcs) »
+  /// Supplément facturé POUR CE PLAT. 0 = choix inclus (une sauce offerte).
+  price_delta   Float       @default(0)
+  /// Rattachement facultatif au catalogue de suppléments, pour que la cuisine,
+  /// les tickets et HubRise retrouvent un article connu. Un choix purement
+  /// descriptif (« Épicé ») n'en a pas besoin.
+  supplement_id String?     @db.Uuid
+  supplement    Supplement? @relation(fields: [supplement_id], references: [id])
+
+  /// Présélectionné à l'ouverture de l'écran de composition.
+  is_default Boolean @default(false)
+  available  Boolean @default(true)
+  position   Int     @default(0)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([group_id, position])
+}
+
+model DishExcludedRestaurant {
+  id            String     @id @default(uuid()) @db.Uuid
+  dish_id       String     @db.Uuid
+  restaurant_id String     @db.Uuid
+  dish          Dish       @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@unique([dish_id, restaurant_id])
+}
+
+model Dish {
+  id String @id @default(uuid()) @db.Uuid
+
+  name                  String            @db.VarChar
+  reference             String?           @unique @db.VarChar
+  description           String?           @db.VarChar
+  price                 Float
+  image                 String?           @db.Text
+  is_promotion          Boolean           @default(false)
+  is_alway_epice        Boolean           @default(false)
+  spice_level           SpiceLevel        @default(OPTIONAL)
+  available_order_types OrderType[]       @default([DELIVERY, PICKUP, TABLE])
+  // Créneau horaire de disponibilité « HH:mm » (NULL = toujours disponible)
+  available_from        String?           @db.VarChar
+  available_until       String?           @db.VarChar
+  promotion_price       Float?
+  category_id           String            @db.Uuid
+  cooking_time          Int?              @db.Integer // en minutes
+  private               Boolean           @default(false)
+  // Ciblage d'audience : [] = PUBLIC (tout le monde). Sinon le plat n'est
+  // visible que pour les clients dont l'audience (ETUDIANT si étudiant, ou
+  // leur niveau de fidélité exact) figure dans la liste. Match STRICT (un plat
+  // [VIP] n'est PAS vu par VVIP tant que VVIP n'est pas coché aussi).
+  audiences             DishAudience[]    @default([])
+  hubrise_sku           String?           @unique @db.VarChar
+  category              Category          @relation(fields: [category_id], references: [id], onDelete: Cascade)
+  /// MENUS COMPOSABLES (06/08). Un plat composable se configure par des
+  /// GROUPES D'OPTIONS (sauce, format, épicé) avant d'être commandé, au lieu
+  /// d'exister en huit déclinaisons figées. Tant que ce marqueur est faux, le
+  /// plat se comporte exactement comme avant.
+  ///
+  /// ⚠️ SÉCURITÉ : un plat composable est EXCLU de tous les endpoints qui
+  /// servent les applications clientes, car les versions déjà installées ne
+  /// savent pas afficher ses options et produiraient une commande au prix
+  /// faux. La levée de cette exclusion se fera version par version, quand les
+  /// applications sauront se déclarer.
+  composable            Boolean           @default(false)
+  option_groups         DishOptionGroup[]
+
+  dish_excluded_supplements DishExcludedSupplement[]
+  dish_excluded_restaurants DishExcludedRestaurant[]
+  favorites                 Favorite[]
+  order_items               OrderItem[]
+
+  // Relations promotions
+  promotion_dishes          PromotionDish[]
+  promotion_targeted_dishes PromotionTargetedDish[]
+
+  // Relations codes promo
+  promo_code_targeted_dishes PromoCodeTargetedDish[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([category_id, entity_status, is_promotion])
+}
+
+model Favorite {
+  id String @id @default(uuid()) @db.Uuid
+
+  customer_id String   @db.Uuid
+  dish_id     String   @db.Uuid
+  customer    Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  dish        Dish     @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+}
+
+model NotificationSetting {
+  customer_id                String    @id @unique @db.Uuid
+  push                       Boolean   @default(true)
+  promotions                 Boolean   @default(true)
+  system                     Boolean   @default(true)
+  expo_push_token            String?   @db.VarChar
+  /// Jeton Expo REVOQUE, conservé pour pouvoir revenir en arrière.
+  ///
+  /// Quand Expo répond `DeviceNotRegistered`, le téléphone a désinstallé
+  /// l'application ou réinitialisé son jeton : continuer à le viser brûle du
+  /// quota dans le vide et gonfle la cible des campagnes. On déplace donc la
+  /// valeur ici au lieu de la perdre, ce qui a deux vertus : les dix et
+  /// quelques endroits qui testent déjà `expo_push_token != null` cessent
+  /// automatiquement de viser un appareil mort, sans être modifiés, et la
+  /// valeur reste consultable si la révocation s'avérait fautive.
+  expo_push_token_revoked    String?   @db.VarChar
+  expo_push_token_revoked_at DateTime?
+  onesignal_id               String?   @db.VarChar
+  onesignal_subscription_id  String?   @db.VarChar
+  customer                   Customer  @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  active                     Boolean   @default(true)
+
+  @@index([expo_push_token])
+}
+
+model Notification {
+  id String @id @default(uuid()) @db.Uuid
+
+  title         String             @db.VarChar
+  message       String             @db.Text
+  type          NotificationType
+  is_read       Boolean            @default(false)
+  user_id       String             @db.Uuid
+  target        NotificationTarget
+  icon          String             @db.Text
+  icon_bg_color String             @db.VarChar
+  show_chevron  Boolean            @default(false)
+  data          Json?
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([user_id, target])
+  @@index([type, is_read])
+}
+
+model ScheduledNotification {
+  id String @id @default(uuid()) @db.Uuid
+
+  name    String @db.VarChar
+  channel String @default("push") @db.VarChar
+
+  // Message content (OneSignal payload)
+  payload   Json
+  // Targeting config { type, segments?, filters?, aliases? }
+  targeting Json
+
+  // Schedule
+  schedule_type   String    @db.VarChar // once | daily | weekly | monthly | custom
+  cron_expression String?   @db.VarChar
+  scheduled_at    DateTime? @db.Timestamp(6)
+  timezone        String    @default("Africa/Abidjan") @db.VarChar
+
+  // State
+  active       Boolean   @default(true)
+  last_sent_at DateTime? @db.Timestamp(6)
+  next_run_at  DateTime? @db.Timestamp(6)
+  send_count   Int       @default(0)
+
+  // Meta
+  created_by String   @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([active, next_run_at])
+}
+
+model PushCampaign {
+  id        String  @id @default(uuid()) @db.Uuid
+  name      String  @db.VarChar
+  title     String  @db.VarChar
+  body      String  @db.Text
+  data      Json?
+  image_url String? @db.VarChar
+
+  // Ciblage
+  target_type   String @db.VarChar // all | segment | filters | ids
+  target_config Json // { segment?, filters?, ids? }
+
+  // Stats
+  total_targeted  Int @default(0)
+  total_sent      Int @default(0)
+  total_delivered Int @default(0)
+  total_failed    Int @default(0)
+  /// Ouvertures REELLES, remontées par le téléphone au moment du geste.
+  ///
+  /// ⚠️ Ne se remplit QUE depuis les versions de l'application qui savent la
+  /// remonter. Les téléphones plus anciens resteront muets pour toujours : le
+  /// clic ne quitte jamais le téléphone, aucune donnée serveur ne peut le
+  /// reconstituer. Le chiffre est donc un PLANCHER, jamais un total.
+  total_opened    Int @default(0)
+
+  // Scheduling
+  status       String    @default("sent") @db.VarChar // draft | sent | scheduled | failed
+  scheduled_at DateTime? @db.Timestamp(6)
+  sent_at      DateTime? @db.Timestamp(6)
+
+  // Meta
+  created_by String   @db.VarChar
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  tickets PushCampaignTicket[]
+  opens   PushCampaignOpen[]
+
+  @@index([status, created_at])
+}
+
+/// Une ouverture de notification, remontée par le téléphone.
+///
+/// ⚠️ C'est la SEULE mesure de clic honnête. Le geste se produit sur le
+/// téléphone et n'en sort jamais tout seul : sans une remontée explicite de
+/// l'application, aucun taux de clic ne peut être calculé, et prétendre le
+/// contraire serait inventer un chiffre.
+model PushCampaignOpen {
+  id          String       @id @default(uuid()) @db.Uuid
+  campaign_id String       @db.Uuid
+  campaign    PushCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+
+  customer_id String?  @db.Uuid
+  platform    String?  @db.VarChar
+  opened_at   DateTime @default(now()) @db.Timestamp(6)
+
+  /// Un client ne compte qu'une fois par campagne : rouvrir la même
+  /// notification n'est pas un second destinataire touché.
+  @@unique([campaign_id, customer_id])
+  @@index([campaign_id])
+}
+
+/// Un accusé d'envoi Expo, une ligne par téléphone visé.
+///
+/// ⚠️ Cette table est la raison pour laquelle le compteur « Livrés » pourra
+/// enfin exister. Jusqu'ici les identifiants de tickets rendus par Expo étaient
+/// collectés en mémoire puis jetés à la fin de la méthode d'envoi. Or c'est la
+/// SEULE clé permettant de demander plus tard si le message a bien été remis.
+/// Sans trace en base, l'information était perdue par construction.
+///
+/// ⚠️ Conséquence à assumer : les campagnes ENVOYEES AVANT cette table
+/// resteront à zéro pour toujours. Les reçus Expo expirent sous vingt-quatre
+/// heures, il n'y a aucun rattrapage possible. L'interface doit le dire au lieu
+/// de laisser croire à une panne.
+model PushCampaignTicket {
+  id          String       @id @default(uuid()) @db.Uuid
+  campaign_id String       @db.Uuid
+  campaign    PushCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+
+  expo_push_token String @db.VarChar
+  /// Identifiant de reçu rendu par Expo à l'acceptation du message.
+  receipt_id      String @db.VarChar
+
+  /// Client visé, résolu à partir du jeton au moment de l'enregistrement.
+  ///
+  /// ⚠️ C'est ce qui MATERIALISE l'audience d'une campagne. Sans lui, on sait
+  /// combien de téléphones ont été visés mais pas lesquels, et il devient
+  /// impossible de mesurer après coup si les destinataires ont commandé.
+  /// Nullable à dessein : un jeton orphelin, ou révoqué entre l'envoi et
+  /// l'enregistrement, ne doit pas faire échouer la trace.
+  customer_id String? @db.Uuid
+
+  /// accepted : accepté par Expo, remise encore inconnue.
+  /// delivered : remis à Apple ou Google. Ce n'est PAS « vu par le client ».
+  /// failed : Expo a signalé une non remise.
+  /// unknown : reçu jamais publié dans la fenêtre de vingt-quatre heures.
+  ///           Distinct de `failed` à dessein : une absence d'information n'est
+  ///           pas un échec, et la compter comme telle produirait des chiffres
+  ///           faux et alarmants.
+  status String @default("accepted") @db.VarChar
+
+  checked_at   DateTime? @db.Timestamp(6)
+  delivered_at DateTime? @db.Timestamp(6)
+  error        String?   @db.Text
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@unique([campaign_id, receipt_id])
+  @@index([status, created_at])
+  @@index([campaign_id, status])
+  @@index([customer_id])
+}
+
+model PushTemplate {
+  id        String  @id @default(uuid()) @db.Uuid
+  name      String  @db.VarChar
+  title     String  @db.VarChar
+  body      String  @db.Text
+  data      Json?
+  image_url String? @db.VarChar
+
+  created_by String   @db.VarChar
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+}
+
+model PushSegment {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @db.VarChar
+  description String? @db.Text
+  filters     Json
+  is_system   Boolean @default(false)
+
+  created_by String   @db.VarChar
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([is_system])
+}
+
+model OrderItem {
+  id String @id @default(uuid()) @db.Uuid
+
+  quantity      Int      @default(1)
+  amount        Float
+  /// PRIX FIGÉ À LA COMMANDE (06/08). Avant, une ligne ne gardait que
+  /// `amount`, dont le sens diffère selon le canal (prix unitaire côté call
+  /// center, prix unitaire fois quantité côté application), et le prix des
+  /// suppléments n'était enregistré NULLE PART : il était calculé puis jeté.
+  /// Conséquence, tous les calculs de chiffre d'affaires, le reçu PDF et les
+  /// tickets relisaient le prix VIVANT du catalogue, donc l'historique se
+  /// réécrivait à chaque changement de prix. Ces trois colonnes gravent la
+  /// vérité comptable de la ligne, quoi qu'il advienne du catalogue ensuite.
+  /// Elles deviennent indispensables avec des options payantes.
+  unit_price    Float? // prix unitaire du plat, promotion appliquée
+  options_price Float? // total des suppléments et options de la ligne
+  line_total    Float? // unit_price × quantity + options_price
+  epice         Boolean  @default(false)
+  order_id      String   @db.Uuid
+  dish_id       String   @db.Uuid
+  supplements   Json?    @db.Json
+  /// MENUS COMPOSABLES : les choix retenus par le client, figés à la commande
+  /// ([{ id, label, group_name, price_delta }]). Le catalogue peut changer de
+  /// sauce ou de tarif ensuite, la cuisine et le reçu gardent ce qui a été
+  /// commandé et payé ce jour-là.
+  options       Json?    @db.Json
+  dish          Dish     @relation(fields: [dish_id], references: [id])
+  order         Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  cooking_time  Int?     @db.Integer // en minutes
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+  updated_at    DateTime @default(now()) @db.Timestamp(6)
+}
+
+model Order {
+  id                         String          @id @default(uuid()) @db.Uuid
+  reference                  String          @unique @db.VarChar
+  /// CODE DE RÉCUPÉRATION (12/08). Quatre chiffres remis au client, qu'il
+  /// présente pour récupérer sa commande : dicté au livreur à la remise, ou
+  /// donné au comptoir pour un retrait.
+  ///
+  /// Porté par la COMMANDE et non par la livraison, pour trois raisons : il
+  /// existe dès la création, donc on peut l'annoncer tout de suite ; il vaut
+  /// pour tous les modes de commande, y compris à emporter et sur place ; et il
+  /// reste unique, `Delivery.delivery_pin` en recevant une copie plutôt qu'un
+  /// tirage indépendant, ce qui évitait au client d'avoir deux codes.
+  ///
+  /// Nullable pour les commandes antérieures que le rattrapage n'aurait pas
+  /// couvertes ; tout lecteur doit tolérer l'absence.
+  recovery_code              String?         @db.VarChar
+  customer_id                String          @db.Uuid
+  paied                      Boolean         @default(false)
+  delivery_fee               Float
+  delivery_fee_base          Float           @default(0) // frais de livraison PLEIN (avant offre) — pour le bilan
+  delivery_discount          Float           @default(0) // remise de l'offre de livraison appliquée (base - facturé)
+  /// Distance qui a SERVI A FACTURER, en kilomètres, PAR LA ROUTE.
+  ///
+  /// C'est la même distance que celle affichée sur les écrans, fournie par
+  /// Google. Elle l'est devenue : les frais s'adossaient auparavant au vol
+  /// d'oiseau, plus court d'un bon tiers en ville. Un trajet de 15,6 km par la
+  /// route fait environ 12 km à vol d'oiseau et tombait donc deux paliers plus
+  /// bas que ce que le gestionnaire croyait appliquer.
+  ///
+  /// Quand Google ne répond pas, le vol d'oiseau sert de repli, redressé du
+  /// facteur de détour (`delivery.facteur_detour`) pour rester comparable.
+  ///
+  /// La stocker rend la facturation VERIFIABLE après coup : sans elle, aucune
+  /// commande ne dit sur quelle distance elle a été tarifée.
+  delivery_distance_km       Float?
+  delivery_service           DeliveryService @default(FREE)
+  zone_id                    String?         @db.VarChar
+  points                     Int             @default(0)
+  type                       OrderType
+  table_type                 TypeTable?
+  places                     Int?
+  address                    Json            @db.Json // { title: string, address: string, street?: string, city?: string, longitude: number, latitude: number, note: string }
+  code_promo                 String?         @db.VarChar
+  tax                        Float
+  amount                     Float // Tous frais confondu
+  net_amount                 Float
+  discount                   Float           @default(0)
+  date                       DateTime?       @db.Date
+  time                       String?         @db.VarChar
+  estimated_delivery_time    DateTime?
+  estimated_preparation_time DateTime?
+  fullname                   String?         @db.VarChar
+  phone                      String?         @db.VarChar
+  email                      String?         @db.VarChar
+  note                       String?         @db.VarChar
+  auto                       Boolean         @default(true)
+  payment_method             PaymentMethod?  @default(ONLINE)
+
+  user_id String? @db.Uuid
+  user    User?   @relation(fields: [user_id], references: [id])
+
+  /// Livraison associée (null si type PICKUP/TABLE ou pas encore de Course créée).
+  /// Relation inverse : 1 Order → 0..1 Delivery (unique côté Delivery).
+  delivery Delivery?
+
+  /// Batch de regroupement en cours (null quand la Course est déjà créée OU
+  /// si l'order n'est pas encore passée READY). Permet au `CourseGroupingService`
+  /// de retrouver les orders d'un même batch pour décider l'ajout/flush.
+  batch_id String?      @db.Uuid
+  batch    CourseBatch? @relation(fields: [batch_id], references: [id], onDelete: SetNull)
+
+  status           OrderStatus
+  restaurant_id    String      @db.Uuid
+  order_items      OrderItem[]
+  paiements        Paiement[]
+  customer         Customer    @relation(fields: [customer_id], references: [id])
+  restaurant       Restaurant  @relation(fields: [restaurant_id], references: [id])
+  cancelled_by     String?
+  cancelled_reason String?
+  // Dernier membre du staff (User) ayant modifié la commande — audit backoffice.
+  // Champ simple (comme cancelled_by) : le nom est résolu côté service à la lecture.
+  updated_by       String?     @db.Uuid
+
+  // ================================
+  // INTÉGRATION HUBRISE
+  // ================================
+  hubrise_order_id String? @db.VarChar // ID de la commande dans HubRise (pour le suivi bidirectionnel)
+
+  // ================================
+  // INTÉGRATION PROMOTIONS ET FIDÉLITÉ
+  // ================================
+  promotion_id     String?          @db.Uuid
+  promotion        Promotion?       @relation(fields: [promotion_id], references: [id])
+  promotion_usages PromotionUsage[]
+  loyalty_points   LoyaltyPoint[]
+  rewards          Reward[]
+  scratch_draws    ScratchDraw[]
+
+  entity_status     EntityStatus     @default(ACTIVE)
+  accepted_at       DateTime?
+  prepared_at       DateTime?
+  ready_at          DateTime?
+  picked_up_at      DateTime?
+  collected_at      DateTime?
+  completed_at      DateTime?
+  cancelled_at      DateTime?
+  deleted_at        DateTime?
+  paied_at          DateTime?
+  /// Instant de SOUMISSION initiale de la commande (création du panier, avant paiement).
+  /// Pour les paiements différés (commande créée un jour, payée un autre), `created_at`
+  /// est aligné sur l'instant du PAIEMENT afin que la commande remonte en tête de liste
+  /// et soit filtrée sur la bonne période. `submitted_at` conserve la création d'origine.
+  submitted_at      DateTime?        @db.Timestamp(6)
+  created_at        DateTime         @default(now()) @db.Timestamp(6)
+  updated_at        DateTime         @default(now()) @db.Timestamp(6)
+  Comment           Comment[]
+  TicketThread      TicketThread[]
+  Redemption        Redemption[]
+  promo_code_usages PromoCodeUsage[]
+
+  @@index([reference, status, entity_status, customer_id])
+  // Index pour les agrégations statistiques (page Stats > Clients/Commandes) :
+  // groupBy/where sur restaurant_id + plage de dates, par client, et global par date.
+  @@index([restaurant_id, created_at])
+  @@index([customer_id, created_at])
+  @@index([created_at])
+}
+
+model OtpToken {
+  id      String   @id @default(uuid()) @db.Uuid
+  code    String   @db.VarChar(255)
+  phone   String   @db.VarChar
+  counter Int?
+  expire  DateTime @db.Timestamp(6)
+}
+
+// Durcissement OTP (audit) : plafond de tentatives de VÉRIFICATION par numéro
+// + lockout temporaire. Le nombre d'échecs est compté par fenêtre glissante
+// (window_start) ; au-delà du plafond, `locked_until` bloque toute vérif pour
+// ce numéro pendant un délai. Persisté en DB (et non en mémoire) pour rester
+// robuste au double backend sur la même base et aux redémarrages.
+model OtpVerificationAttempt {
+  id           String    @id @default(uuid()) @db.Uuid
+  phone        String    @unique @db.VarChar
+  failed_count Int       @default(0)
+  window_start DateTime  @default(now()) @db.Timestamp(6)
+  locked_until DateTime? @db.Timestamp(6)
+  updated_at   DateTime  @updatedAt @db.Timestamp(6)
+
+  @@index([phone])
+}
+
+model Paiement {
+  id              String         @id @default(uuid()) @db.Uuid
+  amount          Float          @default(0)
+  total           Float          @default(0)
+  mode            PaiementMode
+  source          String?
+  fees            Float          @default(0)
+  client          Json?          @db.Json
+  client_id       String?        @db.Uuid
+  status          PaiementStatus
+  reference       String         @db.VarChar
+  failure_code    String?
+  failure_message String?
+  order_id        String?        @db.Uuid
+  order           Order?         @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  /// MULTI-COMPTES KKiaPay : restaurant dont le COMPTE a encaissé cette
+  /// transaction (tracé au moment de la vérification). null = compte global
+  /// historique. Sert à rembourser depuis le BON compte et à réconcilier
+  /// l'argent par restaurant. Colonne scalaire volontairement sans relation.
+  restaurant_id   String?        @db.Uuid
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([restaurant_id])
+}
+
+model Restaurant {
+  id String @id @default(uuid()) @db.Uuid
+
+  name                      String                   @db.VarChar
+  manager                   String                   @db.Uuid
+  description               String?                  @db.VarChar
+  image                     String?                  @db.Text
+  address                   String?                  @db.VarChar
+  latitude                  Float?
+  longitude                 Float?
+  phone                     String?                  @db.VarChar
+  email                     String?                  @db.VarChar
+  schedule                  Json?                    @db.Json
+  apikey                    String?                  @db.VarChar
+  dish_excluded_restaurants DishExcludedRestaurant[]
+  users                     User[]
+  deliverers                Deliverer[]
+  courses                   Course[]
+  course_batches            CourseBatch[]
+  orders                    Order[]
+  restaurantPromotions      RestaurantPromotion[]
+  /// Plannings de créneaux émis pour ce restaurant (P7).
+  schedule_plans            SchedulePlan[]
+  /// Appels internes reçus (Lunion Meet) — cible = ce restaurant.
+  calls_received            Call[]                   @relation("CallsToRestaurant")
+
+  // ================================
+  // INTÉGRATION HUBRISE
+  // ================================
+  hubrise_access_token     String? @db.Text // Token OAuth HubRise
+  hubrise_location_id      String? @db.VarChar // ID du location HubRise associé
+  hubrise_catalog_id       String? @db.VarChar // ID du catalogue HubRise
+  hubrise_customer_list_id String? @db.VarChar // ID de la liste de clients HubRise
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  Conversation Conversation[]
+  prospects    Prospect[]
+}
+
+model Supplement {
+  id                        String                   @id @default(uuid()) @db.Uuid
+  name                      String                   @db.VarChar
+  price                     Float
+  image                     String?                  @db.Text
+  available                 Boolean                  @default(true)
+  category                  SupplementCategory
+  /// ORDRE D'AFFICHAGE dans sa catégorie (17/08). Plus petit vient en premier.
+  /// Sert à décider, par exemple, que les sodas passent avant les glaces, là où
+  /// l'ordre alphabétique imposait l'inverse. À égalité, on retombe sur le nom,
+  /// pour que deux suppléments jamais classés gardent un ordre stable.
+  position                  Int                      @default(0)
+  spice_level               SpiceLevel               @default(NEVER)
+  available_order_types     OrderType[]              @default([DELIVERY, PICKUP, TABLE])
+  hubrise_sku               String?                  @unique @db.VarChar
+  dish_excluded_supplements DishExcludedSupplement[]
+  /// Choix de menus composables qui pointent ce supplément.
+  dish_option_items         DishOptionItem[]
+
+  @@index([category, position])
+}
+
+model User {
+  id String @id @default(uuid()) @db.Uuid
+
+  fullname            String      @db.VarChar
+  email               String      @unique @db.VarChar
+  phone               String?     @db.VarChar
+  password            String      @db.VarChar
+  image               String?     @db.Text
+  address             String?     @db.VarChar
+  password_is_updated Boolean     @default(false)
+  type                UserType
+  role                UserRole
+  restaurant_id       String?     @db.Uuid
+  restaurant          Restaurant? @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  // Token Expo Push (mobile staff Chicken Nation Pro). Mis à jour à chaque
+  // login mobile via POST /users/me/expo-push-token. NULL si pas encore loggé
+  // sur mobile ou si l'utilisateur a refusé les notifications.
+  expo_push_token String? @db.VarChar(255)
+
+  // Préférences de notification du staff (backoffice + resto). Chaque membre
+  // peut couper les alertes email et/ou in-app (cloche + toast) le concernant.
+  // Modifiables dans son profil perso ET par l'admin (module Personnel).
+  email_notifications_enabled  Boolean @default(true)
+  in_app_notifications_enabled Boolean @default(true)
+
+  // Relations promotions
+  created_promotions Promotion[] @relation("CreatedBy")
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+  last_login_at DateTime?
+
+  // Relations conversations, tickets
+  TicketMessage         TicketMessage[]         @relation("TicketMsgAuthorUser")
+  TicketParticipant     TicketParticipant[]
+  Message               Message[]               @relation("MessageAuthorUser")
+  ConversationUser      ConversationUser[]
+  MessageReaction       MessageReaction[]
+  TicketMessageReaction TicketMessageReaction[]
+  TicketThread          TicketThread[]          @relation("TicketAssignee")
+  Voucher               Voucher[]
+  TicketUserSkill       TicketUserSkill[]       @relation("CategoryAgents")
+  orders                Order[]
+  promo_codes_created   PromoCode[]             @relation("promo_code_creator")
+  retentionCallbacks    RetentionCallback[]     @relation("RetentionCallbacks")
+  prospects_created     Prospect[]              @relation("ProspectCreator")
+  prospect_calls        ProspectCall[]          @relation("ProspectCallAgent")
+  campaigns_led         ConversionCampaign[]    @relation("CampaignLead")
+  campaign_agents       CampaignAgent[]         @relation("CampaignAgents")
+  prospects_assigned    Prospect[]              @relation("ProspectAssignedAgent")
+
+  // Appels internes (Lunion Meet)
+  calls_made     Call[] @relation("CallsMade")
+  calls_answered Call[] @relation("CallsAnswered")
+  calls_targeted Call[] @relation("CallsToUser")
+
+  @@index([email, type])
+}
+
+// ================================
+// NOUVEAUX MODÈLES POUR LE SYSTÈME DE FIDÉLITÉ ET PROMOTIONS
+// ================================
+
+model Promotion {
+  id             String       @id @default(uuid()) @db.Uuid
+  title          String       @db.VarChar
+  description    String?      @db.Text
+  discount_type  DiscountType // PERCENTAGE, FIXED_AMOUNT, BUY_X_GET_Y
+  discount_value Float
+  target_type    TargetType // ALL_PRODUCTS, SPECIFIC_PRODUCTS, CATEGORIES
+
+  // Contraintes
+  min_order_amount    Float?
+  max_discount_amount Float?
+  max_usage_per_user  Int?   @default(1)
+  max_total_usage     Int?
+  current_usage       Int    @default(0)
+
+  // Dates
+  start_date      DateTime @db.Timestamp(6)
+  expiration_date DateTime @db.Timestamp(6)
+
+  // Statut et visibilité
+  status     PromotionStatus @default(DRAFT)
+  visibility Visibility      @default(PUBLIC)
+
+  // Ciblage par niveau de fidélité (pour les promotions privées)
+  target_standard Boolean @default(false)
+  target_premium  Boolean @default(false)
+  target_gold     Boolean @default(false)
+
+  // Personnalisation visuelle
+  coupon_image_url String? @db.Text
+  background_color String? @db.VarChar // Code couleur hex
+  text_color       String? @db.VarChar // Code couleur hex
+  expiration_color String? @db.VarChar // Code couleur hex
+
+  // Métadonnées
+  created_by_id String @db.Uuid
+  created_by    User   @relation("CreatedBy", fields: [created_by_id], references: [id])
+
+  // Relations
+  promotion_dishes          PromotionDish[]
+  promotion_targeted_dishes PromotionTargetedDish[]
+  promotion_usages          PromotionUsage[]
+  orders                    Order[]
+
+  created_at                    DateTime                    @default(now()) @db.Timestamp(6)
+  updated_at                    DateTime                    @default(now()) @db.Timestamp(6)
+  promotion_targeted_categories PromotionTargetedCategory[]
+  restaurantPromotions          RestaurantPromotion[]
+
+  @@index([status, visibility])
+  @@index([start_date, expiration_date])
+}
+
+model RestaurantPromotion {
+  id String @id @default(uuid()) @db.Uuid
+
+  promotion_id  String @db.Uuid
+  restaurant_id String @db.Uuid
+
+  promotion  Promotion  @relation(fields: [promotion_id], references: [id], onDelete: Cascade)
+  restaurant Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  @@unique([promotion_id, restaurant_id])
+}
+
+// Table de liaison pour les plats inclus dans une promotion
+model PromotionDish {
+  id           String @id @default(uuid()) @db.Uuid
+  promotion_id String @db.Uuid
+  dish_id      String @db.Uuid
+  quantity     Int    @default(1) // Pour les offres "Buy X Get Y"
+
+  promotion Promotion @relation(fields: [promotion_id], references: [id], onDelete: Cascade)
+  dish      Dish      @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+
+  @@unique([promotion_id, dish_id])
+}
+
+// Plats ciblés spécifiquement par une promotion
+model PromotionTargetedDish {
+  id           String @id @default(uuid()) @db.Uuid
+  promotion_id String @db.Uuid
+  dish_id      String @db.Uuid
+
+  promotion Promotion @relation(fields: [promotion_id], references: [id], onDelete: Cascade)
+  dish      Dish      @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+
+  @@unique([promotion_id, dish_id])
+}
+
+// Utilisation des promotions
+model PromotionUsage {
+  id           String  @id @default(uuid()) @db.Uuid
+  promotion_id String  @db.Uuid
+  customer_id  String  @db.Uuid
+  order_id     String? @db.Uuid
+
+  // Détails de l'utilisation
+  discount_amount Float
+  original_amount Float
+  final_amount    Float
+
+  promotion Promotion @relation(fields: [promotion_id], references: [id])
+  customer  Customer  @relation(fields: [customer_id], references: [id])
+  order     Order?    @relation(fields: [order_id], references: [id])
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([customer_id, promotion_id])
+}
+
+// Catégories ciblées spécifiquement par une promotion
+model PromotionTargetedCategory {
+  id           String @id @default(uuid()) @db.Uuid
+  promotion_id String @db.Uuid
+  category_id  String @db.Uuid
+
+  promotion Promotion @relation(fields: [promotion_id], references: [id], onDelete: Cascade)
+  category  Category  @relation(fields: [category_id], references: [id], onDelete: Cascade)
+
+  @@unique([promotion_id, category_id])
+}
+
+// Système de points de fidélité
+model LoyaltyPoint {
+  id          String             @id @default(uuid()) @db.Uuid
+  customer_id String             @db.Uuid
+  is_used     LoyaltyPointIsUsed @default(NO)
+  points_used Float              @default(0)
+  points      Int
+  type        LoyaltyPointType
+  reason      String?            @db.Text // Description de la raison (commande, bonus, etc.)
+  order_id    String?            @db.Uuid
+  expires_at  DateTime?          @db.Timestamp(6)
+
+  customer Customer @relation(fields: [customer_id], references: [id])
+  order    Order?   @relation(fields: [order_id], references: [id])
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+  // Idempotence comptable DIFFÉRÉE : l'index UNIQUE PARTIEL sur order_id
+  // (WHERE type IN ('EARNED','BONUS')) n'est PAS encore posé — un pré-check prod (14/07)
+  // a trouvé des points EN DOUBLE (séquelle double-backend) qui le feraient échouer.
+  // À poser après déduplication maîtrisée des points (décision métier). Garde-fou
+  // applicatif entre-temps : find-then-create + catch P2002 (dormant sans l'index).
+
+  @@index([customer_id, type])
+  @@index([expires_at])
+}
+
+// Récompense « à gratter » — couche CÉLÉBRATION, ne remplace AUCUN registre
+// comptable (LoyaltyPoint/Voucher/PromoCodeUsage restent la source de vérité).
+// `order_id` optionnel : une récompense peut être liée à une commande (gain au
+// paiement) ou non (bonus admin, campagne, cadeau).
+model Reward {
+  id           String       @id @default(uuid()) @db.Uuid
+  customer_id  String       @db.Uuid
+  type         RewardType
+  status       RewardStatus @default(PENDING)
+  payload      Json // Contenu selon le type (ex: { points: 25 })
+  reason       String?      @db.Text // Libellé (ex: commande #REF, campagne X)
+  order_id     String?      @db.Uuid
+  campaign_id  String?      @db.Uuid // Campagne « Envoyer un cadeau » (null si issu d'une commande)
+  scratched_at DateTime?    @db.Timestamp(6)
+  consumed_at  DateTime?    @db.Timestamp(6) // GIFT : ajouté à une commande à 0 fr
+  expires_at   DateTime?    @db.Timestamp(6)
+
+  customer Customer        @relation(fields: [customer_id], references: [id])
+  order    Order?          @relation(fields: [order_id], references: [id])
+  campaign RewardCampaign? @relation(fields: [campaign_id], references: [id])
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+  // Idempotence comptable — contrainte DB non exprimable par Prisma (index UNIQUE
+  // PARTIEL) posée en SQL brut dans la migration 20260714120000_add_earning_idempotency_indexes :
+  //   CREATE UNIQUE INDEX "Reward_order_id_points_unique" ON "Reward"(order_id)
+  //     WHERE type = 'POINTS' AND order_id IS NOT NULL;
+  // Empêche un 2e Reward POINTS pour la même commande sous concurrence.
+
+  scratch_draws ScratchDraw[]
+
+  @@index([customer_id, status])
+  @@index([order_id])
+  @@index([campaign_id, status])
+}
+
+// ── Gratte & Gagne (moteur) ────────────────────────────────────────────────
+// Le grattage est un CANAL DE PRÉSENTATION du Reward existant, PAS la récompense
+// en soi. Chaque commande app payée donne UN grattage : au minimum le lot PLANCHER
+// (révélation des points de base déjà crédités par addPoints, coût enveloppe = 0)
+// et RAREMENT un GROS LOT « en plus » (coût = unit_cost, compté dans l'enveloppe).
+//
+// Un ScratchLot décrit un lot possible ; le tirage pondéré (ScratchEngineService)
+// choisit un lot par commande en tenant la cible d'enveloppe (surcoût moyen ciblé
+// = % du panier). Les points de base NE sont JAMAIS modifiés par ce moteur.
+model ScratchLot {
+  id          String     @id @default(uuid()) @db.Uuid
+  label       String     @db.VarChar
+  reward_type RewardType // POINTS | GIFT | VOUCHER | PROMO_CODE
+  // Contenu-modèle recopié dans le Reward produit :
+  //   POINTS     { points }
+  //   GIFT       { dish_id, quantity? }  (enrichi comme les campagnes : nom/prix/image)
+  //   VOUCHER    { amount }
+  //   PROMO_CODE { code, ... }
+  payload     Json
+
+  weight          Int           @default(1) // Poids de tirage (proba relative, > 0)
+  unit_cost       Int           @default(0) // Coût réel FCFA du SURCOÛT (compté dans l'enveloppe)
+  min_cart        Int           @default(0) // RG-09 : panier minimum (order.amount) pour être éligible
+  frequency_cap   Int? // Nb max de fois qu'un même client peut gagner CE lot sur la fenêtre (null = illimité)
+  /// FIDÉLITÉ REQUISE (décision 30/07, pensée pour les CADEAUX) : le client
+  /// doit être un peu récurrent — au moins `min_paid_orders` commandes payées
+  /// OU `min_revenue` FCFA de CA (net) sur la fenêtre d'éligibilité
+  /// (`scratch.eligibility_window_days`, défaut 90 j). L'UN des deux suffit ;
+  /// 0 = critère inactif.
+  min_paid_orders Int           @default(0)
+  min_revenue     Int           @default(0)
+  stock           Int? // Stock total (null = illimité)
+  stock_used      Int           @default(0)
+  level_min       LoyaltyLevel? // Niveau de fidélité minimum requis (null = tous)
+
+  is_floor Boolean @default(false) // Lot PLANCHER = révélation des points de base (un seul attendu, unit_cost=0)
+  active   Boolean @default(true)
+
+  scratch_draws ScratchDraw[]
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([active, is_floor])
+  @@index([reward_type])
+}
+
+// Journal des tirages — audit + comptabilité d'enveloppe (fenêtre glissante sur
+// `cost`) + application des plafonds de fréquence (compte par client/lot).
+model ScratchDraw {
+  id             String    @id @default(uuid()) @db.Uuid
+  order_id       String    @unique @db.Uuid // 1 tirage par commande (idempotence du moteur)
+  customer_id    String    @db.Uuid
+  scratch_lot_id String?   @db.Uuid // null si plancher servi sans lot configuré (fallback legacy)
+  reward_id      String?   @db.Uuid
+  cost           Int       @default(0) // 0 pour le plancher ; unit_cost du lot pour un gros lot
+  // Horodatage de restitution du stock (annulation) — idempotence PAR TIRAGE : un
+  // event CANCELLED rejoué ne re-décrémente pas stock_used (claim atomique sur NULL).
+  restored_at    DateTime? @db.Timestamp(6)
+
+  order    Order       @relation(fields: [order_id], references: [id])
+  customer Customer    @relation(fields: [customer_id], references: [id])
+  lot      ScratchLot? @relation(fields: [scratch_lot_id], references: [id])
+  reward   Reward?     @relation(fields: [reward_id], references: [id])
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([customer_id, created_at])
+  @@index([scratch_lot_id, created_at])
+  @@index([created_at])
+}
+
+/// Parrainage : un parrain (referrer) invite un filleul (referee) via son
+/// referral_code. Créé à l'inscription du filleul avec le code ; passe REWARDED
+/// à sa 1ère commande payée (le parrain reçoit alors sa carte à gratter).
+model Referral {
+  id                  String         @id @default(uuid()) @db.Uuid
+  referrer_id         String         @db.Uuid // parrain
+  referee_id          String         @unique @db.Uuid // filleul — parrainé UNE seule fois
+  referral_code       String         @db.VarChar // code utilisé (snapshot)
+  status              ReferralStatus @default(PENDING)
+  qualifying_order_id String?        @db.Uuid // 1ère commande payée ayant qualifié
+  welcome_voucher_id  String?        @db.Uuid // (legacy) bon de bienvenue direct du filleul
+  filleul_reward_id   String?        @db.Uuid // cadeau à gratter du filleul (créé à l'inscription)
+  parrain_reward_id   String?        @db.Uuid // récompense (Reward) du parrain
+  qualified_at        DateTime?      @db.Timestamp(6)
+  created_at          DateTime       @default(now()) @db.Timestamp(6)
+  updated_at          DateTime       @default(now()) @db.Timestamp(6)
+
+  referrer Customer @relation("Referrer", fields: [referrer_id], references: [id])
+  referee  Customer @relation("Referee", fields: [referee_id], references: [id])
+
+  earnings ReferralEarning[]
+
+  @@index([referrer_id, status])
+  @@index([status])
+}
+
+// Parrainage — VOLET MONÉTAIRE (Phase 5). Registre COMPTABLE des gains de
+// l'ambassadeur (parrain) : PRIME fixe à la qualification du filleul + COMMISSION
+// (% du CA) sur chaque commande payée du filleul dans la fenêtre. Ne remplace PAS
+// le système Reward (carte à gratter parrain) : c'est une couche financière à part,
+// versée manuellement au back office (V1, marquage admin). Idempotence par
+// (source_order_id, type) : une commande ne génère qu'UNE prime ET/OU qu'une commission.
+model ReferralEarning {
+  id              String                @id @default(uuid()) @db.Uuid
+  referral_id     String                @db.Uuid // lien Referral parrain→filleul
+  referrer_id     String                @db.Uuid // parrain (ambassadeur) — bénéficiaire du gain
+  referee_id      String                @db.Uuid // filleul générateur du gain
+  type            ReferralEarningType
+  source_order_id String?               @db.Uuid // commande à l'origine du gain (clé d'idempotence)
+  amount          Int // Montant en FCFA (entier)
+  status          ReferralEarningStatus @default(PENDING)
+  note            String?               @db.Text // Note admin (versement / annulation / revue)
+  paid_by         String?               @db.Uuid // User admin ayant marqué PAID
+  paid_at         DateTime?             @db.Timestamp(6)
+  created_at      DateTime              @default(now()) @db.Timestamp(6)
+  updated_at      DateTime              @default(now()) @updatedAt @db.Timestamp(6)
+
+  referral Referral @relation(fields: [referral_id], references: [id])
+
+  // Idempotence : au plus 1 PRIME et 1 COMMISSION par commande source.
+  @@unique([source_order_id, type])
+  @@index([referrer_id, status])
+  @@index([referral_id])
+  @@index([status])
+}
+
+// Campagne « Envoyer un cadeau » : distribue des Reward (GIFT | VOUCHER | PROMO_CODE)
+// à un client, une liste, ou tous (avec filtre niveau fidélité), immédiatement ou
+// à une date programmée. Modèle aligné sur PushCampaign (statut/ciblage en String).
+model RewardCampaign {
+  id      String     @id @default(uuid()) @db.Uuid
+  name    String     @db.VarChar // Libellé de campagne (sert de `reason` sur chaque Reward)
+  type    RewardType // GIFT | VOUCHER | PROMO_CODE (POINTS réservé aux commandes)
+  payload Json // Contenu-modèle : GIFT{label,image?} · VOUCHER{amount} · PROMO_CODE{code,discount_type,discount_value,description?}
+
+  // Ciblage : all | ids   (config: { ids?: string[], loyalty_level?: LoyaltyLevel })
+  target_type   String @db.VarChar
+  target_config Json
+
+  expires_at DateTime? @db.Timestamp(6) // Expiration appliquée à chaque Reward distribué
+
+  // Stats
+  total_targeted Int @default(0)
+
+  // Programmation : scheduled | sending | sent | cancelled | failed
+  status       String    @default("sent") @db.VarChar
+  scheduled_at DateTime? @db.Timestamp(6)
+  sent_at      DateTime? @db.Timestamp(6)
+
+  created_by String   @db.VarChar // id de l'admin (utilisé comme Voucher.created_by au grattage)
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  rewards Reward[]
+
+  @@index([status, scheduled_at])
+}
+
+// ── COMBO MYSTÈRE (Phase 6) ─────────────────────────────────────────────────
+// Jeu-concours : le client doit reconstituer une COMBINAISON secrète d'items du
+// menu réel (ex. plat + accompagnement + sauce). Essais BORNÉS (RG-10 : plafond
+// strict par compte et par partie, 3 par défaut, horodatés). À la clôture, un
+// TIRAGE AU SORT désigne N gagnants (winners_count) parmi TOUTES les bonnes
+// réponses → coût borné. Chaque gagnant reçoit une RÉCOMPENSE EXISTANTE
+// (Reward GIFT = plat offert récupérable au panier à 0 fr, EXCLUSIF app, RG-03) :
+// on NE réinvente PAS la distribution, on réutilise le système Reward.
+enum ComboGameStatus {
+  SCHEDULED // Programmé (avant starts_at)
+  OPEN // Ouvert au jeu (fenêtre active : starts_at ≤ now < ends_at)
+  CLOSED // Fenêtre terminée — en attente de règlement (tirage)
+  SETTLED // Réglé — gagnants tirés au sort et récompensés
+}
+
+model ComboGame {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String   @db.VarChar
+  description String?  @db.Text
+  clues       Json // Liste d'indices révélés progressivement (string[])
+  solution    Json // Combinaison-solution : [{ type: 'DISH'|'SUPPLEMENT', id }] (ordre indifférent)
+  starts_at   DateTime @db.Timestamp(6)
+  ends_at     DateTime @db.Timestamp(6)
+
+  max_attempts  Int @default(3) // RG-10 : plafond STRICT d'essais / compte / partie
+  winners_count Int @default(1) // Nb de gagnants tirés au sort (borne le coût)
+
+  prize Json // Spec de récompense (snapshot config) : { reward_type: 'GIFT', payload: { item_type, dish_id, name, price, image? } }
+
+  status     ComboGameStatus @default(SCHEDULED)
+  settled_at DateTime?       @db.Timestamp(6)
+  created_by String?         @db.VarChar // id de l'admin créateur
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  attempts ComboAttempt[]
+  winners  ComboWinner[]
+
+  @@index([status, starts_at])
+  @@index([status, ends_at])
+}
+
+// Journal des tentatives — support de RG-10 (comptage/plafond) + horodatage
+// anti-triche + base du tirage (bonnes réponses distinctes à la clôture).
+model ComboAttempt {
+  id            String   @id @default(uuid()) @db.Uuid
+  combo_game_id String   @db.Uuid
+  customer_id   String   @db.Uuid
+  answer        Json // Combinaison proposée : [{ type, id }]
+  is_correct    Boolean  @default(false)
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+
+  game ComboGame @relation(fields: [combo_game_id], references: [id], onDelete: Cascade)
+
+  @@index([combo_game_id, customer_id]) // Comptage des essais (RG-10)
+  @@index([combo_game_id, is_correct]) // Sélection des bonnes réponses (tirage)
+}
+
+// Gagnant tiré au sort. UNIQUE (combo_game_id, customer_id) = idempotence du
+// règlement : un même client ne peut gagner qu'une fois une partie, même si le
+// settle est rejoué (double backend / retry).
+model ComboWinner {
+  id            String   @id @default(uuid()) @db.Uuid
+  combo_game_id String   @db.Uuid
+  customer_id   String   @db.Uuid
+  reward_id     String?  @db.Uuid // Reward GIFT créé pour ce gagnant (null si création échouée — audité)
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+
+  game ComboGame @relation(fields: [combo_game_id], references: [id], onDelete: Cascade)
+
+  @@unique([combo_game_id, customer_id])
+  @@index([combo_game_id])
+}
+
+// Historique des changements de niveau de fidélité
+model LoyaltyLevelHistory {
+  id             String        @id @default(uuid()) @db.Uuid
+  customer_id    String        @db.Uuid
+  previous_level LoyaltyLevel?
+  new_level      LoyaltyLevel
+  points_at_time Int // Points au moment du changement
+  reason         String?       @db.Text // Raison du changement (achat, bonus, etc.)
+
+  customer Customer @relation(fields: [customer_id], references: [id])
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([customer_id])
+}
+
+// Configuration du système de fidélité
+model LoyaltyConfig {
+  id                        String @id @default(uuid()) @db.Uuid
+  points_per_xof            Float  @default(0.002) // 2 points par 1000 XOF dépensé
+  points_expiration_days    Int?   @default(365) // Points expirent après X jours
+  minimum_redemption_points Int    @default(100) // Pour 100 points, on peut acheter un plat de 2000 XOF
+  point_value_in_xof        Float  @default(20) // 1 point = 20 XOF
+  /// Plafond anti-abus : part MAXIMALE du panier (plats) qu'une remise
+  /// fidélité peut couvrir. 100 = pas de plafond. Empêche qu'une commande
+  /// devienne quasi gratuite en cumulant points + livraison offerte.
+  max_redemption_pct        Int    @default(50)
+
+  /// Bonus de points crédité à la MONTÉE de palier (0 = aucun bonus).
+  /// STANDARD étant le niveau d'ENTRÉE depuis le 23/07, son bonus tombait dès
+  /// la 1re commande : il vaut 0 par défaut (décision 31/07). VIP/VVIP
+  /// récompensent une vraie progression et gardent le leur.
+  bonus_standard Int @default(0)
+  bonus_vip      Int @default(150)
+  bonus_vvip     Int @default(200)
+
+  // Seuils pour les niveaux de fidélité (comparés à status_points, compteur annuel)
+  // NB : les CHAMPS gardent leurs noms historiques premium_threshold/gold_threshold
+  // (compat backoffice/config JSON) mais correspondent désormais aux niveaux VIP/VVIP.
+  standard_threshold Int @default(0) // STANDARD = niveau d'ENTRÉE (0 point)
+  premium_threshold  Int @default(700) // 700 points pour VIP (ex-Premium)
+  gold_threshold     Int @default(1000) // 1000 points pour VVIP (ex-Gold)
+
+  is_active  Boolean  @default(false)
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @db.Timestamp(6)
+}
+
+// ================================
+// # Bon d'achat
+// ================================
+
+enum VoucherStatus {
+  ACTIVE
+  REDEEMED
+  EXPIRED
+  CANCELLED
+}
+
+model Voucher {
+  id               String        @id @default(uuid()) @db.Uuid
+  code             String        @unique @db.VarChar
+  initial_amount   Float // Montant initial du bon
+  remaining_amount Float // Montant restant
+  customer_id      String        @db.Uuid
+  customer         Customer      @relation(fields: [customer_id], references: [id])
+  status           VoucherStatus @default(ACTIVE)
+  redeemed_at      DateTime?     @db.Timestamp(6) // Date de rédemption
+  expires_at       DateTime?     @db.Timestamp(6) // Date d'expiration
+  created_at       DateTime      @default(now()) @db.Timestamp(6)
+  updated_at       DateTime      @default(now()) @db.Timestamp(6)
+  Redemption       Redemption[]
+
+  created_by    String       @db.Uuid
+  creator       User         @relation(fields: [created_by], references: [id])
+  entity_status EntityStatus @default(ACTIVE)
+}
+
+model Redemption {
+  id            String       @id @default(uuid()) @db.Uuid
+  voucher_id    String       @db.Uuid
+  order_id      String       @db.Uuid
+  amount        Float // Montant utilisé lors de la rédemption
+  voucher       Voucher      @relation(fields: [voucher_id], references: [id])
+  order         Order        @relation(fields: [order_id], references: [id])
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  entity_status EntityStatus @default(ACTIVE)
+}
+
+// ================================
+// CODES PROMO
+// ================================
+
+model PromoCode {
+  id                  String           @id @default(uuid()) @db.Uuid
+  code                String           @unique @db.VarChar
+  description         String?          @db.Text
+  discount_type       DiscountType
+  discount_value      Float
+  min_order_amount    Float?           @default(0)
+  max_discount_amount Float?
+  max_usage           Int?
+  max_usage_per_user  Int?             @default(1)
+  usage_count         Int              @default(0)
+  start_date          DateTime         @db.Timestamp(6)
+  expiration_date     DateTime         @db.Timestamp(6)
+  is_active           Boolean          @default(true)
+  restaurant_ids      String[]         @default([])
+  target_type         TargetType       @default(ALL_PRODUCTS)
+  created_by          String?          @db.Uuid
+  creator             User?            @relation("promo_code_creator", fields: [created_by], references: [id])
+  created_at          DateTime         @default(now()) @db.Timestamp(6)
+  updated_at          DateTime         @updatedAt @db.Timestamp(6)
+  entity_status       EntityStatus     @default(ACTIVE)
+  usages              PromoCodeUsage[]
+
+  promo_code_targeted_dishes     PromoCodeTargetedDish[]
+  promo_code_targeted_categories PromoCodeTargetedCategory[]
+  prospects                      Prospect[]
+
+  @@index([code])
+  @@index([is_active, entity_status])
+}
+
+// Plats ciblés spécifiquement par un code promo
+model PromoCodeTargetedDish {
+  id            String @id @default(uuid()) @db.Uuid
+  promo_code_id String @db.Uuid
+  dish_id       String @db.Uuid
+
+  promo_code PromoCode @relation(fields: [promo_code_id], references: [id], onDelete: Cascade)
+  dish       Dish      @relation(fields: [dish_id], references: [id], onDelete: Cascade)
+
+  @@unique([promo_code_id, dish_id])
+}
+
+// Catégories ciblées spécifiquement par un code promo
+model PromoCodeTargetedCategory {
+  id            String @id @default(uuid()) @db.Uuid
+  promo_code_id String @db.Uuid
+  category_id   String @db.Uuid
+
+  promo_code PromoCode @relation(fields: [promo_code_id], references: [id], onDelete: Cascade)
+  category   Category  @relation(fields: [category_id], references: [id], onDelete: Cascade)
+
+  @@unique([promo_code_id, category_id])
+}
+
+/// Statut d'un usage de code promo dans son cycle de vie :
+///  - INACTIVE : usage enregistré à la création de la commande (PENDING, non payée)
+///               → NE compte PAS dans usage_count / analytics.
+///  - ACTIVE   : la commande est devenue payée/ACCEPTED → l'usage est comptabilisé.
+/// Repasse INACTIVE si la commande est annulée (décompte).
+enum PromoCodeUsageStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model PromoCodeUsage {
+  id              String               @id @default(uuid()) @db.Uuid
+  promo_code_id   String               @db.Uuid
+  promo_code      PromoCode            @relation(fields: [promo_code_id], references: [id])
+  customer_id     String               @db.Uuid
+  customer        Customer             @relation(fields: [customer_id], references: [id])
+  order_id        String?              @db.Uuid
+  order           Order?               @relation(fields: [order_id], references: [id])
+  discount_amount Float
+  status          PromoCodeUsageStatus @default(INACTIVE)
+  created_at      DateTime             @default(now()) @db.Timestamp(6)
+
+  @@index([promo_code_id])
+  @@index([customer_id])
+  @@index([order_id])
+}
+
+// ================================
+// # Analytics App Click
+// ================================
+model AppClick {
+  id          Int      @id @default(autoincrement())
+  platform    String?
+  userAgent   String?
+  ip          String?
+  referer     String?
+  type        String?
+  targetId    String?
+  targetLabel String?
+  createdAt   DateTime @default(now())
+}
+
+// CARTE NATION
+enum CardRequestStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum NationCardStatus {
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+// Profil DECLARATIF de la demande de carte (Phase 3).
+// V1 : sans justificatif → le client déclare simplement son profil.
+enum ProfileType {
+  ETUDIANT
+  PROFESSIONNEL
+}
+
+model CardRequest {
+  id                    String            @id @default(uuid()) @db.Uuid
+  customer_id           String            @db.Uuid
+  customer              Customer          @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  nickname              String?           @db.VarChar(100)
+  // Profil déclaratif (V1). NULL = grand public (non-étudiant) ; ETUDIANT =
+  // carte étudiant (débloque les menus dédiés). Marqueur indépendant du niveau.
+  profile_type          ProfileType?
+  // institution / justificatif : requis UNIQUEMENT en mode V2 (card.require_justificatif=true).
+  // Nullable depuis la Phase 3 (V1 déclaratif sans justificatif).
+  institution           String?           @db.VarChar(255)
+  student_card_file_url String?           @db.Text
+  // Photo du titulaire fournie au formulaire de demande (app + site). Sert au
+  // CONTRÔLE backoffice (affichée dans la modale Détail) ; N'est PAS reprise sur
+  // la carte générée. Nullable : les demandes antérieures n'en ont pas.
+  photo                 String?           @db.Text
+  status                CardRequestStatus @default(PENDING)
+  rejection_reason      String?           @db.Text
+  // Motif d'une demande de RÉVISION (modif de carte depuis l'app), généré
+  // automatiquement : « Changement de photo », « Nouveau pseudo : … ».
+  revision_reason       String?           @db.Text
+  reviewed_by           String?           @db.Uuid
+  reviewed_at           DateTime?         @db.Timestamp(6)
+  created_at            DateTime          @default(now()) @db.Timestamp(6)
+  updated_at            DateTime          @updatedAt @db.Timestamp(6)
+  nation_card           NationCard?
+
+  // ⚠️ PAS de @@unique([customer_id, status]) : il interdisait tout historique
+  // (une 2e demande APPROVED entrait en collision) et rendait le flux de RÉVISION
+  // impossible. Remplacé par un index unique PARTIEL « une seule demande OUVERTE
+  // (PENDING/IN_REVIEW) par client », que Prisma ne sait pas exprimer → créé en
+  // SQL dans la migration 20260717120000_card_request_one_open_per_customer.
+  @@index([customer_id])
+  @@index([status])
+  @@index([created_at])
+}
+
+model NationCard {
+  id              String           @id @default(uuid()) @db.Uuid
+  customer_id     String           @db.Uuid
+  customer        Customer         @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  card_request_id String           @unique @db.Uuid
+  card_request    CardRequest      @relation(fields: [card_request_id], references: [id], onDelete: Restrict)
+  nickname        String?          @db.VarChar(100)
+  card_number     String           @unique @db.VarChar(50)
+  qr_code_value   String           @unique @db.Text
+  card_image_url  String           @db.Text
+  // Snapshot du niveau de fidélité au moment de la (re)génération de l'image.
+  // Pilote le thème couleur de la carte (Standard/VIP/VVIP). Nullable = pas encore snapshoté.
+  level           LoyaltyLevel?
+  // Marqueur ETUDIANT (liseré/badge jaune sur la carte), indépendant du niveau.
+  is_student      Boolean          @default(false)
+  status          NationCardStatus @default(ACTIVE)
+  created_at      DateTime         @default(now()) @db.Timestamp(6)
+  updated_at      DateTime         @updatedAt @db.Timestamp(6)
+
+  @@index([customer_id])
+  @@index([card_number])
+  @@index([status])
+}
+
+// News
+model News {
+  id        String   @id @default(uuid())
+  title     String
+  content   String?
+  imageUrl  String? // optionnel, image de la news 2.5:1
+  link      String? // lien externe ou deeplink
+  isActive  Boolean  @default(true) // publié ou non
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ========================
+// SETTINGS (clé/valeur)
+// ========================
+model Setting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@map("settings")
+}
+
+// ========================
+// APPELS INTERNES (Lunion Meet)
+// ========================
+// Appels audio internes entre le staff, routés par type d'utilisateur :
+// - un appelant BACKOFFICE sonne le staff d'un RESTAURANT ciblé (CAISSIER/MANAGER/…)
+// - un appelant RESTAURANT sonne le CALL_CENTER (BACKOFFICE)
+// Modèle « sonnerie de groupe » : tous les receveurs éligibles sonnent, le premier
+// qui décroche prend l'appel (claim atomique sur `status`), les autres arrêtent de sonner.
+enum CallStatus {
+  RINGING // room créée, receveurs en train de sonner, personne n'a décroché
+  ONGOING // un receveur a décroché, appel en cours
+  ENDED // appel terminé normalement (un des deux a raccroché)
+  MISSED // personne n'a décroché (tous refusé / timeout)
+  CANCELLED // l'appelant a raccroché avant que quelqu'un décroche
+  FAILED // échec technique (room Lunion non créée, etc.)
+}
+
+model Call {
+  id        String     @id @default(uuid()) @db.Uuid
+  room_slug String     @db.VarChar // slug de la room Lunion Meet
+  room_name String?    @db.VarChar // nom lisible de la room
+  status    CallStatus @default(RINGING)
+
+  // Appelant (toujours un membre du staff = User)
+  caller_id   String   @db.Uuid
+  caller      User     @relation("CallsMade", fields: [caller_id], references: [id])
+  caller_type UserType // type de l'appelant au moment de l'appel (BACKOFFICE | RESTAURANT)
+
+  // Cible de l'appel
+  target_kind          String      @db.VarChar // 'RESTAURANT' | 'CALL_CENTER' | 'USER'
+  target_restaurant_id String?     @db.Uuid
+  target_restaurant    Restaurant? @relation("CallsToRestaurant", fields: [target_restaurant_id], references: [id])
+  // Cible individuelle (appel P2P, ex : admin appelle une personne précise)
+  target_user_id       String?     @db.Uuid
+  target_user          User?       @relation("CallsToUser", fields: [target_user_id], references: [id])
+
+  // Receveurs qui sonnent encore (retirés au refus). Vide + RINGING => MISSED.
+  ringing_user_ids String[] @default([])
+  // Receveurs sonnés à l'origine (IMMUABLE) — sert à l'historique des appels
+  // manqués et au contrôle d'accès du polling de statut.
+  rung_user_ids    String[] @default([])
+
+  // Receveur qui a décroché (null si personne)
+  answered_by_id String? @db.Uuid
+  answered_by    User?   @relation("CallsAnswered", fields: [answered_by_id], references: [id])
+
+  started_at  DateTime  @default(now())
+  answered_at DateTime?
+  ended_at    DateTime?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([caller_id])
+  @@index([answered_by_id])
+  @@index([target_restaurant_id])
+  @@index([target_user_id])
+  @@index([status])
+  @@map("calls")
+}
+
+// ========================
+// RÉTENTION CLIENTS
+// ========================
+
+enum RetentionCallbackStatus {
+  CALLED
+  NO_ANSWER
+  CALLBACK_SCHEDULED
+  RECONQUERED
+  LOST
+}
+
+model RetentionCallbackReason {
+  id            String              @id @default(uuid()) @db.Uuid
+  name          String              @db.VarChar(255)
+  description   String?             @db.Text
+  is_active     Boolean             @default(true)
+  position      Int                 @default(0)
+  callbacks     RetentionCallback[]
+  entity_status EntityStatus        @default(ACTIVE)
+  created_at    DateTime            @default(now()) @db.Timestamp(6)
+  updated_at    DateTime            @default(now()) @db.Timestamp(6)
+
+  @@map("retention_callback_reasons")
+}
+
+model RetentionCallback {
+  id               String                   @id @default(uuid()) @db.Uuid
+  customer_id      String                   @db.Uuid
+  customer         Customer                 @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  caller_user_id   String                   @db.Uuid
+  caller           User                     @relation("RetentionCallbacks", fields: [caller_user_id], references: [id])
+  reason_id        String?                  @db.Uuid
+  reason           RetentionCallbackReason? @relation(fields: [reason_id], references: [id])
+  status           RetentionCallbackStatus  @default(CALLED)
+  notes            String?                  @db.Text
+  called_at        DateTime                 @default(now()) @db.Timestamp(6)
+  next_callback_at DateTime?                @db.Timestamp(6)
+  reconquered_at   DateTime?                @db.Timestamp(6)
+  parent_id        String?                  @db.Uuid
+  parent           RetentionCallback?       @relation("CallbackChain", fields: [parent_id], references: [id])
+  followups        RetentionCallback[]      @relation("CallbackChain")
+  entity_status    EntityStatus             @default(ACTIVE)
+  created_at       DateTime                 @default(now()) @db.Timestamp(6)
+  updated_at       DateTime                 @default(now()) @db.Timestamp(6)
+
+  @@index([customer_id])
+  @@index([status])
+  @@index([next_callback_at])
+  @@map("retention_callbacks")
+}
+
+// ============================================================
+// MODULE SCHEDULE — créneaux & disponibilité livreurs (P7)
+// ============================================================
+//
+// Workflow général :
+//   1. ADMIN génère un plan (ex : 2 semaines) via la matrice livreur×jours.
+//   2. Le service `SchedulePlanningService` calcule automatiquement :
+//      - les jours de repos en rotation FIFO sur `rotation_cycle_weeks`
+//      - le nombre de slots matin/soir en fonction du volume estimé
+//        (`weekday_volume_multiplier`, `weekend_volume_multiplier`)
+//      - les `ShiftAssignment` (PROPOSED) pour chaque (livreur, jour, shift)
+//   3. ADMIN review et SEND → status=SENT, push WS aux livreurs.
+//   4. Chaque livreur ACCEPTE / REFUSE chaque jour proposé via mobile.
+//   5. À 8h chaque matin : push de check-in "Tu es opérationnel aujourd'hui ?"
+//      Réponse OUI / NON / pas de réponse (auto-CONFIRMED après X minutes).
+//   6. Le livreur peut ajouter / retirer un jour de repos pour LUI-MÊME
+//      depuis le mobile (n'impacte pas les autres livreurs du plan).
+//
+// Tous les paramètres (durée plans, rotation, shifts, volumes, deadlines)
+// sont dans `schedule.*` settings — voir `ScheduleSettingsHelper`.
+
+/// Statut d'un plan de planning au cours de son cycle de vie.
+enum SchedulePlanStatus {
+  DRAFT // En cours d'édition par l'admin (auto-généré ou manuel)
+  SENT // Envoyé aux livreurs, en attente de leurs confirmations
+  CONFIRMED // Tous les livreurs ont répondu (ou deadline passée + auto-CONFIRMED)
+  ARCHIVED // Période passée, plan figé pour historique
+}
+
+/// Type de créneau journalier — 2 paliers seulement (matin/soir) pour rester simple.
+enum ShiftType {
+  MORNING // ex : 09h-15h
+  EVENING // ex : 15h-23h
+}
+
+/// Statut d'une affectation livreur ↔ shift.
+enum ShiftAssignmentStatus {
+  ASSIGNED // Pré-affecté par l'algo, en attente de réponse livreur
+  CONFIRMED // Livreur a confirmé sa présence (ou auto-CONFIRMED par deadline)
+  REFUSED // Livreur a explicitement décliné le shift
+}
+
+/// Origine d'un jour de repos.
+enum RestDaySource {
+  AUTO // Calculé par l'algo de rotation
+  MANUAL_DELIVERER // Le livreur a ajouté ce repos lui-même via mobile
+  MANUAL_ADMIN // L'admin a forcé ce repos (gestion exceptionnelle)
+}
+
+/// Réponse au check-in matinal de présence.
+enum PresenceCheckResponse {
+  PRESENT // "Oui je suis op aujourd'hui"
+  ABSENT // "Non je ne peux pas"
+  NO_RESPONSE // Pas de réponse → auto-CONFIRMED PRESENT (politique Q6=A)
+}
+
+/// Plan de créneaux pour un restaurant sur une période donnée.
+/// Émis par l'admin (manuellement ou auto-généré). Contient 1..N Shift.
+model SchedulePlan {
+  id String @id @default(uuid()) @db.Uuid
+
+  restaurant_id String     @db.Uuid
+  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+
+  /// Période couverte par ce plan (inclus). Typiquement 2 semaines.
+  period_start DateTime @db.Date
+  period_end   DateTime @db.Date
+
+  status SchedulePlanStatus @default(DRAFT)
+
+  /// Snapshot du nombre de livreurs ayant CONFIRMED au moment du SEND →
+  /// permet de track le taux de confirmation sans recalcul.
+  confirmed_count Int @default(0)
+
+  /// Timestamps des transitions (audit + métriques).
+  sent_at      DateTime? @db.Timestamp(6)
+  confirmed_at DateTime? @db.Timestamp(6) // Quand toutes les réponses sont collectées
+  archived_at  DateTime? @db.Timestamp(6)
+
+  /// Shifts générés pour cette période (1 par jour × shift_type).
+  shifts Shift[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+  /// ⚠️ Index UNIQUE PARTIEL géré en SQL pur (Prisma ne l'exprime pas) :
+  ///   CREATE UNIQUE INDEX ... ON (restaurant_id, period_start) WHERE status <> 'ARCHIVED'
+  /// → au plus 1 plan non-archivé par (restaurant, date de début). Empêche les
+  /// doublons (course double-backend). Voir migration 20260602103000_schedule_plan_period_unique.
+
+  @@index([restaurant_id, status])
+  @@index([period_start, period_end])
+}
+
+/// Créneau journalier dans un plan (matin OU soir, pour 1 jour donné).
+model Shift {
+  id String @id @default(uuid()) @db.Uuid
+
+  plan_id String       @db.Uuid
+  plan    SchedulePlan @relation(fields: [plan_id], references: [id], onDelete: Cascade)
+
+  /// Jour calendaire couvert par ce shift.
+  date DateTime @db.Date
+
+  type ShiftType
+
+  /// Heures d'ouverture du shift (HH:mm). Snapshots des settings au moment
+  /// de la génération du plan — un changement futur des settings n'altère
+  /// pas les plans déjà envoyés.
+  start_time String @db.VarChar(5) // ex : "09:00"
+  end_time   String @db.VarChar(5) // ex : "15:00"
+
+  /// Capacité maximale en livreurs sur ce shift.
+  /// Calculée par `SchedulePlanningService` selon le volume estimé.
+  max_slots Int
+
+  /// Affectations livreur ↔ shift (1..max_slots — l'algo n'en crée jamais plus).
+  assignments ShiftAssignment[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@unique([plan_id, date, type]) // 1 shift matin + 1 shift soir par jour max
+  @@index([plan_id])
+  @@index([date])
+}
+
+/// Affectation d'un livreur à un shift, avec son statut de confirmation.
+model ShiftAssignment {
+  id String @id @default(uuid()) @db.Uuid
+
+  shift_id String @db.Uuid
+  shift    Shift  @relation(fields: [shift_id], references: [id], onDelete: Cascade)
+
+  deliverer_id String    @db.Uuid
+  deliverer    Deliverer @relation(fields: [deliverer_id], references: [id], onDelete: Cascade)
+
+  status ShiftAssignmentStatus @default(ASSIGNED)
+
+  /// Timestamps des transitions (audit).
+  confirmed_at DateTime? @db.Timestamp(6)
+  refused_at   DateTime? @db.Timestamp(6)
+
+  /// Raison de refus (optionnelle, libre).
+  refusal_reason String? @db.VarChar(500)
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  /// Pas 2 affectations du même livreur sur le même shift.
+  @@unique([shift_id, deliverer_id])
+  @@index([deliverer_id, status])
+  @@index([shift_id])
+}
+
+/// Jour de repos d'un livreur. Peut être issu de l'algo (rotation FIFO),
+/// du livreur lui-même (toggle mobile), ou de l'admin (gestion exceptionnelle).
+///
+/// Les RestDay sont indépendants des plans : ils s'expriment au niveau livreur
+/// pour pouvoir évoluer en cours de plan (ex : le livreur retire son repos
+/// du mardi pour celui du mercredi).
+model RestDay {
+  id String @id @default(uuid()) @db.Uuid
+
+  deliverer_id String    @db.Uuid
+  deliverer    Deliverer @relation(fields: [deliverer_id], references: [id], onDelete: Cascade)
+
+  /// Jour de repos (date pure, pas de time).
+  date DateTime @db.Date
+
+  source RestDaySource @default(AUTO)
+
+  /// Raison libre (ex : "vacances", "maladie", "marriage cousin").
+  reason String? @db.VarChar(500)
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  /// Un livreur ne peut pas avoir 2 RestDay le même jour.
+  @@unique([deliverer_id, date])
+  @@index([date])
+}
+
+/// Réponse d'un livreur au check-in matinal "Tu es opérationnel aujourd'hui ?"
+///
+/// Push envoyé chaque jour à `daily_presence_check_hour` (default 8h).
+/// Si pas de réponse dans la fenêtre, auto-CONFIRMED PRESENT (Q6=A).
+/// Sert à détecter les absences silencieuses pour l'admin (compte rendu daily).
+model DailyPresenceCheck {
+  id String @id @default(uuid()) @db.Uuid
+
+  deliverer_id String    @db.Uuid
+  deliverer    Deliverer @relation(fields: [deliverer_id], references: [id], onDelete: Cascade)
+
+  /// Jour du check-in.
+  date DateTime @db.Date
+
+  response PresenceCheckResponse @default(NO_RESPONSE)
+
+  /// Timestamp de la réponse explicite. Null si NO_RESPONSE auto-CONFIRMED.
+  responded_at DateTime? @db.Timestamp(6)
+
+  /// Snapshot du shift principal du jour (pour stats sans rejoin).
+  shift_type ShiftType?
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  /// Un seul check-in par livreur par jour.
+  @@unique([deliverer_id, date])
+  @@index([date, response])
+}
+
+// ============================================================
+// MODULE « BASE DE DONNÉES » — Captation & conversion Glovo/Yango
+// (SPEC-CN-BDD-001). Voir docs/BASE-DONNEES-PLAN.md
+// ============================================================
+
+enum ProspectPlatform {
+  GLOVO
+  YANGO
+  APP_ORGANIC
+}
+
+enum ProspectStatus {
+  NOUVEAU // saisi par le store
+  A_APPELER // entré dans la file J+1
+  JOINT // appel marqué « joint »
+  NON_JOIGNABLE // appel sans réponse (recyclable)
+  REFUS // client ne souhaite pas
+  COUPON_ENVOYE // coupon + lien app envoyés
+  INSCRIT // compte app créé (match téléphone)
+  CONVERTI // ≥ 1 commande directe
+}
+
+enum ProspectCallResult {
+  JOINT
+  NON_JOIGNABLE
+  REFUS
+}
+
+enum ProspectMessageKind {
+  DECOUVERTE
+  RELANCE_1
+  RELANCE_2_FIDELITE
+}
+
+/// Contact capté depuis Glovo/Yango par un store, à convertir en client direct.
+model Prospect {
+  id           String           @id @default(uuid()) @db.Uuid
+  platform     ProspectPlatform
+  name         String           @db.VarChar // nom / prénom / pseudo
+  order_number String           @db.VarChar // n° de commande Glovo/Yango
+  phone        String           @db.VarChar // numéro ivoirien (10 chiffres)
+  status       ProspectStatus   @default(NOUVEAU)
+
+  // Store de saisie (= Restaurant)
+  restaurant_id String?     @db.Uuid
+  restaurant    Restaurant? @relation(fields: [restaurant_id], references: [id])
+
+  // Agent (caissier / manager) ayant saisi
+  created_by String? @db.Uuid
+  creator    User?   @relation("ProspectCreator", fields: [created_by], references: [id])
+
+  // Liens de conversion (remplis dans les phases suivantes)
+  customer_id   String?    @db.Uuid
+  customer      Customer?  @relation(fields: [customer_id], references: [id])
+  promo_code_id String?    @db.Uuid
+  promo_code    PromoCode? @relation(fields: [promo_code_id], references: [id])
+
+  called_at      DateTime?
+  joined_at      DateTime? // 1er appel « joint » (pour l'entonnoir « vérifiés »)
+  coupon_sent_at DateTime?
+  registered_at  DateTime?
+  converted_at   DateTime?
+  // Attribution de la 1ʳᵉ vente directe (dénormalisé pour les stats/ventes)
+  first_order_id String?   @db.Uuid
+
+  // Assignation Campagne & Agent (Module 1 & 3)
+  campaign_id String?             @db.Uuid
+  campaign    ConversionCampaign? @relation(fields: [campaign_id], references: [id])
+
+  assigned_to_id String? @db.Uuid
+  assigned_agent User?   @relation("ProspectAssignedAgent", fields: [assigned_to_id], references: [id])
+
+  // Raison codifiée de non-commande
+  loss_reason_id     String?             @db.Uuid
+  loss_reason        ProspectLossReason? @relation(fields: [loss_reason_id], references: [id])
+  first_order_amount Float?
+
+  calls    ProspectCall[]
+  messages ProspectMessage[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+
+  @@index([phone])
+  @@index([restaurant_id, status, created_at])
+}
+
+/// Historique des appels du call center sur un prospect.
+model ProspectCall {
+  id          String             @id @default(uuid()) @db.Uuid
+  prospect_id String             @db.Uuid
+  prospect    Prospect           @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
+  agent_id    String?            @db.Uuid
+  agent       User?              @relation("ProspectCallAgent", fields: [agent_id], references: [id])
+  result      ProspectCallResult
+  rank        Int                @default(1)
+  note        String?            @db.VarChar
+  created_at  DateTime           @default(now()) @db.Timestamp(6)
+
+  @@index([prospect_id, created_at])
+}
+
+/// Historique des messages envoyés à un prospect (rang auto).
+model ProspectMessage {
+  id          String              @id @default(uuid()) @db.Uuid
+  prospect_id String              @db.Uuid
+  prospect    Prospect            @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
+  kind        ProspectMessageKind
+  rank        Int                 @default(1)
+  body        String              @db.Text
+  sms_sent    Boolean             @default(false) // SMS réellement délivré par Twilio ?
+  created_at  DateTime            @default(now()) @db.Timestamp(6)
+
+  @@index([prospect_id, created_at])
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  OFFRES DE LIVRAISON (promotions sur le frais de livraison)
+// ════════════════════════════════════════════════════════════════════════
+
+enum DeliveryOfferType {
+  FREE_DELIVERY // Livraison gratuite
+  PERCENTAGE // % de réduction sur le frais
+  FIXED_AMOUNT // Montant fixe déduit du frais
+  FIXED_PRICE // Prix de livraison IMPOSÉ (remplace la grille, pas une remise)
+}
+
+enum DeliveryOfferChannel {
+  APP // Commandes via l'app uniquement
+  CALL_CENTER // Commandes call center uniquement
+  BOTH // Les deux
+}
+
+model DeliveryOffer {
+  id          String            @id @default(uuid()) @db.Uuid
+  name        String            @db.VarChar
+  description String?           @db.Text
+  type        DeliveryOfferType
+  value       Float             @default(0) // % (PERCENTAGE) ou FCFA (FIXED_AMOUNT/FIXED_PRICE) ; ignoré pour FREE_DELIVERY
+
+  /// FIXED_PRICE seulement : prix imposé PAR PALIER DE DISTANCE.
+  ///
+  /// Forme : [{ "max_km": 2, "price": 1000 }, { "max_km": 5, "price": 1500 }]
+  /// Distances PAR LA ROUTE, comme la grille Chicken et comme les écrans.
+  /// Le premier palier dont `max_km` couvre la distance donne le prix. Au-delà
+  /// du dernier palier, l'offre ne s'applique PAS et la livraison retombe sur
+  /// le système habituel, grille Chicken ou zones Turbo selon le paramétrage.
+  ///
+  /// Vide ou absent : `value` s'applique à toute distance (« 1000 F partout »).
+  price_tiers Json? @db.Json
+
+  // Conditions
+  min_order_amount Float?               @default(0)
+  channel          DeliveryOfferChannel @default(BOTH)
+  restaurant_ids   String[]             @default([]) // vide = tous les restaurants
+
+  // Ciblage fidélité (si aucun coché → tous les niveaux)
+  target_standard Boolean @default(false)
+  target_premium  Boolean @default(false)
+  target_gold     Boolean @default(false)
+
+  // Jours / créneaux (vide = tous les jours / toute la journée)
+  days_of_week String[] @default([]) // ex: ["saturday","sunday"] (minuscules)
+  time_start   String?  @db.VarChar // "HH:mm"
+  time_end     String?  @db.VarChar // "HH:mm"
+
+  // Période de validité
+  start_date      DateTime @db.Timestamp(6)
+  expiration_date DateTime @db.Timestamp(6)
+
+  // Limites d'usage
+  max_usage          Int? // global ; null = illimité
+  max_usage_per_user Int? @default(0) // par client ; 0/null = illimité
+  usage_count        Int  @default(0)
+
+  is_active Boolean @default(true)
+  priority  Int     @default(0) // départage si plusieurs offres matchent (plus haut = prioritaire)
+
+  created_by    String?      @db.Uuid
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @updatedAt @db.Timestamp(6)
+  entity_status EntityStatus @default(ACTIVE)
+
+  @@index([is_active, entity_status])
+  @@index([start_date, expiration_date])
+}
+
+model DeliveryOfferUsage {
+  id                String               @id @default(uuid()) @db.Uuid
+  delivery_offer_id String               @db.Uuid
+  customer_id       String               @db.Uuid
+  order_id          String?              @db.Uuid
+  discount_amount   Float                @default(0) // frais de livraison économisé
+  status            PromoCodeUsageStatus @default(INACTIVE) // ACTIVE = compte ; INACTIVE = attente paiement
+  created_at        DateTime             @default(now()) @db.Timestamp(6)
+
+  @@index([delivery_offer_id])
+  @@index([customer_id])
+  @@index([order_id])
+}
+
+// ================================
+// AUDIT — journal des actions du personnel (backoffice)
+// ================================
+// Snapshot DÉNORMALISÉ (pas de FK vers User/Restaurant) : un log d'audit doit
+// survivre à la suppression de son auteur et ne jamais coupler le cycle de vie
+// d'un compte. On fige donc actor_name/actor_role au moment de l'action.
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  actor_id      String?  @db.Uuid // id du User staff (null = public / système)
+  actor_name    String?  @db.VarChar
+  actor_role    String?  @db.VarChar
+  restaurant_id String?  @db.Uuid
+  action        String   @db.VarChar // CREATE | UPDATE | DELETE | LOGIN | READ | OTHER
+  module        String?  @db.VarChar // 1er segment de path (orders, dishes, card-nation…)
+  entity_id     String?  @db.VarChar // id ciblé (UUID trouvé dans le path)
+  method        String   @db.VarChar // GET | POST | PATCH | PUT | DELETE
+  path          String   @db.Text
+  status_code   Int?
+  duration_ms   Int?
+  ip            String?  @db.VarChar
+  user_agent    String?  @db.Text
+  summary       String?  @db.Text
+  metadata      Json? // { body (redacted), query, params } tronqué
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([created_at])
+  @@index([actor_id])
+  @@index([module])
+  @@index([action])
+  @@index([status_code])
+  @@map("audit_logs")
+}
+
+/// DIFFUSION DE MESSAGES — envoyer le même message à une liste de clients.
+///
+/// Calqué sur `PushCampaign` pour le ciblage, mais l'envoi n'est pas un ticket
+/// Expo : c'est une écriture en base, une conversation par client et un message
+/// par destinataire, posée par une file en lots.
+model MessageBroadcast {
+  id   String @id @default(uuid()) @db.Uuid
+  name String @db.VarChar // Nom interne, vu du backoffice seulement
+  body String @db.Text // Le message envoyé, variables {{first_name}} comprises
+
+  /// Image jointe, clé S3. Recopiée dans `Message.meta.imageUrl`, exactement
+  /// comme une image de conversation ordinaire : l'application sait déjà
+  /// l'afficher, rien à livrer de ce côté.
+  image_url String? @db.VarChar
+
+  /// Ciblage, même contrat que `PushCampaign` : all | segment | ids.
+  /// Le mode « filtres libres » n'est PAS exposé : son moteur ignore
+  /// l'opérateur et ne gère que 4 champs sur 15. Les critères libres passent
+  /// par un segment enregistré, qui utilise le vrai moteur.
+  target_type   String @db.VarChar
+  target_config Json
+
+  /// draft | scheduled | sending | sent | failed
+  status       String    @default("draft") @db.VarChar
+  scheduled_at DateTime? @db.Timestamp(6)
+  started_at   DateTime? @db.Timestamp(6)
+  sent_at      DateTime? @db.Timestamp(6)
+
+  /// Nombre de destinataires retenus au moment de la création. Les compteurs
+  /// d'envoyés et d'échecs ne sont PAS stockés : ils dérivent d'un `count()`
+  /// sur les destinataires. Un compteur incrémenté dérive au premier
+  /// redémarrage et devient un instrument qui ment.
+  total_targeted Int @default(0)
+
+  /// Incrémenté à chaque mise en file. Entre dans l'identifiant de tâche, sinon
+  /// une relance réutiliserait le même identifiant et BullMQ l'avalerait en
+  /// silence, sans erreur et sans job créé.
+  enqueue_seq Int @default(0)
+
+  created_by String   @db.VarChar
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  recipients MessageBroadcastRecipient[]
+  messages   Message[]
+
+  @@index([status, created_at])
+  @@index([status, scheduled_at])
+}
+
+/// Un destinataire d'une diffusion. Matérialisé à la création, ce qui fige
+/// l'audience : un client qui remplit le segment le lendemain ne recevra pas
+/// une diffusion partie la veille.
+model MessageBroadcastRecipient {
+  id           String           @id @default(uuid()) @db.Uuid
+  broadcast_id String           @db.Uuid
+  broadcast    MessageBroadcast @relation(fields: [broadcast_id], references: [id], onDelete: Cascade)
+
+  customer_id String   @db.Uuid
+  customer    Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  /// pending | sending | sent | failed
+  status String @default("pending") @db.VarChar
+
+  /// Horodatage de la réservation. Un destinataire resté en `sending` au-delà
+  /// d'un délai est repris : sans cela, un redémarrage en cours de lot les
+  /// condamnerait à ne jamais rien recevoir, sans que rien ne le signale.
+  claimed_at DateTime? @db.Timestamp(6)
+  sent_at    DateTime? @db.Timestamp(6)
+  error      String?   @db.Text
+
+  conversation_id String? @db.Uuid
+  message_id      String? @db.Uuid
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  /// Un client ne peut figurer qu'une fois dans une diffusion.
+  @@unique([broadcast_id, customer_id])
+  @@index([broadcast_id, status])
+  @@index([status, claimed_at])
+}
+
+// ============================================================
+// MODULE 3 — CAMPAGNES DE CONVERSION
+// ============================================================
+
+enum CampaignStatus {
+  PLANIFIED
+  ACTIVE
+  COMPLETED
+  SUSPENDED
+}
+
+model ConversionCampaign {
+  id          String         @id @default(uuid()) @db.Uuid
+  name        String         @db.VarChar(255)
+  description String?        @db.Text
+  start_date  DateTime       @db.Timestamp(6)
+  end_date    DateTime?      @db.Timestamp(6)
+  status      CampaignStatus @default(PLANIFIED)
+
+  // Objectifs
+  target_conversion_rate Float?
+  target_contacts_count  Int?
+
+  // Rôles
+  lead_agent_id String @db.Uuid
+  lead_agent    User   @relation("CampaignLead", fields: [lead_agent_id], references: [id])
+
+  // Relations
+  assigned_agents CampaignAgent[]
+  prospects       Prospect[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+}
+
+model CampaignAgent {
+  campaign_id String             @db.Uuid
+  agent_id    String             @db.Uuid
+  campaign    ConversionCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+  agent       User               @relation("CampaignAgents", fields: [agent_id], references: [id], onDelete: Cascade)
+
+  @@id([campaign_id, agent_id])
+}
+
+model ProspectLossReason {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @db.VarChar(255)
+  description String? @db.Text
+  is_active   Boolean @default(true)
+  position    Int     @default(0)
+
+  prospects Prospect[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+}
