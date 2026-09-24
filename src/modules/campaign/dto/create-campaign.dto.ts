@@ -1,6 +1,10 @@
 import { IsDateString, IsNumber, IsOptional, IsString, IsArray, IsUUID } from 'class-validator';
 
-export class CreateCampaignDto {
+/**
+ * Nom distinct de `CreateCampaignDto` (campagnes push) : Swagger refuse deux
+ * classes homonymes aux schémas différents et le signalait à chaque démarrage.
+ */
+export class CreateConversionCampaignDto {
   @IsString()
   name: string;
 

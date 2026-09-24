@@ -681,7 +681,7 @@ export class ProspectService {
 
     const where: Prisma.ProspectWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
-      ...(platform && { platform }),
+      ...this.filtrePlateforme(platform),
       ...(status && { status }),
     };
 
@@ -713,6 +713,22 @@ export class ProspectService {
     return where;
   }
 
+  /**
+   * Les inscrits de l'app (`APP_ORGANIC`) restent HORS de l'opération Glovo/Yango
+   * tant qu'on ne les demande pas explicitement.
+   *
+   * Ils vivent dans la même table depuis le module de conversion, mais ce n'est
+   * pas la même population : un client qui s'inscrit seul n'a été ni capté en
+   * store ni appelé. Les compter ici gonflait le nombre de contacts, faussait le
+   * taux de conversion et surtout attribuait à l'opération le chiffre d'affaires
+   * de leurs premières commandes.
+   */
+  private filtrePlateforme(platform?: ProspectPlatform): Prisma.ProspectWhereInput {
+    return platform
+      ? { platform }
+      : { platform: { not: ProspectPlatform.APP_ORGANIC } };
+  }
+
   private scopeFor(user: User, restaurantId?: string): Prisma.ProspectWhereInput {
     if (this.isStoreUser(user)) return { restaurant_id: user.restaurant_id! };
     if (restaurantId) return { restaurant_id: restaurantId };
@@ -723,6 +739,7 @@ export class ProspectService {
   async getStats(user: User, restaurantId?: string) {
     const base: Prisma.ProspectWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
+      ...this.filtrePlateforme(),
       ...this.scopeFor(user, restaurantId),
     };
     const c = (where: Prisma.ProspectWhereInput) =>
