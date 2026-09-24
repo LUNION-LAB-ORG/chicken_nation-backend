@@ -69,15 +69,19 @@ export class CrmRepriseService {
             ORDER BY p."customer_id", o."created_at"
           ),
           nouveaux AS (
-            INSERT INTO "CrmContact" ("id", "customer_id", "registered_at", "segment", "segment_since", "status",
+            INSERT INTO "CrmContact" ("id", "customer_id", "phone", "phone_key", "registered_at", "segment", "segment_since", "status",
                                       "converted_at", "conversion_order_id", "conversion_amount", "last_order_at", "updated_at")
-            SELECT gen_random_uuid(), c."id", c."created_at", 'INACTIF', v.premier, 'CONVERTI',
+            SELECT gen_random_uuid(), c."id", nullif(regexp_replace(c."phone", '\\D', '', 'g'), ''),
+                   right(regexp_replace(c."phone", '\\D', '', 'g'), 10), c."created_at", 'INACTIF', v.premier, 'CONVERTI',
                    v.commande_le, v.order_id, v."amount",
                    (SELECT max(o."created_at") FROM "Order" o WHERE o."customer_id" = c."id" AND ${EFFECTIVE}),
                    now()
             FROM conversion v JOIN "Customer" c ON c."id" = v."customer_id" AND c."entity_status" <> 'DELETED'
             WHERE NOT EXISTS (SELECT 1 FROM "CrmContact" x WHERE x."customer_id" = c."id")
-            ON CONFLICT ("customer_id") DO NOTHING
+              -- La fiche Glovo/Yango de son numéro lui sera liée, jamais une seconde fiche.
+              AND NOT EXISTS (SELECT 1 FROM "CrmContact" y WHERE y."customer_id" IS NULL AND y."entity_status" <> 'DELETED'
+                              AND y."phone_key" = right(regexp_replace(c."phone", '\\D', '', 'g'), 10))
+            ON CONFLICT DO NOTHING
             RETURNING "id"
           )
           INSERT INTO "CrmEvent" ("id", "contact_id", "type", "label")

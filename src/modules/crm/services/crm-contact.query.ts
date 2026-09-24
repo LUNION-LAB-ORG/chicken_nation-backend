@@ -3,6 +3,7 @@ import {
   EntityStatus,
   Prisma,
 } from '@prisma/client';
+import { identiteContact } from '../crm.rules';
 import { EtatCoupon, QueryCrmContactDto } from '../dto/contact.dto';
 
 /**
@@ -17,6 +18,8 @@ export const SELECT_LIGNE = {
   segment_since: true,
   cycle: true,
   last_order_at: true,
+  phone: true,
+  name: true,
   registered_at: true,
   call_count: true,
   last_call_at: true,
@@ -62,15 +65,21 @@ export function etatCoupon(c: { used_at: Date | null; expires_at: Date }, mainte
 export function versLigne(p: LigneBrute) {
   const { coupons, ...reste } = p;
   const dernier = coupons[0];
+  const identite = identiteContact(p);
   return {
     ...reste,
-    nom: nomClient(p.customer),
+    nom: identite.nom,
+    telephone: identite.telephone,
     coupon: dernier ? { ...dernier, etat: etatCoupon(dernier) } : null,
   };
 }
 
-export function nomClient(c: { first_name: string | null; last_name: string | null }): string {
-  return [c.first_name, c.last_name].filter(Boolean).join(' ').trim() || 'Client sans nom';
+/** Nom affichable d'un contact (compte appli, sinon nom relevé à la capture). */
+export function nomClient(c: {
+  name?: string | null;
+  customer?: { first_name: string | null; last_name: string | null; phone: string | null } | null;
+}): string {
+  return identiteContact(c).nom;
 }
 
 /** Jour entier en UTC : la Côte d'Ivoire vit à UTC+0, sans heure d'été. */
@@ -124,6 +133,20 @@ export function filtreContacts(
   const appel = plage(q.last_call_from, q.last_call_to);
   if (appel) et.push({ last_call_at: appel });
 
+  // Restaurant et dates portent sur une MÊME capture Glovo/Yango.
+  const capture = plage(q.captured_from, q.captured_to);
+  if (q.restaurant_id || capture) {
+    et.push({
+      captures: {
+        some: {
+          entity_status: { not: EntityStatus.DELETED },
+          ...(q.restaurant_id && { restaurant_id: q.restaurant_id }),
+          ...(capture && { created_at: capture }),
+        },
+      },
+    });
+  }
+
   const recherche = filtreRecherche(q.search);
   if (recherche) et.push(recherche);
 
@@ -159,18 +182,24 @@ function filtreRecherche(search?: string): Prisma.CrmContactWhereInput | null {
   if (!s) return null;
   const chiffres = s.replace(/\D/g, '');
   if (chiffres.length >= 4 && chiffres.length === s.replace(/[\s+.-]/g, '').length) {
-    return { customer: { phone: { contains: chiffres.slice(-10) } } };
+    const bout = chiffres.slice(-10);
+    return { OR: [{ phone: { contains: bout } }, { customer: { phone: { contains: bout } } }] };
   }
   const mots = s.split(/\s+/).filter(Boolean).slice(0, 4);
   return {
     AND: mots.map((mot) => ({
-      customer: {
-        OR: [
-          { first_name: { contains: mot, mode: 'insensitive' as const } },
-          { last_name: { contains: mot, mode: 'insensitive' as const } },
-          { email: { contains: mot, mode: 'insensitive' as const } },
-        ],
-      },
+      OR: [
+        { name: { contains: mot, mode: 'insensitive' as const } },
+        {
+          customer: {
+            OR: [
+              { first_name: { contains: mot, mode: 'insensitive' as const } },
+              { last_name: { contains: mot, mode: 'insensitive' as const } },
+              { email: { contains: mot, mode: 'insensitive' as const } },
+            ],
+          },
+        },
+      ],
     })),
   };
 }
@@ -178,22 +207,22 @@ function filtreRecherche(search?: string): Prisma.CrmContactWhereInput | null {
 export function triContacts(sort?: QueryCrmContactDto['sort']): Prisma.CrmContactOrderByWithRelationInput[] {
   switch (sort) {
     case 'inscription_asc':
-      return [{ registered_at: 'asc' }];
+      return [{ registered_at: { sort: 'asc', nulls: 'last' } }];
     case 'appel_desc':
-      return [{ last_call_at: { sort: 'desc', nulls: 'last' } }, { registered_at: 'desc' }];
+      return [{ last_call_at: { sort: 'desc', nulls: 'last' } }, { registered_at: { sort: 'desc', nulls: 'last' } }];
     case 'appel_asc':
-      return [{ last_call_at: { sort: 'asc', nulls: 'first' } }, { registered_at: 'desc' }];
+      return [{ last_call_at: { sort: 'asc', nulls: 'first' } }, { registered_at: { sort: 'desc', nulls: 'last' } }];
     case 'tentatives_desc':
-      return [{ call_count: 'desc' }, { registered_at: 'desc' }];
+      return [{ call_count: 'desc' }, { registered_at: { sort: 'desc', nulls: 'last' } }];
     case 'inscription_desc':
-      return [{ registered_at: 'desc' }];
+      return [{ registered_at: { sort: 'desc', nulls: 'last' } }];
     case 'derniere_commande_asc':
-      return [{ last_order_at: { sort: 'asc', nulls: 'last' } }, { registered_at: 'desc' }];
+      return [{ last_order_at: { sort: 'asc', nulls: 'last' } }, { registered_at: { sort: 'desc', nulls: 'last' } }];
     case 'derniere_commande_desc':
-      return [{ last_order_at: { sort: 'desc', nulls: 'last' } }, { registered_at: 'desc' }];
+      return [{ last_order_at: { sort: 'desc', nulls: 'last' } }, { registered_at: { sort: 'desc', nulls: 'last' } }];
     default:
       // Les entrées les plus récentes d'abord : l'inscription pour un inscrit,
       // le jour où il est devenu inactif pour un ancien client.
-      return [{ segment_since: 'desc' }, { registered_at: 'desc' }];
+      return [{ segment_since: 'desc' }, { registered_at: { sort: 'desc', nulls: 'last' } }];
   }
 }

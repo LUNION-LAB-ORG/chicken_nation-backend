@@ -5,7 +5,7 @@ import * as PDFDocument from 'pdfkit';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CrmCampaignStatsService } from './crm-campaign-stats.service';
 import { CrmExportService, FichierExport } from './crm-export.service';
-import { LIBELLES_PUBLIC, compter } from '../crm.rules';
+import { LIBELLES_PUBLIC, compter, identiteContact } from '../crm.rules';
 import { nomClient } from './crm-contact.query';
 
 type Stats = Awaited<ReturnType<CrmCampaignStatsService['statistiques']>>;
@@ -106,6 +106,8 @@ export class CrmReportService {
             conversion_amount: true,
             last_call_status: { select: { label: true } },
             loss_reason: { select: { name: true } },
+            name: true,
+            phone: true,
             customer: { select: { first_name: true, last_name: true, phone: true } },
           },
         },
@@ -115,8 +117,8 @@ export class CrmReportService {
       'Contacts',
       ['Nom', 'Téléphone', 'Public', 'Agent', 'Statut', 'Tentatives', "Dernier statut d'appel", 'Raison', 'Converti ou reconquis le', 'Montant (F)'],
       membres.map((m) => [
-        nomClient(m.contact.customer),
-        m.contact.customer.phone,
+        nomClient(m.contact),
+        identiteContact(m.contact).telephone,
         LIBELLES_PUBLIC[m.contact.segment] ?? m.contact.segment,
         m.agent?.fullname ?? '',
         STATUTS[m.contact.status] ?? m.contact.status,

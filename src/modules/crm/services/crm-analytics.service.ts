@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { VENTE_VALIDE_SQL } from '../crm.rules';
 import { AnalyticsQueryDto, VerbatimsQueryDto } from '../dto/analytics.dto';
 import { CrmAccessService } from './crm-access.service';
 
 const JOUR = 86_400_000;
+const VENTE_VALIDE = Prisma.raw(VENTE_VALIDE_SQL);
 const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 1000) / 10 : 0);
 const arrondi = (n: number, d = 1) => Math.round(n * 10 ** d) / 10 ** d;
 
@@ -73,7 +75,7 @@ export class CrmAnalyticsService {
   async vueEnsemble(q: AnalyticsQueryDto) {
     const [[entonnoir], [population], [conversions]] = await Promise.all([
       this.prisma.$queryRaw<
-        { inscrits: number; traites: number; joints: number; interesses: number; coupons: number; commandes: number; delai: number }[]
+        { inscrits: number; traites: number; joints: number; interesses: number; coupons: number; inscrits_appli: number; commandes: number; delai: number }[]
       >`
         SELECT count(*)::int AS inscrits,
           count(*) FILTER (WHERE p.call_count > 0)::int AS traites,
@@ -81,6 +83,7 @@ export class CrmAnalyticsService {
           count(*) FILTER (WHERE p.coupon_sent_at IS NOT NULL OR EXISTS (
             SELECT 1 FROM "CrmCall" k WHERE k.contact_id = p.id AND k.outcome = 'INTERESSE'))::int AS interesses,
           count(*) FILTER (WHERE p.coupon_sent_at IS NOT NULL)::int AS coupons,
+          count(*) FILTER (WHERE p.customer_id IS NOT NULL AND p.registered_at >= p.segment_since)::int AS inscrits_appli,
           count(*) FILTER (WHERE p.converted_at IS NOT NULL)::int AS commandes,
           coalesce(avg(greatest(0, EXTRACT(EPOCH FROM (p.converted_at - p.segment_since)) / 86400))
             FILTER (WHERE p.converted_at IS NOT NULL), 0)::float AS delai
@@ -101,11 +104,9 @@ export class CrmAnalyticsService {
         FROM "CrmContact" p
         WHERE p.entity_status <> 'DELETED' ${this.filtreContact(q)}`,
       this.prisma.$queryRaw<{ conversions: number; ca: number }[]>`
-        SELECT count(*)::int AS conversions,
-          coalesce(sum(p.conversion_amount) FILTER (WHERE coalesce(o.status::text, '') <> 'CANCELLED'), 0)::float AS ca
-        FROM "CrmContact" p LEFT JOIN "Order" o ON o.id = p.conversion_order_id
-        WHERE p.entity_status <> 'DELETED' AND p.converted_at IS NOT NULL
-          ${this.plage('p.converted_at', q)} ${this.filtreContact(q)}`,
+        SELECT count(*)::int AS conversions, coalesce(sum(v.amount), 0)::float AS ca
+        FROM "CrmConversion" v
+        WHERE ${VENTE_VALIDE} ${this.plage('v.converted_at', q)} ${this.filtreColonne('v', q)}`,
     ]);
 
     const etapes: [string, string, number][] = [
@@ -114,6 +115,10 @@ export class CrmAnalyticsService {
       ['joints', 'Joints', entonnoir.joints],
       ['interesses', 'Intéressés', entonnoir.interesses],
       ['coupons', 'Coupon envoyé', entonnoir.coupons],
+      // Pour Glovo/Yango, l'inscription sur l'application est une étape à part entière.
+      ...(q.segment === 'GLOVO' || q.segment === 'YANGO'
+        ? ([['inscrits_appli', "Inscrits sur l'appli", entonnoir.inscrits_appli]] as [string, string, number][])
+        : []),
       ['commandes', q.segment === 'INACTIF' ? 'Reconquis' : 'Commande passée', entonnoir.commandes],
     ];
     return {
@@ -291,8 +296,8 @@ export class CrmAnalyticsService {
         (SELECT count(DISTINCT k.contact_id) FROM "CrmCall" k WHERE k.agent_id = u.id ${this.plage('k.created_at', q)} ${this.filtreColonne('k', q)})::int AS traites,
         (SELECT count(DISTINCT k.contact_id) FROM "CrmCall" k WHERE k.agent_id = u.id AND k.reached ${this.plage('k.created_at', q)} ${this.filtreColonne('k', q)})::int AS joints,
         (SELECT count(*) FROM "CrmCoupon" c WHERE c.sent_by_id = u.id ${this.plage('c.sent_at', q)} ${this.filtreColonne('c', q)})::int AS coupons,
-        (SELECT count(*) FROM "CrmContact" p WHERE p.assigned_to_id = u.id AND p.converted_at IS NOT NULL ${this.plage('p.converted_at', q)} ${this.filtreContact(q)})::int AS conversions,
-        (SELECT coalesce(sum(p.conversion_amount), 0) FROM "CrmContact" p WHERE p.assigned_to_id = u.id AND p.converted_at IS NOT NULL ${this.plage('p.converted_at', q)} ${this.filtreContact(q)})::float AS ca,
+        (SELECT count(*) FROM "CrmConversion" v WHERE v.agent_id = u.id AND ${VENTE_VALIDE} ${this.plage('v.converted_at', q)} ${this.filtreColonne('v', q)})::int AS conversions,
+        (SELECT coalesce(sum(v.amount), 0) FROM "CrmConversion" v WHERE v.agent_id = u.id AND ${VENTE_VALIDE} ${this.plage('v.converted_at', q)} ${this.filtreColonne('v', q)})::float AS ca,
         (SELECT count(*) FROM "CrmContact" p WHERE p.assigned_to_id = u.id AND p.status IN ('A_APPELER', 'A_RAPPELER', 'INTERESSE', 'COUPON_ENVOYE'))::int AS portefeuille
       FROM "User" u
       WHERE u.entity_status = 'ACTIVE' AND u.role::text IN (${Prisma.join(roles)})`;
@@ -315,8 +320,8 @@ export class CrmAnalyticsService {
             WHERE k.created_at >= ${debut} AND k.created_at < ${lendemain} ${this.filtreColonne('k', q)} GROUP BY 1),
       c AS (SELECT c.sent_at::date AS j, count(*) AS n FROM "CrmCoupon" c
             WHERE c.sent_at >= ${debut} AND c.sent_at < ${lendemain} ${this.filtreColonne('c', q)} GROUP BY 1),
-      v AS (SELECT p.converted_at::date AS j, count(*) AS n FROM "CrmContact" p
-            WHERE p.converted_at >= ${debut} AND p.converted_at < ${lendemain} ${this.filtreContact(q)} GROUP BY 1),
+      v AS (SELECT v.converted_at::date AS j, count(*) AS n FROM "CrmConversion" v
+            WHERE ${VENTE_VALIDE} AND v.converted_at >= ${debut} AND v.converted_at < ${lendemain} ${this.filtreColonne('v', q)} GROUP BY 1),
       i AS (SELECT p.segment_since::date AS j, count(*) AS n FROM "CrmContact" p
             WHERE p.segment_since >= ${debut} AND p.segment_since < ${lendemain} ${this.filtreContact(q)} GROUP BY 1)
       SELECT to_char(jours.jour, 'YYYY-MM-DD') AS jour,
@@ -347,10 +352,10 @@ export class CrmAnalyticsService {
         { id: string; created_at: Date; comment: string; status_label: string; outcome: string; raison: string | null; agent: string | null; contact: string; contact_id: string }[]
       >`
         SELECT k.id, k.created_at, k.comment, k.status_label, k.outcome::text AS outcome, r.name AS raison, u.fullname AS agent,
-          coalesce(nullif(trim(concat_ws(' ', cu.first_name, cu.last_name)), ''), 'Client sans nom') AS contact, p.id AS contact_id
+          coalesce(nullif(trim(concat_ws(' ', cu.first_name, cu.last_name)), ''), p.name, 'Client sans nom') AS contact, p.id AS contact_id
         FROM "CrmCall" k
         JOIN "CrmContact" p ON p.id = k.contact_id
-        JOIN "Customer" cu ON cu.id = p.customer_id
+        LEFT JOIN "Customer" cu ON cu.id = p.customer_id
         LEFT JOIN "ProspectLossReason" r ON r.id = k.loss_reason_id
         LEFT JOIN "User" u ON u.id = k.agent_id
         WHERE ${where}

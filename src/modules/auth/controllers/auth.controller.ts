@@ -8,6 +8,9 @@ import {
   ApiNotFoundResponse,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
+import { User, UserRole } from '@prisma/client';
+import { permissionsByRole } from '../constantes/permissionsByRole';
+import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { JwtRefreshAuthGuard } from '../guards/jwt-refresh-auth.guard';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 
@@ -52,6 +55,18 @@ export class AuthController {
   @Post('customer/verify-otp')
   async verifyOtpCustomer(@Body() data: VerifyOtpDto) {
     return this.authService.verifyOtp(data);
+  }
+
+  // DROITS À JOUR
+  // Les droits sont recopiés dans le cookie à la connexion : quand un rôle
+  // change (nouveau module, droit ajouté), le backoffice les relit ici au lieu
+  // d'exiger une reconnexion.
+  @ApiOperation({ summary: "Rôle et droits actuels de l'utilisateur connecté" })
+  @UseGuards(JwtAuthGuard)
+  @Get('permissions')
+  permissions(@Req() req: Request) {
+    const user = req.user as User;
+    return { role: user.role, permissions: permissionsByRole[user.role as UserRole] ?? null };
   }
 
   // REFRESH TOKEN

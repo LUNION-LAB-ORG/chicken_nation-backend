@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsEnum, Matches, IsOptional, IsUUID } from 'class-validator';
+import { IsString, IsNotEmpty, IsEnum, Matches, IsOptional, IsUUID, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { ProspectPlatform } from '@prisma/client';
@@ -18,12 +18,14 @@ export class CreateProspectDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(120, { message: 'Le nom ne dépasse pas 120 caractères' })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   name?: string;
 
   @ApiProperty({ description: 'Numéro de la commande Glovo/Yango', example: '101672547192' })
   @IsString()
   @IsNotEmpty({ message: 'Le numéro de commande est obligatoire' })
+  @MaxLength(64, { message: 'Le numéro de commande ne dépasse pas 64 caractères' })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   order_number: string;
 

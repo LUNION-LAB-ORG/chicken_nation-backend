@@ -81,6 +81,17 @@ export class QueryCrmContactDto {
   @IsOptional() @IsDateString()
   last_call_to?: string;
 
+  @ApiPropertyOptional({ description: 'Restaurant où le contact a été capté (Glovo/Yango)' })
+  @IsOptional() @IsUUID()
+  restaurant_id?: string;
+
+  @ApiPropertyOptional({ description: 'Captés depuis le (même capture que le restaurant)' })
+  @IsOptional() @IsDateString()
+  captured_from?: string;
+
+  @IsOptional() @IsDateString()
+  captured_to?: string;
+
   @ApiPropertyOptional({ description: '« true » : jamais appelés' })
   @IsOptional() @IsIn(['true', 'false'])
   never_called?: string;

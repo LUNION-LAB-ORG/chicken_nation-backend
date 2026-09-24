@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Prisma, User } from '@prisma/client';
+import { EntityStatus, Prisma, User } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { ExportCrmContactDto, QueryExportsDto } from '../dto/contact.dto';
@@ -48,11 +48,24 @@ export class CrmExportService {
       );
     }
     const lignes = (
-      await this.prisma.crmContact.findMany({ where, select: SELECT_LIGNE, orderBy: triContacts(q.sort) })
-    ).map(versLigne);
+      await this.prisma.crmContact.findMany({
+        where,
+        select: {
+          ...SELECT_LIGNE,
+          captures: {
+            where: { entity_status: { not: EntityStatus.DELETED } },
+            orderBy: { created_at: 'desc' },
+            take: 1,
+            select: { platform: true, order_number: true, created_at: true, restaurant: { select: { name: true } } },
+          },
+        },
+        orderBy: triContacts(q.sort),
+      })
+    ).map((l) => ({ ...versLigne(l), capture: l.captures[0] ?? null }));
 
     const entetes = [
-      'Nom', 'Téléphone', 'E-mail', 'Public', 'Inscrit le', 'Dernière commande', 'Statut', 'Agent', 'Campagne', 'Tentatives',
+      'Nom', 'Téléphone', 'E-mail', 'Public', 'Inscrit le', 'Dernière commande', 'Capté sur', 'Capté le', 'Restaurant de capture',
+      'N° de commande capturée', 'Statut', 'Agent', 'Campagne', 'Tentatives',
       'Dernier appel', "Statut d'appel", 'Raison de non-commande', 'Commentaire', 'Coupon', 'Offre',
       'Coupon envoyé le', 'Expire le', 'État du coupon', 'Converti ou reconquis le', 'Montant de cette commande',
       'Paiements abandonnés',
@@ -60,11 +73,15 @@ export class CrmExportService {
     const date = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 16).replace('T', ' ') : '');
     const rangees = lignes.map((l) => [
       l.nom,
-      l.customer.phone ?? '',
-      l.customer.email ?? '',
+      l.telephone,
+      l.customer?.email ?? '',
       LIBELLES_PUBLIC[l.segment] ?? l.segment,
       date(l.registered_at),
       date(l.last_order_at),
+      l.capture ? (l.capture.platform === 'YANGO' ? 'Yango' : 'Glovo') : '',
+      date(l.capture?.created_at),
+      l.capture?.restaurant?.name ?? '',
+      l.capture?.order_number ?? '',
       l.status === 'CONVERTI' && l.segment === 'INACTIF' ? 'Reconquis' : (LIBELLES_STATUT[l.status] ?? l.status),
       l.assigned_to?.fullname ?? '',
       l.campaign?.name ?? '',

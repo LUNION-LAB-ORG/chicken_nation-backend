@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   CampaignStatus,
   CrmChannel,
@@ -13,6 +13,7 @@ import { TwilioService } from 'src/twilio/services/twilio.service';
 import {
   dateCourte,
   genererCodeCoupon,
+  identiteContact,
   joursRestants,
   prenomPourMessage,
   remplirModele,
@@ -28,6 +29,15 @@ const LIBELLE_CANAL: Record<CrmChannel, string> = {
   WHATSAPP: 'envoyé par WhatsApp',
   SMS: 'envoyé par SMS',
   AUCUN: "créé, mais aucun message n'est parti",
+  INCONNU: 'envoyé (canal non noté)',
+};
+
+/** Renvoi d'un coupon existant : jamais « créé ». */
+const LIBELLE_RENVOI: Record<CrmChannel, string> = {
+  WHATSAPP: 'renvoyé par WhatsApp',
+  SMS: 'renvoyé par SMS',
+  AUCUN: "à renvoyer : aucun message n'est parti",
+  INCONNU: 'renvoyé (canal non noté)',
 };
 
 /**
@@ -49,20 +59,11 @@ export class CrmCouponService {
 
   async envoyer(user: User, contactId: string, dto: SendCouponDto) {
     const contact = await this.chargerContact(user, contactId);
+    await this.access.assertPeutTraiter(user, contact);
     if (contact.status === CrmStatus.INJOIGNABLE) {
       throw new BadRequestException("Ce numéro est injoignable : aucun message ne pourrait partir");
     }
     const maintenant = new Date();
-    const actif = await this.prisma.crmCoupon.findFirst({
-      where: { contact_id: contact.id, used_at: null, expires_at: { gt: maintenant } },
-      select: { code: true, expires_at: true },
-    });
-    if (actif) {
-      throw new BadRequestException(
-        `Un coupon est déjà actif (${actif.code}, jusqu'au ${dateCourte(actif.expires_at)}). Renvoyez-le plutôt que d'en créer un second.`,
-      );
-    }
-
     const reglages = await this.config.lireReglages();
     const offre = await this.choisirOffre([dto.offer_id, contact.campaign?.offer_id, reglages.default_offer_id]);
     const code = await this.codeLibre();
@@ -71,15 +72,28 @@ export class CrmCouponService {
       contact.campaign_id && contact.campaign?.status !== CampaignStatus.COMPLETED ? contact.campaign_id : null;
 
     const coupon = await this.prisma.$transaction(async (tx) => {
+      await this.access.prendre(tx, user, contact.id, maintenant);
+      // Contact verrouillé le temps de l'envoi : deux clics, ou deux agents,
+      // ne créent jamais deux codes pour la même personne.
+      await tx.$queryRaw`SELECT id FROM "CrmContact" WHERE id = ${contact.id}::uuid FOR UPDATE`;
+      const actif = await tx.crmCoupon.findFirst({
+        where: { contact_id: contact.id, used_at: null, expires_at: { gt: maintenant } },
+        select: { code: true, expires_at: true },
+      });
+      if (actif) {
+        throw new BadRequestException(
+          `Un coupon est déjà actif (${actif.code}, jusqu'au ${dateCourte(actif.expires_at)}). Renvoyez-le plutôt que d'en créer un second.`,
+        );
+      }
       const claim = await tx.crmContact.updateMany({
-        where: { id: contact.id, status: { not: CrmStatus.CONVERTI } },
+        where: { id: contact.id, status: { not: CrmStatus.CONVERTI }, ...this.access.conditionAgent(user) },
         data: { status: CrmStatus.COUPON_ENVOYE, coupon_sent_at: maintenant, callback_at: null },
       });
       if (claim.count === 0) throw new BadRequestException('Ce client vient de commander : il est sorti de la liste');
       const promo = await tx.promoCode.create({
         data: {
           code,
-          description: `Contact ${nomClient(contact.customer)} : ${offre.label}`,
+          description: `Contact ${nomClient(contact)} : ${offre.label}`,
           discount_type: offre.discount_type,
           discount_value: offre.discount_value,
           max_discount_amount: offre.max_discount_amount,
@@ -114,7 +128,7 @@ export class CrmCouponService {
 
     // Le message part APRÈS l'enregistrement : jamais de code envoyé qui
     // n'existerait pas en base.
-    const envoi = await this.expedier(contact.customer, coupon, reglages);
+    const envoi = await this.expedier(contact, coupon, reglages);
     await this.prisma.crmCoupon.update({
       where: { id: coupon.id },
       data: { channel: envoi.canal, message_sid: envoi.sid, send_error: envoi.erreur },
@@ -138,17 +152,30 @@ export class CrmCouponService {
     };
   }
 
-  /** Renvoie le message du coupon actif, sans créer de second code. */
-  async renvoyer(user: User, contactId: string) {
+  /**
+   * Renvoie le message du coupon actif, sans créer de second code. Un agent de
+   * la file commune prend le contact ; pour un client qui appelle (« je n'ai
+   * pas reçu mon code »), tout agent peut renvoyer : le renvoi est tracé et
+   * le contact reste à son agent.
+   */
+  async renvoyer(user: User, contactId: string, options: { codeAttendu?: string } = {}) {
     const contact = await this.chargerContact(user, contactId);
-    const coupon = await this.prisma.crmCoupon.findFirst({
-      where: { contact_id: contact.id, used_at: null, expires_at: { gt: new Date() } },
-      orderBy: { sent_at: 'desc' },
+    this.access.assertAgent(user);
+    const maintenant = new Date();
+    const coupon = await this.prisma.$transaction(async (tx) => {
+      if (this.access.dansFileCommune(contact, maintenant)) await this.access.prendre(tx, user, contact.id, maintenant);
+      return tx.crmCoupon.findFirst({
+        where: { contact_id: contact.id, used_at: null, expires_at: { gt: maintenant } },
+        orderBy: { sent_at: 'desc' },
+      });
     });
     if (!coupon) throw new BadRequestException('Aucun coupon actif à renvoyer');
+    if (options.codeAttendu && coupon.code.toUpperCase() !== options.codeAttendu.toUpperCase()) {
+      throw new ConflictException(`Un autre coupon est actif pour ce client (${coupon.code})`);
+    }
 
     const reglages = await this.config.lireReglages();
-    const envoi = await this.expedier(contact.customer, coupon, reglages);
+    const envoi = await this.expedier(contact, coupon, reglages);
     await this.prisma.crmCoupon.update({
       where: { id: coupon.id },
       data: {
@@ -157,18 +184,19 @@ export class CrmCouponService {
         send_error: envoi.erreur,
       },
     });
+    const pourUnAutre = !this.access.estGestionnaire(user) && contact.assigned_to_id && contact.assigned_to_id !== user.id;
     await this.events.journaliser([
       {
         contact_id: contact.id,
         type: CrmEventType.COUPON_RENVOYE,
-        label: `Coupon ${coupon.code} ${LIBELLE_CANAL[envoi.canal].replace('envoyé', 'renvoyé')}`,
+        label: `Coupon ${coupon.code} ${LIBELLE_RENVOI[envoi.canal]}${pourUnAutre ? ' (demande du client)' : ''}`,
         actor_id: user.id,
         campaign_id: coupon.campaign_id,
         data: { coupon_id: coupon.id, canal: envoi.canal },
       },
     ]);
     this.events.signaler([contact.id], 'coupon');
-    return { message: envoi.message, canal: envoi.canal, envoye: envoi.canal !== CrmChannel.AUCUN };
+    return { message: envoi.message, canal: envoi.canal, envoye: envoi.canal !== CrmChannel.AUCUN, code: coupon.code };
   }
 
   private async chargerContact(user: User, contactId: string) {
@@ -178,14 +206,16 @@ export class CrmCouponService {
         id: true,
         status: true,
         segment: true,
+        segment_since: true,
         assigned_to_id: true,
         campaign_id: true,
         campaign: { select: { status: true, offer_id: true } },
+        name: true,
+        phone: true,
         customer: { select: { first_name: true, last_name: true, phone: true } },
       },
     });
     if (!contact) throw new NotFoundException('Contact introuvable');
-    await this.access.assertPeutTraiter(user, contact);
     if (contact.status === CrmStatus.CONVERTI) {
       throw new BadRequestException('Ce client a déjà commandé : il est sorti de la liste');
     }
@@ -193,12 +223,13 @@ export class CrmCouponService {
   }
 
   private async expedier(
-    client: { first_name: string | null; phone: string },
+    contact: Parameters<typeof identiteContact>[0],
     coupon: { code: string; offer_label: string; expires_at: Date },
     reglages: { message_template: string; whatsapp_template_sid: string; app_link: string },
   ) {
+    const identite = identiteContact(contact);
     const variables = {
-      prenom: prenomPourMessage(client.first_name),
+      prenom: prenomPourMessage(identite.prenom),
       offre: coupon.offer_label,
       code: coupon.code,
       expiration: dateCourte(coupon.expires_at),
@@ -208,7 +239,7 @@ export class CrmCouponService {
     let resultat: { channel: CrmChannel; sid: string | null };
     try {
       resultat = await this.twilio.sendCrmCoupon({
-        phoneNumber: versE164(client.phone),
+        phoneNumber: versE164(identite.telephone),
         templateSid: reglages.whatsapp_template_sid,
         // Variables du modèle approuvé : {{1}} prénom, {{2}} code, {{3}}
         // validité en jours. L'offre et le lien sont dans le texte du SMS.

@@ -16,9 +16,14 @@ import { CrmEventsService } from './services/crm-events.service';
 import { CrmExportService } from './services/crm-export.service';
 import { CrmContactService } from './services/crm-contact.service';
 import { CrmReportService } from './services/crm-report.service';
+import { CrmCaptureService } from './services/crm-capture.service';
+import { CrmIdentiteService } from './services/crm-identite.service';
 import { CrmRattrapageService } from './services/crm-rattrapage.service';
+import { CrmRegistreService } from './services/crm-registre.service';
+import { CrmRepriseAcquisitionService } from './services/crm-reprise-acquisition.service';
 import { CrmRepriseService } from './services/crm-reprise.service';
 import { CrmSyncService } from './services/crm-sync.service';
+import { CrmVentesService } from './services/crm-ventes.service';
 import { CrmTask } from './tasks/crm.task';
 
 /**
@@ -37,9 +42,13 @@ import { CrmTask } from './tasks/crm.task';
   providers: [
     CrmAccessService,
     CrmEventsService,
+    CrmIdentiteService,
+    CrmRegistreService,
     CrmSyncService,
+    CrmCaptureService,
     CrmRattrapageService,
     CrmRepriseService,
+    CrmRepriseAcquisitionService,
     CrmConfigService,
     CrmContactService,
     CrmCallService,
@@ -50,9 +59,11 @@ import { CrmTask } from './tasks/crm.task';
     CrmReportService,
     CrmAlertService,
     CrmAnalyticsService,
+    CrmVentesService,
     CrmListener,
     CrmTask,
   ],
-  exports: [CrmSyncService],
+  // Pour les routes de l'acquisition Glovo/Yango (capture, anciennes routes de l'appli caisse).
+  exports: [CrmSyncService, CrmCaptureService, CrmAccessService, CrmCallService, CrmCouponService],
 })
 export class CrmModule {}

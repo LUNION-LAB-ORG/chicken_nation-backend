@@ -5,20 +5,30 @@ import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
-import { AnalyticsQueryDto, VerbatimsQueryDto } from '../dto/analytics.dto';
+import { AnalyticsQueryDto, VentesQueryDto, VerbatimsQueryDto } from '../dto/analytics.dto';
 import { CrmAnalyticsService } from '../services/crm-analytics.service';
+import { CrmVentesService } from '../services/crm-ventes.service';
 
 /**
- * Tableaux de bord du module Contacts (cahier §5 et §7). Droit REPORT : la
- * direction et la lecture seule y ont accès ; un agent, lui, suit ses
- * chiffres du jour dans sa file.
+ * Tableaux de bord du CRM (cahier §5 et §7). Droit REPORT : direction,
+ * marketing et call center (en consultation).
  */
-@ApiTags('Contacts (tableaux de bord)')
+@ApiTags('CRM (tableaux de bord)')
 @ApiBearerAuth()
 @Controller('crm/analytics')
 @UseGuards(JwtAuthGuard, UserPermissionsGuard)
 export class CrmAnalyticsController {
-  constructor(private readonly analytics: CrmAnalyticsService) {}
+  constructor(
+    private readonly analytics: CrmAnalyticsService,
+    private readonly ventesService: CrmVentesService,
+  ) {}
+
+  @Get('sales')
+  @RequirePermission(Modules.CRM, Action.REPORT)
+  @ApiOperation({ summary: 'Ventes du registre par public et par mois, captures par restaurant' })
+  ventes(@Query() q: VentesQueryDto) {
+    return this.ventesService.ventes(q);
+  }
 
   @Get('overview')
   @RequirePermission(Modules.CRM, Action.REPORT)

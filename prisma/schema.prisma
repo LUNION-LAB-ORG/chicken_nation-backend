@@ -1699,8 +1699,9 @@ model Restaurant {
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 
-  Conversation Conversation[]
-  prospects    Prospect[]
+  Conversation    Conversation[]
+  crm_conversions CrmConversion[]
+  prospects       Prospect[]
 }
 
 model Supplement {
@@ -1784,6 +1785,7 @@ model User {
   crm_coupons_sent      CrmCoupon[]         @relation("CrmCouponSender")
   crm_members           CrmCampaignMember[] @relation("CrmMemberAgent")
   crm_events            CrmEvent[]          @relation("CrmEventActor")
+  crm_conversions       CrmConversion[]     @relation("CrmConversionAgent")
   crm_exports           CrmExport[]         @relation("CrmExportAuthor")
 
   // Appels internes (Lunion Meet)
@@ -2903,10 +2905,14 @@ model Prospect {
   creator    User?   @relation("ProspectCreator", fields: [created_by], references: [id])
 
   // Liens de conversion (remplis dans les phases suivantes)
-  customer_id   String?    @db.Uuid
-  customer      Customer?  @relation(fields: [customer_id], references: [id])
-  promo_code_id String?    @db.Uuid
-  promo_code    PromoCode? @relation(fields: [promo_code_id], references: [id])
+  /// Fiche du CRM de cette personne (une fiche par numéro, plusieurs captures possibles).
+  contact_id    String?         @db.Uuid
+  contact       CrmContact?     @relation(fields: [contact_id], references: [id], onDelete: SetNull)
+  conversions   CrmConversion[]
+  customer_id   String?         @db.Uuid
+  customer      Customer?       @relation(fields: [customer_id], references: [id])
+  promo_code_id String?         @db.Uuid
+  promo_code    PromoCode?      @relation(fields: [promo_code_id], references: [id])
 
   called_at          DateTime?
   joined_at          DateTime? // 1er appel « joint » (pour l'entonnoir « vérifiés »)
@@ -2930,6 +2936,7 @@ model Prospect {
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 
   @@index([phone])
+  @@index([contact_id])
   @@index([restaurant_id, status, created_at])
 }
 
@@ -2943,6 +2950,7 @@ model ProspectCall {
   result      ProspectCallResult
   rank        Int                @default(1)
   note        String?            @db.VarChar
+  crm_call    CrmCall?
   created_at  DateTime           @default(now()) @db.Timestamp(6)
 
   @@index([prospect_id, created_at])
@@ -3217,6 +3225,7 @@ enum CrmChannel {
   WHATSAPP
   SMS
   AUCUN
+  INCONNU // coupon repris de l'acquisition : le canal n'a pas été noté
 }
 
 enum CrmReleaseReason {
@@ -3236,6 +3245,8 @@ enum CrmEventType {
   CONVERSION
   RETOUR
   ALERTE
+  CAPTURE // commande Glovo/Yango relevée par un caissier
+  INSCRIPTION // compte sur l'application associé à la fiche
 }
 
 model CrmCampaign {
@@ -3282,6 +3293,7 @@ model CrmCampaign {
   calls           CrmCall[]
   coupons         CrmCoupon[]
   events          CrmEvent[]
+  conversions     CrmConversion[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -3358,10 +3370,20 @@ model CrmOffer {
 
 model CrmContact {
   id            String     @id @default(uuid()) @db.Uuid
-  customer_id   String     @unique @db.Uuid
-  customer      Customer   @relation(fields: [customer_id], references: [id], onDelete: Cascade)
-  /// Date d'inscription du client, recopiée pour trier et filtrer sans jointure.
-  registered_at DateTime   @db.Timestamp(6)
+  /// NULL pour un contact Glovo/Yango qui n'a pas (encore) de compte sur l'application.
+  customer_id   String?    @unique @db.Uuid
+  customer      Customer?  @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  /// Numéro complet, en chiffres : celui qu'on affiche et qu'on appelle.
+  phone         String?    @db.VarChar(20)
+  /// 10 derniers chiffres : la seule clé de correspondance entre captures, comptes et fiches.
+  /// ⚠️ Index unique PARTIEL écrit à la main dans la migration (une fiche sans compte par
+  /// numéro) : Prisma ne sait pas le décrire, un `migrate dev` proposerait de le supprimer.
+  phone_key     String?    @db.VarChar(10)
+  /// Nom relevé à la capture, utilisé tant qu'il n'y a pas de compte.
+  name          String?    @db.VarChar(120)
+  /// Inscription sur l'application, recopiée pour trier et filtrer sans jointure.
+  /// NULL tant que le contact n'a pas de compte.
+  registered_at DateTime?  @db.Timestamp(6)
   /// Public actuel. Un client reconquis qui décroche à nouveau repart en INACTIF.
   segment       CrmSegment @default(JAMAIS_COMMANDE)
   /// Entrée dans le public actuel : l'inscription, ou le jour où le client est devenu inactif.
@@ -3404,10 +3426,13 @@ model CrmContact {
   /// sur la même chose qu'un client qui n'a jamais essayé.
   abandoned_orders Int @default(0)
 
-  calls   CrmCall[]
-  coupons CrmCoupon[]
-  members CrmCampaignMember[]
-  events  CrmEvent[]
+  calls       CrmCall[]
+  coupons     CrmCoupon[]
+  members     CrmCampaignMember[]
+  events      CrmEvent[]
+  /// Commandes Glovo/Yango relevées par les caissiers (table historique « Prospect »).
+  captures    Prospect[]
+  conversions CrmConversion[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -3415,6 +3440,7 @@ model CrmContact {
 
   @@index([status, registered_at])
   @@index([segment, status])
+  @@index([phone_key])
   @@index([segment, segment_since])
   @@index([assigned_to_id, status])
   @@index([campaign_id, status])
@@ -3426,26 +3452,29 @@ model CrmContact {
 /// Historique des appels. Libellé et effet recopiés : renommer un statut ne
 /// réécrit pas ce qui s'est dit au téléphone.
 model CrmCall {
-  id             String         @id @default(uuid()) @db.Uuid
-  contact_id     String         @db.Uuid
-  contact        CrmContact     @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  id               String         @id @default(uuid()) @db.Uuid
+  contact_id       String         @db.Uuid
+  contact          CrmContact     @relation(fields: [contact_id], references: [id], onDelete: Cascade)
   /// Public du contact au moment de l\'action, pour des statistiques par public.
-  segment        CrmSegment     @default(JAMAIS_COMMANDE)
-  agent_id       String?        @db.Uuid
-  agent          User?          @relation("CrmCallAgent", fields: [agent_id], references: [id], onDelete: SetNull)
-  campaign_id    String?        @db.Uuid
-  campaign       CrmCampaign?   @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
-  call_status_id String?        @db.Uuid
-  call_status    CrmCallStatus? @relation(fields: [call_status_id], references: [id], onDelete: SetNull)
-  status_label   String         @db.VarChar(120)
-  outcome        CrmCallOutcome
-  reached        Boolean        @default(false)
-  attempt        Int            @default(1)
-  loss_reason_id String?        @db.Uuid
-  loss_reason    CrmReason?     @relation(fields: [loss_reason_id], references: [id], onDelete: SetNull)
-  comment        String?        @db.Text
-  callback_at    DateTime?      @db.Timestamp(6)
-  created_at     DateTime       @default(now()) @db.Timestamp(6)
+  segment          CrmSegment     @default(JAMAIS_COMMANDE)
+  agent_id         String?        @db.Uuid
+  agent            User?          @relation("CrmCallAgent", fields: [agent_id], references: [id], onDelete: SetNull)
+  campaign_id      String?        @db.Uuid
+  campaign         CrmCampaign?   @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
+  call_status_id   String?        @db.Uuid
+  call_status      CrmCallStatus? @relation(fields: [call_status_id], references: [id], onDelete: SetNull)
+  status_label     String         @db.VarChar(120)
+  outcome          CrmCallOutcome
+  reached          Boolean        @default(false)
+  attempt          Int            @default(1)
+  loss_reason_id   String?        @db.Uuid
+  loss_reason      CrmReason?     @relation(fields: [loss_reason_id], references: [id], onDelete: SetNull)
+  comment          String?        @db.Text
+  callback_at      DateTime?      @db.Timestamp(6)
+  /// Appel repris de l'acquisition (ou passé par ses anciennes routes) : jamais importé deux fois.
+  prospect_call_id String?        @unique @db.Uuid
+  prospect_call    ProspectCall?  @relation(fields: [prospect_call_id], references: [id], onDelete: SetNull)
+  created_at       DateTime       @default(now()) @db.Timestamp(6)
 
   @@index([contact_id, created_at])
   @@index([campaign_id, created_at])
@@ -3541,4 +3570,42 @@ model CrmExport {
   created_at DateTime @default(now()) @db.Timestamp(6)
 
   @@index([created_at])
+}
+
+/// Origine d'une vente du registre.
+enum CrmConversionSource {
+  CRM // enregistrée par le CRM
+  ACQUISITION_HISTORIQUE // conversion de l'ancienne acquisition Glovo/Yango, antérieure à la bascule
+}
+
+/// Registre des ventes du CRM : une commande ne compte qu'une fois, et une vente
+/// passée reste acquise même si le client redevient inactif (nouveau cycle).
+/// ⚠️ Deux index uniques PARTIELS sont écrits à la main dans la migration
+/// (order_id et (contact_id, cycle) des ventes non annulées).
+model CrmConversion {
+  id            String              @id @default(uuid()) @db.Uuid
+  contact_id    String              @db.Uuid
+  contact       CrmContact          @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  cycle         Int                 @default(1)
+  segment       CrmSegment
+  /// NULL seulement pour une conversion historique dont la commande est inconnue.
+  order_id      String?             @db.Uuid
+  amount        Float               @default(0)
+  converted_at  DateTime            @db.Timestamp(6)
+  restaurant_id String?             @db.Uuid
+  restaurant    Restaurant?         @relation(fields: [restaurant_id], references: [id], onDelete: SetNull)
+  capture_id    String?             @db.Uuid
+  capture       Prospect?           @relation(fields: [capture_id], references: [id], onDelete: SetNull)
+  campaign_id   String?             @db.Uuid
+  campaign      CrmCampaign?        @relation(fields: [campaign_id], references: [id], onDelete: SetNull)
+  agent_id      String?             @db.Uuid
+  agent         User?               @relation("CrmConversionAgent", fields: [agent_id], references: [id], onDelete: SetNull)
+  source        CrmConversionSource @default(CRM)
+  cancelled_at  DateTime?           @db.Timestamp(6)
+  created_at    DateTime            @default(now()) @db.Timestamp(6)
+
+  @@index([converted_at])
+  @@index([contact_id])
+  @@index([segment, converted_at])
+  @@index([order_id])
 }

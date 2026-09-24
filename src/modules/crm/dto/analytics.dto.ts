@@ -18,6 +18,12 @@ export class AnalyticsQueryDto {
   segment?: (typeof SEGMENTS_CRM)[number];
 }
 
+/** Onglet Ventes : mêmes filtres, plus le restaurant (commande directe ou lieu de capture). */
+export class VentesQueryDto extends AnalyticsQueryDto {
+  @IsOptional() @IsUUID()
+  restaurant_id?: string;
+}
+
 export class VerbatimsQueryDto extends AnalyticsQueryDto {
   @IsOptional() @IsUUID()
   loss_reason_id?: string;

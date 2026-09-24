@@ -4,7 +4,8 @@ import { CampaignStatus, EntityStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CrmAlertService } from '../services/crm-alert.service';
 import { CrmCampaignService } from '../services/crm-campaign.service';
-import { CrmRattrapageService } from '../services/crm-rattrapage.service';
+import { CrmRattrapageService, TAILLE_REVUE } from '../services/crm-rattrapage.service';
+import { CrmRepriseAcquisitionService } from '../services/crm-reprise-acquisition.service';
 import { CrmRepriseService } from '../services/crm-reprise.service';
 
 /**
@@ -20,6 +21,7 @@ export class CrmTask implements OnApplicationBootstrap {
     private readonly prisma: PrismaService,
     private readonly rattrapage: CrmRattrapageService,
     private readonly reprise: CrmRepriseService,
+    private readonly repriseAcquisition: CrmRepriseAcquisitionService,
     private readonly alertes: CrmAlertService,
     private readonly campagnes: CrmCampaignService,
   ) {}
@@ -36,6 +38,16 @@ export class CrmTask implements OnApplicationBootstrap {
         await this.rattrapage.reconcilier();
         await this.detecter();
         await this.reprise.reprendreRetention();
+        const reprise = await this.repriseAcquisition.reprendre();
+        // Les fiches reprises sont jugées tout de suite, pas au passage suivant :
+        // un client Glovo qui a déjà commandé sur l'appli ne doit pas rester
+        // « à appeler » dans la file commune.
+        if (reprise.fiches + reprise.captures > 0) {
+          for (let passe = 0; passe < 10; passe++) {
+            const r = await this.rattrapage.reconcilier();
+            if (r.revus < TAILLE_REVUE) break;
+          }
+        }
       });
     }, 15_000);
   }
@@ -44,10 +56,14 @@ export class CrmTask implements OnApplicationBootstrap {
   @Cron('*/10 * * * *')
   async reconcilier() {
     await this.uneFois('reconciliation', async () => {
+      // Tant que l'appli caisse garde ses anciennes routes, ce qu'elles ont
+      // laissé sans fiche est repris ici.
+      await this.repriseAcquisition.reprendre();
       const r = await this.rattrapage.reconcilier();
       if (Object.values(r).some((n) => n > 0)) {
         this.logger.log(
-          `CRM : ${r.crees} inscrits entrés, ${r.revus} revus, ${r.couponsUtilises} coupons rattachés, ${r.couponsLiberes} libérés`,
+          `CRM : ${r.crees} inscrits entrés, ${r.lies} comptes associés, ${r.revus} revus, ${r.couponsUtilises} coupons rattachés, ` +
+            `${r.couponsLiberes} libérés, ${r.ventes} ventes ajoutées au registre`,
         );
       }
     });

@@ -1,8 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { CampaignStatus, EntityStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { VENTE_VALIDE_SQL } from '../crm.rules';
 
 const JOUR = 86_400_000;
+const VENTE_VALIDE = Prisma.raw(VENTE_VALIDE_SQL);
 
 const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 1000) / 10 : 0);
 
@@ -90,11 +92,11 @@ export class CrmCampaignStatsService {
         this.prisma.$queryRaw<{ cibles: number; conversions: number; ca: number }[]>`
           SELECT count(*)::int AS cibles,
                  count(*) FILTER (WHERE m.converted_at IS NOT NULL)::int AS conversions,
-                 coalesce(sum(p.conversion_amount) FILTER (
-                   WHERE m.converted_at IS NOT NULL AND coalesce(o.status::text, '') <> 'CANCELLED'), 0)::float AS ca
+                 -- Chiffre d'affaires lu dans le registre : une commande compte
+                 -- une fois, et reste acquise si le client redevient inactif.
+                 (SELECT coalesce(sum(v.amount), 0) FROM "CrmConversion" v
+                  WHERE v.campaign_id = ${id}::uuid AND ${VENTE_VALIDE})::float AS ca
           FROM "CrmCampaignMember" m
-          JOIN "CrmContact" p ON p.id = m.contact_id
-          LEFT JOIN "Order" o ON o.id = p.conversion_order_id
           WHERE m.campaign_id = ${id}::uuid`,
         this.prisma.$queryRaw<{ appels: number; traites: number; joints: number }[]>`
           SELECT count(*)::int AS appels, count(DISTINCT contact_id)::int AS traites,
@@ -186,8 +188,8 @@ export class CrmCampaignStatsService {
         (SELECT count(DISTINCT k.contact_id) FROM "CrmCall" k WHERE k.campaign_id = ${id}::uuid AND k.agent_id = u.id AND k.reached)::int AS joints,
         (SELECT count(*) FROM "CrmCoupon" cc WHERE cc.campaign_id = ${id}::uuid AND cc.sent_by_id = u.id)::int AS coupons,
         (SELECT count(*) FROM "CrmCampaignMember" m WHERE m.campaign_id = ${id}::uuid AND m.agent_id = u.id AND m.converted_at IS NOT NULL)::int AS conversions,
-        (SELECT coalesce(sum(p.conversion_amount), 0) FROM "CrmCampaignMember" m JOIN "CrmContact" p ON p.id = m.contact_id
-           WHERE m.campaign_id = ${id}::uuid AND m.agent_id = u.id AND m.converted_at IS NOT NULL)::float AS ca
+        (SELECT coalesce(sum(v.amount), 0) FROM "CrmConversion" v
+           WHERE v.campaign_id = ${id}::uuid AND v.agent_id = u.id AND ${VENTE_VALIDE})::float AS ca
       FROM "User" u WHERE u.id IN (SELECT id FROM acteurs)
       ORDER BY conversions DESC, traites DESC`;
     return lignes.map((l) => ({

@@ -1,15 +1,14 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   CampaignStatus,
   CrmEventType,
   CrmStatus,
   EntityStatus,
   Prisma,
-  ProspectPlatform,
   User,
 } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { STATUTS_OUVERTS, commandeEffective } from '../crm.rules';
+import { STATUTS_OUVERTS, cleTelephone, commandeEffective } from '../crm.rules';
 import { AssignContactsDto, QueryCrmContactDto } from '../dto/contact.dto';
 import { CrmAccessService } from './crm-access.service';
 import { CrmEventsService } from './crm-events.service';
@@ -49,11 +48,17 @@ export class CrmContactService {
     };
   }
 
-  async fiche(user: User, id: string) {
+  /**
+   * `telephone` : numéro tapé par l'agent dans « Un client appelle ? ». Seul
+   * ce numéro, s'il est bien celui de la fiche, ouvre en lecture la fiche d'un
+   * client suivi par un collègue : un identifiant seul ne suffit pas.
+   */
+  async fiche(user: User, id: string, telephone?: string) {
     const p = await this.prisma.crmContact.findUnique({
       where: { id },
       select: {
         ...SELECT_LIGNE,
+        phone_key: true,
         first_reached_at: true,
         qualified_at: true,
         conversion_order_id: true,
@@ -117,6 +122,20 @@ export class CrmContactService {
             agent: { select: { id: true, fullname: true } },
           },
         },
+        captures: {
+          where: { entity_status: { not: EntityStatus.DELETED } },
+          orderBy: { created_at: 'desc' },
+          take: 30,
+          select: {
+            id: true,
+            platform: true,
+            order_number: true,
+            name: true,
+            created_at: true,
+            restaurant: { select: { name: true } },
+            creator: { select: { fullname: true } },
+          },
+        },
         events: {
           orderBy: { created_at: 'desc' },
           take: 100,
@@ -134,10 +153,20 @@ export class CrmContactService {
     if (!p || p.entity_status === EntityStatus.DELETED) {
       throw new NotFoundException('Contact introuvable');
     }
-    await this.access.assertPeutTraiter(user, p);
+    // Tout agent peut consulter une fiche (client qui rappelle) ; agir sur un
+    // contact reste réservé à son agent, à la file commune et à la direction.
+    const mode = this.access.estGestionnaire(user)
+      ? 'gestion'
+      : await this.access.assertPeutTraiter(user, p).catch(() => 'lecture' as const);
+    if (mode === 'lecture') {
+      this.access.assertAgent(user);
+      const cle = cleTelephone(telephone);
+      if (!cle || (cle !== p.phone_key && cle !== cleTelephone(p.customer?.phone))) {
+        throw new ForbiddenException("Ce client est suivi par un collègue : retrouvez-le par son numéro dans « Un client appelle ? »");
+      }
+    }
 
-    const telephone = (p.customer.phone ?? '').replace(/\D/g, '').slice(-10);
-    const [commande, abandons, acquisition, achats] = await Promise.all([
+    const [commande, abandons, achats] = await Promise.all([
       p.conversion_order_id
         ? this.prisma.order.findUnique({
             where: { id: p.conversion_order_id },
@@ -153,7 +182,7 @@ export class CrmContactService {
             },
           })
         : null,
-      p.abandoned_orders > 0
+      p.customer && p.abandoned_orders > 0
         ? this.prisma.order.findMany({
             where: { customer_id: p.customer.id, entity_status: EntityStatus.DELETED },
             orderBy: { created_at: 'desc' },
@@ -161,37 +190,17 @@ export class CrmContactService {
             select: { id: true, reference: true, created_at: true, amount: true, payment_method: true },
           })
         : [],
-      // Le même numéro a pu être capté par l'acquisition Glovo/Yango : l'agent
-      // doit le savoir avant d'appeler, pour ne pas répéter le même discours.
-      telephone.length === 10
-        ? this.prisma.prospect.findMany({
-            where: {
-              phone: telephone,
-              entity_status: { not: EntityStatus.DELETED },
-              platform: { not: ProspectPlatform.APP_ORGANIC },
-            },
-            orderBy: { created_at: 'desc' },
-            take: 5,
-            select: {
-              id: true,
-              platform: true,
-              status: true,
-              created_at: true,
-              coupon_sent_at: true,
-              restaurant: { select: { name: true } },
-            },
-          })
-        : [],
-      p.last_order_at ? this.historiqueAchats(p.customer.id) : null,
+      p.customer && p.last_order_at ? this.historiqueAchats(p.customer.id) : null,
     ]);
 
-    const { calls, coupons, members, events, ...reste } = p;
+    const { calls, coupons, members, events, captures, ...reste } = p;
     const maintenant = new Date();
     return {
       ...versLigne({ ...reste, coupons: coupons.slice(0, 1) }),
       first_reached_at: p.first_reached_at,
       qualified_at: p.qualified_at,
       customer: p.customer,
+      segment_since: p.segment_since,
       // Depuis l'inscription pour un inscrit, depuis l'inactivité pour un ancien client.
       delai_conversion_jours: p.converted_at
         ? Math.max(0, Math.round((p.converted_at.getTime() - p.segment_since.getTime()) / 86_400_000))
@@ -202,8 +211,9 @@ export class CrmContactService {
       journal: events,
       commande,
       paiements_abandonnes: abandons,
-      acquisition,
+      captures,
       achats,
+      mode,
     };
   }
 
@@ -325,7 +335,7 @@ export class CrmContactService {
         .findMany({ where: { AND: [base, where] }, select: SELECT_LIGNE, orderBy, take })
         .then((l) => l.map(versLigne));
 
-    const [rappels, interesses, nouveaux, relances, coupons, rappelsPlanifies] = await Promise.all([
+    const [rappels, interesses, nouveaux, relances, coupons, rappelsPlanifies, commune] = await Promise.all([
       prendre({ status: CrmStatus.A_RAPPELER, callback_at: { lte: maintenant } }, [{ callback_at: 'asc' }]),
       prendre({ status: CrmStatus.INTERESSE }, [{ last_call_at: 'asc' }]),
       prendre({ status: CrmStatus.A_APPELER, call_count: 0 }, [{ segment_since: 'desc' }]),
@@ -340,6 +350,11 @@ export class CrmContactService {
       ),
       prendre({ status: CrmStatus.COUPON_ENVOYE }, [{ coupon_sent_at: 'asc' }]),
       prendre({ status: CrmStatus.A_RAPPELER, callback_at: { gt: maintenant } }, [{ callback_at: 'asc' }], 20),
+      // File commune Glovo/Yango (J+1) : les plus anciens d'abord, le premier
+      // qui compose prend le contact.
+      this.prisma.crmContact
+        .findMany({ where: this.access.fileCommune(maintenant), select: SELECT_LIGNE, orderBy: [{ segment_since: 'asc' }], take: 50 })
+        .then((l) => l.map(versLigne)),
     ]);
 
     const [appels, joints, couponsJour, conversionsJour, portefeuille] = await Promise.all([
@@ -357,6 +372,7 @@ export class CrmContactService {
       relances,
       coupons,
       rappels_planifies: rappelsPlanifies,
+      commune,
       indicateurs: {
         appels_jour: appels,
         joints_jour: joints,
@@ -365,6 +381,49 @@ export class CrmContactService {
         portefeuille,
       },
     };
+  }
+
+  /**
+   * Recherche par numéro exact (client qui appelle) : ouverte à tout agent,
+   * en consultation. Égalité de clé (10 derniers chiffres), jamais un début ou
+   * une fin de numéro : un numéro incomplet ne ramène personne d'autre.
+   */
+  async rechercher(user: User, telephone: string) {
+    if (!this.access.estGestionnaire(user)) this.access.assertAgent(user);
+    const cle = cleTelephone(telephone);
+    if (!cle || cle.length < 8) throw new BadRequestException('Tapez le numéro complet du client');
+    const parCompte = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT x."id" FROM "CrmContact" x JOIN "Customer" cu ON cu."id" = x."customer_id"
+      WHERE x."entity_status" <> 'DELETED' AND right(regexp_replace(cu."phone", '\D', '', 'g'), 10) = ${cle}
+      LIMIT 10`;
+    const lignes = await this.prisma.crmContact.findMany({
+      where: {
+        entity_status: { not: EntityStatus.DELETED },
+        OR: [{ phone_key: cle }, { id: { in: parCompte.map((r) => r.id) } }],
+      },
+      select: SELECT_LIGNE,
+      orderBy: [{ segment_since: 'desc' }],
+      take: 10,
+    });
+    return lignes.map(versLigne);
+  }
+
+  /** L'agent prend un contact de la file commune au moment de composer son numéro. */
+  async prendreContact(user: User, id: string) {
+    const contact = await this.prisma.crmContact.findFirst({
+      where: { id, entity_status: { not: EntityStatus.DELETED } },
+      select: { id: true, assigned_to_id: true, campaign_id: true, segment: true, status: true, segment_since: true },
+    });
+    if (!contact) throw new NotFoundException('Contact introuvable');
+    await this.access.assertPeutTraiter(user, contact);
+    const pris = await this.prisma.$transaction((tx) => this.access.prendre(tx, user, id));
+    if (pris) {
+      await this.events.journaliser([
+        { contact_id: id, type: CrmEventType.ASSIGNATION, label: `Pris dans la file commune par ${user.fullname}`, actor_id: user.id },
+      ]);
+      this.events.signaler([id], 'assignation');
+    }
+    return { pris, assigned_to_id: pris ? user.id : contact.assigned_to_id };
   }
 
   /** Personnes à qui confier des contacts, avec leur charge actuelle. */

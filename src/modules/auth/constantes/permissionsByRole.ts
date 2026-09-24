@@ -83,11 +83,12 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       // coupons, ventes, export, capture, suppression). Limité à BASE_DONNEES.
       [Modules.BASE_DONNEES]: Object.values(Action),
 
-      // CRM : l'agent traite SES contacts (appel, raison, commentaire,
-      // coupon). Ni création de campagne, ni réglages, ni export : le cahier
-      // réserve ces gestes à la direction. Le pilote d'une campagne gère en
-      // plus son équipe, contrôlé au cas par cas côté service.
-      [Modules.CRM]: [Action.READ, Action.UPDATE],
+      // CRM : l'agent traite SES contacts et la file commune Glovo/Yango
+      // (appel, raison, commentaire, coupon), et consulte les tableaux de bord.
+      // Ni création de campagne, ni réglages, ni export : le cahier réserve ces
+      // gestes à la direction. Le pilote d'une campagne gère en plus son
+      // équipe, contrôlé au cas par cas côté service.
+      [Modules.CRM]: [Action.READ, Action.UPDATE, Action.REPORT],
     },
   },
 

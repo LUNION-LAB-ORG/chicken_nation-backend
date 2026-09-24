@@ -21,10 +21,11 @@ import { CrmExportService } from '../services/crm-export.service';
 import { CrmContactService } from '../services/crm-contact.service';
 
 /**
- * Contacts : inscrits qui n'ont jamais commandé (cahier §4).
- * Les routes fixes précèdent `contacts/:id`, sinon `export` serait lu comme un id.
+ * Contacts du CRM (cahier §4) : inscrits sans commande, clients inactifs,
+ * clients Glovo et Yango. Les routes fixes précèdent `contacts/:id`, sinon
+ * `export` ou `recherche` seraient lus comme un id.
  */
-@ApiTags('Contacts (conversion)')
+@ApiTags('CRM')
 @ApiBearerAuth()
 @Controller('crm')
 @UseGuards(JwtAuthGuard, UserPermissionsGuard)
@@ -53,6 +54,13 @@ export class CrmContactController {
     res.send(fichier.contenu);
   }
 
+  @Get('contacts/recherche')
+  @RequirePermission(Modules.CRM, Action.UPDATE)
+  @ApiOperation({ summary: 'Retrouver une fiche par le numéro exact du client (client qui appelle)' })
+  rechercher(@Req() req: Request, @Query('telephone') telephone: string) {
+    return this.contacts.rechercher(req.user as User, telephone ?? '');
+  }
+
   @Patch('contacts/assign')
   @RequirePermission(Modules.CRM, Action.UPDATE)
   @ApiOperation({ summary: 'Assigner un ou plusieurs contacts à un agent (ou les désassigner)' })
@@ -62,8 +70,15 @@ export class CrmContactController {
 
   @Get('contacts/:id')
   @RequirePermission(Modules.CRM, Action.READ)
-  fiche(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
-    return this.contacts.fiche(req.user as User, id);
+  fiche(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string, @Query('telephone') telephone?: string) {
+    return this.contacts.fiche(req.user as User, id, telephone);
+  }
+
+  @Post('contacts/:id/prendre')
+  @RequirePermission(Modules.CRM, Action.UPDATE)
+  @ApiOperation({ summary: "Prendre un contact de la file commune Glovo/Yango au moment de l'appeler" })
+  prendre(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
+    return this.contacts.prendreContact(req.user as User, id);
   }
 
   @Post('contacts/:id/calls')

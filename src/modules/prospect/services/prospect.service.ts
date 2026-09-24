@@ -1,49 +1,51 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
-  DiscountType,
+  CrmCallOutcome,
+  CrmSegment,
+  CrmStatus,
   EntityStatus,
   Prisma,
   ProspectCallResult,
   ProspectMessageKind,
-  ProspectPlatform,
   ProspectStatus,
-  TargetType,
   User,
   UserType,
 } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { CrmCallService } from 'src/modules/crm/services/crm-call.service';
+import { CrmCaptureService } from 'src/modules/crm/services/crm-capture.service';
+import { CrmCouponService } from 'src/modules/crm/services/crm-coupon.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
-import { TwilioService } from 'src/twilio/services/twilio.service';
 import { CreateProspectDto } from '../dto/create-prospect.dto';
 import { MarkCallDto } from '../dto/mark-call.dto';
-import {
-  BulkMarkCallDto,
-  EchecGroupe,
-  ResultatGroupe,
-} from '../dto/bulk-action.dto';
-import { QueryProspectDto } from '../dto/query-prospect.dto';
 import { UpdateProspectSettingsDto } from '../dto/update-prospect-settings.dto';
 
-// Lien envoyé aux prospects par SMS et WhatsApp. Pointait `chicken.turbodeliveryapp.com`,
-// domaine hors service depuis la migration : les prospects tombaient dans le vide.
-// Le réglage `prospect.app_link` reste prioritaire s'il est renseigné.
-const DEFAULT_APP_LINK = 'https://www.chicken-nation.com/fr/app-mobile';
-
-const DEFAULT_MESSAGES: Record<ProspectMessageKind, string> = {
-  DECOUVERTE:
-    'Bonjour {nom} ! Merci de commander chez Chicken Nation 🍗 Commandez désormais en direct sur notre app et payez moins cher. Votre code promo {code_coupon} (valable {validite} jours). Lien : {lien_app}',
-  RELANCE_1:
-    "Re-bonjour {nom} ! Profitez encore de tarifs réduits sur l'app Chicken Nation : {lien_app}. Code {code_coupon} (valable {validite} jours).",
-  RELANCE_2_FIDELITE:
-    "{nom}, merci pour votre fidélité ! 🎁 Offre exclusive sur l'app : {lien_app}. Votre code {code_coupon} (valable {validite} jours).",
+/** Issue CRM de chaque résultat d'appel de l'ancienne file. */
+const ISSUE_DU_RESULTAT: Record<ProspectCallResult, CrmCallOutcome> = {
+  JOINT: CrmCallOutcome.INTERESSE,
+  NON_JOIGNABLE: CrmCallOutcome.NON_JOINT,
+  REFUS: CrmCallOutcome.NON_INTERESSE,
 };
 
+/**
+ * Captures Glovo/Yango (caissiers, gérants) et anciennes routes de l'appli
+ * caisse.
+ *
+ * Depuis le CRM (lot 2), une capture rejoint aussitôt la fiche de son numéro
+ * dans le CRM. Les appels et les coupons de l'ancienne file J+1 passent par le
+ * CRM (mêmes règles, même prise de la fiche, mêmes refus) : ces routes ne
+ * servent plus qu'à l'appli caisse pas encore mise à jour, et disparaîtront
+ * ensuite. Les anciennes lignes restent tenues à jour pour qu'elle s'affiche
+ * correctement d'ici là.
+ */
 @Injectable()
 export class ProspectService {
   private readonly logger = new Logger(ProspectService.name);
@@ -51,7 +53,9 @@ export class ProspectService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly settings: SettingsService,
-    private readonly twilio: TwilioService,
+    private readonly crmCapture: CrmCaptureService,
+    private readonly crmAppels: CrmCallService,
+    private readonly crmCoupons: CrmCouponService,
   ) {}
 
   /**
@@ -65,19 +69,13 @@ export class ProspectService {
 
   /** Saisie d'un contact. Le store est forcé au restaurant de l'agent store. */
   async create(user: User, dto: CreateProspectDto) {
-    const restaurantId = this.isStoreUser(user)
-      ? user.restaurant_id!
-      : dto.restaurant_id;
-
+    const restaurantId = this.isStoreUser(user) ? user.restaurant_id! : dto.restaurant_id;
     if (!restaurantId) {
-      throw new BadRequestException(
-        'Le store (restaurant) est obligatoire pour enregistrer un contact.',
-      );
+      throw new BadRequestException('Le store (restaurant) est obligatoire pour enregistrer un contact.');
     }
 
-    // Garde-fou : le MÊME client peut être saisi plusieurs fois (phone non
-    // unique), mais on empêche d'enregistrer DEUX FOIS exactement la même
-    // commande (même plateforme + même n° de commande dans ce restaurant).
+    // Le MÊME client peut être saisi plusieurs fois (une fiche par numéro dans
+    // le CRM), mais pas DEUX FOIS la même commande dans ce restaurant.
     const orderNumber = dto.order_number?.trim();
     if (orderNumber) {
       const dejaSaisie = await this.prisma.prospect.findFirst({
@@ -90,13 +88,11 @@ export class ProspectService {
         select: { id: true },
       });
       if (dejaSaisie) {
-        throw new BadRequestException(
-          `La commande ${dto.platform} n° ${orderNumber} a déjà été enregistrée.`,
-        );
+        throw new BadRequestException(`La commande ${dto.platform} n° ${orderNumber} a déjà été enregistrée.`);
       }
     }
 
-    return this.prisma.prospect.create({
+    const capture = await this.prisma.prospect.create({
       data: {
         platform: dto.platform,
         name: dto.name?.trim() || 'Client', // Yango ne fournit pas de nom
@@ -108,1091 +104,267 @@ export class ProspectService {
       },
       include: { restaurant: { select: { id: true, name: true } } },
     });
+    // Jamais bloquant : en cas de souci, la reprise rattache dans les 10 minutes.
+    const contactId = await this.crmCapture.rattacherCapture(capture.id);
+    return { ...capture, contact_id: contactId };
   }
 
   /**
-   * Détection de doublon par téléphone AVANT saisie (cf. cahier §4.3 :
-   * « alerte doublon possible »). Cloisonné au store pour un agent store.
+   * Détection de doublon par téléphone AVANT saisie (« doublon possible »).
+   * Cloisonné au store pour un agent store.
    */
   async checkPhone(user: User, phone: string) {
     const cleaned = (phone || '').replace(/\D/g, '');
-    // Plage E.164 (6–15 chiffres) — aligné sur la validation de saisie.
-    if (cleaned.length < 6 || cleaned.length > 15) {
-      return { exists: false, prospect: null };
-    }
+    if (cleaned.length < 6 || cleaned.length > 15) return { exists: false, prospect: null };
 
-    const where: Prisma.ProspectWhereInput = {
-      phone: cleaned,
-      entity_status: { not: EntityStatus.DELETED },
-    };
-    if (this.isStoreUser(user)) {
-      where.restaurant_id = user.restaurant_id!;
-    }
+    const where: Prisma.ProspectWhereInput = { phone: cleaned, entity_status: { not: EntityStatus.DELETED } };
+    if (this.isStoreUser(user)) where.restaurant_id = user.restaurant_id!;
 
     const existing = await this.prisma.prospect.findFirst({
       where,
       orderBy: { created_at: 'desc' },
       include: { restaurant: { select: { id: true, name: true } } },
     });
-
     return {
       exists: !!existing,
       prospect: existing
-        ? {
-            id: existing.id,
-            name: existing.name,
-            status: existing.status,
-            restaurant: existing.restaurant,
-            created_at: existing.created_at,
-          }
+        ? { id: existing.id, name: existing.name, status: existing.status, restaurant: existing.restaurant, created_at: existing.created_at }
         : null,
     };
   }
 
   /**
-   * Liste des contacts (admin), triée du plus ancien au plus récent (cahier §4.2).
-   * Filtrage store/plateforme/statut/période + recherche.
+   * Ancienne file J+1 de l'appli caisse, lue dans le CRM (seule source de
+   * vérité) : les fiches Glovo/Yango ouvertes, hors campagne, sans coupon
+   * actif, à l'agent ou encore dans la file commune (captées avant aujourd'hui),
+   * un rappel promis n'y revenant qu'à son heure. Une carte par fiche, avec sa
+   * dernière capture : c'est elle que l'ancienne appli qualifie. Les conditions
+   * sont dans la requête, avant la limite : une fiche déjà traitée ne peut plus
+   * occuper une place de la file.
    */
-  async findAll(user: User, query: QueryProspectDto) {
-    const {
-      restaurantId,
-      platform,
-      status,
-      search,
-      startDate,
-      endDate,
-      page = 1,
-      limit = 20,
-    } = query;
-
-    const where = this.construireFiltre(user, {
-      restaurantId,
-      platform,
-      status,
-      search,
-      startDate,
-      endDate,
-    });
-
-    const [data, total] = await Promise.all([
-      this.prisma.prospect.findMany({
-        where,
-        include: {
-          restaurant: { select: { id: true, name: true } },
-          creator: { select: { id: true, fullname: true } },
-        },
-        // Plus récents en premier (le backoffice attend la commande la plus
-        // fraîche en haut de table). L'ordre croissant existait pour le
-        // workflow Call Center (qui appelle le plus ancien d'abord) ; ce
-        // workflow utilise désormais le bucket `findCallQueue()` qui garde
-        // son propre tri ascendant — voir line ~227.
-        orderBy: { created_at: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.prisma.prospect.count({ where }),
-    ]);
-
-    return {
-      data,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
-    };
-  }
-
-  // ============================================================
-  // PHASE 2 — CALL CENTER
-  // ============================================================
-
-  /**
-   * File d'appels J+1 (cahier §4.5) : contacts saisis AVANT aujourd'hui, encore
-   * à traiter (Nouveau / À appeler / Non joignable recyclable), du plus ancien au
-   * plus récent. + indicateurs du jour.
-   */
-  async getCallQueue(
-    user: User,
-    restaurantId?: string,
-    startDate?: string,
-    endDate?: string,
-  ) {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
+  async getCallQueue(user: User, restaurantId?: string, startDate?: string, endDate?: string) {
+    const maintenant = new Date();
+    const debutDuJour = new Date(`${maintenant.toISOString().slice(0, 10)}T00:00:00.000Z`);
     const scope: Prisma.ProspectWhereInput = this.isStoreUser(user)
       ? { restaurant_id: user.restaurant_id! }
       : restaurantId
         ? { restaurant_id: restaurantId }
         : {};
-
-    // Par défaut : tout le backlog J+1 et antérieur (créé avant aujourd'hui).
-    // Si l'agent fournit une plage de dates (rattrapage d'un jour raté), on
-    // cible précisément cette plage à la place — aujourd'hui inclus si voulu.
-    const createdAtFilter: Prisma.DateTimeFilter =
+    const periode: Prisma.DateTimeFilter | undefined =
       startDate || endDate
         ? {
             ...(startDate && { gte: new Date(startDate) }),
-            ...(endDate && {
-              lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
-            }),
+            ...(endDate && { lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)) }),
           }
-        : { lt: startOfToday };
-
-    // Téléphones DÉJÀ TRAITÉS : un client qui a déjà reçu son coupon (ou s'est
-    // inscrit / converti) ne doit JAMAIS être rappelé, même si une nouvelle
-    // commande Glovo/Yango est captée pour son numéro (= nouveau prospect NOUVEAU).
-    // On collecte ces numéros et on les exclut de la file.
-    const traites = await this.prisma.prospect.findMany({
-      where: {
-        entity_status: { not: EntityStatus.DELETED },
-        status: {
-          in: [
-            ProspectStatus.COUPON_ENVOYE,
-            ProspectStatus.INSCRIT,
-            ProspectStatus.CONVERTI,
-          ],
-        },
-        ...scope,
-      },
-      select: { phone: true },
-      distinct: ['phone'],
-    });
-    const phonesTraites = traites.map((p) => p.phone);
-
-    const where: Prisma.ProspectWhereInput = {
+        : undefined;
+    const capturesVisibles: Prisma.ProspectWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
-      // JOINT inclus : la carte reste visible APRÈS « joint » pour permettre
-      // l'envoi du coupon (sinon elle disparaissait avant le clic). Elle sort
-      // de la file dès que le coupon est envoyé (statut COUPON_ENVOYE).
-      status: {
-        in: [
-          ProspectStatus.NOUVEAU,
-          ProspectStatus.A_APPELER,
-          ProspectStatus.NON_JOIGNABLE,
-          ProspectStatus.JOINT,
-        ],
-      },
-      created_at: createdAtFilter,
-      ...(phonesTraites.length > 0 && { phone: { notIn: phonesTraites } }),
+      platform: { in: ['GLOVO', 'YANGO'] },
       ...scope,
+      ...(periode && { created_at: periode }),
     };
 
-    const queue = await this.prisma.prospect.findMany({
-      where,
-      include: {
-        restaurant: { select: { id: true, name: true } },
-        _count: { select: { calls: true, messages: true } },
+    const fiches = await this.prisma.crmContact.findMany({
+      where: {
+        entity_status: { not: EntityStatus.DELETED },
+        segment: { in: [CrmSegment.GLOVO, CrmSegment.YANGO] },
+        status: { in: [CrmStatus.A_APPELER, CrmStatus.A_RAPPELER, CrmStatus.INTERESSE] },
+        campaign_id: null,
+        coupons: { none: { used_at: null, expires_at: { gt: maintenant } } },
+        captures: { some: capturesVisibles },
+        AND: [
+          { OR: [{ assigned_to_id: user.id }, { assigned_to_id: null, segment_since: { lt: debutDuJour } }] },
+          { OR: [{ status: { not: CrmStatus.A_RAPPELER } }, { callback_at: null }, { callback_at: { lte: maintenant } }] },
+        ],
       },
-      orderBy: { created_at: 'asc' },
+      select: {
+        status: true,
+        call_count: true,
+        captures: {
+          where: capturesVisibles,
+          orderBy: { created_at: 'desc' },
+          take: 1,
+          include: { restaurant: { select: { id: true, name: true } }, _count: { select: { messages: true } } },
+        },
+      },
+      orderBy: { segment_since: 'asc' },
       take: 200,
     });
 
-    // Déduplication par téléphone : 1 client = 1 carte, même s'il a passé
-    // PLUSIEURS commandes Glovo/Yango non encore traitées (sinon le même
-    // numéro apparaîtrait N fois et serait appelé N fois). On garde la carte
-    // JOINT si elle existe (coupon prêt à envoyer), sinon la plus ancienne
-    // (ordre d'appel FIFO).
-    const parPhone = new Map<string, (typeof queue)[number]>();
-    for (const item of queue) {
-      const existant = parPhone.get(item.phone);
-      if (!existant) {
-        parPhone.set(item.phone, item);
-      } else if (
-        item.status === ProspectStatus.JOINT &&
-        existant.status !== ProspectStatus.JOINT
-      ) {
-        parPhone.set(item.phone, item);
-      }
-    }
-    const dedupedQueue = Array.from(parPhone.values());
+    // Statut affiché par l'ancienne appli, déduit de la fiche.
+    const statutAffiche = (f: { status: CrmStatus; call_count: number }): ProspectStatus =>
+      f.status === CrmStatus.INTERESSE
+        ? ProspectStatus.JOINT
+        : f.status === CrmStatus.A_RAPPELER
+          ? ProspectStatus.A_APPELER
+          : f.call_count > 0
+            ? ProspectStatus.NON_JOIGNABLE
+            : ProspectStatus.NOUVEAU;
+    const queue = fiches
+      .filter((f) => f.captures.length > 0)
+      .map((f) => {
+        const { _count, ...capture } = f.captures[0];
+        return { ...capture, status: statutAffiche(f), _count: { calls: f.call_count, messages: _count.messages } };
+      });
 
+    // Indicateurs du jour, lus dans le CRM : un appel ou un coupon fait au backoffice compte aussi.
     const [joinedToday, couponsToday] = await Promise.all([
-      this.prisma.prospect.count({
-        where: {
-          entity_status: { not: EntityStatus.DELETED },
-          status: ProspectStatus.JOINT,
-          called_at: { gte: startOfToday },
-          ...scope,
-        },
+      this.prisma.crmCall.count({
+        where: { reached: true, created_at: { gte: debutDuJour }, segment: { in: [CrmSegment.GLOVO, CrmSegment.YANGO] } },
       }),
-      this.prisma.prospect.count({
-        where: {
-          entity_status: { not: EntityStatus.DELETED },
-          coupon_sent_at: { gte: startOfToday },
-          ...scope,
-        },
+      this.prisma.crmCoupon.count({
+        where: { sent_at: { gte: debutDuJour }, segment: { in: [CrmSegment.GLOVO, CrmSegment.YANGO] } },
       }),
     ]);
-
-    return {
-      queue: dedupedQueue,
-      indicators: { toCall: dedupedQueue.length, joinedToday, couponsToday },
-    };
+    return { queue, indicators: { toCall: queue.length, joinedToday, couponsToday } };
   }
 
-  /** Fiche détaillée d'un contact + tout son historique (cahier §4.4). */
+  /** Fiche détaillée d'une capture et de son ancien historique (appli caisse). */
   async findOne(user: User, id: string) {
     const prospect = await this.prisma.prospect.findUnique({
       where: { id },
       include: {
         restaurant: { select: { id: true, name: true } },
         creator: { select: { id: true, fullname: true } },
-        customer: {
-          select: { id: true, first_name: true, last_name: true, phone: true },
-        },
-        promo_code: {
-          select: {
-            id: true,
-            code: true,
-            expiration_date: true,
-            is_active: true,
-            usage_count: true,
-          },
-        },
-        calls: {
-          orderBy: { created_at: 'desc' },
-          include: { agent: { select: { id: true, fullname: true } } },
-        },
+        customer: { select: { id: true, first_name: true, last_name: true, phone: true } },
+        promo_code: { select: { id: true, code: true, expiration_date: true, is_active: true, usage_count: true } },
+        calls: { orderBy: { created_at: 'desc' }, include: { agent: { select: { id: true, fullname: true } } } },
         messages: { orderBy: { created_at: 'desc' } },
       },
     });
-
-    if (!prospect || prospect.entity_status === EntityStatus.DELETED) {
-      throw new NotFoundException('Contact introuvable');
-    }
+    if (!prospect || prospect.entity_status === EntityStatus.DELETED) throw new NotFoundException('Contact introuvable');
     if (this.isStoreUser(user) && prospect.restaurant_id !== user.restaurant_id) {
       throw new ForbiddenException('Accès non autorisé à ce contact');
     }
     return prospect;
   }
 
-  /** Qualification d'un appel (joint / non joignable / refus). */
+  /** Qualification d'un appel de l'ancienne file : enregistrée dans le CRM, puis recopiée. */
   async markCall(user: User, id: string, dto: MarkCallDto) {
-    const prospect = await this.prisma.prospect.findUnique({ where: { id } });
-    if (!prospect || prospect.entity_status === EntityStatus.DELETED) {
-      throw new NotFoundException('Contact introuvable');
-    }
-    if (this.isStoreUser(user) && prospect.restaurant_id !== user.restaurant_id) {
-      throw new ForbiddenException('Accès non autorisé à ce contact');
+    const capture = await this.chargerCapture(user, id);
+    const contactId = await this.ficheDe(capture);
+    const outcome = ISSUE_DU_RESULTAT[dto.result];
+    const statut = await this.prisma.crmCallStatus.findFirst({
+      where: { outcome, is_active: true, entity_status: { not: EntityStatus.DELETED } },
+      orderBy: { position: 'asc' },
+      select: { id: true },
+    });
+    if (!statut) throw new BadRequestException("Aucun statut d'appel correspondant n'est actif dans les réglages du CRM");
+
+    const maintenant = new Date();
+    const rank = (await this.prisma.prospectCall.count({ where: { prospect_id: id } })) + 1;
+    const prospectCallId = randomUUID();
+    await this.prisma.prospectCall.create({
+      data: { id: prospectCallId, prospect_id: id, agent_id: user.id, result: dto.result, rank, note: dto.note, created_at: maintenant },
+    });
+    // Mêmes règles que le CRM : prise de la fiche, refus si un collègue l'a.
+    // L'ancienne ligne d'appel doit exister avant (clé du CrmCall) ; un refus
+    // du CRM la retire, sinon elle resterait comme un appel fantôme.
+    try {
+      await this.crmAppels.enregistrer(
+        user,
+        contactId,
+        { call_status_id: statut.id, comment: dto.note },
+        { sansRaison: true, prospectCallId, date: maintenant },
+      );
+    } catch (e) {
+      await this.prisma.prospectCall.delete({ where: { id: prospectCallId } }).catch(() => undefined);
+      throw e;
     }
 
-    const rank =
-      (await this.prisma.prospectCall.count({ where: { prospect_id: id } })) + 1;
-
-    const statusByResult: Record<ProspectCallResult, ProspectStatus> = {
+    const bloques: ProspectStatus[] = [ProspectStatus.COUPON_ENVOYE, ProspectStatus.INSCRIT, ProspectStatus.CONVERTI];
+    const suivant: Record<ProspectCallResult, ProspectStatus> = {
       JOINT: ProspectStatus.JOINT,
       NON_JOIGNABLE: ProspectStatus.NON_JOIGNABLE,
       REFUS: ProspectStatus.REFUS,
     };
-    // Ne jamais rétrograder un contact déjà plus avancé dans l'entonnoir
-    const locked: ProspectStatus[] = [
-      ProspectStatus.COUPON_ENVOYE,
-      ProspectStatus.INSCRIT,
-      ProspectStatus.CONVERTI,
-    ];
-    const nextStatus = locked.includes(prospect.status)
-      ? prospect.status
-      : statusByResult[dto.result];
+    return this.prisma.prospect.update({
+      where: { id },
+      data: {
+        status: bloques.includes(capture.status) ? capture.status : suivant[dto.result],
+        called_at: maintenant,
+        ...(dto.result === ProspectCallResult.JOINT && !capture.joined_at && { joined_at: maintenant }),
+      },
+      include: { restaurant: { select: { id: true, name: true } } },
+    });
+  }
 
-    const [, updated] = await this.prisma.$transaction([
-      this.prisma.prospectCall.create({
-        data: {
-          prospect_id: id,
-          agent_id: user.id,
-          result: dto.result,
-          rank,
-          note: dto.note,
-        },
-      }),
+  /** Coupon depuis l'ancienne file : créé et envoyé par le CRM (un seul coupon actif par personne). */
+  async sendCoupon(user: User, id: string) {
+    const capture = await this.chargerCapture(user, id);
+    const contactId = await this.ficheDe(capture);
+    const envoi = await this.crmCoupons.envoyer(user, contactId, {});
+    const maintenant = new Date();
+    const rank = (await this.prisma.prospectMessage.count({ where: { prospect_id: id } })) + 1;
+    const [prospect] = await this.prisma.$transaction([
       this.prisma.prospect.update({
         where: { id },
-        data: {
-          status: nextStatus,
-          called_at: new Date(),
-          // Horodate le 1er « joint » (entonnoir « vérifiés »)
-          ...(dto.result === ProspectCallResult.JOINT && !prospect.joined_at
-            ? { joined_at: new Date() }
-            : {}),
-        },
+        data: { promo_code_id: envoi.coupon.promo_code_id, status: ProspectStatus.COUPON_ENVOYE, coupon_sent_at: maintenant },
         include: { restaurant: { select: { id: true, name: true } } },
       }),
-    ]);
-
-    return updated;
-  }
-
-  /**
-   * Génère + rattache un coupon (code promo à usage unique) puis l'envoie.
-   * Verrou cahier §6.2 : uniquement après un appel « joint », un seul coupon actif.
-   */
-  async sendCoupon(user: User, id: string) {
-    const prospect = await this.prisma.prospect.findUnique({ where: { id } });
-    if (!prospect || prospect.entity_status === EntityStatus.DELETED) {
-      throw new NotFoundException('Contact introuvable');
-    }
-    if (this.isStoreUser(user) && prospect.restaurant_id !== user.restaurant_id) {
-      throw new ForbiddenException('Accès non autorisé à ce contact');
-    }
-    if (prospect.status !== ProspectStatus.JOINT) {
-      throw new BadRequestException(
-        "Le client doit d'abord être marqué « joint » avant l'envoi du coupon.",
-      );
-    }
-    if (prospect.promo_code_id) {
-      throw new BadRequestException('Un coupon a déjà été envoyé à ce contact.');
-    }
-
-    const cfg = await this.getCouponConfig();
-    const now = new Date();
-    const expiration = new Date(
-      now.getTime() + cfg.validityDays * 24 * 60 * 60 * 1000,
-    );
-
-    // Code unique
-    let code = this.generateCouponCode();
-    for (let i = 0; i < 5; i++) {
-      const exists = await this.prisma.promoCode.findUnique({ where: { code } });
-      if (!exists) break;
-      code = this.generateCouponCode();
-    }
-
-    // Génération via le système de codes promo EXISTANT (pas de système parallèle)
-    const promo = await this.prisma.promoCode.create({
-      data: {
-        code,
-        description: `Conversion Glovo/Yango — ${prospect.name}`,
-        discount_type: cfg.discountType,
-        discount_value: cfg.discountValue,
-        min_order_amount: 0,
-        max_usage: 1,
-        max_usage_per_user: 1,
-        start_date: now,
-        expiration_date: expiration,
-        is_active: true,
-        restaurant_ids: [], // utilisable dans TOUS les restaurants Chicken Nation
-        target_type: TargetType.ALL_PRODUCTS,
-        created_by: user.id,
-      },
-    });
-
-    // Message au rang adéquat (découverte / relance)
-    const rank =
-      (await this.prisma.prospectMessage.count({
-        where: { prospect_id: id },
-      })) + 1;
-    const kind = this.kindForRank(rank);
-    const body = await this.buildMessageBody(kind, {
-      nom: prospect.name,
-      code,
-      validite: cfg.validityDays,
-      lien: cfg.appLink,
-    });
-
-    // Envoi WhatsApp (template acquisition_coupon) d'abord, repli SMS auto.
-    const sms = await this.twilio.sendCouponMessage({
-      phoneNumber: this.toE164(prospect.phone),
-      name: prospect.name,
-      code,
-      validityDays: cfg.validityDays,
-      smsBody: body,
-    });
-    const smsSent = !!sms;
-    this.logger.log(
-      `Coupon → to=${this.toE164(prospect.phone)} accepté=${smsSent} sid=${sms?.sid ?? '-'} statut=${sms?.status ?? '-'} errCode=${sms?.errorCode ?? '-'} errMsg=${sms?.errorMessage ?? '-'}`,
-    );
-
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.prospect.update({
-        where: { id },
-        data: {
-          promo_code_id: promo.id,
-          status: ProspectStatus.COUPON_ENVOYE,
-          coupon_sent_at: now,
-        },
-        include: {
-          restaurant: { select: { id: true, name: true } },
-          promo_code: {
-            select: { id: true, code: true, expiration_date: true },
-          },
-        },
-      }),
       this.prisma.prospectMessage.create({
-        data: { prospect_id: id, kind, rank, body, sms_sent: smsSent },
+        data: { prospect_id: id, kind: ProspectMessageKind.DECOUVERTE, rank, body: envoi.message, sms_sent: envoi.envoye },
       }),
     ]);
-
     return {
-      prospect: updated,
-      coupon: { code: promo.code, expiration_date: promo.expiration_date },
-      message: body,
-      smsSent,
+      prospect,
+      coupon: { code: envoi.coupon.code, expiration_date: envoi.coupon.expires_at },
+      message: envoi.message,
+      smsSent: envoi.envoye,
     };
   }
 
-  /** Renvoie le SMS du coupon EXISTANT (sans en générer un nouveau). */
-  /**
-   * QUALIFIER UN LOT D'APPELS.
-   *
-   * Le call center descend une page de contacts au téléphone et les qualifie
-   * ensuite en bloc. Chaque contact passe par `markCall`, la méthode unitaire :
-   * mêmes règles de cloisonnement, même historique d'appel, même refus de
-   * rétrograder un contact déjà plus avancé dans l'entonnoir. Rien n'est
-   * réécrit ici, donc rien ne peut diverger.
-   */
-  async markCallBulk(user: User, dto: BulkMarkCallDto): Promise<ResultatGroupe> {
-    const ids = [...new Set(dto.ids)];
-    const noms = await this.nomsDesContacts(ids);
-    const echecs: EchecGroupe[] = [];
-    let reussis = 0;
-
-    for (const id of ids) {
-      try {
-        await this.markCall(user, id, { result: dto.result, note: dto.note });
-        reussis += 1;
-      } catch (e) {
-        echecs.push({ id, nom: noms.get(id) ?? null, motif: this.motifEchec(e) });
-      }
-    }
-
-    this.logger.log(
-      `Appels qualifiés en lot (${dto.result}) par ${user.id} : ${reussis}/${ids.length}`,
-    );
-    return { demandes: ids.length, reussis, echecs };
-  }
-
-  /**
-   * ENVOYER LE COUPON À UN LOT.
-   *
-   * Traitement SÉQUENTIEL, délibérément. Chaque coupon crée un code promo,
-   * met à jour le contact et appelle Twilio. Lancer vingt envois de front
-   * multiplierait les connexions à la base et exposerait à une limitation de
-   * débit de la passerelle SMS, pour gagner quelques secondes.
-   *
-   * Un refus n'interrompt jamais le lot : un contact pas encore « joint » ou
-   * déjà pourvu d'un coupon est écarté et nommé dans le compte rendu, les
-   * autres partent.
-   */
-  async sendCouponBulk(user: User, idsDemandes: string[]): Promise<ResultatGroupe> {
-    const ids = [...new Set(idsDemandes)];
-    const noms = await this.nomsDesContacts(ids);
-    const echecs: EchecGroupe[] = [];
-    let reussis = 0;
-    let sansSms = 0;
-
-    for (const id of ids) {
-      try {
-        const res = await this.sendCoupon(user, id);
-        reussis += 1;
-        // Le code existe même si le SMS n'est pas parti : ce n'est pas un
-        // échec, c'est un coupon à communiquer de vive voix. On le compte à
-        // part pour que l'écran le dise.
-        if (!res.smsSent) sansSms += 1;
-      } catch (e) {
-        echecs.push({ id, nom: noms.get(id) ?? null, motif: this.motifEchec(e) });
-      }
-    }
-
-    this.logger.log(
-      `Coupons envoyés en lot par ${user.id} : ${reussis}/${ids.length} (sans SMS : ${sansSms})`,
-    );
-    return { demandes: ids.length, reussis, sansSms, echecs };
-  }
-
-  /** Noms des contacts visés, pour que le compte rendu désigne les écartés. */
-  private async nomsDesContacts(ids: string[]): Promise<Map<string, string>> {
-    const contacts = await this.prisma.prospect.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, name: true },
-    });
-    return new Map(contacts.map((c) => [c.id, c.name]));
-  }
-
-  /** Message porté par l'exception, ou un repli lisible. */
-  private motifEchec(e: unknown): string {
-    const message = (e as { message?: unknown })?.message;
-    return typeof message === 'string' && message.trim()
-      ? message
-      : 'Erreur inattendue';
-  }
-
+  /** Renvoi du coupon depuis l'ancienne file : seulement celui de cette capture. */
   async resendCoupon(user: User, id: string) {
-    const prospect = await this.prisma.prospect.findUnique({
-      where: { id },
-      include: { promo_code: { select: { code: true } } },
+    const capture = await this.chargerCapture(user, id);
+    const contactId = await this.ficheDe(capture);
+    const code = capture.promo_code_id
+      ? (await this.prisma.promoCode.findUnique({ where: { id: capture.promo_code_id }, select: { code: true } }))?.code
+      : undefined;
+    if (!code) throw new BadRequestException('Aucun coupon à renvoyer pour ce contact.');
+    const envoi = await this.crmCoupons.renvoyer(user, contactId, { codeAttendu: code });
+    const rank = (await this.prisma.prospectMessage.count({ where: { prospect_id: id } })) + 1;
+    await this.prisma.prospectMessage.create({
+      data: { prospect_id: id, kind: ProspectMessageKind.RELANCE_1, rank, body: envoi.message, sms_sent: envoi.envoye },
     });
-    if (!prospect || prospect.entity_status === EntityStatus.DELETED) {
-      throw new NotFoundException('Contact introuvable');
-    }
-    if (this.isStoreUser(user) && prospect.restaurant_id !== user.restaurant_id) {
+    return { smsSent: envoi.envoye, message: envoi.message, code: envoi.code };
+  }
+
+  private async chargerCapture(user: User, id: string) {
+    const capture = await this.prisma.prospect.findUnique({ where: { id } });
+    if (!capture || capture.entity_status === EntityStatus.DELETED) throw new NotFoundException('Contact introuvable');
+    if (this.isStoreUser(user) && capture.restaurant_id !== user.restaurant_id) {
       throw new ForbiddenException('Accès non autorisé à ce contact');
     }
-    if (!prospect.promo_code_id || !prospect.promo_code) {
-      throw new BadRequestException('Aucun coupon à renvoyer pour ce contact.');
+    return capture;
+  }
+
+  private async ficheDe(capture: { id: string; contact_id: string | null }): Promise<string> {
+    const contactId = capture.contact_id ?? (await this.crmCapture.rattacherCapture(capture.id));
+    if (!contactId) {
+      throw new ConflictException('Ce contact est en cours de reprise dans le CRM : réessayez dans quelques minutes');
     }
-
-    const cfg = await this.getCouponConfig();
-    const rank =
-      (await this.prisma.prospectMessage.count({ where: { prospect_id: id } })) +
-      1;
-    const kind = this.kindForRank(rank);
-    const body = await this.buildMessageBody(kind, {
-      nom: prospect.name,
-      code: prospect.promo_code.code,
-      validite: cfg.validityDays,
-      lien: cfg.appLink,
-    });
-
-    const sms = await this.twilio.sendCouponMessage({
-      phoneNumber: this.toE164(prospect.phone),
-      name: prospect.name,
-      code: prospect.promo_code.code,
-      validityDays: cfg.validityDays,
-      smsBody: body,
-    });
-    const smsSent = !!sms;
-    this.logger.log(
-      `Renvoi coupon → to=${this.toE164(prospect.phone)} accepté=${smsSent} sid=${sms?.sid ?? '-'} statut=${sms?.status ?? '-'} errCode=${sms?.errorCode ?? '-'} errMsg=${sms?.errorMessage ?? '-'}`,
-    );
-
-    await this.prisma.prospectMessage.create({
-      data: { prospect_id: id, kind, rank, body, sms_sent: smsSent },
-    });
-
-    return { smsSent, message: body, code: prospect.promo_code.code };
+    return contactId;
   }
 
   // ============================================================
-  // PHASE 3 — ANALYTICS
+  // RÉGLAGES DU SCAN (la remise et les messages sont dans le CRM)
   // ============================================================
 
-  /**
-   * Filtre commun à la LISTE et à l'EXPORT.
-   *
-   * ⚠️ Il vivait uniquement dans `findAll`. L'export, lui, ne recevait que le
-   * restaurant : demander les contacts GLOVO et obtenir un fichier plein de
-   * contacts Yango n'était donc pas un hasard, la plateforme n'était jamais
-   * transmise. Même chose pour le statut, la recherche et les dates.
-   *
-   * Une seule construction pour les deux, sinon elles redivergeront.
-   */
-  private construireFiltre(
-    user: User,
-    filtres: Omit<QueryProspectDto, 'page' | 'limit'>,
-  ): Prisma.ProspectWhereInput {
-    const { restaurantId, platform, status, search, startDate, endDate } = filtres;
-
-    const where: Prisma.ProspectWhereInput = {
-      entity_status: { not: EntityStatus.DELETED },
-      ...this.filtrePlateforme(platform),
-      ...(status && { status }),
-    };
-
-    // Cloisonnement : agent store -> son restaurant ; admin -> filtre optionnel
-    if (this.isStoreUser(user)) {
-      where.restaurant_id = user.restaurant_id!;
-    } else if (restaurantId) {
-      where.restaurant_id = restaurantId;
-    }
-
-    if (search) {
-      const s = search.trim();
-      where.OR = [
-        { name: { contains: s, mode: 'insensitive' } },
-        { phone: { contains: s.replace(/\D/g, '') } },
-        { order_number: { contains: s } },
-      ];
-    }
-
-    if (startDate || endDate) {
-      where.created_at = {
-        ...(startDate && { gte: new Date(startDate) }),
-        ...(endDate && {
-          lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
-        }),
-      };
-    }
-
-    return where;
-  }
-
-  /**
-   * Les inscrits de l'app (`APP_ORGANIC`) restent HORS de l'opération Glovo/Yango
-   * tant qu'on ne les demande pas explicitement.
-   *
-   * Ils vivent dans la même table depuis le module de conversion, mais ce n'est
-   * pas la même population : un client qui s'inscrit seul n'a été ni capté en
-   * store ni appelé. Les compter ici gonflait le nombre de contacts, faussait le
-   * taux de conversion et surtout attribuait à l'opération le chiffre d'affaires
-   * de leurs premières commandes.
-   */
-  private filtrePlateforme(platform?: ProspectPlatform): Prisma.ProspectWhereInput {
-    return platform
-      ? { platform }
-      : { platform: { not: ProspectPlatform.APP_ORGANIC } };
-  }
-
-  private scopeFor(user: User, restaurantId?: string): Prisma.ProspectWhereInput {
-    if (this.isStoreUser(user)) return { restaurant_id: user.restaurant_id! };
-    if (restaurantId) return { restaurant_id: restaurantId };
-    return {};
-  }
-
-  /** KPIs + entonnoir + répartition (cahier §4.1 / §8). */
-  async getStats(user: User, restaurantId?: string) {
-    const base: Prisma.ProspectWhereInput = {
-      entity_status: { not: EntityStatus.DELETED },
-      ...this.filtrePlateforme(),
-      ...this.scopeFor(user, restaurantId),
-    };
-    const c = (where: Prisma.ProspectWhereInput) =>
-      this.prisma.prospect.count({ where: { ...base, ...where } });
-
-    const [
-      total,
-      verifies,
-      couponEnvoye,
-      inscrits,
-      convertis,
-      glovo,
-      yango,
-      couponsUsed,
-      caAgg,
-    ] = await Promise.all([
-      c({}),
-      c({ joined_at: { not: null } }),
-      c({ coupon_sent_at: { not: null } }),
-      c({ registered_at: { not: null } }),
-      c({ converted_at: { not: null } }),
-      c({ platform: ProspectPlatform.GLOVO }),
-      c({ platform: ProspectPlatform.YANGO }),
-      c({ promo_code_id: { not: null }, converted_at: { not: null } }),
-      this.prisma.prospect.aggregate({
-        where: { ...base, converted_at: { not: null } },
-        _sum: { first_order_amount: true },
-      }),
-    ]);
-    const ca = caAgg._sum.first_order_amount ?? 0;
-
-    const [byStoreRaw, convByStoreRaw] = await Promise.all([
-      this.prisma.prospect.groupBy({
-        by: ['restaurant_id'],
-        where: base,
-        _count: { _all: true },
-      }),
-      this.prisma.prospect.groupBy({
-        by: ['restaurant_id'],
-        where: { ...base, converted_at: { not: null } },
-        _count: { _all: true },
-      }),
-    ]);
-    const restaurantIds = byStoreRaw.map((r) => r.restaurant_id).filter((id): id is string => id !== null);
-    const restos = await this.prisma.restaurant.findMany({
-      where: { id: { in: restaurantIds } },
-      select: { id: true, name: true },
-    });
-    const nameById = new Map(restos.map((r) => [r.id, r.name]));
-    const convById = new Map(
-      convByStoreRaw.map((r) => [r.restaurant_id, r._count._all]),
-    );
-    const by_store = byStoreRaw
-      .map((r) => ({
-        restaurant_id: r.restaurant_id,
-        name: r.restaurant_id ? (nameById.get(r.restaurant_id) ?? '—') : 'Organique / En ligne',
-        total: r._count._all,
-        converted: convById.get(r.restaurant_id) ?? 0,
-      }))
-      .sort((a, b) => b.total - a.total);
-
-    return {
-      total,
-      funnel: {
-        saisis: total,
-        verifies,
-        coupon_envoye: couponEnvoye,
-        inscrits,
-        convertis,
-      },
-      platform: { glovo, yango },
-      conversion_rate: total ? Math.round((convertis / total) * 100) : 0,
-      coupons: {
-        sent: couponEnvoye,
-        used: couponsUsed,
-        usage_rate: couponEnvoye
-          ? Math.round((couponsUsed / couponEnvoye) * 100)
-          : 0,
-      },
-      sales: {
-        count: convertis,
-        ca,
-        average: convertis ? Math.round(ca / convertis) : 0,
-      },
-      by_store,
-    };
-  }
-
-  /**
-   * Suivi des coupons émis (cahier §4.6).
-   *
-   * ⚠️ `limite` est explicite : à `undefined`, la requête n'est PAS plafonnée.
-   * L'écran demande 500 lignes, l'export les veut toutes. Un plafond en dur
-   * dans cette méthode tronquait le fichier exporté en silence.
-   */
-  async getCoupons(
-    user: User,
-    filtres: Omit<QueryProspectDto, 'page' | 'limit'> = {},
-    limite: number | undefined = 500,
-  ) {
-    const rows = await this.prisma.prospect.findMany({
-      where: {
-        entity_status: { not: EntityStatus.DELETED },
-        promo_code_id: { not: null },
-        ...this.construireFiltre(user, filtres),
-      },
-      include: {
-        restaurant: { select: { id: true, name: true } },
-        promo_code: { select: { code: true, expiration_date: true } },
-      },
-      orderBy: { coupon_sent_at: 'desc' },
-      ...(limite ? { take: limite } : {}),
-    });
-    const now = new Date();
-    return rows.map((p) => {
-      const used = !!p.converted_at;
-      const expired =
-        !used && p.promo_code?.expiration_date
-          ? p.promo_code.expiration_date < now
-          : false;
-      return {
-        id: p.id,
-        code: p.promo_code?.code ?? '—',
-        name: p.name,
-        platform: p.platform,
-        restaurant: p.restaurant,
-        sent_at: p.coupon_sent_at,
-        expiration_date: p.promo_code?.expiration_date ?? null,
-        state: used ? 'USED' : expired ? 'EXPIRED' : 'ACTIVE',
-      };
-    });
-  }
-
-  /** Ventes attribuées à l'opération (cahier §4.7). */
-  async getSales(
-    user: User,
-    filtres: Omit<QueryProspectDto, 'page' | 'limit'> = {},
-    limite: number | undefined = 500,
-  ) {
-    /**
-     * ⚠️ LA PLAGE DE DATES PORTE SUR `converted_at`, PAS SUR `created_at`.
-     *
-     * `construireFiltre` borne la date de CAPTURE du contact, ce qui est juste
-     * pour la liste des contacts. Ici on mesure de l'argent : un contact
-     * ramassé en juin qui commande en septembre a rapporté en septembre.
-     * L'attribuer à juin fausserait exactement la mesure recherchée, celle de
-     * la période où l'opération a porté. On retire donc les dates avant
-     * l'appel et on les repose sur la date d'encaissement.
-     */
-    const { startDate, endDate, ...sansDates } = filtres;
-    const where: Prisma.ProspectWhereInput = {
-      ...this.construireFiltre(user, sansDates),
-      converted_at: {
-        not: null,
-        ...(startDate && { gte: new Date(startDate) }),
-        ...(endDate && {
-          lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
-        }),
-      },
-    };
-
-    /**
-     * Les totaux se calculent sur TOUT le périmètre, le tableau seul est
-     * borné. Ils lisaient jusqu'ici les mêmes 500 lignes que la liste : au
-     * 501e encaissement, le chiffre d'affaires affiché aurait cessé de monter
-     * sans que rien ne le signale. La seconde requête ne ramène que trois
-     * colonnes, elle reste légère même sur plusieurs milliers de lignes.
-     */
-    const [rows, agregat] = await Promise.all([
-      this.prisma.prospect.findMany({
-        where,
-        include: {
-          restaurant: { select: { id: true, name: true } },
-          promo_code: { select: { code: true } },
-        },
-        orderBy: { converted_at: 'desc' },
-        ...(limite ? { take: limite } : {}),
-      }),
-      this.prisma.prospect.findMany({
-        where,
-        select: {
-          platform: true,
-          first_order_amount: true,
-          converted_at: true,
-        },
-      }),
-    ]);
-
-    const ca = agregat.reduce((s, p) => s + (p.first_order_amount ?? 0), 0);
-
-    // Glovo et Yango côte à côte, plutôt qu'un filtre à basculer pour lire
-    // l'un puis l'autre et faire la soustraction de tête.
-    const parPlateforme = new Map<ProspectPlatform, { count: number; ca: number }>();
-    // La série mensuelle : c'est elle qui montre QUAND l'opération a porté.
-    const parMois = new Map<string, { count: number; ca: number }>();
-
-    for (const p of agregat) {
-      const montant = p.first_order_amount ?? 0;
-
-      const pf = parPlateforme.get(p.platform) ?? { count: 0, ca: 0 };
-      pf.count += 1;
-      pf.ca += montant;
-      parPlateforme.set(p.platform, pf);
-
-      if (p.converted_at) {
-        // Clé AAAA-MM. La Côte d'Ivoire est à UTC+0 toute l'année, sans
-        // heure d'été : la date stockée est déjà la date locale.
-        const cle = p.converted_at.toISOString().slice(0, 7);
-        const m = parMois.get(cle) ?? { count: 0, ca: 0 };
-        m.count += 1;
-        m.ca += montant;
-        parMois.set(cle, m);
-      }
-    }
-
-    const data = rows.map((p) => ({
-      id: p.id,
-      name: p.name,
-      platform: p.platform,
-      restaurant: p.restaurant,
-      coupon: p.promo_code?.code ?? null,
-      amount: p.first_order_amount ?? 0,
-      date: p.converted_at,
-    }));
-
-    return {
-      data,
-      totals: {
-        count: agregat.length,
-        ca,
-        average: agregat.length ? Math.round(ca / agregat.length) : 0,
-      },
-      parPlateforme: [...parPlateforme.entries()]
-        .map(([platform, v]) => ({ platform, ...v }))
-        .sort((a, b) => b.ca - a.ca),
-      parMois: [...parMois.entries()]
-        .map(([mois, v]) => ({ mois, ...v }))
-        .sort((a, b) => a.mois.localeCompare(b.mois)),
-    };
-  }
-
-  // ============================================================
-  // PHASE 4 — RÉGLAGES & EXPORTS
-  // ============================================================
-
-  /** Réglages courants du module (avec valeurs par défaut). */
   async getSettings() {
-    const v = await this.settings.getMany([
-      'prospect.coupon_validity_days',
-      'prospect.coupon_discount_type',
-      'prospect.coupon_discount_value',
-      'prospect.app_link',
-      'prospect.msg.decouverte',
-      'prospect.msg.relance_1',
-      'prospect.msg.relance_2',
-      'prospect.scan_engine',
-      'prospect.scan_api_key',
-      'prospect.scan_model',
-    ]);
+    const v = await this.settings.getMany(['prospect.scan_engine', 'prospect.scan_api_key', 'prospect.scan_model']);
     return {
-      coupon_validity_days:
-        Number(v['prospect.coupon_validity_days']) > 0
-          ? Number(v['prospect.coupon_validity_days'])
-          : 7,
-      coupon_discount_type:
-        v['prospect.coupon_discount_type'] === 'FIXED_AMOUNT'
-          ? 'FIXED_AMOUNT'
-          : 'PERCENTAGE',
-      coupon_discount_value:
-        Number(v['prospect.coupon_discount_value']) > 0
-          ? Number(v['prospect.coupon_discount_value'])
-          : 10,
-      app_link: v['prospect.app_link'] || DEFAULT_APP_LINK,
-      msg_decouverte: v['prospect.msg.decouverte'] || DEFAULT_MESSAGES.DECOUVERTE,
-      msg_relance_1: v['prospect.msg.relance_1'] || DEFAULT_MESSAGES.RELANCE_1,
-      msg_relance_2:
-        v['prospect.msg.relance_2'] || DEFAULT_MESSAGES.RELANCE_2_FIDELITE,
       scan_engine: v['prospect.scan_engine'] || 'TESSERACT',
-      // Masqué (revue 31/07) : ce GET renvoyait la clé OCR en clair au
-      // navigateur. Write-only comme les autres secrets — l'écriture d'un
-      // masque est un no-op (SettingsService.set).
+      // Write-only comme les autres secrets : l'écriture d'un masque est sans effet.
       scan_api_key: v['prospect.scan_api_key'] ? SettingsService.MASK : '',
       scan_model: v['prospect.scan_model'] || '',
     };
   }
 
-  /** Met à jour les réglages (upsert dans `settings`). */
   async updateSettings(dto: UpdateProspectSettingsDto) {
-    const set = async (k: string, val: string | undefined) => {
-      if (val !== undefined && val !== null) await this.settings.set(k, val);
-    };
-    await set(
-      'prospect.coupon_validity_days',
-      dto.coupon_validity_days != null ? String(dto.coupon_validity_days) : undefined,
-    );
-    await set('prospect.coupon_discount_type', dto.coupon_discount_type);
-    await set(
-      'prospect.coupon_discount_value',
-      dto.coupon_discount_value != null ? String(dto.coupon_discount_value) : undefined,
-    );
-    await set('prospect.app_link', dto.app_link);
-    await set('prospect.msg.decouverte', dto.msg_decouverte);
-    await set('prospect.msg.relance_1', dto.msg_relance_1);
-    await set('prospect.msg.relance_2', dto.msg_relance_2);
-    await set('prospect.scan_engine', dto.scan_engine);
-    await set('prospect.scan_api_key', dto.scan_api_key);
-    await set('prospect.scan_model', dto.scan_model);
+    if (dto.scan_engine !== undefined) await this.settings.set('prospect.scan_engine', dto.scan_engine);
+    if (dto.scan_api_key !== undefined) await this.settings.set('prospect.scan_api_key', dto.scan_api_key);
+    if (dto.scan_model !== undefined) await this.settings.set('prospect.scan_model', dto.scan_model);
     return this.getSettings();
-  }
-
-  /** Export CSV (contacts | coupons | sales). */
-  /**
-   * Export CSV.
-   *
-   * ⚠️ Reçoit les MÊMES filtres que la liste, et n'est PLUS plafonné.
-   *
-   * Deux défauts se cumulaient et se voyaient à l'usage : demander les contacts
-   * GLOVO rendait un fichier plein de contacts Yango, parce que la plateforme
-   * n'était jamais transmise ; et le fichier s'arrêtait à 5 000 lignes sans
-   * que rien ne le dise, 500 pour les coupons et les ventes. Un export
-   * silencieusement tronqué est pire qu'un export refusé : on travaille dessus
-   * en croyant l'avoir en entier.
-   */
-  async exportCsv(
-    user: User,
-    type: string,
-    filtres: Omit<QueryProspectDto, 'page' | 'limit'> = {},
-  ): Promise<string> {
-    if (type === 'coupons') {
-      const rows = await this.getCoupons(user, filtres, undefined);
-      return this.toCsv(
-        ['Code', 'Contact', 'Plateforme', 'Emis le', 'Expire le', 'Store', 'Etat'],
-        rows.map((r) => [
-          r.code,
-          r.name,
-          r.platform,
-          this.csvDate(r.sent_at),
-          this.csvDate(r.expiration_date),
-          r.restaurant?.name ?? '',
-          r.state,
-        ]),
-      );
-    }
-    if (type === 'sales') {
-      const { data } = await this.getSales(user, filtres, undefined);
-      return this.toCsv(
-        ['Date', 'Client', 'Plateforme', 'Coupon', 'Store', 'Montant'],
-        data.map((r) => [
-          this.csvDate(r.date),
-          r.name,
-          r.platform,
-          r.coupon ?? '',
-          r.restaurant?.name ?? '',
-          String(r.amount),
-        ]),
-      );
-    }
-    // contacts (défaut) — même ordre que la table : plus récents en premier.
-    const rows = await this.prisma.prospect.findMany({
-      where: this.construireFiltre(user, filtres),
-      include: { restaurant: { select: { name: true } } },
-      orderBy: { created_at: 'desc' },
-    });
-    return this.toCsv(
-      ['Date', 'Plateforme', 'Nom', 'N commande', 'Telephone', 'Store', 'Statut'],
-      rows.map((p) => [
-        this.csvDate(p.created_at),
-        p.platform,
-        p.name,
-        p.order_number,
-        p.phone,
-        p.restaurant?.name ?? '',
-        p.status,
-      ]),
-    );
-  }
-
-  private csvDate(d?: Date | string | null): string {
-    if (!d) return '';
-    const date = typeof d === 'string' ? new Date(d) : d;
-    try {
-      return date.toISOString().slice(0, 16).replace('T', ' ');
-    } catch {
-      return '';
-    }
-  }
-
-  private csvCell(v: string): string {
-    const s = v == null ? '' : String(v);
-    return /[",;\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  }
-
-  private toCsv(headers: string[], rows: string[][]): string {
-    return [headers, ...rows]
-      .map((r) => r.map((c) => this.csvCell(c)).join(';'))
-      .join('\n');
-  }
-
-  // ---------- Helpers coupon / messages ----------
-
-  private async getCouponConfig() {
-    const [days, type, value, link] = await Promise.all([
-      this.settings.get('prospect.coupon_validity_days'),
-      this.settings.get('prospect.coupon_discount_type'),
-      this.settings.get('prospect.coupon_discount_value'),
-      this.settings.get('prospect.app_link'),
-    ]);
-    const validityDays = Number(days) > 0 ? Number(days) : 7;
-    const discountType =
-      type === 'FIXED_AMOUNT'
-        ? DiscountType.FIXED_AMOUNT
-        : DiscountType.PERCENTAGE;
-    const discountValue = Number(value) > 0 ? Number(value) : 10;
-    const appLink = link || DEFAULT_APP_LINK;
-    return { validityDays, discountType, discountValue, appLink };
-  }
-
-  private generateCouponCode(): string {
-    const rnd = Math.random().toString(36).slice(2, 8).toUpperCase();
-    return `CN-${rnd}`;
-  }
-
-  /** Numéro ivoirien au format E.164 pour Twilio : 225 + 10 chiffres (le + est ajouté par formatNumber). */
-  private toE164(phone: string): string {
-    const d = (phone || '').replace(/\D/g, '').slice(-10);
-    return `225${d}`;
-  }
-
-  private kindForRank(rank: number): ProspectMessageKind {
-    if (rank <= 1) return ProspectMessageKind.DECOUVERTE;
-    if (rank === 2) return ProspectMessageKind.RELANCE_1;
-    return ProspectMessageKind.RELANCE_2_FIDELITE;
-  }
-
-  private async buildMessageBody(
-    kind: ProspectMessageKind,
-    vars: { nom: string; code: string; validite: number; lien: string },
-  ): Promise<string> {
-    const keyByKind: Record<ProspectMessageKind, string> = {
-      DECOUVERTE: 'prospect.msg.decouverte',
-      RELANCE_1: 'prospect.msg.relance_1',
-      RELANCE_2_FIDELITE: 'prospect.msg.relance_2',
-    };
-    const tpl = (await this.settings.get(keyByKind[kind])) || DEFAULT_MESSAGES[kind];
-    // Repli si pas de nom (cas Yango) : évite « Bonjour  ! »
-    const nom =
-      vars.nom && vars.nom.trim() && vars.nom.trim().toLowerCase() !== 'client'
-        ? vars.nom.trim()
-        : 'cher client';
-    return tpl
-      .split('{nom}').join(nom)
-      .split('{code_coupon}').join(vars.code)
-      .split('{validite}').join(String(vars.validite))
-      .split('{lien_app}').join(vars.lien);
   }
 }

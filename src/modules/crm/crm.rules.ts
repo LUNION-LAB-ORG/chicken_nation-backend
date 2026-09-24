@@ -1,6 +1,7 @@
 import { randomInt } from 'crypto';
 import {
   CrmCallOutcome,
+  CrmSegment,
   CrmStatus,
   EntityStatus,
   OrderStatus,
@@ -21,6 +22,8 @@ export const CRM_SETTINGS = {
   APP_LINK: 'crm.app_link',
   DEFAULT_OFFER_ID: 'crm.default_offer_id',
   INACTIVE_DAYS: 'crm.inactive_days',
+  /** Posée au premier passage de la reprise acquisition : avant, les ventes sont « historique ». */
+  BASCULE_ACQUISITION: 'crm.bascule_acquisition',
 } as const;
 
 export const DEFAULT_MAX_ATTEMPTS = 5;
@@ -85,6 +88,32 @@ export const NOUVEAU_CYCLE_SQL = Object.keys(NOUVEAU_CYCLE)
 /** Une commande qui compte, écrite en SQL pour la table "Order" aliasée « o ». */
 export const COMMANDE_EFFECTIVE_SQL = `o."entity_status" <> 'DELETED'
   AND NOT (o."payment_method" = 'ONLINE' AND o."paied" = false AND o."status" = 'PENDING')`;
+
+/**
+ * Vente comptée dans les chiffres (alias `v` sur "CrmConversion") : ni annulée
+ * au registre, ni portée par une commande annulée ou supprimée. Une commande
+ * annulée laisse le client hors de la liste (règle du lot 1), mais ne compte
+ * jamais comme vente, sur aucun écran.
+ */
+export const VENTE_VALIDE_SQL = `v."cancelled_at" IS NULL AND NOT EXISTS (
+  SELECT 1 FROM "Order" ov WHERE ov."id" = v."order_id" AND (ov."status" = 'CANCELLED' OR ov."entity_status" = 'DELETED'))`;
+
+/**
+ * Ventes des fiches converties absentes du registre (alias x sur la fiche, o
+ * sur sa commande). `bascule` : paramètre SQL de la date de bascule, avant
+ * laquelle une commande Glovo/Yango est de l'historique d'acquisition.
+ */
+export const venteManquante = (bascule: string) => `
+  SELECT gen_random_uuid(), x."id", x."cycle", x."segment", x."conversion_order_id", coalesce(x."conversion_amount", o."amount"),
+         x."converted_at", o."restaurant_id", x."campaign_id", x."assigned_to_id",
+         (CASE WHEN x."segment" IN ('GLOVO', 'YANGO') AND ${bascule}::timestamp IS NOT NULL AND o."created_at" < ${bascule}::timestamp
+               THEN 'ACQUISITION_HISTORIQUE' ELSE 'CRM' END)::"CrmConversionSource"
+  FROM "CrmContact" x JOIN "Order" o ON o."id" = x."conversion_order_id"
+  WHERE x."status" = 'CONVERTI' AND x."entity_status" <> 'DELETED' AND x."converted_at" IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM "CrmConversion" v WHERE v."order_id" = x."conversion_order_id" AND v."cancelled_at" IS NULL)`;
+
+export const COLONNES_VENTE = `("id", "contact_id", "cycle", "segment", "order_id", "amount", "converted_at",
+  "restaurant_id", "campaign_id", "agent_id", "source")`;
 
 /** Nom de chaque public, tel qu'il s'affiche dans les exports et rapports. */
 export const LIBELLES_PUBLIC: Record<string, string> = {
@@ -175,10 +204,73 @@ export function statutSansConversion(p: {
   }
 }
 
-/** Numéro ivoirien au format attendu par Twilio : 225 + 10 chiffres. */
+/** Numéro en chiffres, normalisé comme à la capture : sans le « 00 » international. */
+export function chiffresTelephone(phone?: string | null): string {
+  const d = (phone ?? '').replace(/\D/g, '');
+  return d.startsWith('00') ? d.slice(2) : d;
+}
+
+/**
+ * Clé de correspondance d'un numéro : ses 10 derniers chiffres. C'est ainsi
+ * qu'une capture Glovo/Yango, un compte client et une fiche se retrouvent,
+ * quel que soit le format saisi (« 07… », « 225 07… », « +225 07… »).
+ */
+export function cleTelephone(phone?: string | null): string | null {
+  const d = chiffresTelephone(phone);
+  return d.length >= 6 ? d.slice(-10) : null;
+}
+
+/**
+ * Numéro au format attendu par Twilio (sans le « + », ajouté ensuite) : un
+ * numéro ivoirien à 10 chiffres prend l'indicatif 225 ; un numéro qui porte
+ * déjà son indicatif part tel quel, pour ne jamais écrire à un inconnu.
+ */
 export function versE164(phone: string): string {
-  const d = (phone || '').replace(/\D/g, '').slice(-10);
-  return `225${d}`;
+  const d = chiffresTelephone(phone);
+  return d.length === 10 ? `225${d}` : d;
+}
+
+/**
+ * Public d'une NOUVELLE fiche pour un client qui a un compte, quand il est
+ * relevé sur Glovo/Yango : ce qui est arrivé en premier l'emporte.
+ *  - inscrit avant la capture, sans aucune commande : inscrit sans commande ;
+ *  - devenu inactif avant la capture : client inactif ;
+ *  - sinon (inscrit après, ou client encore actif) : client Glovo/Yango.
+ * Même règle que la requalification des fiches existantes par la reprise :
+ * le résultat ne dépend jamais de l'ordre dans lequel tournent les tâches.
+ */
+export function publicALaCapture(p: {
+  plateforme: CrmSegment;
+  capteLe: Date;
+  inscritLe: Date | null;
+  derniereCommande: Date | null;
+  joursInactivite: number;
+}): { segment: CrmSegment; depuis: Date } {
+  if (!p.derniereCommande && p.inscritLe && p.inscritLe < p.capteLe) {
+    return { segment: CrmSegment.JAMAIS_COMMANDE, depuis: p.inscritLe };
+  }
+  if (p.derniereCommande) {
+    const inactifLe = new Date(p.derniereCommande.getTime() + p.joursInactivite * 86_400_000);
+    if (inactifLe < p.capteLe) return { segment: CrmSegment.INACTIF, depuis: inactifLe };
+  }
+  return { segment: p.plateforme, depuis: p.capteLe };
+}
+
+/** Nom et numéro d'un contact, qu'il ait un compte sur l'application ou non. */
+export function identiteContact(c: {
+  name?: string | null;
+  phone?: string | null;
+  customer?: { first_name: string | null; last_name: string | null; phone: string | null; email?: string | null } | null;
+}): { nom: string; prenom: string | null; telephone: string; email: string | null } {
+  const compte = c.customer;
+  const nomCompte = compte ? [compte.first_name, compte.last_name].filter(Boolean).join(' ').trim() : '';
+  const nomCapture = (c.name ?? '').trim();
+  return {
+    nom: nomCompte || nomCapture || 'Client sans nom',
+    prenom: compte?.first_name?.trim() || nomCapture.split(/\s+/).filter(Boolean).pop() || null,
+    telephone: compte?.phone ?? c.phone ?? '',
+    email: compte?.email ?? null,
+  };
 }
 
 /** Prénom affichable dans un message, jamais « Bonjour  ! ». */

@@ -4,19 +4,19 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Put,
   Query,
   Req,
-  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { Request, Response } from 'express';
+import type { Request } from 'express';
 import { User } from '@prisma/client';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
@@ -27,11 +27,9 @@ import { ProspectService } from '../services/prospect.service';
 import { ProspectScanService } from '../services/prospect-scan.service';
 import { CreateProspectDto } from '../dto/create-prospect.dto';
 import { MarkCallDto } from '../dto/mark-call.dto';
-import { BulkCouponDto, BulkMarkCallDto } from '../dto/bulk-action.dto';
-import { QueryProspectDto } from '../dto/query-prospect.dto';
 import { UpdateProspectSettingsDto } from '../dto/update-prospect-settings.dto';
 
-@ApiTags('Prospects (Base de Données)')
+@ApiTags('Captures Glovo/Yango')
 @ApiBearerAuth()
 @Controller('prospects')
 @UseGuards(JwtAuthGuard, UserPermissionsGuard)
@@ -68,9 +66,13 @@ export class ProspectController {
     return this.prospectService.checkPhone(req.user as User, phone);
   }
 
+  // ⚠️ Routes de TRANSITION : l'appli caisse pas encore mise à jour s'en sert
+  // encore. Appels et coupons passent par le CRM. À retirer (lot 2 bis) quand
+  // tous les appareils auront reçu la mise à jour « capture seule ».
+  // Lecture réservée au droit UPDATE : un caissier n'a pas à voir les codes promo.
   @Get('call-queue')
-  @RequirePermission(Modules.BASE_DONNEES, Action.READ)
-  @ApiOperation({ summary: "File d'appels J+1 (call center)" })
+  @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
+  @ApiOperation({ summary: "Ancienne file d'appels J+1 de l'appli caisse (transition)" })
   callQueue(
     @Req() req: Request,
     @Query('restaurantId') restaurantId?: string,
@@ -85,105 +87,25 @@ export class ProspectController {
     );
   }
 
-  @Get('stats')
-  @RequirePermission(Modules.BASE_DONNEES, Action.READ)
-  @ApiOperation({ summary: 'KPIs + entonnoir + répartition (tableau de bord)' })
-  stats(@Req() req: Request, @Query('restaurantId') restaurantId?: string) {
-    return this.prospectService.getStats(req.user as User, restaurantId);
-  }
-
-  @Get('coupons')
-  @RequirePermission(Modules.BASE_DONNEES, Action.READ)
-  @ApiOperation({ summary: 'Suivi des coupons émis' })
-  coupons(@Req() req: Request, @Query() query: QueryProspectDto) {
-    // Les écrans passent les mêmes filtres que la liste : plateforme, statut,
-    // recherche et dates s'appliquent ici aussi.
-    const { page: _p, limit: _l, ...filtres } = query;
-    return this.prospectService.getCoupons(req.user as User, filtres);
-  }
-
-  @Get('sales')
-  @RequirePermission(Modules.BASE_DONNEES, Action.READ)
-  @ApiOperation({ summary: 'Ventes générées attribuées' })
-  sales(@Req() req: Request, @Query() query: QueryProspectDto) {
-    const { page: _p, limit: _l, ...filtres } = query;
-    return this.prospectService.getSales(req.user as User, filtres);
-  }
-
   @Get('settings')
   @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
-  @ApiOperation({ summary: 'Réglages du module (coupon, messages)' })
+  @ApiOperation({ summary: 'Réglages du scan de commande (la remise et les messages sont dans le CRM)' })
   getSettings() {
     return this.prospectService.getSettings();
   }
 
   @Put('settings')
   @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
-  @ApiOperation({ summary: 'Mettre à jour les réglages' })
+  @ApiOperation({ summary: 'Mettre à jour les réglages du scan' })
   updateSettings(@Body() dto: UpdateProspectSettingsDto) {
     return this.prospectService.updateSettings(dto);
   }
 
-  @Get('export')
-  @RequirePermission(Modules.BASE_DONNEES, Action.EXPORT)
-  @ApiOperation({ summary: 'Export CSV (type=contacts|coupons|sales)' })
-  async export(
-    @Req() req: Request,
-    @Res() res: Response,
-    @Query() query: QueryProspectDto,
-    @Query('type') type = 'contacts',
-  ) {
-    // ⚠️ L'export reçoit les MÊMES filtres que la liste. Il n'en recevait que
-    // le restaurant : l'écran filtrait sur GLOVO et le fichier sortait avec
-    // tout le monde dedans.
-    const { page: _page, limit: _limit, ...filtres } = query;
-    const csv = await this.prospectService.exportCsv(
-      req.user as User,
-      type,
-      filtres,
-    );
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="prospects-${type}.csv"`,
-    );
-    res.send('﻿' + csv); // BOM UTF-8 pour Excel
-  }
-
-  @Get()
-  @RequirePermission(Modules.BASE_DONNEES, Action.READ)
-  @ApiOperation({ summary: 'Liste des contacts (admin), filtrable' })
-  findAll(@Req() req: Request, @Query() query: QueryProspectDto) {
-    return this.prospectService.findAll(req.user as User, query);
-  }
-
   @Get(':id')
-  @RequirePermission(Modules.BASE_DONNEES, Action.READ)
-  @ApiOperation({ summary: "Fiche d'un contact + historique" })
-  findOne(@Req() req: Request, @Param('id') id: string) {
+  @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
+  @ApiOperation({ summary: "Ancienne fiche d'une capture (transition)" })
+  findOne(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
     return this.prospectService.findOne(req.user as User, id);
-  }
-
-  /**
-   * ACTIONS GROUPÉES.
-   *
-   * ⚠️ Ces deux routes DOIVENT rester déclarées avant leurs équivalents
-   * `:id`. Nest résout dans l'ordre de déclaration : placées après,
-   * `/prospects/bulk/coupon` serait happé par `@Post(':id/coupon')` avec
-   * `id = "bulk"`, et répondrait « contact introuvable ».
-   */
-  @Patch('bulk/call')
-  @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
-  @ApiOperation({ summary: 'Qualifier un lot d\'appels en une fois' })
-  markCallBulk(@Req() req: Request, @Body() dto: BulkMarkCallDto) {
-    return this.prospectService.markCallBulk(req.user as User, dto);
-  }
-
-  @Post('bulk/coupon')
-  @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
-  @ApiOperation({ summary: 'Envoyer le coupon à un lot de contacts joints' })
-  sendCouponBulk(@Req() req: Request, @Body() dto: BulkCouponDto) {
-    return this.prospectService.sendCouponBulk(req.user as User, dto.ids);
   }
 
   @Patch(':id/call')
@@ -191,7 +113,7 @@ export class ProspectController {
   @ApiOperation({ summary: "Qualifier un appel (joint / non joignable / refus)" })
   markCall(
     @Req() req: Request,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: MarkCallDto,
   ) {
     return this.prospectService.markCall(req.user as User, id, dto);
@@ -199,15 +121,15 @@ export class ProspectController {
 
   @Post(':id/coupon')
   @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
-  @ApiOperation({ summary: 'Générer + envoyer le coupon (après « joint »)' })
-  sendCoupon(@Req() req: Request, @Param('id') id: string) {
+  @ApiOperation({ summary: 'Coupon depuis l’ancienne file (créé et envoyé par le CRM)' })
+  sendCoupon(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
     return this.prospectService.sendCoupon(req.user as User, id);
   }
 
   @Post(':id/coupon/resend')
   @RequirePermission(Modules.BASE_DONNEES, Action.UPDATE)
   @ApiOperation({ summary: 'Renvoyer le SMS du coupon existant' })
-  resendCoupon(@Req() req: Request, @Param('id') id: string) {
+  resendCoupon(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
     return this.prospectService.resendCoupon(req.user as User, id);
   }
 }

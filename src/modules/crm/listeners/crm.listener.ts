@@ -47,15 +47,20 @@ export class CrmListener {
 
   @OnEvent(OrderChannels.ORDER_DELETED)
   async commandeSupprimee(payload: CommandeEmise) {
-    await this.synchroniser(payload?.customer_id, undefined, 'suppression de commande');
+    await this.synchroniser(payload?.customer_id, payload?.id, 'suppression de commande');
   }
 
+  /**
+   * Le client, et aussi les fiches liées à la commande par sa conversion ou
+   * par un coupon (une fiche Glovo/Yango sans compte, par exemple).
+   */
   private async synchroniser(customerId: string | undefined, commandeId: string | undefined, origine: string) {
-    if (!customerId) return;
+    if (!customerId && !commandeId) return;
     try {
-      await this.sync.synchroniserClient(customerId, commandeId);
+      if (commandeId) await this.sync.synchroniserCommande(commandeId, customerId);
+      else await this.sync.synchroniserClient(customerId!);
     } catch (e) {
-      this.logger.warn(`Suivi contact (${origine}) du client ${customerId} échoué : ${(e as Error).message}`);
+      this.logger.warn(`Suivi CRM (${origine}) du client ${customerId ?? 'inconnu'} échoué : ${(e as Error).message}`);
     }
   }
 }

@@ -1,13 +1,17 @@
-import { CrmCallOutcome as O, CrmStatus as S } from '@prisma/client';
+import { CrmCallOutcome as O, CrmSegment as P, CrmStatus as S } from '@prisma/client';
 import {
   commandeEffective,
+  chiffresTelephone,
+  cleTelephone,
   compter,
   dateCourte,
+  identiteContact,
   joursRestants,
   NOUVEAU_CYCLE,
   NOUVEAU_CYCLE_SQL,
   genererCodeCoupon,
   prenomPourMessage,
+  publicALaCapture,
   remplirModele,
   statutApresAppel,
   statutSansConversion,
@@ -147,5 +151,56 @@ describe('joursRestants', () => {
   });
   it('ne descend jamais sous 1', () => {
     expect(joursRestants(new Date('2026-09-20T10:00:00Z'), maintenant)).toBe(1);
+  });
+});
+
+describe('numéros', () => {
+  it('ramène tous les formats ivoiriens à la même clé', () => {
+    expect(cleTelephone('+225 07 01 00 00 01')).toBe('0701000001');
+    expect(cleTelephone('0701000001')).toBe('0701000001');
+    expect(cleTelephone('002250701000001')).toBe('0701000001');
+    expect(cleTelephone('12345')).toBeNull();
+  });
+  it("n'écrit jamais un numéro étranger en +225", () => {
+    expect(versE164('33612345678')).toBe('33612345678');
+    expect(versE164('0701000001')).toBe('2250701000001');
+    expect(versE164('+2250701000001')).toBe('2250701000001');
+    expect(chiffresTelephone('00 33 6 12 34 56 78')).toBe('33612345678');
+  });
+});
+
+describe('identiteContact', () => {
+  it("préfère le compte de l'application", () => {
+    const id = identiteContact({ name: 'Salif', phone: '0701', customer: { first_name: 'Awa', last_name: 'Koné', phone: '+2250700000001' } });
+    expect(id).toMatchObject({ nom: 'Awa Koné', prenom: 'Awa', telephone: '+2250700000001' });
+  });
+  it('sans compte, garde le nom et le numéro relevés à la capture', () => {
+    expect(identiteContact({ name: 'Koné Salif', phone: '0701000001', customer: null })).toMatchObject({
+      nom: 'Koné Salif',
+      prenom: 'Salif',
+      telephone: '0701000001',
+    });
+    expect(identiteContact({ name: null, phone: '0701000002', customer: null }).nom).toBe('Client sans nom');
+  });
+});
+
+describe('publicALaCapture (ce qui est arrivé en premier l\'emporte)', () => {
+  const j = (n: number) => new Date(Date.UTC(2026, 8, 24) - n * 86_400_000);
+  const base = { plateforme: P.YANGO, capteLe: j(7), joursInactivite: 30 };
+
+  it('inscrit avant la capture, sans commande : reste inscrit sans commande', () => {
+    expect(publicALaCapture({ ...base, inscritLe: j(80), derniereCommande: null })).toEqual({ segment: P.JAMAIS_COMMANDE, depuis: j(80) });
+  });
+  it('inscrit après la capture : client Yango depuis la capture', () => {
+    expect(publicALaCapture({ ...base, inscritLe: j(2), derniereCommande: null })).toEqual({ segment: P.YANGO, depuis: j(7) });
+  });
+  it('devenu inactif avant la capture : client inactif depuis le jour du délai', () => {
+    expect(publicALaCapture({ ...base, inscritLe: j(200), derniereCommande: j(130) })).toEqual({ segment: P.INACTIF, depuis: j(100) });
+  });
+  it('encore actif à la capture : client Yango', () => {
+    expect(publicALaCapture({ ...base, inscritLe: j(200), derniereCommande: j(20) })).toEqual({ segment: P.YANGO, depuis: j(7) });
+  });
+  it('sans compte : client de la plateforme', () => {
+    expect(publicALaCapture({ ...base, plateforme: P.GLOVO, inscritLe: null, derniereCommande: null })).toEqual({ segment: P.GLOVO, depuis: j(7) });
   });
 });

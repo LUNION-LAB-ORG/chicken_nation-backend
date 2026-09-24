@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   CampaignStatus,
   CrmCallOutcome,
@@ -14,6 +14,15 @@ import { CrmAccessService } from './crm-access.service';
 import { CrmConfigService } from './crm-config.service';
 import { CrmEventsService } from './crm-events.service';
 
+/** Options des anciennes routes de l'appli caisse (acquisition Glovo/Yango). */
+export interface OptionsAppelAcquisition {
+  /** Un « refus » de l'acquisition n'a pas de raison codifiée. */
+  sansRaison?: boolean;
+  /** L'appel existe aussi dans l'ancienne table : il ne sera jamais réimporté. */
+  prospectCallId?: string;
+  date?: Date;
+}
+
 /**
  * Saisie d'un appel (cahier §4.3) : statut, raison de non-commande,
  * commentaire, et rappel éventuel. L'appel est journalisé tel qu'il a eu lieu,
@@ -28,13 +37,14 @@ export class CrmCallService {
     private readonly events: CrmEventsService,
   ) {}
 
-  async enregistrer(user: User, contactId: string, dto: RecordCallDto) {
+  async enregistrer(user: User, contactId: string, dto: RecordCallDto, options: OptionsAppelAcquisition = {}) {
     const contact = await this.prisma.crmContact.findFirst({
       where: { id: contactId, entity_status: { not: EntityStatus.DELETED } },
       select: {
         id: true,
         status: true,
         segment: true,
+        segment_since: true,
         call_count: true,
         first_reached_at: true,
         qualified_at: true,
@@ -55,7 +65,7 @@ export class CrmCallService {
     if (!statutAppel) throw new BadRequestException("Statut d'appel inconnu ou désactivé");
 
     const outcome = statutAppel.outcome;
-    if (outcome === CrmCallOutcome.NON_INTERESSE && !dto.loss_reason_id) {
+    if (outcome === CrmCallOutcome.NON_INTERESSE && !dto.loss_reason_id && !options.sansRaison) {
       throw new BadRequestException('Indiquez la raison pour laquelle le client ne commande pas');
     }
     if (dto.loss_reason_id) {
@@ -66,7 +76,7 @@ export class CrmCallService {
       if (!raison) throw new BadRequestException('Raison de non-commande inconnue');
     }
 
-    const maintenant = new Date();
+    const maintenant = options.date ?? new Date();
     const rappel = outcome === CrmCallOutcome.A_RAPPELER && dto.callback_at ? new Date(dto.callback_at) : null;
     if (rappel && rappel <= maintenant) {
       throw new BadRequestException('La date de rappel doit être dans le futur');
@@ -88,10 +98,12 @@ export class CrmCallService {
     const commentaire = dto.comment?.trim() || null;
 
     return this.prisma.$transaction(async (tx) => {
-      // Claim : si le client vient de commander pendant l'appel, on ne
-      // réécrit pas sa conversion.
+      // Un contact de la file commune devient celui de l'agent qui l'appelle.
+      await this.access.prendre(tx, user, contact.id, maintenant);
+      // Claim : si le client vient de commander pendant l'appel, ou si un
+      // collègue l'a pris entre-temps, on n'écrit rien.
       const claim = await tx.crmContact.updateMany({
-        where: { id: contact.id, status: { not: CrmStatus.CONVERTI } },
+        where: { id: contact.id, status: { not: CrmStatus.CONVERTI }, ...this.access.conditionAgent(user) },
         data: {
           status: nouveauStatut,
           call_count: { increment: 1 },
@@ -110,7 +122,16 @@ export class CrmCallService {
         },
       });
       if (claim.count === 0) {
-        throw new BadRequestException('Ce client vient de commander : il est sorti de la liste');
+        const actuel = await tx.crmContact.findUnique({
+          where: { id: contact.id },
+          select: { status: true, assigned_to_id: true },
+        });
+        if (actuel?.status === CrmStatus.CONVERTI) {
+          throw new BadRequestException('Ce client vient de commander : il est sorti de la liste');
+        }
+        throw new ConflictException(
+          actuel?.assigned_to_id ? await this.access.messagePris(actuel.assigned_to_id) : 'Ce contact vient de changer, rechargez la fiche',
+        );
       }
       const appel = await tx.crmCall.create({
         data: {
@@ -126,6 +147,8 @@ export class CrmCallService {
           loss_reason_id: dto.loss_reason_id ?? null,
           comment: commentaire,
           callback_at: rappel,
+          prospect_call_id: options.prospectCallId ?? null,
+          created_at: maintenant,
         },
       });
       await this.events.journaliser(
