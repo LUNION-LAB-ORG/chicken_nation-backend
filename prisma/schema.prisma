@@ -343,7 +343,6 @@ model Comment {
   /// seconde fois pour le total. C'est la cause de la lenteur constatée sur le
   /// module Clients.
   @@index([entity_status, created_at])
-
   @@index([order_id])
   @@index([customer_id])
   @@index([rating])
@@ -401,7 +400,7 @@ model Customer {
   // relations conversations, tickets
   TicketMessage TicketMessage[] @relation("TicketMsgAuthorCustomer")
 
-  Message Message[] @relation("MessageAuthorCustomer")
+  Message               Message[]               @relation("MessageAuthorCustomer")
   MessageReaction       MessageReaction[]
   TicketMessageReaction TicketMessageReaction[]
 
@@ -520,8 +519,8 @@ model Deliverer {
   // ── Tickets support (P-chat livreur ↔ support) ─────────────────────────
   // Le livreur peut ouvrir des tickets de support via l'app mobile, et
   // recevoir des messages d'agents support depuis le backoffice.
-  support_tickets         TicketThread[]  @relation("DelivererTickets")
-  support_ticket_messages TicketMessage[] @relation("DelivererTicketMessages")
+  support_tickets          TicketThread[]          @relation("DelivererTickets")
+  support_ticket_messages  TicketMessage[]         @relation("DelivererTicketMessages")
   ticket_message_reactions TicketMessageReaction[]
 
   entity_status EntityStatus @default(ACTIVE)
@@ -850,20 +849,19 @@ model Message {
 
   body      String
   meta      Json? // Image, vidéo, fichier, etc.
-  isRead    Boolean  @default(false) // Si le message a été lu
+  isRead    Boolean   @default(false) // Si le message a été lu
   /// Horodatage de la lecture. Colonne NOUVELLE plutôt que réinterprétation de
   /// `isRead`, qui pilote déjà tous les compteurs de non lus : la toucher
   /// casserait les badges. Sert à afficher l'heure sous la coche « Vu ».
   readAt    DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   /// Message issu d'une diffusion. Sert à l'exclure des compteurs de non lus
   /// du backoffice, et à garantir qu'une même diffusion n'écrit qu'une seule
   /// fois dans une conversation (index unique partiel posé en SQL brut).
   broadcastId String?           @db.Uuid
   broadcast   MessageBroadcast? @relation(fields: [broadcastId], references: [id], onDelete: SetNull)
-
 
   /// Message SUPPRIMÉ, par son auteur ou par un administrateur.
   ///
@@ -1031,7 +1029,6 @@ model TicketMessage {
 
   isRead   Boolean @default(false) // Si le message a été lu
   internal Boolean @default(false) // Si le message est pour usage interne
-
 
   /// Message SUPPRIMÉ, par son auteur ou par un administrateur.
   ///
@@ -1232,11 +1229,11 @@ model Favorite {
 }
 
 model NotificationSetting {
-  customer_id               String   @id @unique @db.Uuid
-  push                      Boolean  @default(true)
-  promotions                Boolean  @default(true)
-  system                    Boolean  @default(true)
-  expo_push_token           String?  @db.VarChar
+  customer_id                String    @id @unique @db.Uuid
+  push                       Boolean   @default(true)
+  promotions                 Boolean   @default(true)
+  system                     Boolean   @default(true)
+  expo_push_token            String?   @db.VarChar
   /// Jeton Expo REVOQUE, conservé pour pouvoir revenir en arrière.
   ///
   /// Quand Expo répond `DeviceNotRegistered`, le téléphone a désinstallé
@@ -1248,10 +1245,10 @@ model NotificationSetting {
   /// valeur reste consultable si la révocation s'avérait fautive.
   expo_push_token_revoked    String?   @db.VarChar
   expo_push_token_revoked_at DateTime?
-  onesignal_id              String?  @db.VarChar
-  onesignal_subscription_id String?  @db.VarChar
-  customer                  Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
-  active                    Boolean  @default(true)
+  onesignal_id               String?   @db.VarChar
+  onesignal_subscription_id  String?   @db.VarChar
+  customer                   Customer  @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  active                     Boolean   @default(true)
 
   @@index([expo_push_token])
 }
@@ -1760,20 +1757,23 @@ model User {
   last_login_at DateTime?
 
   // Relations conversations, tickets
-  TicketMessage       TicketMessage[]     @relation("TicketMsgAuthorUser")
-  TicketParticipant   TicketParticipant[]
-  Message             Message[]           @relation("MessageAuthorUser")
-  ConversationUser    ConversationUser[]
+  TicketMessage         TicketMessage[]         @relation("TicketMsgAuthorUser")
+  TicketParticipant     TicketParticipant[]
+  Message               Message[]               @relation("MessageAuthorUser")
+  ConversationUser      ConversationUser[]
   MessageReaction       MessageReaction[]
   TicketMessageReaction TicketMessageReaction[]
-  TicketThread        TicketThread[]      @relation("TicketAssignee")
-  Voucher             Voucher[]
-  TicketUserSkill     TicketUserSkill[]   @relation("CategoryAgents")
-  orders              Order[]
-  promo_codes_created PromoCode[]         @relation("promo_code_creator")
-  retentionCallbacks  RetentionCallback[] @relation("RetentionCallbacks")
-  prospects_created   Prospect[]          @relation("ProspectCreator")
-  prospect_calls      ProspectCall[]      @relation("ProspectCallAgent")
+  TicketThread          TicketThread[]          @relation("TicketAssignee")
+  Voucher               Voucher[]
+  TicketUserSkill       TicketUserSkill[]       @relation("CategoryAgents")
+  orders                Order[]
+  promo_codes_created   PromoCode[]             @relation("promo_code_creator")
+  retentionCallbacks    RetentionCallback[]     @relation("RetentionCallbacks")
+  prospects_created     Prospect[]              @relation("ProspectCreator")
+  prospect_calls        ProspectCall[]          @relation("ProspectCallAgent")
+  campaigns_led         ConversionCampaign[]    @relation("CampaignLead")
+  campaign_agents       CampaignAgent[]         @relation("CampaignAgents")
+  prospects_assigned    Prospect[]              @relation("ProspectAssignedAgent")
 
   // Appels internes (Lunion Meet)
   calls_made     Call[] @relation("CallsMade")
@@ -2847,6 +2847,7 @@ model DailyPresenceCheck {
 enum ProspectPlatform {
   GLOVO
   YANGO
+  APP_ORGANIC
 }
 
 enum ProspectStatus {
@@ -2882,8 +2883,8 @@ model Prospect {
   status       ProspectStatus   @default(NOUVEAU)
 
   // Store de saisie (= Restaurant)
-  restaurant_id String     @db.Uuid
-  restaurant    Restaurant @relation(fields: [restaurant_id], references: [id])
+  restaurant_id String?     @db.Uuid
+  restaurant    Restaurant? @relation(fields: [restaurant_id], references: [id])
 
   // Agent (caissier / manager) ayant saisi
   created_by String? @db.Uuid
@@ -2895,13 +2896,24 @@ model Prospect {
   promo_code_id String?    @db.Uuid
   promo_code    PromoCode? @relation(fields: [promo_code_id], references: [id])
 
-  called_at          DateTime?
-  joined_at          DateTime? // 1er appel « joint » (pour l'entonnoir « vérifiés »)
-  coupon_sent_at     DateTime?
-  registered_at      DateTime?
-  converted_at       DateTime?
+  called_at      DateTime?
+  joined_at      DateTime? // 1er appel « joint » (pour l'entonnoir « vérifiés »)
+  coupon_sent_at DateTime?
+  registered_at  DateTime?
+  converted_at   DateTime?
   // Attribution de la 1ʳᵉ vente directe (dénormalisé pour les stats/ventes)
-  first_order_id     String?   @db.Uuid
+  first_order_id String?   @db.Uuid
+
+  // Assignation Campagne & Agent (Module 1 & 3)
+  campaign_id String?             @db.Uuid
+  campaign    ConversionCampaign? @relation(fields: [campaign_id], references: [id])
+
+  assigned_to_id String? @db.Uuid
+  assigned_agent User?   @relation("ProspectAssignedAgent", fields: [assigned_to_id], references: [id])
+
+  // Raison codifiée de non-commande
+  loss_reason_id     String?             @db.Uuid
+  loss_reason        ProspectLossReason? @relation(fields: [loss_reason_id], references: [id])
   first_order_amount Float?
 
   calls    ProspectCall[]
@@ -3062,7 +3074,6 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-
 /// DIFFUSION DE MESSAGES — envoyer le même message à une liste de clients.
 ///
 /// Calqué sur `PushCampaign` pour le ciblage, mais l'envoi n'est pas un ticket
@@ -3144,4 +3155,63 @@ model MessageBroadcastRecipient {
   @@unique([broadcast_id, customer_id])
   @@index([broadcast_id, status])
   @@index([status, claimed_at])
+}
+
+// ============================================================
+// MODULE 3 — CAMPAGNES DE CONVERSION
+// ============================================================
+
+enum CampaignStatus {
+  PLANIFIED
+  ACTIVE
+  COMPLETED
+  SUSPENDED
+}
+
+model ConversionCampaign {
+  id          String         @id @default(uuid()) @db.Uuid
+  name        String         @db.VarChar(255)
+  description String?        @db.Text
+  start_date  DateTime       @db.Timestamp(6)
+  end_date    DateTime?      @db.Timestamp(6)
+  status      CampaignStatus @default(PLANIFIED)
+
+  // Objectifs
+  target_conversion_rate Float?
+  target_contacts_count  Int?
+
+  // Rôles
+  lead_agent_id String @db.Uuid
+  lead_agent    User   @relation("CampaignLead", fields: [lead_agent_id], references: [id])
+
+  // Relations
+  assigned_agents CampaignAgent[]
+  prospects       Prospect[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
+}
+
+model CampaignAgent {
+  campaign_id String             @db.Uuid
+  agent_id    String             @db.Uuid
+  campaign    ConversionCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+  agent       User               @relation("CampaignAgents", fields: [agent_id], references: [id], onDelete: Cascade)
+
+  @@id([campaign_id, agent_id])
+}
+
+model ProspectLossReason {
+  id          String  @id @default(uuid()) @db.Uuid
+  name        String  @db.VarChar(255)
+  description String? @db.Text
+  is_active   Boolean @default(true)
+  position    Int     @default(0)
+
+  prospects Prospect[]
+
+  entity_status EntityStatus @default(ACTIVE)
+  created_at    DateTime     @default(now()) @db.Timestamp(6)
+  updated_at    DateTime     @default(now()) @db.Timestamp(6)
 }

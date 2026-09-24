@@ -766,8 +766,9 @@ export class ProspectService {
         _count: { _all: true },
       }),
     ]);
+    const restaurantIds = byStoreRaw.map((r) => r.restaurant_id).filter((id): id is string => id !== null);
     const restos = await this.prisma.restaurant.findMany({
-      where: { id: { in: byStoreRaw.map((r) => r.restaurant_id) } },
+      where: { id: { in: restaurantIds } },
       select: { id: true, name: true },
     });
     const nameById = new Map(restos.map((r) => [r.id, r.name]));
@@ -777,7 +778,7 @@ export class ProspectService {
     const by_store = byStoreRaw
       .map((r) => ({
         restaurant_id: r.restaurant_id,
-        name: nameById.get(r.restaurant_id) ?? '—',
+        name: r.restaurant_id ? (nameById.get(r.restaurant_id) ?? '—') : 'Organique / En ligne',
         total: r._count._all,
         converted: convById.get(r.restaurant_id) ?? 0,
       }))

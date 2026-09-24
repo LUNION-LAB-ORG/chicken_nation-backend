@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { Customer, EntityStatus, ProspectStatus } from '@prisma/client';
+import { Customer, EntityStatus, ProspectStatus, ProspectPlatform } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
 
@@ -110,7 +110,22 @@ export class ProspectListenerService {
         },
         orderBy: { created_at: 'asc' },
       });
-      if (!prospect) return;
+      if (!prospect) {
+        // NOUVEAU: Si aucun prospect existant n'est trouvé, on crée un prospect APP_ORGANIC
+        await this.prisma.prospect.create({
+          data: {
+            platform: ProspectPlatform.APP_ORGANIC,
+            name: customer.first_name ? `${customer.first_name} ${customer.last_name || ''}`.trim() : 'Client Organique',
+            order_number: 'N/A', // Organic signup, no order number yet
+            phone: phone,
+            status: ProspectStatus.INSCRIT,
+            registered_at: new Date(),
+            customer_id: customer.id,
+          }
+        });
+        this.logger.log(`Nouveau prospect APP_ORGANIC créé pour le client ${customer.id}`);
+        return;
+      }
 
       const res = await this.prisma.prospect.updateMany({
         where: {
