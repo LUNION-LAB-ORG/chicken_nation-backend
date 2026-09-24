@@ -1,15 +1,19 @@
 -- CreateEnum
-CREATE TYPE "CampaignStatus" AS ENUM ('PLANIFIED', 'ACTIVE', 'COMPLETED', 'SUSPENDED');
+DO $$ BEGIN
+    CREATE TYPE "CampaignStatus" AS ENUM ('PLANIFIED', 'ACTIVE', 'COMPLETED', 'SUSPENDED');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AlterEnum
-ALTER TYPE "ProspectPlatform" ADD VALUE 'APP_ORGANIC';
+ALTER TYPE "ProspectPlatform" ADD VALUE IF NOT EXISTS 'APP_ORGANIC';
 
 -- AlterTable
-ALTER TABLE "Prospect" ADD COLUMN     "campaign_id" UUID,
-ADD COLUMN     "loss_reason_id" UUID;
+ALTER TABLE "Prospect" ADD COLUMN IF NOT EXISTS "campaign_id" UUID,
+ADD COLUMN IF NOT EXISTS "loss_reason_id" UUID;
 
 -- CreateTable
-CREATE TABLE "ConversionCampaign" (
+CREATE TABLE IF NOT EXISTS "ConversionCampaign" (
     "id" UUID NOT NULL,
     "name" VARCHAR(255) NOT NULL,
     "description" TEXT,
@@ -27,7 +31,7 @@ CREATE TABLE "ConversionCampaign" (
 );
 
 -- CreateTable
-CREATE TABLE "CampaignAgent" (
+CREATE TABLE IF NOT EXISTS "CampaignAgent" (
     "campaign_id" UUID NOT NULL,
     "agent_id" UUID NOT NULL,
 
@@ -35,7 +39,7 @@ CREATE TABLE "CampaignAgent" (
 );
 
 -- CreateTable
-CREATE TABLE "ProspectLossReason" (
+CREATE TABLE IF NOT EXISTS "ProspectLossReason" (
     "id" UUID NOT NULL,
     "name" VARCHAR(255) NOT NULL,
     "description" TEXT,
@@ -49,7 +53,7 @@ CREATE TABLE "ProspectLossReason" (
 );
 
 -- CreateTable
-CREATE TABLE "ProspectCall" (
+CREATE TABLE IF NOT EXISTS "ProspectCall" (
     "id" UUID NOT NULL,
     "result" "CallResult" NOT NULL,
     "rank" INTEGER NOT NULL,
@@ -63,22 +67,50 @@ CREATE TABLE "ProspectCall" (
 );
 
 -- AddForeignKey
-ALTER TABLE "Prospect" ADD CONSTRAINT "Prospect_campaign_id_fkey" FOREIGN KEY ("campaign_id") REFERENCES "ConversionCampaign"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "Prospect" ADD CONSTRAINT "Prospect_campaign_id_fkey" FOREIGN KEY ("campaign_id") REFERENCES "ConversionCampaign"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "Prospect" ADD CONSTRAINT "Prospect_loss_reason_id_fkey" FOREIGN KEY ("loss_reason_id") REFERENCES "ProspectLossReason"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "Prospect" ADD CONSTRAINT "Prospect_loss_reason_id_fkey" FOREIGN KEY ("loss_reason_id") REFERENCES "ProspectLossReason"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "ConversionCampaign" ADD CONSTRAINT "ConversionCampaign_lead_agent_id_fkey" FOREIGN KEY ("lead_agent_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "ConversionCampaign" ADD CONSTRAINT "ConversionCampaign_lead_agent_id_fkey" FOREIGN KEY ("lead_agent_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "CampaignAgent" ADD CONSTRAINT "CampaignAgent_campaign_id_fkey" FOREIGN KEY ("campaign_id") REFERENCES "ConversionCampaign"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "CampaignAgent" ADD CONSTRAINT "CampaignAgent_campaign_id_fkey" FOREIGN KEY ("campaign_id") REFERENCES "ConversionCampaign"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "CampaignAgent" ADD CONSTRAINT "CampaignAgent_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "CampaignAgent" ADD CONSTRAINT "CampaignAgent_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "ProspectCall" ADD CONSTRAINT "ProspectCall_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "ProspectCall" ADD CONSTRAINT "ProspectCall_agent_id_fkey" FOREIGN KEY ("agent_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "ProspectCall" ADD CONSTRAINT "ProspectCall_prospect_id_fkey" FOREIGN KEY ("prospect_id") REFERENCES "Prospect"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+    ALTER TABLE "ProspectCall" ADD CONSTRAINT "ProspectCall_prospect_id_fkey" FOREIGN KEY ("prospect_id") REFERENCES "Prospect"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
