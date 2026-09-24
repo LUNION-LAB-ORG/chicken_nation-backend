@@ -111,7 +111,7 @@ export class KkiapayController {
     /**
      * Webhook KKiaPay — INGESTION SANS PERTE.
      *
-     * 1. Vérifie le secret via un lecteur env-first Neon-indépendant (§2) → 403 si invalide.
+     * 1. Vérifie le secret via un lecteur env-first Neon-indépendant (§2) → un désaccord est journalisé, jamais bloquant (24/09).
      * 2. Enfile le payload brut dans BullMQ (Redis) avec un jobId idempotent
      *    `event_transactionId` (assaini, sans ':' interdit par BullMQ) → répond 200.
      *    Le traitement DB awaité se fait dans le
@@ -221,24 +221,19 @@ export class KkiapayController {
             return response.status(HttpStatus.SERVICE_UNAVAILABLE).send('Secret unavailable');
         }
 
-        // Vérification simple : Kkiapay renvoie le secret en clair.
-        if (!webhookSecret || receivedSecret !== webhookSecret) {
-            // Empreinte des deux valeurs, jamais la valeur entière : sans elle,
-            // impossible de savoir si KKiaPay envoie un ancien secret, rien, ou
-            // la bonne valeur entourée d'espaces (incident ZONE 4, 24/09).
+        // Secret NON BLOQUANT (décision du 24/09, incident ZONE 4 : secret collé
+        // à l'identique des deux côtés, webhooks refusés quand même, commandes
+        // payées jamais confirmées). Le secret n'est pas ce qui protège l'argent :
+        // le traitement revérifie la transaction auprès de KKiaPay avec les clés
+        // du compte, exige un statut SUCCESS et un montant qui couvre la commande,
+        // et une transaction déjà rattachée ne compte pas pour une autre commande.
+        // Un désaccord est donc seulement journalisé, avec l'empreinte des deux
+        // valeurs (jamais la valeur entière) pour pouvoir le réaligner.
+        if (receivedSecret !== webhookSecret) {
             this.logger.warn(
-                `Webhook KKiaPay${restaurantId ? ` [${restaurantId}]` : ''} : secret invalide` +
+                `Webhook KKiaPay${restaurantId ? ` [${restaurantId}]` : ''} : secret différent, traité quand même` +
                 ` (reçu ${empreinteSecret(receivedSecret)}, attendu ${empreinteSecret(webhookSecret)})`,
             );
-            // Compte RECONNU : on n'arrive ici que si un secret existe pour cet
-            // identifiant, donc l'espace de clés est borné par le nombre de
-            // restaurants configurés, et l'identifiant reste utile au diagnostic.
-            tracerRefus(
-                HttpStatus.FORBIDDEN,
-                'secret invalide : la valeur envoyée par KKiaPay ne correspond pas à celle enregistrée pour ce compte',
-                true,
-            );
-            return response.status(HttpStatus.FORBIDDEN).send('Invalid secret');
         }
 
         try {
