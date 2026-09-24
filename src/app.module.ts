@@ -45,7 +45,7 @@ import { HubriseModule } from 'src/hubrise/hubrise.module';
 import { SettingsModule } from 'src/modules/settings/settings.module';
 import { OnesignalModule } from 'src/modules/onesignal/onesignal.module';
 import { PushCampaignModule } from 'src/modules/push-campaign/push-campaign.module';
-import { CampaignModule } from './modules/campaign/campaign.module';
+import { ConversionModule } from 'src/modules/conversion/conversion.module';
 import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
 import { ReferralModule } from 'src/modules/referral/referral.module';
 import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.module';
@@ -153,7 +153,7 @@ import { CallsModule } from 'src/modules/calls/calls.module';
     SchedulingModule,
     MapsModule,
     ProspectModule,
-    CampaignModule,
+    ConversionModule,
     AdhesionModule,
     CallsModule,
   ],

@@ -335,6 +335,32 @@ export class TwilioService {
     }
 
     /**
+     * Coupon de bienvenue du module Prospects (cahier §8).
+     *
+     * Le modèle WhatsApp n'est pas codé en dur : son identifiant se règle dans
+     * le backoffice une fois approuvé par Meta. Tant qu'il est vide, ou si
+     * WhatsApp échoue, le SMS part à sa place. Le canal réellement utilisé est
+     * renvoyé pour que la fiche du prospect dise la vérité.
+     */
+    async sendConversionCoupon({ phoneNumber, templateSid, variables, smsBody }: {
+        phoneNumber: string;
+        templateSid: string;
+        variables: Record<string, string>;
+        smsBody: string;
+    }): Promise<{ channel: 'WHATSAPP' | 'SMS' | 'AUCUN'; sid: string | null }> {
+        if (templateSid && (await this.isWhatsAppEnabled())) {
+            const whatsapp = await this.sendWhatsappMessage({
+                phoneNumber,
+                contentSid: templateSid,
+                contentVariables: JSON.stringify(variables),
+            });
+            if (whatsapp) return { channel: 'WHATSAPP', sid: whatsapp.sid };
+        }
+        const sms = await this.sendSmsMessage({ phoneNumber, message: smsBody });
+        return sms ? { channel: 'SMS', sid: sms.sid } : { channel: 'AUCUN', sid: null };
+    }
+
+    /**
      * Tunnel d'adhésion (Phase 4) — envoie le template WhatsApp « carte prête »
      * avec le deep link. BEST-EFFORT : ne jette JAMAIS, renvoie null en cas
      * d'échec ou de template non approuvé (l'adhésion ne doit pas échouer).

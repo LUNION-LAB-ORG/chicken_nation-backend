@@ -15,6 +15,8 @@ export enum Modules {
   COMMENTAIRES = 'reviews',
   SETTINGS = 'settings',
   BASE_DONNEES = 'base_donnees',
+  /** Conversion des inscrits qui n'ont jamais commandé (module Prospects). */
+  PROSPECTS = 'prospects',
   CALLS = 'calls',
   AUDIT = 'audit',
   ALL = 'all',
