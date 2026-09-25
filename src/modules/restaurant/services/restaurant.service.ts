@@ -138,6 +138,12 @@ export class RestaurantService {
    * sur Internet pouvait les récupérer. Les deux routes ne servent plus que
    * cette LISTE BLANCHE ; les lecteurs internes (Turbo, HubRise) continuent de
    * lire les colonnes sensibles par leurs propres requêtes.
+   *
+   * Revue 25/09 : `findOne` joignait encore `users` (id, nom, email, rôle,
+   * photo de tout le personnel), soit un annuaire public exploitable pour
+   * l'hameçonnage et les essais de connexion. Aucun écran ne le lisait : il
+   * est retiré. L'annuaire du personnel passe par GET /restaurants/:id/users,
+   * gardée PERSONNELS.READ.
    */
   private static readonly PUBLIC_SELECT = {
     id: true,
@@ -240,22 +246,9 @@ export class RestaurantService {
         id,
         entity_status: { not: EntityStatus.DELETED },
       },
-      select: {
-        ...RestaurantService.PUBLIC_SELECT,
-        // Personnel : champs d'affichage uniquement — JAMAIS password ni jetons.
-        users: {
-          select: {
-            id: true,
-            fullname: true,
-            email: true,
-            role: true,
-            type: true,
-            image: true,
-            entity_status: true,
-            created_at: true,
-          },
-        },
-      },
+      // Route publique (invités de l'appli cliente) : liste blanche seule,
+      // jamais le personnel ni les secrets Turbo / HubRise.
+      select: RestaurantService.PUBLIC_SELECT,
     });
 
     if (!restaurant) {

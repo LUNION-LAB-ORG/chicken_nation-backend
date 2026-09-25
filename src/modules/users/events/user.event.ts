@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Prisma, User } from '@prisma/client';
+import { User } from '@prisma/client';
+import { UtilisateurAvecRestaurant } from 'src/modules/restaurant/constantes/restaurant-public.select';
 
 
 @Injectable()
@@ -15,8 +16,8 @@ export class UserEvent {
      */
     async userCreatedEvent(payload:
         {
-            actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>,
-            user: Prisma.UserGetPayload<{ include: { restaurant: true } }>
+            actor: UtilisateurAvecRestaurant,
+            user: UtilisateurAvecRestaurant
         }
     ) {
         this.eventEmitter.emit(
@@ -29,8 +30,8 @@ export class UserEvent {
     * Emet un évènement de la création d'un membre
     */
     async memberCreatedEvent(payload: {
-        actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>,
-        user: Prisma.UserGetPayload<{ include: { restaurant: true } }>
+        actor: UtilisateurAvecRestaurant,
+        user: UtilisateurAvecRestaurant
     }) {
         this.eventEmitter.emit(
             'member.created',

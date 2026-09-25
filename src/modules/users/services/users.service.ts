@@ -12,6 +12,7 @@ import { GenerateDataService } from 'src/common/services/generate-data.service';
 import { UserEvent } from '../events/user.event';
 import { ResetUserPasswordResponseDto } from '../dto/reset-user-password.dto';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
+import { RESTAURANT_PERSONNEL_SELECT } from 'src/modules/restaurant/constantes/restaurant-public.select';
 
 @Injectable()
 export class UsersService {
@@ -61,7 +62,7 @@ export class UsersService {
         restaurant_id: restaurantId,
       },
       include: {
-        restaurant: true,
+        restaurant: { select: RESTAURANT_PERSONNEL_SELECT },
       },
     });
 
@@ -114,7 +115,7 @@ export class UsersService {
         type,
       },
       include: {
-        restaurant: true,
+        restaurant: { select: RESTAURANT_PERSONNEL_SELECT },
       },
     });
 
@@ -137,7 +138,9 @@ export class UsersService {
     const users = await this.prisma.user.findMany({
       where,
       include: {
-        restaurant: true,
+        // Liste blanche : la ligne complète portait la clé Turbo et le jeton
+        // HubRise de chaque restaurant, à tout lecteur du personnel.
+        restaurant: { select: RESTAURANT_PERSONNEL_SELECT },
       },
       orderBy: {
         created_at: 'desc',
@@ -186,7 +189,7 @@ export class UsersService {
         id: user.id,
       },
       include: {
-        restaurant: true,
+        restaurant: { select: RESTAURANT_PERSONNEL_SELECT },
       },
     });
 
@@ -281,7 +284,7 @@ export class UsersService {
     const updated = await this.prisma.user.update({
       where: { id },
       data,
-      include: { restaurant: true },
+      include: { restaurant: { select: RESTAURANT_PERSONNEL_SELECT } },
     });
 
     await this.cacheManager.del('users');

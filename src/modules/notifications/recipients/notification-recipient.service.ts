@@ -26,7 +26,8 @@ export class NotificationRecipientService {
         const users = await this.prisma.user.findMany({
             where: whereClause,
             include: {
-                restaurant: true
+                // Seul le nom sert : pas de clé Turbo ni de jeton HubRise en mémoire.
+                restaurant: { select: { name: true } }
             }
         });
 
@@ -71,7 +72,7 @@ export class NotificationRecipientService {
         const users = await this.prisma.user.findMany({
             where: whereClause,
             include: {
-                restaurant: true
+                restaurant: { select: { name: true } }
             }
         });
 
@@ -117,7 +118,7 @@ export class NotificationRecipientService {
                 entity_status: EntityStatus.ACTIVE,
             },
             include: {
-                restaurant: true
+                restaurant: { select: { name: true } }
             }
         });
         if (!user) {
@@ -142,8 +143,10 @@ export class NotificationRecipientService {
     }
     /**
      * Mapping User to NotificationRecipient
+     * Seul le nom du restaurant est lu : un restaurant réduit à une liste
+     * blanche (sans clé Turbo ni jeton HubRise) suffit.
      */
-    mapUserToNotificationRecipient(user: Prisma.UserGetPayload<{ include: { restaurant: true } }>): NotificationRecipient {
+    mapUserToNotificationRecipient(user: Prisma.UserGetPayload<{ include: { restaurant: { select: { name: true } } } }>): NotificationRecipient {
         return {
             id: user.id,
             type: user.type === UserType.RESTAURANT ? 'restaurant_user' : 'backoffice_user',

@@ -1,7 +1,11 @@
 import { LoyaltyLevel, Prisma } from "@prisma/client";
+import { RESTAURANT_COMMANDE_SELECT } from "src/modules/restaurant/constantes/restaurant-public.select";
 
 export class OrderCreatedEvent {
-  order: Prisma.OrderGetPayload<{ include: { restaurant: true } }>;
+  // Restaurant réduit à la liste blanche : la même commande part sur les
+  // sockets, et aucun écouteur ne lit autre chose que `restaurant.name`.
+  // Une commande chargée avec le restaurant complet reste assignable.
+  order: Prisma.OrderGetPayload<{ include: { restaurant: { select: typeof RESTAURANT_COMMANDE_SELECT } } }>;
   expo_token?: string | null;
   payment_id?: string;
   loyalty_level?: LoyaltyLevel;

@@ -15,6 +15,7 @@ import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { ConnectedUser } from '../interfaces/app.gateway.interface';
 import { Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { sansSecretsRestaurant } from 'src/common/utils/restaurant-secrets.util';
 
 // Interface pour le cache
 interface CachedUser {
@@ -184,7 +185,9 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       } else if (type === 'user') {
         const user = await this.prisma.user.findUnique({
           where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
-          include: { restaurant: true },
+          // Seuls le type et le rattachement servent : inutile de charger la
+          // ligne du restaurant, et avec elle sa clé Turbo et son jeton HubRise.
+          select: { id: true, type: true, restaurant_id: true },
         });
 
         if (user) {
@@ -331,6 +334,10 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // ================================
   // MÉTHODES D'ÉMISSION GÉNÉRIQUES
   // ================================
+  // Toutes passent par `sansSecretsRestaurant` : `backoffice_all` réunit tout
+  // compte BACKOFFICE quel que soit son rôle, `restaurant_{id}` ses livreurs,
+  // et aucun d'eux ne doit recevoir la clé Turbo ni le jeton HubRise d'un
+  // restaurant, même si une requête en amont charge la ligne complète.
 
   // Émettre à un utilisateur spécifique
   emitToUser<T>(
@@ -341,37 +348,37 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     const prefixMap = { customer: 'customer', user: 'user', deliverer: 'deliverer' };
     const room = `${prefixMap[userType]}_${userId}`;
-    this.server.to(room).emit(event, data);
+    this.server.to(room).emit(event, sansSecretsRestaurant(data));
   }
 
   // Émettre à un livreur spécifique (alias sémantique)
   emitToDeliverer<T>(delivererId: string, event: string, data: T) {
-    this.server.to(`deliverer_${delivererId}`).emit(event, data);
+    this.server.to(`deliverer_${delivererId}`).emit(event, sansSecretsRestaurant(data));
   }
 
   // Émettre à tous les livreurs
   emitToAllDeliverers<T>(event: string, data: T) {
-    this.server.to('deliverers').emit(event, data);
+    this.server.to('deliverers').emit(event, sansSecretsRestaurant(data));
   }
 
   // Émettre à tous les backoffice
   emitToBackoffice<T>(event: string, data: T) {
-    this.server.to('backoffice_all').emit(event, data);
+    this.server.to('backoffice_all').emit(event, sansSecretsRestaurant(data));
   }
 
   // Émettre à un restaurant spécifique
   emitToRestaurant<T>(restaurantId: string, event: string, data: T) {
-    this.server.to(`restaurant_${restaurantId}`).emit(event, data);
+    this.server.to(`restaurant_${restaurantId}`).emit(event, sansSecretsRestaurant(data));
   }
 
   // Émettre à tous les utilisateurs d'un type
   emitToUserType<T>(userType: 'customers' | 'users' | 'deliverers', event: string, data: T) {
-    this.server.to(userType).emit(event, data);
+    this.server.to(userType).emit(event, sansSecretsRestaurant(data));
   }
 
   // Broadcast à tous les connectés
   broadcast<T>(event: string, data: T) {
-    this.server.emit(event, data);
+    this.server.emit(event, sansSecretsRestaurant(data));
   }
 
   @SubscribeMessage('ping')

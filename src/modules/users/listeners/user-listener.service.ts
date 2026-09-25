@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { NotificationType, Prisma, User } from '@prisma/client';
+import { NotificationType, User } from '@prisma/client';
+import { UtilisateurAvecRestaurant } from 'src/modules/restaurant/constantes/restaurant-public.select';
 import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
 import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
 import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
@@ -17,8 +18,8 @@ export class UserListenerService {
 
     @OnEvent('user.created')
     async userCreatedEventListener(payload: {
-        actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>,
-        user: Prisma.UserGetPayload<{ include: { restaurant: true } }>
+        actor: UtilisateurAvecRestaurant,
+        user: UtilisateurAvecRestaurant
     }) {
         // RECUPERATION DES RECEPTEURS
         const usersBackoffice = (await this.notificationRecipientService.getAllUsersByBackofficeAndRole()).filter((user) => user.email !== payload.user.email);
@@ -59,8 +60,8 @@ export class UserListenerService {
 
     @OnEvent('member.created')
     async memberCreatedEventListener(payload: {
-        actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>,
-        user: Prisma.UserGetPayload<{ include: { restaurant: true } }>
+        actor: UtilisateurAvecRestaurant,
+        user: UtilisateurAvecRestaurant
     }) {
         // RECUPERATION DES RECEPTEURS
         const usersRestaurant = (await this.notificationRecipientService.getAllUsersByRestaurantAndRole(payload.actor.restaurant_id ?? "")).filter((user) => user.email !== payload.user.email);

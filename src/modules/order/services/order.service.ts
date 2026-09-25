@@ -51,6 +51,7 @@ import { OrderCreateDto, OrderItemDto } from '../dto/order-create.dto';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 import { TwilioService } from 'src/twilio/services/twilio.service';
+import { RESTAURANT_COMMANDE_SELECT } from 'src/modules/restaurant/constantes/restaurant-public.select';
 
 @Injectable()
 export class OrderService {
@@ -259,7 +260,10 @@ export class OrderService {
         include: {
           order_items: { include: { dish: true } },
           customer: { select: { id: true, first_name: true, last_name: true, phone: true, email: true, image: true } },
-          restaurant: true,
+          // Liste blanche : cette réponse part au CLIENT et sur les sockets.
+          // La clé Turbo lue plus haut pour les frais reste interne (variable
+          // locale `restaurant`), elle n'a rien à faire dans la commande rendue.
+          restaurant: { select: RESTAURANT_COMMANDE_SELECT },
           paiements: true,
         },
       });
@@ -743,7 +747,8 @@ export class OrderService {
               image: true,
             },
           },
-          restaurant: true,
+          // Liste blanche, jamais la clé Turbo ni le jeton HubRise.
+          restaurant: { select: RESTAURANT_COMMANDE_SELECT },
           paiements: true,
         },
       });
@@ -910,7 +915,9 @@ export class OrderService {
             notification_settings: true,
           },
         },
-        restaurant: true,
+        // Liste blanche : nom, adresse, téléphone et courriel suffisent au
+        // ticket imprimé du backoffice ; la réponse part aussi au client.
+        restaurant: { select: RESTAURANT_COMMANDE_SELECT },
       },
     });
 
@@ -1260,18 +1267,7 @@ export class OrderService {
         user: {
           select: { id: true, fullname: true, email: true, role: true },
         },
-        restaurant: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-            address: true,
-            phone: true,
-            email: true,
-            latitude: true,
-            longitude: true,
-          },
-        },
+        restaurant: { select: RESTAURANT_COMMANDE_SELECT },
         // Suivi de livraison temps réel (app cliente) : présent uniquement pour
         // les commandes livrées par un livreur interne Chicken Nation (le
         // graphe Delivery → Course → Deliverer n'existe pas pour Turbo/PICKUP).
@@ -1386,7 +1382,8 @@ export class OrderService {
         // notification_settings : nécessaire pour pousser « Commande confirmée »
         // au client au moment du paiement (cf. KkiapayOrderListenerService).
         customer: { include: { notification_settings: true } },
-        restaurant: true,
+        // Liste blanche : la commande repart sur les sockets au paiement.
+        restaurant: { select: RESTAURANT_COMMANDE_SELECT },
       },
     });
   }
@@ -1475,7 +1472,7 @@ export class OrderService {
       },
       include: {
         customer: true,
-        restaurant: true,
+        restaurant: { select: RESTAURANT_COMMANDE_SELECT },
         order_items: { include: { dish: true } },
       },
     });
@@ -1609,18 +1606,7 @@ export class OrderService {
               image: true,
             },
           },
-          restaurant: {
-            select: {
-              id: true,
-              name: true,
-              image: true,
-              address: true,
-              phone: true,
-              email: true,
-              latitude: true,
-              longitude: true,
-            },
-          },
+          restaurant: { select: RESTAURANT_COMMANDE_SELECT },
         },
         ...(pagination
           ? {
@@ -1724,18 +1710,7 @@ export class OrderService {
               image: true,
             },
           },
-          restaurant: {
-            select: {
-              id: true,
-              name: true,
-              image: true,
-              address: true,
-              phone: true,
-              email: true,
-              latitude: true,
-              longitude: true,
-            },
-          },
+          restaurant: { select: RESTAURANT_COMMANDE_SELECT },
         },
         skip: (page - 1) * limit,
         take: limit,
@@ -2253,18 +2228,7 @@ export class OrderService {
             image: true,
           },
         },
-        restaurant: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-            address: true,
-            phone: true,
-            email: true,
-            latitude: true,
-            longitude: true,
-          },
-        },
+        restaurant: { select: RESTAURANT_COMMANDE_SELECT },
         user: {
           select: {
             id: true,
@@ -2350,18 +2314,7 @@ export class OrderService {
             image: true,
           },
         },
-        restaurant: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-            address: true,
-            phone: true,
-            email: true,
-            latitude: true,
-            longitude: true,
-          },
-        },
+        restaurant: { select: RESTAURANT_COMMANDE_SELECT },
         user: {
           select: {
             id: true,

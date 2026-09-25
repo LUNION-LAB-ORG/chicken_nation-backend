@@ -1,6 +1,7 @@
 import { notificationIcons } from "src/modules/notifications/constantes/notifications.constante";
 import { NotificationTemplate } from "src/modules/notifications/interfaces/notifications.interface";
-import { Prisma, UserType } from "@prisma/client";
+import { UserType } from "@prisma/client";
+import { UtilisateurAvecRestaurant } from "src/modules/restaurant/constantes/restaurant-public.select";
 import { userGetRole } from "../constantes/user-get-role.constante"; // Assuming you have this utility
 
 export class UserNotificationsTemplate {
@@ -10,8 +11,8 @@ export class UserNotificationsTemplate {
      * Inform an administrator or manager that a new user has been created in the system.
      */
     NEW_USER_BACKOFFICE: NotificationTemplate<{
-        actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>, // The user who created the new user
-        user: Prisma.UserGetPayload<{ include: { restaurant: true } }>  // The newly created user
+        actor: UtilisateurAvecRestaurant, // The user who created the new user
+        user: UtilisateurAvecRestaurant  // The newly created user
     }> = {
             title: (ctx) => `👥 Nouvel utilisateur : ${ctx.data.user.fullname}`,
             message: (ctx) => `${ctx.data.user.fullname} (${ctx.data.user.email}) a été ajouté en tant que ${userGetRole(ctx.data.user.role)} par ${ctx.data.actor.fullname}.`,
@@ -25,8 +26,8 @@ export class UserNotificationsTemplate {
      * Inform a restaurant manager that a new team member (agent) has joined their specific restaurant.
      */
     NEW_USER_RESTAURANT: NotificationTemplate<{
-        actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>, // The user who created the new user (e.g., admin or main manager)
-        user: Prisma.UserGetPayload<{ include: { restaurant: true } }>  // The newly added agent for the restaurant
+        actor: UtilisateurAvecRestaurant, // The user who created the new user (e.g., admin or main manager)
+        user: UtilisateurAvecRestaurant  // The newly added agent for the restaurant
     }> = {
             title: (ctx) => `🤝 Nouveau membre dans votre équipe !`,
             message: (ctx) => `${ctx.data.user.fullname} a rejoint l'équipe de votre restaurant ${ctx.data.user.restaurant?.name ?? 'non renseigné'} en tant qu'${userGetRole(ctx.data.user.role)}.`,
@@ -40,8 +41,8 @@ export class UserNotificationsTemplate {
      * Welcome the new user to the platform and inform them their account is ready.
      */
     WELCOME_USER: NotificationTemplate<{
-        actor: Prisma.UserGetPayload<{ include: { restaurant: true } }>, // The user who created this user
-        user: Prisma.UserGetPayload<{ include: { restaurant: true } }>  // The new user being welcomed
+        actor: UtilisateurAvecRestaurant, // The user who created this user
+        user: UtilisateurAvecRestaurant  // The new user being welcomed
     }> = {
             title: (ctx) => `🎉 Bienvenue ${ctx.data.user.fullname} !`,
             message: (ctx) => {

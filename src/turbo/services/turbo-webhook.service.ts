@@ -10,6 +10,7 @@ import { CourseStatut, DeliveryStatut, OrderStatus, PaiementStatus } from '@pris
 import { OrderChannels } from 'src/modules/order/enums/order-channels';
 import { CourseChannels } from 'src/modules/course/enums/course-channels';
 import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
+import { RESTAURANT_COMMANDE_SELECT } from 'src/modules/restaurant/constantes/restaurant-public.select';
 import {
   libelleEncaissements,
   normaliserEncaissements,
@@ -88,10 +89,11 @@ export class TurboWebhookService {
   /** Retrouve la commande CN par la RÉFÉRENCE portée par `data.numero`. */
   private async resolveOrder(numero?: string) {
     if (!numero) return null;
+    // Pas de restaurant joint : aucun appelant ne le lit, et la ligne complète
+    // porte la clé Turbo et le jeton HubRise.
     return this.prisma.order.findFirst({
       where: { reference: numero },
       include: {
-        restaurant: true,
         customer: { include: { notification_settings: true } },
       },
     });
@@ -303,7 +305,8 @@ export class TurboWebhookService {
         }),
       },
       include: {
-        restaurant: true,
+        // Liste blanche : la commande part sur les sockets juste après.
+        restaurant: { select: RESTAURANT_COMMANDE_SELECT },
         customer: { include: { notification_settings: true } },
       },
     });

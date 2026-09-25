@@ -17,13 +17,15 @@ import type { Request } from 'express';
 
 /** Garde-fou commun aux endpoints d'édition/suppression de paiement : seul un
  *  ADMIN peut corriger un paiement déjà enregistré (audit comptable, erreur de
- *  saisie). Pour les autres rôles, on lève 403. */
-function assertAdmin(req: Request) {
+ *  saisie). Pour les autres rôles, on lève 403. Sert aussi à la création brute
+ *  (POST /paiements), qui est une correction du registre au même titre. */
+function assertAdmin(
+  req: Request,
+  message = "Seul un administrateur peut modifier ou supprimer un paiement existant.",
+) {
   const user = req.user as User | undefined;
   if (user?.role !== UserRole.ADMIN) {
-    throw new ForbiddenException(
-      "Seul un administrateur peut modifier ou supprimer un paiement existant.",
-    );
+    throw new ForbiddenException(message);
   }
 }
 
@@ -36,7 +38,6 @@ export class PaiementsController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.UPDATE)
   @Post('add')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Payer via backoffice' })
   addPaiement(@Req() req: Request, @Body() data: AddPaiementDto) {
     return this.paiementsService.addPaiement(req, data);
@@ -55,7 +56,6 @@ export class PaiementsController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.DELETE)
   @Post('refund/:id')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Remboursement d\'un paiement par Kkiapay' })
   refundPaiement(@Param('id') paiementId: string) {
     return this.paiementsService.refundPaiement(paiementId);
@@ -65,7 +65,6 @@ export class PaiementsController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.UPDATE)
   @Patch(':id/confirmer-encaissement')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary: "Confirmer un encaissement livreur en attente",
     description:
@@ -85,31 +84,46 @@ export class PaiementsController {
     return this.paiementsService.getFreePaiements(req);
   }
 
+  // Guard AJOUTÉ (revue 31/07) : la route ANONYME permettait de FABRIQUER un
+  // Paiement SUCCESS arbitraire, contournant le contrôle « montant couvert »
+  // (fraude au paiement-jeton) et polluant la traçabilité multi-comptes.
   // ⚠️ Aucune permission : tout membre du personnel fabriquait un paiement
   // SUCCESS arbitraire, rattaché à la commande de n'importe quel restaurant.
+  // ⚠️ Audit des droits (25/09) : COMMANDES CREATE l'ouvrait encore à la caisse
+  // et au centre d'appel, avec référence (un vrai transactionId KKiaPay), compte
+  // encaisseur et statut libres. Ce paiement compte dans le cumul « montant
+  // couvert » des paiements suivants. Aucun écran ne l'appelle ; l'encaissement
+  // normal passe par POST /paiements/add. Administrateur seul, comme PATCH et
+  // DELETE : c'est une correction du registre.
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.CREATE)
   @Post()
-  // Guard AJOUTÉ (revue 31/07) : la route ANONYME permettait de FABRIQUER un
-  // Paiement SUCCESS arbitraire — contournant le contrôle « montant couvert »
-  // (fraude au paiement-jeton) et polluant la traçabilité multi-comptes.
-  @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Créer un paiement' })
-  create(@Body() createPaiementDto: CreatePaiementDto) {
+  @ApiOperation({ summary: 'Créer un paiement brut (admin uniquement)' })
+  create(@Req() req: Request, @Body() createPaiementDto: CreatePaiementDto) {
+    assertAdmin(
+      req,
+      "Seul un administrateur peut créer un paiement directement. Pour encaisser une commande, ajoutez un paiement depuis la commande.",
+    );
     return this.paiementsService.create(createPaiementDto);
   }
 
-  @Get()
   // Guard AJOUTÉ (revue 31/07) : la liste ANONYME fuyait références, montants
   // et coordonnées clients de tous les paiements.
-  @UseGuards(JwtAuthGuard)
+  // ⚠️ Le seul JWT ouvrait encore la liste à tout le personnel, cuisine comprise,
+  // tous restaurants confondus : références KKiaPay et coordonnées des clients.
+  // Registre comptable : administrateur et comptable. Aucun écran ne l'appelle.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.REPORT)
+  @Get()
   @ApiOperation({ summary: 'Lister tous les paiements' })
   findAll(@Query() queryDto: QueryPaiementDto) {
     return this.paiementsService.findAll(queryDto);
   }
 
+  // ⚠️ Même exposition que la liste, paiement par paiement : même garde.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.REPORT)
   @Get(':id')
-  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Obtenir un paiement par son ID' })
   findOne(@Param('id') id: string) {
     return this.paiementsService.findOne(id);

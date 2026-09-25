@@ -25,6 +25,7 @@ import { PaiementEvent } from 'src/modules/paiements/events/paiement.event';
 import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { OrderChannels } from 'src/modules/order/enums/order-channels';
+import { RESTAURANT_COMMANDE_SELECT } from 'src/modules/restaurant/constantes/restaurant-public.select';
 
 /**
  * Tolérance d'arrondi (FCFA) entre le cumul des paiements SUCCESS et le total de
@@ -318,7 +319,8 @@ export class PaiementsService {
         }),
       },
       include: {
-        restaurant: true,
+        // Liste blanche : la commande part sur les sockets si elle se termine.
+        restaurant: { select: RESTAURANT_COMMANDE_SELECT },
         customer: { include: { notification_settings: true } },
       },
     });

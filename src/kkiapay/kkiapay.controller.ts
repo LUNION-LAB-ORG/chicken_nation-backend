@@ -1,13 +1,16 @@
 import { ApiOperation } from '@nestjs/swagger';
 import { Body, Controller, Get, Headers, HttpStatus, Logger, Param, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import type { Request, Response } from 'express';
 import { KkiapayService } from './kkiapay.service';
 import { KkiapayResponse, KkiapayWebhookDto } from './kkiapay.type';
 import { SettingsService } from 'src/modules/settings/settings.service';
-import { PrismaService } from 'src/database/services/prisma.service';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { journalRefusWebhook } from './kkiapay-audit.helper';
 import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
@@ -19,16 +22,23 @@ export class KkiapayController {
     constructor(
         private readonly kkiapayService: KkiapayService,
         private readonly settingsService: SettingsService,
-        private readonly prisma: PrismaService,
         private readonly auditService: AuditService,
         private readonly alertes: AlertesService,
         @InjectQueue('kkiapay-webhooks') private readonly webhooksQueue: Queue,
     ) { }
 
-    // Guards AJOUTÉS (audit 31/07) : ces deux routes étaient PUBLIQUES — un
+    // Guards AJOUTÉS (audit 31/07) : ces routes étaient PUBLIQUES, un
     // REMBOURSEMENT était déclenchable anonymement avec un simple transactionId.
     // Aucun client (app/backoffice/site) ne les consommait ; le remboursement
     // officiel passe par POST /paiements/refund/:id (gardé + tracé par compte).
+    //
+    // Audit des droits (25/09) : le seul JWT laissait passer TOUT le personnel,
+    // cuisine et caisse comprises. POST /kkiapay/refund est SUPPRIMÉ : il
+    // remboursait de l'argent réel sans toucher la base (Paiement resté SUCCESS,
+    // commande restée payée, points acquis), et personne ne l'appelait.
+    // Diagnostic et vérification sont réservés à qui lit les clés KKiaPay dans
+    // Paramètres (SETTINGS READ, administrateur seul aujourd'hui).
+    // ⚠️ @RequirePermission se pose sur la MÉTHODE : le garde ne lit que le handler.
     /**
      * DIAGNOSTIC (06/08) : quel compte KKiaPay sert réellement un restaurant, et
      * pourquoi. Sans cet outil, un repli silencieux sur le compte global ne se
@@ -36,7 +46,8 @@ export class KkiapayController {
      * Ne renvoie AUCUN secret : uniquement des présences et des empreintes.
      */
     @Get('diagnostic/:restaurantId')
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.SETTINGS, Action.READ)
     @ApiOperation({ summary: 'Compte KKiaPay effectivement utilisé pour un restaurant' })
     async diagnostic(@Param('restaurantId') restaurantId: string) {
         const cles = KkiapayService.settingKeys(restaurantId);
@@ -55,7 +66,7 @@ export class KkiapayController {
         return {
             restaurant_id: restaurantId,
             compte_utilise: dedie ? 'DEDIE' : 'GLOBAL',
-            // Les 4 premiers caractères suffisent à distinguer deux comptes.
+            // Les 8 premiers caractères suffisent à distinguer deux comptes.
             cle_publique_servie: compte.publicKey
                 ? `${compte.publicKey.slice(0, 8)}…`
                 : '(vide)',
@@ -72,27 +83,12 @@ export class KkiapayController {
         };
     }
 
+    // Renvoie l'identité du payeur (nom, téléphone, email) : lecture réservée.
     @Post('verify')
-    @UseGuards(JwtAuthGuard)
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.SETTINGS, Action.READ)
     async verifyTransaction(@Body() body: { transactionId: string }): Promise<KkiapayResponse> {
         return this.kkiapayService.verifyTransaction(body.transactionId);
-    }
-
-    @Post('refund')
-    @UseGuards(JwtAuthGuard)
-    async refundTransaction(@Body() body: { transactionId: string }): Promise<KkiapayResponse> {
-        // MULTI-COMPTES (revue 31/07) : cette route remboursait TOUJOURS depuis le
-        // compte global, même une transaction encaissée par un compte restaurant.
-        // On retrouve le paiement par sa référence pour rembourser depuis le
-        // compte TRACÉ ; sans trace, comportement historique (global).
-        const paiement = await this.prisma.paiement.findFirst({
-            where: { reference: body.transactionId },
-            select: { restaurant_id: true },
-        });
-        return this.kkiapayService.refundTransaction(
-            body.transactionId,
-            paiement?.restaurant_id ?? null,
-        );
     }
 
     /**
