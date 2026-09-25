@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
@@ -21,6 +22,17 @@ import { LoginDelivererDto } from '../dto/login-deliverer.dto';
 import { RegisterPhoneDto } from '../dto/register-phone.dto';
 import { ResetPasswordDto } from '../dto/reset-password.dto';
 import { VerifyDelivererOtpDto } from '../dto/verify-otp.dto';
+import {
+  DELAI_RENVOI_CODE_MS,
+  POLITIQUE_CODE,
+  POLITIQUE_CONNEXION,
+  POLITIQUE_CONNEXION_JOUR,
+  cleConnexion,
+  cleConnexionJour,
+  cleVerificationCode,
+  messageDelaiRenvoi,
+} from '../helpers/tentatives-livreur.helper';
+import { TentativesLivreurService } from './tentatives-livreur.service';
 
 /**
  * Service d'authentification pour les livreurs.
@@ -58,6 +70,7 @@ export class AuthDelivererService {
     private readonly otpService: OtpService,
     private readonly twilioService: TwilioService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly tentatives: TentativesLivreurService,
   ) {}
 
   // ============================================================
@@ -80,12 +93,7 @@ export class AuthDelivererService {
       throw new ConflictException('Un livreur avec ce numéro existe déjà');
     }
 
-    const otp = await this.otpService.generate(dto.phone);
-    const isSent = await this.twilioService.sendOtp({ phoneNumber: dto.phone, otp });
-
-    if (!isSent) {
-      throw new HttpException("Envoi de l'OTP impossible", 500);
-    }
+    await this.envoyerCode(dto.phone);
 
     return { phone: dto.phone, message: 'Code OTP envoyé' };
   }
@@ -95,7 +103,7 @@ export class AuthDelivererService {
    * qui sera utilisé à l'étape 3 pour créer le Deliverer.
    */
   async verifyRegistrationOtp(dto: VerifyDelivererOtpDto) {
-    await this.assertOtpValid(dto.phone, dto.otp);
+    await this.consommerCode(dto.phone, dto.otp);
     const verifyToken = await this.jwt.generateDelivererVerifyToken(dto.phone);
     return { verifyToken };
   }
@@ -183,6 +191,10 @@ export class AuthDelivererService {
       where: { phone: dto.phone },
     });
 
+    // Numéro inconnu, compte supprimé ou inactif : aucun code n'est comparé,
+    // donc rien à compter. Compter ces cas n'apprendrait rien à personne (le
+    // 404 dit déjà si le numéro existe) et ferait écrire deux lignes en base
+    // pour chaque numéro inventé.
     if (!deliverer || deliverer.entity_status === EntityStatus.DELETED) {
       throw new NotFoundException('Livreur non trouvé');
     }
@@ -194,10 +206,26 @@ export class AuthDelivererService {
     // (is_operational=false, status≠ACTIVE) → le moteur d'offre ne lui envoie aucune course.
     // Seuls entity_status DELETED/INACTIVE (ci-dessus) bloquent réellement la connexion.
 
+    // Verrou PAR TÉLÉPHONE (le code n'a que 4 chiffres). On lit d'abord les
+    // deux verrous pour annoncer le plus long, puis la tentative est comptée
+    // AVANT bcrypt (environ 250 ms) : des requêtes parallèles reçoivent
+    // chacune leur rang, seules les premières sont examinées.
+    const maintenant = new Date();
+    const cle = cleConnexion(dto.phone);
+    const cleJour = cleConnexionJour(dto.phone);
+    await this.tentatives.verifierVerrous([cle, cleJour], maintenant);
+    const rang = await this.tentatives.reserver(cle, POLITIQUE_CONNEXION, maintenant);
+    const rangJour = await this.tentatives.reserver(cleJour, POLITIQUE_CONNEXION_JOUR, maintenant);
+
     const isPasswordValid = await bcrypt.compare(dto.password, deliverer.password);
     if (!isPasswordValid) {
+      await this.tentatives.constaterEchec(cle, rang, POLITIQUE_CONNEXION, maintenant);
+      await this.tentatives.constaterEchec(cleJour, rangJour, POLITIQUE_CONNEXION_JOUR, maintenant);
       throw new BadRequestException('Mot de passe invalide');
     }
+
+    // Bon code : on repart de zéro sur les deux compteurs.
+    await this.tentatives.effacer(cle, cleJour);
 
     await this.prisma.deliverer.update({
       where: { id: deliverer.id },
@@ -236,17 +264,13 @@ export class AuthDelivererService {
       throw new NotFoundException('Aucun compte livreur associé à ce numéro');
     }
 
-    const otp = await this.otpService.generate(dto.phone);
-    const isSent = await this.twilioService.sendOtp({ phoneNumber: dto.phone, otp });
-    if (!isSent) {
-      throw new HttpException("Envoi de l'OTP impossible", 500);
-    }
+    await this.envoyerCode(dto.phone);
 
     return { phone: dto.phone, message: 'Code OTP envoyé' };
   }
 
   async verifyResetOtp(dto: VerifyDelivererOtpDto) {
-    await this.assertOtpValid(dto.phone, dto.otp);
+    await this.consommerCode(dto.phone, dto.otp);
     const resetToken = await this.jwt.generateDelivererResetToken(dto.phone);
     return { resetToken };
   }
@@ -277,6 +301,11 @@ export class AuthDelivererService {
         last_login_at: new Date(),
       },
     });
+
+    // Le code SMS prouve que le livreur détient le numéro : on lève les
+    // verrous de connexion, y compris celui de 24 heures qu'un tiers aurait
+    // pu provoquer en essayant des codes.
+    await this.tentatives.effacer(cleConnexion(payload.phone), cleConnexionJour(payload.phone));
 
     return this.issueSession(updated, { message: 'Mot de passe réinitialisé avec succès' });
   }
@@ -435,18 +464,29 @@ export class AuthDelivererService {
   // ============================================================
 
   /**
-   * Vérifie qu'un OTP existe en DB et qu'il est valide via HOTP.
+   * Vérifie un code reçu par SMS puis le consomme.
    * Utilisé par verify-otp ET verify-reset-otp.
+   *
+   * Les deux routes partagent UN compteur, indexé sur le téléphone normalisé
+   * sans préfixe : les codes sont les mêmes (et la table des codes est aussi
+   * celle des clients), des compteurs séparés offriraient 5 essais par route
+   * sur le même jeu de codes. Plafond : 5 échecs en 15 minutes, puis 429
+   * pendant 15 minutes. Un mauvais code garde sa réponse 401 habituelle.
    */
-  private async assertOtpValid(phone: string, otp: string) {
+  private async consommerCode(phone: string, otp: string): Promise<void> {
+    const maintenant = new Date();
+    const cle = cleVerificationCode(phone);
+    const rang = await this.tentatives.reserver(cle, POLITIQUE_CODE, maintenant);
+
     const otpToken = await this.prisma.otpToken.findFirst({
       where: {
         code: otp,
         phone,
-        expire: { gte: new Date() },
+        expire: { gte: maintenant },
       },
     });
     if (!otpToken) {
+      await this.tentatives.constaterEchec(cle, rang, POLITIQUE_CODE, maintenant);
       throw new UnauthorizedException('Code OTP invalide ou expiré');
     }
 
@@ -454,6 +494,40 @@ export class AuthDelivererService {
     // partagé (tous les utilisateurs + les 2 backends sur la même base) et a
     // bougé entre la génération et la saisie → faux « OTP invalide ». Le lookup
     // ci-dessus (phone + code + expire) est la validation complète et correcte.
+
+    // Usage unique, comme pour les clients : le code ne peut plus être rejoué
+    // pour obtenir un nouveau jeton, et les autres codes encore valides de ce
+    // numéro disparaissent avec lui.
+    await this.prisma.otpToken.deleteMany({ where: { phone: otpToken.phone } });
+    await this.tentatives.effacer(cle);
+  }
+
+  /**
+   * Génère et envoie un code, en respectant le délai entre deux envois au
+   * même numéro (le code précédent reste valide 5 minutes).
+   *
+   * `phone` est déjà normalisé par RegisterPhoneDto, sous la forme où le code
+   * est enregistré : le délai porte donc sur la bonne ligne.
+   */
+  private async envoyerCode(phone: string): Promise<void> {
+    const attente = await this.otpService.getResendCooldownSeconds(phone, DELAI_RENVOI_CODE_MS);
+    if (attente > 0) {
+      throw new HttpException(messageDelaiRenvoi(attente), HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    const otp = await this.otpService.generate(phone);
+    const isSent = await this.twilioService.sendOtp({ phoneNumber: phone, otp });
+    if (!isSent) {
+      // Rien n'est parti : on retire le code créé, sinon la nouvelle tentative
+      // (l'appli relance d'elle-même une réponse 500) serait refusée par le
+      // délai avec « Un code vient d'être envoyé ».
+      try {
+        await this.prisma.otpToken.deleteMany({ where: { phone, code: otp } });
+      } catch (erreur) {
+        this.logger.error(`Retrait du code non envoyé impossible : ${String(erreur)}`);
+      }
+      throw new HttpException("Envoi de l'OTP impossible", 500);
+    }
   }
 
   /**

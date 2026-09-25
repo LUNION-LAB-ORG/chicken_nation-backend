@@ -7,6 +7,7 @@ import { DelivererOperationalGuard } from './guards/deliverer-operational.guard'
 import { JwtDelivererAuthGuard } from './guards/jwt-deliverer-auth.guard';
 import { JwtDelivererRefreshAuthGuard } from './guards/jwt-deliverer-refresh-auth.guard';
 import { AuthDelivererService } from './services/auth-deliverer.service';
+import { TentativesLivreurService } from './services/tentatives-livreur.service';
 import { JwtDelivererRefreshStrategy } from './strategies/jwt-deliverer-refresh.strategy';
 import { JwtDelivererStrategy } from './strategies/jwt-deliverer.strategy';
 
@@ -15,6 +16,7 @@ import { JwtDelivererStrategy } from './strategies/jwt-deliverer.strategy';
   controllers: [AuthDelivererController],
   providers: [
     AuthDelivererService,
+    TentativesLivreurService,
     JwtDelivererStrategy,
     JwtDelivererRefreshStrategy,
     JwtDelivererAuthGuard,

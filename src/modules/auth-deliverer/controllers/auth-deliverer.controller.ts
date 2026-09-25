@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Post, UseGuards } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Deliverer } from '@prisma/client';
 
 import { CurrentDeliverer } from '../decorators/current-deliverer.decorator';
@@ -11,7 +12,20 @@ import { ResetPasswordDto } from '../dto/reset-password.dto';
 import { VerifyDelivererOtpDto } from '../dto/verify-otp.dto';
 import { JwtDelivererAuthGuard } from '../guards/jwt-deliverer-auth.guard';
 import { JwtDelivererRefreshAuthGuard } from '../guards/jwt-deliverer-refresh-auth.guard';
+import { LivreurThrottlerGuard } from '../guards/livreur-throttler.guard';
 import { AuthDelivererService } from '../services/auth-deliverer.service';
+
+/**
+ * Limites par adresse IP des routes publiques, en complément du verrou par
+ * téléphone du service. Posées MÉTHODE PAR MÉTHODE : les routes de session
+ * (refresh-token, me, logout, gestion du compte) restent libres.
+ * Les compteurs sont séparés par route.
+ */
+const UNE_MINUTE_MS = 60_000;
+/** Envoi d'un SMS : chaque appel coûte un message. */
+const LIMITE_ENVOI_CODE = { default: { limit: 5, ttl: UNE_MINUTE_MS } };
+/** Saisie d'un code (connexion ou code reçu par SMS). */
+const LIMITE_SAISIE_CODE = { default: { limit: 10, ttl: UNE_MINUTE_MS } };
 
 @ApiTags('Auth — Deliverer')
 @Controller('auth/deliverer')
@@ -24,6 +38,8 @@ export class AuthDelivererController {
 
   @ApiOperation({ summary: 'Étape 1 inscription : envoi OTP au numéro' })
   @ApiBody({ type: RegisterPhoneDto })
+  @UseGuards(LivreurThrottlerGuard)
+  @Throttle(LIMITE_ENVOI_CODE)
   @Post('register')
   async register(@Body() dto: RegisterPhoneDto) {
     return this.authService.registerPhone(dto);
@@ -31,6 +47,8 @@ export class AuthDelivererController {
 
   @ApiOperation({ summary: 'Étape 2 inscription : vérification OTP → verifyToken' })
   @ApiBody({ type: VerifyDelivererOtpDto })
+  @UseGuards(LivreurThrottlerGuard)
+  @Throttle(LIMITE_SAISIE_CODE)
   @Post('verify-otp')
   async verifyOtp(@Body() dto: VerifyDelivererOtpDto) {
     return this.authService.verifyRegistrationOtp(dto);
@@ -38,6 +56,8 @@ export class AuthDelivererController {
 
   @ApiOperation({ summary: 'Étape 3 inscription : création du compte (PENDING_VALIDATION)' })
   @ApiBody({ type: CompleteRegistrationDto })
+  @UseGuards(LivreurThrottlerGuard)
+  @Throttle(LIMITE_SAISIE_CODE)
   @Post('complete-registration')
   async completeRegistration(@Body() dto: CompleteRegistrationDto) {
     return this.authService.completeRegistration(dto);
@@ -49,6 +69,8 @@ export class AuthDelivererController {
 
   @ApiOperation({ summary: 'Connexion livreur (phone + code 4 chiffres)' })
   @ApiBody({ type: LoginDelivererDto })
+  @UseGuards(LivreurThrottlerGuard)
+  @Throttle(LIMITE_SAISIE_CODE)
   @Post('login')
   async login(@Body() dto: LoginDelivererDto) {
     return this.authService.login(dto);
@@ -60,6 +82,8 @@ export class AuthDelivererController {
 
   @ApiOperation({ summary: 'Reset étape 1 : envoi OTP pour réinitialisation' })
   @ApiBody({ type: RegisterPhoneDto })
+  @UseGuards(LivreurThrottlerGuard)
+  @Throttle(LIMITE_ENVOI_CODE)
   @Post('forgot-password')
   async forgotPassword(@Body() dto: RegisterPhoneDto) {
     return this.authService.forgotPassword(dto);
@@ -67,6 +91,8 @@ export class AuthDelivererController {
 
   @ApiOperation({ summary: 'Reset étape 2 : vérification OTP → resetToken' })
   @ApiBody({ type: VerifyDelivererOtpDto })
+  @UseGuards(LivreurThrottlerGuard)
+  @Throttle(LIMITE_SAISIE_CODE)
   @Post('verify-reset-otp')
   async verifyResetOtp(@Body() dto: VerifyDelivererOtpDto) {
     return this.authService.verifyResetOtp(dto);
@@ -74,6 +100,8 @@ export class AuthDelivererController {
 
   @ApiOperation({ summary: 'Reset étape 3 : définir le nouveau mot de passe' })
   @ApiBody({ type: ResetPasswordDto })
+  @UseGuards(LivreurThrottlerGuard)
+  @Throttle(LIMITE_SAISIE_CODE)
   @Post('reset-password')
   async resetPassword(@Body() dto: ResetPasswordDto) {
     return this.authService.resetPassword(dto);
