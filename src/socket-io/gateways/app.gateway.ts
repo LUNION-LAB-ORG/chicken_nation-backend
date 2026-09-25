@@ -16,6 +16,18 @@ import { ConnectedUser } from '../interfaces/app.gateway.interface';
 import { Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { sansSecretsRestaurant } from 'src/common/utils/restaurant-secrets.util';
+import {
+  SALLE_BACKOFFICE,
+  SALLE_CLIENTS,
+  SALLE_PERSONNEL,
+  salleLivreur,
+  salleLivreursRestaurant,
+  sallePersonnelle,
+  sallesAJoindre,
+  sallesDiffusionRestaurant,
+  sallesLivreursARetirer,
+  salleUtilisateur,
+} from '../utils/salles.util';
 
 // Interface pour le cache
 interface CachedUser {
@@ -261,36 +273,65 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  /**
+   * Le détail des salles, et pourquoi le livreur ne rejoint plus
+   * `restaurant_{id}`, est dans `salles.util.ts`.
+   */
   private async joinRooms(client: Socket, userInfo: ConnectedUser) {
-    // Rooms par type d'utilisateur
-    await client.join(`${userInfo.type}s`);
+    await client.join(sallesAJoindre(userInfo));
+  }
 
-    // Rooms pour tous les restaurants
-    await client.join('restaurants');
+  // ================================
+  // RÉVOCATION DES SALLES
+  // ================================
+  // Les salles sont fixées à la connexion. Sans ces deux méthodes, un livreur
+  // réaffecté ou supprimé, un compte du personnel désactivé ou supprimé,
+  // gardaient leurs salles jusqu'à la prochaine reconnexion de leur appareil.
+  // Les deux passent par l'adaptateur Redis : elles atteignent le socket quelle
+  // que soit l'instance où il est connecté. Elles sont appelées par
+  // `RevocationSallesListener`, sur les événements internes des modules
+  // livreurs et utilisateurs.
 
-    if (userInfo.type === 'customer') {
-      // Room spécifique au customer
-      await client.join(`customer_${userInfo.id}`);
-    } else if (userInfo.type === 'user') {
-      // Room spécifique à l'utilisateur
-      await client.join(`user_${userInfo.id}`);
-
-      if (userInfo.userType === 'BACKOFFICE') {
-        // Backoffice peut voir toutes les données
-        await client.join('backoffice_all');
-      } else if (userInfo.userType === 'RESTAURANT' && userInfo.restaurantId) {
-        // Restaurant ne voit que ses données
-        await client.join(`restaurant_${userInfo.restaurantId}`);
-      }
-    } else if (userInfo.type === 'deliverer') {
-      // Room spécifique au livreur (pour events personnels : operational, courses)
-      await client.join(`deliverer_${userInfo.id}`);
-
-      // Si affecté à un restaurant, écoute aussi les events de son restaurant
-      if (userInfo.restaurantId) {
-        await client.join(`restaurant_${userInfo.restaurantId}`);
+  /**
+   * Place les sockets d'un livreur dans la salle des livreurs de son restaurant
+   * actuel, et les retire de toute autre. `restaurantId` à `null` : aucune.
+   *
+   * Le canal privé `deliverer_{id}` n'est pas touché : le livreur continue de
+   * recevoir son changement de statut, même quand son compte vient d'être
+   * suspendu ou supprimé.
+   */
+  async resynchroniserSallesLivreur(delivererId: string, restaurantId: string | null): Promise<void> {
+    // La prochaine connexion relira la fiche au lieu du cache
+    this.authCache.delete(`deliverer_${delivererId}`);
+    for (const connexion of this.connectedUsers.values()) {
+      if (connexion.type === 'deliverer' && connexion.id === delivererId) {
+        connexion.restaurantId = restaurantId ?? undefined;
       }
     }
+
+    if (!this.server) return;
+    const salleCible = restaurantId ? salleLivreursRestaurant(restaurantId) : null;
+    const sockets = await this.server.in(salleLivreur(delivererId)).fetchSockets();
+    for (const socket of sockets) {
+      for (const salle of sallesLivreursARetirer(socket.rooms, salleCible)) {
+        await socket.leave(salle);
+      }
+      if (salleCible && !socket.rooms.has(salleCible)) {
+        await socket.join(salleCible);
+      }
+    }
+  }
+
+  /**
+   * Coupe les sockets d'un membre du personnel (compte désactivé ou supprimé).
+   * La reconnexion est refusée ensuite : `identifyUser` exige un compte actif.
+   * Une coupure décidée par le serveur n'est pas relancée d'elle-même par le
+   * client socket.io.
+   */
+  deconnecterUtilisateur(userId: string): void {
+    this.authCache.delete(`user_${userId}`);
+    if (!this.server) return;
+    this.server.in(salleUtilisateur(userId)).disconnectSockets(true);
   }
 
   // ================================
@@ -335,9 +376,10 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // MÉTHODES D'ÉMISSION GÉNÉRIQUES
   // ================================
   // Toutes passent par `sansSecretsRestaurant` : `backoffice_all` réunit tout
-  // compte BACKOFFICE quel que soit son rôle, `restaurant_{id}` ses livreurs,
-  // et aucun d'eux ne doit recevoir la clé Turbo ni le jeton HubRise d'un
-  // restaurant, même si une requête en amont charge la ligne complète.
+  // compte BACKOFFICE quel que soit son rôle, et aucun membre d'une salle ne
+  // doit recevoir la clé Turbo ni le jeton HubRise d'un restaurant, même si une
+  // requête en amont charge la ligne complète. Qui entend quoi : voir
+  // `salles.util.ts`.
 
   // Émettre à un utilisateur spécifique
   emitToUser<T>(
@@ -346,37 +388,51 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     event: string,
     data: T,
   ) {
-    const prefixMap = { customer: 'customer', user: 'user', deliverer: 'deliverer' };
-    const room = `${prefixMap[userType]}_${userId}`;
-    this.server.to(room).emit(event, sansSecretsRestaurant(data));
+    this.server.to(sallePersonnelle(userType, userId)).emit(event, sansSecretsRestaurant(data));
   }
 
   // Émettre à un livreur spécifique (alias sémantique)
   emitToDeliverer<T>(delivererId: string, event: string, data: T) {
-    this.server.to(`deliverer_${delivererId}`).emit(event, sansSecretsRestaurant(data));
-  }
-
-  // Émettre à tous les livreurs
-  emitToAllDeliverers<T>(event: string, data: T) {
-    this.server.to('deliverers').emit(event, sansSecretsRestaurant(data));
+    this.server.to(salleLivreur(delivererId)).emit(event, sansSecretsRestaurant(data));
   }
 
   // Émettre à tous les backoffice
   emitToBackoffice<T>(event: string, data: T) {
-    this.server.to('backoffice_all').emit(event, sansSecretsRestaurant(data));
+    this.server.to(SALLE_BACKOFFICE).emit(event, sansSecretsRestaurant(data));
   }
 
-  // Émettre à un restaurant spécifique
+  /**
+   * Émettre au personnel d'un restaurant (caisse, cuisine, gérant).
+   *
+   * Les livreurs du restaurant ne reçoivent que les événements de
+   * `EVENEMENTS_RESTAURANT_POUR_LIVREURS` (aujourd'hui la file d'attente) :
+   * commandes, courses, tickets et messages des clients restent au personnel.
+   * Une seule émission vers les deux salles : aucun socket ne la reçoit deux fois.
+   */
   emitToRestaurant<T>(restaurantId: string, event: string, data: T) {
-    this.server.to(`restaurant_${restaurantId}`).emit(event, sansSecretsRestaurant(data));
+    this.server
+      .to(sallesDiffusionRestaurant(restaurantId, event))
+      .emit(event, sansSecretsRestaurant(data));
   }
 
-  // Émettre à tous les utilisateurs d'un type
-  emitToUserType<T>(userType: 'customers' | 'users' | 'deliverers', event: string, data: T) {
-    this.server.to(userType).emit(event, sansSecretsRestaurant(data));
+  /**
+   * Émettre à toutes les apps clientes (`customers`) ou à tout le personnel
+   * (`users`). Jamais de donnée propre à une personne : chaque client connecté
+   * la recevrait.
+   */
+  emitToUserType<T>(userType: 'customers' | 'users', event: string, data: T) {
+    const salle = userType === 'customers' ? SALLE_CLIENTS : SALLE_PERSONNEL;
+    this.server.to(salle).emit(event, sansSecretsRestaurant(data));
   }
 
-  // Broadcast à tous les connectés
+  /**
+   * Émettre à TOUS les sockets connectés, clients et livreurs compris.
+   *
+   * @deprecated Sans appel effectif : son seul appelant,
+   * `NotificationsWebSocketService.broadcast`, n'est lui-même appelé nulle part.
+   * Tout ce qui partirait par ici atteindrait chaque client connecté : cibler
+   * une salle.
+   */
   broadcast<T>(event: string, data: T) {
     this.server.emit(event, sansSecretsRestaurant(data));
   }

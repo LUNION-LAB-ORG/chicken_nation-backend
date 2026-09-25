@@ -1,9 +1,24 @@
-import { Controller, Post, Body, Headers, HttpCode, UnauthorizedException, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Headers,
+  HttpCode,
+  NotFoundException,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import type { User } from '@prisma/client';
+import { isUUID } from 'class-validator';
+import type { Request } from 'express';
+import { PrismaService } from 'src/database/services/prisma.service';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
+import { assertCanAccessRestaurant } from 'src/modules/order/helpers/restaurant-scope.helper';
 import { TurboService } from '../services/turbo.service';
 import { ApiBody, ApiHeader, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { WebhookEventDto, WebhookResponseDto } from '../dto/turbo-webhook.dto';
@@ -14,14 +29,23 @@ import { WebhookEvent } from '../enums/webhook-event.enum';
 @Controller('turbo')
 export class TurboController {
   constructor(private readonly turboService: TurboService,
-    private readonly turboWebhookService: TurboWebhookService
+    private readonly turboWebhookService: TurboWebhookService,
+    private readonly prisma: PrismaService,
   ) { }
 
   /**
-   * ⚠️ Route sans aucune garde, et sans appelant identifié dans les trois
-   * façades. La clé passée dans le corps n'est pas vérifiée côté Chicken
-   * Nation, elle est seulement transmise à Turbo : le seul garde-fou était
-   * l'état de la commande. Réservée au personnel.
+   * Crée une course Turbo pour une commande prête (READY, livraison TURBO).
+   *
+   * ⚠️ Sans appelant identifié dans les applications : les courses partent
+   * par le flux des courses (`creerCourseGroupe`). Réservée au personnel, et
+   * seulement pour une commande de son restaurant ; un compte BACKOFFICE voit
+   * tous les restaurants.
+   *
+   * La clé Turbo est celle du restaurant de la commande, lue en base. La clé
+   * `apikey` du corps de la requête, autrefois transmise telle quelle à Turbo,
+   * est ignorée : elle permettait d'envoyer le nom, le téléphone, l'e-mail et
+   * l'adresse du client d'une commande de n'importe quel restaurant vers le
+   * compte Turbo de son choix.
    *
    * ⚠️ Le webhook du même contrôleur reste volontairement hors garde : il est
    * appelé par Turbo, et son contrôle passe par la clé d'API.
@@ -29,19 +53,35 @@ export class TurboController {
   @Post('creer-course')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.CREATE)
-  async creerCourse(@Body() body: { order_id: string, apikey: string }) {
-    return this.turboService.creerCourse(body.order_id, body.apikey);
+  async creerCourse(@Req() req: Request, @Body() body: { order_id?: unknown }) {
+    const orderId = body?.order_id;
+    if (typeof orderId !== 'string' || !isUUID(orderId)) {
+      throw new BadRequestException('Identifiant de commande invalide.');
+    }
+
+    const commande = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { restaurant_id: true, restaurant: { select: { apikey: true } } },
+    });
+    if (!commande) {
+      throw new NotFoundException('Commande introuvable.');
+    }
+    assertCanAccessRestaurant(req.user as User, commande.restaurant_id);
+
+    const cle = commande.restaurant?.apikey;
+    if (!cle) {
+      throw new BadRequestException("Ce restaurant n'a pas de clé Turbo.");
+    }
+    return this.turboService.creerCourse(orderId, cle);
   }
 
-  @Post('obtenir-frais-livraison')
-  async obtenirFraisLivraison(@Body() body: { apikey: string, latitude: number, longitude: number }) {
-    return this.turboService.obtenirFraisLivraison(body);
-  }
-
-  @Post('obtenir-frais-livraison-par-restaurant')
-  async obtenirFraisLivraisonParRestaurant(@Body() body: { apikey: string}, @Query() query: { page?: number, size?: number }) {
-    return this.turboService.obtenirFraisLivraisonParRestaurant(body.apikey, query?.page, query?.size);
-  }
+  // Les relais POST obtenir-frais-livraison et obtenir-frais-livraison-par-restaurant
+  // ont été retirés. Sans garde ni limite de débit, ils transmettaient à Turbo
+  // la clé fournie dans le corps de la requête : relais anonyme attribué à
+  // l'adresse du serveur, et moyen de tester la validité d'une clé. Aucune
+  // application ne les appelait. Les frais s'estiment par GET
+  // /orders/frais-livraison, qui lit la clé du restaurant en base
+  // (DeliveryFeeHelper) et ne la reçoit jamais de l'appelant.
 
   /**
    * Validation du CODE CLIENT (4 chiffres) par un livreur Turbo.
@@ -146,9 +186,11 @@ export class TurboController {
         return await this.turboWebhookService.handleEmergency(data);
 
       default:
-        console.warn(`⚠️ Event non géré: ${event}`);
+        // `alias` et non `event` : ce nom ne désigne aucune variable ici, et
+        // Node levait une ReferenceError (500) sur tout événement inconnu.
+        console.warn(`Événement Turbo non géré : ${alias}`);
         return {
-          event,
+          event: alias,
           received: true,
           process: false,
         };
