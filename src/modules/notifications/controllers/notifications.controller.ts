@@ -1,15 +1,15 @@
 import {
   Controller,
   Get,
-  Post,
-  Body,
   Patch,
   Param,
   Delete,
   Query,
   ParseUUIDPipe,
+  ParseEnumPipe,
+  ParseIntPipe,
+  ParseBoolPipe,
   HttpStatus,
-  UseInterceptors,
   UseGuards,
   Req,
   ForbiddenException,
@@ -23,140 +23,103 @@ import {
   ApiParam,
   ApiQuery,
   ApiBearerAuth,
-  ApiCreatedResponse,
   ApiOkResponse,
 } from '@nestjs/swagger';
 import { NotificationsService } from '../services/notifications.service';
 import { NotificationType, NotificationTarget } from '@prisma/client';
-import { CreateNotificationDto } from '../dto/create-notification.dto';
 import { NotificationResponseDto } from '../dto/response-notification.dto';
-import { UpdateNotificationDto } from '../dto/update-notification.dto';
 import { NotificationStatsDto } from '../dto/notifications-stats.dto';
-import { QueryNotificationDto } from '../dto/query-notification.dto';
-import { CacheInterceptor } from '@nestjs/cache-manager';
+import {
+  NOTIFICATIONS_PAGE_MAX,
+  NotificationOwner,
+  notificationOwnerOf,
+  ownsNotifications,
+} from '../services/notification-owner.util';
 
+/**
+ * Cloche de notifications du personnel (backoffice) et des clients (appli).
+ *
+ * Chaque route ne touche QUE les notifications du porteur du jeton : le propriétaire est le
+ * couple (id du principal, USER pour le personnel ou CUSTOMER pour le client).
+ * - Routes user/:userId/:target et stats : le couple du chemin doit être celui du jeton (403).
+ * - Routes par :id : la notification d'un autre répond 404, comme une notification inexistante.
+ *
+ * Retirées faute d'appelant, car elles ouvraient la cloche des autres :
+ * POST / (création libre pour n'importe qui), GET / (liste de tout le monde) et
+ * PATCH /:id (réécriture libre, y compris du destinataire). La création reste interne
+ * (NotificationsService.create, sendNotificationToMultiple).
+ *
+ * PAS de CacheInterceptor : sa clé est l'URL seule, partagée entre tous les jetons, et il
+ * répondait avant le contrôle du propriétaire. Les fronts ont déjà leur propre cache.
+ */
 @ApiTags('🔔 Notifications')
 @ApiBearerAuth()
 @Controller('notifications')
 @UseGuards(AuthGuard(['jwt', 'jwt-customer']))
-@UseInterceptors(CacheInterceptor)
 export class NotificationsController {
   constructor(private readonly notificationService: NotificationsService) { }
 
   /**
-   * Empêche un utilisateur de lire/vider les notifications d'un AUTRE : le path porte un
-   * userId, on le compare à l'identité du token (User OU Customer). 403 si différent.
+   * Propriétaire des notifications accessibles au porteur du jeton (User OU Customer).
    */
-  private assertSelf(req: Request, userId: string) {
-    const principalId = (req.user as { id?: string } | undefined)?.id;
-    if (!principalId || principalId !== userId) {
+  private ownerOf(req: Request): NotificationOwner {
+    const owner = notificationOwnerOf(req.user);
+    if (!owner) {
       throw new ForbiddenException('Accès non autorisé à ces notifications');
     }
+    return owner;
   }
 
-  @Post()
-  @ApiOperation({
-    summary: 'Créer une nouvelle notification',
-    description: 'Permet de créer une nouvelle notification pour un utilisateur ou client spécifique.',
-  })
-  @ApiCreatedResponse({
-    description: 'Notification créée avec succès',
-    type: NotificationResponseDto,
-  })
-  @ApiResponse({
-    status: HttpStatus.BAD_REQUEST,
-    description: 'Données invalides fournies',
-  })
-  async create(@Body() createNotificationDto: CreateNotificationDto) {
-    return this.notificationService.create(createNotificationDto);
-  }
-
-  @Get()
-  @ApiOperation({
-    summary: 'Obtenir toutes les notifications',
-    description: 'Récupère toutes les notifications avec pagination et filtres optionnels.',
-  })
-  @ApiOkResponse({
-    description: 'Liste des notifications récupérée avec succès',
-    schema: {
-      type: 'object',
-      properties: {
-        data: {
-          type: 'array',
-          items: { $ref: '#/components/schemas/NotificationResponseDto' },
-        },
-        pagination: {
-          type: 'object',
-          properties: {
-            current_page: { type: 'number', example: 1 },
-            per_page: { type: 'number', example: 10 },
-            total: { type: 'number', example: 50 },
-            total_pages: { type: 'number', example: 5 },
-          },
-        },
-      },
-    },
-  })
-  @ApiQuery({
-    name: 'page',
-    required: false,
-    description: 'Numéro de la page',
-    example: 1,
-  })
-  @ApiQuery({
-    name: 'limit',
-    required: false,
-    description: 'Nombre d\'éléments par page',
-    example: 10,
-  })
-  @ApiQuery({
-    name: 'userId',
-    required: false,
-    description: 'Filtrer par identifiant utilisateur',
-  })
-  @ApiQuery({
-    name: 'target',
-    required: false,
-    enum: NotificationTarget,
-    description: 'Filtrer par cible de notification',
-  })
-  @ApiQuery({
-    name: 'type',
-    required: false,
-    enum: NotificationType,
-    description: 'Filtrer par type de notification',
-  })
-  @ApiQuery({
-    name: 'isRead',
-    required: false,
-    description: 'Filtrer par statut de lecture',
-    type: Boolean,
-  })
-  async findAll(@Query() query: QueryNotificationDto) {
-    return this.notificationService.findAll(query);
+  /**
+   * Empêche un utilisateur de lire/vider les notifications d'un AUTRE : le chemin porte un
+   * couple (userId, target), on le compare à celui du jeton. 403 si l'un des deux diffère.
+   */
+  private assertSelf(req: Request, userId: string, target: NotificationTarget): NotificationOwner {
+    const owner = notificationOwnerOf(req.user);
+    if (!ownsNotifications(owner, userId, target)) {
+      throw new ForbiddenException('Accès non autorisé à ces notifications');
+    }
+    return owner;
   }
 
   @Get('user/:userId/:target')
   @ApiOperation({
     summary: 'Obtenir les notifications d\'un utilisateur',
-    description: 'Récupère toutes les notifications d\'un utilisateur spécifique avec pagination.',
+    description: `Récupère les notifications du porteur du jeton avec pagination (${NOTIFICATIONS_PAGE_MAX} au plus par page).`,
   })
   @ApiParam({
     name: 'userId',
-    description: 'Identifiant de l\'utilisateur',
+    description: 'Identifiant de l\'utilisateur (celui du jeton)',
     example: '550e8400-e29b-41d4-a716-446655440000',
   })
   @ApiParam({
     name: 'target',
     enum: NotificationTarget,
-    description: 'Cible de la notification (USER ou CUSTOMER)',
+    description: 'Cible de la notification (USER pour le personnel, CUSTOMER pour un client)',
   })
+  @ApiQuery({ name: 'page', required: false, description: 'Numéro de la page', example: 1 })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: `Nombre d'éléments par page (${NOTIFICATIONS_PAGE_MAX} au plus)`,
+    example: 10,
+  })
+  @ApiQuery({ name: 'type', required: false, enum: NotificationType, description: 'Filtrer par type de notification' })
+  @ApiQuery({ name: 'isRead', required: false, type: Boolean, description: 'Filtrer par statut de lecture' })
   @ApiOkResponse({
     description: 'Notifications de l\'utilisateur récupérées avec succès',
   })
-  async findByUser(@Req() req: Request, @Query() query: Omit<QueryNotificationDto, 'userId' | 'target'>, @Param('userId', ParseUUIDPipe) userId: string, @Param('target') target: NotificationTarget) {
-    this.assertSelf(req, userId);
-    return this.notificationService.findByUser(query, userId, target);
+  async findByUser(
+    @Req() req: Request,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Param('target', new ParseEnumPipe(NotificationTarget)) target: NotificationTarget,
+    @Query('page', new ParseIntPipe({ optional: true })) page?: number,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
+    @Query('type', new ParseEnumPipe(NotificationType, { optional: true })) type?: NotificationType,
+    @Query('isRead', new ParseBoolPipe({ optional: true })) isRead?: boolean,
+  ) {
+    const owner = this.assertSelf(req, userId, target);
+    return this.notificationService.findByUser(owner, { page, limit, type, isRead });
   }
 
   @Get('stats/:userId/:target')
@@ -166,7 +129,7 @@ export class NotificationsController {
   })
   @ApiParam({
     name: 'userId',
-    description: 'Identifiant de l\'utilisateur',
+    description: 'Identifiant de l\'utilisateur (celui du jeton)',
   })
   @ApiParam({
     name: 'target',
@@ -180,16 +143,16 @@ export class NotificationsController {
   async getStats(
     @Req() req: Request,
     @Param('userId', ParseUUIDPipe) userId: string,
-    @Param('target') target: NotificationTarget,
+    @Param('target', new ParseEnumPipe(NotificationTarget)) target: NotificationTarget,
   ) {
-    this.assertSelf(req, userId);
-    return this.notificationService.getStatsByUser(userId, target);
+    const owner = this.assertSelf(req, userId, target);
+    return this.notificationService.getStatsByUser(owner);
   }
 
   @Get(':id')
   @ApiOperation({
     summary: 'Obtenir une notification par ID',
-    description: 'Récupère les détails d\'une notification spécifique.',
+    description: 'Récupère les détails d\'une notification du porteur du jeton.',
   })
   @ApiParam({
     name: 'id',
@@ -203,38 +166,14 @@ export class NotificationsController {
     status: HttpStatus.NOT_FOUND,
     description: 'Notification non trouvée',
   })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.notificationService.findOne(id);
-  }
-
-  @Patch(':id')
-  @ApiOperation({
-    summary: 'Mettre à jour une notification',
-    description: 'Met à jour les informations d\'une notification existante.',
-  })
-  @ApiParam({
-    name: 'id',
-    description: 'Identifiant de la notification',
-  })
-  @ApiOkResponse({
-    description: 'Notification mise à jour avec succès',
-    type: NotificationResponseDto,
-  })
-  @ApiResponse({
-    status: HttpStatus.NOT_FOUND,
-    description: 'Notification non trouvée',
-  })
-  async update(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() updateNotificationDto: UpdateNotificationDto,
-  ) {
-    return this.notificationService.update(id, updateNotificationDto);
+  async findOne(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
+    return this.notificationService.findOne(id, this.ownerOf(req));
   }
 
   @Patch(':id/read')
   @ApiOperation({
     summary: 'Marquer une notification comme lue',
-    description: 'Change le statut d\'une notification à "lue".',
+    description: 'Change le statut d\'une notification du porteur du jeton à "lue".',
   })
   @ApiParam({
     name: 'id',
@@ -244,14 +183,18 @@ export class NotificationsController {
     description: 'Notification marquée comme lue',
     type: NotificationResponseDto,
   })
-  async markAsRead(@Param('id', ParseUUIDPipe) id: string) {
-    return this.notificationService.markAsRead(id);
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Notification non trouvée',
+  })
+  async markAsRead(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
+    return this.notificationService.markAsRead(id, this.ownerOf(req));
   }
 
   @Patch(':id/unread')
   @ApiOperation({
     summary: 'Marquer une notification comme non lue',
-    description: 'Change le statut d\'une notification à "non lue".',
+    description: 'Change le statut d\'une notification du porteur du jeton à "non lue".',
   })
   @ApiParam({
     name: 'id',
@@ -261,8 +204,12 @@ export class NotificationsController {
     description: 'Notification marquée comme non lue',
     type: NotificationResponseDto,
   })
-  async markAsUnread(@Param('id', ParseUUIDPipe) id: string) {
-    return this.notificationService.markAsUnread(id);
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Notification non trouvée',
+  })
+  async markAsUnread(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
+    return this.notificationService.markAsUnread(id, this.ownerOf(req));
   }
 
   @Patch('user/:userId/:target/read-all')
@@ -272,7 +219,7 @@ export class NotificationsController {
   })
   @ApiParam({
     name: 'userId',
-    description: 'Identifiant de l\'utilisateur',
+    description: 'Identifiant de l\'utilisateur (celui du jeton)',
   })
   @ApiParam({
     name: 'target',
@@ -292,16 +239,16 @@ export class NotificationsController {
   async markAllAsRead(
     @Req() req: Request,
     @Param('userId', ParseUUIDPipe) userId: string,
-    @Param('target') target: NotificationTarget,
+    @Param('target', new ParseEnumPipe(NotificationTarget)) target: NotificationTarget,
   ) {
-    this.assertSelf(req, userId);
-    return this.notificationService.markAllAsReadByUser(userId, target);
+    const owner = this.assertSelf(req, userId, target);
+    return this.notificationService.markAllAsReadByUser(owner);
   }
 
   @Delete(':id')
   @ApiOperation({
     summary: 'Supprimer une notification',
-    description: 'Supprime définitivement une notification.',
+    description: 'Supprime définitivement une notification du porteur du jeton.',
   })
   @ApiParam({
     name: 'id',
@@ -316,8 +263,12 @@ export class NotificationsController {
       },
     },
   })
-  async remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.notificationService.remove(id);
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Notification non trouvée',
+  })
+  async remove(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
+    return this.notificationService.remove(id, this.ownerOf(req));
   }
 
   @Delete('user/:userId/:target')
@@ -327,7 +278,7 @@ export class NotificationsController {
   })
   @ApiParam({
     name: 'userId',
-    description: 'Identifiant de l\'utilisateur',
+    description: 'Identifiant de l\'utilisateur (celui du jeton)',
   })
   @ApiParam({
     name: 'target',
@@ -347,9 +298,9 @@ export class NotificationsController {
   async removeAllByUser(
     @Req() req: Request,
     @Param('userId', ParseUUIDPipe) userId: string,
-    @Param('target') target: NotificationTarget,
+    @Param('target', new ParseEnumPipe(NotificationTarget)) target: NotificationTarget,
   ) {
-    this.assertSelf(req, userId);
-    return this.notificationService.removeAllByUser(userId, target);
+    const owner = this.assertSelf(req, userId, target);
+    return this.notificationService.removeAllByUser(owner);
   }
 }

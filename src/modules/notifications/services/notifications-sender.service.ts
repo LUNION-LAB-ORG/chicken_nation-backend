@@ -220,7 +220,7 @@ export class NotificationsSenderService {
                 title: () => '🛵 Aucun livreur disponible',
                 message: () =>
                     `La course ${reference} attend un livreur depuis ${waitingMinutes} min. ` +
-                    `La recherche continue automatiquement — vérifiez qu'un livreur est actif, ou affectez-le manuellement.`,
+                    `La recherche continue automatiquement : vérifiez qu'un livreur est actif, ou affectez-le manuellement.`,
                 icon: () => notificationIcons.delivery.url,
                 iconBgColor: () => notificationIcons.delivery.color,
             };
@@ -564,7 +564,7 @@ export class NotificationsSenderService {
                 title: () => '🚫 Course annulée par Turbo',
                 message: () =>
                     `Turbo a annulé ${cible} (commande(s) ${commandes}) : ${raison}. ` +
-                    `Les commandes restent actives — relancez une livraison ou annulez-les manuellement.`,
+                    `Les commandes restent actives : relancez une livraison ou annulez-les manuellement.`,
                 icon: () => notificationIcons.delivery.url,
                 iconBgColor: () => notificationIcons.delivery.color,
             };
