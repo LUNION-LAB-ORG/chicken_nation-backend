@@ -35,8 +35,13 @@ export class PaiementsController {
   constructor(private readonly paiementsService: PaiementsService) { }
 
   // ⚠️ Aucune permission : tout jeton personnel, cuisine comprise, agissait sur l'argent.
+  // ⚠️ COMMANDES UPDATE laissait encore passer la CUISINE, qui n'encaisse pas
+  // (la caisse lui affichait le formulaire faute de contrôle de rôle).
+  // UPDATE_FULL est détenu par tous les rôles qui encaissent : caissier,
+  // gérant, assistant, centre d'appel, administrateur. Le restaurant de la
+  // commande est contrôlé dans le service.
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.COMMANDES, Action.UPDATE)
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE_FULL)
   @Post('add')
   @ApiOperation({ summary: 'Payer via backoffice' })
   addPaiement(@Req() req: Request, @Body() data: AddPaiementDto) {
@@ -62,8 +67,10 @@ export class PaiementsController {
   }
 
   // ⚠️ Aucune permission : tout jeton personnel, cuisine comprise, agissait sur l'argent.
+  // ⚠️ Même droit que l'ajout d'un paiement (UPDATE_FULL) : la cuisine ne
+  // confirme pas d'encaissement. Restaurant de la commande contrôlé dans le service.
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.COMMANDES, Action.UPDATE)
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE_FULL)
   @Patch(':id/confirmer-encaissement')
   @ApiOperation({
     summary: "Confirmer un encaissement livreur en attente",

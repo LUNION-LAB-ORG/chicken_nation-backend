@@ -47,6 +47,16 @@ import { ReceiptsService } from '../services/receipts.service';
 import { OrderCreateDto } from '../dto/order-create.dto';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
 
+/**
+ * Retire d'une modification de commande les champs qui la rendraient payée
+ * sans encaissement : `paied`, `paied_at` et `amount`. Réservés à
+ * l'administrateur (correction d'une erreur de saisie).
+ */
+function sansChampsDePaiement(dto: UpdateOrderDto): UpdateOrderDto {
+  const { paied: _paied, paied_at: _paiedAt, amount: _amount, ...champs } = dto;
+  return champs;
+}
+
 @ApiTags('Commandes')
 @Controller('orders')
 @UseInterceptors(UserScopedCacheInterceptor)
@@ -144,17 +154,23 @@ export class OrderController {
     return this.orderService.findAll(queryOrderDto, req.user as User);
   }
 
+  /**
+   * ⚠️ COMMANDES UPDATE laissait passer la CUISINE, qui n'encaisse pas.
+   * UPDATE_FULL est détenu par tous les rôles qui encaissent (caissier,
+   * gérant, assistant, centre d'appel, administrateur) et pas par la cuisine.
+   * Le restaurant de la commande est contrôlé dans le service.
+   */
   @Post(':id/mark-paid-cash')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.COMMANDES, Action.UPDATE)
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE_FULL)
   @ApiOperation({
     summary: 'Caissière : encaisse le livreur pour une commande en espèce',
     description:
       'Marque Order.paied=true + paied_at=now et passe en COMPLETED. Uniquement pour payment_method=OFFLINE. Déclenche order:updated.',
   })
   @ApiBody({ type: MarkPaidCashDto })
-  markPaidCash(@Param('id') id: string, @Body() dto: MarkPaidCashDto) {
-    return this.orderService.markPaidCash(id, dto.amount);
+  markPaidCash(@Req() req: Request, @Param('id') id: string, @Body() dto: MarkPaidCashDto) {
+    return this.orderService.markPaidCash(id, dto.amount, req.user as User);
   }
 
   @Post(':id/confirm-payment')
@@ -277,9 +293,16 @@ export class OrderController {
     res.status(HttpStatus.OK).send(buffer);
   }
 
+  /**
+   * ⚠️ Rattrapage de maintenance, administrateur seul. COMMANDES UPDATE
+   * l'ouvrait à toute la caisse, cuisine comprise : un compte de restaurant
+   * lisait les commandes de livraison de tout le réseau (référence, frais) et
+   * pouvait lancer autant de calculs de tarif Turbo que voulu (`limit` libre).
+   * Aucun écran ne l'appelle.
+   */
   @Post('/backfill-delivery-fees')
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.COMMANDES, Action.UPDATE)
+  @UseGuards(JwtAuthGuard, UserRolesGuard)
+  @UserRoles(UserRole.ADMIN)
   @ApiOperation({
     summary:
       'RATTRAPAGE : recalcule le frais plein (grille) des commandes livrées à base 0 — dry-run par défaut, ?apply=true pour écrire. Ne touche jamais aux montants clients.',
@@ -376,9 +399,23 @@ export class OrderController {
     return this.attachPaymentConfig(order);
   }
 
+  /**
+   * Modification d'une commande depuis le back office (bouton « Modifier »).
+   *
+   * ⚠️ Cette route contournait les trois routes d'encaissement :
+   *  - COMMANDES UPDATE l'ouvrait à la CUISINE. Le back office ne propose
+   *    « Modifier » qu'aux détenteurs d'UPDATE_FULL (et à l'administrateur),
+   *    la caisse ne l'appelle pas : même droit ici ;
+   *  - le restaurant n'était pas contrôlé : un compte du restaurant A modifiait
+   *    la commande du restaurant B. Contrôlé dans le service ;
+   *  - `paied`, `paied_at` et `amount` étaient écrits tels quels : une commande
+   *    passait payée sans aucun encaissement, ou son montant tombait à zéro,
+   *    puis on la terminait. Aucun écran ne les envoie (le montant se recalcule
+   *    à partir des articles) : seul l'administrateur les garde.
+   */
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.COMMANDES, Action.UPDATE)
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE_FULL)
   @ApiBody({ type: UpdateOrderDto })
   update(
     @Req() req: Request,
@@ -389,10 +426,15 @@ export class OrderController {
     // (COMPLETED, COLLECTED, CANCELLED inclus). Cf. order.service.ts:update().
     const user = req.user as User;
     const isAdmin = user?.role === UserRole.ADMIN;
-    return this.orderService.update(id, updateOrderDto, {
-      skipStatusCheck: isAdmin,
-      userId: user.id,
-    });
+    return this.orderService.update(
+      id,
+      isAdmin ? updateOrderDto : sansChampsDePaiement(updateOrderDto),
+      {
+        skipStatusCheck: isAdmin,
+        userId: user.id,
+        user,
+      },
+    );
   }
   /**
    * ⚠️ FAILLE CRITIQUE CORRIGEE : aucun contrôle d'appartenance.

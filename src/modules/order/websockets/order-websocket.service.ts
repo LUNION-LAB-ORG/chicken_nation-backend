@@ -3,14 +3,22 @@ import { Injectable } from '@nestjs/common';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { Order, OrderStatus } from '@prisma/client';
 import { OrderChannels } from '../enums/order-channels';
+import { sansIdentifiantsPush } from '../helpers/identifiants-push.helper';
 
 
 
+/**
+ * Aucune commande ne part sur un socket avec un identifiant de notification
+ * (jeton Expo, identifiants OneSignal), pas même vers le client : chaque
+ * méthode commence par `sansIdentifiantsPush`. Le code de récupération, lui,
+ * n'est retiré que des diffusions au restaurant et au back office.
+ */
 @Injectable()
 export class OrderWebSocketService {
     constructor(private appGateway: AppGateway) { }
 
-    emitOrderCreated(order: Order) {
+    emitOrderCreated(commande: Order) {
+        const order = sansIdentifiantsPush(commande);
         // Notifier le client qui a passé la commande
         this.appGateway.emitToUser(order.customer_id, 'customer', OrderChannels.ORDER_CREATED, {
             order,
@@ -30,7 +38,8 @@ export class OrderWebSocketService {
         });
     }
 
-    emitStatusUpdate(order: Order, previousStatus: OrderStatus) {
+    emitStatusUpdate(commande: Order, previousStatus: OrderStatus) {
+        const order = sansIdentifiantsPush(commande);
         const statusMessages = {
             PENDING: 'Commande en attente',
             ACCEPTED: 'Commande confirmée',
@@ -58,7 +67,8 @@ export class OrderWebSocketService {
         this.appGateway.emitToRestaurant(order.restaurant_id, OrderChannels.ORDER_STATUS_UPDATED, statusDataDiffusion);
     }
 
-    emitOrderUpdated(order: Order) {
+    emitOrderUpdated(commande: Order) {
+        const order = sansIdentifiantsPush(commande);
         const data = { order, message: 'Commande mise à jour' };
         const dataDiffusion = { ...data, order: sanitizeOrderForBroadcast(order) };
 

@@ -6,6 +6,7 @@ import { PaiementsService } from 'src/modules/paiements/services/paiements.servi
 import { OrderEvent } from '../events/order.event';
 import { OrderService } from '../services/order.service';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
+import { sansIdentifiantsPush } from '../helpers/identifiants-push.helper';
 import { ExpoPushService } from 'src/expo-push/expo-push.service';
 import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
 import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
@@ -355,7 +356,9 @@ export class KkiapayOrderListenerService {
             }
         }
 
-        return { confirmed: true, justPaid, order, paiement, earnedPoints };
+        // Le jeton Expo lu plus haut ne quitte pas ce service : ce résultat
+        // devient la réponse HTTP de la confirmation manuelle.
+        return { confirmed: true, justPaid, order: sansIdentifiantsPush(order), paiement, earnedPoints };
     }
 
     /**

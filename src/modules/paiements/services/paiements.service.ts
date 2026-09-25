@@ -15,6 +15,7 @@ import {
   PaiementMode,
   PaiementStatus,
   PaymentMethod,
+  User,
 } from '@prisma/client';
 import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
 import { KkiapayService } from 'src/kkiapay/kkiapay.service';
@@ -26,14 +27,15 @@ import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { OrderChannels } from 'src/modules/order/enums/order-channels';
 import { RESTAURANT_COMMANDE_SELECT } from 'src/modules/restaurant/constantes/restaurant-public.select';
-
-/**
- * Tolérance d'arrondi (FCFA) entre le cumul des paiements SUCCESS et le total de
- * la commande. Absorbe l'écart de taxe app/back (≈ ±50 : l'app arrondit la taxe
- * au plancher de 50, le back au plafond de 10). Au-delà, la commande n'est PAS
- * considérée comme payée (paiement-jeton ou sous-paiement). cf. réconciliation KKiaPay.
- */
-const PAYMENT_AMOUNT_TOLERANCE = 50;
+import { CLIENT_COMMANDE_SELECT } from 'src/modules/order/constantes/client-commande.select';
+import { sansIdentifiantsPush } from 'src/modules/order/helpers/identifiants-push.helper';
+import { assertCanAccessRestaurant } from 'src/modules/order/helpers/restaurant-scope.helper';
+import {
+  etatApresEncaissement,
+  extraireEncaissement,
+  PAYMENT_AMOUNT_TOLERANCE,
+  verifierCommandeEncaissable,
+} from 'src/modules/paiements/helpers/encaissement.helper';
 
 @Injectable()
 export class PaiementsService {
@@ -137,31 +139,47 @@ export class PaiementsService {
     };
   }
   /**
-   * Enregistre un ou plusieurs paiements ajoutés par la caissière depuis le
-   * backoffice (liste de modes : CASH / Mobile Money / Carte / Wave…).
+   * Enregistre un ou plusieurs paiements ajoutés par la caissière depuis la
+   * caisse ou le backoffice (liste de modes : CASH / Mobile Money / Carte / Wave…).
+   *
+   * Contrôles, AVANT toute écriture (cf. `encaissement.helper.ts`) :
+   *   - toutes les lignes portent la même commande ;
+   *   - la commande existe, n'est pas annulée, et appartient au restaurant du
+   *     compte quand c'est un compte de restaurant ;
+   *   - le client du paiement est celui de la commande, jamais celui du corps.
    *
    * Cascade sur l'Order :
-   *   - `paied_at = now`, `paied = true` dès qu'on a au moins un paiement.
-   *   - Si la somme des paiements **SUCCESS** (nouveaux + existants) couvre
-   *     le `order.amount` ET que la commande est déjà `COLLECTED` (livrée
-   *     mais pas encore encaissée), alors elle passe en `COMPLETED` avec
-   *     `completed_at = now`. Une commande partiellement payée reste en
-   *     `COLLECTED` (ou son statut initial si pas encore livrée).
+   *   - `paied = true` seulement si la somme des paiements **SUCCESS**
+   *     (nouveaux + existants) couvre `order.amount`, à la tolérance près ;
+   *   - si de plus la commande est déjà `COLLECTED` (livrée mais pas encore
+   *     encaissée), elle passe en `COMPLETED` avec `completed_at = now`. Une
+   *     commande partiellement payée garde son statut et un reste dû.
    */
   async addPaiement(
     req: Request,
     data: AddPaiementDto,
   ) {
-    const { items } = data;
-    if (!items || items.length === 0) {
-      throw new BadRequestException('Aucun paiement à ajouter');
-    }
+    const { orderId, lignes } = extraireEncaissement(data.items);
+
+    const commande = verifierCommandeEncaissable(
+      await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+          id: true,
+          restaurant_id: true,
+          customer_id: true,
+          status: true,
+          entity_status: true,
+        },
+      }),
+      req.user as User | undefined,
+    );
 
     // Résoudre toutes les créations en parallèle — le bug précédent utilisait
     // `items.map(async)` sans Promise.all, donc la vérification `length`
     // portait sur un tableau de Promises, et seul paiements[0] était awaited.
-    const createdPaiements = await Promise.all(
-      items.map(async (item) => {
+    await Promise.all(
+      lignes.map(async (item) => {
         const uniqueRef = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
         return this.create({
           reference: uniqueRef,
@@ -171,25 +189,20 @@ export class PaiementsService {
           mode: item.mode,
           source: item.source,
           status: PaiementStatus.SUCCESS,
-          order_id: item.order_id,
-          client_id: item.client_id,
+          order_id: commande.id,
+          // ⚠️ Le client venait du corps de la requête, sans contrôle.
+          client_id: commande.customer_id,
         });
       }),
     );
 
-    const first = createdPaiements.find((r) => r?.order?.id);
-    if (!first?.order?.id) {
-      return { success: true, message: 'Paiement effectué avec succès' };
-    }
-
-    const orderId = first.order.id;
     const now = new Date();
 
     // Recharger l'order + tous les paiements SUCCESS pour décider si le total
     // est couvert (on ne peut pas se fier uniquement aux `items` entrants car
     // il peut déjà y avoir eu des paiements partiels précédents).
     const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
+      where: { id: commande.id },
       include: {
         paiements: { where: { status: PaiementStatus.SUCCESS } },
       },
@@ -199,15 +212,23 @@ export class PaiementsService {
     }
 
     const totalPaid = order.paiements.reduce((sum, p) => sum + (p.total ?? p.amount ?? 0), 0);
-    const isFullyPaid = totalPaid >= order.amount;
-    const shouldComplete = isFullyPaid && order.status === OrderStatus.COLLECTED;
+    // ⚠️ `paied` était posé dès le premier paiement, même partiel : une
+    // commande à moitié réglée passait pour payée.
+    const { soldee, aTerminer } = etatApresEncaissement(order.amount, totalPaid, order.status);
+    // Rien n'a été enregistré (toutes les lignes à zéro) et il reste un dû :
+    // répondre « paiement enregistré » serait faux.
+    if (lignes.length === 0 && !soldee) {
+      throw new BadRequestException('Aucun montant à encaisser : saisissez le montant reçu.');
+    }
 
     const updatedOrder = await this.prisma.order.update({
-      where: { id: orderId },
+      where: { id: order.id },
       data: {
-        paied_at: now,
-        paied: true,
-        ...(shouldComplete && {
+        ...(soldee && {
+          paied: true,
+          paied_at: order.paied_at ?? now,
+        }),
+        ...(aTerminer && {
           status: OrderStatus.COMPLETED,
           completed_at: now,
         }),
@@ -225,7 +246,9 @@ export class PaiementsService {
 
     return {
       success: true,
-      message: 'Paiement effectué avec succès',
+      message: soldee
+        ? 'Paiement effectué avec succès'
+        : `Paiement enregistré, reste dû ${Math.max(0, order.amount - totalPaid).toLocaleString('fr-FR')} XOF (commande non soldée).`,
     };
   }
 
@@ -251,12 +274,19 @@ export class PaiementsService {
         id: true,
         status: true,
         order_id: true,
-        order: { select: { status: true } },
+        order: { select: { status: true, restaurant_id: true } },
       },
     });
     if (!paiement) {
       throw new NotFoundException('Paiement introuvable');
     }
+    // ⚠️ `req` n'était pas lu : un compte du restaurant A confirmait
+    // l'encaissement d'une commande du restaurant B, qui passait payée et
+    // terminée. Contrôle AVANT tout autre, pour ne rien apprendre d'un
+    // paiement étranger. Un paiement sans commande n'a pas de restaurant : un
+    // compte de restaurant ne peut pas le confirmer, ce que le contrôle
+    // ci-dessous refuserait de toute façon. Sans effet pour le back office.
+    assertCanAccessRestaurant(req.user as User | undefined, paiement.order?.restaurant_id);
     if (paiement.status !== PaiementStatus.PENDING) {
       throw new BadRequestException(
         'Seul un encaissement en attente peut être confirmé.',
@@ -299,8 +329,11 @@ export class PaiementsService {
       (sum, p) => sum + (p.total ?? p.amount ?? 0),
       0,
     );
-    const isFullyPaid = totalPaid >= order.amount - PAYMENT_AMOUNT_TOLERANCE;
-    const shouldComplete = isFullyPaid && order.status === OrderStatus.COLLECTED;
+    const { soldee: isFullyPaid, aTerminer: shouldComplete } = etatApresEncaissement(
+      order.amount,
+      totalPaid,
+      order.status,
+    );
 
     const previousStatus = order.status;
     const updatedOrder = await this.prisma.order.update({
@@ -321,7 +354,10 @@ export class PaiementsService {
       include: {
         // Liste blanche : la commande part sur les sockets si elle se termine.
         restaurant: { select: RESTAURANT_COMMANDE_SELECT },
-        customer: { include: { notification_settings: true } },
+        // ⚠️ La ligne client complète et ses réglages de notification (jeton
+        // Expo, identifiants OneSignal) partaient vers tout le restaurant et
+        // tout le back office. Le jeton est relu à part, plus bas.
+        customer: { select: CLIENT_COMMANDE_SELECT },
       },
     });
 
@@ -338,7 +374,8 @@ export class PaiementsService {
     // (fidélité, notifications) qu'une transition COMPLETED normale.
     if (shouldComplete) {
       const statusData = {
-        order: updatedOrder,
+        // Filet : aucun identifiant de notification ne part sur un socket.
+        order: sansIdentifiantsPush(updatedOrder),
         message: 'Commande terminée',
         previousStatus,
       };
@@ -350,27 +387,40 @@ export class PaiementsService {
       );
       // Sans le code de récupération : la room du restaurant est aussi écoutée
       // par ses livreurs, à qui ce code doit rester inconnu.
-      const statusDataDiffusion = { ...statusData, order: sanitizeOrderForBroadcast(updatedOrder) };
+      const statusDataDiffusion = { ...statusData, order: sanitizeOrderForBroadcast(statusData.order) };
       this.appGateway.emitToBackoffice(OrderChannels.ORDER_STATUS_UPDATED, statusDataDiffusion);
       this.appGateway.emitToRestaurant(
         updatedOrder.restaurant_id,
         OrderChannels.ORDER_STATUS_UPDATED,
         statusDataDiffusion,
       );
+      // Destinataire de la notification « commande terminée » : lu ici, jamais
+      // rangé dans la commande. Un échec coûte la notification, pas la
+      // confirmation, déjà enregistrée.
+      const reglagesPush = await this.prisma.notificationSetting
+        .findUnique({
+          where: { customer_id: updatedOrder.customer_id },
+          select: { expo_push_token: true },
+        })
+        .catch((e) => {
+          console.error(
+            `Jeton de notification illisible (confirmerEncaissement) pour ${order.id}: ${(e as Error)?.message}`,
+          );
+          return null;
+        });
       this.eventEmitter.emit(OrderChannels.ORDER_STATUS_UPDATED, {
         order: updatedOrder,
-        expo_token:
-          updatedOrder.customer?.notification_settings?.expo_push_token,
+        expo_token: reglagesPush?.expo_push_token ?? null,
       });
     }
 
     return {
       success: true,
       message: shouldComplete
-        ? 'Encaissement confirmé — commande terminée.'
+        ? 'Encaissement confirmé, commande terminée.'
         : isFullyPaid
           ? 'Encaissement confirmé.'
-          : `Encaissement confirmé — reste dû ${Math.max(0, order.amount - totalPaid).toLocaleString('fr-FR')} XOF (commande non soldée).`,
+          : `Encaissement confirmé, reste dû ${Math.max(0, order.amount - totalPaid).toLocaleString('fr-FR')} XOF (commande non soldée).`,
     };
   }
 

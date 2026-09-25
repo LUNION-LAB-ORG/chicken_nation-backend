@@ -1,4 +1,4 @@
-import { ArrayMinSize, IsArray, IsEnum, IsNumber, IsOptional, IsString, IsUUID, ValidateNested } from "class-validator";
+import { ArrayMinSize, IsArray, IsEnum, IsNumber, IsOptional, IsString, IsUUID, Min, ValidateNested } from "class-validator";
 import { Transform, Type } from "class-transformer";
 import { PaiementMode, PaiementStatus } from "@prisma/client";
 import { ApiProperty, ApiPropertyOptional, PickType } from "@nestjs/swagger";
@@ -77,8 +77,12 @@ export class CreatePaiementDto {
     client_id?: string;
 }
 export class AddPaiementItemDto {
-    @ApiProperty({ description: 'Montant du paiement' })
+    // ⚠️ Un montant négatif était accepté et venait réduire le cumul encaissé.
+    // Zéro reste admis : la caisse envoie une ligne à zéro quand tout est déjà
+    // réparti, et le service l'ignore.
+    @ApiProperty({ description: 'Montant du paiement', minimum: 0 })
     @IsNumber()
+    @Min(0, { message: 'Le montant d\'un paiement ne peut pas être négatif.' })
     @Transform(({ value }) => parseFloat(value))
     amount: number;
 
@@ -92,12 +96,12 @@ export class AddPaiementItemDto {
     @Transform(({ value }) => String(value).trim().toUpperCase())
     source?: string;
 
-    @ApiPropertyOptional({ description: "ID de la promotion" })
+    @ApiPropertyOptional({ description: "Commande encaissée, la même sur toutes les lignes (obligatoire, contrôlé par le service)" })
     @IsOptional()
     @IsUUID()
     order_id?: string;
 
-    @ApiPropertyOptional({ description: "ID de la promotion" })
+    @ApiPropertyOptional({ description: "Ignoré : le client du paiement est toujours celui de la commande" })
     @IsOptional()
     @IsUUID()
     client_id?: string;

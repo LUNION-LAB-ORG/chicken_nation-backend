@@ -17,18 +17,18 @@ export class UpdateOrderDto extends PartialType(CreateOrderDto) {
     estimated_preparation_time?: string;
 
 
-    @ApiPropertyOptional({ type: Date, required: false, description: "Date du paiement", example: "2023-01-01T00:00:00.000Z" })
+    @ApiPropertyOptional({ type: Date, required: false, description: "Date du paiement (administrateur seulement, ignorée pour les autres comptes)", example: "2023-01-01T00:00:00.000Z" })
     @IsOptional()
     @IsString()
     paied_at?: string
 
-    @ApiPropertyOptional({ type: Boolean, required: false, description: "Statut du paiement", example: true })
+    @ApiPropertyOptional({ type: Boolean, required: false, description: "Statut du paiement (administrateur seulement, ignoré pour les autres comptes)", example: true })
     @IsOptional()
     @IsBoolean()
     @Type(() => Boolean)
     paied?: boolean;
 
-    @ApiPropertyOptional({ type: Number, required: false, description: "Montant de la commande", example: 1500 })
+    @ApiPropertyOptional({ type: Number, required: false, description: "Montant de la commande (administrateur seulement, ignoré pour les autres comptes : il se recalcule à partir des articles)", example: 1500 })
     @IsOptional()
     @IsNumber()
     @Type(() => Number)

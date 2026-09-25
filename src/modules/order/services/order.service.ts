@@ -52,6 +52,9 @@ import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 import { TwilioService } from 'src/twilio/services/twilio.service';
 import { RESTAURANT_COMMANDE_SELECT } from 'src/modules/restaurant/constantes/restaurant-public.select';
+import { CLIENT_COMMANDE_SELECT } from '../constantes/client-commande.select';
+import { assertCanAccessRestaurant } from '../helpers/restaurant-scope.helper';
+import { sansIdentifiantsPush } from '../helpers/identifiants-push.helper';
 
 @Injectable()
 export class OrderService {
@@ -904,22 +907,29 @@ export class OrderService {
           },
         },
         paiements: true,
-        customer: {
-          select: {
-            id: true,
-            first_name: true,
-            last_name: true,
-            phone: true,
-            email: true,
-            image: true,
-            notification_settings: true,
-          },
-        },
+        // ⚠️ `notification_settings` y figurait : le jeton Expo et les
+        // identifiants OneSignal du client partaient dans la réponse et, par
+        // socket, vers tout le restaurant et tout le back office. Le jeton est
+        // relu à part, plus bas, pour la seule notification interne.
+        customer: { select: CLIENT_COMMANDE_SELECT },
         // Liste blanche : nom, adresse, téléphone et courriel suffisent au
         // ticket imprimé du backoffice ; la réponse part aussi au client.
         restaurant: { select: RESTAURANT_COMMANDE_SELECT },
       },
     });
+
+    // Destinataire de la notification « statut de commande » : lu ici, jamais
+    // rangé dans la commande qui repart. Le statut est déjà enregistré : un
+    // échec de cette lecture coûte la notification, pas la transition.
+    const reglagesPush = await this.prisma.notificationSetting
+      .findUnique({
+        where: { customer_id: updatedOrder.customer_id },
+        select: { expo_push_token: true },
+      })
+      .catch((e) => {
+        this.logger.warn(`Jeton de notification illisible pour la commande ${order.id}: ${e?.message}`);
+        return null;
+      });
 
     // Cycle de vie de l'usage du code promo selon le statut :
     //  - → ACCEPTED (paiement confirmé) : comptabilise l'usage (usage_count++)
@@ -938,7 +948,7 @@ export class OrderService {
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderStatusUpdatedEvent({
       order: updatedOrder,
-      expo_token: updatedOrder.customer.notification_settings?.expo_push_token,
+      expo_token: reglagesPush?.expo_push_token ?? null,
       voucher: meta?._voucher ? {
         code: meta._voucher.code,
         initial_amount: meta._voucher.initial_amount,
@@ -1354,7 +1364,9 @@ export class OrderService {
       throw new NotFoundException(`Commande est introuvable`);
     }
 
-    return order;
+    // La lecture ci-dessous embarque le jeton Expo pour le seul listener
+    // KKiaPay : il ne sort jamais par cette méthode publique.
+    return sansIdentifiantsPush(order);
   }
 
   /**
@@ -1379,9 +1391,15 @@ export class OrderService {
           },
         },
         paiements: true,
-        // notification_settings : nécessaire pour pousser « Commande confirmée »
-        // au client au moment du paiement (cf. KkiapayOrderListenerService).
-        customer: { include: { notification_settings: true } },
+        // Le jeton Expo sert à pousser « Commande confirmée » au client au
+        // moment du paiement (cf. KkiapayOrderListenerService), et à rien
+        // d'autre : cette commande repart ensuite sur les sockets, que
+        // `OrderWebSocketService` nettoie, et dans la réponse de la
+        // confirmation manuelle, que le listener nettoie, comme
+        // `findByReference`.
+        customer: {
+          include: { notification_settings: { select: { expo_push_token: true } } },
+        },
         // Liste blanche : la commande repart sur les sockets au paiement.
         restaurant: { select: RESTAURANT_COMMANDE_SELECT },
       },
@@ -1441,12 +1459,27 @@ export class OrderService {
    *   - Émet order:updated pour rafraîchir en temps réel le backoffice Opérations
    *
    * @throws BadRequestException si l'order est déjà payée ou n'est pas en OFFLINE.
+   * @throws ForbiddenException si la commande appartient à un autre restaurant
+   *   que celui du compte (compte de restaurant).
+   *
+   * ⚠️ Aucun écran ne l'appelle plus : la caisse est passée à POST
+   * /paiements/add le 9 juin, et le crochet du back office n'a jamais été
+   * branché. Elle reste pour les caisses qui tourneraient encore sur un paquet
+   * plus ancien. Elle ne crée aucune ligne de paiement.
    */
-  async markPaidCash(id: string, amount?: number) {
+  async markPaidCash(id: string, amount: number | undefined, user: User | undefined) {
     const order = await this.prisma.order.findUnique({ where: { id } });
     if (!order) throw new NotFoundException('Commande introuvable');
+    // ⚠️ Cloisonnement absent jusqu'ici : un compte du restaurant A soldait et
+    // terminait une commande du restaurant B.
+    assertCanAccessRestaurant(user, order.restaurant_id);
     if (order.entity_status === EntityStatus.DELETED) {
       throw new BadRequestException('Commande supprimée');
+    }
+    // Jamais payée ni terminée après coup : une commande annulée se traite en
+    // litige, comme dans la confirmation d'un encaissement livreur.
+    if (order.status === OrderStatus.CANCELLED) {
+      throw new BadRequestException('Commande annulée : elle ne peut pas être encaissée.');
     }
     if (order.paied) {
       throw new BadRequestException('Commande déjà payée');
@@ -1471,7 +1504,8 @@ export class OrderService {
         }),
       },
       include: {
-        customer: true,
+        // Liste blanche : la commande repart dans la réponse et sur les sockets.
+        customer: { select: CLIENT_COMMANDE_SELECT },
         restaurant: { select: RESTAURANT_COMMANDE_SELECT },
         order_items: { include: { dish: true } },
       },
@@ -1802,13 +1836,20 @@ export class OrderService {
    *   COMPLETED / COLLECTED / CANCELLED pour rectifier une erreur de saisie,
    *   un audit comptable, etc.). Le controller met ce flag à `true` UNIQUEMENT
    *   si le user JWT a le rôle ADMIN.
+   * @param options.user  Compte du personnel : un compte de restaurant ne
+   *   modifie que les commandes de SON restaurant. Sans effet pour le back
+   *   office.
    */
   async update(
     id: string,
     updateOrderDto: UpdateOrderDto,
-    options: { skipStatusCheck?: boolean; userId?: string } = {},
+    options: { skipStatusCheck?: boolean; userId?: string; user?: User } = {},
   ) {
     const order = await this.findById(id);
+    // ⚠️ Cloisonnement absent jusqu'ici : un compte du restaurant A modifiait
+    // (et pouvait rendre payée) la commande du restaurant B. Contrôle AVANT
+    // celui du statut, pour ne rien apprendre d'une commande étrangère.
+    assertCanAccessRestaurant(options.user, order.restaurant_id);
     // Extraire les champs qui ne sont pas des colonnes directes de la table Order
     const {
       paiement_id,
@@ -2013,7 +2054,7 @@ export class OrderService {
       (sum, p) => sum + (p.total ?? p.amount ?? 0),
       0,
     );
-    // Tolérance d'arrondi taxe app/back (= PAYMENT_AMOUNT_TOLERANCE, cf. paiements.service)
+    // Tolérance d'arrondi taxe app/back (= PAYMENT_AMOUNT_TOLERANCE, cf. paiements/helpers/encaissement.helper)
     const shouldBePaied = totalPaid >= fresh.amount - 50;
     if (shouldBePaied === fresh.paied) {
       // Rien à changer — on renvoie tout de même la commande détaillée pour
