@@ -3,6 +3,14 @@ import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundEx
 import { CreateUserDto } from '../dto/create-user.dto';
 import { EntityStatus, Prisma, User, UserRole, UserType } from '@prisma/client';
 import { isStoreRole, resolveStaffType } from '../helpers/staff-type.helper';
+import {
+  assertPeutAttribuerRole,
+  assertPeutGererMembre,
+  estAdministrateur,
+  MESSAGE_HORS_RESTAURANT,
+  restaurantDuNouveauMembre,
+  restaurantDuPersonnelVisible,
+} from '../helpers/personnel-scope.helper';
 import type { Request } from 'express';
 import { PrismaService } from 'src/database/services/prisma.service';
 import * as bcrypt from 'bcryptjs';
@@ -25,11 +33,27 @@ export class UsersService {
   // CREATE
   async create(req: Request, createUserDto: CreateUserDto) {
     const user = req.user as User;
+
+    // GARDE-FOU : le `type` découle TOUJOURS du rôle (jamais du client ni du
+    // créateur). Un rôle de point de vente exige un restaurant de rattachement.
+    // Un non-ADMIN ne crée qu'un rôle inférieur au sien, dans SON restaurant
+    // (voir personnel-scope.helper.ts).
+    const { restaurant_id, ...userData } = createUserDto;
+    assertPeutAttribuerRole(user, createUserDto.role);
+    const type = resolveStaffType(createUserDto.role);
+    const restaurantId = restaurantDuNouveauMembre(user, createUserDto.role, restaurant_id);
+    if (isStoreRole(createUserDto.role) && !restaurantId) {
+      throw new BadRequestException(
+        'Un rôle de point de vente (caissier, cuisine, manager, assistant) doit être rattaché à un restaurant.',
+      );
+    }
+
     // Vérification de l'existence de l'utilisateur
     const userExist = await this.prisma.user.findUnique({
       where: {
         email: createUserDto.email,
       },
+      select: { id: true },
     });
     if (userExist) {
       throw new BadRequestException(
@@ -41,17 +65,6 @@ export class UsersService {
     const pass = this.generateDataService.generateSecurePassword();
     const salt = await bcrypt.genSalt();
     const hash = await bcrypt.hash(pass, salt);
-
-    // GARDE-FOU : le `type` découle TOUJOURS du rôle (jamais du client ni du
-    // créateur). Un rôle de point de vente exige un restaurant de rattachement.
-    const { restaurant_id, ...userData } = createUserDto;
-    const type = resolveStaffType(createUserDto.role);
-    const restaurantId = isStoreRole(createUserDto.role) ? restaurant_id : null;
-    if (isStoreRole(createUserDto.role) && !restaurantId) {
-      throw new BadRequestException(
-        'Un rôle de point de vente (caissier, cuisine, manager, assistant) doit être rattaché à un restaurant.',
-      );
-    }
 
     // Créer l'utilisateur
     const newUser = await this.prisma.user.create({
@@ -69,6 +82,8 @@ export class UsersService {
     // Emettre l'événement de création d'utilisateur
     this.userEvent.userCreatedEvent({ actor: { ...user, restaurant: null }, user: newUser });
 
+    // Le haché ne sort jamais ; le mot de passe provisoire, en clair, est
+    // montré UNE fois à celui qui crée le compte.
     const { password, ...rest } = newUser;
 
     await this.cacheManager.del("users");
@@ -78,11 +93,28 @@ export class UsersService {
   // CREATE MEMBER
   async createMember(req: Request, createUserDto: CreateUserDto) {
     const user = req.user as User;
+
+    // GARDE-FOU : type découlé du rôle. Restaurant = celui choisi (admin) sinon
+    // celui du créateur ; un manager ou un assistant crée TOUJOURS dans SON
+    // restaurant, et seulement un rôle inférieur au sien.
+    const { restaurant_id, ...memberData } = createUserDto;
+    assertPeutAttribuerRole(user, createUserDto.role);
+    const type = resolveStaffType(createUserDto.role);
+    const restaurantId = restaurantDuNouveauMembre(user, createUserDto.role, restaurant_id, {
+      restaurantParDefaut: true,
+    });
+    if (isStoreRole(createUserDto.role) && !restaurantId) {
+      throw new BadRequestException(
+        'Un rôle de point de vente (caissier, cuisine, manager, assistant) doit être rattaché à un restaurant.',
+      );
+    }
+
     // Vérification de l'existence de l'utilisateur
     const userExist = await this.prisma.user.findUnique({
       where: {
         email: createUserDto.email,
       },
+      select: { id: true },
     });
     if (userExist) {
       throw new BadRequestException(
@@ -94,17 +126,6 @@ export class UsersService {
     const pass = this.generateDataService.generateSecurePassword();
     const salt = await bcrypt.genSalt();
     const hash = await bcrypt.hash(pass, salt);
-
-    // GARDE-FOU : type découlé du rôle. Restaurant = celui choisi (admin) sinon
-    // celui du créateur (manager qui ajoute un membre de SON restaurant).
-    const { restaurant_id, ...memberData } = createUserDto;
-    const type = resolveStaffType(createUserDto.role);
-    const restaurantId = restaurant_id ?? user.restaurant_id ?? null;
-    if (isStoreRole(createUserDto.role) && !restaurantId) {
-      throw new BadRequestException(
-        'Un rôle de point de vente (caissier, cuisine, manager, assistant) doit être rattaché à un restaurant.',
-      );
-    }
 
     // Créer l'utilisateur
     const newUser = await this.prisma.user.create({
@@ -127,13 +148,17 @@ export class UsersService {
   }
 
   // FIND_ALL
-  async findAll(filters?: { type?: UserType; restaurantId?: string }) {
-    // Sans filtre → TOUS les utilisateurs (backoffice + équipes restaurant).
-    // Avec `type` ou `restaurantId` → liste ciblée pour les onglets Personnel
-    // (Tous = aucun filtre / Back Office = type BACKOFFICE / resto = restaurantId).
+  async findAll(req: Request, filters?: { type?: UserType; restaurantId?: string }) {
+    // Compte du siège : sans filtre → TOUS les utilisateurs (backoffice +
+    // équipes restaurant) ; avec `type` ou `restaurantId` → liste ciblée pour
+    // les onglets Personnel (Tous / Back Office / resto).
+    // Compte de restaurant (manager, assistant, la caisse) : TOUJOURS son
+    // restaurant, quel que soit le paramètre reçu. Il lisait tout le réseau.
+    const acteur = req.user as User;
     const where: Prisma.UserWhereInput = {};
     if (filters?.type) where.type = filters.type;
-    if (filters?.restaurantId) where.restaurant_id = filters.restaurantId;
+    const restaurantId = restaurantDuPersonnelVisible(acteur, filters?.restaurantId);
+    if (restaurantId) where.restaurant_id = restaurantId;
 
     const users = await this.prisma.user.findMany({
       where,
@@ -156,14 +181,20 @@ export class UsersService {
   /**
    * Définit un manager comme « principal » de son restaurant (Restaurant.manager).
    * Plusieurs managers peuvent être rattachés à un même restaurant ; un seul est
-   * principal. Réservé au backoffice (permission PERSONNELS/UPDATE).
+   * principal. Permission PERSONNELS/UPDATE, et la cible doit être gérée par le
+   * compte connecté : en pratique l'ADMIN, un manager ne gérant pas un autre
+   * manager (ni lui-même).
    */
   async setPrincipalManager(req: Request, userId: string) {
-    void req;
-    const target = await this.prisma.user.findUnique({ where: { id: userId } });
+    const acteur = req.user as User;
+    const target = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true, restaurant_id: true },
+    });
     if (!target) {
       throw new NotFoundException('Utilisateur introuvable');
     }
+    assertPeutGererMembre(acteur, target);
     if (target.role !== UserRole.MANAGER || !target.restaurant_id) {
       throw new BadRequestException(
         'Seul un manager rattaché à un restaurant peut être défini comme principal.',
@@ -239,57 +270,114 @@ export class UsersService {
   }
 
   /**
-   * Mise à jour d'un membre CIBLÉ par son id (édition par l'admin, ou par
-   * l'utilisateur sur son propre profil). Contrairement à `update()` qui ne
-   * touchait QUE le compte connecté, celui-ci édite n'importe quel membre et
-   * re-dérive type/restaurant depuis le rôle (cohérence garantie).
+   * Mise à jour d'un membre CIBLÉ par son id (édition par l'admin ou par un
+   * responsable de restaurant, ou par l'utilisateur sur son propre profil).
+   * Contrairement à `update()` qui ne touche QUE le compte connecté, celui-ci
+   * édite un autre membre et re-dérive type/restaurant depuis le rôle.
+   *
+   *  - ADMIN : n'importe quel membre, rôle et rattachement compris ;
+   *  - manager, assistant : le personnel de SON restaurant, de rang inférieur ;
+   *    le rôle ne peut devenir qu'un rôle inférieur au sien et le restaurant ne
+   *    change pas ;
+   *  - sur son propre profil, un non-ADMIN ne change ni son rôle ni son
+   *    restaurant (c'était une promotion ADMIN en une requête).
    */
   async updateById(req: Request, id: string, updateUserDto: UpdateUserDto) {
     const actor = req.user as User;
-    const target = await this.prisma.user.findUnique({ where: { id } });
+    const target = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, role: true, restaurant_id: true, email: true },
+    });
     if (!target) {
       throw new NotFoundException('Utilisateur introuvable');
     }
-    // Seul un ADMIN peut modifier un AUTRE membre ; chacun peut modifier le sien.
-    if (actor.role !== UserRole.ADMIN && actor.id !== id) {
-      throw new ForbiddenException(
-        "Vous n'avez pas les droits pour modifier ce membre.",
-      );
+    const admin = estAdministrateur(actor);
+    const soiMeme = actor.id === target.id;
+    if (!soiMeme) {
+      assertPeutGererMembre(actor, target);
     }
 
-    const { restaurant_id, role, ...rest } = updateUserDto;
-    const data: Prisma.UserUpdateInput = { ...rest };
+    const { restaurant_id, role, email, ...profil } = updateUserDto;
+    const data: Prisma.UserUpdateInput = { ...profil };
 
-    if (role) {
-      data.role = role;
-      // Le type découle TOUJOURS du rôle ; un rôle point de vente exige un resto.
-      data.type = resolveStaffType(role);
-      if (isStoreRole(role)) {
-        const rid = restaurant_id ?? target.restaurant_id;
-        if (!rid) {
-          throw new BadRequestException(
-            'Un rôle de point de vente (caissier, cuisine, manager, assistant) doit être rattaché à un restaurant.',
-          );
-        }
-        data.restaurant = { connect: { id: rid } };
-      } else {
-        data.restaurant = { disconnect: true };
+    if (email !== undefined && email !== target.email) {
+      const dejaPris = await this.prisma.user.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+      if (dejaPris && dejaPris.id !== target.id) {
+        throw new BadRequestException(
+          'Cette adresse email est déjà utilisée par un autre compte.',
+        );
       }
-    } else if (restaurant_id !== undefined) {
-      data.restaurant = restaurant_id
-        ? { connect: { id: restaurant_id } }
-        : { disconnect: true };
+      data.email = email;
+    }
+
+    if (admin) {
+      if (role) {
+        data.role = role;
+        // Le type découle TOUJOURS du rôle ; un rôle point de vente exige un resto.
+        data.type = resolveStaffType(role);
+        if (isStoreRole(role)) {
+          const rid = restaurant_id ?? target.restaurant_id;
+          if (!rid) {
+            throw new BadRequestException(
+              'Un rôle de point de vente (caissier, cuisine, manager, assistant) doit être rattaché à un restaurant.',
+            );
+          }
+          data.restaurant = { connect: { id: rid } };
+        } else {
+          data.restaurant = { disconnect: true };
+        }
+      } else if (restaurant_id !== undefined) {
+        data.restaurant = restaurant_id
+          ? { connect: { id: restaurant_id } }
+          : { disconnect: true };
+      }
+    } else {
+      // Le rattachement reste celui du membre : un autre restaurant est refusé.
+      if (restaurant_id !== undefined && (restaurant_id || null) !== target.restaurant_id) {
+        throw new ForbiddenException(MESSAGE_HORS_RESTAURANT);
+      }
+      // Le rôle renvoyé tel quel par le formulaire ne change rien.
+      if (role !== undefined && role !== target.role) {
+        if (soiMeme) {
+          throw new ForbiddenException('Vous ne pouvez pas modifier votre propre rôle.');
+        }
+        assertPeutAttribuerRole(actor, role);
+        data.role = role;
+        data.type = resolveStaffType(role);
+      }
     }
 
     const updated = await this.prisma.user.update({
       where: { id },
       data,
       include: { restaurant: { select: RESTAURANT_PERSONNEL_SELECT } },
+      omit: { password: true },
     });
 
     await this.cacheManager.del('users');
-    const { password, ...out } = updated;
-    return out;
+    return updated;
+  }
+
+  /**
+   * Charge un membre visé par une action d'administration (réinitialisation,
+   * suspension, restauration, suppression) et vérifie que le compte connecté
+   * le gère. Son propre compte est laissé à la décision de l'appelant.
+   */
+  private async chargerMembreGere(acteur: User, id: string) {
+    const cible = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, role: true, restaurant_id: true, email: true },
+    });
+    if (!cible) {
+      throw new NotFoundException('Utilisateur non trouvé');
+    }
+    if (cible.id !== acteur.id) {
+      assertPeutGererMembre(acteur, cible);
+    }
+    return cible;
   }
 
   // UPDATE PASSWORD
@@ -324,61 +412,47 @@ export class UsersService {
   }
 
   async resetPassword(req: Request, user_id: string): Promise<ResetUserPasswordResponseDto> {
+    const acteur = req.user as User;
+    const cible = await this.chargerMembreGere(acteur, user_id);
+
     // Générer le salt et le hash
     const pass = this.generateDataService.generateSecurePassword();
     const salt = await bcrypt.genSalt();
     const hash = await bcrypt.hash(pass, salt);
 
-    const user = await this.prisma.user.update({
+    await this.prisma.user.update({
       where: {
-        id: user_id,
+        id: cible.id,
       },
       data: {
         password: hash,
         password_is_updated: true
       },
+      select: { id: true },
     });
-
-    if (!user) {
-      throw new NotFoundException('Utilisateur non trouvé');
-    }
-
 
     return {
-      email: user.email,
+      email: cible.email,
       password: pass,
     };
-
   }
 
-  // PARTIAL DELETE
-  async partialRemove(req: Request) {
-    const user = req.user as User;
-
-    const newUser = await this.prisma.user.update({
-      where: {
-        id: user.id,
-      },
-      data: {
-        entity_status: EntityStatus.DELETED,
-      },
-    });
-    // Emettre l'événement de suppression d'utilisateur
-    this.userEvent.userDeletedEvent({ actor: user, data: newUser });
-    return newUser;
-  }
-
-  // INACTIVE
+  // INACTIVE (bouton « Suspendre » du backoffice)
   async inactive(req: Request, id: string) {
     const user = req.user as User;
+    const cible = await this.chargerMembreGere(user, id);
+    if (cible.id === user.id) {
+      throw new BadRequestException('Vous ne pouvez pas suspendre votre propre compte.');
+    }
 
     const newUser = await this.prisma.user.update({
       where: {
-        id: id,
+        id: cible.id,
       },
       data: {
         entity_status: EntityStatus.INACTIVE,
       },
+      omit: { password: true },
     });
 
     // Emettre l'événement de désactivation d'utilisateur
@@ -389,14 +463,20 @@ export class UsersService {
   // RESTAURATION
   async restore(req: Request, id: string) {
     const user = req.user as User;
+    const cible = await this.chargerMembreGere(user, id);
+    // Un compte suspendu dont le jeton vivrait encore ne se rétablit pas lui-même.
+    if (cible.id === user.id) {
+      throw new BadRequestException('Vous ne pouvez pas restaurer votre propre compte.');
+    }
 
     const newUser = await this.prisma.user.update({
       where: {
-        id: id,
+        id: cible.id,
       },
       data: {
         entity_status: EntityStatus.ACTIVE,
       },
+      omit: { password: true },
     });
 
     // Emettre l'événement de restauration d'utilisateur
@@ -407,16 +487,20 @@ export class UsersService {
   // DELETE
   async remove(req: Request, id: string) {
     const user = req.user as User;
+    const cible = await this.chargerMembreGere(user, id);
+    if (cible.id === user.id) {
+      throw new BadRequestException('Vous ne pouvez pas supprimer votre propre compte.');
+    }
 
     const deletedUser = await this.prisma.user.delete({
       where: {
-        id: id,
+        id: cible.id,
       },
+      omit: { password: true },
     });
     // Emettre l'événement de suppression d'utilisateur
     this.userEvent.userDeletedEvent({ actor: user, data: deletedUser });
 
-    const { password, ...rest } = deletedUser;
-    return rest;
+    return deletedUser;
   }
 }

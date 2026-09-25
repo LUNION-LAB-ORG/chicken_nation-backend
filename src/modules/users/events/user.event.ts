@@ -3,6 +3,8 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { User } from '@prisma/client';
 import { UtilisateurAvecRestaurant } from 'src/modules/restaurant/constantes/restaurant-public.select';
 
+/** Compte transmis aux écouteurs : jamais le haché du mot de passe. */
+export type CompteSansMotDePasse = Omit<User, 'password'>;
 
 @Injectable()
 export class UserEvent {
@@ -42,7 +44,7 @@ export class UserEvent {
     /**
      * Emet un évènement de la activation d'un utilisateur
      */
-    async userActivatedEvent(payload: { actor: User, data: User }) {
+    async userActivatedEvent(payload: { actor: CompteSansMotDePasse, data: CompteSansMotDePasse }) {
         this.eventEmitter.emit(
             'user.activated',
             payload
@@ -52,7 +54,7 @@ export class UserEvent {
     /**
      * Emet un évènement de la désactivation d'un utilisateur
      */
-    async userDeactivatedEvent(payload: { actor: User, data: User }) {
+    async userDeactivatedEvent(payload: { actor: CompteSansMotDePasse, data: CompteSansMotDePasse }) {
         this.eventEmitter.emit(
             'user.deactivated',
             payload
@@ -62,7 +64,7 @@ export class UserEvent {
     /**
      * Emet un évènement de la suppression d'un utilisateur
      */
-    async userDeletedEvent(payload: { actor: User, data: User }) {
+    async userDeletedEvent(payload: { actor: CompteSansMotDePasse, data: CompteSansMotDePasse }) {
         this.eventEmitter.emit(
             'user.deleted',
             payload

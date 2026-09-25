@@ -1,4 +1,3 @@
-import { CacheInterceptor } from '@nestjs/cache-manager';
 import {
   Body,
   Controller,
@@ -39,8 +38,20 @@ import { RegisterUserExpoPushTokenDto } from '../dto/register-expo-push-token.dt
 import { S3Service } from 'src/s3/s3.service';
 import { UserPushService } from '../services/user-push.service';
 
+/**
+ * Aucun cache sur ce contrôleur. Le `CacheInterceptor` d'origine rangeait les
+ * réponses sous la seule URL : GET /users/detail servait le profil d'un membre
+ * à un autre, et GET /users, désormais propre à chaque restaurant, aurait
+ * servi la liste d'un restaurant à un autre.
+ *
+ * La liste n'est pas mise en cache non plus : la clé de `UserScopedCacheInterceptor`
+ * (type et restaurant du compte) ne suit pas la règle de visibilité, qui se
+ * fonde aussi sur le rôle. Un compte de magasin enregistré comme siège et sans
+ * restaurant partageait la clé de l'ADMIN et recevait tout le réseau. La
+ * liste change à chaque création ou suspension, et le cache ne durait qu'une
+ * seconde : il n'apportait rien.
+ */
 @Controller('users')
-@UseInterceptors(CacheInterceptor)
 export class UsersController {
   constructor(
     private readonly usersService: UsersService,
@@ -147,6 +158,7 @@ export class UsersController {
   }
 
   // GET ALL USERS
+  // Compte de restaurant : limité à SON restaurant, le paramètre est ignoré.
   @Get()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.PERSONNELS, Action.READ)
@@ -158,10 +170,11 @@ export class UsersController {
     description: 'Utilisateur non trouvé',
   })
   findAll(
+    @Req() req: Request,
     @Query('type') type?: UserType,
     @Query('restaurantId') restaurantId?: string,
   ) {
-    return this.usersService.findAll({ type, restaurantId });
+    return this.usersService.findAll(req, { type, restaurantId });
   }
 
   // UPDATE USER
@@ -221,12 +234,13 @@ export class UsersController {
     return this.usersService.resetPassword(req, user_id);
   }
 
-  // UPDATE MEMBER (par id) — admin édite n'importe quel membre, ou soi-même.
+  // UPDATE MEMBER (par id) : l'admin édite n'importe quel membre, un
+  // responsable le personnel de rang inférieur de son restaurant, chacun son profil.
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.PERSONNELS, Action.UPDATE)
   @UseInterceptors(FileInterceptor('image'))
-  @ApiOperation({ summary: 'Mise à jour d’un membre ciblé (admin)' })
+  @ApiOperation({ summary: 'Mise à jour d’un membre ciblé' })
   @ApiOkResponse({ description: 'Membre mis à jour avec succès' })
   @ApiBody({ type: UpdateUserDto })
   async updateById(
@@ -242,20 +256,9 @@ export class UsersController {
     });
   }
 
-  // PARTIAL DELETE
-  @Delete()
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.PERSONNELS, Action.DELETE)
-  @ApiOperation({ summary: 'Supprimer partiellement utilisateur' })
-  @ApiOkResponse({
-    description: 'Utilisateur supprimé partiellement avec succès',
-  })
-  @ApiUnauthorizedResponse({
-    description: 'Utilisateur non trouvé',
-  })
-  async partialDelete(@Req() req: Request) {
-    return this.usersService.partialRemove(req);
-  }
+  // DELETE /users (le compte connecté passait SON compte à DELETED) retirée :
+  // aucune application ne l'appelait. La suppression passe par
+  // DELETE /users/delete/:id, et la suspension par POST /users/inactive/:id.
 
   // INACTIVE
   @Post('inactive/:id')

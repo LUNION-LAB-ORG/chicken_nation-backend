@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, MaxLength, IsOptional, IsString, IsBoolean } from 'class-validator';
+import { IsNotEmpty, MaxLength, IsOptional, IsString, IsBoolean, IsEnum } from 'class-validator';
 
 // Multipart (FormData) envoie des strings "true"/"false" : on parse en booléen.
 // IMPORTANT : renvoyer `undefined` quand le champ est absent, sinon on écraserait
@@ -65,6 +65,7 @@ export class CreateUserDto {
   // ROLE
 
   @IsNotEmpty()
+  @IsEnum(UserRole, { message: 'Rôle inconnu.' })
   @ApiProperty({
     enum: UserRole,
     description: "le role de l'utilisateur",
