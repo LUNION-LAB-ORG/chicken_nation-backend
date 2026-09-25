@@ -3294,6 +3294,9 @@ model CrmCampaign {
   coupons         CrmCoupon[]
   events          CrmEvent[]
   conversions     CrmConversion[]
+  /// Publics visés, avec leurs critères, offre et objectifs (lot 3). `segments`
+  /// est recopié pour les anciens écrans.
+  publics         CrmCampaignPublic[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -3360,8 +3363,9 @@ model CrmOffer {
   position            Int          @default(0)
   is_active           Boolean      @default(true)
 
-  campaigns CrmCampaign[]
-  coupons   CrmCoupon[]
+  campaigns        CrmCampaign[]
+  campaign_publics CrmCampaignPublic[]
+  coupons          CrmCoupon[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -3433,6 +3437,9 @@ model CrmContact {
   /// Commandes Glovo/Yango relevées par les caissiers (table historique « Prospect »).
   captures    Prospect[]
   conversions CrmConversion[]
+  /// Passages successifs dans les publics du CRM. ⚠️ Écrits par un déclencheur
+  /// PostgreSQL (migration 20260926090000_crm_passages_publics), invisible pour Prisma.
+  passages    CrmCycle[]
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -3474,9 +3481,14 @@ model CrmCall {
   /// Appel repris de l'acquisition (ou passé par ses anciennes routes) : jamais importé deux fois.
   prospect_call_id String?        @unique @db.Uuid
   prospect_call    ProspectCall?  @relation(fields: [prospect_call_id], references: [id], onDelete: SetNull)
+  /// Passage de la fiche où l'appel a eu lieu (0 = historique antérieur au premier passage).
+  cycle            Int
+  /// Appel repris d'un ancien écran (acquisition, rétention) : hors mesures d'effort et de premier appel.
+  imported         Boolean        @default(false)
   created_at       DateTime       @default(now()) @db.Timestamp(6)
 
   @@index([contact_id, created_at])
+  @@index([contact_id, cycle])
   @@index([campaign_id, created_at])
   @@index([agent_id, created_at])
   @@index([created_at])
@@ -3511,8 +3523,11 @@ model CrmCoupon {
   used_at        DateTime?    @db.Timestamp(6)
   order_id       String?      @db.Uuid
   order_amount   Float?
+  /// Passage de la fiche où le coupon a été envoyé.
+  cycle          Int
 
   @@index([contact_id, sent_at])
+  @@index([contact_id, cycle])
   @@index([campaign_id])
   @@index([sent_at])
   @@index([used_at])
@@ -3535,8 +3550,12 @@ model CrmCampaignMember {
   release_reason CrmReleaseReason?
   converted_at   DateTime?         @db.Timestamp(6)
   alert_sent_at  DateTime?         @db.Timestamp(6)
+  /// Public et passage du contact au moment du ciblage : la campagne se lit par public.
+  segment        CrmSegment
+  cycle          Int
 
   @@unique([campaign_id, contact_id])
+  @@index([campaign_id, segment])
   @@index([campaign_id, agent_id])
   @@index([contact_id])
 }
@@ -3608,4 +3627,59 @@ model CrmConversion {
   @@index([contact_id])
   @@index([segment, converted_at])
   @@index([order_id])
+  @@index([contact_id, cycle])
+}
+
+/// Passage d'une fiche dans un public du CRM : un par cycle. La fiche est
+/// remise à zéro à chaque nouveau cycle, pas ses passages : c'est ici que se
+/// lisent les chiffres d'une période passée (entrées, conversions, délais).
+/// ⚠️ Écrit par le déclencheur PostgreSQL "CrmContact_passage" (migration
+/// 20260926090000_crm_passages_publics), jamais par le code : invisible pour
+/// Prisma, ne jamais recréer la base par `db push`.
+model CrmCycle {
+  id               String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contact_id       String     @db.Uuid
+  contact          CrmContact @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+  cycle            Int
+  segment          CrmSegment
+  /// Entrée dans le public : inscription, décrochage ou capture.
+  segment_since    DateTime   @db.Timestamp(6)
+  /// Entrée réelle dans le CRM (le stock repris à l'ouverture tombe ce jour-là).
+  crm_entered_at   DateTime   @default(now()) @db.Timestamp(6)
+  closed_at        DateTime?  @db.Timestamp(6)
+  /// RECHUTE ou NOUVELLE_CAPTURE.
+  close_reason     String?    @db.VarChar(20)
+  /// Glovo/Yango : le compte avait déjà commandé dans le délai d'inactivité avant la capture.
+  already_customer Boolean?
+  /// Passage reconstitué par la migration (fiches ouvertes avant le lot 3).
+  rebuilt          Boolean    @default(false)
+
+  @@unique([contact_id, cycle])
+  @@index([segment, crm_entered_at])
+  @@index([segment, segment_since])
+}
+
+/// Un public visé par une campagne, avec ses critères propres : période
+/// (d'inscription, de décrochage ou de capture selon le public), restaurants
+/// de capture et compte appli pour Glovo/Yango, « déjà reconquis » pour les
+/// inactifs, offre et objectifs facultatifs.
+model CrmCampaignPublic {
+  id                     String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  campaign_id            String      @db.Uuid
+  campaign               CrmCampaign @relation(fields: [campaign_id], references: [id], onDelete: Cascade)
+  segment                CrmSegment
+  period_from            DateTime?   @db.Date
+  period_to              DateTime?   @db.Date
+  restaurant_ids         String[]    @default([]) @db.Uuid
+  /// AVEC ou SANS compte sur l'application (Glovo/Yango seulement).
+  account                String?     @db.VarChar(10)
+  /// Inactifs déjà reconquis au moins une fois (cycle 2 et plus).
+  relapsed_only          Boolean     @default(false)
+  offer_id               String?     @db.Uuid
+  offer                  CrmOffer?   @relation(fields: [offer_id], references: [id], onDelete: SetNull)
+  target_conversion_rate Float?
+  target_contacts_count  Int?
+  targeted_count         Int         @default(0)
+
+  @@unique([campaign_id, segment])
 }

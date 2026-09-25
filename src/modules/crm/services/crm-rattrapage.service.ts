@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { COLONNES_VENTE, COMMANDE_EFFECTIVE_SQL, NOUVEAU_CYCLE_SQL, compter, venteManquante } from '../crm.rules';
+import { COLONNES_VENTE, COMMANDE_EFFECTIVE_SQL, COMMANDE_VALIDE_SQL, NOUVEAU_CYCLE_SQL, compter, venteManquante } from '../crm.rules';
 import { CrmConfigService } from './crm-config.service';
 import { CrmRegistreService } from './crm-registre.service';
 import { CrmSyncService } from './crm-sync.service';
@@ -145,7 +145,25 @@ export class CrmRattrapageService {
       await this.bascule(),
     );
 
-    return { crees, lies, revus: aRevoir.length, couponsUtilises, couponsLiberes, ventes };
+    // 6. Passages Glovo/Yango : le compte de la fiche avait-il déjà commandé
+    //    (commande valide) dans le délai d'inactivité avant la capture ? Ce
+    //    « déjà client » est compté à part dans les tableaux de bord. Calculé
+    //    une fois par passage (mise à jour conditionnée, sans effet si on la
+    //    rejoue) ; les autres publics reçoivent « non ». Tourne après l'étape 2 :
+    //    un compte associé depuis la capture est déjà connu.
+    const dejaClients = await this.prisma.$executeRawUnsafe(
+      `UPDATE "CrmCycle" y
+      SET "already_customer" = (y."segment" IN ('GLOVO', 'YANGO') AND x."customer_id" IS NOT NULL AND EXISTS (
+        SELECT 1 FROM "Order" o
+        WHERE o."customer_id" = x."customer_id" AND ${COMMANDE_VALIDE_SQL}
+          AND o."created_at" >= y."segment_since" - make_interval(days => $1::int)
+          AND o."created_at" < y."segment_since"))
+      FROM "CrmContact" x
+      WHERE x."id" = y."contact_id" AND y."already_customer" IS NULL`,
+      await this.config.joursInactivite(),
+    );
+
+    return { crees, lies, revus: aRevoir.length, couponsUtilises, couponsLiberes, ventes, dejaClients };
   }
 
   /**

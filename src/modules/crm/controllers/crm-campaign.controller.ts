@@ -9,14 +9,15 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import {
   CampaignReportQueryDto,
+  CompareCampaignsQueryDto,
   CreateCrmCampaignDto,
   DistributeCrmDto,
+  PreviewCampaignDto,
   QueryCampaignsDto,
   UpdateCrmCampaignDto,
   UpdateCrmTeamDto,
 } from '../dto/campaign.dto';
 import { CrmAlertService } from '../services/crm-alert.service';
-import { CrmCampaignStatsService } from '../services/crm-campaign-stats.service';
 import { CrmCampaignService } from '../services/crm-campaign.service';
 import { CrmReportService } from '../services/crm-report.service';
 
@@ -32,7 +33,6 @@ import { CrmReportService } from '../services/crm-report.service';
 export class CrmCampaignController {
   constructor(
     private readonly campagnes: CrmCampaignService,
-    private readonly stats: CrmCampaignStatsService,
     private readonly rapports: CrmReportService,
     private readonly alertes: CrmAlertService,
   ) {}
@@ -45,15 +45,33 @@ export class CrmCampaignController {
 
   @Get('compare')
   @RequirePermission(Modules.CRM, Action.REPORT)
-  @ApiOperation({ summary: 'Historique et comparatif des campagnes lancées' })
-  comparer() {
-    return this.stats.comparer();
+  @ApiOperation({ summary: 'Historique et comparatif des campagnes lancées, par public' })
+  comparer(@Req() req: Request, @Query() q: CompareCampaignsQueryDto) {
+    return this.campagnes.comparer(req.user as User, q);
+  }
+
+  @Get('compare/export')
+  @RequirePermission(Modules.CRM, Action.EXPORT)
+  @ApiOperation({ summary: 'Comparatif des campagnes en Excel, avec les filtres de l’écran' })
+  async exporterComparatif(@Req() req: Request, @Query() q: CompareCampaignsQueryDto, @Res() res: Response) {
+    const lignes = await this.campagnes.comparer(req.user as User, q);
+    const fichier = await this.rapports.comparatif(req.user as User, lignes, { ...(q.segment && { segment: q.segment }) });
+    res.setHeader('Content-Type', fichier.type);
+    res.setHeader('Content-Disposition', `attachment; filename="${fichier.nom}"`);
+    res.send(fichier.contenu);
   }
 
   @Post()
   @RequirePermission(Modules.CRM, Action.CREATE)
   creer(@Req() req: Request, @Body() dto: CreateCrmCampaignDto) {
     return this.campagnes.creer(req.user as User, dto);
+  }
+
+  @Post('preview')
+  @RequirePermission(Modules.CRM, Action.CREATE)
+  @ApiOperation({ summary: 'Estimer la population de chaque public avant le lancement' })
+  apercu(@Body() dto: PreviewCampaignDto) {
+    return this.campagnes.apercu(dto);
   }
 
   @Get(':id')
@@ -113,9 +131,8 @@ export class CrmCampaignController {
   @RequirePermission(Modules.CRM, Action.UPDATE)
   async terminer(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
     const resultat = await this.campagnes.terminer(req.user as User, id);
-    const indicateurs = (resultat.rapport as { indicateurs?: { conversions: number; cibles: number } }).indicateurs;
-    if (indicateurs) await this.alertes.notifierFinCampagne(id, indicateurs);
-    return { liberes: resultat.liberes };
+    await this.alertes.notifierFinCampagne(id);
+    return { sortis: resultat.sortis, liberes: resultat.liberes, gardes: resultat.gardes, message: resultat.message };
   }
 
   @Post(':id/distribute')

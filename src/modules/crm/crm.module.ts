@@ -17,6 +17,7 @@ import { CrmExportService } from './services/crm-export.service';
 import { CrmContactService } from './services/crm-contact.service';
 import { CrmReportService } from './services/crm-report.service';
 import { CrmCaptureService } from './services/crm-capture.service';
+import { CrmPublicsService } from './services/crm-publics.service';
 import { CrmIdentiteService } from './services/crm-identite.service';
 import { CrmRattrapageService } from './services/crm-rattrapage.service';
 import { CrmRegistreService } from './services/crm-registre.service';
@@ -58,6 +59,7 @@ import { CrmTask } from './tasks/crm.task';
     CrmCampaignService,
     CrmReportService,
     CrmAlertService,
+    CrmPublicsService,
     CrmAnalyticsService,
     CrmVentesService,
     CrmListener,

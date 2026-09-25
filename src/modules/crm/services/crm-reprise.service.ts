@@ -90,6 +90,8 @@ export class CrmRepriseService {
         const appels = await tx.$executeRawUnsafe(`
           WITH source AS (
             SELECT rc.*, x."id" AS contact_id,
+              -- Passage de l'appel : celui en cours s'il est postérieur à l'entrée, sinon l'historique (0).
+              CASE WHEN rc."called_at" >= x."segment_since" THEN x."cycle" ELSE 0 END AS passage,
               CASE rc."status" WHEN 'NO_ANSWER' THEN 'NON_JOINT' WHEN 'LOST' THEN 'NON_INTERESSE'
                                WHEN 'RECONQUERED' THEN 'INTERESSE' ELSE 'A_RAPPELER' END AS resultat,
               CASE rc."status" WHEN 'NO_ANSWER' THEN 'Pas de réponse' WHEN 'CALLBACK_SCHEDULED' THEN 'Rappel planifié'
@@ -101,10 +103,10 @@ export class CrmRepriseService {
             WHERE rc."entity_status" <> 'DELETED'
           )
           INSERT INTO "CrmCall" ("id", "contact_id", "segment", "agent_id", "call_status_id", "status_label", "outcome",
-                                 "reached", "attempt", "loss_reason_id", "comment", "callback_at", "created_at")
+                                 "reached", "attempt", "loss_reason_id", "comment", "callback_at", "created_at", "cycle", "imported")
           SELECT gen_random_uuid(), s.contact_id, 'INACTIF', s."caller_user_id", NULL, s.libelle,
                  s.resultat::"CrmCallOutcome", s.resultat <> 'NON_JOINT', s.rang, raison."id",
-                 nullif(trim(s."notes"), ''), s."next_callback_at", s."called_at"
+                 nullif(trim(s."notes"), ''), s."next_callback_at", s."called_at", s.passage, true
           FROM source s
           LEFT JOIN "retention_callback_reasons" rr ON rr."id" = s."reason_id"
           LEFT JOIN LATERAL (

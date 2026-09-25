@@ -10,6 +10,8 @@ export interface ContactCredite {
   id: string;
   cycle: number;
   segment: CrmSegment;
+  /** Entrée dans le passage en cours : une capture plus ancienne appartient à un passage fini. */
+  segment_since: Date;
   campaign_id: string | null;
   assigned_to_id: string | null;
 }
@@ -70,13 +72,16 @@ export class CrmRegistreService {
       const couponDe = async (contactId: string) =>
         !!code && (await tx.crmCoupon.count({ where: { contact_id: contactId, code: { equals: code, mode: 'insensitive' } } })) > 0;
       if (existante.source === CrmConversionSource.CRM && (await couponDe(contact.id)) && !(await couponDe(existante.contact_id))) {
+        const capture = await this.captureDuPassage(tx, contact, commande);
+        const campagne = await this.campagneDeLaVente(tx, contact, commande);
         await tx.crmConversion.update({
           where: { id: existante.id },
           data: {
             contact_id: contact.id,
             cycle: contact.cycle,
             segment: contact.segment,
-            campaign_id: contact.campaign_id,
+            capture_id: capture,
+            campaign_id: campagne,
             agent_id: contact.assigned_to_id,
           },
         });
@@ -100,18 +105,47 @@ export class CrmRegistreService {
     }
 
     const source = await this.source(contact.segment, commande.created_at);
-    const [capture] = await tx.$queryRaw<{ id: string }[]>`
-      SELECT p."id" FROM "Prospect" p
-      WHERE p."contact_id" = ${contact.id}::uuid AND p."entity_status" <> 'DELETED'
-      ORDER BY p."created_at" DESC LIMIT 1`;
+    const capture = await this.captureDuPassage(tx, contact, commande);
+    const campagne = await this.campagneDeLaVente(tx, contact, commande);
     const inseres = await tx.$executeRaw`
       INSERT INTO "CrmConversion" ("id", "contact_id", "cycle", "segment", "order_id", "amount", "converted_at",
         "restaurant_id", "capture_id", "campaign_id", "agent_id", "source")
       VALUES (gen_random_uuid(), ${contact.id}::uuid, ${contact.cycle}, ${contact.segment}::"CrmSegment",
         ${commande.id}::uuid, ${commande.amount}, ${commande.created_at}, ${commande.restaurant_id}::uuid,
-        ${capture?.id ?? null}::uuid, ${contact.campaign_id}::uuid, ${contact.assigned_to_id}::uuid, ${source}::"CrmConversionSource")
+        ${capture}::uuid, ${campagne}::uuid, ${contact.assigned_to_id}::uuid, ${source}::"CrmConversionSource")
       ON CONFLICT DO NOTHING`;
     return inseres > 0;
+  }
+
+  /**
+   * Campagne créditée : celle du coupon utilisé s'il vient d'une campagne (le
+   * client gardé par son agent à la clôture commande souvent après), sinon la
+   * campagne en cours de la fiche.
+   */
+  private async campagneDeLaVente(tx: Tx, contact: ContactCredite, commande: CommandeCreditee): Promise<string | null> {
+    const code = commande.code_promo?.trim();
+    if (code) {
+      const coupon = await tx.crmCoupon.findFirst({
+        where: { contact_id: contact.id, code: { equals: code, mode: 'insensitive' }, campaign_id: { not: null } },
+        select: { campaign_id: true },
+      });
+      if (coupon?.campaign_id) return coupon.campaign_id;
+    }
+    return contact.campaign_id;
+  }
+
+  /**
+   * Capture à l'origine d'une vente : la plus récente capture du passage en
+   * cours faite avant la commande. Une capture d'un passage fini, ou
+   * postérieure à la commande, n'y est pour rien.
+   */
+  private async captureDuPassage(tx: Tx, contact: ContactCredite, commande: CommandeCreditee): Promise<string | null> {
+    const [capture] = await tx.$queryRaw<{ id: string }[]>`
+      SELECT p."id" FROM "Prospect" p
+      WHERE p."contact_id" = ${contact.id}::uuid AND p."entity_status" <> 'DELETED'
+        AND p."created_at" <= ${commande.created_at} AND p."created_at" >= ${contact.segment_since}
+      ORDER BY p."created_at" DESC LIMIT 1`;
+    return capture?.id ?? null;
   }
 
   /**

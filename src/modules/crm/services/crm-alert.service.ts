@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { CampaignStatus, CrmEventType, NotificationType } from '@prisma/client';
+import { CampaignStatus, CrmEventType, NotificationType, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import {
   NotificationRecipient,
@@ -8,6 +8,7 @@ import {
 import { NotificationRecipientService } from 'src/modules/notifications/recipients/notification-recipient.service';
 import { NotificationsService } from 'src/modules/notifications/services/notifications.service';
 import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
+import { STATUTS_OUVERTS, VENTE_VALIDE_SQL } from '../crm.rules';
 import { CrmNotificationsTemplate } from '../templates/crm-notifications.template';
 import { CrmConfigService } from './crm-config.service';
 import { CrmEventsService } from './crm-events.service';
@@ -31,7 +32,8 @@ export class CrmAlertService {
   ) {}
 
   /**
-   * Contacts affectés dans une campagne en cours, toujours pas appelés après
+   * Contacts affectés dans une campagne en cours, encore à travailler (ni pas
+   * intéressés, ni injoignables, ni convertis), toujours pas appelés après
    * le délai réglé. Une alerte par couple agent et campagne, une seule fois
    * par affectation : la réaffectation remet le compteur à zéro.
    */
@@ -43,7 +45,7 @@ export class CrmAlertService {
       SELECT m.id AS member_id, m.contact_id, m.agent_id, m.campaign_id, c.name AS campagne, c.lead_agent_id
       FROM "CrmCampaignMember" m
       JOIN "ConversionCampaign" c ON c.id = m.campaign_id AND c.status = 'ACTIVE'
-      JOIN "CrmContact" p ON p.id = m.contact_id AND p.status <> 'CONVERTI' AND p.entity_status <> 'DELETED'
+      JOIN "CrmContact" p ON p.id = m.contact_id AND p.status::text IN (${Prisma.join(STATUTS_OUVERTS)}) AND p.entity_status <> 'DELETED'
       WHERE m.released_at IS NULL AND m.agent_id IS NOT NULL AND m.alert_sent_at IS NULL
         AND m.assigned_at < now() - make_interval(hours => ${heures}::int)
         AND (p.last_call_at IS NULL OR p.last_call_at < m.assigned_at)
@@ -81,12 +83,20 @@ export class CrmAlertService {
     return lignes.length;
   }
 
-  async notifierFinCampagne(campagneId: string, indicateurs: { conversions: number; cibles: number }) {
+  /**
+   * Fin de campagne : ventes lues dans le registre (valides, enregistrées par
+   * le CRM), rapportées aux ciblés. Le second paramètre, ancien, est ignoré.
+   */
+  async notifierFinCampagne(campagneId: string, _indicateurs?: { conversions: number; cibles: number }) {
     const c = await this.prisma.crmCampaign.findUnique({
       where: { id: campagneId },
-      select: { name: true, status: true, lead_agent_id: true, created_by_id: true },
+      select: { name: true, status: true, lead_agent_id: true, created_by_id: true, targeted_count: true },
     });
     if (!c || c.status !== CampaignStatus.COMPLETED) return;
+    const [ventes] = await this.prisma.$queryRaw<{ conversions: number }[]>`
+      SELECT count(*)::int AS conversions FROM "CrmConversion" v
+      WHERE v.campaign_id = ${campagneId}::uuid AND v.source = 'CRM' AND ${Prisma.raw(VENTE_VALIDE_SQL)}`;
+    const indicateurs = { conversions: ventes?.conversions ?? 0, cibles: c.targeted_count };
     const ids = [...new Set([c.lead_agent_id, c.created_by_id].filter((v): v is string => !!v))];
     const destinataires = (await Promise.all(ids.map((id) => this.destinataire(id)))).filter(
       (r): r is NotificationRecipient => !!r,

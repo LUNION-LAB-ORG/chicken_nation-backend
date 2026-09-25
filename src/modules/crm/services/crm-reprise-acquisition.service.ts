@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
-import { COMMANDE_EFFECTIVE_SQL, CRM_SETTINGS, compter } from '../crm.rules';
+import { COMMANDE_EFFECTIVE_SQL, CRM_SETTINGS, NOUVEAU_CYCLE_SQL, compter } from '../crm.rules';
 import { CrmConfigService } from './crm-config.service';
 
 const EFFECTIVE = COMMANDE_EFFECTIVE_SQL;
@@ -9,6 +9,33 @@ const CLE_CAPTURE = `right(regexp_replace(p."phone", '\\D', '', 'g'), 10)`;
 const CLE_CLIENT = `right(regexp_replace(c."phone", '\\D', '', 'g'), 10)`;
 const TAILLE_LOT = 500;
 const VERROU_REPRISE = 727226;
+const PASSAGES_MAX = 5;
+
+/**
+ * Fiches Glovo/Yango du lot jamais travaillées dans le CRM, avec une vente
+ * d'acquisition dans leur passage en cours : elles partent converties, avec
+ * la première de ces ventes.
+ */
+const CONVERSION_DE_DEPART = `
+  WITH conv AS (
+    SELECT DISTINCT ON (p."contact_id") p."contact_id", p."converted_at", p."first_order_id",
+           coalesce(p."first_order_amount", o."amount") AS montant
+    FROM "Prospect" p JOIN crm_lot l ON l.contact_id = p."contact_id"
+    JOIN "CrmContact" y ON y."id" = p."contact_id"
+    JOIN "Order" o ON o."id" = p."first_order_id" AND ${EFFECTIVE}
+    WHERE p."status" = 'CONVERTI' AND p."converted_at" IS NOT NULL AND p."converted_at" >= y."segment_since"
+    ORDER BY p."contact_id", p."converted_at"
+  )
+  UPDATE "CrmContact" x
+  SET "status" = 'CONVERTI', "converted_at" = c."converted_at", "conversion_order_id" = c."first_order_id",
+      "conversion_amount" = c.montant, "callback_at" = NULL, "updated_at" = now()
+  FROM conv c
+  WHERE x."id" = c."contact_id" AND x."status" <> 'CONVERTI' AND x."segment" IN ('GLOVO', 'YANGO')
+    AND x."assigned_to_id" IS NULL AND x."campaign_id" IS NULL`;
+
+/** Passage d'une ligne reprise (alias k, datée par `date`) : le dernier ouvert avant elle, sinon l'historique (0). */
+const passageA = (date: string) =>
+  `coalesce((SELECT max(y."cycle") FROM "CrmCycle" y WHERE y."contact_id" = k."contact_id" AND y."segment_since" <= ${date}), 0)`;
 
 /**
  * Reprise de l'acquisition Glovo/Yango dans le CRM : une fiche par personne
@@ -40,7 +67,7 @@ export class CrmRepriseAcquisitionService {
       WHERE p."contact_id" IS NULL AND p."entity_status" <> 'DELETED' AND p."platform" IN ('GLOVO', 'YANGO')
         AND length(regexp_replace(p."phone", '\\D', '', 'g')) >= 6
       ORDER BY 1`);
-    const bilan: Record<string, number> = { numeros: cles.length, fiches: 0, requalifiees: 0, captures: 0, appels: 0, coupons: 0, ventes: 0, lots_en_erreur: 0 };
+    const bilan: Record<string, number> = { numeros: cles.length, fiches: 0, requalifiees: 0, captures: 0, appels: 0, coupons: 0, ventes: 0, nouveaux_passages: 0, lots_en_erreur: 0 };
     for (let i = 0; i < cles.length; i += TAILLE_LOT) {
       const lot = cles.slice(i, i + TAILLE_LOT).map((c) => c.cle);
       try {
@@ -60,6 +87,7 @@ export class CrmRepriseAcquisitionService {
       this.logger.log(
         `Reprise acquisition : ${bilan.numeros} numéros, ${bilan.fiches} fiches créées, ${bilan.requalifiees} requalifiées, ` +
           `${bilan.captures} captures, ${bilan.appels} appels, ${bilan.coupons} coupons, ${bilan.ventes} ventes historiques` +
+          (bilan.nouveaux_passages ? `, ${bilan.nouveaux_passages} nouveaux passages` : '') +
           (bilan.lots_en_erreur ? `, ${bilan.lots_en_erreur} lots en erreur` : ''),
       );
     }
@@ -222,32 +250,36 @@ export class CrmRepriseAcquisitionService {
         // Appels de l'acquisition, avec le public de la capture d'origine.
         const appels = await q(`
           INSERT INTO "CrmCall" ("id", "contact_id", "segment", "agent_id", "call_status_id", "status_label", "outcome",
-                                 "reached", "attempt", "comment", "created_at", "prospect_call_id")
+                                 "reached", "attempt", "comment", "created_at", "prospect_call_id", "cycle", "imported")
           SELECT gen_random_uuid(), p."contact_id", p."platform"::text::"CrmSegment", pc."agent_id", NULL,
                  CASE pc."result" WHEN 'JOINT' THEN 'Joint (acquisition)' WHEN 'NON_JOIGNABLE' THEN 'Non joignable (acquisition)'
                                   ELSE 'Refus (acquisition)' END,
                  (CASE pc."result" WHEN 'JOINT' THEN 'INTERESSE' WHEN 'NON_JOIGNABLE' THEN 'NON_JOINT'
                                    ELSE 'NON_INTERESSE' END)::"CrmCallOutcome",
-                 pc."result" <> 'NON_JOIGNABLE', pc."rank", nullif(trim(pc."note"), ''), pc."created_at", pc."id"
+                 pc."result" <> 'NON_JOIGNABLE', pc."rank", nullif(trim(pc."note"), ''), pc."created_at", pc."id",
+                 CASE WHEN pc."created_at" >= x."segment_since" THEN x."cycle" ELSE 0 END, true
           FROM "ProspectCall" pc
           JOIN "Prospect" p ON p."id" = pc."prospect_id"
           JOIN crm_lot l ON l.contact_id = p."contact_id"
+          JOIN "CrmContact" x ON x."id" = p."contact_id"
           ON CONFLICT DO NOTHING`);
 
         // Coupons de l'acquisition : l'usage historique est posé tout de suite.
         const coupons = await q(`
           INSERT INTO "CrmCoupon" ("id", "contact_id", "segment", "promo_code_id", "code", "offer_label", "discount_type",
                                    "discount_value", "sent_at", "expires_at", "channel", "resent_count",
-                                   "used_at", "order_id", "order_amount")
+                                   "used_at", "order_id", "order_amount", "cycle")
           SELECT gen_random_uuid(), p."contact_id", p."platform"::text::"CrmSegment", pc."id", pc."code",
                  left(CASE WHEN pc."discount_type" = 'PERCENTAGE'
                            THEN trim(to_char(pc."discount_value", 'FM999990.##')) || ' % de remise'
                            ELSE trim(to_char(pc."discount_value", 'FM9999999990')) || ' F de remise' END, 120),
                  pc."discount_type", pc."discount_value", coalesce(p."coupon_sent_at", pc."start_date"), pc."expiration_date",
                  'INCONNU', greatest((SELECT count(*) FROM "ProspectMessage" m WHERE m."prospect_id" = p."id") - 1, 0),
-                 u."created_at", u."id", u."amount"
+                 u."created_at", u."id", u."amount",
+                 CASE WHEN coalesce(p."coupon_sent_at", pc."start_date") >= x."segment_since" THEN x."cycle" ELSE 0 END
           FROM "Prospect" p
           JOIN crm_lot l ON l.contact_id = p."contact_id"
+          JOIN "CrmContact" x ON x."id" = p."contact_id"
           JOIN "PromoCode" pc ON pc."id" = p."promo_code_id"
           LEFT JOIN LATERAL (
             SELECT o."id", o."created_at", o."amount" FROM "Order" o
@@ -260,7 +292,10 @@ export class CrmRepriseAcquisitionService {
         const ventes = await q(
           `INSERT INTO "CrmConversion" ("id", "contact_id", "cycle", "segment", "order_id", "amount", "converted_at",
                                         "restaurant_id", "capture_id", "source")
-           SELECT DISTINCT ON (p."first_order_id") gen_random_uuid(), p."contact_id", x."cycle", p."platform"::text::"CrmSegment",
+           SELECT DISTINCT ON (p."first_order_id") gen_random_uuid(), p."contact_id",
+                  -- Passage de la vente : celui en cours si elle suit l'entrée, sinon l'historique (0),
+                  -- comme les appels et les coupons : jamais une vente Glovo rangée chez les inactifs.
+                  CASE WHEN p."converted_at" >= x."segment_since" THEN x."cycle" ELSE 0 END, p."platform"::text::"CrmSegment",
                   p."first_order_id", coalesce(p."first_order_amount", o."amount"), p."converted_at", p."restaurant_id", p."id",
                   'ACQUISITION_HISTORIQUE'
            FROM "Prospect" p
@@ -274,21 +309,57 @@ export class CrmRepriseAcquisitionService {
         );
 
         // État de départ des fiches encore jamais travaillées dans le CRM.
-        await q(`
-          WITH conv AS (
-            SELECT DISTINCT ON (p."contact_id") p."contact_id", p."converted_at", p."first_order_id", coalesce(p."first_order_amount", o."amount") AS montant
-            FROM "Prospect" p JOIN crm_lot l ON l.contact_id = p."contact_id"
-            JOIN "Order" o ON o."id" = p."first_order_id" AND ${EFFECTIVE}
-            WHERE p."status" = 'CONVERTI' AND p."converted_at" IS NOT NULL
-            ORDER BY p."contact_id", p."converted_at"
-          )
-          UPDATE "CrmContact" x
-          SET "status" = 'CONVERTI', "converted_at" = c."converted_at", "conversion_order_id" = c."first_order_id",
-              "conversion_amount" = c.montant, "callback_at" = NULL, "updated_at" = now()
-          FROM conv c
-          WHERE x."id" = c."contact_id" AND x."status" <> 'CONVERTI' AND x."segment" IN ('GLOVO', 'YANGO')
-            AND x."assigned_to_id" IS NULL AND x."campaign_id" IS NULL
-            AND x."segment_since" <= c."converted_at"`);
+        await q(CONVERSION_DE_DEPART);
+
+        // Client sans compte déjà converti, relevé de nouveau plus de N jours après
+        // sa vente : nouveau passage, comme pour une capture en direct (crm-capture).
+        // Avec un compte, c'est la rechute en inactif qui s'en charge.
+        const RETOUR = `
+          SELECT DISTINCT ON (x."id") x."id", x."cycle", x."segment_since", p."platform"::text AS plateforme, p."created_at" AS capte_le
+          FROM "CrmContact" x JOIN crm_lot l ON l.contact_id = x."id"
+          JOIN "Prospect" p ON p."contact_id" = x."id" AND p."entity_status" <> 'DELETED' AND p."platform" IN ('GLOVO', 'YANGO')
+          WHERE x."customer_id" IS NULL AND x."status" = 'CONVERTI' AND x."converted_at" IS NOT NULL
+            AND p."created_at" > x."converted_at" + make_interval(days => $1::int)
+          ORDER BY x."id", p."created_at"`;
+        const renouvelees = new Set<string>();
+        for (let tour = 0; tour < PASSAGES_MAX; tour++) {
+          // Le passage qui se ferme prend la plateforme de sa dernière capture,
+          // pas celle de la capture qui ouvre le suivant.
+          await q(
+            `WITH retour AS (${RETOUR}),
+             avant AS (
+               SELECT DISTINCT ON (r."id") r."id", r."cycle", p."platform"::text AS plateforme
+               FROM retour r JOIN "Prospect" p ON p."contact_id" = r."id" AND p."entity_status" <> 'DELETED'
+                 AND p."platform" IN ('GLOVO', 'YANGO') AND p."created_at" >= r."segment_since" AND p."created_at" < r.capte_le
+               ORDER BY r."id", p."created_at" DESC
+             )
+             UPDATE "CrmCycle" y SET "segment" = a.plateforme::"CrmSegment"
+             FROM avant a WHERE y."contact_id" = a."id" AND y."cycle" = a."cycle" AND y."segment"::text <> a.plateforme`,
+            jours,
+          );
+          const lignes = await tx.$queryRawUnsafe<{ id: string }[]>(
+            `WITH retour AS (${RETOUR})
+             UPDATE "CrmContact" x SET ${NOUVEAU_CYCLE_SQL}, "segment" = r.plateforme::"CrmSegment", "segment_since" = r.capte_le,
+                    "cycle" = x."cycle" + 1, "updated_at" = now()
+             FROM retour r WHERE x."id" = r."id" AND x."status" = 'CONVERTI'
+             RETURNING x."id"`,
+            jours,
+          );
+          if (lignes.length === 0) break;
+          for (const l of lignes) renouvelees.add(l.id);
+          await q(CONVERSION_DE_DEPART);
+        }
+        if (renouvelees.size > 0) {
+          // Appels, coupons et ventes de l'acquisition rangés dans le passage de leur date.
+          const ids = [...renouvelees];
+          await q(`UPDATE "CrmCall" k SET "cycle" = ${passageA('k."created_at"')}
+                   WHERE k."contact_id" = ANY($1::uuid[]) AND k."prospect_call_id" IS NOT NULL`, ids);
+          await q(`UPDATE "CrmCoupon" k SET "cycle" = ${passageA('k."sent_at"')}
+                   WHERE k."contact_id" = ANY($1::uuid[])
+                     AND EXISTS (SELECT 1 FROM "Prospect" p WHERE p."promo_code_id" = k."promo_code_id")`, ids);
+          await q(`UPDATE "CrmConversion" k SET "cycle" = ${passageA('k."converted_at"')}
+                   WHERE k."contact_id" = ANY($1::uuid[]) AND k."source" = 'ACQUISITION_HISTORIQUE'`, ids);
+        }
         await q(`
           WITH cible AS (
             SELECT x."id", x."segment_since" FROM "CrmContact" x JOIN crm_lot l ON l.contact_id = x."id"
@@ -327,7 +398,7 @@ export class CrmRepriseAcquisitionService {
             -- mise en campagne pendant la reprise n'est pas écrasée.
             AND x."status" <> 'CONVERTI' AND x."assigned_to_id" IS NULL AND x."campaign_id" IS NULL`);
 
-        return { fiches, requalifiees, captures, appels, coupons, ventes };
+        return { fiches, requalifiees, captures, appels, coupons, ventes, nouveaux_passages: renouvelees.size };
       },
       { maxWait: 10_000, timeout: 120_000 },
     );

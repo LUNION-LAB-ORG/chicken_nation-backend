@@ -3,6 +3,7 @@ import {
   CampaignStatus,
   CrmChannel,
   CrmEventType,
+  CrmSegment,
   CrmStatus,
   EntityStatus,
   TargetType,
@@ -65,7 +66,14 @@ export class CrmCouponService {
     }
     const maintenant = new Date();
     const reglages = await this.config.lireReglages();
-    const offre = await this.choisirOffre([dto.offer_id, contact.campaign?.offer_id, reglages.default_offer_id]);
+    // Dans l'ordre : l'offre choisie par l'agent, celle du public dans la
+    // campagne, celle de la campagne, puis l'offre par défaut.
+    const offre = await this.choisirOffre([
+      dto.offer_id,
+      await this.offreDuPublic(contact),
+      contact.campaign?.offer_id,
+      reglages.default_offer_id,
+    ]);
     const code = await this.codeLibre();
     const expiration = new Date(maintenant.getTime() + offre.validity_days * 86_400_000);
     const campagneId =
@@ -112,6 +120,7 @@ export class CrmCouponService {
         data: {
           contact_id: contact.id,
           segment: contact.segment,
+          cycle: contact.cycle,
           campaign_id: campagneId,
           offer_id: offre.id,
           promo_code_id: promo.id,
@@ -207,6 +216,7 @@ export class CrmCouponService {
         status: true,
         segment: true,
         segment_since: true,
+        cycle: true,
         assigned_to_id: true,
         campaign_id: true,
         campaign: { select: { status: true, offer_id: true } },
@@ -263,6 +273,16 @@ export class CrmCouponService {
           ? "Ni WhatsApp ni SMS n'ont pu partir : dictez le code au client"
           : null,
     };
+  }
+
+  /** Offre propre au public du contact dans sa campagne, s'il en a une. */
+  private async offreDuPublic(contact: { campaign_id: string | null; segment: CrmSegment }): Promise<string | null> {
+    if (!contact.campaign_id) return null;
+    const pub = await this.prisma.crmCampaignPublic.findUnique({
+      where: { campaign_id_segment: { campaign_id: contact.campaign_id, segment: contact.segment } },
+      select: { offer_id: true },
+    });
+    return pub?.offer_id ?? null;
   }
 
   private async choisirOffre(candidates: (string | null | undefined)[]) {

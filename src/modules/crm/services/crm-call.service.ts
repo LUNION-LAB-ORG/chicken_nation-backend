@@ -45,6 +45,7 @@ export class CrmCallService {
         status: true,
         segment: true,
         segment_since: true,
+        cycle: true,
         call_count: true,
         first_reached_at: true,
         qualified_at: true,
@@ -137,6 +138,8 @@ export class CrmCallService {
         data: {
           contact_id: contact.id,
           segment: contact.segment,
+          // Un cycle ne change qu'à partir d'une fiche convertie, refusée plus haut.
+          cycle: contact.cycle,
           agent_id: user.id,
           campaign_id: campagneId,
           call_status_id: statutAppel.id,

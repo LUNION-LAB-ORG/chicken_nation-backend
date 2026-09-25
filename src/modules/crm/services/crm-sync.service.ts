@@ -308,9 +308,13 @@ export class CrmSyncService {
 
   /** La commande qui l'avait fait sortir a disparu : il revient dans la liste. */
   private async retablir(c: ContactVu) {
-    const couponActif = await this.prisma.crmCoupon.count({
-      where: { contact_id: c.id, used_at: null, expires_at: { gt: new Date() } },
-    });
+    const [couponActif, campagne] = await Promise.all([
+      this.prisma.crmCoupon.count({ where: { contact_id: c.id, used_at: null, expires_at: { gt: new Date() } } }),
+      c.campaign_id ? this.prisma.crmCampaign.findUnique({ where: { id: c.campaign_id }, select: { status: true } }) : null,
+    ]);
+    // Revenu dans la liste après la fin de sa campagne : il la quitte, pour
+    // retrouver la file de son agent (ou la file commune s'il n'en a plus).
+    const campagneFinie = !!campagne && campagne.status !== 'ACTIVE' && campagne.status !== 'SUSPENDED';
     const retabli = await this.prisma.$transaction(async (tx) => {
       const claim = await tx.crmContact.updateMany({
         where: { id: c.id, status: CrmStatus.CONVERTI },
@@ -319,6 +323,7 @@ export class CrmSyncService {
           converted_at: null,
           conversion_order_id: null,
           conversion_amount: null,
+          ...(campagneFinie && { campaign_id: null }),
         },
       });
       if (claim.count === 0) return false;
