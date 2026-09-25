@@ -55,6 +55,8 @@ import { RESTAURANT_COMMANDE_SELECT } from 'src/modules/restaurant/constantes/re
 import { CLIENT_COMMANDE_SELECT } from '../constantes/client-commande.select';
 import { assertCanAccessRestaurant } from '../helpers/restaurant-scope.helper';
 import { sansIdentifiantsPush } from '../helpers/identifiants-push.helper';
+import { assietteDesRemises, normaliserCode } from '../helpers/coupon.helper';
+import { ConsommationCoupon, CouponResolu, OrderCouponService } from './order-coupon.service';
 
 @Injectable()
 export class OrderService {
@@ -73,6 +75,7 @@ export class OrderService {
     private promoCodeService: PromoCodeService,
     private twilioService: TwilioService,
     private readonly mapsService: MapsService,
+    private readonly orderCoupon: OrderCouponService,
   ) { }
 
   async createv2(customer_id: string, createOrderDto: OrderCreateDto): Promise<Order> {
@@ -475,16 +478,28 @@ export class OrderService {
       points,
       user_id,
       delivery_service: overrideDeliveryService,
+      // Sorti de l'étalement : un code n'est écrit sur la commande QUE s'il a
+      // été vérifié et a donné une remise (coupon CRM grillé sinon).
+      code_promo,
       ...orderData
     } = createOrderDto;
+
+    // Code promo ou bon : chemin du PERSONNEL seulement (route /create, auteur
+    // pris du jeton). La route client historique ne le transmet plus.
+    const codeCoupon = user_id ? normaliserCode(code_promo) : '';
 
     // RG-02 non-cumul (chemin staff/call-center, comme createv2) : une commande
     // utilise SOIT les points, SOIT un seul coupon — jamais les deux.
     const wantsPoints = (points ?? 0) > 0;
-    const wantsCoupon = typeof orderData.code_promo === 'string' && orderData.code_promo.trim() !== '';
-    if (wantsPoints && wantsCoupon) {
+    if (wantsPoints && codeCoupon) {
       throw new BadRequestException(
         'Non-cumul : utilisez soit vos points, soit un coupon, pas les deux',
+      );
+    }
+    // Promotion automatique et coupon s'additionnaient sans plafond.
+    if (promotion_id && codeCoupon) {
+      throw new BadRequestException(
+        'Une promotion et un code promo ou un bon ne se cumulent pas sur une même commande.',
       );
     }
 
@@ -498,11 +513,6 @@ export class OrderService {
     // Récupérer les plats et vérifier leur disponibilité
     const dishesWithDetails = await this.orderHelper.getDishesWithDetails(
       items.map((item) => item.dish_id),
-    );
-
-    // Vérifier et appliquer le code promo s'il existe
-    const promoDiscount = await this.orderHelper.applyPromoCode(
-      orderData.code_promo,
     );
 
     // Calculer les montants et préparer les order items.
@@ -519,11 +529,8 @@ export class OrderService {
     // différentes pour la même commande donnaient une remise accordée et une
     // remise enregistrée qui ne coïncidaient pas, donc un plafond de campagne
     // consommé trop lentement et un coût sous-estimé au backoffice.
-    const assiettePromotion = orderItems.map((item) => ({
-      dish_id: item.dish_id,
-      quantity: item.quantity,
-      price: item.dishPrice + (item.optionsUnitPrice ?? 0),
-    }));
+    // Même fonction que l'aperçu du coupon (OrderCouponService.apercu).
+    const assiettePromotion = assietteDesRemises(orderItems);
 
     //Calculer la promotion et la création de l'utilisation de la promotion
     const promotion = await this.orderHelper.calculatePromotionPrice(
@@ -601,6 +608,19 @@ export class OrderService {
       );
     }
 
+    // Code promo ou bon : vérifié ICI, sur le panier recalculé et le restaurant
+    // retenu, avec la même fonction que l'aperçu. Un refus arrête tout, rien
+    // n'est écrit. La consommation se fait dans la transaction, plus bas.
+    const coupon: CouponResolu | null = codeCoupon
+      ? await this.orderCoupon.resoudre({
+          code: codeCoupon,
+          customerId: customerData.customer_id,
+          netAmount,
+          assiette: assiettePromotion,
+          restaurantId: restaurant?.id ?? null,
+        })
+      : null;
+
     // Montant frais de livraison. Le staff (call center) peut FORCER un frais — 0 INCLUS
     // (ex. livraison offerte imposée à la main). On distingue "fourni" (même 0) de "absent"
     // via `!= null` : `delivery_fee || …` écrasait à tort un 0 explicite par le frais recalculé.
@@ -627,8 +647,13 @@ export class OrderService {
       netAmount, // plafond anti-abus (% du panier)
     );
 
-    // Calcul de la remise
-    const discount = netAmount * promoDiscount + loyaltyFee + discountPromotion;
+    // Calcul de la remise. Le coupon est un MONTANT (l'ancienne formule le
+    // multipliait par le panier). Plafond : les articles, jamais la livraison
+    // ni la taxe ; le total ne descend donc jamais sous les frais.
+    const discount = Math.min(
+      netAmount,
+      (coupon?.remise ?? 0) + loyaltyFee + discountPromotion,
+    );
 
     // Calcul du montant remisé
     const totalAfterDiscount = netAmount - discount;
@@ -651,11 +676,13 @@ export class OrderService {
     const orderNumber = this.generateDataService.generateOrderReference();
 
     // Transaction pour garantir l'intégrité des données
-    const order = await this.prisma.$transaction(async (prisma) => {
+    const { createdOrder: order, consommation } = await this.prisma.$transaction(async (prisma) => {
       // Créer la commande
       const createdOrder = await prisma.order.create({
         data: {
           ...orderData,
+          // Code normalisé, seulement s'il a donné une remise.
+          ...(coupon && { code_promo: coupon.code }),
           fullname: customerData.fullname,
           phone: customerData.phone,
           email: customerData.email,
@@ -756,8 +783,28 @@ export class OrderService {
         },
       });
 
-      return createdOrder;
+      // Coupon consommé DANS la transaction : s'il ne peut plus l'être (bon
+      // débité entre-temps, code épuisé), la commande n'est pas créée.
+      const consommation: ConsommationCoupon | null = coupon
+        ? await this.orderCoupon.consommer(prisma, {
+            coupon,
+            orderId: createdOrder.id,
+            customerId: customerData.customer_id,
+            restaurantId: restaurant?.id ?? null,
+          })
+        : null;
+
+      return { createdOrder, consommation };
     });
+
+    // Journal d'audit avec l'agent, notification au client pour un bon.
+    if (consommation) {
+      this.orderCoupon.signalerUsage({
+        order,
+        consommation,
+        acteur: req.user as User,
+      });
+    }
 
     if (user_id) {
       // Envoyer l'événement de création de commande
@@ -933,13 +980,23 @@ export class OrderService {
 
     // Cycle de vie de l'usage du code promo selon le statut :
     //  - → ACCEPTED (paiement confirmé) : comptabilise l'usage (usage_count++)
-    //  - → CANCELLED : décompte l'usage (usage_count--)
-    // Idempotent côté PromoCodeService ; isolé pour ne jamais casser la maj statut.
+    //  - → CANCELLED : rend le coupon. Code promo décompté (usage_count--) ET,
+    //    désormais, bon d'achat recrédité (prolongé de 30 jours s'il a expiré),
+    //    pour toutes les commandes, application comprise (décision du 25/09).
+    // Idempotent ; isolé pour ne jamais casser la maj statut.
     try {
       if (status === OrderStatus.ACCEPTED && order.status !== OrderStatus.ACCEPTED) {
         await this.promoCodeService.activateUsageForOrder(updatedOrder);
       } else if (status === OrderStatus.CANCELLED) {
-        await this.promoCodeService.deactivateUsageForOrder(order.id);
+        await this.orderCoupon.restituerPourCommande(
+          {
+            id: order.id,
+            reference: order.reference,
+            customer_id: order.customer_id,
+            restaurant_id: order.restaurant_id,
+          },
+          { motif: 'ANNULATION', acteurId: meta?.userId ?? null, acteurRole: meta?.role ?? null },
+        );
       }
     } catch (e) {
       this.logger.error(`Sync usage promo (statut ${status}) échoué pour ${order.id}: ${e?.message}`);
@@ -1878,6 +1935,37 @@ export class OrderService {
       );
     }
 
+    // Coupon figé à la création (décision du 25/09). Un bon est nominatif et
+    // un code promo est compté par client : changer de client fausserait les
+    // deux. Il faut annuler (le coupon est alors rendu) et recréer.
+    if (customer_id && order.code_promo && customer_id !== order.customer_id) {
+      throw new ConflictException(
+        "Le client d'une commande avec un code promo ou un bon ne peut pas être changé. Annulez la commande et créez-en une nouvelle.",
+      );
+    }
+
+    // Même raison pour le restaurant : un code promo réservé à certains
+    // restaurants, vérifié à la création, ne doit pas suivre la commande dans
+    // un restaurant où il n'est pas valable. Les bons valent partout.
+    if (restaurant_id && order.code_promo && restaurant_id !== order.restaurant_id) {
+      const usage = await this.prisma.promoCodeUsage.findFirst({
+        where: { order_id: order.id },
+        select: { promo_code_id: true },
+      });
+      const promo = usage
+        ? await this.prisma.promoCode.findUnique({
+            where: { id: usage.promo_code_id },
+            select: { restaurant_ids: true },
+          })
+        : null;
+      const autorises = promo?.restaurant_ids ?? [];
+      if (autorises.length > 0 && !autorises.includes(restaurant_id)) {
+        throw new ConflictException(
+          "Le code promo de cette commande n'est pas valable dans ce restaurant. Annulez la commande et créez-en une nouvelle.",
+        );
+      }
+    }
+
     // Si des items sont fournis, recalculer les order_items
     // Les colonnes de prix figé voyagent avec la ligne recréée. Sans elles, une
     // simple modification de commande au backoffice effaçait ce que le client
@@ -1985,6 +2073,13 @@ export class OrderService {
       // Recalculer le montant total
       const tax = order.tax ?? 0;
       const discount = order.discount ?? 0;
+      // La remise est figée : un panier réduit sous son montant donnerait un
+      // total négatif. Refus, avant toute écriture.
+      if (discount > 0 && newNetAmount < discount) {
+        throw new ConflictException(
+          `La réduction de cette commande (${Math.round(discount).toLocaleString('fr-FR')} F) dépasserait le montant des articles (${Math.round(newNetAmount).toLocaleString('fr-FR')} F). Annulez la commande et créez-en une nouvelle.`,
+        );
+      }
       const totalAfterDiscount = newNetAmount - discount;
       const totalAmount = totalAfterDiscount + tax + finalDeliveryFee;
 
@@ -2095,7 +2190,7 @@ export class OrderService {
   /**
    * Supprime une commande (soft delete)
    */
-  async remove(id: string) {
+  async remove(id: string, user?: User) {
     const order = await this.findById(id);
 
     // Vérifier que la commande peut être supprimée
@@ -2112,6 +2207,22 @@ export class OrderService {
       },
       data: { entity_status: EntityStatus.DELETED },
     });
+
+    // Coupon rendu : bon recrédité, code promo décompté (la suppression ne le
+    // faisait pas). Ne lève jamais : la commande est déjà supprimée.
+    try {
+      await this.orderCoupon.restituerPourCommande(
+        {
+          id: order.id,
+          reference: order.reference,
+          customer_id: order.customer_id,
+          restaurant_id: order.restaurant_id,
+        },
+        { motif: 'SUPPRESSION', acteurId: user?.id ?? null, acteurRole: user?.role ?? null },
+      );
+    } catch (e) {
+      this.logger.error(`Restitution du coupon (suppression) échouée pour ${order.id}: ${e?.message}`);
+    }
 
     // Envoyer l'événement de suppression de commande
     this.orderEvent.orderDeletedEvent(order);

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsBoolean, IsUUID, ValidateNested, IsNumber } from "class-validator";
+import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsBoolean, IsUUID, ValidateNested, IsNumber, MaxLength, Min } from "class-validator";
 import { Transform, Type } from "class-transformer";
 import { CreateOrderItemDto } from "src/modules/order/dto/create-order-item.dto";
 import { OrderType } from "src/modules/order/enums/order-type.enum";
@@ -34,9 +34,14 @@ export class CreateOrderDto {
     @Transform(({ value }) => typeof value !== "string" ? (typeof value == "object" ? JSON.stringify(value) : String(value)) : value)
     address?: string;
 
-    @ApiPropertyOptional({ description: "Code promo" })
+    @ApiPropertyOptional({
+        description: "Code promo ou bon d'achat (création par le personnel seulement). Normalisé : majuscules, sans espaces autour.",
+        maxLength: 64,
+    })
     @IsOptional()
+    @Transform(({ value }) => typeof value === "string" ? value.trim().toUpperCase() : value)
     @IsString()
+    @MaxLength(64, { message: "Le code compte 64 caractères au plus." })
     code_promo?: string;
 
     @ApiPropertyOptional({ description: "Date souhaitée de livraison" })
@@ -123,9 +128,12 @@ export class CreateOrderDto {
     @IsString()
     user_id?: string;
 
-    @ApiPropertyOptional({ description: "Celui qui a enregistrer la commande" })
+    @ApiPropertyOptional({ description: "Frais de livraison imposés par le personnel (0 compris)", minimum: 0 })
     @IsOptional()
     @IsNumber()
+    // Un frais négatif retranchait de l'argent au total : avec une réduction
+    // qui couvre tous les articles, la commande passait sous zéro.
+    @Min(0, { message: "Les frais de livraison ne peuvent pas être négatifs." })
     @Type(() => Number)
     delivery_fee?: number;
 

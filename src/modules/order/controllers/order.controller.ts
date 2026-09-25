@@ -25,7 +25,7 @@ import {
   ApiResponse,
   ApiTags
 } from '@nestjs/swagger';
-import { Customer, OrderStatus, User, UserRole } from '@prisma/client';
+import { Customer, OrderStatus, User, UserRole, UserType } from '@prisma/client';
 import type { Request, Response } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
@@ -46,6 +46,8 @@ import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 import { ReceiptsService } from '../services/receipts.service';
 import { OrderCreateDto } from '../dto/order-create.dto';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
+import { Throttle } from '@nestjs/throttler';
+import { CouponCreationThrottlerGuard, LIMITE_COUPON } from '../guards/coupon-throttler.guard';
 
 /**
  * Retire d'une modification de commande les champs qui la rendraient payée
@@ -101,6 +103,10 @@ export class OrderController {
       // Frais de livraison et exonération de TVA : décisions du personnel.
       delivery_fee: undefined,
       user_id: undefined,
+      // Ce chemin n'a jamais appliqué de code (la remise valait 0) mais
+      // l'enregistrait : un coupon CRM était compté « utilisé » sans rien
+      // donner. Les codes passent par /create-v2.
+      code_promo: undefined,
     });
   }
   @Post("/create-v2")
@@ -136,13 +142,36 @@ export class OrderController {
 
 
   @Post("/create")
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  // Quota par agent, compté seulement quand la commande porte un code promo
+  // ou un bon : sans lui, la création servait à essayer des codes sans limite.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard, CouponCreationThrottlerGuard)
+  @Throttle(LIMITE_COUPON)
   @RequirePermission(Modules.COMMANDES, Action.CREATE)
   @ApiOperation({ summary: 'Créer une nouvelle commande' })
   @ApiResponse({ status: 201, description: 'Commande créée avec succès' })
   @ApiBody({ type: CreateOrderDto })
   async createBackoffice(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
-    return this.orderService.create(req, createOrderDto);
+    const user = req.user as User;
+    /**
+     * Auteur pris du JETON, jamais du corps : `user_id` vaut exonération de
+     * taxe, statut ACCEPTED et paiement hors ligne, et il signe le journal des
+     * réductions accordées.
+     *
+     * Compte de point de vente (caissier) : la commande est pour SON
+     * restaurant. Un autre restaurant est refusé ; sans restaurant indiqué, le
+     * sien est pris.
+     */
+    let restaurant_id = createOrderDto.restaurant_id;
+    if (user?.type === UserType.RESTAURANT) {
+      if (!user.restaurant_id) {
+        throw new ForbiddenException("Votre compte n'est rattaché à aucun restaurant.");
+      }
+      if (restaurant_id && restaurant_id !== user.restaurant_id) {
+        throw new ForbiddenException('Vous ne pouvez créer une commande que pour votre restaurant.');
+      }
+      restaurant_id = user.restaurant_id;
+    }
+    return this.orderService.create(req, { ...createOrderDto, user_id: user.id, restaurant_id });
   }
 
   @Get()
@@ -465,8 +494,13 @@ export class OrderController {
      * seulement `paied`, en laissant volontairement le statut à PENDING : un
      * client pouvait donc valider lui même une commande en ligne NON PAYEE.
      * L'annulation reste possible par la route de statut dédiée.
+     *
+     * Le CODE PROMO non plus : il était écrit tel quel sur la commande, sans
+     * vérification. Au paiement, `activateUsageForOrder` comptait alors une
+     * utilisation du code écrit, celui d'un autre client compris (coupon CRM
+     * à usage unique grillé). Un code ne s'applique qu'à la création.
      */
-    const { status, ...champsClient } = orderUpdatedDto as any;
+    const { status, code_promo: _codePromo, ...champsClient } = orderUpdatedDto as any;
     return this.orderService.updateClient(id, champsClient);
   }
 
@@ -546,8 +580,16 @@ export class OrderController {
       );
     }
 
+    /**
+     * ⚠️ `meta` vient du client : seul le motif est repris. Il passait tel
+     * quel, `role` compris, or le service lit `role === ADMIN` pour autoriser
+     * l'annulation depuis N'IMPORTE quel statut. Avec « role: ADMIN », un
+     * client annulait sa commande déjà livrée : remboursement réel, et bon
+     * d'achat recrédité. `_voucher` est de même un champ interne du service.
+     */
+    const motif = typeof body.meta?.reason === 'string' ? body.meta.reason.slice(0, 500) : undefined;
     const userId = (req.user as Customer).id;
-    return this.orderService.updateStatus(id, body.status, { ...body.meta, userId });
+    return this.orderService.updateStatus(id, body.status, { reason: motif, userId });
   }
 
   /**
@@ -569,8 +611,9 @@ export class OrderController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.DELETE)
   @HttpCode(HttpStatus.OK)
-  remove(@Param('id') id: string) {
-    return this.orderService.remove(id);
+  remove(@Req() req: Request, @Param('id') id: string) {
+    // L'auteur signe la restitution du coupon dans le journal d'audit.
+    return this.orderService.remove(id, req.user as User);
   }
 
   @Get(':id/pdf')

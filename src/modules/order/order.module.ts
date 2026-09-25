@@ -4,11 +4,14 @@ import { Module } from '@nestjs/common';
 import { OrderService } from './services/order.service';
 import { OrderDelivererService } from './services/order-deliverer.service';
 import { OrderController } from './controllers/order.controller';
+import { OrderCouponController } from './controllers/order-coupon.controller';
+import { OrderCouponService } from './services/order-coupon.service';
 import { OrderDelivererController } from './controllers/order-deliverer.controller';
 import { OrderHelper } from './helpers/order.helper';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
 import { OrderListenerService } from './listeners/order.listener.service';
+import { CouponRestitutionListener } from './listeners/coupon-restitution.listener';
 import { OrderEvent } from './events/order.event';
 import { OrderTask } from './tasks/order.task';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
@@ -48,15 +51,20 @@ import { MapsModule } from 'src/modules/maps/maps.module';
     // L'aperçu du trajet avant paiement a besoin de Directions.
     MapsModule,
   ],
-  controllers: [OrderController, OrderDelivererController],
+  // OrderCouponController AVANT OrderController : `orders/coupon/...` ne doit
+  // jamais être lu comme un identifiant de commande.
+  controllers: [OrderCouponController, OrderController, OrderDelivererController],
   providers: [
     OrderService,
+    OrderCouponService,
     OrderDelivererService,
     OrderHelper,
     OrderV2Helper,
     DeliveryFeeHelper,
     OrderEvent,
     OrderListenerService,
+    // Coupon rendu quand une course annulée ou une livraison échouée annule la commande.
+    CouponRestitutionListener,
     OrderTask,
     OrderWebSocketService,
     ReceiptsService,

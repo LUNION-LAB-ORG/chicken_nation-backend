@@ -212,7 +212,8 @@ export class ReferralService {
       | undefined;
     if (voucherId) {
       const redemption = await this.prisma.redemption.findFirst({
-        where: { voucher_id: voucherId, order_id: orderId },
+        // Une utilisation rendue (commande annulée) ne compte pas.
+        where: { voucher_id: voucherId, order_id: orderId, entity_status: 'ACTIVE' },
         select: { id: true },
       });
       return !!redemption;

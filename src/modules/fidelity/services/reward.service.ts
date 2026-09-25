@@ -193,7 +193,8 @@ export class RewardService {
                 },
             }),
             this.prisma.redemption.findMany({
-                where: { voucher: { customer_id } },
+                // Utilisations rendues (commande annulée ou supprimée) exclues.
+                where: { voucher: { customer_id }, entity_status: 'ACTIVE' },
                 orderBy: { created_at: 'desc' },
                 take: 300,
                 select: { voucher_id: true, created_at: true },

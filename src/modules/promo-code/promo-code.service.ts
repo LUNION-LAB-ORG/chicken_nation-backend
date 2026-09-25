@@ -467,11 +467,17 @@ export class PromoCodeService {
     return promoCode;
   }
 
+  /**
+   * `options.restaurantId` : restaurant qui prépare la commande. Fourni, il
+   * fait respecter `restaurant_ids` (chemin du personnel). L'application ne le
+   * passe pas encore : son comportement ne change pas.
+   */
   async applyPromoCode(
     code: string,
     customerId: string,
     orderAmount: number,
     orderItems?: { dish_id: string; quantity: number; price: number }[],
+    options: { restaurantId?: string } = {},
   ) {
     const promoCode = await this.prismaService.promoCode.findUnique({
       where: { code: code.toUpperCase().trim() },
@@ -503,6 +509,18 @@ export class PromoCodeService {
 
     if (now > promoCode.expiration_date) {
       throw new HttpException('Ce code promo a expiré', HttpStatus.BAD_REQUEST);
+    }
+
+    // Restaurants autorisés : liste vide = tous les restaurants.
+    if (
+      options.restaurantId &&
+      (promoCode.restaurant_ids?.length ?? 0) > 0 &&
+      !promoCode.restaurant_ids.includes(options.restaurantId)
+    ) {
+      throw new HttpException(
+        "Ce code promo n'est pas valable dans ce restaurant",
+        HttpStatus.BAD_REQUEST,
+      );
     }
 
     // Validate global usage limit
@@ -615,6 +633,10 @@ export class PromoCodeService {
         discount_value: promoCode.discount_value,
         description: promoCode.description,
         target_type: promoCode.target_type,
+        // Conditions du code, pour que l'écran du personnel les explique.
+        min_order_amount: promoCode.min_order_amount ?? null,
+        max_discount_amount: promoCode.max_discount_amount ?? null,
+        expiration_date: promoCode.expiration_date ?? null,
       },
     };
   }
@@ -742,35 +764,53 @@ export class PromoCodeService {
   }
 
   /**
-   * Décompte le code promo d'une commande ANNULÉE : tous les usages ACTIVE de
-   * cette commande repassent INACTIVE + usage_count--. Idempotent (no-op si
-   * aucun usage actif).
+   * Décompte le code promo d'une commande ANNULÉE ou SUPPRIMÉE : les usages
+   * ACTIVE de cette commande repassent INACTIVE et usage_count baisse d'autant.
+   *
+   * Idempotent, y compris sous concurrence : chaque usage est RÉSERVÉ par une
+   * écriture conditionnée (ACTIVE vers INACTIVE) avant de décompter. Deux
+   * annulations simultanées (bouton et événement, deux instances) ne décomptent
+   * donc qu'une fois. Avant, les deux lisaient la même liste et décomptaient
+   * chacune, ce qui libérait une utilisation de trop.
+   *
+   * Renvoie les usages réellement décomptés.
    */
-  async deactivateUsageForOrder(orderId: string) {
+  async deactivateUsageForOrder(orderId: string): Promise<
+    { id: string; promo_code_id: string; discount_amount: number; code: string | null }[]
+  > {
     const actives = await this.prismaService.promoCodeUsage.findMany({
       where: { order_id: orderId, status: PromoCodeUsageStatus.ACTIVE },
+      include: { promo_code: { select: { code: true } } },
     });
-    if (actives.length === 0) return;
+    if (actives.length === 0) return [];
 
-    await this.prismaService.$transaction(
-      actives.flatMap((u) => [
-        this.prismaService.promoCodeUsage.update({
-          where: { id: u.id },
-          data: { status: PromoCodeUsageStatus.INACTIVE },
-        }),
-        this.prismaService.promoCode.update({
-          where: { id: u.promo_code_id },
-          data: { usage_count: { decrement: 1 } },
-        }),
-      ]),
-    );
-
+    const decomptes: { id: string; promo_code_id: string; discount_amount: number; code: string | null }[] = [];
     for (const u of actives) {
+      const fait = await this.prismaService.$transaction(async (tx) => {
+        const reserve = await tx.promoCodeUsage.updateMany({
+          where: { id: u.id, status: PromoCodeUsageStatus.ACTIVE },
+          data: { status: PromoCodeUsageStatus.INACTIVE },
+        });
+        if (reserve.count === 0) return false;
+        await tx.promoCode.updateMany({
+          where: { id: u.promo_code_id, usage_count: { gt: 0 } },
+          data: { usage_count: { decrement: 1 } },
+        });
+        return true;
+      });
+      if (!fait) continue;
+      decomptes.push({
+        id: u.id,
+        promo_code_id: u.promo_code_id,
+        discount_amount: u.discount_amount,
+        code: u.promo_code?.code ?? null,
+      });
       this.appGateway.emitToBackoffice('promo_code:usage_reverted', {
         promoCodeId: u.promo_code_id,
         orderId,
       });
     }
+    return decomptes;
   }
 
   /**

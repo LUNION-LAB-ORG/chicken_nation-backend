@@ -15,6 +15,7 @@ import { NotificationRecipientService } from 'src/modules/notifications/recipien
 import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
 import { notificationIcons } from 'src/modules/notifications/constantes/notifications.constante';
 import { ExpoPushService } from 'src/expo-push/expo-push.service';
+import { texteMouvementBon } from './helpers/mouvement-bon.texte';
 
 const voucherInclude = {
   customer: {
@@ -187,6 +188,81 @@ export class VoucherService {
       }
     } catch (pushError: any) {
       this.logger.error(`Erreur envoi push Expo pour voucher: ${pushError.message}`);
+    }
+  }
+
+  /**
+   * Prévient le client qu'un de ses bons a servi (prise de commande par le
+   * personnel) ou qu'il a été recrédité (commande annulée ou supprimée).
+   * Notification dans l'application puis notification push. Ne lève jamais :
+   * la commande est déjà enregistrée, seule l'alerte peut se perdre.
+   */
+  async notifierMouvementBon(params: {
+    customerId: string;
+    code: string;
+    sens: 'DEBIT' | 'CREDIT';
+    montant: number;
+    solde: number;
+    reference?: string | null;
+    motif?: 'ANNULATION' | 'SUPPRESSION';
+    valableJusquau?: Date | null;
+  }): Promise<void> {
+    try {
+      const { titre, message } = texteMouvementBon(params);
+      const customer = await this.notificationRecipientService.getCustomer(params.customerId);
+      const template = {
+        title: () => titre,
+        message: () => message,
+        icon: () => notificationIcons.good.url,
+        iconBgColor: () => notificationIcons.good.color,
+        showChevron: true,
+      };
+      const notifications = await this.notificationsService.sendNotificationToMultiple(
+        template,
+        { actor: customer, recipients: [customer], data: {} },
+        NotificationType.PROMOTION,
+      );
+      if (notifications.length > 0) {
+        this.notificationsWebSocketService.emitNotification(notifications[0], customer);
+      }
+
+      const reglages = await this.prismaService.notificationSetting.findUnique({
+        where: { customer_id: params.customerId },
+        select: { expo_push_token: true, push: true },
+      });
+      if (reglages?.expo_push_token && reglages?.push) {
+        await this.expoPushService.sendPushNotifications({
+          tokens: [reglages.expo_push_token],
+          title: titre,
+          body: message,
+          data: { type: 'VOUCHER', voucher_code: params.code },
+          sound: 'default',
+          badge: 1,
+          priority: 'high',
+          channelId: 'default',
+        });
+      }
+    } catch (e: any) {
+      this.logger.error(`Notification du bon ${params.code} non envoyée : ${e?.message}`);
+    }
+  }
+
+  /**
+   * Diffuse l'état d'un bon au client et au back office (rafraîchissement des
+   * écrans). Ne lève jamais.
+   */
+  async diffuserBon(voucherId: string, evenement: 'voucher:redeemed' | 'voucher:updated'): Promise<void> {
+    try {
+      const voucher = await this.prismaService.voucher.findUnique({
+        where: { id: voucherId },
+        include: this.include,
+      });
+      if (!voucher) return;
+      const dto = this.mapToDto(voucher);
+      this.appGateway.emitToUser(voucher.customer_id, 'customer', evenement, dto);
+      this.appGateway.emitToBackoffice(evenement, dto);
+    } catch (e: any) {
+      this.logger.warn(`Diffusion du bon ${voucherId} impossible : ${e?.message}`);
     }
   }
 
@@ -500,6 +576,9 @@ export class VoucherService {
       where: { code },
       include: {
         Redemption: {
+          // Une utilisation rendue (commande annulée ou supprimée) n'est plus
+          // une utilisation : elle disparaît de l'historique.
+          where: { entity_status: 'ACTIVE' },
           orderBy: { created_at: 'desc' },
         },
       },
@@ -522,6 +601,8 @@ export class VoucherService {
 
     const redemptions = await this.prismaService.redemption.findMany({
       where: {
+        // Utilisations rendues exclues (commande annulée ou supprimée).
+        entity_status: 'ACTIVE',
         voucher: {
           customer_id: customerId,
         },

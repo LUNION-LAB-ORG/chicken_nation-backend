@@ -248,16 +248,9 @@ export class OrderHelper {
     return JSON.parse(address) as Address;
   }
 
-  // Appliquer un code promo
-  async applyPromoCode(promoCode?: string): Promise<number> {
-    if (!promoCode) return 0;
-
-    // Logique pour vérifier et appliquer un code promo
-    // Idéalement, nous aurions une table pour les codes promo
-
-    // Pour simplifier, on renvoie 0 (pas de réduction)
-    return 0;
-  }
+  // ⚠️ Le bouchon `applyPromoCode` (qui renvoyait toujours 0 mais laissait
+  // enregistrer et compter le code) a été retiré le 25/09 : la prise de
+  // commande du personnel passe par OrderCouponService.
 
   // Calculer les détails de la commande
   async calculateOrderDetails(
@@ -692,6 +685,25 @@ export class OrderHelper {
     newStatus: OrderStatus,
     options?: { allowCancelFromAnyStatus?: boolean },
   ) {
+    /**
+     * Une commande annulée est close, pour tout le monde, administrateur
+     * compris. L'annulation a déjà rendu ce que la commande avait consommé :
+     * bon recrédité, code promo décompté, paiement remboursé ou converti en
+     * bon. La faire repartir donnerait la réduction une seconde fois ; l'annuler
+     * de nouveau rejouerait le remboursement. Il faut créer une autre commande.
+     *
+     * Rien ne l'empêchait avant : une commande annulée n'a pas de rang dans les
+     * séquences plus bas (-1), si bien que PENDING, puis toute la suite, et
+     * même COMPLETED, passaient le contrôle.
+     */
+    if (currentStatus === OrderStatus.CANCELLED) {
+      throw new ConflictException(
+        newStatus === OrderStatus.CANCELLED
+          ? 'Cette commande est déjà annulée.'
+          : 'Une commande annulée ne peut pas reprendre. Créez une nouvelle commande.',
+      );
+    }
+
     // Cas spécial : annulation.
     // - Règle standard (rôles non-admin + clients) : uniquement depuis PENDING ou ACCEPTED.
     // - ADMIN (`allowCancelFromAnyStatus`) : peut annuler QUEL QUE SOIT l'état.
