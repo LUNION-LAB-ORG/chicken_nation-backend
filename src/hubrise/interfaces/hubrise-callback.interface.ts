@@ -3,10 +3,12 @@
  * Basé sur la documentation : https://developers.hubrise.com/api/callbacks
  *
  * HubRise envoie des requêtes POST à l'URL de callback configurée.
- * Chaque requête contient un header X-HubRise-Hmac pour la vérification HMAC-SHA256.
+ * Chaque requête porte l'en-tête X-HubRise-Hmac-SHA256 : HMAC-SHA256 en
+ * hexadécimal du corps brut, clé = client_secret.
  *
- * Mécanisme de retry : 6 tentatives avec backoff exponentiel
- * (10s, 30s, 90s, 270s, 810s, 2430s).
+ * Relance (réponse 5xx ou délai de 20 s dépassé) : 6 tentatives, attente
+ * d'une minute doublée à chaque essai, 32 minutes au plus. Tout code 200 à
+ * 499 vaut accusé de réception.
  */
 
 import { HubriseCallbackEvent } from '../constants/hubrise-status-mapping.constant';
@@ -55,8 +57,8 @@ export interface HubriseCallbackResponse {
 
 // === Headers de vérification du callback ===
 export interface HubriseCallbackHeaders {
-  /** Signature HMAC-SHA256 du body (header X-HubRise-Hmac) */
-  'x-hubrise-hmac'?: string;
+  /** Signature HMAC-SHA256 du body brut, en hexadécimal, clé = client_secret (header X-HubRise-Hmac-SHA256) */
+  'x-hubrise-hmac-sha256'?: string;
   /** Timestamp du callback */
   'x-hubrise-timestamp'?: string;
 }

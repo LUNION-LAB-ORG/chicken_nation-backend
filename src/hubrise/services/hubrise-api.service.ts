@@ -42,7 +42,6 @@ export class HubriseApiService {
       hubrise_client_id: 'HUBRISE_CLIENT_ID',
       hubrise_client_secret: 'HUBRISE_CLIENT_SECRET',
       hubrise_access_token: 'HUBRISE_ACCESS_TOKEN',
-      hubrise_webhook_secret: 'HUBRISE_WEBHOOK_SECRET',
       base_url: 'BASE_URL',
     });
   }
@@ -52,6 +51,10 @@ export class HubriseApiService {
     return config.hubrise_client_id || '';
   }
 
+  /**
+   * `client_secret` du client OAuth. Sert aussi de clé HMAC aux callbacks :
+   * HubRise signe chaque événement avec lui (en-tête X-HubRise-Hmac-SHA256).
+   */
   async getClientSecret(): Promise<string> {
     const config = await this.getHubriseConfig();
     return config.hubrise_client_secret || '';
@@ -67,11 +70,6 @@ export class HubriseApiService {
     const baseUrl = config.base_url || '';
     // `base_url` peut déjà porter le préfixe : on ne le rajoute pas deux fois.
     return urlApiDepuis(baseUrl, 'hubrise/webhook');
-  }
-
-  async getWebhookSecret(): Promise<string> {
-    const config = await this.getHubriseConfig();
-    return config.hubrise_webhook_secret || '';
   }
 
   // ─── Méthodes HTTP ───────────────────────────────────────────────────

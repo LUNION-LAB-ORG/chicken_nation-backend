@@ -2,7 +2,7 @@
  * Contrôleur d'authentification OAuth 2.0 HubRise.
  *
  * Endpoints :
- * - GET  /hubrise/auth/connect/:restaurantId → Redirige vers HubRise pour autoriser
+ * - POST /hubrise/auth/connect/:restaurantId → Renvoie l'URL d'autorisation HubRise ({ url })
  * - GET  /hubrise/auth/callback             → Callback OAuth (reçoit le code)
  * - GET  /hubrise/auth/status/:restaurantId  → Vérifie si un restaurant est connecté
  * - POST /hubrise/auth/disconnect/:restaurantId → Déconnecte un restaurant
@@ -16,12 +16,15 @@ import {
   Post,
   Param,
   Query,
+  Req,
   Res,
   Logger,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import { ConfigService } from '@nestjs/config';
+import type { Request, Response } from 'express';
+import type { User } from '@prisma/client';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
@@ -30,6 +33,7 @@ import { Action } from 'src/modules/auth/enums/action.enum';
 
 import { HubriseAuthService } from '../services/hubrise-auth.service';
 import { HubriseWebhookService } from '../services/hubrise-webhook.service';
+import { MotifRetour, urlRetourBackoffice } from '../utils/retour-oauth.util';
 
 @Controller('hubrise/auth')
 export class HubriseAuthController {
@@ -38,11 +42,17 @@ export class HubriseAuthController {
   constructor(
     private readonly authService: HubriseAuthService,
     private readonly webhookService: HubriseWebhookService,
+    private readonly config: ConfigService,
   ) {}
 
   /**
-   * Initie la connexion OAuth avec HubRise pour un restaurant.
-   * Redirige l'utilisateur vers la page d'autorisation HubRise.
+   * Prépare la connexion OAuth avec HubRise pour un restaurant et renvoie
+   * l'URL d'autorisation, que le backoffice ouvre lui-même.
+   *
+   * ⚠️ Appel AUTHENTIFIÉ qui répond en JSON, et non plus une redirection :
+   * l'écran ouvrait cette route par `window.open`, sans en-tête Bearer, donc
+   * 401 pour tout le monde. Le `state` signé y lie le restaurant à
+   * l'utilisateur qui demande la connexion.
    *
    * @param restaurantId - ID du restaurant CN à connecter
    */
@@ -50,61 +60,57 @@ export class HubriseAuthController {
   // le retour réécrit le jeton HubRise du restaurant. En READ, un rôle en
   // simple consultation (Marketing, Comptable) pouvait rattacher un restaurant
   // à son propre compte HubRise.
-  @Get('connect/:restaurantId')
+  @Post('connect/:restaurantId')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.RESTAURANTS, Action.CREATE)
+  @HttpCode(HttpStatus.OK)
   async connect(
     @Param('restaurantId') restaurantId: string,
-    @Res() res: Response,
-  ) {
-    this.logger.log(`[HubRise Auth] Connexion initiée pour le restaurant ${restaurantId}`);
-
-    const authUrl = await this.authService.getAuthorizationUrl(restaurantId);
-    return res.redirect(authUrl);
+    @Req() req: Request,
+  ): Promise<{ url: string }> {
+    const user = req.user as User;
+    const url = await this.authService.getAuthorizationUrl(restaurantId, user.id);
+    return { url };
   }
 
   /**
    * Callback OAuth — reçoit le code d'autorisation de HubRise.
-   * Échange le code contre un access_token et enregistre le webhook.
+   * Vérifie le `state` signé AVANT tout échange, échange le code, enregistre
+   * le jeton sans écraser une autre liaison, puis inscrit le webhook.
+   * Termine TOUJOURS par une redirection vers le backoffice, avec un motif en
+   * cas d'échec (jamais de JSON brut dans l'onglet de l'utilisateur).
    *
    * @param code - Code d'autorisation retourné par HubRise
-   * @param state - ID du restaurant CN (passé dans le state)
+   * @param state - `state` signé par `getAuthorizationUrl`
+   * @param error - Présent si l'utilisateur a refusé sur HubRise (access_denied)
    */
-  // ⚠️ VOLONTAIREMENT SANS GARDE : retour OAuth appelé par le navigateur du
+  // ⚠️ VOLONTAIREMENT SANS GARDE : retour OAuth appelé par le navigateur de
+  // l'utilisateur, redirigé par HubRise, donc sans jeton. Toute la confiance
+  // repose sur le `state` signé et le nonce à usage unique.
   @Get('callback')
   async callback(
-    @Query('code') code: string,
-    @Query('state') state: string,
+    @Query('code') code: unknown,
+    @Query('state') state: unknown,
+    @Query('error') error: unknown,
     @Res() res: Response,
   ) {
-    this.logger.log(`[HubRise Auth] Callback OAuth reçu — state: ${state}`);
+    const base = this.config.get<string>('BACKOFFICE_URL');
+    let motif: MotifRetour | null = null;
 
     try {
-      if (!code || !state) {
-        return res.status(HttpStatus.BAD_REQUEST).json({
-          success: false,
-          message: 'Paramètres manquants (code ou state)',
-        });
+      const retour = await this.authService.traiterRetour({ code, state, error });
+      if (retour.ok) {
+        // Enregistrer le webhook callback (le token est scopé au location)
+        await this.webhookService.registerCallback(retour.accessToken);
+      } else {
+        motif = retour.motif;
       }
-
-      // Échanger le code contre un token
-      const tokenData = await this.authService.exchangeCodeForToken(code, state);
-
-      // Enregistrer le webhook callback (le token est scopé au location)
-      if (tokenData.access_token) {
-        await this.webhookService.registerCallback(tokenData.access_token);
-      }
-
-      // Rediriger vers le backoffice avec un message de succès
-      const backofficeUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      return res.redirect(
-        `${backofficeUrl}/gestion?hubrise=connected&location=${tokenData.location_id}`,
-      );
-    } catch (error) {
-      this.logger.error(`[HubRise Auth] Erreur callback : ${error}`);
-      const backofficeUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      return res.redirect(`${backofficeUrl}/gestion?hubrise=error`);
+    } catch (erreur) {
+      this.logger.error(`[HubRise Auth] Erreur callback : ${erreur}`);
+      motif = 'echec';
     }
+
+    return res.redirect(urlRetourBackoffice(base, motif));
   }
 
   /**

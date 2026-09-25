@@ -16,8 +16,8 @@
  * Documentation : https://developers.hubrise.com/api/callbacks
  */
 
-import { Injectable, Logger } from '@nestjs/common';
-import { createHmac } from 'crypto';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { HubriseApiService } from './hubrise-api.service';
 import { HubriseOrderSyncService } from './hubrise-order-sync.service';
@@ -29,6 +29,7 @@ import {
   HubriseCallbackAck,
   HubriseCallbackResponse,
 } from '../interfaces/hubrise-callback.interface';
+import { verifierSignatureHubrise } from '../utils/signature-webhook.util';
 
 @Injectable()
 export class HubriseWebhookService {
@@ -39,6 +40,7 @@ export class HubriseWebhookService {
     private readonly hubriseApi: HubriseApiService,
     private readonly orderSync: HubriseOrderSyncService,
     private readonly customerSync: HubriseCustomerSyncService,
+    private readonly config: ConfigService,
   ) {}
 
   // ─── Traitement des callbacks ──────────────────────────────────────
@@ -48,22 +50,17 @@ export class HubriseWebhookService {
    * Vérifie la signature HMAC puis dispatche vers le service approprié.
    *
    * @param payload - Corps du callback
-   * @param hmacSignature - Signature HMAC reçue dans le header X-HubRise-Hmac
-   * @param rawBody - Corps brut pour la vérification HMAC
+   * @param hmacSignature - Signature reçue dans le header X-HubRise-Hmac-SHA256
+   * @param rawBody - Corps brut (octets) pour la vérification HMAC
+   * @throws UnauthorizedException si la signature est absente ou invalide
    */
   async handleCallback(
     payload: HubriseCallbackPayload,
     hmacSignature?: string,
-    rawBody?: string,
+    rawBody?: Buffer,
   ): Promise<HubriseCallbackAck> {
-    // 1. Vérifier la signature HMAC (si le secret est configuré)
-    const webhookSecret = await this.hubriseApi.getWebhookSecret();
-    if (webhookSecret && hmacSignature && rawBody) {
-      if (!this.verifyHmac(rawBody, hmacSignature, webhookSecret)) {
-        this.logger.warn('[HubRise Webhook] Signature HMAC invalide — callback rejeté');
-        return { received: false, message: 'Signature HMAC invalide' };
-      }
-    }
+    // 1. Vérifier la signature HMAC, AVANT de chercher le restaurant ou d'appeler HubRise
+    await this.verifierSignature(hmacSignature, rawBody);
 
     this.logger.log(
       `[HubRise Webhook] Callback reçu : ${payload.event_type} pour ${payload.resource_type} ${payload.resource_id}`,
@@ -180,20 +177,38 @@ export class HubriseWebhookService {
 
   /**
    * Vérifie la signature HMAC-SHA256 d'un callback HubRise.
-   * Le secret est fourni lors de la création du callback.
+   * Clé : le `client_secret` du client OAuth (documentation HubRise, page
+   * Callbacks), et non plus `HUBRISE_WEBHOOK_SECRET` que HubRise ignore.
    *
-   * @param rawBody - Corps brut de la requête
-   * @param signature - Signature reçue dans le header X-HubRise-Hmac
-   * @returns true si la signature est valide
+   * Obligatoire dès que ce secret existe : signature absente ou invalide →
+   * 401. Seule soupape, explicite : `HUBRISE_WEBHOOK_STRICT=false` accepte le
+   * callback en le signalant dans les journaux, le temps de corriger une clé
+   * mal renseignée sans perdre les commandes réelles.
    */
-  private verifyHmac(rawBody: string, signature: string, secret: string): boolean {
-    if (!secret) return true; // Pas de vérification si pas de secret
+  private async verifierSignature(
+    signature: string | undefined,
+    rawBody: Buffer | undefined,
+  ): Promise<void> {
+    const secret = await this.hubriseApi.getClientSecret();
+    if (!secret) {
+      this.logger.warn(
+        '[HubRise Webhook] Aucun client_secret HubRise configuré : signature non vérifiée.',
+      );
+      return;
+    }
 
-    const expectedSignature = createHmac('sha256', secret)
-      .update(rawBody)
-      .digest('hex');
+    if (verifierSignatureHubrise(rawBody, signature, secret)) return;
 
-    return expectedSignature === signature;
+    const etat = signature ? 'invalide' : 'absente';
+    const strict = this.config.get<string>('HUBRISE_WEBHOOK_STRICT') !== 'false';
+    if (strict) {
+      this.logger.warn(`[HubRise Webhook] Signature ${etat} : callback rejeté.`);
+      throw new UnauthorizedException('Signature HubRise invalide');
+    }
+
+    this.logger.warn(
+      `[HubRise Webhook] Signature ${etat} : callback ACCEPTÉ car HUBRISE_WEBHOOK_STRICT=false. À rétablir au plus vite.`,
+    );
   }
 
   // ─── Utilitaires ─────────────────────────────────────────────────────
@@ -201,9 +216,13 @@ export class HubriseWebhookService {
   /**
    * Récupère le token d'accès pour un location_id HubRise.
    */
-  private async getTokenForLocation(locationId: string): Promise<string | null> {
+  private async getTokenForLocation(locationId: unknown): Promise<string | null> {
+    // ⚠️ Prisma ignore un filtre `undefined` : sans ce contrôle, un corps sans
+    // `location_id` renverrait le jeton du PREMIER restaurant venu.
+    if (typeof locationId !== 'string' || !locationId) return null;
+
     const restaurant = await this.prisma.restaurant.findFirst({
-      where: { hubrise_location_id: locationId },
+      where: { hubrise_location_id: locationId, hubrise_access_token: { not: null } },
       select: { hubrise_access_token: true },
     });
 
