@@ -1,4 +1,6 @@
-import { Injectable, UnauthorizedException, BadRequestException, NotFoundException, HttpException, Logger } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, NotFoundException, HttpException, HttpStatus, ForbiddenException, Inject, Logger } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { PrismaService } from 'src/database/services/prisma.service';
 import * as bcrypt from 'bcryptjs';
 import type { Request } from 'express';
@@ -14,38 +16,87 @@ import {
   canonicalizeCustomerPhone,
   customerPhoneVariants,
 } from 'src/common/utils/customer-phone.util';
+import {
+  motifRefusCompte,
+  statutApresConnexion,
+} from 'src/modules/auth/helpers/staff-account-status.helper';
+import {
+  EtatEchecsConnexion,
+  MESSAGE_IDENTIFIANTS_INCORRECTS,
+  cleEchecsConnexion,
+  etatApresEchec,
+  lireEtatEchecs,
+  messageBlocageConnexion,
+  minutesRestantesBlocage,
+  pourJournal,
+} from 'src/modules/auth/helpers/connexion-echecs.helper';
+import { FileParCle, avantDelai } from 'src/modules/auth/helpers/file-par-cle.helper';
+
+// Haché bcrypt (coût 10, celui de genSalt) d'une chaîne aléatoire jetée :
+// comparé quand l'email est inconnu, pour que la réponse prenne le même temps
+// qu'un mauvais mot de passe. Ce n'est pas un secret, le résultat est ignoré.
+const HACHE_FACTICE = '$2b$10$VgUroBqB..TnDIdhiX2VQeBUEG5eOkQg6wwu9gap66p/bgc7O9yhS';
+
+// Au-delà, une opération du compteur d'échecs est abandonnée (Redis coupé ou
+// saturé) : la connexion continue sans lui.
+const DELAI_CACHE_CONNEXION_MS = 1000;
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+
+  // Essais de connexion d'un même email traités un par un (voir FileParCle).
+  private readonly essaisParEmail = new FileParCle();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly jsonWebTokenService: JsonWebTokenService,
     private readonly otpService: OtpService,
     private readonly twilioService: TwilioService,
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
   ) { }
 
   // LOGIN USER
-  async login(loginUserDto: LoginUserDto) {
-    // Vérification de l'existence de l'utilisateur
-    const user = await this.prisma.user.findUnique({
-      where: { email: loginUserDto.email },
-    });
-    if (!user) throw new NotFoundException('Utilisateur non trouvé');
+  // Réponse identique (400) pour un email inconnu et un mauvais mot de passe,
+  // avec le même coût bcrypt : ni le message ni le temps de réponse ne disent
+  // si le compte existe. Le statut n'est contrôlé qu'APRÈS le mot de passe,
+  // pour ne rien révéler d'un compte suspendu à un tiers.
+  //
+  // `origine` : adresse(s) de l'appelant, pour le journal seulement.
+  async login(loginUserDto: LoginUserDto, origine?: string) {
+    const cle = cleEchecsConnexion(loginUserDto.email);
+    const journal = {
+      email: pourJournal(loginUserDto.email),
+      origine: pourJournal(origine || 'adresse inconnue'),
+    };
 
-    // Vérification du mot de passe
-    const isPasswordValid = await bcrypt.compare(loginUserDto.password, user.password);
-    if (!isPasswordValid) throw new BadRequestException('Mot de passe invalide');
+    // Verrou, mot de passe et compteur passent un essai à la fois par email :
+    // des essais parallèles liraient sinon tous le compteur avant le premier
+    // échec écrit, et passeraient tous le verrou.
+    const user = await this.essaisParEmail.executer(cle, () =>
+      this.verifierIdentifiants(loginUserDto, cle, journal),
+    );
+
+    // Compte suspendu ou supprimé par un administrateur : pas de session.
+    const motif = motifRefusCompte(user.entity_status);
+    if (motif) {
+      this.logger.warn(
+        `Connexion refusée (compte ${user.entity_status}) : ${journal.email} depuis ${journal.origine}`,
+      );
+      throw new ForbiddenException(motif);
+    }
 
     // Génération du token et du refreshToken
     const token = await this.jsonWebTokenService.generateToken(user.id);
     const refreshToken = await this.jsonWebTokenService.generateRefreshToken(user.id);
 
-    // Mise à jour du statut de l'utilisateur
+    // Date de connexion. Le statut ne change que pour un compte hérité NEW
+    // (passé ACTIVE) : écrire ACTIVE à chaque connexion réactivait les comptes
+    // suspendus.
+    const statut = statutApresConnexion(user.entity_status);
     await this.prisma.user.update({
       where: { id: user.id },
-      data: { entity_status: EntityStatus.ACTIVE, last_login_at: new Date() },
+      data: { last_login_at: new Date(), ...(statut ? { entity_status: statut } : {}) },
     });
 
     // Récupération des permissions selon le rôle
@@ -60,6 +111,86 @@ export class AuthService {
       role: user.role,
       permissions: rolePermissions,
     };
+  }
+
+  /**
+   * Contrôle du verrou, de l'email et du mot de passe, puis mise à jour du
+   * compteur. Renvoie le membre du personnel si le mot de passe est juste, lève
+   * 429 (email verrouillé) ou 400 (identifiants incorrects) sinon.
+   */
+  private async verifierIdentifiants(
+    loginUserDto: LoginUserDto,
+    cle: string,
+    journal: { email: string; origine: string },
+  ): Promise<User> {
+    // Email verrouillé après trop d'échecs : refusé avant tout calcul.
+    const minutes = minutesRestantesBlocage(
+      await this.lireEchecsConnexion(cle),
+      Date.now(),
+    );
+    if (minutes > 0) {
+      this.logger.warn(
+        `Connexion refusée (email verrouillé) : ${journal.email} depuis ${journal.origine}`,
+      );
+      throw new HttpException(messageBlocageConnexion(minutes), HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { email: loginUserDto.email },
+    });
+    const isPasswordValid = await bcrypt.compare(
+      loginUserDto.password,
+      user?.password ?? HACHE_FACTICE,
+    );
+    if (!user || !isPasswordValid) {
+      const minutesBlocage = await this.enregistrerEchecConnexion(cle);
+      this.logger.warn(
+        `Échec de connexion : ${journal.email} depuis ${journal.origine}${minutesBlocage > 0 ? ', email verrouillé' : ''}`,
+      );
+      if (minutesBlocage > 0) {
+        throw new HttpException(messageBlocageConnexion(minutesBlocage), HttpStatus.TOO_MANY_REQUESTS);
+      }
+      throw new BadRequestException(MESSAGE_IDENTIFIANTS_INCORRECTS);
+    }
+    await this.effacerEchecsConnexion(cle);
+    return user;
+  }
+
+  // ── Compteur d'échecs de connexion du personnel (par email, dans Redis) ────
+  // Best-effort : une panne du cache ne doit jamais empêcher de se connecter ;
+  // la limite par IP (ConnexionThrottlerGuard) reste alors en place. Chaque
+  // appel est borné dans le temps : pendant une coupure, le client Redis garde
+  // les commandes en attente au lieu d'échouer.
+
+  private async lireEchecsConnexion(cle: string): Promise<EtatEchecsConnexion | null> {
+    try {
+      return lireEtatEchecs(await avantDelai(this.cache.get(cle), DELAI_CACHE_CONNEXION_MS));
+    } catch (error) {
+      this.logger.error(`Lecture du compteur d'échecs de connexion impossible : ${String(error)}`);
+      return null;
+    }
+  }
+
+  /** Enregistre un échec et renvoie les minutes de verrou s'il atteint le plafond (0 sinon). */
+  private async enregistrerEchecConnexion(cle: string): Promise<number> {
+    try {
+      // Relu ici plutôt qu'au début : un autre serveur a pu compter un échec
+      // pendant bcrypt (dans ce processus, la file par email l'empêche).
+      const suivant = etatApresEchec(await this.lireEchecsConnexion(cle), Date.now());
+      await avantDelai(this.cache.set(cle, suivant.etat, suivant.ttlMs), DELAI_CACHE_CONNEXION_MS);
+      return suivant.minutesBlocage;
+    } catch (error) {
+      this.logger.error(`Écriture du compteur d'échecs de connexion impossible : ${String(error)}`);
+      return 0;
+    }
+  }
+
+  private async effacerEchecsConnexion(cle: string): Promise<void> {
+    try {
+      await avantDelai(this.cache.del(cle), DELAI_CACHE_CONNEXION_MS);
+    } catch {
+      // best-effort : la clé expire d'elle-même.
+    }
   }
 
   // Délai minimum entre deux envois d'OTP pour un même numéro (anti-flood).

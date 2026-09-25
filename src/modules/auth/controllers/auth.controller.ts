@@ -1,17 +1,23 @@
 import { Controller, Get, Post, Body, Req, UseGuards, Query } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from 'src/modules/auth/services/auth.service';
 import { LoginUserDto } from 'src/modules/auth/dto/login-user.dto';
 import {
+  ApiBadRequestResponse,
   ApiBody,
+  ApiForbiddenResponse,
   ApiOkResponse,
   ApiOperation,
   ApiNotFoundResponse,
+  ApiTooManyRequestsResponse,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { User, UserRole } from '@prisma/client';
 import { permissionsByRole } from '../constantes/permissionsByRole';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { JwtRefreshAuthGuard } from '../guards/jwt-refresh-auth.guard';
+import { ConnexionThrottlerGuard } from '../guards/connexion-throttler.guard';
+import { origineConnexion } from '../helpers/connexion-echecs.helper';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 
 @Controller('auth')
@@ -19,16 +25,25 @@ export class AuthController {
   constructor(private readonly authService: AuthService) { }
 
   // LOGIN USER
+  // Limite par IP sur CETTE route seulement (pas sur la classe : GET
+  // /auth/permissions est relu régulièrement par le backoffice). 10 par minute
+  // et non 5 : les caissiers d'un restaurant, comme le siège, sortent par la
+  // même adresse et se connectent ensemble à la relève. Le verrou par email
+  // (AuthService) complète cette limite.
   @ApiOperation({ summary: 'Connexion utilisateur' })
   @ApiOkResponse({
     type: String,
     description: 'Utilisateur, Token et refreshToken envoyé',
   })
-  @ApiNotFoundResponse({ description: 'Utilisateur non trouvé' })
+  @ApiBadRequestResponse({ description: 'Email ou mot de passe incorrect' })
+  @ApiForbiddenResponse({ description: 'Compte désactivé' })
+  @ApiTooManyRequestsResponse({ description: 'Trop de tentatives de connexion' })
   @ApiBody({ type: LoginUserDto })
+  @UseGuards(ConnexionThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('login')
-  async login(@Body() data: LoginUserDto) {
-    return this.authService.login(data);
+  async login(@Body() data: LoginUserDto, @Req() req: Request) {
+    return this.authService.login(data, origineConnexion(req));
   }
 
   // LOGIN CUSTOMER

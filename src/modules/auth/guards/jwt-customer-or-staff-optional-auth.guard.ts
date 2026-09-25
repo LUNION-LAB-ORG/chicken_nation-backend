@@ -29,8 +29,9 @@ export class JwtCustomerOrStaffOptionalAuthGuard extends AuthGuard([
     }
     const request = context.switchToHttp().getRequest();
     const principal = request.user as (Customer | User) | undefined;
-    // Un CLIENT inactif/supprimé est traité comme un invité (le staff n'a pas de
-    // statut pertinent ici : un User authentifié reste staff).
+    // Un CLIENT inactif/supprimé est traité comme un invité. Un membre du
+    // personnel suspendu ou supprimé est déjà refusé par JwtStrategy : son
+    // erreur arrive dans handleRequest, qui l'ignore, et il est ici en invité.
     if (principal && !('role' in principal)) {
       const customer = principal as Customer;
       if (
