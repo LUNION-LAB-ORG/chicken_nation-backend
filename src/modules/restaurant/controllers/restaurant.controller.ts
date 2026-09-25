@@ -93,27 +93,48 @@ export class RestaurantController {
   @Get(':id/users')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.PERSONNELS, Action.READ)
-  async getRestaurantUsers(@Param('id') id: string) {
+  async getRestaurantUsers(@Req() req: Request, @Param('id') id: string) {
+    // ⚠️ Cloisonnement RESTAURANT : un manager ou un assistant lisait la liste
+    // du personnel (nom, e-mail, rôle, photo) de n'importe quel restaurant,
+    // les identifiants de restaurants étant publics. Tous les écrans passent
+    // le restaurant du compte connecté.
+    assertCanAccessRestaurant(req.user as User, id);
     return this.restaurantService.getRestaurantUsers(id);
   }
 
   @Get(':id/clients')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.CLIENTS, Action.READ)
-  async getRestaurantCustomers(@Req() req: Request, @Param('id') id: string) {
+  async getRestaurantCustomers(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
     /**
      * ⚠️ Cloisonnement RESTAURANT. La permission CLIENTS.READ est portée par
      * cinq rôles, dont caissier et centre d'appel : sans ce contrôle, un
      * employé d'un restaurant listait le fichier clients de tous les autres.
+     *
+     * Une page de 50 clients (100 au plus), recherche faite par la base, et
+     * seulement nom, e-mail, téléphone et photo : la route renvoyait la base
+     * entière du restaurant, fiches complètes, à chaque frappe.
      */
     assertCanAccessRestaurant(req.user as User, id);
-    return this.restaurantService.getRestaurantCustomers(id);
+    return this.restaurantService.getRestaurantCustomers(id, { search, page, limit });
   }
 
   @Get(':id/manager')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.PERSONNELS, Action.READ)
-  async getRestaurantManager(@Param('id') id: string) {
+  async getRestaurantManager(@Req() req: Request, @Param('id') id: string) {
+    // ⚠️ Cloisonnement RESTAURANT : téléphone, e-mail et adresse personnelle
+    // du gérant de n'importe quel restaurant étaient lisibles par le personnel
+    // d'un autre. Le backoffice l'appelle depuis la fiche restaurant (siège),
+    // la caisse depuis le détail d'un restaurant : pour un autre restaurant
+    // que le sien, elle reçoit 403 et masque déjà la carte du gérant.
+    assertCanAccessRestaurant(req.user as User, id);
     return this.restaurantService.getRestaurantManager(id);
   }
 

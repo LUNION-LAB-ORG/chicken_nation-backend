@@ -6,7 +6,7 @@ import type { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Customer, UserRole } from '@prisma/client';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
-import { CacheInterceptor } from '@nestjs/cache-manager';
+import { UserScopedCacheInterceptor } from 'src/modules/order/interceptors/user-scoped-cache.interceptor';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
@@ -15,10 +15,16 @@ import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 
+/**
+ * ⚠️ Cache cloisonné par utilisateur, et non le `CacheInterceptor` par URL.
+ * La clé était l'URL seule alors que la réponse est celle du porteur du jeton :
+ * un client qui appelait /favorites/customer/<id d'un autre> dans la seconde
+ * recevait les favoris de cet autre client, ou lui servait les siens.
+ */
 @ApiTags('Favorites')
 @ApiBearerAuth()
 @Controller('favorites')
-@UseInterceptors(CacheInterceptor)
+@UseInterceptors(UserScopedCacheInterceptor)
 export class FavoriteController {
   constructor(private readonly favoriteService: FavoriteService) { }
 
@@ -58,22 +64,30 @@ export class FavoriteController {
   // détail. Le paramètre d'URL est ignoré au profit du jeton.
   @UseGuards(JwtCustomerAuthGuard)
   @Get('customer/:customerId')
-  findByCustomer(@Req() req: Request, @Param('customerId') customerId: string, @Query() query?: { page?: number, limit?: number }) {
-    return this.favoriteService.findByCustomer((req.user as Customer).id, query?.page ?? 1, query?.limit ?? 10);
+  findByCustomer(
+    @Req() req: Request,
+    @Param('customerId') customerId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.favoriteService.findByCustomer((req.user as Customer).id, page, limit);
   }
 
   @ApiOperation({ summary: 'Mettre à jour une favorite' })
+  // ⚠️ Le propriétaire n'était pas vérifié : tout client connecté modifiait le
+  // favori d'un autre dont il connaissait l'identifiant. Aucun appelant.
   @UseGuards(JwtCustomerAuthGuard)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateFavoriteDto: UpdateFavoriteDto) {
-    return this.favoriteService.update(id, updateFavoriteDto);
+  update(@Req() req: Request, @Param('id') id: string, @Body() updateFavoriteDto: UpdateFavoriteDto) {
+    return this.favoriteService.update((req.user as Customer).id, id, updateFavoriteDto);
   }
 
   @ApiOperation({ summary: 'Supprimer une favorite' })
+  // ⚠️ Même défaut que la modification : seul le propriétaire supprime.
   @UseGuards(JwtCustomerAuthGuard)
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.favoriteService.remove(id);
+  remove(@Req() req: Request, @Param('id') id: string) {
+    return this.favoriteService.remove((req.user as Customer).id, id);
   }
 
   @ApiOperation({ summary: 'Supprimer une favorite par client et plat' })

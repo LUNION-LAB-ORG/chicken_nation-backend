@@ -4,6 +4,20 @@ import { CreateCommentDto, UpdateCommentDto, CommentResponseDto, DishCommentsRes
 import { EntityStatus, OrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
+import { AVIS_PUBLIC_SELECT, AvisPublic, limiteAvisPublics, versAvisPublic } from './avis-public.util';
+
+/**
+ * Plafond de `limit` sur les listes d'avis réservées au personnel : sans
+ * maximum, un seul appel renvoyait tous les avis d'un coup, ce qui revenait à
+ * un export. Posé ici, et non dans le DTO que partagent les routes publiques.
+ */
+const AVIS_PERSONNEL_LIMITE_MAX = 100;
+
+const MESSAGE_AVIS_AUTRE_RESTAURANT =
+    "Accès refusé : cette commande n'appartient pas à votre restaurant.";
+
+const MESSAGE_AVIS_ID_AUTRE_RESTAURANT =
+    "Accès refusé : cet avis porte sur une commande d'un autre restaurant.";
 
 @Injectable()
 export class CommentService {
@@ -147,7 +161,8 @@ export class CommentService {
         page: number;
         limit: number;
     }> {
-        const { page = 1, limit = 10, min_rating = 1, max_rating = 5 } = query;
+        const { page = 1, min_rating = 1, max_rating = 5 } = query;
+        const limit = Math.min(query.limit ?? 10, AVIS_PERSONNEL_LIMITE_MAX);
         const skip = (page - 1) * limit;
 
         if (restaurantScope) {
@@ -156,9 +171,7 @@ export class CommentService {
                 select: { restaurant_id: true },
             });
             if (!order || order.restaurant_id !== restaurantScope) {
-                throw new ForbiddenException(
-                    "Accès refusé : cette commande n'appartient pas à votre restaurant.",
-                );
+                throw new ForbiddenException(MESSAGE_AVIS_AUTRE_RESTAURANT);
             }
         }
 
@@ -212,9 +225,18 @@ export class CommentService {
         };
     }
 
-    // Récupérer les commentaires d'un plat
-    async getDishComments(dishId: string, query: GetCommentsQueryDto): Promise<DishCommentsResponseDto> {
-        const { page = 1, limit = 10, min_rating, max_rating } = query;
+    // Récupérer les commentaires d'un plat (onglet « Commentaires » de la fiche
+    // plat, au backoffice comme dans la caisse).
+    // `restaurantScope` : restaurant du personnel de restaurant, résolu depuis
+    // le jeton. Il ne voit alors que les avis laissés sur les commandes de SON
+    // restaurant, note moyenne et total compris, comme sur GET /comments.
+    async getDishComments(
+        dishId: string,
+        query: GetCommentsQueryDto,
+        restaurantScope?: string,
+    ): Promise<DishCommentsResponseDto> {
+        const { page = 1, min_rating, max_rating } = query;
+        const limit = Math.min(query.limit ?? 10, AVIS_PERSONNEL_LIMITE_MAX);
         const skip = (page - 1) * limit;
 
         // Récupérer le plat
@@ -239,6 +261,7 @@ export class CommentService {
                         dish_id: dishId,
                     },
                 },
+                ...(restaurantScope ? { restaurant_id: restaurantScope } : {}),
             },
         };
 
@@ -273,16 +296,15 @@ export class CommentService {
             take: limit,
         });
 
-        // Calculer les statistiques
-        const allComments = await this.prisma.comment.findMany({
+        // Statistiques calculées par la base, sans rapatrier chaque note.
+        const stats = await this.prisma.comment.aggregate({
             where: whereClause,
-            select: { rating: true },
+            _count: { _all: true },
+            _avg: { rating: true },
         });
 
-        const totalComments = allComments.length;
-        const averageRating = totalComments > 0
-            ? allComments.reduce((sum, comment) => sum + comment.rating, 0) / totalComments
-            : 0;
+        const totalComments = stats._count._all;
+        const averageRating = stats._avg.rating ?? 0;
 
         return {
             dish_id: dishId,
@@ -302,7 +324,9 @@ export class CommentService {
         page: number;
         limit: number;
     }> {
-        const { page = 1, limit = 10, min_rating, max_rating } = query;
+        const { page = 1, min_rating, max_rating } = query;
+        // Plafond du personnel : nom et téléphone sortent ici, comme sur GET /comments.
+        const limit = Math.min(query.limit ?? 10, AVIS_PERSONNEL_LIMITE_MAX);
         const skip = (page - 1) * limit;
 
         const whereClause: any = {
@@ -359,8 +383,10 @@ export class CommentService {
         };
     }
 
-    // Récupérer un commentaire par ID
-    async getCommentById(commentId: string): Promise<CommentResponseDto> {
+    // Récupérer un commentaire par ID (personnel seulement).
+    // `restaurantScope` : restaurant du personnel de restaurant, résolu depuis
+    // le jeton. L'avis d'une commande d'un autre restaurant est refusé.
+    async getCommentById(commentId: string, restaurantScope?: string): Promise<CommentResponseDto> {
         const comment = await this.prisma.comment.findFirst({
             where: {
                 id: commentId,
@@ -384,6 +410,8 @@ export class CommentService {
                         id: true,
                         reference: true,
                         created_at: true,
+                        // Lu pour le contrôle ci-dessous, retiré de la réponse.
+                        restaurant_id: true,
                     },
                 },
             },
@@ -393,7 +421,12 @@ export class CommentService {
             throw new NotFoundException('Commentaire non trouvé');
         }
 
-        return this.mapToResponseDto(comment);
+        const { restaurant_id, ...order } = comment.order;
+        if (restaurantScope && restaurant_id !== restaurantScope) {
+            throw new ForbiddenException(MESSAGE_AVIS_ID_AUTRE_RESTAURANT);
+        }
+
+        return this.mapToResponseDto({ ...comment, order });
     }
 
     async getAllComments(query: GetCommentsQueryDto): Promise<QueryResponseDto<CommentResponseDto>> {
@@ -401,7 +434,7 @@ export class CommentService {
         // Plafonné à 100 : sans maximum, un seul appel en lecture renvoyait tous
         // les avis avec nom et téléphone, ce qui revenait à un export. Plafond
         // appliqué ici, et non dans le DTO que partagent les routes publiques.
-        const limit = Math.min(query.limit ?? 10, 100);
+        const limit = Math.min(query.limit ?? 10, AVIS_PERSONNEL_LIMITE_MAX);
         const skip = (page - 1) * limit;
 
         const whereClause: any = {
@@ -485,13 +518,23 @@ export class CommentService {
         };
     }
 
-    async getBestComments(query: GetCommentsQueryDto): Promise<QueryResponseDto<CommentResponseDto>> {
-        const { page = 1, limit = 10 } = query;
+    /**
+     * Section « Témoignages » du site vitrine : route PUBLIQUE, sans jeton.
+     *
+     * Chaque avis passe par la liste blanche `versAvisPublic` : note, texte,
+     * date, prénom et initiale du nom. Ni téléphone, ni e-mail, ni photo, ni
+     * identifiant du client, ni commande (identifiant ou référence). `limit`
+     * est plafonné à 50 : sans maximum, un seul appel vidait tous les avis
+     * approuvés.
+     */
+    async getBestComments(query: GetCommentsQueryDto): Promise<QueryResponseDto<AvisPublic>> {
+        const page = query.page ?? 1;
+        const limit = limiteAvisPublics(query.limit);
         const skip = (page - 1) * limit;
 
         // CURATION BACKOFFICE : uniquement les avis explicitement approuvés
         // (toggle « Visible sur le site »). Plus AUCUNE sélection automatique
-        // — ni note minimale, ni filtre de longueur : l'admin décide.
+        // (ni note minimale, ni filtre de longueur) : l'admin décide.
         const whereClause: Prisma.CommentWhereInput = {
             entity_status: EntityStatus.ACTIVE,
             site_visible: true,
@@ -500,23 +543,7 @@ export class CommentService {
         const [comments, total] = await Promise.all([
             this.prisma.comment.findMany({
                 where: whereClause,
-                include: {
-                    customer: {
-                        select: {
-                            id: true,
-                            first_name: true,
-                            last_name: true,
-                                                image: true,
-                        },
-                    },
-                    order: {
-                        select: {
-                            id: true,
-                            reference: true,
-                            created_at: true,
-                        },
-                    },
-                },
+                select: AVIS_PUBLIC_SELECT,
                 // Les plus récemment approuvés/modifiés d'abord.
                 orderBy: { updated_at: 'desc' },
                 skip,
@@ -526,8 +553,7 @@ export class CommentService {
         ]);
 
         return {
-            // Plus de filtre de longueur : la sélection est HUMAINE (backoffice).
-            data: comments.map(comment => this.mapToResponseDto(comment)),
+            data: comments.map(versAvisPublic),
             meta: {
                 total,
                 page,

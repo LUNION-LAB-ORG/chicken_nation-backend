@@ -1,5 +1,7 @@
-import { Body, Controller, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { User } from '@prisma/client';
+import type { Request } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
@@ -7,6 +9,7 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { ReplaceDishOptionGroupsDto } from '../dto/dish-option-group.dto';
 import { DishOptionService } from '../services/dish-option.service';
+import { peutVoirTelephonesClients } from '../utils/usages-cadeau.util';
 
 /**
  * MENUS COMPOSABLES — configuration réservée au personnel.
@@ -44,8 +47,12 @@ export class DishOptionController {
     summary: "Ce qui empêche ce plat de devenir composable (lots, campagnes, cadeaux déjà distribués)",
   })
   @RequirePermission(Modules.MENUS, Action.READ)
-  usagesCadeau(@Param('dishId') dishId: string) {
-    return this.dishOptionService.usagesCadeau(dishId);
+  // ⚠️ Nom ET téléphone des clients détenteurs d'un cadeau, sans restaurant :
+  // le téléphone ne sort plus que pour un compte du siège ayant CLIENTS READ.
+  usagesCadeau(@Req() req: Request, @Param('dishId') dishId: string) {
+    return this.dishOptionService.usagesCadeau(dishId, {
+      avecTelephones: peutVoirTelephonesClients(req.user as User | undefined),
+    });
   }
 
   @Post('copier-vers/:cibleId')

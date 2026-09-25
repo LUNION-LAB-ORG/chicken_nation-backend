@@ -6,6 +6,31 @@ import { EntityStatus, Customer, Favorite } from '@prisma/client';
 import type { Request } from 'express';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 
+/** Plafond de `limit` sur « mes favoris » : l'application demande 10. */
+export const FAVORIS_LIMITE_MAX = 50;
+
+/**
+ * Page et taille demandées, converties en nombres et bornées.
+ *
+ * Les paramètres d'URL arrivent en chaînes : la réponse renvoyait
+ * `meta.page = "1"`, et l'application calculait la page suivante « 1 » + 1,
+ * soit « 11 ». La deuxième page de favoris revenait donc toujours vide.
+ */
+export function paginationFavoris(page?: unknown, limit?: unknown): { page: number; limit: number } {
+  const p = Math.floor(Number(page));
+  const l = Math.floor(Number(limit));
+  return {
+    page: Number.isFinite(p) && p >= 1 ? p : 1,
+    limit: Number.isFinite(l) && l >= 1 ? Math.min(l, FAVORIS_LIMITE_MAX) : 10,
+  };
+}
+
+/**
+ * Client joint à un favori sur les routes du personnel : de quoi le nommer,
+ * jamais la fiche entière (téléphone, e-mail, date de naissance, points).
+ */
+const CLIENT_DU_FAVORI_SELECT = { id: true, first_name: true, last_name: true } as const;
+
 @Injectable()
 export class FavoriteService {
   constructor(private prisma: PrismaService) { }
@@ -19,7 +44,7 @@ export class FavoriteService {
     });
 
     if (!dish || dish.entity_status !== EntityStatus.ACTIVE) {
-      throw new NotFoundException(`Dish with ID ${createFavoriteDto.dish_id} not found`);
+      throw new NotFoundException('Plat introuvable');
     }
 
     // Vérifier si le favori existe déjà
@@ -31,12 +56,12 @@ export class FavoriteService {
     });
 
     if (existingFavorite) {
-      throw new ConflictException(`This dish is already in favorites for this customer`);
+      throw new ConflictException('Ce plat est déjà dans vos favoris');
     }
 
     return this.prisma.favorite.create({
       data: {
-        ...createFavoriteDto,
+        dish_id: createFavoriteDto.dish_id,
         customer_id: customer.id,
       },
       include: {
@@ -52,7 +77,7 @@ export class FavoriteService {
   async findAll() {
     return this.prisma.favorite.findMany({
       include: {
-        customer: true,
+        customer: { select: CLIENT_DU_FAVORI_SELECT },
         dish: {
           include: {
             category: true,
@@ -69,7 +94,7 @@ export class FavoriteService {
     const favorite = await this.prisma.favorite.findUnique({
       where: { id },
       include: {
-        customer: true,
+        customer: { select: CLIENT_DU_FAVORI_SELECT },
         dish: {
           include: {
             category: true,
@@ -79,13 +104,33 @@ export class FavoriteService {
     });
 
     if (!favorite) {
-      throw new NotFoundException(`Favorite with ID ${id} not found`);
+      throw new NotFoundException('Favori introuvable');
     }
 
     return favorite;
   }
 
-  async findByCustomer(customerId: string, page: number, limit: number): Promise<QueryResponseDto<Favorite>> {
+  /**
+   * Favori appartenant à CE client, sinon 404 : un client ne touche jamais
+   * au favori d'un autre, même s'il en connaît l'identifiant.
+   */
+  private async favoriDuClient(customerId: string, id: string) {
+    const favorite = await this.prisma.favorite.findFirst({
+      where: { id, customer_id: customerId },
+      select: { id: true },
+    });
+    if (!favorite) {
+      throw new NotFoundException('Favori introuvable');
+    }
+    return favorite;
+  }
+
+  /**
+   * « Mes favoris » : `customerId` vient TOUJOURS du jeton du client, jamais
+   * de l'URL (voir le contrôleur).
+   */
+  async findByCustomer(customerId: string, pageDemandee?: unknown, limitDemandee?: unknown): Promise<QueryResponseDto<Favorite>> {
+    const { page, limit } = paginationFavoris(pageDemandee, limitDemandee);
 
     // Exclure les favoris pointant vers un plat supprimé (entity_status DELETED) :
     // l'app cliente ne doit plus jamais voir un plat retiré du catalogue, même
@@ -108,8 +153,8 @@ export class FavoriteService {
         orderBy: {
           created_at: 'desc',
         },
-        skip: (Number(page) - 1) * Number(limit),
-        take: Number(limit),
+        skip: (page - 1) * limit,
+        take: limit,
       }),
       this.prisma.favorite.count({ where })
     ])
@@ -125,9 +170,9 @@ export class FavoriteService {
     };
   }
 
-  async update(id: string, updateFavoriteDto: UpdateFavoriteDto) {
-    // Vérifier si le favori existe
-    await this.findOne(id);
+  async update(customerId: string, id: string, updateFavoriteDto: UpdateFavoriteDto) {
+    // Le favori doit appartenir au client connecté
+    await this.favoriDuClient(customerId, id);
 
     // Vérifier si le plat existe (si fourni)
     if (updateFavoriteDto.dish_id) {
@@ -136,13 +181,14 @@ export class FavoriteService {
       });
 
       if (!dish || dish.entity_status !== EntityStatus.ACTIVE) {
-        throw new NotFoundException(`Dish with ID ${updateFavoriteDto.dish_id} not found`);
+        throw new NotFoundException('Plat introuvable');
       }
     }
 
+    // Seul le plat se change : jamais le client propriétaire du favori.
     return this.prisma.favorite.update({
       where: { id },
-      data: updateFavoriteDto,
+      data: { dish_id: updateFavoriteDto.dish_id },
       include: {
         dish: {
           include: {
@@ -153,9 +199,9 @@ export class FavoriteService {
     });
   }
 
-  async remove(id: string) {
-    // Vérifier si le favori existe
-    await this.findOne(id);
+  async remove(customerId: string, id: string) {
+    // Le favori doit appartenir au client connecté
+    await this.favoriDuClient(customerId, id);
 
     // Suppression définitive
     return this.prisma.favorite.delete({
@@ -172,7 +218,7 @@ export class FavoriteService {
     });
 
     if (!favorite) {
-      throw new NotFoundException(`Favorite not found for customer ${customerId} and dish ${dishId}`);
+      throw new NotFoundException('Ce plat ne fait pas partie de vos favoris');
     }
 
     return this.prisma.favorite.delete({

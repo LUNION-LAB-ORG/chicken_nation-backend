@@ -92,12 +92,13 @@ export class CommentController {
         return this.commentService.deleteComment(commentId);
     }
 
+    // Route PUBLIQUE du site vitrine (section « Témoignages ») : prénom et
+    // initiale du nom seulement, jamais téléphone, e-mail, photo ni commande.
     @ApiOperation({ summary: 'Récupérer les meilleurs commentaires' })
     @ApiResponse({
         status: 200,
         description: 'Commentaires récupérés avec succès',
     })
-
     @Get('bests')
     async getBestComments(@Query() query: GetCommentsQueryDto) {
         return this.commentService.getBestComments(query);
@@ -108,7 +109,6 @@ export class CommentController {
     })
     @ApiParam({ name: 'id', description: 'ID du commentaire' })
     @ApiResponse({ status: 200, description: 'Visibilité mise à jour' })
-    @UseGuards(JwtAuthGuard)
     // ⚠️ Aucune permission : tout membre du personnel réécrivait ou publiait un avis client.
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMENTAIRES, Action.UPDATE)
@@ -125,7 +125,6 @@ export class CommentController {
     })
     @ApiParam({ name: 'id', description: 'ID du commentaire' })
     @ApiResponse({ status: 200, description: 'Message corrigé' })
-    @UseGuards(JwtAuthGuard)
     // ⚠️ Aucune permission : tout membre du personnel réécrivait ou publiait un avis client.
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMENTAIRES, Action.UPDATE)
@@ -141,9 +140,21 @@ export class CommentController {
     @ApiParam({ name: 'id', description: 'ID du commentaire' })
     @ApiResponse({ status: 200, description: 'Commentaire trouvé', type: CommentResponseDto })
     @ApiResponse({ status: 404, description: 'Commentaire non trouvé' })
+    // ⚠️ Route sans aucune garde : sans jeton, elle donnait nom, téléphone,
+    // photo et commande de l'auteur de n'importe quel avis, les identifiants
+    // d'avis étant publics. Aucun écran ne l'appelle. Réservée au personnel ;
+    // un compte de restaurant ne lit que les avis de SON restaurant.
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.COMMENTAIRES, Action.READ)
     @Get(':id')
-    async getCommentById(@Param('id') commentId: string): Promise<CommentResponseDto> {
-        return this.commentService.getCommentById(commentId);
+    async getCommentById(
+        @Req() req: Request,
+        @Param('id') commentId: string,
+    ): Promise<CommentResponseDto> {
+        return this.commentService.getCommentById(
+            commentId,
+            resolveRestaurantScope(req.user as User),
+        );
     }
 
     @ApiOperation({ summary: 'Récupérer les commentaires d\'une commande' })
@@ -185,12 +196,26 @@ export class CommentController {
     @ApiParam({ name: 'dishId', description: 'ID du plat' })
     @ApiResponse({ status: 200, description: 'Commentaires du plat récupérés avec succès', type: DishCommentsResponseDto })
     @ApiResponse({ status: 404, description: 'Plat non trouvé' })
+    // ⚠️ Route publique sans plafond : ?limit=100000 sur chaque plat donnait
+    // nom, photo, identifiant client et référence de commande de tous les
+    // auteurs d'avis. Seuls la fiche plat du backoffice et celle de la caisse
+    // l'appellent, avec un jeton du personnel (ni l'application ni le site).
+    // MENUS READ et non COMMENTAIRES READ : l'assistant manager et le comptable
+    // voient l'onglet sans avoir les avis. Un compte de restaurant ne voit que
+    // les avis de SON restaurant, comme sur GET /comments.
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @RequirePermission(Modules.MENUS, Action.READ)
     @Get('dish/:dishId')
     async getDishComments(
+        @Req() req: Request,
         @Param('dishId') dishId: string,
         @Query() query: GetCommentsQueryDto,
     ): Promise<DishCommentsResponseDto> {
-        return this.commentService.getDishComments(dishId, query);
+        return this.commentService.getDishComments(
+            dishId,
+            query,
+            resolveRestaurantScope(req.user as User),
+        );
     }
 
 

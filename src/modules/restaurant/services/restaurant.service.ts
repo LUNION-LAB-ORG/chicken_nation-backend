@@ -28,6 +28,11 @@ import {
 } from 'date-fns';
 import type { Request } from 'express';
 import { S3Service } from '../../../s3/s3.service';
+import {
+  CLIENT_DE_RESTAURANT_SELECT,
+  filtreClientsRestaurant,
+  paginationClientsRestaurant,
+} from '../utils/clients-restaurant.util';
 
 @Injectable()
 export class RestaurantService {
@@ -352,15 +357,26 @@ export class RestaurantService {
     });
   }
 
-  async getRestaurantCustomers(id: string) {
+  /**
+   * Clients d'un restaurant, pour la liste déroulante des fenêtres « Nouvelle
+   * conversation » et « Nouveau ticket » du backoffice.
+   *
+   * Une page de 50 (100 au plus), recherche faite par la base, clients actifs
+   * seulement, et rien d'autre que nom, e-mail, téléphone et photo. Réponse en
+   * tableau simple, la forme qu'attendent les écrans. Voir
+   * `clients-restaurant.util.ts`.
+   */
+  async getRestaurantCustomers(
+    id: string,
+    params: { search?: string; page?: string | number; limit?: string | number } = {},
+  ) {
+    const { skip, limit } = paginationClientsRestaurant(params.page, params.limit);
     return this.prisma.customer.findMany({
-      where: {
-        orders: {
-          some: {
-            restaurant_id: id,
-          },
-        },
-      },
+      where: filtreClientsRestaurant(id, params.search),
+      select: CLIENT_DE_RESTAURANT_SELECT,
+      orderBy: [{ first_name: 'asc' }, { last_name: 'asc' }, { id: 'asc' }],
+      skip,
+      take: limit,
     });
   }
 
@@ -369,6 +385,10 @@ export class RestaurantService {
    */
   async getRestaurantManager(id: string) {
     const restaurant = await this.findOne(id);
+
+    // Restaurant sans gérant désigné : rien à renvoyer. `findUnique` avec un
+    // identifiant absent levait une erreur Prisma (réponse 500).
+    if (!restaurant.manager) return null;
 
     return this.prisma.user.findUnique({
       where: {

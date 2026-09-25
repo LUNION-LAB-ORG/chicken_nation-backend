@@ -67,7 +67,8 @@ export class CommentResponseDto {
         id: string;
         first_name?: string;
         last_name?: string;
-        phone: string;
+        /** Routes réservées au personnel ayant COMMENTAIRES READ seulement. */
+        phone?: string;
         image?: string;
     };
 

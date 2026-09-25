@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
+import { estUuid, parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
 import { Customer, EntityStatus, OrderStatus, Prisma, SpiceLevel, User } from '@prisma/client';
 import type { Request } from 'express';
 import { AudienceContext, composableClause, dishAudienceClause, litCapaciteComposable } from '../utils/dish-audience.util';
@@ -358,7 +358,10 @@ export class DishService {
       where: { ...whereCondition, ...composableClause(audience) },
       include: {
         category: true,
-        favorites: { select: { customer_id: true } },
+        // ⚠️ Plus la liste des favoris du plat : route publique, sans jeton,
+        // elle donnait l'identifiant de CHAQUE client ayant mis ce plat en
+        // favori. `isFavorite` est calculé à part, pour le seul client demandé.
+
         // MENUS COMPOSABLES : les questions posées au client avant le panier.
         // Servies UNIQUEMENT sur le détail, jamais dans les listes : une carte
         // de cinquante plats n'a pas à transporter leurs options.
@@ -384,9 +387,25 @@ export class DishService {
       throw new NotFoundException(`Plat non trouvée`);
     }
 
-    const [withEff] = await this.withEffective([dish]);
-    const isFavorite = customerId ? dish.favorites.some((favorite) => favorite.customer_id === customerId) : false;
+    const [[withEff], isFavorite] = await Promise.all([
+      this.withEffective([dish]),
+      this.estFavoriDuClient(dish.id, customerId),
+    ]);
     return { ...withEff, isFavorite };
+  }
+
+  /**
+   * Ce plat est-il dans les favoris de CE client ? Une seule ligne lue, jamais
+   * la liste des clients qui l'ont en favori. Un identifiant qui n'a pas la
+   * forme d'un UUID répond non sans interroger la base (colonne UUID).
+   */
+  private async estFavoriDuClient(dishId: string, customerId?: string): Promise<boolean> {
+    if (!customerId || !estUuid(customerId)) return false;
+    const favori = await this.prisma.favorite.findFirst({
+      where: { dish_id: dishId, customer_id: customerId },
+      select: { id: true },
+    });
+    return !!favori;
   }
 
   /**

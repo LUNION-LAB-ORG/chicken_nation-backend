@@ -7,6 +7,7 @@ import {
   platOffrable,
 } from '../utils/plat-offrable.util';
 import { DishOptionGroupDto } from '../dto/dish-option-group.dto';
+import { masquerTelephones } from '../utils/usages-cadeau.util';
 
 /**
  * MENUS COMPOSABLES — configuration des groupes d'options d'un plat.
@@ -254,8 +255,12 @@ export class DishOptionService {
    *
    * Le lien vit dans un champ JSON, sous la clé `dish_id` posée par tous les
    * constructeurs de cadeaux.
+   *
+   * `avecTelephones` : faux pour qui n'a pas CLIENTS READ et pour tout compte
+   * de restaurant (voir `usages-cadeau.util`). Le refus interne de PUT et de copier-vers garde les
+   * téléphones : ces routes exigent MENUS UPDATE.
    */
-  async usagesCadeau(dishId: string) {
+  async usagesCadeau(dishId: string, { avecTelephones = true }: { avecTelephones?: boolean } = {}) {
     const [lots, campagnes, cadeaux, combos] = await Promise.all([
       this.prisma.scratchLot.findMany({
         where: {
@@ -314,16 +319,19 @@ export class DishOptionService {
     return {
       lots,
       campagnes,
-      cadeaux: cadeaux.map((r) => ({
-        id: r.id,
-        status: r.status,
-        expires_at: r.expires_at,
-        client: [r.customer?.first_name, r.customer?.last_name]
-          .filter(Boolean)
-          .join(' ')
-          .trim(),
-        telephone: r.customer?.phone ?? null,
-      })),
+      cadeaux: masquerTelephones(
+        cadeaux.map((r) => ({
+          id: r.id,
+          status: r.status,
+          expires_at: r.expires_at,
+          client: [r.customer?.first_name, r.customer?.last_name]
+            .filter(Boolean)
+            .join(' ')
+            .trim(),
+          telephone: r.customer?.phone ?? null,
+        })),
+        avecTelephones,
+      ),
       combos,
       /** Vrai si quelque chose empêche réellement le passage en composable. */
       bloquant: lots.length > 0 || campagnes.length > 0 || cadeaux.length > 0,
