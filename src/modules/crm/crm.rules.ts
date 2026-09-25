@@ -130,6 +130,22 @@ export const OUTCOMES_JOINTS: CrmCallOutcome[] = [
   CrmCallOutcome.NON_INTERESSE,
 ];
 
+/**
+ * Issues où une raison de non-commande a un sens : le client a décroché sans
+ * commander. Un client intéressé n'en a pas (l'ancienne est même effacée), et
+ * un client qu'on n'a pas joint n'a rien pu dire.
+ */
+export const OUTCOMES_AVEC_RAISON: CrmCallOutcome[] = [CrmCallOutcome.A_RAPPELER, CrmCallOutcome.NON_INTERESSE];
+
+/**
+ * Raison à enregistrer pour un appel : celle choisie, seulement si l'issue en
+ * admet une. Une raison restée choisie avant de passer à « Intéressé » (ou
+ * envoyée par un écran plus ancien) est ignorée au lieu de marquer le client.
+ */
+export function raisonRetenue(outcome: CrmCallOutcome, raisonId?: string | null): string | undefined {
+  return OUTCOMES_AVEC_RAISON.includes(outcome) && raisonId ? raisonId : undefined;
+}
+
 /** Issues qui tranchent : le contact est qualifié. */
 export const OUTCOMES_DEFINITIFS: CrmCallOutcome[] = [
   CrmCallOutcome.INTERESSE,

@@ -8,7 +8,7 @@ import {
   User,
 } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { OUTCOMES_DEFINITIFS, OUTCOMES_JOINTS, statutApresAppel } from '../crm.rules';
+import { OUTCOMES_DEFINITIFS, OUTCOMES_JOINTS, raisonRetenue, statutApresAppel } from '../crm.rules';
 import { RecordCallDto } from '../dto/contact.dto';
 import { CrmAccessService } from './crm-access.service';
 import { CrmConfigService } from './crm-config.service';
@@ -66,15 +66,18 @@ export class CrmCallService {
     if (!statutAppel) throw new BadRequestException("Statut d'appel inconnu ou désactivé");
 
     const outcome = statutAppel.outcome;
-    if (outcome === CrmCallOutcome.NON_INTERESSE && !dto.loss_reason_id && !options.sansRaison) {
+    const raisonId = raisonRetenue(outcome, dto.loss_reason_id);
+    if (outcome === CrmCallOutcome.NON_INTERESSE && !raisonId && !options.sansRaison) {
       throw new BadRequestException('Indiquez la raison pour laquelle le client ne commande pas');
     }
-    if (dto.loss_reason_id) {
+    if (raisonId) {
+      // Même exigence que pour le statut : une raison retirée des réglages ne
+      // s'enregistre plus, même depuis un écran resté ouvert.
       const raison = await this.prisma.crmReason.findFirst({
-        where: { id: dto.loss_reason_id, entity_status: { not: EntityStatus.DELETED } },
+        where: { id: raisonId, is_active: true, entity_status: { not: EntityStatus.DELETED } },
         select: { id: true },
       });
-      if (!raison) throw new BadRequestException('Raison de non-commande inconnue');
+      if (!raison) throw new BadRequestException('Raison de non-commande inconnue ou désactivée');
     }
 
     const maintenant = options.date ?? new Date();
@@ -116,8 +119,8 @@ export class CrmCallService {
           ...(OUTCOMES_DEFINITIFS.includes(outcome) && !contact.qualified_at && { qualified_at: maintenant }),
           // Un client redevenu intéressé n'a plus de raison de ne pas commander :
           // l'ancienne fausserait l'analyse des blocages.
-          ...(dto.loss_reason_id
-            ? { loss_reason_id: dto.loss_reason_id }
+          ...(raisonId
+            ? { loss_reason_id: raisonId }
             : outcome === CrmCallOutcome.INTERESSE && { loss_reason_id: null }),
           ...(commentaire && { last_comment: commentaire }),
         },
@@ -147,7 +150,7 @@ export class CrmCallService {
           outcome,
           reached: joint,
           attempt: tentatives,
-          loss_reason_id: dto.loss_reason_id ?? null,
+          loss_reason_id: raisonId ?? null,
           comment: commentaire,
           callback_at: rappel,
           prospect_call_id: options.prospectCallId ?? null,

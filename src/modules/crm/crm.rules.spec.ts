@@ -34,6 +34,7 @@ import {
   porteePublics,
   pourcentage,
   publicsDe,
+  raisonRetenue,
 } from './crm.rules';
 import { dansPeriode, filtreCampagne, filtreSegments, plage } from './services/crm-passages.query';
 
@@ -74,6 +75,30 @@ describe('statutApresAppel', () => {
 
   it('un client qui avait refusé peut redevenir intéressé', () => {
     expect(statutApresAppel(S.NON_INTERESSE, O.INTERESSE, ctx())).toBe(S.INTERESSE);
+  });
+});
+
+describe('raisonRetenue (raison de non-commande)', () => {
+  const RAISON = 'raison-trop-cher';
+
+  it("gardée quand le client n'est pas intéressé ou demande à être rappelé", () => {
+    expect(raisonRetenue(O.NON_INTERESSE, RAISON)).toBe(RAISON);
+    expect(raisonRetenue(O.A_RAPPELER, RAISON)).toBe(RAISON);
+  });
+
+  it('ignorée pour un client intéressé, même choisie avant de changer de statut', () => {
+    expect(raisonRetenue(O.INTERESSE, RAISON)).toBeUndefined();
+  });
+
+  it("ignorée quand le client n'a pas été joint", () => {
+    expect(raisonRetenue(O.NON_JOINT, RAISON)).toBeUndefined();
+    expect(raisonRetenue(O.NUMERO_INVALIDE, RAISON)).toBeUndefined();
+  });
+
+  it('aucune raison choisie : rien', () => {
+    expect(raisonRetenue(O.NON_INTERESSE, undefined)).toBeUndefined();
+    expect(raisonRetenue(O.NON_INTERESSE, '')).toBeUndefined();
+    expect(raisonRetenue(O.A_RAPPELER, null)).toBeUndefined();
   });
 });
 
