@@ -5,10 +5,12 @@ import { UpdateAddressDto } from 'src/modules/customer/dto/update-address.dto';
 import type { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
-import { Customer } from '@prisma/client';
+import { Customer, UserRole } from '@prisma/client';
 import { CacheInterceptor } from '@nestjs/cache-manager';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
@@ -28,10 +30,16 @@ export class AddressController {
     return this.addressService.create(req, createAddressDto);
   }
 
+  // ⚠️ Administrateur seulement : toutes les adresses de tous les clients, fiche
+  // client complète comprise, sans pagination ni restaurant. Ouverte à CLIENTS
+  // READ, elle valait un export pour un rôle en consultation (Marketing) et
+  // livrait tout le réseau au personnel d'un restaurant. Aucun écran ne
+  // l'appelle (l'application passe par /addresses/customer/:id).
   @Get()
   @ApiOperation({ summary: 'Récupération de toutes les adresses' })
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard, UserRolesGuard)
   @RequirePermission(Modules.CLIENTS, Action.READ)
+  @UserRoles(UserRole.ADMIN)
   findAll() {
     return this.addressService.findAll();
   }

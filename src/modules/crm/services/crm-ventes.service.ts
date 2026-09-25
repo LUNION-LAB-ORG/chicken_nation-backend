@@ -4,7 +4,15 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { CRM_SETTINGS, PUBLICS_CAPTES, porteePublics, publicsDe } from '../crm.rules';
 import { VentesQueryDto } from '../dto/analytics.dto';
-import { VENTE_VALIDE, filtreCampagne, filtreSegments, jointurePassage, plage } from './crm-passages.query';
+import {
+  Perimetre,
+  VENTE_VALIDE,
+  filtreCampagne,
+  filtreRestaurant,
+  filtreSegments,
+  jointurePassage,
+  plage,
+} from './crm-passages.query';
 
 /**
  * Public d'une vente : celui du passage où elle a eu lieu (voir `jointurePassage`).
@@ -29,6 +37,10 @@ type LigneCaptures = {
  * Remplace les onglets Tableau de bord et Ventes de l'ancienne acquisition
  * Glovo/Yango : les ventes antérieures à la bascule y figurent comme
  * « historique acquisition ».
+ *
+ * Compte de point de vente (`perimetre_restaurant`, posé par le contrôleur) :
+ * les ventes des fiches de son restaurant, le filtre restaurant forcé au sien
+ * (commande directe ou capture chez lui), les captures faites chez lui.
  */
 @Injectable()
 export class CrmVentesService {
@@ -37,16 +49,22 @@ export class CrmVentesService {
     private readonly settings: SettingsService,
   ) {}
 
-  /** Période, publics (public du passage) et campagne d'une vente du registre (alias v, passage ya). */
-  private conditions(q: VentesQueryDto): Prisma.Sql {
-    return Prisma.sql`${plage('v.converted_at', q)} ${filtreSegments(PUBLIC_V, publicsDe(q))} ${filtreCampagne('v.campaign_id', q)}`;
+  /**
+   * Période, publics (public du passage), campagne et fiches du restaurant
+   * d'un point de vente, pour une vente du registre (alias v, passage ya).
+   */
+  private conditions(q: VentesQueryDto & Perimetre): Prisma.Sql {
+    return Prisma.sql`${plage('v.converted_at', q)} ${filtreSegments(PUBLIC_V, publicsDe(q))} ${filtreCampagne('v.campaign_id', q)}
+      ${filtreRestaurant('v.contact_id', q)}`;
   }
 
-  async ventes(q: VentesQueryDto) {
+  async ventes(q: VentesQueryDto & Perimetre) {
     const plateformes = porteePublics(publicsDe(q)).filter((p) => PUBLICS_CAPTES.includes(p));
+    // Un point de vente ne choisit pas son restaurant : c'est le sien.
+    const restaurantId = q.perimetre_restaurant ?? q.restaurant_id;
     // Restaurant : celui de la commande directe, ou celui où le client a été capté.
-    const restaurant = q.restaurant_id
-      ? Prisma.sql`AND (v.restaurant_id = ${q.restaurant_id}::uuid OR cap.restaurant_id = ${q.restaurant_id}::uuid)`
+    const restaurant = restaurantId
+      ? Prisma.sql`AND (v.restaurant_id = ${restaurantId}::uuid OR cap.restaurant_id = ${restaurantId}::uuid)`
       : Prisma.empty;
     const base = Prisma.sql`
       FROM "CrmConversion" v
@@ -87,7 +105,7 @@ export class CrmVentesService {
             LEFT JOIN "CrmConversion" v ON v.capture_id = cap.id AND ${VENTE_VALIDE}
             WHERE cap.entity_status <> 'DELETED' AND cap.platform::text IN (${Prisma.join(plateformes.map((p) => String(p)))})
               ${plage('cap.created_at', q)}
-              ${q.restaurant_id ? Prisma.sql`AND cap.restaurant_id = ${q.restaurant_id}::uuid` : Prisma.empty}
+              ${restaurantId ? Prisma.sql`AND cap.restaurant_id = ${restaurantId}::uuid` : Prisma.empty}
               ${
                 q.campaign_id
                   ? Prisma.sql`AND EXISTS (SELECT 1 FROM "CrmCampaignMember" m WHERE m.contact_id = cap.contact_id AND m.campaign_id = ${q.campaign_id}::uuid)`

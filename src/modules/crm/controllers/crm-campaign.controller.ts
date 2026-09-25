@@ -17,6 +17,7 @@ import {
   UpdateCrmCampaignDto,
   UpdateCrmTeamDto,
 } from '../dto/campaign.dto';
+import { CrmSiegeGuard } from '../guards/crm-siege.guard';
 import { CrmAlertService } from '../services/crm-alert.service';
 import { CrmCampaignService } from '../services/crm-campaign.service';
 import { CrmReportService } from '../services/crm-report.service';
@@ -24,12 +25,16 @@ import { CrmReportService } from '../services/crm-report.service';
 /**
  * Campagnes de conversion (cahier §6). Création, lancement et réglages :
  * direction (CREATE). Suspension, reprise, clôture, équipe et répartition :
- * direction ou pilote de la campagne, contrôlé par le service.
+ * direction ou pilote de la campagne, contrôlé par le service. Consultation
+ * (liste, détail, statistiques, comparatif) : tout compte qui lit le CRM, sauf
+ * un compte de point de vente. `CrmSiegeGuard` passe AVANT le garde des droits :
+ * un compte de point de vente reçoit « Les campagnes se consultent au siège »
+ * sur toutes les routes, rapport et gestes compris.
  */
 @ApiTags('Contacts (campagnes)')
 @ApiBearerAuth()
 @Controller('crm/campaigns')
-@UseGuards(JwtAuthGuard, UserPermissionsGuard)
+@UseGuards(JwtAuthGuard, CrmSiegeGuard, UserPermissionsGuard)
 export class CrmCampaignController {
   constructor(
     private readonly campagnes: CrmCampaignService,

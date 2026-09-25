@@ -56,9 +56,11 @@ export class DeeplinkController {
     return { totalClicks: count };
   }
 
+  // READ et non EXPORT : c'est un comptage agrégé, que /count donne déjà
+  // filtre par filtre. En EXPORT, le rôle Marketing voyait des compteurs vides.
   @Get('stats')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.MARKETING, Action.EXPORT)
+  @RequirePermission(Modules.MARKETING, Action.READ)
   @ApiOperation({ summary: 'Récupère les statistiques des clics' })
   async getClicksStats(@Query() query: RecordClickQueryDto) {
     return this.deeplinkService.getClicksStats(query);

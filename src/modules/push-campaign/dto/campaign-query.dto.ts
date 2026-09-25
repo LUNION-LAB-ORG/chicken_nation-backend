@@ -1,16 +1,29 @@
-import { IsOptional, IsString, IsNumberString } from 'class-validator';
+import { IsOptional, IsString, IsInt, Min, Max } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
-export class CampaignQueryDto {
-  @ApiPropertyOptional({ default: '1' })
-  @IsNumberString()
-  @IsOptional()
-  page?: string;
+/**
+ * ⚠️ `limit` est plafonné à 100 sur toutes les listes de ce module. Sans
+ * maximum, un seul appel en lecture (?limit=100000) renvoyait toute la table,
+ * ce qui revenait à un export pour un rôle qui ne doit que consulter.
+ */
+export const PUSH_LIST_MAX_LIMIT = 100;
 
-  @ApiPropertyOptional({ default: '20' })
-  @IsNumberString()
+export class CampaignQueryDto {
+  @ApiPropertyOptional({ default: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
   @IsOptional()
-  limit?: string;
+  page?: number;
+
+  @ApiPropertyOptional({ default: 20, maximum: PUSH_LIST_MAX_LIMIT })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(PUSH_LIST_MAX_LIMIT)
+  @IsOptional()
+  limit?: number;
 
   @ApiPropertyOptional({ enum: ['draft', 'sent', 'scheduled', 'failed'] })
   @IsString()
@@ -24,17 +37,45 @@ export class CampaignQueryDto {
 }
 
 export class TemplateQueryDto {
-  @ApiPropertyOptional({ default: '1' })
-  @IsNumberString()
+  @ApiPropertyOptional({ default: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
   @IsOptional()
-  page?: string;
+  page?: number;
 
-  @ApiPropertyOptional({ default: '20' })
-  @IsNumberString()
+  @ApiPropertyOptional({ default: 20, maximum: PUSH_LIST_MAX_LIMIT })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(PUSH_LIST_MAX_LIMIT)
   @IsOptional()
-  limit?: string;
+  limit?: number;
 
   @ApiPropertyOptional({ description: 'Recherche par nom' })
+  @IsString()
+  @IsOptional()
+  search?: string;
+}
+
+/** Liste des abonnés push (GET /push-campaigns/users). */
+export class PushUsersQueryDto {
+  @ApiPropertyOptional({ default: 1 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  page?: number;
+
+  @ApiPropertyOptional({ default: 20, maximum: PUSH_LIST_MAX_LIMIT })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(PUSH_LIST_MAX_LIMIT)
+  @IsOptional()
+  limit?: number;
+
+  @ApiPropertyOptional({ description: 'Recherche par nom, prénom ou téléphone' })
   @IsString()
   @IsOptional()
   search?: string;

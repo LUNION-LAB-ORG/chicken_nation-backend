@@ -26,12 +26,17 @@ export class VoucherController {
     return this.voucherService.create(req, createVoucherDto);
   }
 
+  // ⚠️ UserPermissionsGuard sur chaque route staff : sans lui, le
+  // @RequirePermission est ignoré et tout membre du personnel (caissier,
+  // cuisine, rôle en lecture seule) lisait, modifiait, annulait ou supprimait
+  // des bons. La page est plafonnée à 100 lignes : au-delà, une simple lecture
+  // revenait à exporter les bons et leurs clients.
   @Get()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.FIDELITE, Action.READ)
   @ApiOperation({ summary: 'Récupérer tous les vouchers' })
   findAll(@Query() query: QueryVoucherDto) {
-    return this.voucherService.findAll(query);
+    return this.voucherService.findAll({ ...query, limit: Math.min(query.limit ?? 10, 100) });
   }
 
   @Get('client')
@@ -60,7 +65,7 @@ export class VoucherController {
   }
 
   @Get(':code')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.FIDELITE, Action.READ)
   @ApiOperation({ summary: 'Récupérer un voucher par code' })
   findOne(@Param('code') code: string) {
@@ -68,7 +73,7 @@ export class VoucherController {
   }
 
   @Get(':code/redemptions')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.FIDELITE, Action.READ)
   @ApiOperation({ summary: 'Récupérer l\'historique des remises d\'un voucher' })
   getRedemptionHistory(@Param('code') code: string) {
@@ -76,7 +81,7 @@ export class VoucherController {
   }
 
   @Patch(':code')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.FIDELITE, Action.UPDATE)
   @ApiOperation({ summary: 'Mettre à jour un voucher' })
   update(@Param('code') code: string, @Body() updateVoucherDto: UpdateVoucherDto) {
@@ -95,7 +100,7 @@ export class VoucherController {
   }
 
   @Post(':code/cancel')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.FIDELITE, Action.UPDATE)
   @ApiOperation({ summary: 'Annuler un voucher' })
   cancel(@Param('code') code: string) {
@@ -103,7 +108,7 @@ export class VoucherController {
   }
 
   @Delete(':code')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.FIDELITE, Action.DELETE)
   @ApiOperation({ summary: 'Supprimer un voucher' })
   remove(@Param('code') code: string) {
@@ -111,7 +116,7 @@ export class VoucherController {
   }
 
   @Post(':code/restore')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.FIDELITE, Action.UPDATE)
   @ApiOperation({ summary: 'Restaurer un voucher' })
   restore(@Param('code') code: string) {

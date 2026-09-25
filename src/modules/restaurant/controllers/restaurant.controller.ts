@@ -1,4 +1,3 @@
-import { CacheInterceptor } from '@nestjs/cache-manager';
 import {
   Body,
   Controller,
@@ -22,6 +21,7 @@ import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { User } from '@prisma/client';
 import { assertCanAccessRestaurant } from 'src/modules/order/helpers/restaurant-scope.helper';
+import { UserScopedCacheInterceptor } from 'src/modules/order/interceptors/user-scoped-cache.interceptor';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { DishService } from 'src/modules/menu/services/dish.service';
@@ -32,7 +32,10 @@ import { RestaurantService } from 'src/modules/restaurant/services/restaurant.se
 @ApiTags('Restaurants')
 @ApiBearerAuth()
 @Controller('restaurants')
-@UseInterceptors(CacheInterceptor)
+// ⚠️ Cache cloisonné par utilisateur et non par URL seule : GET /:id/clients
+// vérifie le restaurant DANS le gestionnaire, et le cache par URL servait la
+// réponse d'un admin sans passer par ce contrôle.
+@UseInterceptors(UserScopedCacheInterceptor)
 export class RestaurantController {
   constructor(
     private readonly restaurantService: RestaurantService,

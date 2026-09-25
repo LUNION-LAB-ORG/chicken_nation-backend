@@ -8,14 +8,16 @@ import {
   User,
 } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { STATUTS_OUVERTS, cleTelephone, commandeEffective } from '../crm.rules';
+import { STATUTS_OUVERTS, cleTelephone, commandeEffective, ficheDuRestaurant } from '../crm.rules';
 import { AssignContactsDto, QueryCrmContactDto } from '../dto/contact.dto';
 import { CrmAccessService } from './crm-access.service';
 import { CrmEventsService } from './crm-events.service';
 import {
   SELECT_LIGNE,
+  codeMasque,
   etatCoupon,
   filtreContacts,
+  sansCodes,
   triContacts,
   versLigne,
 } from './crm-contact.query';
@@ -42,8 +44,11 @@ export class CrmContactService {
       }),
       this.prisma.crmContact.count({ where }),
     ]);
+    const lecteur = this.access.estLecteur(user);
     return {
-      data: lignes.map(versLigne),
+      data: lignes.map(versLigne).map((l) =>
+        lecteur && l.coupon ? { ...l, coupon: { ...l.coupon, code: codeMasque(l.coupon.code) } } : l,
+      ),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -52,8 +57,15 @@ export class CrmContactService {
    * `telephone` : numéro tapé par l'agent dans « Un client appelle ? ». Seul
    * ce numéro, s'il est bien celui de la fiche, ouvre en lecture la fiche d'un
    * client suivi par un collègue : un identifiant seul ne suffit pas.
+   *
+   * `mode` de la fiche : « gestion » (direction), « sien » ou « commune »
+   * (l'agent peut agir), « lecture » (agent, client d'un collègue retrouvé par
+   * son numéro), « consultation » (lecteur : tout voir, téléphone compris,
+   * aucun geste). Un compte de point de vente n'ouvre que les fiches de son
+   * restaurant, et n'y voit que les captures et commandes de ce restaurant.
    */
   async fiche(user: User, id: string, telephone?: string) {
+    const restaurant = this.access.restaurantDe(user);
     const p = await this.prisma.crmContact.findUnique({
       where: { id },
       select: {
@@ -123,7 +135,7 @@ export class CrmContactService {
           },
         },
         captures: {
-          where: { entity_status: { not: EntityStatus.DELETED } },
+          where: { entity_status: { not: EntityStatus.DELETED }, ...(restaurant !== undefined && { restaurant_id: restaurant }) },
           orderBy: { created_at: 'desc' },
           take: 30,
           select: {
@@ -153,11 +165,15 @@ export class CrmContactService {
     if (!p || p.entity_status === EntityStatus.DELETED) {
       throw new NotFoundException('Contact introuvable');
     }
+    await this.access.assertDuRestaurant(user, p.id);
     // Tout agent peut consulter une fiche (client qui rappelle) ; agir sur un
     // contact reste réservé à son agent, à la file commune et à la direction.
+    // Un lecteur voit toute fiche de sa portée, sans numéro à taper.
     const mode = this.access.estGestionnaire(user)
       ? 'gestion'
-      : await this.access.assertPeutTraiter(user, p).catch(() => 'lecture' as const);
+      : this.access.estLecteur(user)
+        ? ('consultation' as const)
+        : await this.access.assertPeutTraiter(user, p).catch(() => 'lecture' as const);
     if (mode === 'lecture') {
       this.access.assertAgent(user);
       const cle = cleTelephone(telephone);
@@ -168,8 +184,8 @@ export class CrmContactService {
 
     const [commande, abandons, achats] = await Promise.all([
       p.conversion_order_id
-        ? this.prisma.order.findUnique({
-            where: { id: p.conversion_order_id },
+        ? this.prisma.order.findFirst({
+            where: { id: p.conversion_order_id, ...(restaurant !== undefined && { restaurant_id: restaurant }) },
             select: {
               id: true,
               reference: true,
@@ -184,17 +200,25 @@ export class CrmContactService {
         : null,
       p.customer && p.abandoned_orders > 0
         ? this.prisma.order.findMany({
-            where: { customer_id: p.customer.id, entity_status: EntityStatus.DELETED },
+            where: {
+              customer_id: p.customer.id,
+              entity_status: EntityStatus.DELETED,
+              ...(restaurant !== undefined && { restaurant_id: restaurant }),
+            },
             orderBy: { created_at: 'desc' },
             take: 10,
             select: { id: true, reference: true, created_at: true, amount: true, payment_method: true },
           })
         : [],
-      p.customer && p.last_order_at ? this.historiqueAchats(p.customer.id) : null,
+      p.customer && p.last_order_at ? this.historiqueAchats(p.customer.id, restaurant) : null,
     ]);
 
-    const { calls, coupons, members, events, captures, ...reste } = p;
+    const { calls, coupons: couponsBruts, members, events: journalBrut, captures, ...reste } = p;
     const maintenant = new Date();
+    // Consultation : les codes de coupon sont masqués partout, journal compris.
+    const codes = mode === 'consultation' ? couponsBruts.map((c) => c.code) : [];
+    const coupons = codes.length ? couponsBruts.map((c) => ({ ...c, code: codeMasque(c.code) })) : couponsBruts;
+    const events = codes.length ? journalBrut.map((e) => ({ ...e, label: sansCodes(e.label, codes) })) : journalBrut;
     return {
       ...versLigne({ ...reste, coupons: coupons.slice(0, 1) }),
       first_reached_at: p.first_reached_at,
@@ -220,11 +244,16 @@ export class CrmContactService {
   /**
    * Ce qu'un ancien client a acheté : l'agent qui appelle un inactif doit
    * savoir à qui il parle (fidèle de l'application ou client du centre d'appel).
+   * `restaurant` : compte de point de vente, ses seules commandes chez lui.
    */
-  private async historiqueAchats(customerId: string) {
+  private async historiqueAchats(customerId: string, restaurant?: string) {
+    const commandes: Prisma.OrderWhereInput = {
+      ...commandeEffective(customerId),
+      ...(restaurant !== undefined && { restaurant_id: restaurant }),
+    };
     const [total, canaux] = await Promise.all([
       this.prisma.order.aggregate({
-        where: commandeEffective(customerId),
+        where: commandes,
         _count: { _all: true },
         _sum: { amount: true },
         _min: { created_at: true },
@@ -232,7 +261,7 @@ export class CrmContactService {
       }),
       this.prisma.order.groupBy({
         by: ['auto'],
-        where: commandeEffective(customerId),
+        where: commandes,
         _count: { _all: true },
       }),
     ]);
@@ -396,10 +425,16 @@ export class CrmContactService {
       SELECT x."id" FROM "CrmContact" x JOIN "Customer" cu ON cu."id" = x."customer_id"
       WHERE x."entity_status" <> 'DELETED' AND right(regexp_replace(cu."phone", '\D', '', 'g'), 10) = ${cle}
       LIMIT 10`;
+    const restaurant = this.access.restaurantDe(user);
     const lignes = await this.prisma.crmContact.findMany({
       where: {
-        entity_status: { not: EntityStatus.DELETED },
-        OR: [{ phone_key: cle }, { id: { in: parCompte.map((r) => r.id) } }],
+        AND: [
+          {
+            entity_status: { not: EntityStatus.DELETED },
+            OR: [{ phone_key: cle }, { id: { in: parCompte.map((r) => r.id) } }],
+          },
+          ...(restaurant !== undefined ? [ficheDuRestaurant(restaurant)] : []),
+        ],
       },
       select: SELECT_LIGNE,
       orderBy: [{ segment_since: 'desc' }],
@@ -426,8 +461,12 @@ export class CrmContactService {
     return { pris, assigned_to_id: pris ? user.id : contact.assigned_to_id };
   }
 
-  /** Personnes à qui confier des contacts, avec leur charge actuelle. */
-  async agents() {
+  /**
+   * Personnes à qui confier des contacts, avec leur charge actuelle (pour un
+   * compte de point de vente, leur charge parmi les fiches de son restaurant).
+   */
+  async agents(user: User) {
+    const restaurant = this.access.restaurantDe(user);
     const agents = await this.prisma.user.findMany({
       where: { entity_status: EntityStatus.ACTIVE, role: { in: this.access.rolesAgents() } },
       select: { id: true, fullname: true, role: true, image: true },
@@ -436,9 +475,14 @@ export class CrmContactService {
     const charges = await this.prisma.crmContact.groupBy({
       by: ['assigned_to_id'],
       where: {
-        assigned_to_id: { in: agents.map((a) => a.id) },
-        status: { in: STATUTS_OUVERTS },
-        entity_status: { not: EntityStatus.DELETED },
+        AND: [
+          {
+            assigned_to_id: { in: agents.map((a) => a.id) },
+            status: { in: STATUTS_OUVERTS },
+            entity_status: { not: EntityStatus.DELETED },
+          },
+          ...(restaurant !== undefined ? [ficheDuRestaurant(restaurant)] : []),
+        ],
       },
       _count: { _all: true },
     });

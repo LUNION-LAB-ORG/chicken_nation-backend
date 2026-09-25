@@ -2,7 +2,12 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { ExpoPushService } from 'src/expo-push/expo-push.service';
 import { CreateCampaignDto, SegmentPreviewDto } from './dto/create-campaign.dto';
-import { CampaignQueryDto, TemplateQueryDto } from './dto/campaign-query.dto';
+import {
+  CampaignQueryDto,
+  PUSH_LIST_MAX_LIMIT,
+  PushUsersQueryDto,
+  TemplateQueryDto,
+} from './dto/campaign-query.dto';
 import { CreateTemplateDto, UpdateTemplateDto } from './dto/create-template.dto';
 import {
   CreateScheduledDto,
@@ -55,8 +60,8 @@ export class PushCampaignService {
   }
 
   async findAll(query: CampaignQueryDto) {
-    const page = parseInt(query.page ?? '1', 10);
-    const limit = parseInt(query.limit ?? '20', 10);
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, PUSH_LIST_MAX_LIMIT);
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -908,8 +913,8 @@ export class PushCampaignService {
   }
 
   async findAllTemplates(query: TemplateQueryDto) {
-    const page = parseInt(query.page ?? '1', 10);
-    const limit = parseInt(query.limit ?? '20', 10);
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, PUSH_LIST_MAX_LIMIT);
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -1109,9 +1114,29 @@ export class PushCampaignService {
   // USERS — Liste des abonnés push
   // ═══════════════════════════════════════════════════════════════════════════
 
-  async getUsers(query: { page?: string; limit?: string; search?: string }) {
-    const page = parseInt(query.page ?? '1', 10);
-    const limit = parseInt(query.limit ?? '20', 10);
+  /**
+   * ⚠️ Ni le jeton Expo, ni le jeton révoqué, ni les identifiants OneSignal ne
+   * sortent d'ici : le serveur envoie ses push sans jeton d'accès Expo, donc un
+   * jeton suffit à écrire à ce téléphone par l'API publique d'Expo. L'écran
+   * n'a besoin que de savoir s'il existe (`has_push_token`).
+   */
+  private static readonly ABONNE_SELECT = {
+    customer_id: true,
+    push: true,
+    promotions: true,
+    system: true,
+    active: true,
+    expo_push_token: true,
+  } as const;
+
+  private sansJetons<T extends { expo_push_token: string | null }>(ligne: T) {
+    const { expo_push_token, ...reste } = ligne;
+    return { ...reste, has_push_token: !!expo_push_token };
+  }
+
+  async getUsers(query: PushUsersQueryDto) {
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, PUSH_LIST_MAX_LIMIT);
     const skip = (page - 1) * limit;
 
     const where: any = {
@@ -1133,7 +1158,8 @@ export class PushCampaignService {
     const [items, total] = await Promise.all([
       this.prisma.notificationSetting.findMany({
         where,
-        include: {
+        select: {
+          ...PushCampaignService.ABONNE_SELECT,
           customer: {
             select: {
               id: true,
@@ -1152,13 +1178,19 @@ export class PushCampaignService {
       this.prisma.notificationSetting.count({ where }),
     ]);
 
-    return { items, total, page, totalPages: Math.ceil(total / limit) };
+    return {
+      items: items.map((ligne) => this.sansJetons(ligne)),
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async getUserDetail(customerId: string) {
     const setting = await this.prisma.notificationSetting.findUnique({
       where: { customer_id: customerId },
-      include: {
+      select: {
+        ...PushCampaignService.ABONNE_SELECT,
         customer: {
           select: {
             id: true,
@@ -1185,7 +1217,7 @@ export class PushCampaignService {
       },
     });
     if (!setting) throw new NotFoundException('Utilisateur introuvable');
-    return setting;
+    return this.sansJetons(setting);
   }
 
   // ── Custom segment filters resolution ──────────────────────────────────

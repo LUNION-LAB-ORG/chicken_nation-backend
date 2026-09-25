@@ -16,7 +16,10 @@ import { Action } from 'src/modules/auth/enums/action.enum';
  * brûler le quota d'envoi.
  *
  * Elle est conservée plutôt que supprimée, car un envoi de test a une valeur
- * réelle pour l'exploitation, mais elle est désormais réservée au marketing.
+ * réelle pour l'exploitation, mais elle est réservée à la direction
+ * (NOTIFICATIONS CREATE, que seul l'admin détient) : sans écran, elle pousse
+ * un contenu libre vers n'importe quels jetons, ce que les Diffusions du
+ * marketing ne permettent pas.
  */
 @ApiTags('Expo Push')
 @ApiBearerAuth()
@@ -26,7 +29,7 @@ export class ExpoPushController {
     constructor(private readonly pushService: ExpoPushService) { }
 
     @Post('send')
-    @RequirePermission(Modules.MARKETING, Action.CREATE)
+    @RequirePermission(Modules.NOTIFICATIONS, Action.CREATE)
     @HttpCode(HttpStatus.OK)
     @ApiOperation({
         summary: 'Envoyer une notification Push',

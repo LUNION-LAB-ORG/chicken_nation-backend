@@ -14,6 +14,7 @@ import {
   calculerDevenir,
   classerGroupes,
   fenetreComplete,
+  ficheDuRestaurant,
   libelleLigne,
   porteePublics,
   pourcentage,
@@ -24,10 +25,12 @@ import { CrmAccessService, debutDuJour } from './crm-access.service';
 import { CrmConfigService } from './crm-config.service';
 import {
   COUPON_UTILISE,
+  Perimetre,
   VENTE_VALIDE,
   dansPeriode,
   filtreCampagne,
   filtreMembre,
+  filtreRestaurant,
   jointurePassage,
   listePublics,
   parPublic,
@@ -134,6 +137,9 @@ const n = (v: unknown) => Number(v ?? 0);
  *  - « aujourd'hui » : les stocks actuels, seule partie qui lit la fiche ;
  *  - « seconde commande » : les ventes de la période suivies d'une autre
  *    commande avant que le client ne redevienne inactif.
+ *
+ * Pour un compte de point de vente, `perimetre_restaurant` (posé par le
+ * contrôleur) limite chaque requête aux fiches de son restaurant.
  */
 @Injectable()
 export class CrmPublicsService {
@@ -148,7 +154,7 @@ export class CrmPublicsService {
     return this.config.joursInactivite();
   }
 
-  async comparer(q: AnalyticsQueryDto): Promise<ComparatifPublics> {
+  async comparer(q: AnalyticsQueryDto & Perimetre): Promise<ComparatifPublics> {
     const publics = publicsDe(q);
     const portee = porteePublics(publics);
     const jours = await this.config.joursInactivite();
@@ -185,7 +191,7 @@ export class CrmPublicsService {
    * avant la capture) restent comptés dans les entrées et l'entonnoir, mais
    * sortent du taux de conversion, avec leur propre ligne.
    */
-  async devenir(q: AnalyticsQueryDto, jours?: number): Promise<Groupes<Devenir>> {
+  async devenir(q: AnalyticsQueryDto & Perimetre, jours?: number): Promise<Groupes<Devenir>> {
     const publics = publicsDe(q);
     const portee = porteePublics(publics);
     const fenetre = jours ?? (await this.config.joursInactivite());
@@ -236,7 +242,7 @@ export class CrmPublicsService {
   }
 
   /** Événements de la période, rangés sous le public du passage où ils ont eu lieu. */
-  async activite(q: AnalyticsQueryDto): Promise<Groupes<Activite>> {
+  async activite(q: AnalyticsQueryDto & Perimetre): Promise<Groupes<Activite>> {
     const publics = publicsDe(q);
     const [appels, coupons, ventes] = await Promise.all([
       this.prisma.$queryRaw<(LigneGroupee & { appels: number; appels_joints: number; contacts_appeles: number })[]>`
@@ -245,7 +251,7 @@ export class CrmPublicsService {
             count(DISTINCT t.contact_id)::int AS contacts_appeles`,
           Prisma.sql`SELECT k.contact_id, k.reached, ${publicAction('k')} AS segment
             FROM "CrmCall" k ${jointurePassage('k')}
-            WHERE true ${plage('k.created_at', q)} ${filtreCampagne('k.campaign_id', q)}`,
+            WHERE true ${plage('k.created_at', q)} ${filtreCampagne('k.campaign_id', q)} ${filtreRestaurant('k.contact_id', q)}`,
           publics,
         )}`,
       this.prisma.$queryRaw<
@@ -261,7 +267,8 @@ export class CrmPublicsService {
               coalesce(${COUPON_UTILISE} AND ${dansPeriode('c.used_at', q)}, false) AS utilise,
               coalesce(c.order_amount, 0)::float AS montant, coalesce(o.discount, 0)::float AS remise
             FROM "CrmCoupon" c ${jointurePassage('c')} LEFT JOIN "Order" o ON o.id = c.order_id
-            WHERE (${dansPeriode('c.sent_at', q)} OR ${dansPeriode('c.used_at', q)}) ${filtreCampagne('c.campaign_id', q)}`,
+            WHERE (${dansPeriode('c.sent_at', q)} OR ${dansPeriode('c.used_at', q)}) ${filtreCampagne('c.campaign_id', q)}
+              ${filtreRestaurant('c.contact_id', q)}`,
           publics,
         )}`,
       this.prisma.$queryRaw<
@@ -274,7 +281,8 @@ export class CrmPublicsService {
             coalesce(sum(t.amount) FILTER (WHERE t.origine = 'ACQUISITION_HISTORIQUE'), 0)::float AS ca_historique`,
           Prisma.sql`SELECT v.contact_id, ${publicAction('v')} AS segment, v.amount, v.source::text AS origine
             FROM "CrmConversion" v ${jointurePassage('v')}
-            WHERE ${VENTE_VALIDE} ${plage('v.converted_at', q)} ${filtreCampagne('v.campaign_id', q)}`,
+            WHERE ${VENTE_VALIDE} ${plage('v.converted_at', q)} ${filtreCampagne('v.campaign_id', q)}
+              ${filtreRestaurant('v.contact_id', q)}`,
           publics,
         )}`,
     ]);
@@ -308,7 +316,7 @@ export class CrmPublicsService {
    * fiches qui en ont été membres. La file commune est celle de
    * `CrmAccessService.fileCommune()` ; « sans agent » l'exclut.
    */
-  async aujourdhui(q: AnalyticsQueryDto): Promise<Groupes<Aujourdhui>> {
+  async aujourdhui(q: AnalyticsQueryDto & Perimetre): Promise<Groupes<Aujourdhui>> {
     const publics = publicsDe(q);
     const portee = porteePublics(publics);
     const maintenant = new Date();
@@ -324,7 +332,7 @@ export class CrmPublicsService {
               AND NOT (t.segment IN (${listePublics(PUBLICS_CAPTES)}) AND t.segment_since < ${debutDuJour(maintenant)}))::int AS sans_agent_hors_file,
             count(*) FILTER (WHERE t.status IN (${OUVERTS}) AND t.campaign_id IS NOT NULL)::int AS en_campagne`,
           Prisma.sql`SELECT p.id, p.segment, p.status, p.call_count, p.assigned_to_id, p.campaign_id, p.segment_since
-            FROM "CrmContact" p WHERE p.entity_status <> 'DELETED' ${filtreMembre('p', q)}`,
+            FROM "CrmContact" p WHERE p.entity_status <> 'DELETED' ${filtreMembre('p', q)} ${filtreRestaurant('p.id', q)}`,
           publics,
         )}`,
       this.fileCommune(q, maintenant),
@@ -346,7 +354,7 @@ export class CrmPublicsService {
   }
 
   /** File commune Glovo/Yango du jour, par public, dans le périmètre des filtres. */
-  async fileCommune(q: AnalyticsQueryDto, maintenant = new Date()): Promise<Map<CrmSegment, number>> {
+  async fileCommune(q: AnalyticsQueryDto & Perimetre, maintenant = new Date()): Promise<Map<CrmSegment, number>> {
     const publics = publicsDe(q);
     const captes = PUBLICS_CAPTES.filter((p) => !publics.length || publics.includes(p));
     if (!captes.length) return new Map();
@@ -357,6 +365,7 @@ export class CrmPublicsService {
           this.access.fileCommune(maintenant),
           { segment: { in: captes } },
           ...(q.campaign_id ? [{ members: { some: { campaign_id: q.campaign_id } } }] : []),
+          ...(q.perimetre_restaurant ? [ficheDuRestaurant(q.perimetre_restaurant)] : []),
         ],
       },
       _count: { _all: true },
@@ -371,7 +380,7 @@ export class CrmPublicsService {
    * Une vente sans compte (Glovo/Yango converti par un coupon utilisé sur un
    * autre compte) n'est pas mesurable ; une vente trop récente est « en attente ».
    */
-  async secondeCommande(q: AnalyticsQueryDto, jours?: number): Promise<Groupes<SecondeCommande>> {
+  async secondeCommande(q: AnalyticsQueryDto & Perimetre, jours?: number): Promise<Groupes<SecondeCommande>> {
     const publics = publicsDe(q);
     const fenetre = jours ?? (await this.config.joursInactivite());
     const limite = new Date(Date.now() - fenetre * JOUR);
@@ -397,7 +406,8 @@ export class CrmPublicsService {
               AND o.created_at > v.converted_at AND o.id IS DISTINCT FROM v.order_id
             ORDER BY o.created_at LIMIT 1
           ) n ON true
-          WHERE v.source = 'CRM' AND ${VENTE_VALIDE} ${plage('v.converted_at', q)} ${filtreCampagne('v.campaign_id', q)}`,
+          WHERE v.source = 'CRM' AND ${VENTE_VALIDE} ${plage('v.converted_at', q)} ${filtreCampagne('v.campaign_id', q)}
+            ${filtreRestaurant('v.contact_id', q)}`,
         publics,
       )}`;
     return grouper(lignes, (l) => ({
@@ -422,8 +432,11 @@ export class CrmPublicsService {
    *    seule vue qui remonte avant l'ouverture du CRM ;
    *  - inactifs : passages par mois de décrochage ;
    *  - Glovo/Yango : passages par mois de la capture qui les ouvre.
+   * Pour un compte de point de vente, inactifs et Glovo/Yango se limitent aux
+   * fiches de son restaurant ; les inscrits, rattachés à aucun restaurant tant
+   * qu'ils n'ont pas commandé, rendent `lignes: []` et `hors_restaurant: true`.
    */
-  async cohortes(q: CohortesQueryDto) {
+  async cohortes(q: CohortesQueryDto & Perimetre) {
     if (q.segment === CrmSegment.INACTIF) return this.cohortesInactifs(q);
     if (q.segment === CrmSegment.GLOVO || q.segment === CrmSegment.YANGO) return this.cohortesCaptes(q, q.segment);
     return this.cohortesInscrits(q);
@@ -435,7 +448,12 @@ export class CrmPublicsService {
     return Prisma.sql`${debut ? Prisma.sql`AND ${col} >= ${debut}` : Prisma.empty} ${fin ? Prisma.sql`AND ${col} < ${fin}` : Prisma.empty}`;
   }
 
-  private async cohortesInscrits(q: CohortesQueryDto) {
+  private async cohortesInscrits(q: CohortesQueryDto & Perimetre) {
+    // Un inscrit n'appartient à aucun restaurant : pas de cohorte d'inscrits
+    // pour un point de vente (elle compterait tout le réseau).
+    if (q.perimetre_restaurant) {
+      return { type: 'INSCRITS' as const, segment: q.segment ?? null, hors_restaurant: true, lignes: [] };
+    }
     const lignes = await this.prisma.$queryRaw<
       { mois: string; inscrits: number; convertis: number; sous_7_jours: number; delai_moyen: number | null; delai_median: number | null }[]
     >`
@@ -457,6 +475,7 @@ export class CrmPublicsService {
     return {
       type: 'INSCRITS' as const,
       segment: q.segment ?? null,
+      hors_restaurant: false,
       lignes: lignes.map((l) => ({
         mois: l.mois,
         inscrits: n(l.inscrits),
@@ -470,7 +489,7 @@ export class CrmPublicsService {
     };
   }
 
-  private async cohortesInactifs(q: CohortesQueryDto) {
+  private async cohortesInactifs(q: CohortesQueryDto & Perimetre) {
     const maintenant = new Date();
     const lignes = await this.prisma.$queryRaw<
       {
@@ -489,6 +508,7 @@ export class CrmPublicsService {
         SELECT y.contact_id, y.cycle, y.segment_since, y.closed_at
         FROM "CrmCycle" y JOIN "CrmContact" x ON x.id = y.contact_id
         WHERE x.entity_status <> 'DELETED' AND y.segment = 'INACTIF' ${this.bornesCohorte('y.segment_since', q)}
+          ${filtreRestaurant('x.id', q)}
       ), vt AS (
         SELECT v.contact_id, v.cycle, min(v.converted_at) AS converted_at
         FROM "CrmConversion" v JOIN pass p ON p.contact_id = v.contact_id AND p.cycle = v.cycle
@@ -531,7 +551,7 @@ export class CrmPublicsService {
     };
   }
 
-  private async cohortesCaptes(q: CohortesQueryDto, segment: CrmSegment) {
+  private async cohortesCaptes(q: CohortesQueryDto & Perimetre, segment: CrmSegment) {
     const maintenant = new Date();
     const lignes = await this.prisma.$queryRaw<
       {
@@ -556,6 +576,7 @@ export class CrmPublicsService {
                x.customer_id, x.registered_at
         FROM "CrmCycle" y JOIN "CrmContact" x ON x.id = y.contact_id
         WHERE x.entity_status <> 'DELETED' AND y.segment = ${segment}::"CrmSegment" ${this.bornesCohorte('y.segment_since', q)}
+          ${filtreRestaurant('x.id', q)}
       ), vt AS (
         SELECT v.contact_id, v.cycle, min(v.converted_at) AS converted_at
         FROM "CrmConversion" v JOIN pass p ON p.contact_id = v.contact_id AND p.cycle = v.cycle

@@ -1,10 +1,12 @@
 import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
-import { CrmSegment, CrmStatus, EntityStatus, Prisma, User, UserRole } from '@prisma/client';
+import { CrmSegment, CrmStatus, EntityStatus, Prisma, User, UserRole, UserType } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { permissionsByRole } from 'src/modules/auth/constantes/permissionsByRole';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
-import { STATUTS_OUVERTS } from '../crm.rules';
+import { resolveRestaurantScope } from 'src/modules/order/helpers/restaurant-scope.helper';
+import { STATUTS_OUVERTS, ficheDuRestaurant } from '../crm.rules';
+import type { Perimetre } from './crm-passages.query';
 
 type Client = Prisma.TransactionClient | PrismaService;
 
@@ -24,15 +26,25 @@ export const PUBLICS_FILE_COMMUNE: CrmSegment[] = [CrmSegment.GLOVO, CrmSegment.
 export const debutDuJour = (d = new Date()) => new Date(`${d.toISOString().slice(0, 10)}T00:00:00.000Z`);
 
 /**
- * Qui voit et qui touche quoi dans le CRM (cahier §9).
+ * Qui voit et qui touche quoi dans le CRM (cahier §9, revu le 25/09).
  *
- *  - Gestionnaire (droit CREATE : direction, marketing) : tout.
+ *  - Gestionnaire (droit CREATE : direction) : tout.
  *  - Agent (droit UPDATE sans CREATE) : ses contacts, ceux des campagnes qu'il
  *    pilote, et la file commune Glovo/Yango (captés avant aujourd'hui, ouverts,
  *    confiés à personne, hors campagne) : le premier qui compose prend le
  *    contact. Il peut aussi consulter une fiche trouvée par son numéro exact.
- *  - Consultation (READ ou REPORT seulement) : les tableaux de bord, jamais un
- *    téléphone ni un e-mail.
+ *  - Lecteur (droit READ sans UPDATE ni CREATE : marketing, manager) : la
+ *    consultation. Il voit la liste des contacts et les fiches, téléphone
+ *    compris (fiche en mode « consultation »), les campagnes, coupons, ventes,
+ *    réglages et, avec REPORT, les tableaux de bord ; il ne fait aucun geste
+ *    (appel, coupon, assignation, pilotage) et n'exporte rien : les routes
+ *    d'écriture exigent UPDATE, CREATE ou DELETE, les exports EXPORT.
+ *  - REPORT sans READ : les tableaux de bord seulement.
+ *
+ * Compte de point de vente (User.type RESTAURANT, le manager) : tout ce qui
+ * précède, limité aux fiches de SON restaurant (`ficheDuRestaurant`), pris du
+ * compte et jamais d'un paramètre ; sans restaurant rattaché, aucune fiche.
+ * Les campagnes se consultent au siège.
  *
  * Le garde de route vérifie déjà l'action ; ce service ajoute la portée, que
  * le rôle seul ne peut pas dire.
@@ -52,7 +64,48 @@ export class CrmAccessService {
     return this.peut(user, Action.CREATE);
   }
 
-  /** Rôles qui peuvent recevoir des contacts à traiter. */
+  /** Consultation : lire le CRM, téléphones compris, sans aucun geste. */
+  estLecteur(user: Pick<User, 'role'>): boolean {
+    return this.peut(user, Action.READ) && !this.peut(user, Action.UPDATE) && !this.peut(user, Action.CREATE);
+  }
+
+  /**
+   * Restaurant d'un compte de point de vente, pris du compte, jamais d'un
+   * paramètre. Sans restaurant rattaché : un id qui n'existe pas, donc
+   * aucune fiche. `undefined` : compte du siège, tout le réseau.
+   */
+  restaurantDe(user: Pick<User, 'type' | 'restaurant_id'>): string | undefined {
+    return resolveRestaurantScope(user as User);
+  }
+
+  /**
+   * Filtres d'un tableau de bord avec le périmètre du compte, posé ici et
+   * jamais lu dans la requête. Un compte de point de vente ne compte que les
+   * fiches de son restaurant, sans filtre de campagne : les campagnes se
+   * consultent au siège.
+   */
+  filtresAnalyse<T extends object>(user: User, q: T): T & Perimetre {
+    const restaurant = this.restaurantDe(user);
+    if (restaurant === undefined) return { ...q, perimetre_restaurant: undefined };
+    return { ...q, campaign_id: undefined, perimetre_restaurant: restaurant };
+  }
+
+  /** Une fiche d'un autre restaurant, ouverte par un compte de point de vente : refusée. */
+  async assertDuRestaurant(user: User, contactId: string): Promise<void> {
+    const restaurant = this.restaurantDe(user);
+    if (restaurant === undefined) return;
+    const rattachee = await this.prisma.crmContact.count({
+      where: { AND: [{ id: contactId }, ficheDuRestaurant(restaurant)] },
+    });
+    if (rattachee === 0) throw new ForbiddenException("Ce client n'est pas rattaché à votre restaurant");
+  }
+
+  /** Campagnes (liste, détail, statistiques, comparatif, rapport, gestes) : jamais depuis un point de vente. */
+  assertSiege(user: Pick<User, 'type'> | undefined): void {
+    if (user?.type === UserType.RESTAURANT) throw new ForbiddenException('Les campagnes se consultent au siège');
+  }
+
+  /** Rôles qui peuvent recevoir des contacts à traiter (droit UPDATE). */
   rolesAgents(): UserRole[] {
     return (Object.keys(permissionsByRole) as UserRole[]).filter((role) =>
       this.peut({ role }, Action.UPDATE),
@@ -81,9 +134,19 @@ export class CrmAccessService {
     );
   }
 
-  /** Filtre des contacts qu'un utilisateur voit dans ses listes. */
+  /**
+   * Filtre des contacts qu'un utilisateur voit dans ses listes : tout pour la
+   * direction et la consultation, son portefeuille pour un agent ; limité aux
+   * fiches de son restaurant pour un compte de point de vente.
+   */
   portee(user: User): Prisma.CrmContactWhereInput {
-    if (this.estGestionnaire(user)) return {};
+    const role = this.porteeRole(user);
+    const restaurant = this.restaurantDe(user);
+    return restaurant === undefined ? role : { AND: [role, ficheDuRestaurant(restaurant)] };
+  }
+
+  private porteeRole(user: User): Prisma.CrmContactWhereInput {
+    if (this.estGestionnaire(user) || this.estLecteur(user)) return {};
     this.assertAgent(user);
     return {
       OR: [{ assigned_to_id: user.id }, { campaign: { lead_agent_id: user.id } }, this.fileCommune()],
@@ -101,6 +164,8 @@ export class CrmAccessService {
    * dans la file commune : l'action devra le lui assigner (voir `prendre`).
    */
   async assertPeutTraiter(user: User, contact: ContactPortee): Promise<'gestion' | 'sien' | 'commune'> {
+    // Un compte de point de vente n'agit jamais hors de son restaurant.
+    await this.assertDuRestaurant(user, contact.id);
     if (this.estGestionnaire(user)) return 'gestion';
     this.assertAgent(user);
     if (contact.assigned_to_id === user.id) return 'sien';

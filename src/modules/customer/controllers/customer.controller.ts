@@ -35,7 +35,8 @@ import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { NotificationSettingService } from '../services/notification-setting.service';
 import { UpdateNotificationSettingDto } from '../dto/update-notification-setting.dto';
-import { Customer } from '@prisma/client';
+import { Customer, User } from '@prisma/client';
+import { resolveRestaurantScope } from 'src/modules/order/helpers/restaurant-scope.helper';
 
 @ApiTags('Customers')
 @ApiBearerAuth()
@@ -70,9 +71,12 @@ export class CustomerController {
   }
 
   // EXPORT EXCEL — déclaré AVANT @Get(':id') pour que la route statique gagne.
+  // ⚠️ EXPORT et non READ : en READ, un rôle en simple consultation (Marketing)
+  // téléchargeait tout le fichier clients. Les rôles qui exportaient déjà ont
+  // reçu CLIENTS EXPORT. Cloisonné au restaurant du compte comme la liste.
   @Get('export')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard, RestaurantQueryScopeGuard)
-  @RequirePermission(Modules.CLIENTS, Action.READ)
+  @RequirePermission(Modules.CLIENTS, Action.EXPORT)
   @ApiOperation({ summary: 'Exporter les clients (Excel) selon les filtres courants' })
   async exportCustomers(@Query() query: CustomerQueryDto, @Res() res: Response) {
     const { buffer, filename } =
@@ -106,8 +110,11 @@ export class CustomerController {
   @RequirePermission(Modules.CLIENTS, Action.READ)
   @CacheTTL(2 * 60 * 1000)
   @ApiOperation({ summary: 'Obtenir un client par ID' })
-  findOne(@Param('id') id: string) {
-    return this.customerService.findOne(id);
+  findOne(@Req() req: Request, @Param('id') id: string) {
+    // Personnel de restaurant (manager, caissier…) : la fiche ne montre que les
+    // commandes et les avis de SON restaurant, comme la liste. Le cache est
+    // déjà séparé par restaurant (UserScopedCacheInterceptor sur la classe).
+    return this.customerService.findOne(id, resolveRestaurantScope(req.user as User));
   }
 
   @Patch()

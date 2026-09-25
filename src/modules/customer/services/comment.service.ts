@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
 import { CreateCommentDto, UpdateCommentDto, CommentResponseDto, DishCommentsResponseDto, GetCommentsQueryDto } from '../dto/comment.dto';
 import { EntityStatus, OrderStatus, Prisma } from '@prisma/client';
@@ -139,7 +139,9 @@ export class CommentService {
     }
 
     // Récupérer les commentaires d'une commande
-    async getOrderComments(orderId: string, query: GetCommentsQueryDto): Promise<{
+    // `restaurantScope` : restaurant du personnel de restaurant qui consulte
+    // (résolu depuis le jeton). Une commande d'un autre restaurant est refusée.
+    async getOrderComments(orderId: string, query: GetCommentsQueryDto, restaurantScope?: string): Promise<{
         comments: CommentResponseDto[];
         total: number;
         page: number;
@@ -147,6 +149,18 @@ export class CommentService {
     }> {
         const { page = 1, limit = 10, min_rating = 1, max_rating = 5 } = query;
         const skip = (page - 1) * limit;
+
+        if (restaurantScope) {
+            const order = await this.prisma.order.findFirst({
+                where: { id: orderId },
+                select: { restaurant_id: true },
+            });
+            if (!order || order.restaurant_id !== restaurantScope) {
+                throw new ForbiddenException(
+                    "Accès refusé : cette commande n'appartient pas à votre restaurant.",
+                );
+            }
+        }
 
         const whereClause: any = {
             order_id: orderId,
@@ -280,7 +294,9 @@ export class CommentService {
     }
 
     // Récupérer les commentaires d'un client
-    async getCustomerComments(customerId: string, query: GetCommentsQueryDto): Promise<{
+    // `restaurantId` : seulement les avis des commandes de ce restaurant (forcé
+    // pour le personnel de restaurant, jamais passé par la route « mes avis »).
+    async getCustomerComments(customerId: string, query: GetCommentsQueryDto, restaurantId?: string): Promise<{
         comments: CommentResponseDto[];
         total: number;
         page: number;
@@ -293,6 +309,10 @@ export class CommentService {
             customer_id: customerId,
             entity_status: EntityStatus.ACTIVE,
         };
+
+        if (restaurantId) {
+            whereClause.order = { restaurant_id: restaurantId };
+        }
 
         if (min_rating || max_rating) {
             whereClause.rating = {};
@@ -377,7 +397,11 @@ export class CommentService {
     }
 
     async getAllComments(query: GetCommentsQueryDto): Promise<QueryResponseDto<CommentResponseDto>> {
-        const { page = 1, limit = 10, min_rating = 1, max_rating = 5 } = query;
+        const { page = 1, min_rating = 1, max_rating = 5 } = query;
+        // Plafonné à 100 : sans maximum, un seul appel en lecture renvoyait tous
+        // les avis avec nom et téléphone, ce qui revenait à un export. Plafond
+        // appliqué ici, et non dans le DTO que partagent les routes publiques.
+        const limit = Math.min(query.limit ?? 10, 100);
         const skip = (page - 1) * limit;
 
         const whereClause: any = {

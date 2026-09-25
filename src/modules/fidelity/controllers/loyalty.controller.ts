@@ -47,7 +47,9 @@ export class LoyaltyController {
     description: 'Informations de fidélité obtenues'
   })
   getAllLoyaltyPoints(@Query() query: LoyaltyQueryDto) {
-    return this.loyaltyService.getAllLoyaltyPoints(query);
+    // Plafonné à 100 lignes : au-delà, une simple lecture revenait à exporter
+    // l'historique de points avec le nom et le téléphone des clients.
+    return this.loyaltyService.getAllLoyaltyPoints({ ...query, limit: Math.min(query.limit ?? 10, 100) });
   }
 
   @Get('points/stats')

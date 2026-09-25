@@ -62,6 +62,17 @@ export function etatCoupon(c: { used_at: Date | null; expires_at: Date }, mainte
   return c.expires_at > maintenant ? 'ACTIF' : 'EXPIRE';
 }
 
+/**
+ * Code de coupon masqué pour un lecteur (consultation) : un code à usage
+ * unique n'est lié à aucun client, il ne doit pas pouvoir servir en caisse.
+ */
+export const codeMasque = (code: string) => `${code.slice(0, 2)}••••`;
+
+/** Masque, dans un texte (libellé du journal), chacun des codes donnés. */
+export function sansCodes(texte: string, codes: string[]): string {
+  return codes.reduce((t, code) => (code ? t.split(code).join(codeMasque(code)).split(code.toUpperCase()).join(codeMasque(code)) : t), texte);
+}
+
 export function versLigne(p: LigneBrute) {
   const { coupons, ...reste } = p;
   const dernier = coupons[0];

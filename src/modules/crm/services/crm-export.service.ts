@@ -137,9 +137,11 @@ export class CrmExportService {
    * valeur sans objet ou non disponible reste vide.
    */
   async exporterPublics(user: User, q: ExportAnalyticsQueryDto): Promise<FichierExport> {
-    const vue = await this.publics.comparer(q);
-    const campagne = q.campaign_id
-      ? await this.prisma.crmCampaign.findUnique({ where: { id: q.campaign_id }, select: { name: true } })
+    // Même périmètre que l'écran : les fiches de son restaurant pour un point de vente.
+    const perimetre = this.access.filtresAnalyse(user, q);
+    const vue = await this.publics.comparer(perimetre);
+    const campagne = perimetre.campaign_id
+      ? await this.prisma.crmCampaign.findUnique({ where: { id: perimetre.campaign_id }, select: { name: true } })
       : null;
     const fenetre = compter(vue.fenetre_jours, 'jour');
     type Colonne = [groupe: string, titre: string, valeur: (l: LignePublic) => number | null];
@@ -249,7 +251,14 @@ export class CrmExportService {
       user,
       'TABLEAU_PUBLICS',
       'XLSX',
-      { vue: q.vue, from: q.from ?? null, to: q.to ?? null, campaign_id: q.campaign_id ?? null, segments: vue.publics },
+      {
+        vue: q.vue,
+        from: q.from ?? null,
+        to: q.to ?? null,
+        campaign_id: perimetre.campaign_id ?? null,
+        segments: vue.publics,
+        ...(perimetre.perimetre_restaurant && { restaurant_id: perimetre.perimetre_restaurant }),
+      },
       lignes.length,
     );
     return {

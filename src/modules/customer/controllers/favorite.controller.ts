@@ -4,11 +4,13 @@ import { CreateFavoriteDto } from 'src/modules/customer/dto/create-favorite.dto'
 import { UpdateFavoriteDto } from 'src/modules/customer/dto/update-favorite.dto';
 import type { Request } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { Customer } from '@prisma/client';
+import { Customer, UserRole } from '@prisma/client';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { CacheInterceptor } from '@nestjs/cache-manager';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
@@ -27,9 +29,15 @@ export class FavoriteController {
     return this.favoriteService.create(req, createFavoriteDto);
   }
 
+  // ⚠️ Administrateur seulement : tous les favoris de tous les clients, fiche
+  // client complète comprise, sans pagination ni restaurant. Ouverte à CLIENTS
+  // READ, elle valait un export pour un rôle en consultation (Marketing) et
+  // livrait tout le réseau au personnel d'un restaurant. Aucun écran ne
+  // l'appelle (l'application passe par /favorites/customer/:id).
   @Get()
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard, UserRolesGuard)
   @RequirePermission(Modules.CLIENTS, Action.READ)
+  @UserRoles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Récupération de toutes les favorites' })
   findAll() {
     return this.favoriteService.findAll();

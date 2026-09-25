@@ -18,6 +18,10 @@ export enum Modules {
   /** Conversion des inscrits qui n'ont jamais commandé (module Prospects). */
   CRM = 'crm',
   CALLS = 'calls',
+  /** Page Notifications (campagnes push) : séparée de SETTINGS pour l'ouvrir sans ouvrir Paramètres. */
+  NOTIFICATIONS = 'notifications',
+  /** Diffusions de messages : séparées de MARKETING pour que le menu Marketing puisse être en lecture seule. */
+  DIFFUSIONS = 'broadcasts',
   AUDIT = 'audit',
   ALL = 'all',
 }

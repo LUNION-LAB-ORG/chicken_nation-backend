@@ -446,7 +446,11 @@ export class CardRequestService {
    * Liste toutes les demandes (backoffice)
    */
   async getAllRequests(query: CardRequestQueryDto) {
-    const { page = 1, limit = 10, search, status, institution } = query;
+    const { page = 1, search, status, institution } = query;
+    // Plafonné à 100 : une page démesurée revenait à exporter les porteurs de
+    // carte (nom, téléphone, photo) avec un simple droit de lecture. L'export
+    // Excel, lui, exige CARD_NATION EXPORT.
+    const limit = Math.min(query.limit ?? 10, 100);
     const skip = (page - 1) * limit;
 
     const where: Prisma.CardRequestWhereInput = {};
@@ -877,7 +881,11 @@ export class CardRequestService {
    * Liste de toutes les cartes (backoffice)
    */
   async getAllCards(query: NationCardQueryDto) {
-    const { page = 1, limit = 10, search, status, institution } = query;
+    const { page = 1, search, status, institution } = query;
+    // Plafonné à 100 : une page démesurée revenait à exporter les porteurs de
+    // carte (nom, téléphone, photo) avec un simple droit de lecture. L'export
+    // Excel, lui, exige CARD_NATION EXPORT.
+    const limit = Math.min(query.limit ?? 10, 100);
     const skip = (page - 1) * limit;
 
     const where: Prisma.NationCardWhereInput = {};

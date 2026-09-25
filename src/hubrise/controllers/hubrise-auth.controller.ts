@@ -46,9 +46,13 @@ export class HubriseAuthController {
    *
    * @param restaurantId - ID du restaurant CN à connecter
    */
+  // ⚠️ CREATE et non READ, comme disconnect : cette route lance un OAuth dont
+  // le retour réécrit le jeton HubRise du restaurant. En READ, un rôle en
+  // simple consultation (Marketing, Comptable) pouvait rattacher un restaurant
+  // à son propre compte HubRise.
   @Get('connect/:restaurantId')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.RESTAURANTS, Action.READ)
+  @RequirePermission(Modules.RESTAURANTS, Action.CREATE)
   async connect(
     @Param('restaurantId') restaurantId: string,
     @Res() res: Response,

@@ -20,9 +20,11 @@ import { CrmAccessService, debutDuJour } from './crm-access.service';
 import {
   COUPON_UTILISE,
   DEFINITIFS,
+  Perimetre,
   VENTE_VALIDE,
   filtreCampagne,
   filtreMembre,
+  filtreRestaurant,
   filtreSegments,
   jointurePassage,
   listePublics,
@@ -61,7 +63,9 @@ function parPublicVide(portee: CrmSegment[]): Record<string, number> {
  * `crm-passages.query.ts` pour les définitions.
  *
  * Filtres communs : période [from ; to + 1 jour[ en UTC, un ou plusieurs
- * publics (`segments`, ou l'ancien `segment`), une campagne.
+ * publics (`segments`, ou l'ancien `segment`), une campagne. Pour un compte de
+ * point de vente, `perimetre_restaurant` (posé par le contrôleur) limite
+ * chaque requête aux fiches de son restaurant (`filtreRestaurant`).
  */
 @Injectable()
 export class CrmAnalyticsService {
@@ -72,7 +76,7 @@ export class CrmAnalyticsService {
   ) {}
 
   /** Population d'aujourd'hui, entonnoir des entrés de la période, ventes (cahier §7). */
-  async vueEnsemble(q: AnalyticsQueryDto) {
+  async vueEnsemble(q: AnalyticsQueryDto & Perimetre) {
     const publics = publicsDe(q);
     const portee = porteePublics(publics);
     const maintenant = new Date();
@@ -106,7 +110,8 @@ export class CrmAnalyticsService {
           count(*) FILTER (WHERE p.status = 'INJOIGNABLE')::int AS injoignables,
           count(*) FILTER (WHERE p.status <> 'CONVERTI' AND p.abandoned_orders > 0)::int AS abandons
         FROM "CrmContact" p
-        WHERE p.entity_status <> 'DELETED' ${filtreSegments('p.segment', publics)} ${filtreMembre('p', q)}`,
+        WHERE p.entity_status <> 'DELETED' ${filtreSegments('p.segment', publics)} ${filtreMembre('p', q)}
+          ${filtreRestaurant('p.id', q)}`,
       this.prisma.$queryRaw<{ ventes: number; ca: number; historique: number; ca_historique: number }[]>`
         SELECT count(*) FILTER (WHERE v.source = 'CRM')::int AS ventes,
           coalesce(sum(v.amount) FILTER (WHERE v.source = 'CRM'), 0)::float AS ca,
@@ -114,7 +119,7 @@ export class CrmAnalyticsService {
           coalesce(sum(v.amount) FILTER (WHERE v.source = 'ACQUISITION_HISTORIQUE'), 0)::float AS ca_historique
         FROM "CrmConversion" v ${jointurePassage('v')}
         WHERE ${VENTE_VALIDE} ${plage('v.converted_at', q)} ${filtreCampagne('v.campaign_id', q)}
-          ${filtreSegments(PUBLIC_V, publics)}`,
+          ${filtreSegments(PUBLIC_V, publics)} ${filtreRestaurant('v.contact_id', q)}`,
       this.publics.fileCommune(q, maintenant),
     ]);
 
@@ -187,7 +192,7 @@ export class CrmAnalyticsService {
    * pour un nouveau cycle ; un refus repris sans raison apparaît en « Raison
    * non renseignée ».
    */
-  async raisons(q: AnalyticsQueryDto) {
+  async raisons(q: AnalyticsQueryDto & Perimetre) {
     const publics = publicsDe(q);
     const lignes = await this.prisma.$queryRaw<
       { g_segment: number; id: string | null; raison: string; segment: string | null; nombre: number }[]
@@ -195,7 +200,7 @@ export class CrmAnalyticsService {
       WITH d AS (
         SELECT DISTINCT ON (k.contact_id, k.cycle) k.loss_reason_id, k.created_at, k.campaign_id, ${Prisma.raw(PUBLIC_K)} AS segment
         FROM "CrmCall" k ${jointurePassage('k')}
-        WHERE k.outcome = 'NON_INTERESSE'
+        WHERE k.outcome = 'NON_INTERESSE' ${filtreRestaurant('k.contact_id', q)}
         ORDER BY k.contact_id, k.cycle, k.created_at DESC, k.id DESC
       )
       SELECT GROUPING(d.segment)::int AS g_segment, r.id, coalesce(r.name, 'Raison non renseignée') AS raison,
@@ -220,11 +225,12 @@ export class CrmAnalyticsService {
    * Coupons et mesure de la conversion (cahier §5), par date d'envoi. Un coupon
    * « utilisé » l'a été sur une commande qui compte (ni annulée, ni supprimée).
    */
-  async coupons(q: AnalyticsQueryDto) {
+  async coupons(q: AnalyticsQueryDto & Perimetre) {
     const publics = publicsDe(q);
     const base = Prisma.sql`
       FROM "CrmCoupon" c ${jointurePassage('c')} LEFT JOIN "Order" o ON o.id = c.order_id
-      WHERE true ${plage('c.sent_at', q)} ${filtreCampagne('c.campaign_id', q)} ${filtreSegments(PUBLIC_C, publics)}`;
+      WHERE true ${plage('c.sent_at', q)} ${filtreCampagne('c.campaign_id', q)} ${filtreSegments(PUBLIC_C, publics)}
+        ${filtreRestaurant('c.contact_id', q)}`;
     const colonnes = Prisma.sql`count(*)::int AS envoyes,
       count(*) FILTER (WHERE ${COUPON_UTILISE})::int AS utilises,
       count(*) FILTER (WHERE c.used_at IS NOT NULL AND NOT (${COUPON_UTILISE}))::int AS sur_commande_annulee,
@@ -290,7 +296,7 @@ export class CrmAnalyticsService {
    *  - délai du premier appel et traités à J+1 / J+2 : passages ENTRÉS sur la période ;
    *  - seconde commande : ventes de la période (voir `CrmPublicsService.secondeCommande`).
    */
-  async qualite(q: AnalyticsQueryDto) {
+  async qualite(q: AnalyticsQueryDto & Perimetre) {
     const publics = publicsDe(q);
     const { fin } = bornesPeriode(q);
     // Le premier appel d'un passage précède tous les autres : inutile de lire au-delà de la période.
@@ -300,7 +306,7 @@ export class CrmAnalyticsService {
         WITH f AS (
           SELECT DISTINCT ON (k.contact_id, k.cycle) k.outcome, k.created_at, k.campaign_id, ${Prisma.raw(PUBLIC_K)} AS segment
           FROM "CrmCall" k ${jointurePassage('k')}
-          WHERE NOT k.imported AND k.cycle >= 1 ${avantFin}
+          WHERE NOT k.imported AND k.cycle >= 1 ${avantFin} ${filtreRestaurant('k.contact_id', q)}
           ORDER BY k.contact_id, k.cycle, k.created_at, k.id
         )
         SELECT count(*)::int AS traites, count(*) FILTER (WHERE f.outcome IN ${DEFINITIFS})::int AS resolus
@@ -311,7 +317,7 @@ export class CrmAnalyticsService {
                  row_number() OVER (PARTITION BY k.contact_id, k.cycle ORDER BY k.created_at, k.id) AS rang,
                  min(k.created_at) OVER (PARTITION BY k.contact_id, k.cycle) AS premier
           FROM "CrmCall" k ${jointurePassage('k')}
-          WHERE NOT k.imported AND k.cycle >= 1 ${avantFin}
+          WHERE NOT k.imported AND k.cycle >= 1 ${avantFin} ${filtreRestaurant('k.contact_id', q)}
         ), d AS (
           SELECT DISTINCT ON (a.contact_id, a.cycle) a.*, (EXTRACT(EPOCH FROM (a.created_at - a.premier)) / 3600)::float AS heures
           FROM a WHERE a.outcome IN ${DEFINITIFS}
@@ -323,7 +329,8 @@ export class CrmAnalyticsService {
       this.prisma.$queryRaw<{ appels: number; contacts: number }[]>`
         SELECT count(*)::int AS appels, count(DISTINCT (k.contact_id, k.cycle))::int AS contacts
         FROM "CrmCall" k ${jointurePassage('k')}
-        WHERE NOT k.imported ${plage('k.created_at', q)} ${filtreCampagne('k.campaign_id', q)} ${filtreSegments(PUBLIC_K, publics)}`,
+        WHERE NOT k.imported ${plage('k.created_at', q)} ${filtreCampagne('k.campaign_id', q)} ${filtreSegments(PUBLIC_K, publics)}
+          ${filtreRestaurant('k.contact_id', q)}`,
       this.publics.devenir(q),
       this.publics.secondeCommande(q),
     ]);
@@ -361,7 +368,7 @@ export class CrmAnalyticsService {
    * coupon dans ce passage avant la commande ; sinon elle est « spontanée »
    * (le client a commandé seul pendant qu'il était dans son portefeuille).
    */
-  async agents(q: AnalyticsQueryDto) {
+  async agents(q: AnalyticsQueryDto & Perimetre) {
     const publics = publicsDe(q);
     const portee = porteePublics(publics);
     const roles = this.access.rolesAgents();
@@ -374,11 +381,13 @@ export class CrmAnalyticsService {
           count(DISTINCT k.contact_id) FILTER (WHERE k.reached)::int AS joints
         FROM "CrmCall" k ${jointurePassage('k')}
         WHERE k.agent_id IS NOT NULL ${plage('k.created_at', q)} ${filtreCampagne('k.campaign_id', q)} ${filtreSegments(PUBLIC_K, publics)}
+          ${filtreRestaurant('k.contact_id', q)}
         GROUP BY k.agent_id`,
       this.prisma.$queryRaw<{ agent_id: string; coupons: number }[]>`
         SELECT c.sent_by_id AS agent_id, count(*)::int AS coupons
         FROM "CrmCoupon" c ${jointurePassage('c')}
         WHERE c.sent_by_id IS NOT NULL ${plage('c.sent_at', q)} ${filtreCampagne('c.campaign_id', q)} ${filtreSegments(PUBLIC_C, publics)}
+          ${filtreRestaurant('c.contact_id', q)}
         GROUP BY c.sent_by_id`,
       this.prisma.$queryRaw<
         { agent_id: string; segment: string; ventes: number; travaillees: number; ca: number; ca_travaille: number }[]
@@ -392,6 +401,7 @@ export class CrmAnalyticsService {
           FROM "CrmConversion" v ${jointurePassage('v')}
           WHERE v.agent_id IS NOT NULL AND v.source = 'CRM' AND ${VENTE_VALIDE}
             ${plage('v.converted_at', q)} ${filtreCampagne('v.campaign_id', q)} ${filtreSegments(PUBLIC_V, publics)}
+            ${filtreRestaurant('v.contact_id', q)}
         )
         SELECT s.agent_id, s.segment, count(*)::int AS ventes, count(*) FILTER (WHERE s.travaillee)::int AS travaillees,
           coalesce(sum(s.amount), 0)::float AS ca, coalesce(sum(s.amount) FILTER (WHERE s.travaillee), 0)::float AS ca_travaille
@@ -400,7 +410,7 @@ export class CrmAnalyticsService {
         SELECT p.assigned_to_id AS agent_id, count(*)::int AS portefeuille
         FROM "CrmContact" p
         WHERE p.assigned_to_id IS NOT NULL AND p.entity_status <> 'DELETED' AND p.status IN (${OUVERTS})
-          ${filtreSegments('p.segment', publics)} ${filtreCampagne('p.campaign_id', q)}
+          ${filtreSegments('p.segment', publics)} ${filtreCampagne('p.campaign_id', q)} ${filtreRestaurant('p.id', q)}
         GROUP BY p.assigned_to_id`,
     ]);
 
@@ -448,9 +458,10 @@ export class CrmAnalyticsService {
    * Série quotidienne : entrées (passages par jour d'entrée au CRM, cycles
    * passés compris), captures Glovo/Yango, appels, joints, coupons, ventes du
    * CRM (registre, ventes valides). Sans `from`, la série part du premier
-   * passage (un an au plus).
+   * passage (un an au plus). Pour un compte de point de vente, les captures
+   * sont celles faites dans son restaurant.
    */
-  async tendance(q: AnalyticsQueryDto) {
+  async tendance(q: AnalyticsQueryDto & Perimetre) {
     const publics = publicsDe(q);
     const portee = porteePublics(publics);
     const membreDuPassage = q.campaign_id
@@ -462,7 +473,8 @@ export class CrmAnalyticsService {
       : await this.prisma.$queryRaw<{ premier: Date | null }[]>`
           SELECT min(greatest(y.segment_since, y.crm_entered_at)) AS premier
           FROM "CrmCycle" y JOIN "CrmContact" x ON x.id = y.contact_id
-          WHERE x.entity_status <> 'DELETED' ${filtreSegments('y.segment', publics)} ${membreDuPassage}`;
+          WHERE x.entity_status <> 'DELETED' ${filtreSegments('y.segment', publics)} ${membreDuPassage}
+            ${filtreRestaurant('x.id', q)}`;
     const { debut, fin } = bornesTendance({ from: q.from, to: q.to, premierPassage: premier?.premier ?? null });
     const lendemain = new Date(fin.getTime() + 86_400_000);
     const plateformes = portee.filter((s) => PUBLICS_CAPTES.includes(s));
@@ -470,6 +482,7 @@ export class CrmAnalyticsService {
       ? Prisma.sql`SELECT cap.created_at::date AS j, count(*) AS n FROM "Prospect" cap
           WHERE cap.entity_status <> 'DELETED' AND cap.platform::text IN (${Prisma.join(plateformes.map((s) => String(s)))})
             AND cap.created_at >= ${debut} AND cap.created_at < ${lendemain}
+            ${q.perimetre_restaurant ? Prisma.sql`AND cap.restaurant_id = ${q.perimetre_restaurant}::uuid` : Prisma.empty}
             ${q.campaign_id ? Prisma.sql`AND EXISTS (SELECT 1 FROM "CrmCampaignMember" m WHERE m.contact_id = cap.contact_id AND m.campaign_id = ${q.campaign_id}::uuid)` : Prisma.empty}
           GROUP BY 1`
       : Prisma.sql`SELECT NULL::date AS j, 0 AS n WHERE false`;
@@ -491,22 +504,22 @@ export class CrmAnalyticsService {
       a AS (SELECT k.created_at::date AS j, count(*) AS n, count(*) FILTER (WHERE k.reached) AS r
             FROM "CrmCall" k ${jointurePassage('k')}
             WHERE k.created_at >= ${debut} AND k.created_at < ${lendemain}
-              ${filtreCampagne('k.campaign_id', q)} ${filtreSegments(PUBLIC_K, publics)}
+              ${filtreCampagne('k.campaign_id', q)} ${filtreSegments(PUBLIC_K, publics)} ${filtreRestaurant('k.contact_id', q)}
             GROUP BY 1),
       c AS (SELECT c.sent_at::date AS j, count(*) AS n
             FROM "CrmCoupon" c ${jointurePassage('c')}
             WHERE c.sent_at >= ${debut} AND c.sent_at < ${lendemain}
-              ${filtreCampagne('c.campaign_id', q)} ${filtreSegments(PUBLIC_C, publics)}
+              ${filtreCampagne('c.campaign_id', q)} ${filtreSegments(PUBLIC_C, publics)} ${filtreRestaurant('c.contact_id', q)}
             GROUP BY 1),
       v AS (SELECT v.converted_at::date AS j, ${Prisma.raw(PUBLIC_V)}::text AS s, count(*) AS n
             FROM "CrmConversion" v ${jointurePassage('v')}
             WHERE v.source = 'CRM' AND ${VENTE_VALIDE} AND v.converted_at >= ${debut} AND v.converted_at < ${lendemain}
-              ${filtreCampagne('v.campaign_id', q)} ${filtreSegments(PUBLIC_V, publics)}
+              ${filtreCampagne('v.campaign_id', q)} ${filtreSegments(PUBLIC_V, publics)} ${filtreRestaurant('v.contact_id', q)}
             GROUP BY 1, 2),
       e AS (SELECT greatest(y.segment_since, y.crm_entered_at)::date AS j, y.segment::text AS s, count(*) AS n
             FROM "CrmCycle" y JOIN "CrmContact" x ON x.id = y.contact_id AND x.entity_status <> 'DELETED'
             WHERE greatest(y.segment_since, y.crm_entered_at) >= ${debut} AND greatest(y.segment_since, y.crm_entered_at) < ${lendemain}
-              ${filtreSegments('y.segment', publics)} ${membreDuPassage}
+              ${filtreSegments('y.segment', publics)} ${membreDuPassage} ${filtreRestaurant('y.contact_id', q)}
             GROUP BY 1, 2),
       cap AS (${captures})
       SELECT to_char(jours.jour, 'YYYY-MM-DD') AS jour,
@@ -548,7 +561,7 @@ export class CrmAnalyticsService {
    * mots qui reviennent le plus, en complément des raisons codifiées. Un
    * client Glovo/Yango sans compte apparaît sous le nom relevé à la capture.
    */
-  async verbatims(q: VerbatimsQueryDto) {
+  async verbatims(q: VerbatimsQueryDto & Perimetre) {
     const page = q.page ?? 1;
     const limit = q.limit ?? 20;
     const recherche = q.search?.trim();
@@ -559,7 +572,8 @@ export class CrmAnalyticsService {
       ${plage('k.created_at', q)} ${filtreCampagne('k.campaign_id', q)} ${filtreSegments(PUBLIC_K, publics)}
       ${q.loss_reason_id ? Prisma.sql`AND k.loss_reason_id = ${q.loss_reason_id}::uuid` : Prisma.empty}
       ${q.agent_id ? Prisma.sql`AND k.agent_id = ${q.agent_id}::uuid` : Prisma.empty}
-      ${recherche ? Prisma.sql`AND k.comment ILIKE ${`%${recherche}%`}` : Prisma.empty}`;
+      ${recherche ? Prisma.sql`AND k.comment ILIKE ${`%${recherche}%`}` : Prisma.empty}
+      ${filtreRestaurant('k.contact_id', q)}`;
     const [lignes, [total], corpus] = await Promise.all([
       this.prisma.$queryRaw<
         {

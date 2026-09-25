@@ -39,7 +39,10 @@ export class CrmContactController {
 
   @Get('contacts')
   @RequirePermission(Modules.CRM, Action.READ)
-  @ApiOperation({ summary: 'Liste filtrable (portée : tout pour la direction, son portefeuille pour un agent)' })
+  @ApiOperation({
+    summary:
+      'Liste filtrable (portée : tout pour la direction et la consultation, son portefeuille pour un agent ; les fiches de son restaurant pour un compte de point de vente)',
+  })
   lister(@Req() req: Request, @Query() q: QueryCrmContactDto) {
     return this.contacts.lister(req.user as User, q);
   }
@@ -70,6 +73,7 @@ export class CrmContactController {
 
   @Get('contacts/:id')
   @RequirePermission(Modules.CRM, Action.READ)
+  @ApiOperation({ summary: 'Fiche du contact ; mode « consultation » pour un lecteur (téléphone compris, aucun geste)' })
   fiche(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string, @Query('telephone') telephone?: string) {
     return this.contacts.fiche(req.user as User, id, telephone);
   }
@@ -110,8 +114,8 @@ export class CrmContactController {
 
   @Get('agents')
   @RequirePermission(Modules.CRM, Action.READ)
-  agents() {
-    return this.contacts.agents();
+  agents(@Req() req: Request) {
+    return this.contacts.agents(req.user as User);
   }
 
   @Get('exports')

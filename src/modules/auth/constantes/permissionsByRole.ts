@@ -17,22 +17,35 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
   },
 
   /* ===================== MARKETING ===================== */
+  /**
+   * Lecture seule sur les menus Menu, Base de données (Clients, Notes et avis,
+   * CRM), Fidélisation, Inventaire, Restaurant, Marketing et Notifications :
+   * il voit tout, il ne crée, ne modifie, ne supprime et n'exporte rien
+   * (demande du 25/09). REPORT = statistiques en lecture. Seule exception,
+   * voulue : les Diffusions de messages, qu'il continue d'envoyer.
+   */
   [UserRole.MARKETING]: {
     modules: {
       [Modules.DASHBOARD]: [Action.READ],
 
-      [Modules.MENUS]: [Action.CREATE, Action.READ, Action.UPDATE],
-      [Modules.INVENTAIRE]: [Action.CREATE, Action.READ, Action.UPDATE],
-      [Modules.PROMOTIONS]: [Action.CREATE, Action.READ, Action.UPDATE, Action.DELETE],
-      [Modules.FIDELITE]: [Action.CREATE, Action.READ, Action.UPDATE],
-      [Modules.CARD_NATION]: [Action.CREATE, Action.READ, Action.UPDATE],
+      [Modules.MENUS]: [Action.READ],
+      [Modules.INVENTAIRE]: [Action.READ],
+      [Modules.PROMOTIONS]: [Action.READ],
+      [Modules.FIDELITE]: [Action.READ],
+      [Modules.CARD_NATION]: [Action.READ, Action.REPORT],
+      [Modules.RESTAURANTS]: [Action.READ],
 
       [Modules.CLIENTS]: [Action.READ],
+      [Modules.COMMENTAIRES]: [Action.READ],
       [Modules.COMMANDES]: [Action.READ],
-      [Modules.MARKETING]: [Action.CREATE, Action.READ, Action.UPDATE, Action.REPORT],
-      [Modules.BASE_DONNEES]: [Action.READ, Action.CREATE, Action.UPDATE, Action.EXPORT, Action.REPORT],
-      // CRM : pilotage complet (campagnes, listes, exports, tableaux de bord).
-      [Modules.CRM]: [Action.READ, Action.CREATE, Action.UPDATE, Action.DELETE, Action.EXPORT, Action.REPORT],
+      [Modules.MARKETING]: [Action.READ, Action.REPORT],
+      [Modules.NOTIFICATIONS]: [Action.READ],
+      [Modules.BASE_DONNEES]: [Action.READ, Action.REPORT],
+      // CRM en consultation : tableaux de bord, contacts et fiches (téléphone
+      // compris), campagnes, coupons, ventes et réglages, sans aucun geste.
+      [Modules.CRM]: [Action.READ, Action.REPORT],
+      // Diffusions de messages : il garde la création et l'envoi.
+      [Modules.DIFFUSIONS]: [Action.READ, Action.CREATE, Action.UPDATE],
     },
   },
 
@@ -65,13 +78,14 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
 
       [Modules.DASHBOARD]: [Action.READ],
 
-      [Modules.CLIENTS]: [Action.CREATE, Action.READ, Action.UPDATE],
+      [Modules.CLIENTS]: [Action.CREATE, Action.READ, Action.UPDATE, Action.EXPORT],
       [Modules.MENUS]: [Action.READ],
       [Modules.INVENTAIRE]: [Action.READ],
       [Modules.PROMOTIONS]: [Action.READ],
       [Modules.FIDELITE]: [Action.READ, Action.UPDATE],
       [Modules.CARD_NATION]: [Action.READ, Action.CREATE],
-      [Modules.COMMENTAIRES]: [Action.READ],
+      // Export CSV des avis gardé (le bouton exige désormais EXPORT).
+      [Modules.COMMENTAIRES]: [Action.READ, Action.EXPORT],
 
       [Modules.MESSAGES]: [Action.READ, Action.CREATE, Action.UPDATE],
 
@@ -103,7 +117,15 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.INVENTAIRE]: [Action.READ, Action.UPDATE],
       [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
       [Modules.MENUS]: [Action.READ],
-      [Modules.CLIENTS]: [Action.READ],
+      /**
+       * Base de données, en lecture et pour SON restaurant seulement (demande du
+       * 25/09) : Clients (déjà cloisonné, export gardé), Notes et avis et CRM
+       * en consultation. Le cloisonnement se fait côté serveur sur le
+       * restaurant du compte (UserType.RESTAURANT), jamais sur un paramètre.
+       */
+      [Modules.CLIENTS]: [Action.READ, Action.EXPORT],
+      [Modules.COMMENTAIRES]: [Action.READ],
+      [Modules.CRM]: [Action.READ, Action.REPORT],
       /**
        * Messagerie : indispensable pour les GROUPES internes, que seuls les
        * responsables peuvent ouvrir. Sans ce droit, un gestionnaire ne pouvait
@@ -132,7 +154,7 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.INVENTAIRE]: [Action.READ, Action.UPDATE],
       [Modules.PERSONNELS]: [Action.CREATE, Action.READ, Action.UPDATE],
       [Modules.MENUS]: [Action.READ],
-      [Modules.CLIENTS]: [Action.READ],
+      [Modules.CLIENTS]: [Action.READ, Action.EXPORT],
       /**
        * Messagerie : indispensable pour les GROUPES internes, que seuls les
        * responsables peuvent ouvrir. Sans ce droit, un gestionnaire ne pouvait
@@ -162,9 +184,10 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
         Action.PRINT,
       ],
       [Modules.MENUS]: [Action.READ],
-      [Modules.CLIENTS]: [Action.READ],
+      [Modules.CLIENTS]: [Action.READ, Action.EXPORT],
       [Modules.CARD_NATION]: [Action.READ],
-      [Modules.COMMENTAIRES]: [Action.READ],
+      // Export CSV des avis gardé (le bouton exige désormais EXPORT).
+      [Modules.COMMENTAIRES]: [Action.READ, Action.EXPORT],
       [Modules.MESSAGES]: [Action.READ, Action.CREATE, Action.UPDATE],
 
       // Appels internes : le caissier appelle le call center et reçoit ses appels.

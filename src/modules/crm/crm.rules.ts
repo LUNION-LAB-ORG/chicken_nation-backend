@@ -712,3 +712,37 @@ export function calculerDevenir(b: BrutDevenir, avecCaptes: boolean): Devenir {
 export function libelleLigne(cle: CrmSegment | 'CAPTES' | 'TOTAL'): string {
   return LIBELLES_LIGNE_PUBLIC[cle] ?? cle;
 }
+
+// ---------------------------------------------------------------------------
+// Cloisonnement par restaurant (compte de point de vente)
+// ---------------------------------------------------------------------------
+
+/**
+ * Fiche « du restaurant R » : relevée à R sur Glovo/Yango (capture non
+ * supprimée), ou dont le client a au moins une commande qui compte à R. Un
+ * inscrit qui n'a jamais commandé n'est rattaché à aucun restaurant : aucun
+ * compte de point de vente ne le voit.
+ */
+export function ficheDuRestaurant(restaurantId: string): Prisma.CrmContactWhereInput {
+  return {
+    OR: [
+      { captures: { some: { restaurant_id: restaurantId, entity_status: { not: EntityStatus.DELETED } } } },
+      { customer: { orders: { some: { ...commandeEffective(), restaurant_id: restaurantId } } } },
+    ],
+  };
+}
+
+/**
+ * Même condition en SQL, sur une colonne qui porte l'id de la fiche
+ * (« x.id », « k.contact_id », « v.contact_id »…). La sous-requête ne dépend
+ * pas de la ligne : la base calcule une seule fois la liste des fiches du
+ * restaurant, jamais une fois par ligne.
+ */
+export function ficheDuRestaurantSql(colonne: string, restaurantId: string): Prisma.Sql {
+  return Prisma.sql`${Prisma.raw(colonne)} IN (
+    SELECT rcap."contact_id" FROM "Prospect" rcap
+    WHERE rcap."contact_id" IS NOT NULL AND rcap."entity_status" <> 'DELETED' AND rcap."restaurant_id" = ${restaurantId}::uuid
+    UNION
+    SELECT rx."id" FROM "CrmContact" rx JOIN "Order" o ON o."customer_id" = rx."customer_id"
+    WHERE o."restaurant_id" = ${restaurantId}::uuid AND ${Prisma.raw(COMMANDE_EFFECTIVE_SQL)})`;
+}

@@ -238,7 +238,11 @@ export class CustomerService {
   }
 
   async findAll(query: CustomerQueryDto = {}) {
-    const { page = 1, limit = 10 } = query;
+    const { page = 1 } = query;
+    // Plafonné à 100 : sans maximum, un seul appel en lecture (?limit=100000)
+    // renvoyait tout le fichier clients, ce qui revenait à un export pour un
+    // rôle qui n'a que CLIENTS READ. L'export passe par /customer/export.
+    const limit = Math.min(query.limit ?? 10, 100);
     const whereClause = this.buildWhereClause(query);
     // Compte total + dernière commande : scopés au restaurant si un filtre resto
     // est actif (cohérent avec l'export, et plus parlant : « N commandes dans CE
@@ -258,8 +262,11 @@ export class CustomerService {
               created_at: 'desc',
             },
           },
+          // ⚠️ Jamais le jeton push : le serveur envoie sans jeton d'accès Expo,
+          // donc un jeton suffit à écrire à ce téléphone hors de la plateforme.
+          // Aucun écran ne l'affiche (le segment « appli » filtre côté serveur).
           notification_settings: {
-            select: { expo_push_token: true, active: true },
+            select: { push: true, promotions: true, system: true, active: true },
           },
           // PERF : la liste n'affiche que le TOTAL de commandes et la date de la
           // dernière. On évitait de charger TOUTES les commandes de chaque client
@@ -444,7 +451,12 @@ export class CustomerService {
     });
   }
 
-  async findOne(id: string) {
+  /**
+   * @param restaurantId Restaurant du personnel de restaurant qui consulte la
+   * fiche (résolu depuis le jeton, jamais depuis la requête) : commandes et avis
+   * sont alors limités à ce restaurant. Absent pour le backoffice.
+   */
+  async findOne(id: string, restaurantId?: string) {
     const customer = await this.prisma.customer.findUnique({
       where: { id },
       include: {
@@ -476,12 +488,17 @@ export class CustomerService {
               },
             ],
             entity_status: { not: EntityStatus.DELETED },
+            ...(restaurantId ? { restaurant_id: restaurantId } : {}),
           },
           orderBy: {
             created_at: 'desc',
           },
         },
-        notification_settings: true,
+        // Préférences seulement, jamais le jeton push ni les identifiants
+        // OneSignal (voir findAll).
+        notification_settings: {
+          select: { customer_id: true, push: true, promotions: true, system: true, active: true },
+        },
         loyalty_points: {
           orderBy: {
             created_at: 'desc',
@@ -498,30 +515,16 @@ export class CustomerService {
           },
         },
         Comment: {
+          ...(restaurantId ? { where: { order: { restaurant_id: restaurantId } } } : {}),
           orderBy: {
             created_at: 'desc',
           },
         },
-        TicketMessage: {
-          orderBy: {
-            createdAt: 'desc',
-          },
-        },
-        Message: {
-          orderBy: {
-            createdAt: 'desc',
-          },
-        },
-        TicketThread: {
-          orderBy: {
-            createdAt: 'desc',
-          },
-        },
-        Conversation: {
-          orderBy: {
-            createdAt: 'desc',
-          },
-        },
+        // ⚠️ Plus de conversations du support (Message, TicketMessage,
+        // TicketThread, Conversation) : aucun écran de la fiche ne les affiche
+        // (backoffice et caisse), et elles sortaient tous restaurants confondus
+        // vers un manager, ou vers un rôle sans droit MESSAGES (Marketing).
+        // Elles restent lisibles par la messagerie, sous sa propre permission.
         cardRequests: {
           orderBy: {
             created_at: 'desc',

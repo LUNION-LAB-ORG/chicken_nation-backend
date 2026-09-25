@@ -29,14 +29,19 @@ import { MessageBroadcastService } from './message-broadcast.service';
  * sélection. Le pendant des campagnes push, mais la livraison est un message
  * dans le canal officiel du client, pas une notification.
  *
- * ⚠️ Permission MARKETING, et surtout PAS MESSAGES.
+ * ⚠️ Permission DIFFUSIONS, et surtout PAS MESSAGES.
  *
  * `MESSAGES` est la permission qui sert à lire et à répondre aux conversations :
  * les rôles CAISSIER et CALL_CENTER la détiennent (voir `permissionsByRole`).
  * L'y rattacher aurait permis à un caissier d'écrire à toute la base de clients
  * depuis sa caisse. Écrire à des milliers de personnes est une décision de
- * marketing, pas un geste de première ligne, et c'est le rôle MARKETING qui la
- * porte, comme pour les actualités.
+ * marketing, pas un geste de première ligne : seul le rôle MARKETING (et
+ * l'administrateur) détient DIFFUSIONS.
+ *
+ * Module distinct de MARKETING depuis le 25/09 : le menu Marketing passe en
+ * lecture seule pour ce rôle, mais il garde la création et l'envoi des
+ * diffusions. ⚠️ CREATE suffit à envoyer : une diffusion créée avec une date
+ * d'envoi part d'elle-même par la tâche planifiée.
  */
 @ApiTags('Messagerie')
 @ApiBearerAuth()
@@ -47,21 +52,21 @@ export class MessageBroadcastController {
 
   @Get()
   @ApiOperation({ summary: 'Liste des diffusions' })
-  @RequirePermission(Modules.MARKETING, Action.READ)
+  @RequirePermission(Modules.DIFFUSIONS, Action.READ)
   lister(@Query('status') status?: string) {
     return this.service.lister(status);
   }
 
   @Get('clients')
   @ApiOperation({ summary: 'Chercher des clients pour une sélection personnalisée' })
-  @RequirePermission(Modules.MARKETING, Action.READ)
+  @RequirePermission(Modules.DIFFUSIONS, Action.READ)
   chercherClients(@Query('search') search = '') {
     return this.service.chercherClients(search);
   }
 
   @Post('apercu')
   @ApiOperation({ summary: "Combien de clients ce ciblage désigne-t-il (sans rien écrire)" })
-  @RequirePermission(Modules.MARKETING, Action.READ)
+  @RequirePermission(Modules.DIFFUSIONS, Action.READ)
   apercu(@Body() dto: ApercuAudienceDto) {
     return this.service.apercu(dto);
   }
@@ -69,7 +74,7 @@ export class MessageBroadcastController {
   @Post()
   @ApiOperation({ summary: 'Créer une diffusion et figer ses destinataires' })
   @ApiConsumes('multipart/form-data')
-  @RequirePermission(Modules.MARKETING, Action.CREATE)
+  @RequirePermission(Modules.DIFFUSIONS, Action.CREATE)
   @UseInterceptors(FileInterceptor('image'))
   creer(
     @Req() req: Request,
@@ -82,14 +87,14 @@ export class MessageBroadcastController {
 
   @Get(':id')
   @ApiOperation({ summary: "Détail et compteurs d'une diffusion" })
-  @RequirePermission(Modules.MARKETING, Action.READ)
+  @RequirePermission(Modules.DIFFUSIONS, Action.READ)
   detail(@Param('id') id: string) {
     return this.service.detail(id);
   }
 
   @Post(':id/envoyer')
   @ApiOperation({ summary: "Lancer l'envoi" })
-  @RequirePermission(Modules.MARKETING, Action.UPDATE)
+  @RequirePermission(Modules.DIFFUSIONS, Action.UPDATE)
   envoyer(@Param('id') id: string) {
     return this.service.envoyer(id);
   }
@@ -98,7 +103,7 @@ export class MessageBroadcastController {
   @ApiOperation({
     summary: "Reprendre une diffusion interrompue (redémarrage, perte de la file)",
   })
-  @RequirePermission(Modules.MARKETING, Action.UPDATE)
+  @RequirePermission(Modules.DIFFUSIONS, Action.UPDATE)
   reprendre(@Param('id') id: string) {
     return this.service.reprendre(id);
   }

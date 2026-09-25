@@ -9,6 +9,7 @@ import {
   EntityStatus,
   Prisma,
   User,
+  UserRole,
 } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { Action } from 'src/modules/auth/enums/action.enum';
@@ -196,7 +197,11 @@ export class CrmCampaignService {
     return this.stats.comparer(q, this.porteeCampagnes(user));
   }
 
-  /** Un agent ne voit que les campagnes qu'il pilote ou dont il fait partie. */
+  /**
+   * Un agent ne voit que les campagnes qu'il pilote ou dont il fait partie ;
+   * la direction et la consultation les voient toutes. Un compte de point de
+   * vente n'arrive pas jusqu'ici (`CrmSiegeGuard`).
+   */
   private porteeCampagnes(user: User): Prisma.CrmCampaignWhereInput {
     if (this.access.estGestionnaire(user) || !this.access.peut(user, Action.UPDATE)) return {};
     return { OR: [{ lead_agent_id: user.id }, { assigned_agents: { some: { agent_id: user.id } } }] };
@@ -534,17 +539,24 @@ export class CrmCampaignService {
             segment: true,
             callback_at: true,
             assigned_to_id: true,
-            assigned_to: { select: { fullname: true, entity_status: true } },
+            assigned_to: { select: { fullname: true, entity_status: true, role: true } },
             coupons: { where: { used_at: null, expires_at: { gt: maintenant } }, select: { id: true }, take: 1 },
           },
         });
         const gardes: string[] = [];
         const liberes: string[] = [];
         const libelles = new Map<string, string>();
+        const rolesAgents = this.access.rolesAgents();
         for (const x of contacts) {
           const sortie = sortieFinCampagne(x, x.coupons.length > 0, maintenant);
-          // Un agent désactivé ne tiendra pas la promesse : le contact est libéré.
-          if (sortie === 'GARDER_AGENT' && x.assigned_to_id && x.assigned_to?.entity_status === EntityStatus.ACTIVE) {
+          // Un agent désactivé, ou passé en consultation, ne tiendra pas la
+          // promesse : le contact est libéré.
+          if (
+            sortie === 'GARDER_AGENT' &&
+            x.assigned_to_id &&
+            x.assigned_to?.entity_status === EntityStatus.ACTIVE &&
+            rolesAgents.includes(x.assigned_to.role)
+          ) {
             gardes.push(x.id);
             libelles.set(x.id, `Fin de la campagne « ${c.name} » : reste confié à ${x.assigned_to?.fullname ?? 'son agent'}`);
           } else {
@@ -766,7 +778,7 @@ export class CrmCampaignService {
         registered_from: true,
         registered_to: true,
         segments: true,
-        assigned_agents: { select: { agent_id: true, agent: { select: { entity_status: true } } } },
+        assigned_agents: { select: { agent_id: true, agent: { select: { entity_status: true, role: true } } } },
         publics: {
           select: {
             segment: true,
@@ -786,14 +798,21 @@ export class CrmCampaignService {
   }
 
   /**
-   * Équipe qui travaille vraiment : un agent désactivé resté dans l'équipe ne
-   * reçoit rien, et ses contacts sont repris comme ceux de tout agent parti.
+   * Équipe qui travaille vraiment : un agent désactivé, ou dont le rôle ne
+   * traite plus de contacts (plus de droit UPDATE sur le CRM, passé en
+   * consultation), resté dans l'équipe ne reçoit rien, et ses contacts sont
+   * repris comme ceux de tout agent parti.
    */
-  private equipeActive(c: { assigned_agents: { agent_id: string; agent: { entity_status: EntityStatus } }[] }) {
-    const equipe = c.assigned_agents.filter((a) => a.agent.entity_status === EntityStatus.ACTIVE).map((a) => a.agent_id);
+  private equipeActive(c: { assigned_agents: { agent_id: string; agent: { entity_status: EntityStatus; role: UserRole } }[] }) {
+    const roles = this.access.rolesAgents();
+    const equipe = c.assigned_agents
+      .filter((a) => a.agent.entity_status === EntityStatus.ACTIVE && roles.includes(a.agent.role))
+      .map((a) => a.agent_id);
     if (equipe.length === 0) {
       throw new BadRequestException(
-        c.assigned_agents.length === 0 ? "L'équipe de la campagne est vide" : "Aucun agent actif dans l'équipe : complétez-la avant de continuer",
+        c.assigned_agents.length === 0
+          ? "L'équipe de la campagne est vide"
+          : "Aucun agent actif et habilité aux contacts dans l'équipe : complétez-la avant de continuer",
       );
     }
     return equipe;

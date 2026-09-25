@@ -1,4 +1,3 @@
-import { CacheInterceptor } from '@nestjs/cache-manager';
 import {
     Body,
     Controller,
@@ -15,7 +14,7 @@ import {
     UseInterceptors,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Customer } from '@prisma/client';
+import { Customer, User } from '@prisma/client';
 import type { Request } from 'express';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
@@ -31,10 +30,18 @@ import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.g
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
+import { RestaurantQueryScopeGuard } from 'src/common/guards/restaurant-query-scope.guard';
+import { resolveRestaurantScope } from 'src/modules/order/helpers/restaurant-scope.helper';
+import { UserScopedCacheInterceptor } from 'src/modules/order/interceptors/user-scoped-cache.interceptor';
 
+/**
+ * ⚠️ Cache CLOISONNÉ par utilisateur, et non le `CacheInterceptor` par URL.
+ * Avec une clé réduite à l'URL, la liste « tous restaurants » d'un admin était
+ * resservie à un manager, et « mes avis » d'un client à un autre client.
+ */
 @ApiTags('Comments')
 @Controller('comments')
-@UseInterceptors(CacheInterceptor)
+@UseInterceptors(UserScopedCacheInterceptor)
 export class CommentController {
     constructor(private readonly commentService: CommentService) { }
 
@@ -157,14 +164,20 @@ export class CommentController {
     // ⚠️ Route sans aucune garde : n'importe qui lisait les avis d'une commande
     // arbitraire, avec l'identité du client. Réservée au personnel, les avis
     // publics restant servis par la route « par plat ».
+    // Personnel de restaurant : 403 pour une commande d'un autre restaurant.
     @UseGuards(JwtAuthGuard, UserPermissionsGuard)
     @RequirePermission(Modules.COMMENTAIRES, Action.READ)
     @Get('order/:orderId')
     async getOrderComments(
+        @Req() req: Request,
         @Param('orderId') orderId: string,
         @Query() query: GetCommentsQueryDto,
     ) {
-        return this.commentService.getOrderComments(orderId, query);
+        return this.commentService.getOrderComments(
+            orderId,
+            query,
+            resolveRestaurantScope(req.user as User),
+        );
     }
 
 
@@ -197,8 +210,10 @@ export class CommentController {
     }
 
     
+    // Personnel de restaurant : seulement les avis laissés sur les commandes de
+    // SON restaurant (restaurant forcé depuis le jeton, jamais depuis la requête).
     @Get('customer/:customerId')
-    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard, RestaurantQueryScopeGuard)
     @RequirePermission(Modules.COMMENTAIRES, Action.READ)
     @ApiOperation({ summary: 'Récupérer les commentaires d\'un client (admin)' })
     @ApiResponse({
@@ -209,12 +224,15 @@ export class CommentController {
         @Param('customerId') customerId: string,
         @Query() query: GetCommentsQueryDto,
     ) {
-        return this.commentService.getCustomerComments(customerId, query);
+        return this.commentService.getCustomerComments(customerId, query, query.restaurantId);
     }
 
 
+    // Personnel de restaurant (manager, caissier…) : `restaurantId` est forcé
+    // au restaurant du jeton par RestaurantQueryScopeGuard, même omis ou
+    // falsifié. Le backoffice garde le filtre libre.
     @Get()
-    @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+    @UseGuards(JwtAuthGuard, UserPermissionsGuard, RestaurantQueryScopeGuard)
     @RequirePermission(Modules.COMMENTAIRES, Action.READ)
     @ApiOperation({ summary: 'Récupérer tous les commentaires (admin)' })
     @ApiResponse({

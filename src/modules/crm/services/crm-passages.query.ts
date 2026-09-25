@@ -4,6 +4,7 @@ import {
   PUBLICS_CAPTES,
   VENTE_VALIDE_SQL,
   bornesPeriode,
+  ficheDuRestaurantSql,
   publicsDe,
 } from '../crm.rules';
 
@@ -35,7 +36,16 @@ export interface FiltresAnalyse {
   campaign_id?: string;
   segment?: string;
   segments?: string[];
+  /**
+   * Restaurant d'un compte de point de vente : seules les fiches de ce
+   * restaurant comptent. Posé par le contrôleur à partir du compte connecté
+   * (`CrmAccessService.filtresAnalyse`), jamais lu dans la requête HTTP.
+   */
+  perimetre_restaurant?: string;
 }
+
+/** Périmètre restaurant d'un tableau de bord (voir `FiltresAnalyse`). */
+export type Perimetre = Pick<FiltresAnalyse, 'perimetre_restaurant'>;
 
 export const VENTE_VALIDE = Prisma.raw(VENTE_VALIDE_SQL);
 export const COUPON_UTILISE = Prisma.raw(COUPON_UTILISE_SQL);
@@ -78,6 +88,14 @@ export function filtreMembre(alias: string, q: Pick<FiltresAnalyse, 'campaign_id
     : Prisma.empty;
 }
 
+/**
+ * `AND colonne IN (fiches du restaurant)` pour un compte de point de vente,
+ * rien sinon. `colonne` porte l'id d'une fiche (voir `ficheDuRestaurantSql`).
+ */
+export function filtreRestaurant(colonne: string, q: Perimetre): Prisma.Sql {
+  return q.perimetre_restaurant ? Prisma.sql`AND ${ficheDuRestaurantSql(colonne, q.perimetre_restaurant)}` : Prisma.empty;
+}
+
 /** Groupe « Glovo + Yango » d'un public, en SQL. */
 export function groupeDe(colonne: string): Prisma.Sql {
   return Prisma.sql`CASE WHEN ${Prisma.raw(colonne)} IN (${listePublics(PUBLICS_CAPTES)}) THEN 'CAPTES' END`;
@@ -114,8 +132,9 @@ export function parPublic(colonnes: Prisma.Sql, source: Prisma.Sql, publics: Crm
 
 /**
  * Les passages entrés sur la période et ce qui leur est arrivé, en CTE :
- *  - `pass` : un passage par ligne (fiches supprimées exclues), avec `entree`,
- *    le compte de la fiche et `already_customer` ;
+ *  - `pass` : un passage par ligne (fiches supprimées exclues, et celles des
+ *    autres restaurants pour un compte de point de vente), avec `entree`, le
+ *    compte de la fiche et `already_customer` ;
  *  - `ap` : ses appels (nombre, premier appel joint, issue INTERESSE, première
  *    issue définitive, premier appel NON repris et son issue) ;
  *  - `cp` : ses coupons (premier envoi, utilisé sur une commande qui compte) ;
@@ -136,7 +155,7 @@ export function passages(q: FiltresAnalyse, publics: CrmSegment[] = publicsDe(q)
       FROM "CrmCycle" y JOIN "CrmContact" x ON x.id = y.contact_id
       WHERE x.entity_status <> 'DELETED'
         ${plage('greatest(y.segment_since, y.crm_entered_at)', q)}
-        ${filtreSegments('y.segment', publics)} ${membre}
+        ${filtreSegments('y.segment', publics)} ${membre} ${filtreRestaurant('x.id', q)}
     ),
     ap AS (
       SELECT k.contact_id, k.cycle,

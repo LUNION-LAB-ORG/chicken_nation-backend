@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsDateString, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import { IsDateString, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export enum ClickSortField {
     DATE = 'date',
@@ -19,11 +19,15 @@ export class RecordClickQueryDto {
     @Min(1)
     page?: number = 1;
 
-    @ApiPropertyOptional({ description: 'Nombre d\'éléments par page', default: 25 })
+    // Plafonné à 100 : sans maximum, un seul appel en lecture (?limit=1000000)
+    // renvoyait tout le journal des clics (IP, agent utilisateur, referer),
+    // ce qui revenait à un export.
+    @ApiPropertyOptional({ description: 'Nombre d\'éléments par page (100 au plus)', default: 25, maximum: 100 })
     @IsOptional()
     @Type(() => Number)
     @IsInt()
     @Min(1)
+    @Max(100)
     limit?: number = 25;
 
     // --- 2. Recherche Textuelle Globale ---
