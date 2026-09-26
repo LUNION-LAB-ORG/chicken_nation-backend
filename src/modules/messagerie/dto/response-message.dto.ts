@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsOptional } from 'class-validator';
+import type { CitationMessage, MentionMessage } from '../utils/citation';
 
 export class ResponseMessageDto {
   @ApiProperty()
@@ -70,10 +71,37 @@ export class ResponseMessageDto {
     image?: string | null;
   } | null;
 
+  /**
+   * Pièces jointes et contexte. `null` pour un message supprimé. Une alerte
+   * porte `type: 'ALERTE'` et ses propres clés (code, restaurant, référence).
+   */
   @ApiProperty({ required: false })
   @IsOptional()
   meta?: {
     imageUrl?: string | null;
     orderId?: string | null;
-  };
+    audioUrl?: string | null;
+    audioDurationMs?: number | null;
+    type?: string;
+    [cle: string]: unknown;
+  } | null;
+
+  /**
+   * Message CITÉ, quand celui-ci est une réponse. Extrait calculé à la lecture
+   * (160 caractères au plus), masqué si l'original a été supprimé. Pour le
+   * client, un agent cité s'appelle « Chicken Nation ». `null` : pas de
+   * citation, ou message lui-même supprimé. Champ absent = à traiter comme
+   * `null` (charges plus anciennes, alertes).
+   */
+  @ApiProperty({ required: false, type: Object, nullable: true })
+  @IsOptional()
+  replyTo?: CitationMessage | null;
+
+  /**
+   * Collègues MENTIONNÉS, avec le libellé figé à l'envoi (« Awa Koné », sans
+   * l'arobase). Toujours vide pour le client et pour un message supprimé.
+   */
+  @ApiProperty({ required: false, type: [Object] })
+  @IsOptional()
+  mentions?: MentionMessage[];
 }

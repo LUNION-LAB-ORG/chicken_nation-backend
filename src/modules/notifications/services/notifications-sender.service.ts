@@ -1,5 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { NotificationType, PaymentMethod, UserRole } from '@prisma/client';
+import {
+    EntityStatus,
+    NotificationTarget,
+    NotificationType,
+    PaymentMethod,
+    UserRole,
+} from '@prisma/client';
 import { NotificationsTemplate } from '../templates/notifications.template';
 import { NotificationsService } from './notifications.service';
 import { NotificationsWebSocketService } from '../websockets/notifications-websocket.service';
@@ -9,6 +15,15 @@ import { getOrderNotificationContent } from 'src/modules/order/constantes/order-
 import { notificationIcons } from '../constantes/notifications.constante';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { EmailService } from './email.service';
+import { CORPS_MESSAGE_SUPPRIME } from 'src/common/constantes/message-supprime';
+import { couperAuMot } from 'src/modules/messagerie/utils/citation';
+
+/** Longueur maximale de l'extrait montré dans une notification de mention. */
+const LONGUEUR_EXTRAIT_MENTION = 120;
+
+/** Genres de notification ciblée de la messagerie interne (`data.kind`). */
+export type MotifNotificationMessage = 'mention' | 'reponse';
+const MOTIFS_NOTIFICATION_MESSAGE: MotifNotificationMessage[] = ['mention', 'reponse'];
 
 @Injectable()
 export class NotificationsSenderService {
@@ -746,6 +761,146 @@ export class NotificationsSenderService {
                 })
                 .catch((e) => this.logger.warn(`Email « nouveau message » échoué: ${e?.message}`));
         }
+    }
+
+    /**
+     * Notification CIBLÉE d'un collègue, dans une conversation INTERNE :
+     *  - `mention` : il a été mentionné (« @Nom ») ;
+     *  - `reponse` : on a répondu à l'un de ses messages.
+     *
+     * La cloche et le socket `notification:new` partent vers `user_<id>`, UN
+     * PAR UN, jamais vers la salle d'un restaurant (qui contient les livreurs).
+     * Pas de courriel ni de notification poussée : c'est un échange entre
+     * collègues, pas une alerte de service.
+     *
+     * Les destinataires sont relus ici : compte ACTIF, et préférence
+     * `in_app_notifications_enabled` respectée. Le tri métier (membre de la
+     * conversation, accès à la messagerie) est fait par l'appelant.
+     *
+     * `data` (persisté) porte `messageId` : il sert au lien profond jusqu'au
+     * message, au masquage de l'aperçu si le message est retiré, et au marquage
+     * « lu » quand la conversation est ouverte.
+     */
+    async notifyStaffMention(params: {
+        motif: MotifNotificationMessage;
+        userIds: string[];
+        auteurNom: string;
+        conversationId: string;
+        messageId: string;
+        restaurantId?: string | null;
+        libelleConversation: string;
+        extrait: string;
+    }): Promise<number> {
+        const ids = [...new Set((params.userIds ?? []).filter((id) => !!id))];
+        if (ids.length === 0) return 0;
+
+        const users = await this.prisma.user.findMany({
+            where: { id: { in: ids }, entity_status: EntityStatus.ACTIVE },
+            include: { restaurant: { select: { name: true } } },
+        });
+        const destinataires = users
+            .map((u) => this.notificationRecipientService.mapUserToNotificationRecipient(u))
+            .filter((r) => r.in_app_notifications_enabled !== false);
+        if (destinataires.length === 0) return 0;
+
+        const { conversationId, messageId } = params;
+        const meta = {
+            kind: params.motif,
+            conversationId,
+            messageId,
+            restaurantId: params.restaurantId ?? undefined,
+            deep_link: `/gestion?module=inbox&conversation=${conversationId}&message=${messageId}`,
+        };
+        // Coupé au mot et jamais au milieu d'un emoji : une moitié d'emoji
+        // rendrait la chaîne invalide pour Prisma et la notification serait
+        // perdue sans bruit.
+        const texte = (params.extrait || '').replace(/\s+/g, ' ').trim();
+        const extrait = couperAuMot(texte, LONGUEUR_EXTRAIT_MENTION) || 'Nouveau message';
+
+        const notifications = await this.notificationsService.sendNotificationToMultiple(
+            params.motif === 'mention'
+                ? NotificationsTemplate.MENTION_STAFF
+                : NotificationsTemplate.REPONSE_STAFF,
+            {
+                actor: destinataires[0],
+                recipients: destinataires,
+                data: {
+                    auteurNom: params.auteurNom || 'Un collègue',
+                    libelleConversation: params.libelleConversation || 'Discussion privée',
+                    extrait,
+                },
+                meta,
+            },
+            NotificationType.SYSTEM,
+        );
+        // `group` à faux : chaque notification part vers la salle personnelle
+        // de SON destinataire, et nulle part ailleurs. Le destinataire est
+        // retrouvé par l'identifiant que porte la notification, pas par sa
+        // place dans le tableau : un ordre qui changerait un jour ne doit
+        // jamais envoyer à B la notification écrite pour A.
+        const parId = new Map(destinataires.map((d) => [d.id, d]));
+        let emises = 0;
+        notifications.forEach((notif) => {
+            const destinataire = notif?.user_id ? parId.get(notif.user_id) : undefined;
+            if (!destinataire) return;
+            this.notificationsWebSocketService.emitNotification(notif, destinataire);
+            emises += 1;
+        });
+        return emises;
+    }
+
+    /**
+     * Un message a été RETIRÉ : l'aperçu des notifications qui le citaient
+     * (mention, réponse) est remplacé, sans quoi la cloche continuerait de
+     * montrer le texte supprimé. Borné aux destinataires connus, pour
+     * s'appuyer sur l'index (user_id, target).
+     */
+    async masquerApercuNotificationsMessage(params: {
+        messageId: string;
+        userIds: string[];
+    }): Promise<number> {
+        const ids = [...new Set((params.userIds ?? []).filter((id) => !!id))];
+        if (ids.length === 0) return 0;
+        const { count } = await this.prisma.notification.updateMany({
+            where: {
+                user_id: { in: ids },
+                target: NotificationTarget.USER,
+                data: { path: ['messageId'], equals: params.messageId },
+            },
+            data: { message: CORPS_MESSAGE_SUPPRIME, updated_at: new Date() },
+        });
+        return count;
+    }
+
+    /**
+     * Ouvrir une conversation vaut lecture de SES notifications de mention et
+     * de réponse dans cette conversation : la cloche ne reste pas allumée pour
+     * un message déjà sous les yeux. Les autres notifications ne bougent pas.
+     */
+    async marquerNotificationsConversationLues(params: {
+        userId: string;
+        conversationId: string;
+    }): Promise<number> {
+        const { count } = await this.prisma.notification.updateMany({
+            where: {
+                user_id: params.userId,
+                target: NotificationTarget.USER,
+                is_read: false,
+                AND: [
+                    { data: { path: ['conversationId'], equals: params.conversationId } },
+                    {
+                        OR: MOTIFS_NOTIFICATION_MESSAGE.map((kind) => ({
+                            data: { path: ['kind'], equals: kind },
+                        })),
+                    },
+                ],
+            },
+            data: { is_read: true, updated_at: new Date() },
+        });
+        if (count > 0) {
+            this.notificationsWebSocketService.emitBulkNotificationRead(params.userId, 'user', count);
+        }
+        return count;
     }
 
     private backofficeUrl(): string {

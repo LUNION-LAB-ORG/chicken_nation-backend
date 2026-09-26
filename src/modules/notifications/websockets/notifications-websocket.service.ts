@@ -54,7 +54,12 @@ export class NotificationsWebSocketService {
     emitBulkNotificationRead(userId: string, userType: 'customer' | 'user', count: number) {
         this.appGateway.emitToUser(userId, userType, 'notification:bulk_read', {
             count,
-            message: `${count} notifications marquées comme lues`
+            // Accord au singulier : la lecture d'une conversation n'en blanchit
+            // souvent qu'une seule.
+            message:
+                count > 1
+                    ? `${count} notifications marquées comme lues`
+                    : `${count} notification marquée comme lue`,
         });
     }
 }

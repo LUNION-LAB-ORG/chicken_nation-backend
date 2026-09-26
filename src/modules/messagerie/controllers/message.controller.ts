@@ -4,7 +4,9 @@ import {
   Delete,
   Get,
   Logger,
+  NotFoundException,
   Param,
+  ParseUUIDPipe,
   Post,
   Put,
   Query,
@@ -31,6 +33,7 @@ import {
 } from '../utils/pieces-jointes';
 import { CreateMessageDto } from '../dto/createMessageDto';
 import { QueryMessagesDto } from '../dto/query-messages.dto';
+import { QueryPositionDto } from '../dto/query-position.dto';
 import { MessageService } from '../services/message.service';
 
 @Controller('conversations/:conversationId/messages')
@@ -59,6 +62,45 @@ export class MessageController {
     @Query() filter: QueryMessagesDto = {},
   ) {
     return await this.messageService.getMessages(req, conversationId, filter);
+  }
+
+  /**
+   * PAGE où se trouve un message dans la liste (même ordre, même taille de
+   * page que `GET /`). Sert à rejoindre un message cité qui n'est pas encore
+   * chargé, et à suivre un lien de notification jusqu'au message.
+   *
+   * Réponse : `{ messageId, page, limit }`. Un identifiant mal formé, un
+   * message d'une autre conversation ou une conversation inaccessible
+   * répondent tous « introuvable ».
+   */
+  @Get(':messageId/position')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.MESSAGES, Action.READ)
+  @ApiOperation({ summary: "Page d'un message dans la conversation (personnel)" })
+  async getPositionMessage(
+    @Req() req: Request,
+    @Param(
+      'conversationId',
+      new ParseUUIDPipe({
+        exceptionFactory: () => new NotFoundException('Conversation introuvable'),
+      }),
+    )
+    conversationId: string,
+    @Param(
+      'messageId',
+      new ParseUUIDPipe({
+        exceptionFactory: () => new NotFoundException('Message introuvable'),
+      }),
+    )
+    messageId: string,
+    @Query() query: QueryPositionDto,
+  ) {
+    return await this.messageService.getPositionMessage(
+      req,
+      conversationId,
+      messageId,
+      query.limit ?? 100,
+    );
   }
 
   // --- Staff (admin seulement) : création de messages ---

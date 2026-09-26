@@ -2,6 +2,7 @@ import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { agregerReactions } from 'src/common/constantes/emojis-reaction';
 import { Injectable, Logger } from '@nestjs/common';
 import { ResponseMessageDto } from '../dto/response-message.dto';
+import { versionClient } from '../utils/citation';
 import { Prisma } from '@prisma/client';
 
 type ConversationGetPayload = Prisma.ConversationGetPayload<{
@@ -26,13 +27,16 @@ export class MessageWebSocketService {
     const authorUserId = message.authorUser?.id;
     const authorCustomerId = message.authorCustomer?.id;
 
-    // 1. Envoyer au customer de la conversation (s'il n'est pas l'auteur)
+    // 1. Envoyer au customer de la conversation (s'il n'est pas l'auteur).
+    // ⚠️ SA version : l'agent cité devient « Chicken Nation » et les mentions,
+    // affaire interne, disparaissent. La charge reçue est calculée pour le
+    // personnel.
     if (conversation.customerId && conversation.customerId !== authorCustomerId) {
       this.appGateway.emitToUser(
         conversation.customerId,
         'customer',
         'new:message',
-        message,
+        versionClient(message),
       );
     }
 
@@ -140,7 +144,11 @@ export class MessageWebSocketService {
     const charge = { conversationId: conversation.id, message };
 
     if (conversation.customerId) {
-      this.appGateway.emitToUser(conversation.customerId, 'customer', 'message:supprime', charge);
+      // Le client reçoit sa version, comme à l'envoi.
+      this.appGateway.emitToUser(conversation.customerId, 'customer', 'message:supprime', {
+        conversationId: conversation.id,
+        message: versionClient(message),
+      });
     }
 
     const vus = new Set<string>();

@@ -291,6 +291,10 @@ export class AlertesService {
           authorCustomer: null,
           createdAt: message.createdAt,
           updatedAt: message.createdAt,
+          // Même forme que les autres messages : une alerte ne cite rien et
+          // ne mentionne personne.
+          replyTo: null,
+          mentions: [],
         };
 
         groupe.users.forEach((membre) => {

@@ -39,4 +39,22 @@ export class NotificationsTemplate {
         iconBgColor: () => notificationIcons.progress.color,
         showChevron: true,
     };
+
+    // MESSAGERIE INTERNE - Un collègue vous a mentionné (« @Nom ») dans un message
+    static MENTION_STAFF: NotificationTemplate<{ auteurNom: string; libelleConversation: string; extrait: string; }> = {
+        title: (ctx) => `${ctx.data.auteurNom} vous a mentionné`,
+        message: (ctx) => `${ctx.data.libelleConversation} : ${ctx.data.extrait}`,
+        icon: () => notificationIcons.progress.url,
+        iconBgColor: () => notificationIcons.progress.color,
+        showChevron: true,
+    };
+
+    // MESSAGERIE INTERNE - Un collègue a répondu à l'un de vos messages
+    static REPONSE_STAFF: NotificationTemplate<{ auteurNom: string; libelleConversation: string; extrait: string; }> = {
+        title: (ctx) => `${ctx.data.auteurNom} a répondu à votre message`,
+        message: (ctx) => `${ctx.data.libelleConversation} : ${ctx.data.extrait}`,
+        icon: () => notificationIcons.progress.url,
+        iconBgColor: () => notificationIcons.progress.color,
+        showChevron: true,
+    };
 }

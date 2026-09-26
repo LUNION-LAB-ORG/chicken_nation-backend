@@ -14,6 +14,14 @@ import { CreateMessageDto } from '../dto/createMessageDto';
 import { QueryMessagesDto } from '../dto/query-messages.dto';
 import { ResponseMessageDto } from '../dto/response-message.dto';
 import { getAuthType } from '../utils/getTypeUser';
+import {
+  resumerCitation,
+  SELECT_CITATION,
+  SELECT_MENTIONS,
+  versionClient,
+  type Lecteur,
+} from '../utils/citation';
+import { estMentionnable, resoudreMentions } from '../utils/mentions';
 import { CORPS_MESSAGE_SUPPRIME } from 'src/common/constantes/message-supprime';
 import {
   agregerReactions,
@@ -32,6 +40,19 @@ import { S3Service } from '../../../s3/s3.service';
 import { ExpoPushService } from '../../../expo-push/expo-push.service';
 import { NotificationsSenderService } from '../../notifications/services/notifications-sender.service';
 import { AuditService } from 'src/modules/audit/audit.service';
+
+/**
+ * Citation et mentions : à joindre à TOUTE lecture qui passe par
+ * `mapMessagesField`. Deux requêtes groupées par page (clé primaire et index
+ * unique), pas une par message.
+ */
+const INCLURE_REPONSE_ET_MENTIONS = {
+  replyTo: SELECT_CITATION,
+  mentions: SELECT_MENTIONS,
+} as const;
+
+/** Nom montré dans la notification d'une conversation interne sans sujet. */
+const LIBELLE_DISCUSSION_PRIVEE = 'Discussion privée';
 
 @Injectable()
 export class MessageService {
@@ -117,14 +138,19 @@ export class MessageService {
         where: whereClause,
         skip,
         take: limit,
-        orderBy: {
-          createdAt: 'desc',
-        },
+        /**
+         * Départage par identifiant : deux messages de la même milliseconde
+         * (alertes postées en rafale) gardent toujours le même ordre, sans quoi
+         * la pagination par décalage pourrait sauter l'un et doubler l'autre.
+         * La route de position compte avec exactement le même ordre.
+         */
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         include: {
           authorUser: true, // Include user details if needed
           authorCustomer: true, // Include customer details if needed
           // Réactions : agrégées au mapping, jamais renvoyées nominativement.
           reactions: { select: { emoji: true, userId: true, customerId: true } },
+          ...INCLURE_REPONSE_ET_MENTIONS,
           conversation: {
             select: {
               customerId: true,
@@ -152,8 +178,10 @@ export class MessageService {
     // `mine` dépend du lecteur : on le lui passe, sinon toutes les pastilles
     // paraîtraient posées par quelqu'un d'autre.
     const monId = (req.user as User | Customer | undefined)?.id ?? null;
+    // Le client ne voit ni le nom de l'agent cité, ni les mentions internes.
+    const lecteur: Lecteur = req.user ? getAuthType(req.user) : 'user';
     const mappedMessages = messages.map((message) =>
-      this.mapMessagesField(message, monId),
+      this.mapMessagesField(message, monId, lecteur),
     );
 
     if (this.isDev) {
@@ -252,14 +280,55 @@ export class MessageService {
       throw new HttpException('Conversation not found', HttpStatus.NOT_FOUND);
     }
 
+    const authorId =
+      authType === 'user' ? (auth as User).id : (auth as Customer).id;
+
+    /**
+     * RÉPONSE À UN MESSAGE PRÉCIS.
+     *
+     * Le message cité doit appartenir à CETTE conversation : sinon, connaître
+     * un seul identifiant suffirait à faire afficher l'extrait d'une
+     * conversation qu'on ne peut pas lire. On répond « introuvable », comme
+     * pour les réactions, sans rien confirmer à qui cherche. On ne répond pas
+     * à un message retiré : son contenu n'est plus servi.
+     */
+    const replyToId = createMessageDto.replyToId ?? null;
+    let auteurCiteId: string | null = null;
+    if (replyToId) {
+      const cite = await this.prismaService.message.findFirst({
+        where: { id: replyToId, conversationId: conversation.id },
+        select: { id: true, deletedAt: true, authorUserId: true },
+      });
+      if (!cite) {
+        throw new NotFoundException('Message cité introuvable');
+      }
+      if (cite.deletedAt) {
+        throw new BadRequestException(
+          'Impossible de répondre à un message supprimé',
+        );
+      }
+      auteurCiteId = cite.authorUserId ?? null;
+    }
+
+    /**
+     * MENTIONS : personnel seulement, conversations internes seulement, vers
+     * des membres actifs ayant accès à la messagerie, dont le « @Nom » figure
+     * dans le texte. Les autres identifiants sont ignorés sans faire échouer
+     * l'envoi ; la réponse dit ce qui a réellement été retenu.
+     */
+    const mentionsRetenues = await resoudreMentions(this.prismaService, {
+      conversation,
+      authType,
+      auteurId: authorId,
+      body,
+      ids: createMessageDto.mentionUserIds,
+    });
+
     // 🛡️ Garde anti-doublon (filet de sécurité serveur, indépendant de la version app)
     // Si un message TEXTE identique du même auteur a déjà été créé dans la même
     // conversation il y a moins de DUPLICATE_WINDOW_MS, on ne recrée rien : on renvoie
     // le message existant SANS re-broadcaster ni re-notifier. On ne dédoublonne que le
     // texte pur (pas d'image, pas de commande liée) pour ne jamais perdre un envoi légitime.
-    const authorId =
-      authType === 'user' ? (auth as User).id : (auth as Customer).id;
-
     // ⚠️ L'AUDIO désactive aussi la déduplication, au même titre que l'image.
     // Il avait été oublié à l'ouverture de la vanne des notes vocales : deux
     // notes vocales portant le même texte, envoyées à moins de dix secondes
@@ -272,6 +341,13 @@ export class MessageService {
           ...(authType === 'user'
             ? { authorUserId: authorId }
             : { authorCustomerId: authorId }),
+          /**
+           * ⚠️ Même texte ne veut pas dire même message quand il RÉPOND à
+           * autre chose : deux « OK » envoyés en réponse à deux messages
+           * différents sont deux messages. Sans ce critère, le second était
+           * avalé et le premier renvoyé à sa place.
+           */
+          replyToId,
           createdAt: {
             gte: new Date(Date.now() - MessageService.DUPLICATE_WINDOW_MS),
           },
@@ -283,6 +359,7 @@ export class MessageService {
           conversation: {
             select: { id: true, customerId: true, restaurantId: true },
           },
+          ...INCLURE_REPONSE_ET_MENTIONS,
         },
       });
 
@@ -290,7 +367,7 @@ export class MessageService {
         this.logger.warn(
           `Doublon ignoré (conversation ${conversation.id}, auteur ${authorId}): message texte identique créé il y a moins de ${MessageService.DUPLICATE_WINDOW_MS}ms`,
         );
-        return this.mapMessagesField(recentDuplicate);
+        return this.mapMessagesField(recentDuplicate, authorId, authType);
       }
     }
 
@@ -370,7 +447,23 @@ export class MessageService {
           orderId: orderId,
           audioUrl: finalAudioUrl || null,
           audioDurationMs: audioDurationMs ?? null,
-        }
+        },
+        replyToId,
+        /**
+         * Mentions écrites DANS la même requête que le message : Prisma les
+         * enchaîne en une transaction. Pas de message sans ses mentions, ni de
+         * mention orpheline si l'écriture échoue.
+         */
+        ...(mentionsRetenues.length > 0
+          ? {
+              mentions: {
+                create: mentionsRetenues.map((m) => ({
+                  userId: m.userId,
+                  libelle: m.label,
+                })),
+              },
+            }
+          : {}),
       },
       include: {
         authorUser: true,
@@ -385,6 +478,7 @@ export class MessageService {
             },
           },
         },
+        ...INCLURE_REPONSE_ET_MENTIONS,
       },
     });
 
@@ -482,8 +576,87 @@ export class MessageService {
         );
     }
 
-    // Map the created message to ResponseMessageDto format
-    return mappedMessage;
+    /**
+     * Entre COLLÈGUES (conversation interne) : la personne mentionnée, et
+     * l'auteur du message auquel on répond, sont prévenus nommément (cloche et
+     * socket personnel). Non bloquant : une notification ratée ne doit jamais
+     * faire échouer un envoi déjà écrit et diffusé.
+     */
+    if (authType === 'user' && !customerId) {
+      this.notifierMentionsEtReponse({
+        conversationId: message.conversationId,
+        messageId: message.id,
+        restaurantId,
+        libelleConversation:
+          conversation.subject?.trim() || LIBELLE_DISCUSSION_PRIVEE,
+        auteurId: authorId,
+        auteurNom: (auth as User).fullname ?? '',
+        extrait: mappedMessage.body ?? '',
+        mentionnes: mentionsRetenues.map((m) => m.userId),
+        auteurCiteId,
+      }).catch((err) =>
+        this.logger.warn(
+          `Notification de mention ou de réponse échouée : ${err?.message}`,
+        ),
+      );
+    }
+
+    // Le client qui écrit reçoit SA version : ni nom d'agent cité, ni mentions.
+    return authType === 'customer' ? versionClient(mappedMessage) : mappedMessage;
+  }
+
+  /**
+   * Prévient les personnes MENTIONNÉES, puis l'auteur du message CITÉ s'il
+   * n'est pas déjà du nombre (réponse implicite). L'auteur du message cité
+   * n'est prévenu que s'il est employé, différent de celui qui répond, encore
+   * membre de la conversation et éligible (compte actif, accès à la
+   * messagerie). Une réponse à une alerte ne prévient personne : elle n'a pas
+   * d'auteur.
+   */
+  private async notifierMentionsEtReponse(p: {
+    conversationId: string;
+    messageId: string;
+    restaurantId: string | null;
+    libelleConversation: string;
+    auteurId: string;
+    auteurNom: string;
+    extrait: string;
+    mentionnes: string[];
+    auteurCiteId: string | null;
+  }): Promise<void> {
+    const commun = {
+      auteurNom: p.auteurNom,
+      conversationId: p.conversationId,
+      messageId: p.messageId,
+      restaurantId: p.restaurantId,
+      libelleConversation: p.libelleConversation,
+      extrait: p.extrait,
+    };
+
+    if (p.mentionnes.length > 0) {
+      await this.notificationsSenderService.notifyStaffMention({
+        ...commun,
+        motif: 'mention',
+        userIds: p.mentionnes,
+      });
+    }
+
+    const cite = p.auteurCiteId;
+    if (!cite || cite === p.auteurId || p.mentionnes.includes(cite)) return;
+
+    const participation = await this.prismaService.conversationUser.findUnique({
+      where: {
+        conversationId_userId: { conversationId: p.conversationId, userId: cite },
+      },
+      select: { user: { select: { role: true, entity_status: true } } },
+    });
+    if (!participation || !estMentionnable(participation.user)) return;
+
+    await this.notificationsSenderService.notifyStaffMention({
+      ...commun,
+      motif: 'reponse',
+      userIds: [cite],
+    });
   }
 
   async markMessagesAsRead(conversationId: string, type: 'USER' | 'CUSTOMER', authorId: string): Promise<boolean> {
@@ -602,6 +775,20 @@ export class MessageService {
     }
 
     /**
+     * Ouvrir une conversation INTERNE vaut lecture de ses notifications de
+     * mention et de réponse pour ce lecteur. Non bloquant.
+     */
+    if (type === 'USER' && !conversation.customerId) {
+      void this.notificationsSenderService
+        .marquerNotificationsConversationLues({ userId: authorId, conversationId })
+        .catch((e) =>
+          this.logger.warn(
+            `Notifications de mention non marquées lues (${conversationId}) : ${e?.message}`,
+          ),
+        );
+    }
+
+    /**
      * ⚠️ On n'émet QUE si quelque chose a réellement changé.
      *
      * Le téléphone recharge la conversation à chaque retour au premier plan.
@@ -666,8 +853,15 @@ export class MessageService {
   /**
    * `monId` : qui lit. Indispensable pour `mine` sur les réactions, qui dépend
    * du lecteur et non du message. Absent, tout est simplement à `false`.
+   *
+   * `lecteur` : employé ou client. Le client ne voit ni le nom de l'agent
+   * cité (« Chicken Nation » à la place), ni les mentions, affaire interne.
    */
-  private mapMessagesField(message: any, monId?: string | null): ResponseMessageDto {
+  private mapMessagesField(
+    message: any,
+    monId?: string | null,
+    lecteur: Lecteur = 'user',
+  ): ResponseMessageDto {
     if (this.isDev) {
       this.logger.debug(`Mapping du message: ${JSON.stringify(message)}`);
     }
@@ -725,6 +919,74 @@ export class MessageService {
           image: message.authorCustomer.image || null,
         }
         : null,
+      /**
+       * Message CITÉ, résumé à la lecture. Retiré avec le reste quand le
+       * message lui-même est supprimé : une citation au-dessus de « Ce message
+       * a été supprimé » n'aurait plus de sens.
+       */
+      replyTo: supprime ? null : resumerCitation(message.replyTo ?? null, lecteur),
+      mentions:
+        supprime || lecteur === 'customer'
+          ? []
+          : (message.mentions ?? []).map((m: { userId: string; libelle: string }) => ({
+            userId: m.userId,
+            label: m.libelle,
+          })),
+    };
+  }
+
+  // ───────────────────────── Position ─────────────────────────
+
+  /**
+   * PAGE où se trouve un message, pour aller jusqu'à un message cité qui n'est
+   * pas encore chargé, ou pour suivre un lien de notification.
+   *
+   * Même ordre que la liste (`createdAt` décroissant, puis `id` décroissant) :
+   * la page vaut le nombre de messages PLUS RÉCENTS que la cible, divisé par
+   * la taille de page, plus un. Un seul comptage, sur l'index
+   * (conversationId, createdAt).
+   *
+   * Accès : celui de la conversation (`getConversationById`), puis le message
+   * doit lui appartenir ; sinon « introuvable », sans rien confirmer.
+   */
+  async getPositionMessage(
+    req: Request,
+    conversationId: string,
+    messageId: string,
+    limit = 100,
+  ): Promise<{ messageId: string; page: number; limit: number }> {
+    const taille = Number.isInteger(limit) && limit > 0 ? limit : 100;
+
+    const conversation = await this.conversationsService.getConversationById(
+      req,
+      conversationId,
+    );
+    if (!conversation) {
+      throw new NotFoundException('Conversation introuvable');
+    }
+
+    const cible = await this.prismaService.message.findFirst({
+      where: { id: messageId, conversationId: conversation.id },
+      select: { id: true, createdAt: true },
+    });
+    if (!cible) {
+      throw new NotFoundException('Message introuvable');
+    }
+
+    const plusRecents = await this.prismaService.message.count({
+      where: {
+        conversationId: conversation.id,
+        OR: [
+          { createdAt: { gt: cible.createdAt } },
+          { createdAt: cible.createdAt, id: { gt: cible.id } },
+        ],
+      },
+    });
+
+    return {
+      messageId: cible.id,
+      page: Math.floor(plusRecents / taille) + 1,
+      limit: taille,
     };
   }
 
@@ -769,6 +1031,9 @@ export class MessageService {
             users: { select: { userId: true } },
           },
         },
+        // Qui a pu être prévenu de ce message : pour masquer l'aperçu.
+        mentions: { select: { userId: true } },
+        replyTo: { select: { authorUserId: true } },
       },
     });
     if (!message) {
@@ -835,6 +1100,25 @@ export class MessageService {
         summary: `Message retiré${message.authorUserId !== moi.id ? " (écrit par un collègue)" : ''}`,
         metadata: { conversationId, messageId, auteur: message.authorUserId },
       });
+
+      /**
+       * Les notifications de mention ou de réponse montraient un extrait de ce
+       * message : on le remplace, sans quoi la cloche continuerait d'afficher
+       * ce qui vient d'être retiré. Non bloquant.
+       */
+      const prevenus = [
+        ...message.mentions.map((m) => m.userId),
+        ...(message.replyTo?.authorUserId ? [message.replyTo.authorUserId] : []),
+      ];
+      if (prevenus.length > 0) {
+        void this.notificationsSenderService
+          .masquerApercuNotificationsMessage({ messageId, userIds: prevenus })
+          .catch((e) =>
+            this.logger.warn(
+              `Aperçu des notifications du message ${messageId} non masqué : ${e?.message}`,
+            ),
+          );
+      }
     }
 
     const frais = await this.prismaService.message.findUnique({
@@ -844,6 +1128,7 @@ export class MessageService {
         authorCustomer: true,
         reactions: { select: { emoji: true, userId: true, customerId: true } },
         conversation: { select: { customerId: true, restaurantId: true } },
+        ...INCLURE_REPONSE_ET_MENTIONS,
       },
     });
     const mappe = this.mapMessagesField(frais, moi.id);

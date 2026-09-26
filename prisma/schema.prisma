@@ -878,11 +878,48 @@ model Message {
   /// survivre au départ de la personne, comme dans le journal d'audit.
   deletedById String?   @db.Uuid
 
+  /// Message CITÉ : celui auquel ce message répond.
+  ///
+  /// Une colonne et non une clé de `meta` : `meta` est réécrit en entier à la
+  /// création et vidé à la suppression, sans jointure ni intégrité possibles.
+  /// Le texte cité n'est JAMAIS recopié ici : l'extrait se calcule à la lecture,
+  /// si bien qu'un original supprimé cesse aussitôt d'être montré dans les
+  /// réponses qui le citent. `SetNull` : l'effacement réel d'un original (rare,
+  /// la suppression est douce) laisse la réponse en place, sans citation.
+  replyToId String?   @db.Uuid
+  replyTo   Message?  @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   Message[] @relation("MessageReplies")
+
   reactions MessageReaction[]
+  mentions  MessageMention[]
 
   @@index([conversationId, createdAt])
   @@index([authorUserId])
   @@index([authorCustomerId])
+  @@index([replyToId])
+}
+
+/// MENTION d'un collègue dans un message (« @Awa Koné »).
+///
+/// Le texte « @Prénom Nom » reste en clair dans `Message.body`, pour que la
+/// caisse, les courriels et les aperçus restent lisibles ; cette table porte
+/// l'identifiant, qui seul fait foi pour le surlignage et la notification.
+///
+/// `libelle` est figé par le SERVEUR au moment de l'envoi (le nom complet à cet
+/// instant) : le surlignage survit à un changement de nom, et le client ne peut
+/// pas faire afficher un libellé de son choix.
+model MessageMention {
+  id        String  @id @default(uuid()) @db.Uuid
+  messageId String  @db.Uuid
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String  @db.Uuid
+  user      User    @relation("MessageMentions", fields: [userId], references: [id], onDelete: Cascade)
+  libelle   String  @db.VarChar(160)
+
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId])
+  @@index([userId, createdAt])
 }
 
 /// RÉACTION à un message, comme sur WhatsApp : un emoji posé par une personne.
@@ -1766,6 +1803,7 @@ model User {
   Message               Message[]               @relation("MessageAuthorUser")
   ConversationUser      ConversationUser[]
   MessageReaction       MessageReaction[]
+  messageMentions       MessageMention[]        @relation("MessageMentions")
   TicketMessageReaction TicketMessageReaction[]
   TicketThread          TicketThread[]          @relation("TicketAssignee")
   Voucher               Voucher[]

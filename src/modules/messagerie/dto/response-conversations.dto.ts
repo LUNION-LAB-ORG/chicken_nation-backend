@@ -65,10 +65,18 @@ export class ResponseConversationsDto {
     image: string;
   } | null;
 
+  /**
+   * Participants (personnel). `mentionnable` : compte actif ET accès à la
+   * messagerie, calculé par le serveur avec la même règle que celle qui valide
+   * les mentions à l'envoi. Un membre non mentionnable reste listé (grisé à
+   * l'écran), pour qu'on comprenne pourquoi il ne peut pas être prévenu.
+   */
   @ApiProperty({ type: [Object] })
   users: {
     id: string;
     fullName: string;
     image: string | null;
+    role: string;
+    mentionnable: boolean;
   }[];
 }

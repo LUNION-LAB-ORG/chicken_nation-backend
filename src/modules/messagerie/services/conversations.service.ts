@@ -15,6 +15,8 @@ import { CreateConversationDto } from '../dto/create-conversation.dto';
 import { getAuthType } from '../utils/getTypeUser';
 import { ConversationWebsocketsService } from '../websockets/conversation-websockets.service';
 import { ResponseMessageDto } from '../dto/response-message.dto';
+import { CORPS_MESSAGE_SUPPRIME } from 'src/common/constantes/message-supprime';
+import { estMentionnable } from '../utils/mentions';
 
 type ConversationWhereUniqueInput = Prisma.ConversationWhereUniqueInput;
 
@@ -69,6 +71,8 @@ export class ConversationsService {
               id: true,
               fullname: true,
               role: true,
+              // Lu pour calculer `mentionnable`, jamais renvoyé tel quel.
+              entity_status: true,
               ...(includeUserImage ? { image: true } : {}),
             },
           },
@@ -403,7 +407,25 @@ export class ConversationsService {
         },
         include: {
           customer: { select: { id: true, first_name: true, last_name: true } },
-          users: { select: { user: { select: { id: true, fullname: true } } } },
+          /**
+           * ⚠️ Rôle et statut lus ICI AUSSI : sans eux, `mentionnable` valait
+           * faux pour tout le monde dans la réponse de création et dans
+           * `conversation:created`, et un groupe tout neuf affichait chacun de
+           * ses membres grisé jusqu'au rechargement.
+           */
+          users: {
+            select: {
+              user: {
+                select: {
+                  id: true,
+                  fullname: true,
+                  role: true,
+                  entity_status: true,
+                  image: true,
+                },
+              },
+            },
+          },
           messages: { orderBy: { createdAt: 'desc' }, take: 1 },
         },
       });
@@ -1199,7 +1221,16 @@ export class ConversationsService {
         ): Omit<ResponseMessageDto, 'conversationId' | 'conversation'> => ({
           id: message.id,
           isRead: message.isRead,
-          body: message.body,
+          /**
+           * ⚠️ Un message SUPPRIMÉ ne sert jamais son texte d'origine, ici non
+           * plus. Ce chemin (aperçu de la liste, 50 derniers messages d'une
+           * conversation, charge `conversation:participants`) servait le corps
+           * brut : ce que l'auteur avait retiré restait lisible partout ailleurs
+           * que dans le fil.
+           */
+          deleted: !!message.deletedAt,
+          deletedAt: message.deletedAt ?? null,
+          body: message.deletedAt ? CORPS_MESSAGE_SUPPRIME : message.body,
           authorUser: message.authorUser
             ? {
               id: message.authorUser?.id,
@@ -1257,6 +1288,12 @@ export class ConversationsService {
         fullName: user.user.fullname,
         image: user.user.image || null,
         role: user.user.role,
+        /**
+         * Peut être mentionné : compte actif ET accès à la messagerie. Même
+         * règle que celle qui valide les mentions à l'envoi, pour que l'écran
+         * ne propose jamais une personne que le serveur écarterait.
+         */
+        mentionnable: estMentionnable(user.user),
       })),
     };
   }
