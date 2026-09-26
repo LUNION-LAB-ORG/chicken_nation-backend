@@ -160,3 +160,20 @@ export class CampaignReportQueryDto {
   @IsOptional() @IsIn(['xlsx', 'pdf'])
   format?: 'xlsx' | 'pdf';
 }
+
+/**
+ * Ventes d'une campagne, page par page. `segment` : public au ciblage, celui
+ * du tableau « Par public ».
+ */
+export class CampaignVentesQueryDto {
+  /** Borné : la page part en OFFSET d'une requête brute, un nombre démesuré y ferait une erreur 500. */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100_000)
+  page?: number;
+
+  /** 20 par défaut, 100 au plus. */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100)
+  limit?: number;
+
+  @IsOptional() @IsIn(SEGMENTS_CRM)
+  segment?: CrmSegment;
+}

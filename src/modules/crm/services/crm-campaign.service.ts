@@ -30,6 +30,7 @@ import {
 import { LIBELLES_PUBLIC, STATUTS_OUVERTS, compter } from '../crm.rules';
 import {
   CampaignPublicDto,
+  CampaignVentesQueryDto,
   CompareCampaignsQueryDto,
   CreateCrmCampaignDto,
   DistributeCrmDto,
@@ -40,6 +41,7 @@ import {
 } from '../dto/campaign.dto';
 import { CrmAccessService } from './crm-access.service';
 import { CrmCampaignStatsService } from './crm-campaign-stats.service';
+import { CrmCampaignVentesService } from './crm-campaign-ventes.service';
 import { CrmEventsService } from './crm-events.service';
 
 const JOUR = 86_400_000;
@@ -159,6 +161,7 @@ export class CrmCampaignService {
     private readonly access: CrmAccessService,
     private readonly events: CrmEventsService,
     private readonly stats: CrmCampaignStatsService,
+    private readonly ventesCampagne: CrmCampaignVentesService,
   ) {}
 
   async lister(user: User, q: QueryCampaignsDto) {
@@ -190,6 +193,27 @@ export class CrmCampaignService {
   async statistiques(user: User, id: string) {
     await this.detail(user, id);
     return this.stats.statistiques(id);
+  }
+
+  /**
+   * Ventes comptées pour la campagne, page par page : mêmes droits que ses
+   * statistiques. La consultation voit les téléphones, jamais les codes.
+   */
+  async ventes(user: User, id: string, q: CampaignVentesQueryDto) {
+    await this.assertVisible(user, id);
+    return this.ventesCampagne.lister(id, q, this.access.estLecteur(user));
+  }
+
+  /**
+   * Campagne existante et dans la portée du compte, sinon 404 : la même règle
+   * que le détail, sans relancer ses agrégats à chaque page.
+   */
+  private async assertVisible(user: User, id: string): Promise<void> {
+    const c = await this.prisma.crmCampaign.findFirst({
+      where: { id, entity_status: { not: EntityStatus.DELETED }, ...this.porteeCampagnes(user) },
+      select: { id: true },
+    });
+    if (!c) throw new NotFoundException('Campagne introuvable');
   }
 
   /** Comparatif, avec la même portée que la liste pour un agent. */

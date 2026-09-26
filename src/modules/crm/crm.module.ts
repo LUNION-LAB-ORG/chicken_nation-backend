@@ -9,6 +9,7 @@ import { CrmAlertService } from './services/crm-alert.service';
 import { CrmAnalyticsService } from './services/crm-analytics.service';
 import { CrmCallService } from './services/crm-call.service';
 import { CrmCampaignStatsService } from './services/crm-campaign-stats.service';
+import { CrmCampaignVentesService } from './services/crm-campaign-ventes.service';
 import { CrmCampaignService } from './services/crm-campaign.service';
 import { CrmConfigService } from './services/crm-config.service';
 import { CrmCouponService } from './services/crm-coupon.service';
@@ -56,6 +57,7 @@ import { CrmTask } from './tasks/crm.task';
     CrmCouponService,
     CrmExportService,
     CrmCampaignStatsService,
+    CrmCampaignVentesService,
     CrmCampaignService,
     CrmReportService,
     CrmAlertService,

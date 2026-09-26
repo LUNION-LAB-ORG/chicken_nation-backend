@@ -1,13 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { CampaignStatus, CrmSegment, EntityStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { criteresEnClair, estCapte } from '../crm-campagne.rules';
-import { STATUTS_OUVERTS, VENTE_VALIDE_SQL } from '../crm.rules';
+import { MEMBRE_DE_LA_VENTE_SQL, VENTE_DE_CAMPAGNE_SQL, criteresEnClair, estCapte } from '../crm-campagne.rules';
+import { STATUTS_OUVERTS } from '../crm.rules';
 import { CompareCampaignsQueryDto } from '../dto/campaign.dto';
 
 const JOUR = 86_400_000;
-/** Vente de campagne : enregistrée par le CRM (jamais l'historique d'acquisition) et valide. */
-const VENTE_CRM = Prisma.raw(`v."source" = 'CRM' AND ${VENTE_VALIDE_SQL}`);
+/** Vente de campagne : enregistrée par le CRM (jamais l'historique d'acquisition) et valide. Même fragment que la liste des ventes. */
+const VENTE_CRM = Prisma.raw(VENTE_DE_CAMPAGNE_SQL);
+/** Membre qui porte la vente (alias m) : son public au ciblage. */
+const MEMBRE_VENTE = Prisma.raw(MEMBRE_DE_LA_VENTE_SQL);
 /** Coupon utilisé sur une commande ni annulée ni supprimée (alias cc sur le coupon, oc sur la commande). */
 const COUPON_UTILISE = Prisma.raw(
   `cc."used_at" IS NOT NULL AND coalesce(oc."status"::text, '') <> 'CANCELLED' AND coalesce(oc."entity_status"::text, '') <> 'DELETED'`,
@@ -158,7 +160,7 @@ export class CrmCampaignStatsService {
         SELECT v.campaign_id, m.segment::text AS segment, count(*)::int AS conversions,
                coalesce(sum(v.amount), 0)::float AS ca
         FROM "CrmConversion" v
-        JOIN "CrmCampaignMember" m ON m.campaign_id = v.campaign_id AND m.contact_id = v.contact_id
+        ${MEMBRE_VENTE}
         WHERE v.campaign_id IN (${liste}) AND ${VENTE_CRM}
         GROUP BY GROUPING SETS ((v.campaign_id, m.segment), (v.campaign_id))`,
     ]);
@@ -389,7 +391,7 @@ export class CrmCampaignStatsService {
       // Les ventes sans agent forment leur propre groupe (agent_id nul).
       this.prisma.$queryRaw<(Ligne & { conversions: number; ca: number })[]>`
         SELECT v.agent_id, m.segment::text AS segment, count(*)::int AS conversions, coalesce(sum(v.amount), 0)::float AS ca
-        FROM "CrmConversion" v JOIN "CrmCampaignMember" m ON m.campaign_id = v.campaign_id AND m.contact_id = v.contact_id
+        FROM "CrmConversion" v ${MEMBRE_VENTE}
         WHERE v.campaign_id = ${id}::uuid AND ${VENTE_CRM}
         GROUP BY GROUPING SETS ((v.agent_id, m.segment), (v.agent_id))`,
     ]);

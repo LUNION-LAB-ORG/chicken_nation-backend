@@ -9,6 +9,7 @@ import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import {
   CampaignReportQueryDto,
+  CampaignVentesQueryDto,
   CompareCampaignsQueryDto,
   CreateCrmCampaignDto,
   DistributeCrmDto,
@@ -26,7 +27,7 @@ import { CrmReportService } from '../services/crm-report.service';
  * Campagnes de conversion (cahier §6). Création, lancement et réglages :
  * direction (CREATE). Suspension, reprise, clôture, équipe et répartition :
  * direction ou pilote de la campagne, contrôlé par le service. Consultation
- * (liste, détail, statistiques, comparatif) : tout compte qui lit le CRM, sauf
+ * (liste, détail, statistiques, ventes, comparatif) : tout compte qui lit le CRM, sauf
  * un compte de point de vente. `CrmSiegeGuard` passe AVANT le garde des droits :
  * un compte de point de vente reçoit « Les campagnes se consultent au siège »
  * sur toutes les routes, rapport et gestes compris.
@@ -96,6 +97,13 @@ export class CrmCampaignController {
   @ApiOperation({ summary: 'Tableau de bord de la campagne' })
   statistiques(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
     return this.campagnes.statistiques(req.user as User, id);
+  }
+
+  @Get(':id/ventes')
+  @RequirePermission(Modules.CRM, Action.READ)
+  @ApiOperation({ summary: 'Ventes comptées pour la campagne : client, agent, commande, coupon et autres commandes du client' })
+  ventes(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string, @Query() q: CampaignVentesQueryDto) {
+    return this.campagnes.ventes(req.user as User, id, q);
   }
 
   @Get(':id/report')

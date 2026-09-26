@@ -3,13 +3,19 @@ import {
   bacsApercu,
   critereCampagne,
   criteresEnClair,
+  ETAT_COMMANDE_SQL,
+  LigneVenteBrute,
+  MEMBRE_DE_LA_VENTE_SQL,
   memesCriteres,
   populationCampagne,
   PublicCampagne,
   publicsDepuisAncienCorps,
   sortieFinCampagne,
+  VENTE_DE_CAMPAGNE_SQL,
   verifierPublics,
+  versVenteCampagne,
 } from './crm-campagne.rules';
+import { VENTE_VALIDE_SQL } from './crm.rules';
 
 /**
  * Évaluateur minimal des filtres Prisma employés par les règles : il applique
@@ -359,5 +365,157 @@ describe('criteresEnClair', () => {
     ).toBe("Captés sur Glovo du 01/09/2026 au 15/09/2026 ; restaurants de capture : Angré, Cocody ; sans compte sur l'appli");
     expect(criteresEnClair({ segment: P.INACTIF, relapsed_only: true })).toBe('Devenus inactifs, toutes dates ; déjà reconquis une fois');
     expect(criteresEnClair({ segment: P.JAMAIS_COMMANDE, period_from: '2026-09-01' })).toBe('Inscrits depuis le 01/09/2026');
+  });
+});
+
+describe('ventes de campagne : fragments SQL partagés', () => {
+  it('une vente de campagne vient du CRM et reste valide', () => {
+    expect(VENTE_DE_CAMPAGNE_SQL).toContain(`v."source" = 'CRM'`);
+    expect(VENTE_DE_CAMPAGNE_SQL).toContain(VENTE_VALIDE_SQL);
+  });
+
+  it('le membre de la vente se trouve par campagne ET contact', () => {
+    expect(MEMBRE_DE_LA_VENTE_SQL).toContain('JOIN "CrmCampaignMember" m');
+    expect(MEMBRE_DE_LA_VENTE_SQL).toContain('m.campaign_id = v.campaign_id');
+    expect(MEMBRE_DE_LA_VENTE_SQL).toContain('m.contact_id = v.contact_id');
+  });
+
+  it("l'état d'une commande suit l'ordre supprimée, annulée, paiement en attente, valide", () => {
+    const sql = ETAT_COMMANDE_SQL('oa');
+    const supprimee = sql.indexOf(`oa."entity_status" = 'DELETED'`);
+    const annulee = sql.indexOf(`oa."status" = 'CANCELLED'`);
+    // Mode de paiement absent : lu comme « en ligne », comme le fait COMMANDE_EFFECTIVE_SQL.
+    const attente = sql.indexOf(`coalesce(oa."payment_method"::text, 'ONLINE') = 'ONLINE' AND oa."paied" = false AND oa."status" = 'PENDING'`);
+    const valide = sql.indexOf(`ELSE 'VALIDE'`);
+    expect(supprimee).toBeGreaterThanOrEqual(0);
+    expect(annulee).toBeGreaterThan(supprimee);
+    expect(attente).toBeGreaterThan(annulee);
+    expect(valide).toBeGreaterThan(attente);
+    expect(sql).toContain("THEN 'SUPPRIMEE'");
+    expect(sql).toContain("THEN 'ANNULEE'");
+    expect(sql).toContain("THEN 'PAIEMENT_EN_ATTENTE'");
+  });
+
+  it("refuse un alias qui n'est pas un simple nom", () => {
+    expect(() => ETAT_COMMANDE_SQL('oa; DROP')).toThrow();
+  });
+});
+
+describe('versVenteCampagne', () => {
+  const VENDU = new Date('2026-09-20T10:00:00.000Z');
+  const brut = (surcharge: Partial<LigneVenteBrute> = {}): LigneVenteBrute => ({
+    id: 'v1',
+    converted_at: VENDU,
+    montant: 12_049.6,
+    cycle: 1,
+    segment: 'GLOVO',
+    joined_at: new Date('2026-09-18T10:00:00.000Z'),
+    contact_id: 'x1',
+    name: 'Awa Capture',
+    phone: '2250700000001',
+    fiche_supprimee: false,
+    compte_id: 'cu1',
+    first_name: 'Awa',
+    last_name: 'Koné',
+    tel_compte: '+2250700000009',
+    agent_id: 'ag1',
+    agent: 'Agent Un',
+    order_id: 'o1',
+    reference: 'CMD-1',
+    montant_commande: 12_500.4,
+    statut: 'COMPLETED',
+    type: 'DELIVERY',
+    commande_le: VENDU,
+    code_promo: 'CN-ABCDEF',
+    restaurant: 'Angré',
+    coupon_code: 'CN-ABCDEF',
+    coupon_offre: '-20 % sur la commande',
+    coupon_envoye_le: new Date('2026-09-19T10:00:00.000Z'),
+    coupon_hors_campagne: false,
+    delai_campagne_j: 2.04,
+    delai_entree_j: 10.96,
+    autres_nombre: 2,
+    autres_valides: 1,
+    autres_montant: 3_499.5,
+    autres: [
+      { id: 'o3', reference: 'CMD-3', cree_le: '2026-09-22T09:00:00+00:00', montant: 2_000, statut: 'CANCELLED', type: 'PICKUP', restaurant: 'Angré', etat: 'ANNULEE' },
+      { id: 'o2', reference: 'CMD-2', cree_le: '2026-09-21T09:00:00+00:00', montant: 3_499.5, statut: 'COMPLETED', type: 'DELIVERY', restaurant: null, etat: 'VALIDE' },
+    ],
+    ...surcharge,
+  });
+
+  it("prend le nom et le téléphone du compte d'abord", () => {
+    const v = versVenteCampagne(brut(), { masquer: false });
+    expect(v.contact).toEqual({ id: 'x1', nom: 'Awa Koné', telephone: '+2250700000009', supprime: false });
+  });
+
+  it('sans compte : le nom et le numéro de la capture, sinon « Client sans nom »', () => {
+    const sansCompte = { compte_id: null, first_name: null, last_name: null, tel_compte: null };
+    expect(versVenteCampagne(brut(sansCompte), { masquer: false }).contact).toMatchObject({ nom: 'Awa Capture', telephone: '2250700000001' });
+    expect(versVenteCampagne(brut({ ...sansCompte, name: '  ' }), { masquer: false }).contact.nom).toBe('Client sans nom');
+  });
+
+  it('signale une fiche supprimée', () => {
+    expect(versVenteCampagne(brut({ fiche_supprimee: true }), { masquer: false }).contact.supprime).toBe(true);
+  });
+
+  it('une vente sans agent a un agent nul', () => {
+    expect(versVenteCampagne(brut({ agent_id: null, agent: null }), { masquer: false }).agent).toBeNull();
+    expect(versVenteCampagne(brut(), { masquer: false }).agent).toEqual({ id: 'ag1', fullname: 'Agent Un' });
+  });
+
+  it('arrondit les montants et les délais au dixième, jamais négatifs', () => {
+    const v = versVenteCampagne(brut({ delai_campagne_j: -0.3 }), { masquer: false });
+    expect(v.montant).toBe(12_050);
+    expect(v.commande?.montant).toBe(12_500);
+    expect(v.autres.montant).toBe(3_500);
+    expect(v.autres.commandes.map((c) => c.montant)).toEqual([2_000, 3_500]);
+    expect(v.delai_campagne_jours).toBe(0);
+    expect(v.delai_entree_jours).toBe(11);
+    expect(versVenteCampagne(brut(), { masquer: false }).delai_campagne_jours).toBe(2);
+  });
+
+  it("un délai sans passage connu reste nul", () => {
+    expect(versVenteCampagne(brut({ delai_entree_j: null }), { masquer: false }).delai_entree_jours).toBeNull();
+  });
+
+  it('masque le code du coupon en consultation, et seulement là', () => {
+    expect(versVenteCampagne(brut(), { masquer: true }).coupon?.code).toBe('CN••••');
+    expect(versVenteCampagne(brut(), { masquer: false }).coupon?.code).toBe('CN-ABCDEF');
+  });
+
+  it("le code promo n'est rendu que sans coupon du CRM, masqué en consultation", () => {
+    expect(versVenteCampagne(brut(), { masquer: false }).code_promo).toBeNull();
+    const sansCoupon = { coupon_code: null, coupon_offre: null, coupon_envoye_le: null, coupon_hors_campagne: null, code_promo: 'NOEL25' };
+    expect(versVenteCampagne(brut(sansCoupon), { masquer: false })).toMatchObject({ coupon: null, code_promo: 'NOEL25' });
+    expect(versVenteCampagne(brut(sansCoupon), { masquer: true }).code_promo).toBe('NO••••');
+    expect(versVenteCampagne(brut({ ...sansCoupon, code_promo: null }), { masquer: true }).code_promo).toBeNull();
+  });
+
+  it('lit les dates des autres commandes comme des instants UTC', () => {
+    const v = versVenteCampagne(brut(), { masquer: false });
+    expect(v.autres.commandes[0].cree_le).toEqual(new Date('2026-09-22T09:00:00.000Z'));
+    expect(v.autres.commandes[0].etat).toBe('ANNULEE');
+  });
+
+  it('dit si la liste des autres commandes est tronquée', () => {
+    expect(versVenteCampagne(brut(), { masquer: false }).autres.tronque).toBe(false);
+    expect(versVenteCampagne(brut({ autres_nombre: 25 }), { masquer: false }).autres.tronque).toBe(true);
+  });
+
+  it('sans commande retrouvée, la commande est nulle', () => {
+    expect(versVenteCampagne(brut({ order_id: null, reference: null }), { masquer: false }).commande).toBeNull();
+  });
+
+  it('accepte des autres commandes en texte JSON, et aucune', () => {
+    const texte = JSON.stringify(brut().autres);
+    expect(versVenteCampagne(brut({ autres: texte }), { masquer: false }).autres.commandes).toHaveLength(2);
+    expect(versVenteCampagne(brut({ autres: null, autres_nombre: 0, autres_valides: 0, autres_montant: 0 }), { masquer: false }).autres).toEqual({
+      nombre: 0,
+      valides: 0,
+      montant: 0,
+      tronque: false,
+      commandes: [],
+    });
   });
 });

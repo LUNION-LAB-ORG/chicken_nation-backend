@@ -1,5 +1,6 @@
-import { CampaignStatus, CrmSegment, CrmStatus, EntityStatus, Prisma, ProspectPlatform } from '@prisma/client';
-import { LIBELLES_PUBLIC, STATUTS_OUVERTS, dateCourte } from './crm.rules';
+import { CampaignStatus, CrmSegment, CrmStatus, EntityStatus, OrderStatus, OrderType, Prisma, ProspectPlatform } from '@prisma/client';
+import { LIBELLES_PUBLIC, STATUTS_OUVERTS, VENTE_VALIDE_SQL, dateCourte, identiteContact } from './crm.rules';
+import { codeMasque } from './services/crm-contact.query';
 
 /**
  * Règles des campagnes multi-publics (lot 3), sans aucune dépendance : elles
@@ -279,4 +280,228 @@ export function criteresEnClair(pub: PublicCampagne, nomsRestaurants: Map<string
   if (pub.account === 'SANS') morceaux.push("sans compte sur l'appli");
   if (pub.relapsed_only) morceaux.push('déjà reconquis une fois');
   return morceaux.join(' ; ');
+}
+
+// ---------------------------------------------------------------------------
+// Ventes d'une campagne : la liste du détail et l'onglet « Ventes » du rapport
+// ---------------------------------------------------------------------------
+
+/**
+ * Vente comptée pour une campagne (alias v sur "CrmConversion") : enregistrée
+ * par le CRM, jamais l'historique d'acquisition, et valide (ni annulée au
+ * registre, ni portée par une commande annulée ou supprimée). Le compteur du
+ * tableau de bord, la liste des ventes et le rapport lisent ce même fragment :
+ * la liste et le compteur concordent par construction.
+ */
+export const VENTE_DE_CAMPAGNE_SQL = `v."source" = 'CRM' AND ${VENTE_VALIDE_SQL}`;
+
+/**
+ * Membre de la campagne qui porte la vente (alias m) : il donne le public au
+ * ciblage. Un membre est unique par campagne et contact : la jointure ne
+ * double jamais une vente.
+ */
+export const MEMBRE_DE_LA_VENTE_SQL = `JOIN "CrmCampaignMember" m ON m.campaign_id = v.campaign_id AND m.contact_id = v.contact_id`;
+
+/** État d'une commande du client affichée à côté d'une vente : seules les valides entrent dans les totaux. */
+export const ETATS_COMMANDE = ['VALIDE', 'ANNULEE', 'SUPPRIMEE', 'PAIEMENT_EN_ATTENTE'] as const;
+export type EtatCommande = (typeof ETATS_COMMANDE)[number];
+
+/**
+ * État d'une commande (alias `a` sur "Order"), dans cet ordre : supprimée,
+ * annulée, paiement en ligne encore en attente (la règle des commandes
+ * effectives), sinon valide. Un mode de paiement absent se lit comme le
+ * défaut, en ligne : `COMMANDE_EFFECTIVE_SQL` écarte aussi cette commande-là
+ * (la comparaison à NULL la fait sortir), les deux règles disent la même chose.
+ */
+export function ETAT_COMMANDE_SQL(a: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(a)) throw new Error(`Alias SQL invalide : ${a}`);
+  return `CASE WHEN ${a}."entity_status" = 'DELETED' THEN 'SUPPRIMEE'
+            WHEN ${a}."status" = 'CANCELLED' THEN 'ANNULEE'
+            WHEN coalesce(${a}."payment_method"::text, 'ONLINE') = 'ONLINE' AND ${a}."paied" = false AND ${a}."status" = 'PENDING' THEN 'PAIEMENT_EN_ATTENTE'
+            ELSE 'VALIDE' END`;
+}
+
+/** Statut d'une commande en français, pour le rapport. */
+export const LIBELLES_STATUT_COMMANDE: Record<OrderStatus, string> = {
+  PENDING: 'En attente',
+  ACCEPTED: 'Nouvelle',
+  IN_PROGRESS: 'En préparation',
+  READY: 'Prête',
+  PICKED_UP: 'En livraison',
+  COLLECTED: 'Récupérée',
+  COMPLETED: 'Terminée',
+  CANCELLED: 'Annulée',
+};
+
+/** Ce qui écarte une commande des totaux, en minuscules pour se lire dans une phrase. */
+export const LIBELLES_ETAT_COMMANDE: Record<Exclude<EtatCommande, 'VALIDE'>, string> = {
+  ANNULEE: 'annulée',
+  SUPPRIMEE: 'supprimée',
+  PAIEMENT_EN_ATTENTE: 'en attente de paiement',
+};
+
+/** Une autre commande du client pendant la campagne. */
+export interface AutreCommandeCampagne {
+  id: string;
+  reference: string;
+  cree_le: Date;
+  montant: number;
+  statut: OrderStatus;
+  type: OrderType;
+  restaurant: string | null;
+  etat: EtatCommande;
+}
+
+/** Une vente comptée pour la campagne, telle que la liste et le rapport la montrent. */
+export interface VenteCampagne {
+  id: string;
+  vendu_le: Date;
+  /** Montant du registre : celui que le compteur additionne. */
+  montant: number;
+  /** Public au ciblage. */
+  segment: CrmSegment;
+  contact: { id: string; nom: string; telephone: string; supprime: boolean };
+  /** Null : vente sans agent (répartition manuelle, compte supprimé). */
+  agent: { id: string; fullname: string } | null;
+  commande: {
+    id: string;
+    reference: string;
+    montant: number;
+    statut: OrderStatus;
+    type: OrderType;
+    restaurant: string | null;
+    cree_le: Date;
+  } | null;
+  coupon: { code: string; offre: string; envoye_le: Date; hors_campagne: boolean } | null;
+  /** Code promo de la commande quand aucun coupon du CRM n'y est passé. */
+  code_promo: string | null;
+  delai_campagne_jours: number | null;
+  delai_entree_jours: number | null;
+  autres: { nombre: number; valides: number; montant: number; tronque: boolean; commandes: AutreCommandeCampagne[] };
+}
+
+/** Autre commande telle que la base la renvoie (JSON : dates en texte). */
+export interface AutreCommandeBrute {
+  id: string;
+  reference: string;
+  cree_le: string | Date;
+  montant: number | null;
+  statut: string;
+  type: string;
+  restaurant: string | null;
+  etat: string;
+}
+
+/** Ligne de la requête des ventes, avant mise en forme. */
+export interface LigneVenteBrute {
+  id: string;
+  converted_at: Date;
+  montant: number | null;
+  cycle: number;
+  segment: string;
+  joined_at: Date;
+  contact_id: string;
+  name: string | null;
+  phone: string | null;
+  fiche_supprimee: boolean | null;
+  compte_id: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  tel_compte: string | null;
+  agent_id: string | null;
+  agent: string | null;
+  order_id: string | null;
+  reference: string | null;
+  montant_commande: number | null;
+  statut: string | null;
+  type: string | null;
+  commande_le: Date | null;
+  code_promo: string | null;
+  restaurant: string | null;
+  coupon_code: string | null;
+  coupon_offre: string | null;
+  coupon_envoye_le: Date | null;
+  coupon_hors_campagne: boolean | null;
+  delai_campagne_j: number | null;
+  delai_entree_j: number | null;
+  autres_nombre: number | null;
+  autres_valides: number | null;
+  autres_montant: number | null;
+  autres: AutreCommandeBrute[] | string | null;
+}
+
+const montantArrondi = (n: number | string | null | undefined) => Math.round(Number(n ?? 0) || 0);
+
+/** Délai en jours au dixième, jamais négatif ; null quand il n'est pas mesurable. */
+function joursArrondis(n: number | string | null | undefined): number | null {
+  if (n == null) return null;
+  const v = Number(n);
+  return Number.isFinite(v) ? Math.max(0, Math.round(v * 10) / 10) : null;
+}
+
+const etatConnu = (e: string): EtatCommande => ((ETATS_COMMANDE as readonly string[]).includes(e) ? (e as EtatCommande) : 'VALIDE');
+
+/**
+ * Ligne de la base → vente affichée. `masquer` (consultation) cache le code
+ * du coupon et le code promo comme sur les fiches : deux caractères puis des
+ * points. Le téléphone reste visible, comme partout en consultation.
+ */
+export function versVenteCampagne(brut: LigneVenteBrute, options: { masquer: boolean }): VenteCampagne {
+  const cacher = (code: string | null) => (code && options.masquer ? codeMasque(code) : code);
+  const identite = identiteContact({
+    name: brut.name,
+    phone: brut.phone,
+    customer: brut.compte_id ? { first_name: brut.first_name, last_name: brut.last_name, phone: brut.tel_compte } : null,
+  });
+  const autresBruts: AutreCommandeBrute[] =
+    typeof brut.autres === 'string' ? (JSON.parse(brut.autres) as AutreCommandeBrute[]) : (brut.autres ?? []);
+  const commandes = autresBruts.map((a) => ({
+    id: a.id,
+    reference: a.reference,
+    cree_le: new Date(a.cree_le),
+    montant: montantArrondi(a.montant),
+    statut: a.statut as OrderStatus,
+    type: a.type as OrderType,
+    restaurant: a.restaurant ?? null,
+    etat: etatConnu(a.etat),
+  }));
+  const nombre = Number(brut.autres_nombre ?? commandes.length);
+  return {
+    id: brut.id,
+    vendu_le: brut.converted_at,
+    montant: montantArrondi(brut.montant),
+    segment: brut.segment as CrmSegment,
+    contact: { id: brut.contact_id, nom: identite.nom, telephone: identite.telephone, supprime: !!brut.fiche_supprimee },
+    agent: brut.agent_id ? { id: brut.agent_id, fullname: brut.agent ?? 'Compte sans nom' } : null,
+    commande:
+      brut.order_id && brut.reference
+        ? {
+            id: brut.order_id,
+            reference: brut.reference,
+            montant: montantArrondi(brut.montant_commande),
+            statut: brut.statut as OrderStatus,
+            type: brut.type as OrderType,
+            restaurant: brut.restaurant ?? null,
+            cree_le: brut.commande_le as Date,
+          }
+        : null,
+    coupon: brut.coupon_code
+      ? {
+          code: cacher(brut.coupon_code) as string,
+          offre: brut.coupon_offre ?? '',
+          envoye_le: brut.coupon_envoye_le as Date,
+          hors_campagne: !!brut.coupon_hors_campagne,
+        }
+      : null,
+    code_promo: brut.coupon_code ? null : cacher(brut.code_promo?.trim() || null),
+    delai_campagne_jours: joursArrondis(brut.delai_campagne_j),
+    delai_entree_jours: joursArrondis(brut.delai_entree_j),
+    autres: {
+      nombre,
+      valides: Number(brut.autres_valides ?? 0),
+      montant: montantArrondi(brut.autres_montant),
+      tronque: nombre > commandes.length,
+      commandes,
+    },
+  };
 }

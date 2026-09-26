@@ -4,7 +4,9 @@ import * as ExcelJS from 'exceljs';
 import * as PDFDocument from 'pdfkit';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { CrmCampaignStatsService } from './crm-campaign-stats.service';
+import { CrmCampaignVentesService } from './crm-campaign-ventes.service';
 import { CrmExportService, FichierExport } from './crm-export.service';
+import { LIBELLES_ETAT_COMMANDE, LIBELLES_STATUT_COMMANDE, VenteCampagne } from '../crm-campagne.rules';
 import { LIBELLES_PUBLIC, VENTE_VALIDE_SQL, compter, identiteContact } from '../crm.rules';
 import { nomClient } from './crm-contact.query';
 
@@ -57,6 +59,31 @@ const publicUnique = (segments: string[]): string | null => {
 
 const d = (v: Date | string | null | undefined) => (v ? new Date(v).toISOString().slice(0, 10).split('-').reverse().join('/') : 'non fixée');
 
+const statutCommande = (statut: string) => LIBELLES_STATUT_COMMANDE[statut as keyof typeof LIBELLES_STATUT_COMMANDE] ?? statut;
+
+/**
+ * Autres commandes du client pendant la campagne, en une phrase : « REF du
+ * 01/09/2026, 3 500 F, Terminée ; REF2 du 03/09/2026, 2 000 F, annulée (hors
+ * total) ». Une commande annulée, supprimée ou en attente de paiement reste
+ * hors des totaux.
+ */
+function detailAutres(a: VenteCampagne['autres']): string {
+  const morceaux = a.commandes.map((c) => {
+    const etat = c.etat === 'VALIDE' ? statutCommande(c.statut) : `${LIBELLES_ETAT_COMMANDE[c.etat]} (hors total)`;
+    return `${c.reference} du ${d(c.cree_le)}, ${f(c.montant)} F, ${etat}`;
+  });
+  const reste = a.nombre - a.commandes.length;
+  if (reste > 0) morceaux.push(`et ${compter(reste, 'autre commande non détaillée', 'autres commandes non détaillées')}`);
+  return morceaux.join(' ; ');
+}
+
+/** Coupon passé sur la commande comptée, ou code promo hors CRM. */
+function couponDe(v: VenteCampagne): string {
+  if (v.coupon) return v.coupon.code;
+  if (v.code_promo) return `code promo ${v.code_promo}`;
+  return 'sans coupon';
+}
+
 /** Résultats d'un public en une phrase, pour la synthèse et le PDF. */
 function resumePublic(l: LignePublic): string {
   const morceaux = [
@@ -80,6 +107,7 @@ export class CrmReportService {
     private readonly prisma: PrismaService,
     private readonly stats: CrmCampaignStatsService,
     private readonly exports: CrmExportService,
+    private readonly ventesCampagne: CrmCampaignVentesService,
   ) {}
 
   async generer(user: User, campagneId: string, format: 'xlsx' | 'pdf'): Promise<FichierExport> {
@@ -300,7 +328,7 @@ export class CrmReportService {
     );
     onglet('Raisons', ['Raison de non-commande', 'Contacts', 'Part (%)'], s.raisons.map((r) => [r.raison, r.nombre, r.part]));
 
-    const [membres, derniers, ventes] = await Promise.all([
+    const [membres, derniers, ventes, ventesDetaillees] = await Promise.all([
       this.prisma.crmCampaignMember.findMany({
         where: { campaign_id: campagneId },
         orderBy: { joined_at: 'asc' },
@@ -332,6 +360,8 @@ export class CrmReportService {
         FROM "CrmConversion" v
         WHERE v.campaign_id = ${campagneId}::uuid AND v.source = 'CRM' AND ${Prisma.raw(VENTE_VALIDE_SQL)}
         GROUP BY v.contact_id`,
+      // Une ligne par vente comptée : autant de lignes que le compteur, codes en clair (rapport de la direction).
+      this.ventesCampagne.toutes(campagneId),
     ]);
     const appels = new Map(derniers.map((x) => [x.contact_id, x]));
     const venteDe = new Map(ventes.map((x) => [x.contact_id, x]));
@@ -366,6 +396,49 @@ export class CrmReportService {
         ];
       }),
     );
+    onglet(
+      'Ventes',
+      [
+        'Vente le',
+        'Client',
+        'Téléphone',
+        'Public au ciblage',
+        'Agent',
+        'Commande',
+        'Montant compté (F)',
+        'Restaurant',
+        'Statut de la commande',
+        'Coupon',
+        'Offre du coupon',
+        "Jours depuis l'entrée dans la campagne",
+        "Jours depuis l'entrée au CRM",
+        'Autres commandes pendant la campagne',
+        'dont valides',
+        'Montant des autres commandes valides (F)',
+        'Détail des autres commandes',
+      ],
+      ventesDetaillees.map((v) => [
+        d(v.vendu_le),
+        v.contact.supprime ? `${v.contact.nom} (fiche supprimée)` : v.contact.nom,
+        v.contact.telephone,
+        nomPublic(v.segment),
+        v.agent?.fullname ?? 'Sans agent',
+        v.commande?.reference ?? 'commande introuvable',
+        v.montant,
+        v.commande?.restaurant ?? '',
+        v.commande ? statutCommande(v.commande.statut) : '',
+        couponDe(v),
+        v.coupon ? `${v.coupon.offre}${v.coupon.hors_campagne ? ' (coupon hors campagne)' : ''}` : '',
+        v.delai_campagne_jours ?? '',
+        v.delai_entree_jours ?? '',
+        v.autres.nombre,
+        v.autres.valides,
+        v.autres.montant,
+        detailAutres(v.autres),
+      ]),
+    );
+    // Le détail des autres commandes est une phrase : une colonne large.
+    classeur.getWorksheet('Ventes')!.getColumn(17).width = 90;
     return Buffer.from(await classeur.xlsx.writeBuffer());
   }
 
