@@ -26,3 +26,20 @@ export function rolePeut(
   const droits = permissions.modules[module] || permissions.modules[Modules.ALL];
   return !!droits?.includes(action);
 }
+
+/**
+ * Ne garde, parmi des comptes du personnel, que ceux dont le rôle a le droit
+ * `action` sur `module`, avec la règle de `rolePeut`.
+ *
+ * Sert aux alertes de commande et de course envoyées au siège : un compte qui
+ * ne peut pas ouvrir les commandes (le Marketing depuis le 28/09) n'en reçoit
+ * plus ni la notification ni le son. Les autres rôles du siège ont tous
+ * COMMANDES en lecture : pour eux, rien ne change.
+ */
+export function filtrerParDroit<T extends { role?: UserRole | string | null }>(
+  comptes: T[],
+  module: Modules,
+  action: Action | string,
+): T[] {
+  return comptes.filter((compte) => rolePeut(compte.role, module, action));
+}

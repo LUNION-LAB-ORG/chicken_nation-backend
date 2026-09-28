@@ -35,13 +35,13 @@ import { MessageBroadcastService } from './message-broadcast.service';
  * les rôles CAISSIER et CALL_CENTER la détiennent (voir `permissionsByRole`).
  * L'y rattacher aurait permis à un caissier d'écrire à toute la base de clients
  * depuis sa caisse. Écrire à des milliers de personnes est une décision de
- * marketing, pas un geste de première ligne : seul le rôle MARKETING (et
- * l'administrateur) détient DIFFUSIONS.
+ * marketing, pas un geste de première ligne.
  *
- * Module distinct de MARKETING depuis le 25/09 : le menu Marketing passe en
- * lecture seule pour ce rôle, mais il garde la création et l'envoi des
- * diffusions. ⚠️ CREATE suffit à envoyer : une diffusion créée avec une date
- * d'envoi part d'elle-même par la tâche planifiée.
+ * Module distinct de MARKETING depuis le 25/09. Depuis le 28/09, à la demande
+ * du client, le rôle MARKETING n'a plus DIFFUSIONS : seul l'administrateur le
+ * détient (voir `permissionsByRole`). ⚠️ CREATE suffit à envoyer : une
+ * diffusion créée avec une date d'envoi part d'elle-même par la tâche
+ * planifiée.
  */
 @ApiTags('Messagerie')
 @ApiBearerAuth()

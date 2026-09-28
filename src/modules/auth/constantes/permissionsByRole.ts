@@ -18,34 +18,34 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
 
   /* ===================== MARKETING ===================== */
   /**
-   * Lecture seule sur les menus Menu, Base de données (Clients, Notes et avis,
-   * CRM), Fidélisation, Inventaire, Restaurant, Marketing et Notifications :
-   * il voit tout, il ne crée, ne modifie, ne supprime et n'exporte rien
-   * (demande du 25/09). REPORT = statistiques en lecture. Seule exception,
-   * voulue : les Diffusions de messages, qu'il continue d'envoyer.
+   * Consultation seule des menus Menus, Base de données (Clients, Notes et
+   * avis, CRM), Fidélisation, Marketing (Nouveautés, Clics & Deeplinks) et
+   * Notifications : il voit, il ne crée, ne modifie, ne supprime et n'exporte
+   * rien (demande du 25/09). REPORT = statistiques en lecture.
+   *
+   * Retirés le 28/09 à la demande du client : le tableau de bord et les
+   * statistiques (DASHBOARD), les commandes (COMMANDES), Messages et tickets
+   * avec les Diffusions, qu'il ne voit ni n'envoie plus (DIFFUSIONS), les
+   * restaurants (RESTAURANTS) et les inventaires (INVENTAIRE).
+   *
+   * ⚠️ MENUS reste en tête : l'écran d'arrivée du backoffice est la première
+   * clé de ce bloc.
    */
   [UserRole.MARKETING]: {
     modules: {
-      [Modules.DASHBOARD]: [Action.READ],
-
       [Modules.MENUS]: [Action.READ],
-      [Modules.INVENTAIRE]: [Action.READ],
       [Modules.PROMOTIONS]: [Action.READ],
       [Modules.FIDELITE]: [Action.READ],
       [Modules.CARD_NATION]: [Action.READ, Action.REPORT],
-      [Modules.RESTAURANTS]: [Action.READ],
 
       [Modules.CLIENTS]: [Action.READ],
       [Modules.COMMENTAIRES]: [Action.READ],
-      [Modules.COMMANDES]: [Action.READ],
       [Modules.MARKETING]: [Action.READ, Action.REPORT],
       [Modules.NOTIFICATIONS]: [Action.READ],
       [Modules.BASE_DONNEES]: [Action.READ, Action.REPORT],
       // CRM en consultation : tableaux de bord, contacts et fiches (téléphone
       // compris), campagnes, coupons, ventes et réglages, sans aucun geste.
       [Modules.CRM]: [Action.READ, Action.REPORT],
-      // Diffusions de messages : il garde la création et l'envoi.
-      [Modules.DIFFUSIONS]: [Action.READ, Action.CREATE, Action.UPDATE],
     },
   },
 

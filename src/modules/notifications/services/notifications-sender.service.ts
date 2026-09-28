@@ -17,6 +17,9 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { EmailService } from './email.service';
 import { CORPS_MESSAGE_SUPPRIME } from 'src/common/constantes/message-supprime';
 import { couperAuMot } from 'src/modules/messagerie/utils/citation';
+import { filtrerParDroit } from 'src/modules/auth/utils/role-peut';
+import { Modules } from 'src/modules/auth/enums/module-enum';
+import { Action } from 'src/modules/auth/enums/action.enum';
 
 /** Longueur maximale de l'extrait montré dans une notification de mention. */
 const LONGUEUR_EXTRAIT_MENTION = 120;
@@ -36,6 +39,17 @@ export class NotificationsSenderService {
         private readonly prisma: PrismaService,
         private readonly emailService: EmailService,
     ) { }
+
+    /**
+     * Comptes du siège prévenus des alertes de commande et de course : ceux
+     * qui peuvent ouvrir les commandes. Le Marketing n'a plus ce droit depuis
+     * le 28/09 : il ne reçoit plus ces alertes, ni leur son. Les autres rôles
+     * du siège l'ont tous, rien ne change pour eux.
+     */
+    private async siegeQuiVoitLesCommandes(): Promise<NotificationRecipient[]> {
+        const siege = await this.notificationRecipientService.getAllUsersByBackofficeAndRole();
+        return filtrerParDroit(siege, Modules.COMMANDES, Action.READ);
+    }
 
     /**
      * Gère les notifications de paiement
@@ -91,7 +105,7 @@ export class NotificationsSenderService {
                 order.restaurant_id,
                 [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
             ),
-            this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+            this.siegeQuiVoitLesCommandes(),
         ]);
 
         // Dédupe + respect de la préférence in-app de chaque membre.
@@ -156,7 +170,7 @@ export class NotificationsSenderService {
                     order.restaurant_id,
                     [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
                 ),
-                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+                this.siegeQuiVoitLesCommandes(),
             ]);
 
             const byId = new Map<string, NotificationRecipient>();
@@ -221,7 +235,7 @@ export class NotificationsSenderService {
                     restaurantId,
                     [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
                 ),
-                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+                this.siegeQuiVoitLesCommandes(),
             ]);
 
             const byId = new Map<string, NotificationRecipient>();
@@ -283,7 +297,7 @@ export class NotificationsSenderService {
                     restaurantId,
                     [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
                 ),
-                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+                this.siegeQuiVoitLesCommandes(),
             ]);
 
             const byId = new Map<string, NotificationRecipient>();
@@ -339,7 +353,7 @@ export class NotificationsSenderService {
                     restaurantId,
                     [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
                 ),
-                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+                this.siegeQuiVoitLesCommandes(),
             ]);
 
             const byId = new Map<string, NotificationRecipient>();
@@ -394,7 +408,7 @@ export class NotificationsSenderService {
                     restaurantId,
                     [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
                 ),
-                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+                this.siegeQuiVoitLesCommandes(),
             ]);
 
             const byId = new Map<string, NotificationRecipient>();
@@ -449,7 +463,7 @@ export class NotificationsSenderService {
                     restaurantId,
                     [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
                 ),
-                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+                this.siegeQuiVoitLesCommandes(),
             ]);
 
             const byId = new Map<string, NotificationRecipient>();
@@ -506,7 +520,7 @@ export class NotificationsSenderService {
                     restaurantId,
                     [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
                 ),
-                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+                this.siegeQuiVoitLesCommandes(),
             ]);
 
             const byId = new Map<string, NotificationRecipient>();
@@ -563,7 +577,7 @@ export class NotificationsSenderService {
                     restaurantId,
                     [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
                 ),
-                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+                this.siegeQuiVoitLesCommandes(),
             ]);
 
             const byId = new Map<string, NotificationRecipient>();
@@ -625,7 +639,7 @@ export class NotificationsSenderService {
                     restaurantId,
                     [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
                 ),
-                this.notificationRecipientService.getAllUsersByBackofficeAndRole(),
+                this.siegeQuiVoitLesCommandes(),
             ]);
 
             const byId = new Map<string, NotificationRecipient>();

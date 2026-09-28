@@ -3,7 +3,8 @@ import { Reflector } from '@nestjs/core';
 import { UserPermissionsGuard } from '../guards/user-permissions.guard';
 import { Action } from '../enums/action.enum';
 import { Modules } from '../enums/module-enum';
-import { rolePeut } from './role-peut';
+import { permissionsByRole } from '../constantes/permissionsByRole';
+import { filtrerParDroit, rolePeut } from './role-peut';
 
 /** Rejoue le garde réel pour un rôle et une permission donnés. */
 function gardeAutorise(role: UserRole, module: Modules, action: Action): boolean {
@@ -50,5 +51,105 @@ describe('rolePeut', () => {
         }
       }
     }
+  });
+});
+
+describe('rôle MARKETING (décision du 28/09)', () => {
+  const modules = Object.values(Modules) as Modules[];
+  const actions = Object.values(Action) as Action[];
+  const peut = (module: Modules, action: Action) => rolePeut(UserRole.MARKETING, module, action);
+
+  it('perd le tableau de bord, les commandes, les restaurants, les inventaires et les diffusions', () => {
+    for (const module of [Modules.DASHBOARD, Modules.COMMANDES, Modules.RESTAURANTS, Modules.INVENTAIRE, Modules.DIFFUSIONS]) {
+      for (const action of actions) {
+        expect([module, action, peut(module, action)]).toEqual([module, action, false]);
+      }
+    }
+  });
+
+  it('n’a toujours ni messagerie, ni appels, ni paramètres', () => {
+    for (const module of [Modules.MESSAGES, Modules.CALLS, Modules.SETTINGS]) {
+      expect([module, peut(module, Action.READ)]).toEqual([module, false]);
+    }
+  });
+
+  it('garde la consultation de Menus, Base de données, Fidélisation, Marketing et Notifications', () => {
+    const lus = [
+      Modules.MENUS,
+      Modules.CLIENTS,
+      Modules.COMMENTAIRES,
+      Modules.CRM,
+      Modules.PROMOTIONS,
+      Modules.FIDELITE,
+      Modules.CARD_NATION,
+      Modules.MARKETING,
+      Modules.NOTIFICATIONS,
+      Modules.BASE_DONNEES,
+    ];
+    for (const module of lus) expect([module, peut(module, Action.READ)]).toEqual([module, true]);
+    for (const module of [Modules.CRM, Modules.CARD_NATION, Modules.MARKETING, Modules.BASE_DONNEES]) {
+      expect([module, peut(module, Action.REPORT)]).toEqual([module, true]);
+    }
+  });
+
+  it('exactement ces droits : lecture et statistiques, aucun geste nulle part', () => {
+    const autorises = new Set<Action>([Action.READ, Action.REPORT]);
+    for (const module of modules) {
+      for (const action of actions) {
+        if (!autorises.has(action)) {
+          expect([module, action, peut(module, action)]).toEqual([module, action, false]);
+        }
+      }
+    }
+    expect(Object.keys(permissionsByRole[UserRole.MARKETING].modules).sort()).toEqual(
+      [
+        Modules.BASE_DONNEES,
+        Modules.CARD_NATION,
+        Modules.CLIENTS,
+        Modules.COMMENTAIRES,
+        Modules.CRM,
+        Modules.FIDELITE,
+        Modules.MARKETING,
+        Modules.MENUS,
+        Modules.NOTIFICATIONS,
+        Modules.PROMOTIONS,
+      ].sort(),
+    );
+  });
+
+  it('arrive sur Menus : c’est la première clé de son bloc', () => {
+    expect(Object.keys(permissionsByRole[UserRole.MARKETING].modules)[0]).toBe(Modules.MENUS);
+  });
+
+  it('seul l’administrateur détient encore les diffusions', () => {
+    for (const role of Object.values(UserRole)) {
+      for (const action of actions) {
+        expect([role, action, rolePeut(role, Modules.DIFFUSIONS, action)]).toEqual([
+          role,
+          action,
+          role === UserRole.ADMIN,
+        ]);
+      }
+    }
+  });
+});
+
+describe('filtrerParDroit', () => {
+  it('alertes de commande : tous les rôles sauf MARKETING lisent les commandes', () => {
+    for (const role of Object.values(UserRole)) {
+      expect([role, rolePeut(role, Modules.COMMANDES, Action.READ)]).toEqual([role, role !== UserRole.MARKETING]);
+    }
+  });
+
+  it('retire seulement les comptes sans le droit, dans l’ordre reçu, sans copier les objets', () => {
+    const comptes = Object.values(UserRole).map((role, i) => ({ id: `u${i}`, role }));
+    const gardes = filtrerParDroit(comptes, Modules.COMMANDES, Action.READ);
+    expect(gardes).toEqual(comptes.filter((c) => c.role !== UserRole.MARKETING));
+    expect(gardes.every((c) => comptes.includes(c))).toBe(true);
+  });
+
+  it('rôle absent ou inconnu : écarté', () => {
+    const comptes = [{ id: 'a', role: null }, { id: 'b' }, { id: 'c', role: 'INVENTE' }, { id: 'd', role: UserRole.ADMIN }];
+    expect(filtrerParDroit(comptes, Modules.COMMANDES, Action.READ).map((c) => c.id)).toEqual(['d']);
   });
 });
