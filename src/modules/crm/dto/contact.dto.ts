@@ -1,4 +1,4 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -7,6 +7,7 @@ import {
   IsDateString,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
@@ -143,4 +144,27 @@ export class QueryExportsDto {
 
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100)
   limit?: number;
+}
+
+/**
+ * Nommer un contact qui n'a pas de nom.
+ *
+ * ⚠️ Prénom et nom sont demandés SÉPARÉMENT, jamais découpés d'une saisie
+ * libre. Le prénom personnalise les messages de coupon : une découpe qui se
+ * trompe d'ordre ferait dire « Bonjour Koné ! » à Salif Koné, à chaque envoi
+ * et pour toujours. Deux champs coûtent une seconde à l'agent et suppriment
+ * la question.
+ */
+export class RenommerContactDto {
+  @ApiProperty({ description: 'Prénom, celui qui servira dans les messages', example: 'Salif' })
+  @IsString()
+  @IsNotEmpty({ message: 'Le prénom est obligatoire' })
+  @MaxLength(60)
+  prenom: string;
+
+  @ApiPropertyOptional({ description: 'Nom de famille', example: 'Koné' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  nom?: string;
 }

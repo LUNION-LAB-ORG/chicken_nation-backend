@@ -9,7 +9,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { STATUTS_OUVERTS, cleTelephone, commandeEffective, ficheDuRestaurant } from '../crm.rules';
-import { AssignContactsDto, QueryCrmContactDto } from '../dto/contact.dto';
+import { AssignContactsDto, QueryCrmContactDto, RenommerContactDto } from '../dto/contact.dto';
 import { CrmAccessService } from './crm-access.service';
 import { CrmEventsService } from './crm-events.service';
 import {
@@ -465,6 +465,75 @@ export class CrmContactService {
    * Personnes à qui confier des contacts, avec leur charge actuelle (pour un
    * compte de point de vente, leur charge parmi les fiches de son restaurant).
    */
+  /**
+   * NOMMER un contact qui n'en a pas.
+   *
+   * Le nom écrit ici part AUSSI sur le compte de l'application, parce que
+   * c'est le même client : un nom qui ne vivrait que dans le CRM laisserait
+   * la caisse, les reçus et les messages continuer à dire « Client sans nom ».
+   */
+  async renommer(user: User, id: string, dto: RenommerContactDto) {
+    const prenom = (dto.prenom ?? '').trim();
+    const nom = (dto.nom ?? '').trim();
+    if (!prenom) throw new BadRequestException('Le prénom est obligatoire');
+
+    const contact = await this.prisma.crmContact.findFirst({
+      where: { id, entity_status: { not: EntityStatus.DELETED } },
+      select: {
+        id: true,
+        customer_id: true,
+        assigned_to_id: true,
+        campaign_id: true,
+        segment: true,
+        status: true,
+        segment_since: true,
+        customer: { select: { first_name: true, last_name: true } },
+      },
+    });
+    if (!contact) throw new NotFoundException('Contact introuvable');
+    await this.access.assertPeutTraiter(user, contact);
+
+    /**
+     * Ce que le client a saisi LUI-MÊME dans l'application ne se corrige pas
+     * depuis le centre d'appels : c'est son identité, pas la nôtre. On ne
+     * nomme donc que ce qui n'a pas de nom de son côté, ce qui laisse aussi
+     * la porte ouverte à la correction d'une faute de frappe de l'agent.
+     */
+    const nomDuCompte = [contact.customer?.first_name, contact.customer?.last_name]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    if (nomDuCompte) {
+      throw new BadRequestException(
+        `Ce client a renseigné son nom dans l'application (${nomDuCompte}) : il ne se modifie pas depuis le CRM.`,
+      );
+    }
+
+    /**
+     * Ordre « Nom Prénom » sur la fiche CRM, celui des noms relevés en caisse.
+     * C'est ce qui permet à `identiteContact` de retrouver le prénom en
+     * dernier mot quand le contact n'a pas de compte sur l'application.
+     */
+    const nomReleve = [nom, prenom].filter(Boolean).join(' ');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.crmContact.update({ where: { id }, data: { name: nomReleve } });
+      if (contact.customer_id) {
+        await tx.customer.update({
+          where: { id: contact.customer_id },
+          data: { first_name: prenom, last_name: nom || null },
+        });
+      }
+    });
+
+    this.events.signaler([id], 'identite');
+
+    // Le compte l'emporte sur le relevé : quand il existe, la fiche affichera
+    // « Prénom Nom », pas l'ordre de la capture.
+    const nomAffiche = contact.customer_id ? [prenom, nom].filter(Boolean).join(' ') : nomReleve;
+    return { id, nom: nomAffiche, prenom, sur_le_compte: !!contact.customer_id };
+  }
+
   async agents(user: User) {
     const restaurant = this.access.restaurantDe(user);
     const agents = await this.prisma.user.findMany({

@@ -13,6 +13,7 @@ import {
   QueryCrmContactDto,
   QueryExportsDto,
   RecordCallDto,
+  RenommerContactDto,
   SendCouponDto,
 } from '../dto/contact.dto';
 import { CrmCallService } from '../services/crm-call.service';
@@ -83,6 +84,13 @@ export class CrmContactController {
   @ApiOperation({ summary: "Prendre un contact de la file commune Glovo/Yango au moment de l'appeler" })
   prendre(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
     return this.contacts.prendreContact(req.user as User, id);
+  }
+
+  @Patch('contacts/:id/identite')
+  @RequirePermission(Modules.CRM, Action.UPDATE)
+  @ApiOperation({ summary: "Nommer un contact sans nom ; le nom part aussi sur son compte de l'application" })
+  renommer(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string, @Body() dto: RenommerContactDto) {
+    return this.contacts.renommer(req.user as User, id, dto);
   }
 
   @Post('contacts/:id/calls')
