@@ -19,6 +19,7 @@ import { CrmAnalyticsService } from '../services/crm-analytics.service';
 import { CrmExportService } from '../services/crm-export.service';
 import { CrmPublicsService } from '../services/crm-publics.service';
 import { CrmVentesService } from '../services/crm-ventes.service';
+import { CrmRapportService } from '../services/crm-rapport.service';
 
 /**
  * Tableaux de bord du CRM (cahier §5 et §7). Droit REPORT : direction,
@@ -38,6 +39,7 @@ import { CrmVentesService } from '../services/crm-ventes.service';
 export class CrmAnalyticsController {
   constructor(
     private readonly analytics: CrmAnalyticsService,
+    private readonly rapport: CrmRapportService,
     private readonly ventesService: CrmVentesService,
     private readonly publics: CrmPublicsService,
     private readonly exports: CrmExportService,
@@ -70,6 +72,18 @@ export class CrmAnalyticsController {
   @ApiOperation({ summary: 'Ventes du registre par public et par mois, captures par restaurant' })
   ventes(@Req() req: Request, @Query() q: VentesQueryDto) {
     return this.ventesService.ventes(this.filtres(req, q));
+  }
+
+  /**
+   * Rapport d'activité : les chiffres clés de la période FACE à la période
+   * précédente de même durée, l'entonnoir, les publics, les agents, la
+   * qualité et les raisons. Sans dates, les sept derniers jours.
+   */
+  @Get('rapport')
+  @RequirePermission(Modules.CRM, Action.REPORT)
+  @ApiOperation({ summary: "Rapport d'activité sur une période, comparé à la précédente" })
+  rapportActivite(@Req() req: Request, @Query() q: AnalyticsQueryDto) {
+    return this.rapport.rapport(this.filtres(req, q));
   }
 
   @Get('overview')
