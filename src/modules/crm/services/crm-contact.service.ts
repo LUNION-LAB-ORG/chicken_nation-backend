@@ -17,6 +17,7 @@ import {
   codeMasque,
   etatCoupon,
   filtreContacts,
+  pourAnnuaire,
   sansCodes,
   triContacts,
   versLigne,
@@ -169,7 +170,9 @@ export class CrmContactService {
     // Tout agent peut consulter une fiche (client qui rappelle) ; agir sur un
     // contact reste réservé à son agent, à la file commune et à la direction.
     // Un lecteur voit toute fiche de sa portée, sans numéro à taper.
-    const mode = this.access.estGestionnaire(user)
+    const mode = this.access.estAnnuaire(user)
+      ? ('annuaire' as const)
+      : this.access.estGestionnaire(user)
       ? 'gestion'
       : this.access.estLecteur(user)
         ? ('consultation' as const)
@@ -219,7 +222,7 @@ export class CrmContactService {
     const codes = mode === 'consultation' ? couponsBruts.map((c) => c.code) : [];
     const coupons = codes.length ? couponsBruts.map((c) => ({ ...c, code: codeMasque(c.code) })) : couponsBruts;
     const events = codes.length ? journalBrut.map((e) => ({ ...e, label: sansCodes(e.label, codes) })) : journalBrut;
-    return {
+    const fiche = {
       ...versLigne({ ...reste, coupons: coupons.slice(0, 1) }),
       first_reached_at: p.first_reached_at,
       qualified_at: p.qualified_at,
@@ -239,6 +242,8 @@ export class CrmContactService {
       achats,
       mode,
     };
+
+    return mode === 'annuaire' ? pourAnnuaire(fiche) : fiche;
   }
 
   /**

@@ -269,3 +269,45 @@ export function triContacts(sort?: QueryCrmContactDto['sort']): Prisma.CrmContac
       return [{ segment_since: 'desc' }, { registered_at: { sort: 'desc', nulls: 'last' } }];
   }
 }
+
+/**
+ * Champs de la fiche qui portent du CENTRE D'APPELS, et que le mode
+ * « annuaire » vide. Sortis en constante pour qu'un test puisse les
+ * parcourir : c'est lui, et pas la relecture, qui empêchera un champ ajouté
+ * plus tard de fuiter.
+ */
+export const CHAMPS_CENTRE_APPELS = [
+  'appels',
+  'coupons',
+  'campagnes',
+  'journal',
+  'coupon',
+  'assigned_to',
+  'assigned_to_id',
+  'last_call_status',
+  'loss_reason',
+  'last_comment',
+  'callback_at',
+  'last_call_at',
+  'last_call_outcome',
+  'call_count',
+] as const;
+
+/**
+ * LA FICHE VUE PAR UN COMPTE « ANNUAIRE » (caissier, assistant-manager).
+ *
+ * Ils tiennent le fichier client, pas le pipeline d'appels. La forme de la
+ * réponse ne change pas — l'écran attend les mêmes clés — mais tout ce qui
+ * relève du suivi téléphonique en sort vide.
+ *
+ * ⚠️ Masquer un onglet à l'écran ne retire rien de la réponse : c'est ICI que
+ * la séparation se joue. Un test parcourt `CHAMPS_CENTRE_APPELS` et vérifie
+ * qu'aucun ne revient rempli.
+ */
+export function pourAnnuaire<T extends Record<string, unknown>>(fiche: T): T {
+  const vide: Record<string, unknown> = {};
+  for (const champ of CHAMPS_CENTRE_APPELS) {
+    vide[champ] = Array.isArray((fiche as Record<string, unknown>)[champ]) ? [] : null;
+  }
+  return { ...fiche, ...vide };
+}

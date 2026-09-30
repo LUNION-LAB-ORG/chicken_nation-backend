@@ -54,10 +54,30 @@ export class CrmAccessService {
   constructor(private readonly prisma: PrismaService) {}
 
   peut(user: Pick<User, 'role'>, action: Action): boolean {
+    return this.peutSur(user, Modules.CRM, action);
+  }
+
+  /** Une permission quelconque du rôle, tous modules confondus. */
+  private peutSur(user: Pick<User, 'role'>, module: Modules, action: Action): boolean {
     const perms = permissionsByRole[user.role as UserRole];
-    if (!perms || perms.exclusions?.includes(Modules.CRM)) return false;
-    const actions = perms.modules[Modules.CRM] ?? perms.modules[Modules.ALL];
+    if (!perms || perms.exclusions?.includes(module)) return false;
+    const actions = perms.modules[module] ?? perms.modules[Modules.ALL];
     return !!actions?.includes(action);
+  }
+
+  /**
+   * ANNUAIRE : le compte tient le fichier client (droit CLIENTS) sans AUCUN
+   * droit sur le CRM. Caissier et assistant-manager sont dans ce cas.
+   *
+   * Depuis que la page Clients a fusionné dans le CRM, ils doivent pouvoir y
+   * chercher un client — et rien d'autre. Le serveur leur ouvre donc les
+   * routes de contacts, mais ampute la réponse de tout ce qui relève du
+   * centre d'appels : agent, campagne, coupons, appels, journal. Masquer un
+   * onglet ne retire pas les données de la réponse ; c'est ici que ça se
+   * joue, pas à l'écran.
+   */
+  estAnnuaire(user: Pick<User, 'role'>): boolean {
+    return !this.peut(user, Action.READ) && this.peutSur(user, Modules.CLIENTS, Action.READ);
   }
 
   estGestionnaire(user: Pick<User, 'role'>): boolean {
@@ -146,7 +166,9 @@ export class CrmAccessService {
   }
 
   private porteeRole(user: User): Prisma.CrmContactWhereInput {
-    if (this.estGestionnaire(user) || this.estLecteur(user)) return {};
+    // L'annuaire voit le fichier entier, comme l'ancienne page Clients : il
+    // n'est pas agent, il n'a pas de portefeuille à restreindre.
+    if (this.estGestionnaire(user) || this.estLecteur(user) || this.estAnnuaire(user)) return {};
     this.assertAgent(user);
     return {
       OR: [{ assigned_to_id: user.id }, { campaign: { lead_agent_id: user.id } }, this.fileCommune()],
