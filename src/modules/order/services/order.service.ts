@@ -2083,10 +2083,57 @@ export class OrderService {
     }
     if (auto !== undefined) updateData.auto = auto;
 
+    /**
+     * REPRISE PAR LE PERSONNEL : la commande devient une commande du
+     * personnel, avec exactement les règles de la saisie au backoffice.
+     *
+     *  - la TAXE tombe à zéro. Le serveur n'en calcule aucune quand la
+     *    commande est saisie par un agent (`user_id` renseigné à la
+     *    création) : une commande reprise doit atterrir dans le même état,
+     *    sinon deux commandes identiques portent des totaux différents selon
+     *    le chemin qu'elles ont pris.
+     *  - le MONTANT suit. Sans ça, la commande garderait dans son total une
+     *    taxe qu'aucun écran n'affiche plus, et le client paierait un écart
+     *    que personne ne saurait expliquer.
+     *  - le STATUT passe à ACCEPTED. Reprendre une commande au téléphone,
+     *    c'est la confirmer.
+     *
+     * Uniquement sur la BASCULE, et jamais l'inverse : réenregistrer une
+     * commande déjà manuelle ne doit pas refaire ces gestes.
+     */
+    const passeEnManuel = auto === false && order.auto === true;
+    if (passeEnManuel) {
+      updateData.tax = 0;
+      /**
+       * ⚠️ On ne REMBOBINE jamais une commande plus avancée. Forcer ACCEPTED
+       * sur une commande terminée la rouvrirait, sur une commande annulée la
+       * ressusciterait. Le cas réel est le panier de l'application laissé en
+       * attente, que le centre d'appels reprend et confirme.
+       */
+      if (order.status === OrderStatus.PENDING) {
+        updateData.status = OrderStatus.ACCEPTED;
+        updateData.accepted_at = new Date();
+      }
+    }
+
+    /**
+     * Taxe à retenir pour tout recalcul de total plus bas : celle de la
+     * commande, ou zéro si elle vient de passer en manuel.
+     */
+    const taxeEffective = passeEnManuel ? 0 : (order.tax ?? 0);
+
+    // Les articles ne changent pas, mais la taxe si : le total doit être refait
+    // ici, le bloc de recalcul ci-dessous ne s'exécutant que sur un panier modifié.
+    if (passeEnManuel && !(orderItemsData && newNetAmount !== null)) {
+      const net = order.net_amount ?? 0;
+      const remise = order.discount ?? 0;
+      updateData.amount = Number(net - remise + finalDeliveryFee);
+    }
+
     // Si les items ont été recalculés, mettre à jour le montant et les order_items
     if (orderItemsData && newNetAmount !== null) {
       // Recalculer le montant total
-      const tax = order.tax ?? 0;
+      const tax = taxeEffective;
       const discount = order.discount ?? 0;
       // La remise est figée : un panier réduit sous son montant donnerait un
       // total négatif. Refus, avant toute écriture.
