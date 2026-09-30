@@ -2066,6 +2066,21 @@ export class OrderService {
     if (customer_id) updateData.customer = { connect: { id: customer_id } };
     if (restaurant_id) updateData.restaurant = { connect: { id: restaurant_id } };
     if (user_id) updateData.user = { connect: { id: user_id } };
+    /**
+     * ORIGINE DE LA COMMANDE : application (`auto`) ou saisie du personnel.
+     *
+     * ⚠️ Une commande `auto` encore au statut PENDING est un PANIER de
+     * l'application, et la liste des commandes la CACHE volontairement (§
+     * `findAll`). Rebasculer une commande en attente vers « application » la
+     * ferait donc disparaître de tous les écrans du personnel, sans rien dire
+     * : personne ne la retrouverait, et le client attendrait. On refuse, en
+     * expliquant le seul chemin sûr.
+     */
+    if (auto === true && order.status === OrderStatus.PENDING) {
+      throw new BadRequestException(
+        "Cette commande est encore en attente : la rattacher à l'application la retirerait de la liste, où elle serait introuvable. Confirmez-la d'abord, puis changez son origine.",
+      );
+    }
     if (auto !== undefined) updateData.auto = auto;
 
     // Si les items ont été recalculés, mettre à jour le montant et les order_items
