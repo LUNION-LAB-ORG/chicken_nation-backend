@@ -9,7 +9,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { STATUTS_OUVERTS, cleTelephone, commandeEffective, ficheDuRestaurant } from '../crm.rules';
-import { AssignContactsDto, QueryCrmContactDto, RenommerContactDto } from '../dto/contact.dto';
+import { AssignContactsDto, COMPTES_CLIENT, QueryCrmContactDto, RenommerContactDto } from '../dto/contact.dto';
 import { CrmAccessService } from './crm-access.service';
 import { CrmEventsService } from './crm-events.service';
 import {
@@ -72,6 +72,42 @@ export class CrmContactService {
    * aucun geste). Un compte de point de vente n'ouvre que les fiches de son
    * restaurant, et n'y voit que les captures et commandes de ce restaurant.
    */
+  /**
+   * COMBIEN DANS CHAQUE PUBLIC, sur le périmètre filtré.
+   *
+   * La liste n'affichait qu'un total : pour connaître la répartition il
+   * fallait filtrer quatre fois de suite en notant les résultats. Supportable
+   * quand le CRM ne portait que les cibles de relance, absurde depuis qu'il
+   * porte tout le fichier client.
+   *
+   * ⚠️ Le filtre de PUBLIC et celui de COMPTE sont retirés du périmètre.
+   * Sinon, cliquer sur « Glovo » mettrait tous les autres à zéro et on ne
+   * pourrait plus en changer : la bande servirait une fois, puis deviendrait
+   * un cul-de-sac. Les autres filtres, eux, sont respectés — le décompte
+   * décrit ce qu'on regarde.
+   */
+  async repartition(user: User, q: QueryCrmContactDto) {
+    const { segment: _public, compte: _compte, page: _p, limit: _l, ...reste } = q;
+    const base = filtreContacts(this.access.portee(user), reste as QueryCrmContactDto);
+
+    const [parPublic, ...parCompte] = await Promise.all([
+      this.prisma.crmContact.groupBy({ by: ['segment'], where: base, _count: { _all: true } }),
+      ...COMPTES_CLIENT.map((compte) =>
+        this.prisma.crmContact.count({
+          where: filtreContacts(base, { compte } as QueryCrmContactDto),
+        }),
+      ),
+    ]);
+
+    return {
+      total: parPublic.reduce((somme, l) => somme + l._count._all, 0),
+      publics: parPublic
+        .map((l) => ({ segment: l.segment, nombre: l._count._all }))
+        .sort((a, b) => b.nombre - a.nombre),
+      comptes: COMPTES_CLIENT.map((compte, i) => ({ compte, nombre: parCompte[i] })),
+    };
+  }
+
   async fiche(user: User, id: string, telephone?: string) {
     const restaurant = this.access.restaurantDe(user);
     const p = await this.prisma.crmContact.findUnique({

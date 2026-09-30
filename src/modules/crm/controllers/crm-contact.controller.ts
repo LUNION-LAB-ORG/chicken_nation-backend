@@ -61,6 +61,20 @@ export class CrmContactController {
     return this.contacts.lister(req.user as User, q);
   }
 
+  /**
+   * ⚠️ Avant `contacts/:id`, sinon « repartition » serait lu comme un id.
+   * Mêmes droits et mêmes filtres que la liste.
+   */
+  @Get('contacts/repartition')
+  @RequireUnePermission(
+    { module: Modules.CRM, action: Action.READ },
+    { module: Modules.CLIENTS, action: Action.READ },
+  )
+  @ApiOperation({ summary: 'Combien de contacts dans chaque public, sur le périmètre filtré' })
+  repartition(@Req() req: Request, @Query() q: QueryCrmContactDto) {
+    return this.contacts.repartition(req.user as User, q);
+  }
+
   @Get('contacts/export')
   @RequirePermission(Modules.CRM, Action.EXPORT)
   @ApiOperation({ summary: 'Export CSV ou Excel avec les mêmes filtres que la liste' })
