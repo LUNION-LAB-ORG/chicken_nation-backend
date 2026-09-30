@@ -46,10 +46,17 @@ export class CrmContactService {
       this.prisma.crmContact.count({ where }),
     ]);
     const lecteur = this.access.estLecteur(user);
+    // MÊME projection que la fiche : la liste porte les mêmes champs sensibles
+    // (agent, coupon, dernier appel, raison). L'oublier ici aurait tout laissé
+    // fuiter par la liste pendant qu'on protégeait la fiche.
+    const annuaire = this.access.estAnnuaire(user);
     return {
-      data: lignes.map(versLigne).map((l) =>
-        lecteur && l.coupon ? { ...l, coupon: { ...l.coupon, code: codeMasque(l.coupon.code) } } : l,
-      ),
+      data: lignes
+        .map(versLigne)
+        .map((l) =>
+          lecteur && l.coupon ? { ...l, coupon: { ...l.coupon, code: codeMasque(l.coupon.code) } } : l,
+        )
+        .map((l) => (annuaire ? pourAnnuaire(l) : l)),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -462,7 +469,8 @@ export class CrmContactService {
       orderBy: [{ segment_since: 'desc' }],
       take: 10,
     });
-    return lignes.map(versLigne);
+    const annuaire = this.access.estAnnuaire(user);
+    return lignes.map(versLigne).map((l) => (annuaire ? pourAnnuaire(l) : l));
   }
 
   /** L'agent prend un contact de la file commune au moment de composer son numéro. */

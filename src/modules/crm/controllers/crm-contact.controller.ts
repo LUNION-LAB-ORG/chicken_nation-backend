@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req, R
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { User } from '@prisma/client';
 import type { Request, Response } from 'express';
-import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
+import { RequirePermission, RequireUnePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
@@ -39,7 +39,20 @@ export class CrmContactController {
   ) {}
 
   @Get('contacts')
-  @RequirePermission(Modules.CRM, Action.READ)
+  /**
+   * Ouverte AUSSI au droit CLIENTS. Depuis la fusion de la page Clients,
+   * caissier et assistant-manager cherchent leur fichier ici. Le service
+   * reconnaît ce profil et vide la réponse de tout ce qui relève du centre
+   * d'appels (`pourAnnuaire`) : ouvrir la porte n'ouvre pas les tiroirs.
+   *
+   * ⚠️ `contacts/recherche` reste fermée : c'est « un client appelle »,
+   * réservé aux agents, et l'annuaire a déjà sa recherche dans la liste.
+   * `contacts/export` aussi : ses colonnes portent l'agent et la campagne.
+   */
+  @RequireUnePermission(
+    { module: Modules.CRM, action: Action.READ },
+    { module: Modules.CLIENTS, action: Action.READ },
+  )
   @ApiOperation({
     summary:
       'Liste filtrable (portée : tout pour la direction et la consultation, son portefeuille pour un agent ; les fiches de son restaurant pour un compte de point de vente)',
@@ -73,7 +86,10 @@ export class CrmContactController {
   }
 
   @Get('contacts/:id')
-  @RequirePermission(Modules.CRM, Action.READ)
+  @RequireUnePermission(
+    { module: Modules.CRM, action: Action.READ },
+    { module: Modules.CLIENTS, action: Action.READ },
+  )
   @ApiOperation({ summary: 'Fiche du contact ; mode « consultation » pour un lecteur (téléphone compris, aucun geste)' })
   fiche(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string, @Query('telephone') telephone?: string) {
     return this.contacts.fiche(req.user as User, id, telephone);
