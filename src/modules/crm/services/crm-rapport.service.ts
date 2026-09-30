@@ -1,4 +1,7 @@
 import { Injectable } from '@nestjs/common';
+import * as PDFDocument from 'pdfkit';
+import { LIBELLES_PUBLIC } from '../crm.rules';
+import { FichierExport } from './crm-export.service';
 import { AnalyticsQueryDto } from '../dto/analytics.dto';
 import { CrmAnalyticsService } from './crm-analytics.service';
 import { Perimetre } from './crm-passages.query';
@@ -131,9 +134,118 @@ export class CrmRapportService {
       raisons,
     };
   }
+
+  /** Le même rapport, en PDF, avec les filtres appliqués. */
+  async pdf(q: AnalyticsQueryDto & Perimetre): Promise<FichierExport> {
+    const r = await this.rapport(q);
+    const contenu = await this.dessiner(r);
+    return {
+      nom: `rapport-crm-${r.periode.debut}-${r.periode.fin}.pdf`,
+      type: 'application/pdf',
+      contenu,
+    };
+  }
+
+  /**
+   * Mise en page volontairement sobre et sans graphique : ce document est lu
+   * à l'écran, imprimé, et souvent transmis par message. Un tableau de
+   * chiffres lisibles vaut mieux qu'une courbe qui ne survit pas à une
+   * photocopie.
+   */
+  private dessiner(r: Awaited<ReturnType<CrmRapportService['rapport']>>): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const doc = new PDFDocument({ size: 'A4', margin: 48 });
+      const morceaux: Buffer[] = [];
+      doc.on('data', (m: Buffer) => morceaux.push(m));
+      doc.on('end', () => resolve(Buffer.concat(morceaux)));
+      doc.on('error', reject);
+
+      const titre = (t: string) =>
+        doc.moveDown(0.8).fillColor('#111827').fontSize(12).text(t, { underline: true }).moveDown(0.3).fontSize(10);
+      const ligne = (cle: string, valeur: string) =>
+        doc.fillColor('#6B7280').text(`${cle} : `, { continued: true }).fillColor('#111827').text(valeur);
+
+      doc.fillColor('#F17922').fontSize(20).text('Chicken Nation');
+      doc.fillColor('#111827').fontSize(16).text("Rapport d'activité du CRM");
+      doc
+        .fillColor('#6B7280')
+        .fontSize(9)
+        .text(
+          `Du ${jj(r.periode.debut)} au ${jj(r.periode.fin)} (${r.periode.jours} jour${r.periode.jours > 1 ? 's' : ''}) · ` +
+            `comparé au ${jj(r.precedente.debut)} – ${jj(r.precedente.fin)}`,
+        );
+      doc.fillColor('#9CA3AF').fontSize(8).text(`Édité le ${jj(new Date().toISOString().slice(0, 10))}`);
+
+      titre('Chiffres clés');
+      for (const c of r.cles) {
+        ligne(c.libelle, `${f(c.valeur)}${c.monnaie ? ' F' : ''} — ${variation(c)}`);
+      }
+
+      titre('Taux');
+      ligne('Contact (joints / appels)', `${pourcent(r.taux.contact.valeur)} (avant ${pourcent(r.taux.contact.precedent)})`);
+      ligne('Conversion (conversions / entrées)', `${pourcent(r.taux.conversion.valeur)} (avant ${pourcent(r.taux.conversion.precedent)})`);
+      ligne('Coupons utilisés', `${pourcent(r.taux.coupon_utilise.valeur)} (avant ${pourcent(r.taux.coupon_utilise.precedent)})`);
+
+      titre('Par public');
+      if (r.entonnoirs.length === 0) doc.text('Aucun public sur la période.');
+      for (const e of r.entonnoirs) {
+        ligne(nomPublic(e.segment), `${f(e.ventes)} vente(s), conversion ${pourcent(e.taux_conversion ?? 0)}`);
+      }
+
+      titre('État du portefeuille');
+      ligne('Contacts ouverts', f(r.population.ouverts));
+      ligne('Jamais appelés', f(r.population.jamais_appeles));
+      ligne('Non assignés', f(r.population.non_assignes));
+      ligne('À rappeler', f(r.population.a_rappeler));
+      ligne('Intéressés', f(r.population.interesses));
+      ligne('Coupon envoyé', f(r.population.coupons));
+
+      titre('Qualité du traitement');
+      ligne('Résolus au premier appel', `${f(r.qualite.resolution_premier_appel.resolus)} sur ${f(r.qualite.resolution_premier_appel.traites)} (${pourcent(r.qualite.resolution_premier_appel.taux)})`);
+      ligne('Tentatives moyennes', f(r.qualite.traitement.tentatives_moyennes));
+      ligne('Appels par contact', f(r.qualite.traitement.appels_par_contact));
+      ligne('Délai médian avant commande', `${f(r.conversion.delai_median_j)} jour(s)`);
+
+      titre('Performance par agent');
+      const agents = (r.agents as { lignes?: { fullname: string; traites: number; joints: number; coupons: number; conversions: number; ca: number }[] }).lignes ?? [];
+      if (agents.length === 0) doc.text('Aucun agent sur la période.');
+      for (const a of agents) {
+        doc.text(
+          `${a.fullname} : ${f(a.traites)} traité(s), ${f(a.joints)} joint(s), ${f(a.coupons)} coupon(s), ${f(a.conversions)} vente(s), ${f(a.ca)} F`,
+        );
+      }
+
+      titre('Raisons de non-commande');
+      const raisons = (r.raisons as { raisons?: { raison: string; nombre: number }[] }).raisons ?? [];
+      if (raisons.length === 0) doc.text('Aucune raison saisie sur la période.');
+      for (const x of raisons.slice(0, 10)) doc.text(`${x.raison} : ${f(x.nombre)}`);
+
+      doc.end();
+    });
+  }
 }
 
 /** Pourcentage à une décimale ; `0` plutôt qu'une division par zéro. */
 function pct(part: number, total: number): number {
   return total > 0 ? Math.round((part / total) * 1000) / 10 : 0;
+}
+
+/** Nombre à la française ; « 0 » plutôt qu'un vide. */
+const f = (n: number | null | undefined) =>
+  n == null ? '0' : new Intl.NumberFormat('fr-FR').format(Math.round(n));
+const pourcent = (n: number) => `${new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 }).format(n)} %`;
+const jj = (v: string) => v.split('-').reverse().join('/');
+const nomPublic = (s: string) => LIBELLES_PUBLIC[s as keyof typeof LIBELLES_PUBLIC] ?? s;
+
+/**
+ * La variation, écrite comme on la lit à voix haute.
+ *
+ * `null` veut dire « la période précédente était à zéro » : on écrit
+ * « nouveau » plutôt qu'une progression infinie, qui n'apprendrait rien et
+ * ferait douter du reste du document.
+ */
+function variation(c: ChiffreCle): string {
+  if (c.variation === null) return c.valeur > 0 ? 'nouveau' : 'aucun, comme avant';
+  const signe = c.variation > 0 ? '+' : '';
+  return `${signe}${pourcent(c.variation)} (${f(c.precedent)} avant)`;
 }

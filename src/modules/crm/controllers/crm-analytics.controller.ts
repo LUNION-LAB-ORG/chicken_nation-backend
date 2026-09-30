@@ -86,6 +86,24 @@ export class CrmAnalyticsController {
     return this.rapport.rapport(this.filtres(req, q));
   }
 
+  /**
+   * Le même rapport en PDF, avec les filtres de l'écran.
+   *
+   * Gardé par le droit de RAPPORT, pas par celui d'export : ce document ne
+   * contient que des agrégats, exactement ceux déjà affichés à l'écran, et
+   * aucune donnée nominative. Le droit d'export protège l'extraction du
+   * FICHIER DE PERSONNES, pas la synthèse de ce qu'on a le droit de lire.
+   */
+  @Get('rapport/pdf')
+  @RequirePermission(Modules.CRM, Action.REPORT)
+  @ApiOperation({ summary: "Rapport d'activité en PDF, avec les filtres de l'écran" })
+  async rapportPdf(@Req() req: Request, @Query() q: AnalyticsQueryDto, @Res() res: Response) {
+    const fichier = await this.rapport.pdf(this.filtres(req, q));
+    res.setHeader('Content-Type', fichier.type);
+    res.setHeader('Content-Disposition', `attachment; filename="${fichier.nom}"`);
+    res.send(fichier.contenu);
+  }
+
   @Get('overview')
   @RequirePermission(Modules.CRM, Action.REPORT)
   @ApiOperation({ summary: 'Population, entonnoir et chiffre d’affaires des conversions' })
