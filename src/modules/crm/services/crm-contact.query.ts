@@ -139,6 +139,38 @@ export function filtreContacts(
   const couponFiltre = filtreCoupon(q.coupon, maintenant);
   if (couponFiltre) et.push(couponFiltre);
 
+  /**
+   * ÉTAT DU COMPTE, repris de la page Clients. Les conditions sont celles du
+   * module `customer`, transposées à travers la relation : un même mot doit
+   * désigner exactement la même population des deux côtés, sinon la fusion
+   * des deux écrans aurait produit deux comptes différents pour « sans app ».
+   */
+  if (q.compte) {
+    const PAS_SUPPRIMEE = { entity_status: { not: EntityStatus.DELETED } };
+    const parCompte: Record<string, Prisma.CustomerWhereInput> = {
+      avec_app: { notification_settings: { expo_push_token: { not: null }, active: true } },
+      sans_app: {
+        OR: [
+          { notification_settings: { is: null } },
+          { notification_settings: { expo_push_token: null } },
+        ],
+      },
+      a_commande: { orders: { some: PAS_SUPPRIMEE } },
+      jamais_commande: { orders: { none: PAS_SUPPRIMEE } },
+      profil_incomplet: {
+        OR: [
+          { first_name: null },
+          { first_name: '' },
+          { last_name: null },
+          { last_name: '' },
+        ],
+      },
+    };
+    // `customer: { ... }` n'accepte QUE les fiches rattachées à un compte :
+    // un numéro relevé en caisse sans compte sort de lui-même.
+    et.push({ customer: parCompte[q.compte] });
+  }
+
   const inscription = plage(q.registered_from, q.registered_to);
   if (inscription) et.push({ registered_at: inscription });
   const appel = plage(q.last_call_from, q.last_call_to);

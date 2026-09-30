@@ -22,6 +22,26 @@ export type EtatCoupon = (typeof ETATS_COUPON)[number];
 
 export const SEGMENTS_CRM = ['JAMAIS_COMMANDE', 'INACTIF', 'GLOVO', 'YANGO'] as const;
 
+/**
+ * État du COMPTE CLIENT, repris de l'ancienne page Clients.
+ *
+ * ⚠️ À ne pas confondre avec le PUBLIC (`segment`), qui dit par où le contact
+ * est entré et ne bouge plus. Celui-ci décrit le compte applicatif tel qu'il
+ * est aujourd'hui. Les deux se combinent : un contact capté sur Glovo peut
+ * très bien avoir l'application installée.
+ *
+ * Ces valeurs n'ont de sens que pour un contact RATTACHÉ à un compte : un
+ * numéro relevé en caisse sans compte ne correspond à aucune d'elles, et le
+ * filtre de relation l'écarte de lui-même.
+ */
+export const COMPTES_CLIENT = [
+  'avec_app',
+  'sans_app',
+  'a_commande',
+  'jamais_commande',
+  'profil_incomplet',
+] as const;
+
 export const TRIS_CONTACTS = [
   'entree_desc',
   'inscription_desc',
@@ -48,6 +68,10 @@ export class QueryCrmContactDto {
   @ApiPropertyOptional({ description: 'Public : inscrits sans commande, inactifs…', enum: SEGMENTS_CRM })
   @IsOptional() @IsIn(SEGMENTS_CRM)
   segment?: (typeof SEGMENTS_CRM)[number];
+
+  @ApiPropertyOptional({ enum: COMPTES_CLIENT, description: "État du compte client (ancienne page Clients)" })
+  @IsOptional() @IsIn(COMPTES_CLIENT)
+  compte?: (typeof COMPTES_CLIENT)[number];
 
   @ApiPropertyOptional({ description: 'Statuts séparés par des virgules. Par défaut : tous sauf CONVERTI' })
   @IsOptional() @IsString()
