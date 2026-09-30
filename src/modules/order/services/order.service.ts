@@ -922,7 +922,24 @@ export class OrderService {
     // Actions spécifiques selon le changement d'état
     await this.orderHelper.handleStatusSpecificActions(order, status, meta);
 
-    const isDeleted = order.payment_method === PaymentMethod.ONLINE && order.status === OrderStatus.PENDING && status === OrderStatus.CANCELLED;
+    /**
+     * PANIER EN LIGNE ABANDONNÉ : plus de disparition silencieuse.
+     *
+     * Une commande en ligne restée EN ATTENTE puis annulée était marquée
+     * `DELETED`, donc retirée de tous les écrans du personnel. Personne ne
+     * voyait plus qu'un client avait renoncé, ni à quelle fréquence : le
+     * renoncement au paiement est pourtant le signal le plus utile qu'on
+     * puisse lire sur cet écran. Elle reste désormais ACTIVE, au statut
+     * CANCELLED, visible comme n'importe quelle autre annulation.
+     *
+     * Effet de bord corrigé au passage : le client recevait DEUX
+     * notifications, « Commande annulée » puis « Commande supprimée », la
+     * seconde déclenchée par ce même `DELETED`. Seule la première part
+     * maintenant, et c'est la seule qui décrive ce qui s'est produit.
+     *
+     * La suppression explicite d'une commande par le personnel
+     * (`remove()`) n'est pas concernée : elle reste un geste délibéré.
+     */
     // Mettre à jour le statut
     const updatedOrder = await this.prisma.order.update({
       where: { id: order.id },
@@ -933,7 +950,6 @@ export class OrderService {
         estimated_preparation_time: this.orderHelper.calculateEstimatedTime(
           meta?.estimated_preparation_time ?? '',
         ),
-        ...(isDeleted && { entity_status: EntityStatus.DELETED, deleted_at: new Date() }),
         updated_at: new Date(),
         status,
         ...(status === OrderStatus.ACCEPTED && { accepted_at: new Date() }),
