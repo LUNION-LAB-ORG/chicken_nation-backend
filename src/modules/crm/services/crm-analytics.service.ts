@@ -498,6 +498,8 @@ export class CrmAnalyticsService {
         captures: number;
         entrees_par_public: Record<string, number>;
         ventes_par_public: Record<string, number>;
+        appels_par_public: Record<string, number>;
+        joints_par_public: Record<string, number>;
       }[]
     >`
       WITH jours AS (SELECT generate_series(${debut}::date, ${fin}::date, interval '1 day')::date AS jour),
@@ -506,6 +508,12 @@ export class CrmAnalyticsService {
             WHERE k.created_at >= ${debut} AND k.created_at < ${lendemain}
               ${filtreCampagne('k.campaign_id', q)} ${filtreSegments(PUBLIC_K, publics)} ${filtreRestaurant('k.contact_id', q)}
             GROUP BY 1),
+      ap AS (SELECT k.created_at::date AS j, ${Prisma.raw(PUBLIC_K)}::text AS s,
+             count(*) AS n, count(*) FILTER (WHERE k.reached) AS r
+             FROM "CrmCall" k ${jointurePassage('k')}
+             WHERE k.created_at >= ${debut} AND k.created_at < ${lendemain}
+               ${filtreCampagne('k.campaign_id', q)} ${filtreSegments(PUBLIC_K, publics)} ${filtreRestaurant('k.contact_id', q)}
+             GROUP BY 1, 2),
       c AS (SELECT c.sent_at::date AS j, count(*) AS n
             FROM "CrmCoupon" c ${jointurePassage('c')}
             WHERE c.sent_at >= ${debut} AND c.sent_at < ${lendemain}
@@ -528,6 +536,8 @@ export class CrmAnalyticsService {
         coalesce((SELECT jsonb_object_agg(v.s, v.n) FROM v WHERE v.j = jours.jour), '{}'::jsonb) AS ventes_par_public,
         coalesce((SELECT sum(e.n) FROM e WHERE e.j = jours.jour), 0)::int AS entrees,
         coalesce((SELECT jsonb_object_agg(e.s, e.n) FROM e WHERE e.j = jours.jour), '{}'::jsonb) AS entrees_par_public,
+        coalesce((SELECT jsonb_object_agg(ap.s, ap.n) FROM ap WHERE ap.j = jours.jour), '{}'::jsonb) AS appels_par_public,
+        coalesce((SELECT jsonb_object_agg(ap.s, ap.r) FROM ap WHERE ap.j = jours.jour), '{}'::jsonb) AS joints_par_public,
         coalesce(cap.n, 0)::int AS captures
       FROM jours
       LEFT JOIN a ON a.j = jours.jour LEFT JOIN c ON c.j = jours.jour LEFT JOIN cap ON cap.j = jours.jour
@@ -552,6 +562,12 @@ export class CrmAnalyticsService {
         conversions: n(l.conversions),
         entrees_par_public: completer(l.entrees_par_public),
         ventes_par_public: completer(l.ventes_par_public),
+        // Les appels manquaient : impossible de dire « combien sur Glovo
+        // contre Yango ». Agrégés dans une CTE À PART, groupée par jour et
+        // par public, pour ne pas toucher au décompte journalier existant —
+        // une jointure multipliée aurait faussé les totaux de la page.
+        appels_par_public: completer(l.appels_par_public),
+        joints_par_public: completer(l.joints_par_public),
       })),
     };
   }

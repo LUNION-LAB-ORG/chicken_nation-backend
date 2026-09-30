@@ -92,6 +92,24 @@ export class CrmRapportService {
     const a = cumul(tendance.serie);
     const b = cumul(tendancePrec.serie);
 
+    /**
+     * Appels et joints par public, cumulés sur la période. C'est la réponse à
+     * « combien d'appels sur Glovo contre Yango », que rien ne donnait : la
+     * série ventilait les entrées et les ventes, jamais les appels.
+     */
+    const cumulParPublic = (
+      serie: { appels_par_public?: Record<string, number>; joints_par_public?: Record<string, number> }[],
+      champ: 'appels_par_public' | 'joints_par_public',
+    ) =>
+      serie.reduce<Record<string, number>>((acc, l) => {
+        for (const [pub, n] of Object.entries(l[champ] ?? {})) acc[pub] = (acc[pub] ?? 0) + n;
+        return acc;
+      }, {});
+
+    const appelsPublic = cumulParPublic(tendance.serie, 'appels_par_public');
+    const jointsPublic = cumulParPublic(tendance.serie, 'joints_par_public');
+    const appelsPublicPrec = cumulParPublic(tendancePrec.serie, 'appels_par_public');
+
     const cle = (cle: string, libelle: string, valeur: number, precedent: number, monnaie = false): ChiffreCle => ({
       cle,
       libelle,
@@ -126,6 +144,20 @@ export class CrmRapportService {
       serie: tendance.serie,
       population: vue.population,
       entonnoir: vue.entonnoir,
+      /**
+       * Une ligne par public : les appels passés, ceux qui ont décroché, les
+       * ventes et le taux. Les appels de la période précédente sont donnés à
+       * côté, parce que c'est le seul moyen de savoir si l'effort augmente.
+       */
+      par_public: vue.entonnoirs.map((e) => ({
+        segment: e.segment,
+        libelle: e.libelle,
+        appels: appelsPublic[e.segment] ?? 0,
+        appels_precedent: appelsPublicPrec[e.segment] ?? 0,
+        joints: jointsPublic[e.segment] ?? 0,
+        ventes: e.ventes,
+        taux_conversion: e.taux_conversion,
+      })),
       entonnoirs: vue.entonnoirs,
       passage_appli: vue.passage_appli,
       conversion: vue.conversion,
@@ -187,9 +219,13 @@ export class CrmRapportService {
       ligne('Coupons utilisés', `${pourcent(r.taux.coupon_utilise.valeur)} (avant ${pourcent(r.taux.coupon_utilise.precedent)})`);
 
       titre('Par public');
-      if (r.entonnoirs.length === 0) doc.text('Aucun public sur la période.');
-      for (const e of r.entonnoirs) {
-        ligne(nomPublic(e.segment), `${f(e.ventes)} vente(s), conversion ${pourcent(e.taux_conversion ?? 0)}`);
+      if (r.par_public.length === 0) doc.text('Aucun public sur la période.');
+      for (const e of r.par_public) {
+        const avant = e.appels_precedent > 0 ? ` (${f(e.appels_precedent)} avant)` : '';
+        ligne(
+          nomPublic(e.segment),
+          `${f(e.appels)} appel(s)${avant}, ${f(e.joints)} joint(s), ${f(e.ventes)} vente(s), conversion ${pourcent(e.taux_conversion ?? 0)}`,
+        );
       }
 
       titre('État du portefeuille');
