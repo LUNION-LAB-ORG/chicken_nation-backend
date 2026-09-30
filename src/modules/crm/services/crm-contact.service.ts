@@ -386,12 +386,28 @@ export class CrmContactService {
         .then((l) => l.map(versLigne)),
     ]);
 
-    const [appels, joints, couponsJour, conversionsJour, portefeuille] = await Promise.all([
+    const [appels, joints, couponsJour, conversionsJour, portefeuille, jamaisAppeles] = await Promise.all([
       this.prisma.crmCall.count({ where: { agent_id: user.id, created_at: { gte: debutJour } } }),
       this.prisma.crmCall.count({ where: { agent_id: user.id, reached: true, created_at: { gte: debutJour } } }),
       this.prisma.crmCoupon.count({ where: { sent_by_id: user.id, sent_at: { gte: debutJour } } }),
       this.prisma.crmContact.count({ where: { assigned_to_id: user.id, converted_at: { gte: debutJour } } }),
       this.prisma.crmContact.count({ where: { AND: [base, { status: { in: STATUTS_OUVERTS } }] } }),
+      /**
+       * LE NOMBRE QUI BAISSE QUAND ON TRAVAILLE.
+       *
+       * Le portefeuille compte un STOCK : les contacts confiés encore ouverts.
+       * Or « coupon envoyé » et « intéressé » sont des statuts ouverts, et
+       * prendre une fiche dans la file commune en ajoute une. Un agent qui
+       * passe sa journée au téléphone voit donc son portefeuille MONTER, ce
+       * qui lui donne le sentiment de ne pas avancer.
+       *
+       * Celui-ci compte le RESTE À FAIRE : les confiés que personne n'a encore
+       * appelés. Il descend à chaque premier appel, et ne remonte que quand
+       * l'agent prend de nouveaux contacts — ce qui est la vérité.
+       */
+      this.prisma.crmContact.count({
+        where: { AND: [base, { status: { in: STATUTS_OUVERTS } }, { call_count: 0 }] },
+      }),
     ]);
 
     return {
@@ -408,6 +424,7 @@ export class CrmContactService {
         coupons_jour: couponsJour,
         conversions_jour: conversionsJour,
         portefeuille,
+        jamais_appeles: jamaisAppeles,
       },
     };
   }
