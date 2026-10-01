@@ -1,0 +1,8 @@
+Urbanist (Urbanist-Regular.ttf, Urbanist-Bold.ttf)
+Copyright 2020 The Urbanist Project Authors (https://github.com/coreyhu/Urbanist)
+
+Police distribuée sous la SIL Open Font License, version 1.1 (OFL-1.1),
+texte complet : https://openfontlicense.org/open-font-license-official-text/
+
+Copie du dossier backoffice/public/fonts, embarquée dans le serveur pour les
+PDF du rapport CRM (crm-rapport.pdf.ts). Repli sur Helvetica si absente.

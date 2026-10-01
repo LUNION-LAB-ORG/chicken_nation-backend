@@ -52,6 +52,8 @@ export interface Activite {
   appels: number;
   appels_joints: number;
   contacts_appeles: number;
+  /** Clients distincts joints au moins une fois sur la période. */
+  contacts_joints: number;
   coupons_envoyes: number;
   coupons_utilises: number;
   ca_coupons: number;
@@ -245,10 +247,13 @@ export class CrmPublicsService {
   async activite(q: AnalyticsQueryDto & Perimetre): Promise<Groupes<Activite>> {
     const publics = publicsDe(q);
     const [appels, coupons, ventes] = await Promise.all([
-      this.prisma.$queryRaw<(LigneGroupee & { appels: number; appels_joints: number; contacts_appeles: number })[]>`
+      this.prisma.$queryRaw<
+        (LigneGroupee & { appels: number; appels_joints: number; contacts_appeles: number; contacts_joints: number })[]
+      >`
         ${parPublic(
           Prisma.sql`count(*)::int AS appels, count(*) FILTER (WHERE t.reached)::int AS appels_joints,
-            count(DISTINCT t.contact_id)::int AS contacts_appeles`,
+            count(DISTINCT t.contact_id)::int AS contacts_appeles,
+            count(DISTINCT t.contact_id) FILTER (WHERE t.reached)::int AS contacts_joints`,
           Prisma.sql`SELECT k.contact_id, k.reached, ${publicAction('k')} AS segment
             FROM "CrmCall" k ${jointurePassage('k')}
             WHERE true ${plage('k.created_at', q)} ${filtreCampagne('k.campaign_id', q)} ${filtreRestaurant('k.contact_id', q)}`,
@@ -297,6 +302,7 @@ export class CrmPublicsService {
         appels: n(a[cle]?.appels),
         appels_joints: n(a[cle]?.appels_joints),
         contacts_appeles: n(a[cle]?.contacts_appeles),
+        contacts_joints: n(a[cle]?.contacts_joints),
         coupons_envoyes: n(c[cle]?.coupons_envoyes),
         coupons_utilises: n(c[cle]?.coupons_utilises),
         ca_coupons: Math.round(n(c[cle]?.ca_coupons)),
