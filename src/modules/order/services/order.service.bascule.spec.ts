@@ -84,7 +84,13 @@ function monter(commande: Commande, apresRecalcul: Record<string, unknown> = {})
   /** Ce que la base contient, mis à jour par chaque écriture simulée. */
   let enBase: Commande = { ...commande };
   const prisma = {
+    restaurant: { findUnique: jest.fn().mockResolvedValue({ name: 'Riviera' }) },
     order: {
+      // Relecture de la commande reprise, pour l'événement de statut.
+      findUnique: jest.fn(async (_args: { where: { id: string }; include: Record<string, any> }) => ({
+        ...enBase,
+        restaurant: { name: 'Riviera' },
+      })),
       update: jest.fn(async (args: { data: Record<string, unknown> }) => {
         enBase = { ...enBase, ...args.data };
         return enBase;
@@ -106,8 +112,12 @@ function monter(commande: Commande, apresRecalcul: Record<string, unknown> = {})
       return enBase;
     }),
     orderHelper: { calculateEstimatedTime: jest.fn().mockReturnValue(null) },
-    orderEvent: { orderUpdatedEvent: jest.fn() },
-    orderWebSocketService: { emitOrderUpdated: jest.fn() },
+    orderEvent: { orderUpdatedEvent: jest.fn(), orderStatusUpdatedEvent: jest.fn() },
+    orderWebSocketService: { emitOrderUpdated: jest.fn(), emitStatusUpdate: jest.fn() },
+    // Reprise d'un panier : relance des agents, usage du code promo.
+    orderRelance: { noterReprise: jest.fn().mockResolvedValue(undefined) },
+    promoCodeService: { activateUsageForOrder: jest.fn().mockResolvedValue(undefined) },
+    logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
   };
   Object.assign(service, greffes);
   return { service, ...greffes, base: () => enBase };
@@ -290,5 +300,117 @@ describe('OrderService.update : reprise par le personnel', () => {
     expect(prisma.order.updateMany).not.toHaveBeenCalled();
     expect(prisma.order.update.mock.calls[0][0].data).not.toHaveProperty('payment_method');
     expect(commande.payment_method).toBe(PaymentMethod.OFFLINE);
+  });
+});
+
+/**
+ * Reprise au téléphone d'un panier de l'application non payé (relance des
+ * commandes en attente) : les agents de relance et le restaurant sont
+ * prévenus. La confirmation passe par `orderStatusUpdatedEvent`, comme une
+ * acceptation ordinaire : son écouteur déduit les points du panier
+ * (idempotent), sonne la cloche et, pour un ancien brouillon, envoie la
+ * notification « Nouvelle commande ». Une seule cloche, donc : celle de
+ * l'écouteur.
+ */
+describe('OrderService.update : reprise au téléphone, qui est prévenu', () => {
+  /** Laisse partir les promesses lancées sans attente (relecture, journal). */
+  const attendre = () => new Promise((r) => setImmediate(r));
+
+  it('prévient la relance, puis le restaurant : changement de statut et événement de statut, une seule fois', async () => {
+    const monte = monter(commandeAppli({ points: 500, code_promo: null }));
+
+    await basculer(monte.service);
+    await attendre();
+
+    expect(monte.orderRelance.noterReprise).toHaveBeenCalledWith(COMMANDE, 'u1');
+    expect(monte.orderWebSocketService.emitStatusUpdate).toHaveBeenCalledTimes(1);
+    const [commande, precedent] = monte.orderWebSocketService.emitStatusUpdate.mock.calls[0];
+    expect(commande.status).toBe(OrderStatus.ACCEPTED);
+    expect(commande.auto).toBe(false);
+    expect(precedent).toBe(OrderStatus.PENDING);
+
+    // L'écouteur fait la déduction des points et la cloche : un seul envoi.
+    expect(monte.orderEvent.orderStatusUpdatedEvent).toHaveBeenCalledTimes(1);
+    const charge = monte.orderEvent.orderStatusUpdatedEvent.mock.calls[0][0];
+    expect(charge.order).toEqual(
+      expect.objectContaining({ id: COMMANDE, status: OrderStatus.ACCEPTED, points: 500, restaurant: { name: 'Riviera' } }),
+    );
+    expect(charge.etait_brouillon).toBe(true);
+    expect(charge.expo_token).toBeNull();
+
+    // Relue avec les listes blanches : jamais la fiche complète du client.
+    const relecture = monte.prisma.order.findUnique.mock.calls[0][0];
+    expect(relecture.include.customer).toEqual({ select: expect.any(Object) });
+    expect(relecture.include.restaurant).toEqual({ select: expect.any(Object) });
+
+    // Usage du code promo comptabilisé, comme une acceptation ordinaire.
+    expect(monte.promoCodeService.activateUsageForOrder).toHaveBeenCalledTimes(1);
+    expect(monte.promoCodeService.activateUsageForOrder.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ id: COMMANDE }),
+    );
+  });
+
+  it("ne prévient pas la relance pour une commande de l'application déjà payée", async () => {
+    const monte = monter(
+      commandeAppli({
+        status: OrderStatus.ACCEPTED,
+        paied: true,
+        paiements: [paiement(PaiementStatus.SUCCESS, 10500)],
+      }),
+    );
+
+    await basculer(monte.service);
+    await attendre();
+
+    expect(monte.orderRelance.noterReprise).not.toHaveBeenCalled();
+    // Déjà acceptée : le restaurant la connaît, aucun nouvel avis.
+    expect(monte.orderWebSocketService.emitStatusUpdate).not.toHaveBeenCalled();
+    expect(monte.orderEvent.orderStatusUpdatedEvent).not.toHaveBeenCalled();
+    expect(monte.promoCodeService.activateUsageForOrder).not.toHaveBeenCalled();
+  });
+
+  it("confirme une commande de l'application payable au restaurant sans la présenter comme nouvelle", async () => {
+    const monte = monter(commandeAppli({ payment_method: PaymentMethod.OFFLINE }));
+
+    await basculer(monte.service);
+    await attendre();
+
+    // Pas un brouillon : le restaurant la voyait déjà, aucune relance à noter.
+    expect(monte.orderRelance.noterReprise).not.toHaveBeenCalled();
+    expect(monte.orderEvent.orderStatusUpdatedEvent).toHaveBeenCalledTimes(1);
+    expect(monte.orderEvent.orderStatusUpdatedEvent.mock.calls[0][0].etait_brouillon).toBe(false);
+  });
+
+  it('ne refait rien sur une commande déjà manuelle', async () => {
+    const monte = monter(commandeAppli({ auto: false, status: OrderStatus.ACCEPTED }));
+
+    await basculer(monte.service);
+    await attendre();
+
+    expect(monte.orderRelance.noterReprise).not.toHaveBeenCalled();
+    expect(monte.orderWebSocketService.emitStatusUpdate).not.toHaveBeenCalled();
+    expect(monte.orderEvent.orderStatusUpdatedEvent).not.toHaveBeenCalled();
+  });
+
+  it('une relecture en échec ne fait pas échouer la reprise', async () => {
+    const monte = monter(commandeAppli());
+    monte.prisma.order.findUnique.mockRejectedValue(new Error('base injoignable'));
+
+    await expect(basculer(monte.service)).resolves.toEqual(expect.objectContaining({ auto: false }));
+    await attendre();
+
+    expect(monte.logger.warn).toHaveBeenCalled();
+    expect(monte.orderEvent.orderStatusUpdatedEvent).not.toHaveBeenCalled();
+  });
+
+  it("un code promo en échec n'empêche pas l'avis au restaurant", async () => {
+    const monte = monter(commandeAppli());
+    monte.promoCodeService.activateUsageForOrder.mockRejectedValue(new Error('base injoignable'));
+
+    await basculer(monte.service);
+    await attendre();
+
+    expect(monte.logger.error).toHaveBeenCalled();
+    expect(monte.orderEvent.orderStatusUpdatedEvent).toHaveBeenCalledTimes(1);
   });
 });

@@ -1616,7 +1616,7 @@ model Order {
   rewards          Reward[]
   scratch_draws    ScratchDraw[]
 
-  entity_status     EntityStatus     @default(ACTIVE)
+  entity_status     EntityStatus          @default(ACTIVE)
   accepted_at       DateTime?
   prepared_at       DateTime?
   ready_at          DateTime?
@@ -1630,13 +1630,16 @@ model Order {
   /// Pour les paiements différés (commande créée un jour, payée un autre), `created_at`
   /// est aligné sur l'instant du PAIEMENT afin que la commande remonte en tête de liste
   /// et soit filtrée sur la bonne période. `submitted_at` conserve la création d'origine.
-  submitted_at      DateTime?        @db.Timestamp(6)
-  created_at        DateTime         @default(now()) @db.Timestamp(6)
-  updated_at        DateTime         @default(now()) @db.Timestamp(6)
+  submitted_at      DateTime?             @db.Timestamp(6)
+  created_at        DateTime              @default(now()) @db.Timestamp(6)
+  updated_at        DateTime              @default(now()) @db.Timestamp(6)
   Comment           Comment[]
   TicketThread      TicketThread[]
   Redemption        Redemption[]
   promo_code_usages PromoCodeUsage[]
+  /// Relance téléphonique du panier non payé (une ligne au plus) et son journal.
+  relance           OrderRelance?
+  relance_journal   OrderRelanceJournal[]
 
   @@index([reference, status, entity_status, customer_id])
   // Index pour les agrégations statistiques (page Stats > Clients/Commandes) :
@@ -1830,6 +1833,11 @@ model User {
   calls_made     Call[] @relation("CallsMade")
   calls_answered Call[] @relation("CallsAnswered")
   calls_targeted Call[] @relation("CallsToUser")
+
+  // Relance des paniers de l'application non payés
+  relances_prises   OrderRelance[]        @relation("RelancePrisPar")
+  relances_ignorees OrderRelance[]        @relation("RelanceIgnorePar")
+  relances_journal  OrderRelanceJournal[] @relation("RelanceJournalAuteur")
 
   @@index([email, type])
 }
@@ -3720,4 +3728,55 @@ model CrmCampaignPublic {
   targeted_count         Int         @default(0)
 
   @@unique([campaign_id, segment])
+}
+
+/// Relance téléphonique d'un panier de l'application resté en attente de
+/// paiement. Une ligne n'existe qu'à partir du premier événement (alerte ou
+/// geste d'agent). L'état « à relancer » se calcule à la lecture, jamais stocké
+/// (`relance.rules.ts`).
+model OrderRelance {
+  id       String @id @default(uuid()) @db.Uuid
+  order_id String @unique @db.Uuid
+  order    Order  @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  /// Dernier passage au delà du délai, posé par la tâche d'alerte (revendication
+  /// atomique). Reposé quand une prise expire sans traitement : la commande
+  /// sonne de nouveau.
+  alerte_le DateTime? @db.Timestamp(6)
+
+  /// « Je m'en occupe » : valable jusqu'à prise_expire_le, puis libre sans aucun traitement.
+  pris_par_id     String?   @db.Uuid
+  pris_par        User?     @relation("RelancePrisPar", fields: [pris_par_id], references: [id], onDelete: SetNull)
+  pris_le         DateTime? @db.Timestamp(6)
+  prise_expire_le DateTime? @db.Timestamp(6)
+
+  /// « Ignorer » : vaut pour toute l'équipe, jusqu'à « Rétablir ».
+  ignore_par_id String?   @db.Uuid
+  ignore_par    User?     @relation("RelanceIgnorePar", fields: [ignore_par_id], references: [id], onDelete: SetNull)
+  ignore_le     DateTime? @db.Timestamp(6)
+  raison_code   String?   @db.VarChar(40)
+  raison_texte  String?   @db.VarChar(160)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([alerte_le])
+  @@index([ignore_le])
+}
+
+/// Historique des gestes sur une relance (qui, quoi, quand). Jamais modifié.
+model OrderRelanceJournal {
+  id       String  @id @default(uuid()) @db.Uuid
+  order_id String  @db.Uuid
+  order    Order   @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  /// ALERTE | PRISE | LIBERATION | IGNORE | RETABLISSEMENT | REPRISE
+  action   String  @db.VarChar(20)
+  user_id  String? @db.Uuid
+  user     User?   @relation("RelanceJournalAuteur", fields: [user_id], references: [id], onDelete: SetNull)
+  raison   String? @db.VarChar(200)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([order_id, created_at])
+  @@index([user_id, created_at])
 }

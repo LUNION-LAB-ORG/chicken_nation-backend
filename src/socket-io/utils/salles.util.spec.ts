@@ -1,10 +1,11 @@
-import { EntityStatus } from '@prisma/client';
+import { EntityStatus, UserRole } from '@prisma/client';
 import { DelivererChannels } from 'src/modules/deliverers/enums/deliverer-channels';
 import {
   EVENEMENTS_RESTAURANT_POUR_LIVREURS,
   SALLE_BACKOFFICE,
   SALLE_CLIENTS,
   SALLE_PERSONNEL,
+  SALLE_RELANCES,
   estRelayeAuxLivreurs,
   restaurantSuiviParLivreur,
   salleClient,
@@ -134,6 +135,43 @@ describe('salles.util', () => {
     it('seuls les clients sont dans la salle des clients', () => {
       expect(sallesAJoindre({ id: 'u1', type: 'user', userType: 'BACKOFFICE' })).not.toContain('customers');
       expect(sallesAJoindre({ id: 'd1', type: 'deliverer', restaurantId: R1 })).not.toContain('customers');
+    });
+  });
+
+  describe('salle des relances (paniers non payés)', () => {
+    it('garde son nom', () => {
+      expect(SALLE_RELANCES).toBe('relances_paniers');
+    });
+
+    it.each([
+      [UserRole.ADMIN, 'BACKOFFICE' as const],
+      [UserRole.CALL_CENTER, 'BACKOFFICE' as const],
+      [UserRole.ADMIN, 'RESTAURANT' as const],
+      [UserRole.CALL_CENTER, 'RESTAURANT' as const],
+    ])('%s (%s) la rejoint', (role, userType) => {
+      expect(sallesAJoindre({ id: 'u1', type: 'user', userType, restaurantId: R1, role })).toContain('relances_paniers');
+    });
+
+    it.each([UserRole.MARKETING, UserRole.COMPTABLE, UserRole.CAISSIER, UserRole.MANAGER, UserRole.CUISINE])(
+      '%s ne la rejoint pas',
+      (role) => {
+        for (const userType of ['BACKOFFICE', 'RESTAURANT'] as const) {
+          expect(sallesAJoindre({ id: 'u1', type: 'user', userType, restaurantId: R1, role })).not.toContain(
+            'relances_paniers',
+          );
+        }
+      },
+    );
+
+    it('ni un client, ni un livreur, même avec un rôle qui lui serait attribué', () => {
+      expect(sallesAJoindre({ id: 'c1', type: 'customer', role: UserRole.ADMIN })).not.toContain('relances_paniers');
+      expect(sallesAJoindre({ id: 'd1', type: 'deliverer', restaurantId: R1, role: UserRole.ADMIN })).not.toContain(
+        'relances_paniers',
+      );
+    });
+
+    it('membre du personnel sans rôle connu : non', () => {
+      expect(sallesAJoindre({ id: 'u1', type: 'user', userType: 'BACKOFFICE' })).not.toContain('relances_paniers');
     });
   });
 

@@ -30,6 +30,9 @@ import { ReferralModule } from 'src/modules/referral/referral.module';
 import { UsersModule } from 'src/modules/users/users.module';
 import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.module';
 import { MapsModule } from 'src/modules/maps/maps.module';
+import { OrderRelanceController } from './controllers/order-relance.controller';
+import { OrderRelanceService } from './services/order-relance.service';
+import { OrderRelanceTask } from './tasks/order-relance.task';
 
 @Module({
   imports: [
@@ -51,9 +54,10 @@ import { MapsModule } from 'src/modules/maps/maps.module';
     // L'aperçu du trajet avant paiement a besoin de Directions.
     MapsModule,
   ],
-  // OrderCouponController AVANT OrderController : `orders/coupon/...` ne doit
-  // jamais être lu comme un identifiant de commande.
-  controllers: [OrderCouponController, OrderController, OrderDelivererController],
+  // OrderCouponController et OrderRelanceController AVANT OrderController :
+  // `orders/coupon/...` et `orders/relances/...` ne doivent jamais être lus
+  // comme un identifiant de commande.
+  controllers: [OrderCouponController, OrderRelanceController, OrderController, OrderDelivererController],
   providers: [
     OrderService,
     OrderCouponService,
@@ -69,6 +73,9 @@ import { MapsModule } from 'src/modules/maps/maps.module';
     OrderWebSocketService,
     ReceiptsService,
     KkiapayOrderListenerService,
+    // Relance des paniers de l'application non payés (SettingsService est global).
+    OrderRelanceService,
+    OrderRelanceTask,
   ],
 })
 export class OrderModule {}

@@ -159,6 +159,45 @@ describe('OrderService.updateStatus', () => {
     expect(orderEvent.orderStatusUpdatedEvent.mock.calls[0][0].expo_token).toBeNull();
     expect(orderWebSocketService.emitStatusUpdate).toHaveBeenCalledTimes(1);
   });
+
+  it("signale aux écouteurs qu'un panier non payé de l'application est annulé (pas de cloche au restaurant)", async () => {
+    const outils = monter();
+    (outils.service as unknown as { findById: jest.Mock }).findById = jest.fn().mockResolvedValue({
+      id: COMMANDE,
+      reference: 'CMD-1',
+      type: OrderType.PICKUP,
+      status: OrderStatus.PENDING,
+      auto: true,
+      paied: false,
+      payment_method: PaymentMethod.ONLINE,
+      entity_status: EntityStatus.ACTIVE,
+      restaurant_id: RESTAURANT_A,
+      customer_id: CLIENT,
+    });
+    (outils.service as unknown as { orderCoupon: unknown }).orderCoupon = {
+      restituerPourCommande: jest.fn().mockResolvedValue(undefined),
+    };
+    outils.prisma.order.update.mockResolvedValue({
+      id: COMMANDE,
+      customer_id: CLIENT,
+      restaurant_id: RESTAURANT_A,
+      status: OrderStatus.CANCELLED,
+    });
+    outils.prisma.notificationSetting.findUnique.mockResolvedValue(null);
+
+    await outils.service.updateStatus(COMMANDE, OrderStatus.CANCELLED, {});
+
+    expect(outils.orderEvent.orderStatusUpdatedEvent.mock.calls[0][0].etait_brouillon).toBe(true);
+  });
+
+  it("ne marque pas comme brouillon une commande que le restaurant connaît déjà", async () => {
+    const { service, orderEvent, prisma } = preparer();
+    prisma.notificationSetting.findUnique.mockResolvedValue(null);
+
+    await service.updateStatus(COMMANDE, OrderStatus.READY, {});
+
+    expect(orderEvent.orderStatusUpdatedEvent.mock.calls[0][0].etait_brouillon).toBe(false);
+  });
 });
 
 describe('OrderService.update', () => {

@@ -30,6 +30,8 @@ export class OrderTask {
    * Double backend : AUCUN claim préalable nécessaire — tout le chemin rejoué
    * est déjà à claims atomiques, une exécution concurrente est un no-op.
    * Désactivable par DISABLE_KKIAPAY_RECONCILE_CRON=true (2e backend).
+   * Voisine : DISABLE_RELANCE_CRON=true coupe l'alerte des paniers à relancer
+   * (order-relance.task.ts).
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async updateOrders() {

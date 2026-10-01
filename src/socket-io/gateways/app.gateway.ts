@@ -20,6 +20,7 @@ import {
   SALLE_BACKOFFICE,
   SALLE_CLIENTS,
   SALLE_PERSONNEL,
+  SALLE_RELANCES,
   salleLivreur,
   salleLivreursRestaurant,
   sallePersonnelle,
@@ -197,9 +198,10 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       } else if (type === 'user') {
         const user = await this.prisma.user.findUnique({
           where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
-          // Seuls le type et le rattachement servent : inutile de charger la
-          // ligne du restaurant, et avec elle sa clé Turbo et son jeton HubRise.
-          select: { id: true, type: true, restaurant_id: true },
+          // Seuls le type, le rattachement et le rôle servent : inutile de
+          // charger la ligne du restaurant, et avec elle sa clé Turbo et son
+          // jeton HubRise. Le rôle décide de la salle des relances.
+          select: { id: true, type: true, restaurant_id: true, role: true },
         });
 
         if (user) {
@@ -208,6 +210,7 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
             type: 'user',
             userType: user.type,
             restaurantId: user.restaurant_id ?? undefined,
+            role: user.role,
             socketId: '',
           };
         }
@@ -413,6 +416,14 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server
       .to(sallesDiffusionRestaurant(restaurantId, event))
       .emit(event, sansSecretsRestaurant(data));
+  }
+
+  /**
+   * Émettre aux rôles qui suivent les paniers non payés (ADMIN, CALL_CENTER).
+   * Seul `relance:changed` y part, sans donnée personnelle.
+   */
+  emitToRelances<T>(event: string, data: T) {
+    this.server.to(SALLE_RELANCES).emit(event, sansSecretsRestaurant(data));
   }
 
   /**

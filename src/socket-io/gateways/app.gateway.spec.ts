@@ -88,6 +88,31 @@ describe('AppGateway', () => {
       expect(client.join).toHaveBeenCalledWith(['users', 'user_u9', 'backoffice_all']);
     });
 
+    it('centre d\'appels : lit le rôle et rejoint la salle des relances', async () => {
+      const { gateway, prisma, jwt } = creerPasserelle();
+      jwt.verifyToken.mockResolvedValue({ sub: 'u7' });
+      prisma.user.findUnique.mockResolvedValue({ id: 'u7', type: 'BACKOFFICE', restaurant_id: null, role: 'CALL_CENTER' });
+      const client = fauxClient('user');
+
+      await gateway.handleConnection(client as never);
+
+      expect(prisma.user.findUnique.mock.calls[0][0].select).toEqual(
+        expect.objectContaining({ role: true, type: true, restaurant_id: true }),
+      );
+      expect(client.join).toHaveBeenCalledWith(['users', 'user_u7', 'backoffice_all', 'relances_paniers']);
+    });
+
+    it('marketing : pas de salle des relances', async () => {
+      const { gateway, prisma, jwt } = creerPasserelle();
+      jwt.verifyToken.mockResolvedValue({ sub: 'u8' });
+      prisma.user.findUnique.mockResolvedValue({ id: 'u8', type: 'BACKOFFICE', restaurant_id: null, role: 'MARKETING' });
+      const client = fauxClient('user');
+
+      await gateway.handleConnection(client as never);
+
+      expect(client.join).toHaveBeenCalledWith(['users', 'user_u8', 'backoffice_all']);
+    });
+
     it('client : la salle des clients et son canal, sans la salle « restaurants »', async () => {
       const { gateway, prisma, jwt } = creerPasserelle();
       jwt.verifyToken.mockResolvedValue({ sub: 'c1' });
@@ -156,6 +181,18 @@ describe('AppGateway', () => {
       const { gateway, emissions } = creerPasserelle();
       gateway.emitToBackoffice('x', {});
       expect(emissions[0].salles).toBe('backoffice_all');
+    });
+
+    it('emitToRelances vise la seule salle des relances', () => {
+      const { gateway, emissions } = creerPasserelle();
+      gateway.emitToRelances('relance:changed', { motif: 'alerte', ids: ['o1'], nouvelles: ['o1'] });
+      expect(emissions).toEqual([
+        {
+          salles: 'relances_paniers',
+          evenement: 'relance:changed',
+          donnees: { motif: 'alerte', ids: ['o1'], nouvelles: ['o1'] },
+        },
+      ]);
     });
 
     it('emitToUserType garde les salles « customers » et « users »', () => {

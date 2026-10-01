@@ -58,6 +58,8 @@ import { PAYMENT_AMOUNT_TOLERANCE } from 'src/modules/paiements/helpers/encaisse
 import { sansIdentifiantsPush } from '../helpers/identifiants-push.helper';
 import { assietteDesRemises, normaliserCode } from '../helpers/coupon.helper';
 import { ConsommationCoupon, CouponResolu, OrderCouponService } from './order-coupon.service';
+import { estBrouillon, peutVoirLesBrouillons } from '../helpers/brouillons.rules';
+import { OrderRelanceService } from './order-relance.service';
 
 @Injectable()
 export class OrderService {
@@ -77,6 +79,7 @@ export class OrderService {
     private twilioService: TwilioService,
     private readonly mapsService: MapsService,
     private readonly orderCoupon: OrderCouponService,
+    private readonly orderRelance: OrderRelanceService,
   ) { }
 
   async createv2(customer_id: string, createOrderDto: OrderCreateDto): Promise<Order> {
@@ -354,14 +357,20 @@ export class OrderService {
       // Assiette homogène avec celle des remises : options comprises.
       totalDishes: totalDishesEtOptions,
       orderItems: promoItems,
+      // Panier non payé : pas de notification « Nouvelle commande » au
+      // restaurant, elle partira au paiement (KKiaPay réémet la création).
+      brouillon: estBrouillon(order),
     });
 
     // Contrôles de livraison : tarif, acheminement, distance. Fire-and-forget,
     // ils ne peuvent pas faire échouer la commande qu'ils examinent.
     void this.signalerAnomalieLivraison(order);
 
-    // Émettre l'événement WebSocket de création de commande
-    this.orderWebSocketService.emitOrderCreated(order);
+    // Émettre l'événement WebSocket de création de commande. Un panier payable
+    // en ligne et non payé est un BROUILLON : les restaurants ne le reçoivent
+    // pas, le back office n'en reçoit qu'une charge réduite. createv2 est le
+    // seul chemin qui crée des brouillons.
+    this.orderWebSocketService.emitOrderCreated(order, { brouillon: estBrouillon(order) });
 
     return order;
   }
@@ -1022,6 +1031,8 @@ export class OrderService {
     // Envoyer l'événement de mise à jour de statut de commande
     this.orderEvent.orderStatusUpdatedEvent({
       order: updatedOrder,
+      // État PRÉCÉDENT : un panier non payé qu'on annule ne sonne pas au restaurant.
+      etait_brouillon: estBrouillon(order),
       expo_token: reglagesPush?.expo_push_token ?? null,
       voucher: meta?._voucher ? {
         code: meta._voucher.code,
@@ -1641,9 +1652,10 @@ export class OrderService {
       }),
     };
 
-    // Rôles habilités à voir les commandes en attente (suivi client) : ADMIN + CALL CENTER.
-    const canSeePending =
-      user?.role === UserRole.ADMIN || user?.role === UserRole.CALL_CENTER;
+    // Rôles habilités à voir les commandes en attente (suivi client) : ADMIN +
+    // CALL CENTER. Règle unique du serveur (`brouillons.rules.ts`), partagée
+    // avec la relance des paniers et la salle socket des relances.
+    const canSeePending = peutVoirLesBrouillons(user);
 
     // Les brouillons app (auto:true, PENDING) sont masqués par défaut, SAUF si un
     // rôle habilité les demande EXPLICITEMENT via status=PENDING.
@@ -2278,7 +2290,69 @@ export class OrderService {
 
     // Émettre via WebSocket
     this.orderWebSocketService.emitOrderUpdated(updatedOrder);
+
+    if (passeEnManuel) void this.signalerReprise(order, updatedOrder, options.userId ?? options.user?.id ?? null);
     return updatedOrder;
+  }
+
+  /**
+   * REPRISE AU TÉLÉPHONE, prévenir qui doit l'être.
+   *
+   *  - Les agents de relance, si c'était un panier non payé : la prise
+   *    s'efface, le journal note la reprise, leurs listes se relisent.
+   *  - Le restaurant, si la commande vient d'être confirmée (PENDING vers
+   *    ACCEPTED) : il ne l'avait jamais vue (un brouillon ne lui parvient pas).
+   *    Changement de statut sur socket, puis `orderStatusUpdatedEvent`, comme
+   *    une acceptation ordinaire : son écouteur déduit les points utilisés
+   *    dans le panier (idempotent par commande), sonne la cloche et, pour un
+   *    ancien brouillon (`etait_brouillon`), envoie la notification « Nouvelle
+   *    commande » qui n'était pas partie à la création. Le CRM, qui l'écoute
+   *    aussi, se resynchronise sans effet de plus.
+   *  - L'usage du code promo est comptabilisé, comme dans `updateStatus`
+   *    (idempotent lui aussi).
+   *
+   * Sans cet événement, les points du panier n'étaient déduits qu'à la
+   * clôture : le client pouvait, entre-temps, payer un autre panier avec les
+   * mêmes points et profiter deux fois de la remise.
+   *
+   * Ne lève jamais : la commande est déjà enregistrée.
+   */
+  private async signalerReprise(avant: Order, apres: Order, auteurId: string | null): Promise<void> {
+    const etaitBrouillon = estBrouillon(avant);
+    if (etaitBrouillon) void this.orderRelance.noterReprise(avant.id, auteurId);
+    if (avant.status !== OrderStatus.PENDING || apres.status !== OrderStatus.ACCEPTED) return;
+
+    this.orderWebSocketService.emitStatusUpdate(apres, OrderStatus.PENDING);
+
+    try {
+      await this.promoCodeService.activateUsageForOrder(apres);
+    } catch (e) {
+      this.logger.error(`Sync usage promo (reprise au téléphone) échoué pour ${apres.id}: ${(e as Error)?.message}`);
+    }
+
+    try {
+      // Relue avec les mêmes listes blanches qu'un changement de statut : la
+      // cloche range la commande dans chaque notification, la fiche complète
+      // du client n'a rien à y faire.
+      const commande = await this.prisma.order.findUnique({
+        where: { id: apres.id },
+        include: {
+          order_items: { include: { dish: true } },
+          paiements: true,
+          customer: { select: CLIENT_COMMANDE_SELECT },
+          restaurant: { select: RESTAURANT_COMMANDE_SELECT },
+        },
+      });
+      if (!commande) return;
+      this.orderEvent.orderStatusUpdatedEvent({
+        order: commande,
+        etait_brouillon: etaitBrouillon,
+        expo_token: null,
+        voucher: null,
+      });
+    } catch (e) {
+      this.logger.warn(`Avis de reprise non envoyés pour ${apres.reference}: ${(e as Error)?.message}`);
+    }
   }
 
   /**

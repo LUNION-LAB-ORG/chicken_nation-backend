@@ -35,16 +35,10 @@ export class OrderListenerService {
         // 🔔 Push notif aux staffs du restaurant — fire-and-forget,
         // ne JAMAIS bloquer la mutation principale. La socket reste la source
         // primaire de l'update temps réel ; le push est l'alerte "app fermée".
-        if (payload.order.restaurant_id) {
-            void this.userPushService.notifyRestaurant({
-                restaurantId: payload.order.restaurant_id,
-                type: 'new_order',
-                title: '🔔 Nouvelle commande',
-                body: `Cmde ${payload.order.reference} · ${Number(payload.order.amount ?? 0).toLocaleString('fr-FR')} F`,
-                critical: true,
-                data: { orderId: payload.order.id, reference: payload.order.reference },
-            });
-        }
+        // ⚠️ Jamais pour un panier non payé de l'application (`brouillon`) :
+        // le restaurant ne le voit nulle part. Le push part au paiement, quand
+        // KKiaPay réémet la création.
+        if (!payload.brouillon) this.prevenirNouvelleCommande(payload.order);
 
         // 🔔 CLOCHE staff resto — commandes ACTIONNABLES uniquement (status != PENDING) :
         // commandes staff/cash dès la création (ACCEPTED). Les commandes app EN LIGNE sont
@@ -131,6 +125,22 @@ export class OrderListenerService {
         }
     }
 
+    /**
+     * Notification « Nouvelle commande » sur les téléphones du personnel du
+     * restaurant. Fire-and-forget : ne bloque jamais la mutation principale.
+     */
+    private prevenirNouvelleCommande(order: OrderCreatedEvent['order']): void {
+        if (!order.restaurant_id) return;
+        void this.userPushService.notifyRestaurant({
+            restaurantId: order.restaurant_id,
+            type: 'new_order',
+            title: '🔔 Nouvelle commande',
+            body: `Cmde ${order.reference} · ${Number(order.amount ?? 0).toLocaleString('fr-FR')} F`,
+            critical: true,
+            data: { orderId: order.id, reference: order.reference },
+        });
+    }
+
     /* =========================================================
         🚀 STATUT MIS À JOUR
     ========================================================= */
@@ -164,6 +174,12 @@ export class OrderListenerService {
 
             // 🔔 CLOCHE staff resto — la commande vient d'être ACCEPTÉE (client confirmé).
             void this.notificationsSender.sendOrderBell(payload.order);
+
+            // 🔔 Un panier non payé de l'application confirmé par le personnel
+            // (reprise au téléphone, acceptation au back office) : le restaurant
+            // ne l'a jamais vu et n'a reçu aucune notification à sa création.
+            // Celle-ci réveille une caisse dont l'application est fermée.
+            if (payload.etait_brouillon) this.prevenirNouvelleCommande(payload.order);
         }
 
         /* =========================
@@ -230,7 +246,11 @@ export class OrderListenerService {
         ========================= */
         if (payload.order.status === OrderStatus.CANCELLED) {
             // 🔔 CLOCHE staff — annulation (état important), même sans expo_token client.
-            void this.notificationsSender.sendOrderBell(payload.order);
+            // ⚠️ Sauf un panier non payé de l'application : le restaurant ne l'a
+            // jamais vu, la cloche lui apporterait le nom du client et la commande.
+            if (!payload.etait_brouillon) {
+                void this.notificationsSender.sendOrderBell(payload.order);
+            }
 
             // ⭐ RÉVOCATION — on retire les points GAGNÉS pour cette commande annulée.
             // No-op si aucun point gagné (commande non payée / non-app). Idempotent.

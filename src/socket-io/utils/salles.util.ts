@@ -1,5 +1,6 @@
 import { EntityStatus } from '@prisma/client';
 import { DelivererChannels } from 'src/modules/deliverers/enums/deliverer-channels';
+import { peutVoirLesBrouillons } from 'src/modules/order/helpers/brouillons.rules';
 import { ConnectedUser } from '../interfaces/app.gateway.interface';
 
 /**
@@ -18,6 +19,9 @@ import { ConnectedUser } from '../interfaces/app.gateway.interface';
  *    gérant). Commandes, courses, tickets et messages des clients y circulent.
  *  - `livreurs_restaurant_{id}` : les livreurs rattachés au restaurant. Ils n'y
  *    reçoivent que les événements de `EVENEMENTS_RESTAURANT_POUR_LIVREURS`.
+ *  - `relances_paniers` : rôles qui suivent les paniers non payés de
+ *    l'application (ADMIN, CALL_CENTER), quel que soit le type du compte. N'y
+ *    part que `relance:changed`, sans donnée personnelle.
  *
  * Les livreurs rejoignaient autrefois `restaurant_{id}`. Chacun recevait ainsi
  * les commandes et les courses de tout le restaurant (nom, téléphone, adresse et
@@ -37,6 +41,14 @@ import { ConnectedUser } from '../interfaces/app.gateway.interface';
 export const SALLE_CLIENTS = 'customers';
 export const SALLE_PERSONNEL = 'users';
 export const SALLE_BACKOFFICE = 'backoffice_all';
+/**
+ * Relance des paniers non payés. Règle sur le RÔLE seul (`peutVoirLesBrouillons`).
+ * Limite connue : le rôle est lu à la connexion (cache de 10 s, aucun suivi des
+ * changements de rôle), un compte rétrogradé reste dans la salle jusqu'à sa
+ * reconnexion. L'événement ne dit que « il y a du nouveau », la liste reste
+ * gardée par rôle.
+ */
+export const SALLE_RELANCES = 'relances_paniers';
 
 const PREFIXE_LIVREURS_RESTAURANT = 'livreurs_restaurant_';
 
@@ -88,7 +100,7 @@ export function sallesDiffusionRestaurant(restaurantId: string, evenement: strin
 
 /** Salles rejointes à la connexion, selon qui se connecte. */
 export function sallesAJoindre(
-  connexion: Pick<ConnectedUser, 'id' | 'type' | 'userType' | 'restaurantId'>,
+  connexion: Pick<ConnectedUser, 'id' | 'type' | 'userType' | 'restaurantId' | 'role'>,
 ): string[] {
   switch (connexion.type) {
     case 'customer':
@@ -102,6 +114,9 @@ export function sallesAJoindre(
       } else if (connexion.userType === 'RESTAURANT' && connexion.restaurantId) {
         // Le personnel d'un point de vente ne voit que le sien
         salles.push(salleRestaurant(connexion.restaurantId));
+      }
+      if (peutVoirLesBrouillons({ role: connexion.role })) {
+        salles.push(SALLE_RELANCES);
       }
       return salles;
     }
