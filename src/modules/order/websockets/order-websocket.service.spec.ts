@@ -167,6 +167,23 @@ describe('OrderWebSocketService : brouillons', () => {
     expect(backoffice.charge.message).toBe('Commande annulée');
   });
 
+  it('panier annulé par le client, désormais supprimé (01/10) : toujours rien au restaurant', () => {
+    const { service, charges } = monter();
+    service.emitStatusUpdate(
+      brouillon({ status: OrderStatus.CANCELLED, entity_status: EntityStatus.DELETED, cancelled_by: 'client' }),
+      OrderStatus.PENDING,
+    );
+    verifierReduite(charges());
+  });
+
+  it('panier annulé par le client retouché par le centre d’appels : rien au restaurant, charge réduite', () => {
+    const { service, charges } = monter();
+    service.emitOrderUpdated(
+      brouillon({ status: OrderStatus.CANCELLED, entity_status: EntityStatus.DELETED, cancelled_by: 'client' }),
+    );
+    verifierReduite(charges());
+  });
+
   it('panier payé (paied) : le restaurant reçoit le changement de statut', () => {
     const { service, charges } = monter();
     service.emitStatusUpdate(brouillon({ status: OrderStatus.ACCEPTED, paied: true }), OrderStatus.PENDING);

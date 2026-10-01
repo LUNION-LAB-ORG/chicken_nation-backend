@@ -272,6 +272,84 @@ describe('classerBrouillons', () => {
   });
 });
 
+describe('classerBrouillons : paniers annulés par le client (01/10)', () => {
+  /** Panier que le client a annulé dans l'application, `annule` minutes avant maintenant. */
+  const annule = (minutes: number, annuleIlYa: number, surcharge: Partial<BrouillonLu> = {}) =>
+    brouillon(minutes, {
+      auto: true,
+      status: 'CANCELLED',
+      paied: false,
+      payment_method: 'ONLINE',
+      entity_status: 'DELETED',
+      cancelled_by: 'client',
+      cancelled_at: ilYa(annuleIlYa),
+      ...surcharge,
+    });
+
+  it('inclus comme un panier en attente : à relancer passé le délai, avec la date d’annulation', () => {
+    const b = annule(6, 2);
+    const { groupes, exclus } = classer([b]);
+    expect(exclus.size).toBe(0);
+    expect(groupes).toHaveLength(1);
+    expect(groupes[0].etat).toBe('A_RELANCER');
+    expect(groupes[0].tete.id).toBe(b.id);
+    expect(groupes[0].signaux.annulee_par_client).toEqual({ le: ilYa(2) });
+  });
+
+  it('même délai : annulé 1 min après sa création, il reste en cours jusqu’au délai', () => {
+    const { groupes } = classer([annule(2, 1)]);
+    expect(groupes[0].etat).toBe('EN_COURS');
+    expect(groupes[0].echeance).toEqual(dans(REGLES.delai_minutes - 2));
+  });
+
+  it('même fenêtre : au delà de 3 h, absent', () => {
+    expect(classer([annule(FENETRE_HEURES * 60 + 1, 30)]).groupes).toEqual([]);
+  });
+
+  it('regroupé avec les autres paniers du client : tête = le plus récent, signal = l’annulation la plus récente', () => {
+    const premier = annule(40, 35);
+    const second = annule(20, 15);
+    const enAttente = brouillon(8);
+    const { groupes } = classer([premier, second, enAttente]);
+    expect(groupes).toHaveLength(1);
+    expect(groupes[0].tete.id).toBe(enAttente.id);
+    expect(groupes[0].ids).toEqual([premier.id, second.id, enAttente.id].sort());
+    expect(groupes[0].signaux.annulee_par_client).toEqual({ le: ilYa(15) });
+  });
+
+  it('tête annulée : sa date, même si un panier plus ancien a été annulé après', () => {
+    const ancien = annule(30, 1);
+    const tete = annule(10, 5);
+    expect(classer([ancien, tete]).groupes[0].signaux.annulee_par_client).toEqual({ le: ilYa(5) });
+  });
+
+  it('exclu si le client a payé une commande ensuite : a recommandé', () => {
+    const b = annule(20, 18);
+    const e = effective(5);
+    const { groupes, exclus } = classer([b], [e]);
+    expect(groupes).toEqual([]);
+    expect(exclus.get(b.id)).toEqual({ motif: 'RECOMMANDE', reference: e.reference });
+  });
+
+  it('exclu si un paiement réussi le couvre : paiement à confirmer', () => {
+    const b = annule(20, 18, {
+      paiements: [{ status: PaiementStatus.SUCCESS, amount: 5050, total: 5050, created_at: ilYa(19) }],
+    });
+    expect(classer([b]).exclus.get(b.id)).toEqual({ motif: 'PAIEMENT_A_CONFIRMER' });
+  });
+
+  it('ignoré : hors alertes, comme les autres ; pris : pris', () => {
+    const ignore = annule(20, 18, { relance: relance({ ignore_le: ilYa(1) }) });
+    expect(classer([ignore]).groupes).toEqual([]);
+    const pris = annule(20, 18, { relance: relance({ pris_par_id: YAO, prise_expire_le: dans(5), pris_le: ilYa(1) }) });
+    expect(classer([pris]).groupes[0].etat).toBe('PRIS');
+  });
+
+  it('un panier en attente seul ne porte pas le signal', () => {
+    expect(classer([brouillon(10)]).groupes[0].signaux.annulee_par_client).toBeNull();
+  });
+});
+
 describe('réglages', () => {
   it('15. hors bornes ou illisibles : défauts', () => {
     expect(lireRegles({})).toEqual({

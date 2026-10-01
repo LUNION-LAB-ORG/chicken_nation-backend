@@ -44,6 +44,8 @@ export enum CodeAlerte {
   LIVRAISON_TRES_LOIN = 'LIVRAISON_TRES_LOIN',
   /** Paiement en ligne reçu sur une commande payable à la caisse. */
   PAIEMENT_APRES_REPRISE = 'PAIEMENT_APRES_REPRISE',
+  /** Paiement en ligne validé après l'annulation de la commande par le client : à rembourser. */
+  PAIEMENT_SUR_COMMANDE_ANNULEE = 'PAIEMENT_SUR_COMMANDE_ANNULEE',
 }
 
 /**
@@ -74,6 +76,7 @@ const TITRES: Record<CodeAlerte, string> = {
   [CodeAlerte.ACHEMINEMENT_SUSPECT]: 'Commande partie au mauvais restaurant ?',
   [CodeAlerte.LIVRAISON_TRES_LOIN]: 'Livraison très éloignée',
   [CodeAlerte.PAIEMENT_APRES_REPRISE]: 'Paiement en ligne sur une commande à encaisser en caisse',
+  [CodeAlerte.PAIEMENT_SUR_COMMANDE_ANNULEE]: 'Paiement reçu sur une commande annulée, à rembourser',
 };
 
 /**

@@ -322,7 +322,7 @@ describe('OrderService.update : reprise au téléphone, qui est prévenu', () =>
     await basculer(monte.service);
     await attendre();
 
-    expect(monte.orderRelance.noterReprise).toHaveBeenCalledWith(COMMANDE, 'u1');
+    expect(monte.orderRelance.noterReprise).toHaveBeenCalledWith(COMMANDE, 'u1', null);
     expect(monte.orderWebSocketService.emitStatusUpdate).toHaveBeenCalledTimes(1);
     const [commande, precedent] = monte.orderWebSocketService.emitStatusUpdate.mock.calls[0];
     expect(commande.status).toBe(OrderStatus.ACCEPTED);

@@ -15,7 +15,7 @@
  * construction sans être lancé comme une suite par jest.
  */
 import { EntityStatus, OrderStatus, PaymentMethod, User, UserRole, UserType } from '@prisma/client';
-import { BROUILLON_WHERE } from '../helpers/brouillons.rules';
+import { RELANCABLE_WHERE } from '../helpers/brouillons.rules';
 import { OrderRelanceService } from '../services/order-relance.service';
 
 type Ligne = Record<string, any>;
@@ -235,7 +235,7 @@ export function monterRelance(donnees: { commandes?: Ligne[]; relances?: Ligne[]
 
   // Vérifie que la lecture des brouillons passe bien par la règle unique.
   const lecturesBrouillons = () =>
-    prisma.order.findMany.mock.calls.filter((c: [Ligne]) => c[0].where?.AND?.[0] === BROUILLON_WHERE).length;
+    prisma.order.findMany.mock.calls.filter((c: [Ligne]) => c[0].where?.AND?.[0] === RELANCABLE_WHERE).length;
 
   return { service, prisma, commandes, relances, journal, settings, appGateway, lecturesBrouillons };
 }

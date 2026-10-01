@@ -65,6 +65,7 @@ function monter() {
     promoCodeService as never,
     appGateway as never,
     eventEmitter as never,
+    { signaler: jest.fn() } as never,
   );
   const creer = jest
     .spyOn(service, 'create')

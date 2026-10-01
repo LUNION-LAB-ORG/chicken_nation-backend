@@ -108,7 +108,13 @@ export class KkiapayOrderListenerService {
         // Erreur permanente : la référence n'existe pas. findByReferenceOrNull ne lève
         // PAS (contrairement à findByReference) → on distingue « commande absente »
         // (permanent) d'une vraie erreur DB transitoire (qui, elle, sera relancée plus bas).
-        const order = await this.orderService.findByReferenceOrNull(payload.stateData);
+        // Un panier que le client a annulé avant que son paiement ne soit
+        // validé est supprimé des listes : on le retrouve quand même, pour y
+        // rattacher l'argent reçu (sinon, paiement perdu et commande relançable,
+        // donc encaissée une seconde fois à la reprise au téléphone).
+        const order = await this.orderService.findByReferenceOrNull(payload.stateData, {
+            inclurePanierAnnuleParClient: true,
+        });
         if (!order) {
             this.logger.warn(
                 `Webhook KKiaPay : aucune commande pour la référence « ${payload.stateData} » ` +
@@ -124,6 +130,7 @@ export class KkiapayOrderListenerService {
         let justPaid: boolean;
         let isPaid: boolean;
         let payeApresCoup = false;
+        let annuleeRetablie = false;
         let notPaidReason: string | undefined;
         let paiement: { id: string } | null | undefined;
         try {
@@ -138,6 +145,7 @@ export class KkiapayOrderListenerService {
             justPaid = linked.justPaid;
             isPaid = linked.isPaid;
             payeApresCoup = linked.payeApresCoup;
+            annuleeRetablie = linked.annuleeRetablie;
             notPaidReason = linked.notPaidReason;
         } catch (error) {
             // KKiaPay INJOIGNABLE (réseau/5xx, levé par KkiapayService.rawVerify) :
@@ -289,6 +297,21 @@ export class KkiapayOrderListenerService {
         // GAIN DE POINTS FIDÉLITÉ — SEUL point de gain des commandes app EN LIGNE.
         // addPoints émet l'event WS `loyalty:points_added` → carte à gratter côté app.
         // Idempotent par order_id, non bloquant (on trace l'échec sans casser la confirmation).
+        /**
+         * Commande ANNULÉE (annulée par le client avant la validation de son
+         * paiement, ou par le personnel) : l'argent est rattaché et une alerte
+         * part pour le rembourser (`PaiementsService`), mais elle ne rapporte
+         * rien. Ni points, ni carte à gratter, ni gain de parrainage : ces
+         * effets ont été révoqués, ou n'ont jamais eu lieu, à l'annulation.
+         */
+        if (order.status === OrderStatus.CANCELLED || annuleeRetablie) {
+            this.logger.warn(
+                `Paiement ${payload.transactionId} reçu sur la commande annulée ${order.reference} : ` +
+                `rattaché, sans effet de fidélité (remboursement à traiter).`,
+            );
+            return { confirmed: true, justPaid, order: sansIdentifiantsPush(order), paiement, earnedPoints: 0 };
+        }
+
         let earnedPoints = 0;
         try {
             if (order.net_amount > 0) {

@@ -5,13 +5,15 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { EntityStatus, OrderStatus, Prisma, User, UserRole } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { AuditService } from 'src/modules/audit/audit.service';
 import { commandeEffective } from 'src/modules/crm/crm.rules';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
-import { BROUILLON_WHERE, estBrouillon, peutVoirLesBrouillons } from '../helpers/brouillons.rules';
+import { RELANCABLE_WHERE, estPanierAnnuleParClient, estRelancable, peutVoirLesBrouillons } from '../helpers/brouillons.rules';
 import { resolveRestaurantScope } from '../helpers/restaurant-scope.helper';
 import {
   ACTIONS_JOURNAL_RELANCE,
@@ -63,6 +65,14 @@ const SELECT_BROUILLON = {
   customer: { select: { phone: true, first_name: true, last_name: true } },
   restaurant: { select: { id: true, name: true } },
   paiements: { select: { status: true, amount: true, total: true, created_at: true } },
+  // État : distingue un panier annulé par le client d'un panier en attente.
+  auto: true,
+  status: true,
+  paied: true,
+  payment_method: true,
+  entity_status: true,
+  cancelled_by: true,
+  cancelled_at: true,
   relance: {
     select: {
       alerte_le: true,
@@ -85,6 +95,7 @@ const SELECT_COMMANDE = {
   paied: true,
   payment_method: true,
   entity_status: true,
+  cancelled_by: true,
   created_at: true,
 } satisfies Prisma.OrderSelect;
 
@@ -104,6 +115,8 @@ export interface BrouillonLigne {
   type: string;
   amount: number;
   paiement_refuse: boolean;
+  /** Panier annulé par le client dans l'application, sans avoir payé (01/10). */
+  annulee_par_client: boolean;
 }
 
 export interface GroupeRelance {
@@ -117,6 +130,8 @@ export interface GroupeRelance {
     paiement_refuse: boolean;
     paiement_partiel: { reference: string; recu: number; montant: number; libelle: string } | null;
     commande_recente: { reference: string; created_at: string } | null;
+    /** Date d'annulation (ISO) de la tête, ou du panier annulé le plus récent du groupe. */
+    annulee_par_client: { le: string } | null;
   };
   crm: { contact_id: string; statut: string; agent: string | null } | null;
 }
@@ -151,6 +166,7 @@ function ligne(b: BrouillonLu): BrouillonLigne {
     type: b.type,
     amount: b.amount,
     paiement_refuse: (b.paiements ?? []).some((p) => p.status === 'FAILED'),
+    annulee_par_client: estPanierAnnuleParClient(b),
   };
 }
 
@@ -172,6 +188,9 @@ export class OrderRelanceService {
     private readonly prisma: PrismaService,
     private readonly settings: SettingsService,
     private readonly appGateway: AppGateway,
+    // Facultatif : seule la réactivation d'un panier annulé l'emploie, et les
+    // tests montent le service sans lui.
+    @Optional() private readonly audit?: AuditService,
   ) {}
 
   // =========================================================================
@@ -207,7 +226,7 @@ export class OrderRelanceService {
     const brouillons: BrouillonLu[] = await this.prisma.order.findMany({
       where: {
         AND: [
-          BROUILLON_WHERE,
+          RELANCABLE_WHERE,
           { created_at: { gte: debutFenetre } },
           ...(restaurantId ? [{ restaurant_id: restaurantId }] : []),
         ],
@@ -322,17 +341,7 @@ export class OrderRelanceService {
         raison_code: true,
         raison_texte: true,
         ignore_par: { select: { id: true, fullname: true } },
-        order: {
-          select: {
-            ...SELECT_BROUILLON,
-            relance: false,
-            auto: true,
-            status: true,
-            paied: true,
-            payment_method: true,
-            entity_status: true,
-          },
-        },
+        order: { select: { ...SELECT_BROUILLON, relance: false } },
       },
     });
     return {
@@ -343,7 +352,8 @@ export class OrderRelanceService {
         raison_code: l.raison_code ?? 'AUTRE',
         raison_libelle: libelleRaison(l.raison_code),
         raison_texte: l.raison_texte,
-        encore_en_attente: estBrouillon(l.order),
+        // Encore relançable : en attente, ou annulée par le client.
+        encore_en_attente: estRelancable(l.order),
       })),
     };
   }
@@ -510,7 +520,7 @@ export class OrderRelanceService {
     const maintenant = new Date();
     const regles = await this.regles();
     const horsFenetre = commande.created_at.getTime() < maintenant.getTime() - regles.fenetre_heures * 60 * MINUTE;
-    const enAttente = estBrouillon(commande);
+    const enAttente = estRelancable(commande);
 
     // Le groupe du client, s'il est encore suivi ; sinon la seule commande.
     let ids = [orderId];
@@ -554,7 +564,7 @@ export class OrderRelanceService {
    * agents relisent leur liste. Ne lève jamais : la relance ne doit pas faire
    * échouer la modification d'une commande.
    */
-  async noterReprise(orderId: string, userId: string | null): Promise<void> {
+  async noterReprise(orderId: string, userId: string | null, raison?: string | null): Promise<void> {
     try {
       await this.prisma.$transaction([
         this.prisma.orderRelance.updateMany({
@@ -562,13 +572,80 @@ export class OrderRelanceService {
           data: { pris_par_id: null, pris_le: null, prise_expire_le: null },
         }),
         this.prisma.orderRelanceJournal.create({
-          data: { order_id: orderId, action: ACTIONS_JOURNAL_RELANCE.REPRISE, user_id: userId },
+          data: {
+            order_id: orderId,
+            action: ACTIONS_JOURNAL_RELANCE.REPRISE,
+            user_id: userId,
+            ...(raison ? { raison: raison.slice(0, 200) } : {}),
+          },
         }),
       ]);
     } catch (e) {
       this.logger.warn(`Relance : reprise de ${orderId} non journalisée : ${(e as Error)?.message}`);
     }
     this.signaler('reprise', [orderId], userId ?? undefined);
+  }
+
+  /**
+   * RÉACTIVATION d'un panier annulé par le client (reprise au téléphone, dans
+   * `OrderService.update`) : il doit être encore relançable au moment du geste.
+   * Lève 409, avec le motif en français, s'il ne l'est plus : le client a
+   * recommandé, un paiement le couvre, il a passé la fenêtre de relance, ou il
+   * n'est plus annulé par le client. Une commande ignorée se réactive : la
+   * reprise d'un panier en attente ne regarde pas l'ignorance non plus.
+   */
+  async verifierReactivable(orderId: string, user: User): Promise<void> {
+    this.verifierRole(user);
+    const maintenant = new Date();
+    const regles = await this.regles();
+    await this.situation(orderId, user, maintenant, regles);
+  }
+
+  /**
+   * Trace de la réactivation : les champs d'annulation sont vidés sur la
+   * commande, leur valeur reste ici (journal d'audit) et dans le journal de la
+   * relance (REPRISE, écrit par `noterReprise`). Ne lève jamais.
+   */
+  journaliserReactivation(params: {
+    commande: {
+      id: string;
+      reference: string;
+      restaurant_id: string;
+      cancelled_at?: Date | null;
+      cancelled_reason?: string | null;
+      cancelled_by?: string | null;
+    };
+    acteur?: Pick<User, 'id' | 'fullname' | 'email' | 'role'> | null;
+    coupon?: { code: string; type: string; consomme: boolean; remise: number } | null;
+    /** Cadeaux rendus à l'annulation, facturés par des articles modifiés à la reprise. */
+    cadeauxFactures?: string[];
+  }): void {
+    const { commande, acteur, coupon, cadeauxFactures } = params;
+    try {
+      this.audit?.record({
+        actor_id: acteur?.id ?? null,
+        actor_name: acteur?.fullname ?? acteur?.email ?? null,
+        actor_role: acteur?.role ?? null,
+        restaurant_id: commande.restaurant_id,
+        action: 'COMMANDE_REACTIVEE',
+        module: 'orders',
+        entity_id: commande.id,
+        method: 'PATCH',
+        path: `/orders/${commande.id}`,
+        status_code: 200,
+        summary: `Commande ${commande.reference} annulée par le client, réactivée au téléphone : acceptée, paiement à la caisse`,
+        metadata: {
+          reference: commande.reference,
+          annulee_le: commande.cancelled_at ? commande.cancelled_at.toISOString() : null,
+          motif_annulation: commande.cancelled_reason || null,
+          annulee_par: commande.cancelled_by ?? null,
+          coupon: coupon ?? null,
+          ...(cadeauxFactures?.length ? { cadeaux_factures: cadeauxFactures } : {}),
+        },
+      });
+    } catch (e) {
+      this.logger.warn(`Relance : réactivation de ${commande.id} non journalisée : ${(e as Error)?.message}`);
+    }
   }
 
   /** Prévient la salle des relances. Ne lève jamais. */
@@ -616,7 +693,7 @@ export class OrderRelanceService {
     regles: ReglesRelance,
   ): Promise<{ commande: CommandeLue; classement: Classement; groupe: GroupeClasse | null }> {
     const commande = await this.chargerCommande(orderId, user);
-    if (!estBrouillon(commande)) {
+    if (!estRelancable(commande)) {
       const motif = motifSortie(commande);
       const auteur = motif === 'REPRISE' ? await this.auteurReprise(orderId) : null;
       throw new ConflictException(messageSortie(motif, { auteur }));
@@ -744,6 +821,9 @@ export class OrderRelanceService {
               reference: g.signaux.commande_recente.reference,
               created_at: g.signaux.commande_recente.created_at.toISOString(),
             }
+          : null,
+        annulee_par_client: g.signaux.annulee_par_client
+          ? { le: g.signaux.annulee_par_client.le.toISOString() }
           : null,
       },
       crm: (g.tete.customer_id && crm.get(g.tete.customer_id)) || null,

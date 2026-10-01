@@ -1,7 +1,13 @@
 import { OrderStatus, PaiementStatus } from '@prisma/client';
 import { cleTelephone } from 'src/modules/crm/crm.rules';
 import { etatApresEncaissement } from 'src/modules/paiements/helpers/encaissement.helper';
-import { BROUILLON_WHERE, estBrouillon } from '../helpers/brouillons.rules';
+import {
+  BROUILLON_WHERE,
+  RELANCABLE_WHERE,
+  estBrouillon,
+  estPanierAnnuleParClient,
+  estRelancable,
+} from '../helpers/brouillons.rules';
 
 /**
  * RELANCE DES COMMANDES EN ATTENTE : les règles, sans base ni horloge.
@@ -14,7 +20,7 @@ import { BROUILLON_WHERE, estBrouillon } from '../helpers/brouillons.rules';
  * Conception : `.banc-test-crm/conception-relance-commandes.md`.
  */
 
-export { BROUILLON_WHERE, estBrouillon };
+export { BROUILLON_WHERE, RELANCABLE_WHERE, estBrouillon, estPanierAnnuleParClient, estRelancable };
 
 // ---------------------------------------------------------------------------
 // Réglages
@@ -232,6 +238,18 @@ export interface BrouillonLu {
   restaurant?: { id: string; name: string } | null;
   paiements?: PaiementLu[];
   relance?: RelanceLue | null;
+  /**
+   * État de la commande : distingue un panier annulé par le client
+   * (`estPanierAnnuleParClient`) d'un brouillon encore en attente. Absents :
+   * brouillon en attente.
+   */
+  auto?: boolean | null;
+  status?: OrderStatus | string | null;
+  paied?: boolean | null;
+  payment_method?: string | null;
+  entity_status?: string | null;
+  cancelled_by?: string | null;
+  cancelled_at?: Date | null;
 }
 
 export interface CommandeEffectiveLue {
@@ -266,6 +284,11 @@ export interface SignauxGroupe {
   paiement_partiel: { reference: string; recu: number; montant: number } | null;
   /** Le même client a payé une commande peu avant : doublon probable. */
   commande_recente: { reference: string; created_at: Date } | null;
+  /**
+   * Le client a annulé lui-même dans l'application : date d'annulation de la
+   * tête si c'est elle, sinon du panier annulé le plus récent du groupe.
+   */
+  annulee_par_client: { le: Date } | null;
 }
 
 export interface GroupeClasse {
@@ -334,6 +357,15 @@ export function nomClient(brouillon: Pick<BrouillonLu, 'fullname' | 'customer'>)
     .filter(Boolean)
     .join(' ');
   return compte || 'Client sans nom';
+}
+
+/**
+ * Date d'annulation d'un panier annulé par le client, null sinon. Repli sur la
+ * création si `cancelled_at` manque (jamais le cas : l'annulation le pose).
+ */
+export function annuleeParClientLe(brouillon: BrouillonLu): Date | null {
+  if (!estPanierAnnuleParClient(brouillon)) return null;
+  return brouillon.cancelled_at ?? brouillon.created_at;
 }
 
 /** Montant perçu d'un paiement, compté comme partout ailleurs (OrderService). */
@@ -430,6 +462,12 @@ function memeClient(b: BrouillonLu, e: CommandeEffectiveLue): boolean {
 const plusRecentDAbord = (a: { created_at: Date }, b: { created_at: Date }) =>
   b.created_at.getTime() - a.created_at.getTime() || 0;
 
+/**
+ * Les « brouillons » reçus sont les commandes relançables (`RELANCABLE_WHERE`)
+ * : paniers en attente ET paniers annulés par le client (01/10). Les seconds
+ * suivent exactement les mêmes règles (fenêtre, exclusions, regroupement,
+ * délai, prise, ignorance) ; seul le signal `annulee_par_client` les distingue.
+ */
 export function classerBrouillons(entree: {
   brouillons: BrouillonLu[];
   effectives: CommandeEffectiveLue[];
@@ -516,6 +554,13 @@ export function classerBrouillons(entree: {
     const recente = effectives
       .filter((e) => e.created_at >= debutRecente && e.created_at <= tete.created_at && memeClient(tete, e))
       .sort(plusRecentDAbord)[0];
+    const annulationTete = annuleeParClientLe(tete);
+    const annulation =
+      annulationTete ??
+      actifs
+        .map(annuleeParClientLe)
+        .filter((d): d is Date => !!d)
+        .reduce<Date | null>((max, d) => (!max || d > max ? d : max), null);
 
     groupes.push({
       cle: tete.id,
@@ -533,6 +578,7 @@ export function classerBrouillons(entree: {
           ? { reference: partiel.b.reference, recu: partiel.recu, montant: partiel.b.amount }
           : null,
         commande_recente: recente ? { reference: recente.reference, created_at: recente.created_at } : null,
+        annulee_par_client: annulation ? { le: annulation } : null,
       },
     });
   }

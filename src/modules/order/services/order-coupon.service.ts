@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   HttpException,
   HttpStatus,
@@ -100,6 +101,23 @@ export interface RestitutionCoupon {
 }
 
 export type MotifRestitution = 'ANNULATION' | 'SUPPRESSION';
+
+/** Coupon d'un panier annulé par le client, à sa réactivation. */
+export interface ReconsommationCoupon {
+  type: TypeCoupon | null;
+  code: string | null;
+  /** Remise du coupon, comprise dans `Order.discount`. */
+  remise: number;
+  /** Vrai : le coupon est consommé (de nouveau, ou jamais rendu), la remise reste. */
+  consomme: boolean;
+  /** Vrai : il n'avait jamais été rendu, rien n'a été écrit. */
+  deja_consomme?: boolean;
+  /** Faux `consomme` : pourquoi la remise est retirée, en français. */
+  raison?: string;
+  bonId?: string;
+  soldeApres?: number;
+  promoCodeId?: string;
+}
 
 /**
  * Restitution déclenchée ailleurs que par `PATCH /orders/:id/status` : course
@@ -359,35 +377,8 @@ export class OrderCouponService {
       // Verrou de ligne : deux commandes avec le même code passent l'une après
       // l'autre, et la seconde voit l'usage de la première.
       await tx.$queryRaw`SELECT id FROM "PromoCode" WHERE id = ${id}::uuid FOR UPDATE`;
-      const promo = await tx.promoCode.findUnique({ where: { id } });
-      const maintenant = new Date();
-      if (!promo || promo.entity_status === EntityStatus.DELETED || !promo.is_active) {
-        throw new BadRequestException("Ce code promo n'est plus actif.");
-      }
-      if (maintenant < promo.start_date) {
-        throw new BadRequestException("Ce code promo n'est pas encore valide.");
-      }
-      if (maintenant > promo.expiration_date) {
-        throw new BadRequestException('Ce code promo a expiré.');
-      }
-      if (
-        params.restaurantId &&
-        (promo.restaurant_ids?.length ?? 0) > 0 &&
-        !promo.restaurant_ids.includes(params.restaurantId)
-      ) {
-        throw new BadRequestException("Ce code promo n'est pas valable dans ce restaurant.");
-      }
-      if (promo.max_usage && promo.usage_count >= promo.max_usage) {
-        throw new BadRequestException("Ce code promo a atteint son nombre maximum d'utilisations.");
-      }
-      if (promo.max_usage_per_user) {
-        const dejaUtilise = await tx.promoCodeUsage.count({
-          where: { promo_code_id: id, customer_id: customerId, status: PromoCodeUsageStatus.ACTIVE },
-        });
-        if (dejaUtilise >= promo.max_usage_per_user) {
-          throw new BadRequestException('Ce client a déjà utilisé ce code promo le nombre maximum de fois.');
-        }
-      }
+      const refus = await this.refusCodePromo(tx, id, customerId, params.restaurantId);
+      if (refus) throw new BadRequestException(refus);
       // ACTIVE d'emblée : la commande du personnel naît ACCEPTED. Montant EXACT
       // du coupon (le repli de activateUsageForOrder prenait la remise totale).
       const usage = await tx.promoCodeUsage.create({
@@ -440,6 +431,41 @@ export class OrderCouponService {
       redemptionId: redemption.id,
       soldeApres: arrondirSolde(apres?.remaining_amount ?? 0),
     };
+  }
+
+  /**
+   * Pourquoi un code promo ne peut plus être compté pour ce client, ou null.
+   * À appeler sous le verrou de ligne du code (`FOR UPDATE`) : la seconde de
+   * deux commandes simultanées voit l'usage de la première.
+   */
+  private async refusCodePromo(
+    tx: Transaction,
+    id: string,
+    customerId: string,
+    restaurantId?: string | null,
+  ): Promise<string | null> {
+    const promo = await tx.promoCode.findUnique({ where: { id } });
+    const maintenant = new Date();
+    if (!promo || promo.entity_status === EntityStatus.DELETED || !promo.is_active) {
+      return "Ce code promo n'est plus actif.";
+    }
+    if (maintenant < promo.start_date) return "Ce code promo n'est pas encore valide.";
+    if (maintenant > promo.expiration_date) return 'Ce code promo a expiré.';
+    if (restaurantId && (promo.restaurant_ids?.length ?? 0) > 0 && !promo.restaurant_ids.includes(restaurantId)) {
+      return "Ce code promo n'est pas valable dans ce restaurant.";
+    }
+    if (promo.max_usage && promo.usage_count >= promo.max_usage) {
+      return "Ce code promo a atteint son nombre maximum d'utilisations.";
+    }
+    if (promo.max_usage_per_user) {
+      const dejaUtilise = await tx.promoCodeUsage.count({
+        where: { promo_code_id: id, customer_id: customerId, status: PromoCodeUsageStatus.ACTIVE },
+      });
+      if (dejaUtilise >= promo.max_usage_per_user) {
+        return 'Ce client a déjà utilisé ce code promo le nombre maximum de fois.';
+      }
+    }
+    return null;
   }
 
   /**
@@ -694,6 +720,291 @@ export class OrderCouponService {
           motif: contexte.motif,
         },
       );
+    }
+  }
+
+  /* ================================================================
+     RÉACTIVATION D'UN PANIER ANNULÉ PAR LE CLIENT
+  ================================================================ */
+
+  /**
+   * Le coupon d'un panier annulé par le client, de nouveau consommé à sa
+   * réactivation (`OrderService.update`), DANS la transaction qui la
+   * revendique : si celle-ci échoue, rien n'est débité.
+   *
+   * L'annulation a rendu le bon (solde recrédité, prolongé de 30 jours s'il
+   * avait expiré) ; le code promo d'un panier de l'application, lui, n'a
+   * jamais été compté (usage préparé INACTIVE, compté à l'acceptation). La
+   * réactivation accepte la commande : le coupon doit être consommé de
+   * nouveau, avec les mêmes contrôles qu'à la prise de commande, sous le
+   * verrou de sa ligne.
+   *
+   *  - Bon : lignes verrouillées (`FOR UPDATE`), contrôlées, puis débitées ;
+   *    une nouvelle utilisation est écrite (l'ancienne reste rendue).
+   *  - Code promo : verrou du code, contrôles de `refusCodePromo`, puis
+   *    l'usage passe ACTIVE (ou est créé) et le compteur monte.
+   *  - Toujours consommé (jamais rendu) : rien à faire, la remise reste.
+   *
+   * Tout ou rien : si le coupon ne peut plus l'être (bon réutilisé ou épuisé,
+   * expiré, code promo à bout), rien n'est écrit et `consomme` vaut faux ;
+   * l'appelant retire alors la remise du total. Jamais de remise sans coupon
+   * consommé, jamais de double usage. Null : la commande n'avait aucun coupon.
+   */
+  async reconsommerALaReactivation(
+    tx: Transaction,
+    commande: {
+      id: string;
+      customer_id: string;
+      restaurant_id?: string | null;
+      code_promo?: string | null;
+      discount?: number | null;
+      points?: number | null;
+      promotion_id?: string | null;
+    },
+  ): Promise<ReconsommationCoupon | null> {
+    const maintenant = new Date();
+    const remiseCommande = Math.max(0, Number(commande.discount) || 0);
+
+    // 1. Bon d'achat, d'après ses utilisations sur cette commande.
+    const utilisations = await tx.redemption.findMany({
+      where: { order_id: commande.id },
+      select: { id: true, voucher_id: true, amount: true, entity_status: true },
+    });
+    if (utilisations.length > 0) {
+      const actives = utilisations.filter((u) => u.entity_status === EntityStatus.ACTIVE);
+      if (actives.length > 0) {
+        const bon = await tx.voucher.findUnique({ where: { id: actives[0].voucher_id }, select: { code: true } });
+        return {
+          type: 'VOUCHER',
+          code: bon?.code ?? commande.code_promo ?? null,
+          remise: actives.reduce((t, u) => t + u.amount, 0),
+          consomme: true,
+          deja_consomme: true,
+        };
+      }
+      const parBon = new Map<string, number>();
+      for (const u of utilisations) parBon.set(u.voucher_id, (parBon.get(u.voucher_id) ?? 0) + u.amount);
+      return this.redebiterBons(tx, commande, parBon, maintenant);
+    }
+
+    // 2. Code promo, d'après ses usages sur cette commande.
+    const usages = await tx.promoCodeUsage.findMany({
+      where: { order_id: commande.id },
+      orderBy: { created_at: 'desc' },
+      include: { promo_code: { select: { code: true } } },
+    });
+    if (usages.length > 0) {
+      const active = usages.find((u) => u.status === PromoCodeUsageStatus.ACTIVE);
+      if (active) {
+        return {
+          type: 'PROMO_CODE',
+          code: active.promo_code?.code ?? commande.code_promo ?? null,
+          remise: active.discount_amount,
+          consomme: true,
+          deja_consomme: true,
+        };
+      }
+      const usage = usages[0];
+      return this.recompterCodePromo(tx, commande, {
+        promoCodeId: usage.promo_code_id,
+        code: usage.promo_code?.code ?? commande.code_promo ?? '',
+        remise: usage.discount_amount,
+        usageId: usage.id,
+      });
+    }
+
+    // 3. Aucune trace (l'écriture de l'usage avait échoué à la création) :
+    // le code porté par la commande, s'il donnait une remise.
+    const code = (commande.code_promo ?? '').trim();
+    if (!code || remiseCommande <= 0) return null;
+    // La remise mêle aussi des points ou une promotion : la part du code ne se
+    // retrouve pas, et la retirer entière priverait le client de ses points.
+    // Rien n'est touché ; l'acceptation compte l'usage comme avant
+    // (`activateUsageForOrder`). Cas sans trace : antérieur au 25/09, hors de
+    // la fenêtre de relance en pratique.
+    if ((Number(commande.points) || 0) > 0 || commande.promotion_id) {
+      this.logger.warn(
+        `Réactivation de ${commande.id} : code ${code} sans trace d'usage, remise mêlée à des points ou une promotion, laissée telle quelle.`,
+      );
+      return null;
+    }
+    const promo = await tx.promoCode.findFirst({
+      where: { code: { equals: code, mode: 'insensitive' } },
+      select: { id: true, code: true },
+    });
+    if (promo) {
+      return this.recompterCodePromo(tx, commande, {
+        promoCodeId: promo.id,
+        code: promo.code,
+        remise: remiseCommande,
+      });
+    }
+    const bon = await tx.voucher.findUnique({ where: { code }, select: { id: true } });
+    if (bon) return this.redebiterBons(tx, commande, new Map([[bon.id, remiseCommande]]), maintenant);
+    return {
+      type: null,
+      code,
+      remise: remiseCommande,
+      consomme: false,
+      raison: 'Aucun code promo ni bon ne correspond à ce code.',
+    };
+  }
+
+  /** Débit de nouveau des bons rendus. Tout ou rien, sous verrou de ligne. */
+  private async redebiterBons(
+    tx: Transaction,
+    commande: { id: string; customer_id: string; code_promo?: string | null },
+    parBon: Map<string, number>,
+    maintenant: Date,
+  ): Promise<ReconsommationCoupon> {
+    const ids = [...parBon.keys()].sort();
+    const remise = [...parBon.values()].reduce((t, v) => t + v, 0);
+    // Verrou des lignes, dans un ordre fixe : un débit concurrent attend, et
+    // les contrôles qui suivent restent vrais jusqu'à l'écriture.
+    for (const id of ids) {
+      await tx.$queryRaw`SELECT id FROM "Voucher" WHERE id = ${id}::uuid FOR UPDATE`;
+    }
+    const bons = await tx.voucher.findMany({ where: { id: { in: ids } } });
+    const premier = bons.find((b) => b.id === ids[0]);
+    const code = premier?.code ?? commande.code_promo ?? null;
+
+    for (const id of ids) {
+      const bon = bons.find((b) => b.id === id);
+      const montant = parBon.get(id) ?? 0;
+      let raison: string | null = null;
+      if (!bon || bon.entity_status === EntityStatus.DELETED) raison = "Ce bon n'existe plus.";
+      else if (bon.customer_id !== commande.customer_id) raison = 'Ce bon appartient à un autre client.';
+      else raison = motifRefusBon(bon, maintenant);
+      if (!raison && bon && bon.remaining_amount + 1e-6 < montant) {
+        raison = `Le solde de ce bon (${formaterFrancs(bon.remaining_amount)} F) ne couvre plus la remise.`;
+      }
+      if (raison) return { type: 'VOUCHER', code, remise, consomme: false, raison };
+    }
+
+    let soldeApres = 0;
+    for (const id of ids) {
+      const montant = parBon.get(id) ?? 0;
+      const debit = await tx.voucher.updateMany({
+        where: {
+          id,
+          customer_id: commande.customer_id,
+          status: VoucherStatus.ACTIVE,
+          entity_status: { not: EntityStatus.DELETED },
+          remaining_amount: { gte: montant },
+          OR: [{ expires_at: null }, { expires_at: { gt: maintenant } }],
+        },
+        data: { remaining_amount: { decrement: montant }, updated_at: maintenant },
+      });
+      // Sous verrou, après les contrôles : ne peut échouer. Si c'était le cas,
+      // la transaction entière est annulée, réactivation comprise.
+      if (debit.count === 0) throw new ConflictException(ERREUR_SOLDE_CHANGE);
+      await tx.voucher.updateMany({
+        where: { id, status: VoucherStatus.ACTIVE, remaining_amount: { lt: 1 } },
+        data: { status: VoucherStatus.REDEEMED, redeemed_at: maintenant },
+      });
+      await tx.redemption.create({ data: { voucher_id: id, order_id: commande.id, amount: montant } });
+      if (id === ids[0]) {
+        const apres = await tx.voucher.findUnique({ where: { id }, select: { remaining_amount: true } });
+        soldeApres = arrondirSolde(apres?.remaining_amount ?? 0);
+      }
+    }
+    return { type: 'VOUCHER', code, remise, consomme: true, bonId: ids[0], soldeApres };
+  }
+
+  /** Usage du code promo compté de nouveau, ou refus. Sous verrou du code. */
+  private async recompterCodePromo(
+    tx: Transaction,
+    commande: { id: string; customer_id: string; restaurant_id?: string | null },
+    params: { promoCodeId: string; code: string; remise: number; usageId?: string },
+  ): Promise<ReconsommationCoupon> {
+    const { promoCodeId, code, remise, usageId } = params;
+    await tx.$queryRaw`SELECT id FROM "PromoCode" WHERE id = ${promoCodeId}::uuid FOR UPDATE`;
+    const raison = await this.refusCodePromo(tx, promoCodeId, commande.customer_id, commande.restaurant_id);
+    if (raison) return { type: 'PROMO_CODE', code, remise, consomme: false, raison };
+
+    if (usageId) {
+      const active = await tx.promoCodeUsage.updateMany({
+        where: { id: usageId, status: PromoCodeUsageStatus.INACTIVE },
+        data: { status: PromoCodeUsageStatus.ACTIVE },
+      });
+      // Compté entre-temps par un autre chemin : rien de plus à compter.
+      if (active.count === 0) {
+        return { type: 'PROMO_CODE', code, remise, consomme: true, deja_consomme: true, promoCodeId };
+      }
+    } else {
+      await tx.promoCodeUsage.create({
+        data: {
+          promo_code_id: promoCodeId,
+          customer_id: commande.customer_id,
+          order_id: commande.id,
+          discount_amount: remise,
+          status: PromoCodeUsageStatus.ACTIVE,
+        },
+      });
+    }
+    await tx.promoCode.update({ where: { id: promoCodeId }, data: { usage_count: { increment: 1 } } });
+    return { type: 'PROMO_CODE', code, remise, consomme: true, promoCodeId };
+  }
+
+  /**
+   * Après la réactivation (transaction validée) : journal d'audit, mouvement
+   * du bon notifié au client, écrans rafraîchis. Ne lève jamais.
+   */
+  signalerReactivation(params: {
+    order: { id: string; reference?: string | null; customer_id: string; restaurant_id?: string | null };
+    coupon: ReconsommationCoupon;
+    acteur?: Pick<User, 'id' | 'fullname' | 'email' | 'role'> | null;
+  }): void {
+    const { order, coupon: c, acteur } = params;
+    if (c.deja_consomme) return;
+    const nature = c.type === 'VOUCHER' ? 'Bon' : c.type === 'PROMO_CODE' ? 'Code promo' : 'Code';
+    const code = c.type === 'VOUCHER' && c.code ? masquerCode(c.code) : (c.code ?? '');
+    const ref = order.reference ?? order.id;
+    try {
+      this.auditService.record({
+        actor_id: acteur?.id ?? null,
+        actor_name: acteur?.fullname ?? acteur?.email ?? null,
+        actor_role: acteur?.role ?? null,
+        restaurant_id: order.restaurant_id ?? null,
+        action: c.consomme ? 'COUPON_APPLIQUE' : 'COUPON_RETIRE',
+        module: 'orders',
+        entity_id: order.id,
+        method: 'PATCH',
+        path: `/orders/${order.id}`,
+        status_code: 200,
+        summary: c.consomme
+          ? `${nature} ${code} de nouveau appliqué : commande ${ref} réactivée, réduction de ${formaterFrancs(c.remise)} F`
+          : `${nature} ${code} retiré : commande ${ref} réactivée sans sa réduction de ${formaterFrancs(c.remise)} F. ${c.raison ?? ''}`.trim(),
+        metadata: {
+          code: c.code,
+          type: c.type,
+          remise: c.remise,
+          consomme: c.consomme,
+          raison: c.raison ?? null,
+          customer_id: order.customer_id,
+          ...(c.type === 'VOUCHER' ? { solde_apres: c.soldeApres ?? null } : { promo_code_id: c.promoCodeId ?? null }),
+        },
+      });
+    } catch (e: any) {
+      this.logger.warn(`Audit de la réactivation du coupon non écrit : ${e?.message}`);
+    }
+    if (!c.consomme) return;
+    if (c.type === 'VOUCHER' && c.bonId && c.code) {
+      void this.voucherService.notifierMouvementBon({
+        customerId: order.customer_id,
+        code: c.code,
+        sens: 'DEBIT',
+        montant: c.remise,
+        solde: c.soldeApres ?? 0,
+        reference: order.reference ?? null,
+      });
+      void this.voucherService.diffuserBon(c.bonId, 'voucher:redeemed');
+    } else if (c.type === 'PROMO_CODE' && c.promoCodeId) {
+      try {
+        this.appGateway.emitToBackoffice('promo_code:usage_recorded', { promoCodeId: c.promoCodeId, orderId: order.id });
+      } catch (e: any) {
+        this.logger.warn(`Diffusion de l'usage du code ${c.code} impossible : ${e?.message}`);
+      }
     }
   }
 

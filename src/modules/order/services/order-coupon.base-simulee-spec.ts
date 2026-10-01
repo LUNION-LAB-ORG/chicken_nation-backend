@@ -26,6 +26,11 @@ function correspond(ligne: Ligne, where: Ligne = {}): boolean {
       if (valeur !== null && valeur !== undefined) return false;
     } else if (typeof condition === 'object' && !(condition instanceof Date)) {
       const c = condition as Ligne;
+      if ('equals' in c) {
+        const insensible = c.mode === 'insensitive';
+        const norme = (v: unknown) => (insensible && typeof v === 'string' ? v.toUpperCase() : v);
+        if (norme(valeur) !== norme(c.equals)) return false;
+      }
       if ('not' in c && valeur === c.not) return false;
       if ('gte' in c && !(valeur >= c.gte)) return false;
       if ('gt' in c && !(valeur > c.gt)) return false;

@@ -109,4 +109,20 @@ describe('OrderRelanceTask', () => {
 
     await expect(tache().alerter()).resolves.toEqual([]);
   });
+
+  it('panier annulé par le client (01/10) : alerté comme un panier en attente, une fois', async () => {
+    const a = commande(MAINTENANT, 6, {
+      status: 'CANCELLED',
+      entity_status: 'DELETED',
+      cancelled_by: 'client',
+      cancelled_at: plusTot(2),
+    });
+    const { tache, alertes, journal } = monterTache({ commandes: [a] });
+
+    await expect(tache().passage(MAINTENANT)).resolves.toEqual([a.id]);
+    expect(alertes()).toHaveLength(1);
+    expect(alertes()[0][1].nouvelles).toEqual([a.id]);
+    expect(journal.filter((j) => j.action === 'ALERTE').map((j) => j.order_id)).toEqual([a.id]);
+    await expect(tache().passage(new Date(MAINTENANT.getTime() + 30_000))).resolves.toEqual([]);
+  });
 });

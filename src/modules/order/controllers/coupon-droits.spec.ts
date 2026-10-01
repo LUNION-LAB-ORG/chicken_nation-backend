@@ -187,10 +187,14 @@ describe('Routes du client : rien qui touche aux réductions', () => {
       status: OrderStatus.CANCELLED,
       meta: { reason: 'Trop long', role: UserRole.ADMIN, _voucher: { code: 'FAUX' }, userId: 'autre' },
     });
-    expect(orderService.updateStatus).toHaveBeenCalledWith('o1', OrderStatus.CANCELLED, {
-      reason: 'Trop long',
-      userId: 'client-1',
-    });
+    // `parLeClient` ne vient jamais du corps : c'est la route qui le pose
+    // (panier non payé annulé par le client : DELETED, suivi par la relance).
+    expect(orderService.updateStatus).toHaveBeenCalledWith(
+      'o1',
+      OrderStatus.CANCELLED,
+      { reason: 'Trop long', userId: 'client-1' },
+      { parLeClient: true },
+    );
   });
 
   it("la modification par le client n'écrit jamais de code promo sur la commande", async () => {

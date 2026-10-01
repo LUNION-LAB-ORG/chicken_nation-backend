@@ -13,11 +13,17 @@ import { USER_ROLES_KEY } from 'src/modules/auth/decorators/user-roles.decorator
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
 import {
+  ANNULEE_PAR_CLIENT,
   BROUILLON_WHERE,
+  PANIER_ANNULE_PAR_CLIENT_WHERE,
+  RELANCABLE_WHERE,
   ROLES_BROUILLONS,
   estBrouillon,
+  estPanierAnnuleParClient,
+  estRelancable,
   peutVoirLesBrouillons,
 } from '../helpers/brouillons.rules';
+import { OrderService } from '../services/order.service';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { IgnorerRelanceDto } from '../dto/ignorer-relance.dto';
@@ -131,6 +137,94 @@ describe('Règle unique des brouillons', () => {
     // Un seul cas : application, en attente, non payée, en ligne, non supprimée
     // (ACTIVE ou INACTIVE).
     expect(brouillons).toBe(Object.values(EntityStatus).length - 1);
+  });
+
+  it('estPanierAnnuleParClient, estRelancable et leurs `where` donnent le même verdict sur toutes les combinaisons', () => {
+    let annules = 0;
+    for (const auto of [true, false])
+      for (const status of Object.values(OrderStatus))
+        for (const paied of [true, false])
+          for (const payment_method of Object.values(PaymentMethod))
+            for (const entity_status of Object.values(EntityStatus))
+              for (const cancelled_by of [ANNULEE_PAR_CLIENT, 'id-du-client', 'id-agent', null]) {
+                const commande = { auto, status, paied, payment_method, entity_status, cancelled_by };
+                const attendu = correspond(commande, PANIER_ANNULE_PAR_CLIENT_WHERE);
+                expect({ commande, verdict: estPanierAnnuleParClient(commande) }).toEqual({ commande, verdict: attendu });
+                expect({ commande, verdict: estRelancable(commande) }).toEqual({
+                  commande,
+                  verdict: correspond(commande, RELANCABLE_WHERE),
+                });
+                // Jamais les deux à la fois : un brouillon n'est jamais supprimé.
+                if (attendu) expect(estBrouillon(commande)).toBe(false);
+                if (attendu) annules += 1;
+              }
+    // Un seul cas : application, annulée, non payée, en ligne, supprimée, par le client.
+    expect(annules).toBe(1);
+  });
+});
+
+/**
+ * GET /orders/:id : un panier annulé par le client (supprimé des listes) se lit
+ * par ADMIN et CALL_CENTER, qui l'ouvrent depuis « À relancer ». Introuvable
+ * pour les autres rôles, comme toute commande supprimée. Vraie méthode du
+ * service, `where` évalué contre la commande comme le ferait la base.
+ */
+describe('GET /orders/:id : panier annulé par le client', () => {
+  const ID = '11111111-1111-4111-8111-111111111111';
+  const panierAnnule = {
+    id: ID,
+    restaurant_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    auto: true,
+    status: OrderStatus.CANCELLED,
+    paied: false,
+    payment_method: PaymentMethod.ONLINE,
+    entity_status: EntityStatus.DELETED,
+    cancelled_by: ANNULEE_PAR_CLIENT,
+    updated_by: null,
+  };
+
+  function monter(enBase: Record<string, unknown>) {
+    const service = Object.create(OrderService.prototype) as OrderService;
+    const findFirst = jest.fn(async ({ where }: { where: Record<string, unknown> }) =>
+      correspond(enBase, where) ? { ...enBase } : null,
+    );
+    Object.assign(service, { prisma: { order: { findFirst }, user: { findUnique: jest.fn() } } });
+    const controleur = new OrderController({} as never, service, {} as never, {} as never, {} as never);
+    const lire = (role: UserRole) =>
+      controleur.findOne({ user: { id: 'u1', role, type: 'BACKOFFICE', restaurant_id: null } } as never, ID);
+    return { lire, findFirst };
+  }
+
+  it('ADMIN et CALL_CENTER le lisent', async () => {
+    const { lire } = monter(panierAnnule);
+    for (const role of [UserRole.ADMIN, UserRole.CALL_CENTER]) {
+      await expect(lire(role)).resolves.toEqual(expect.objectContaining({ id: ID, entity_status: EntityStatus.DELETED }));
+    }
+  });
+
+  it('introuvable (404) pour tout autre rôle', async () => {
+    const { lire } = monter(panierAnnule);
+    for (const role of [UserRole.MARKETING, UserRole.COMPTABLE, UserRole.MANAGER, UserRole.CAISSIER, UserRole.CUISINE]) {
+      await expect(lire(role)).rejects.toBeInstanceOf(NotFoundException);
+    }
+  });
+
+  it('une autre commande supprimée reste introuvable pour tous, ADMIN compris', async () => {
+    const autres = [
+      { ...panierAnnule, cancelled_by: 'id-agent' }, // annulée par le personnel puis supprimée
+      { ...panierAnnule, status: OrderStatus.PENDING, cancelled_by: null }, // supprimée au backoffice
+      { ...panierAnnule, paied: true }, // payée
+    ];
+    for (const commande of autres) {
+      const { lire } = monter(commande);
+      await expect(lire(UserRole.ADMIN)).rejects.toBeInstanceOf(NotFoundException);
+      await expect(lire(UserRole.CALL_CENTER)).rejects.toBeInstanceOf(NotFoundException);
+    }
+  });
+
+  it('une commande active se lit comme avant, par tous', async () => {
+    const { lire } = monter({ ...panierAnnule, entity_status: EntityStatus.ACTIVE, cancelled_by: 'id-agent' });
+    await expect(lire(UserRole.CAISSIER)).resolves.toEqual(expect.objectContaining({ id: ID }));
   });
 });
 

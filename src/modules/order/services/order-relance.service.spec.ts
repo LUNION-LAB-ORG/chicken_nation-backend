@@ -367,12 +367,135 @@ describe('OrderRelanceService : liste', () => {
       type: 'DELIVERY',
       amount: 5050,
       paiement_refuse: false,
+      annulee_par_client: false,
     });
+    expect(g.signaux.annulee_par_client).toBeNull();
     expect(g.signaux.paiement_partiel).toEqual(
       expect.objectContaining({ recu: 2000, montant: 5050, libelle: expect.stringMatching(/^Paiement partiel : 2.000 F reçus sur 5.050 F$/) }),
     );
     expect(g.crm).toBeNull();
     expect(liste.prochaine_echeance).not.toBeNull();
     expect(Date.parse(liste.maintenant)).not.toBeNaN();
+  });
+});
+
+describe('OrderRelanceService : paniers annulés par le client (01/10)', () => {
+  /** Panier annulé par le client dans l'application, tel que S1 l'écrit. */
+  const annule = (minutes: number, surcharge: Record<string, unknown> = {}) =>
+    commande(maintenant(), minutes, {
+      status: OrderStatus.CANCELLED,
+      entity_status: 'DELETED',
+      cancelled_by: 'client',
+      cancelled_at: plusTot(1),
+      ...surcharge,
+    });
+
+  it('compté dans « à relancer », ligne et signal « annulée par le client »', async () => {
+    const a = annule(9);
+    const enAttente = commande(maintenant(), 8);
+    const { service, lecturesBrouillons } = monterRelance({ commandes: [a, enAttente] });
+
+    const liste = await service.lister(AWA);
+
+    expect(lecturesBrouillons()).toBe(1);
+    expect(liste.compteurs.a_relancer).toBe(2);
+    const groupe = liste.groupes.find((g) => g.tete.id === a.id)!;
+    expect(groupe.tete.annulee_par_client).toBe(true);
+    expect(groupe.signaux.annulee_par_client).toEqual({ le: a.cancelled_at.toISOString() });
+    const autre = liste.groupes.find((g) => g.tete.id === enAttente.id)!;
+    expect(autre.tete.annulee_par_client).toBe(false);
+    expect(autre.signaux.annulee_par_client).toBeNull();
+  });
+
+  it('annulé par le PERSONNEL (reste actif) ou supprimé au back office : absent', async () => {
+    const parAgent = commande(maintenant(), 9, { status: OrderStatus.CANCELLED, cancelled_by: AWA.id });
+    const supprime = commande(maintenant(), 9, { status: OrderStatus.CANCELLED, entity_status: 'DELETED', cancelled_by: AWA.id });
+    const { service } = monterRelance({ commandes: [parAgent, supprime] });
+    expect((await service.lister(AWA)).groupes).toEqual([]);
+  });
+
+  it('prendre, libérer, ignorer, rétablir : chaque geste marche', async () => {
+    const a = annule(9);
+    const { service, relances, journal } = monterRelance({ commandes: [a] });
+
+    const { groupe } = await service.prendre(a.id, AWA);
+    expect(groupe).toEqual(expect.objectContaining({ etat: 'PRIS' }));
+    expect(relances[0].pris_par_id).toBe(AWA.id);
+
+    await service.liberer(a.id, AWA);
+    expect(relances[0].pris_par_id).toBeNull();
+
+    await service.ignorer(a.id, { raison_code: 'CLIENT_INJOIGNABLE' }, AWA);
+    expect(relances[0].ignore_le).toBeInstanceOf(Date);
+    const ignorees = await service.listerIgnorees(AWA);
+    expect(ignorees.items).toEqual([
+      expect.objectContaining({ id: a.id, annulee_par_client: true, encore_en_attente: true }),
+    ]);
+
+    const retabli = await service.retablir(a.id, AWA);
+    expect(retabli).toEqual({ ok: true, hors_fenetre: false, encore_en_attente: true });
+    expect(relances[0].ignore_le).toBeNull();
+    expect(journal.map((j) => j.action)).toEqual(['PRISE', 'LIBERATION', 'IGNORE', 'RETABLISSEMENT']);
+  });
+
+  it('réactivable tant qu’il est relançable', async () => {
+    const a = annule(9);
+    const { service } = monterRelance({ commandes: [a] });
+    await expect(service.verifierReactivable(a.id, AWA)).resolves.toBeUndefined();
+    // Ignoré : la reprise reste possible, comme pour un panier en attente.
+    const b = annule(9);
+    const ignore = monterRelance({
+      commandes: [b],
+      relances: [{ id: 'r1', order_id: b.id, alerte_le: null, pris_par_id: null, prise_expire_le: null, ignore_le: plusTot(1) }],
+    });
+    await expect(ignore.service.verifierReactivable(b.id, AWA)).resolves.toBeUndefined();
+  });
+
+  it('plus réactivable : 409 qui dit pourquoi', async () => {
+    const recommande = annule(30, { customer_id: 'client-r', phone: '0700000777' });
+    const payee = commande(maintenant(), 5, {
+      customer_id: 'client-r',
+      phone: '0700000777',
+      reference: 'ORD-261001-PAYEE',
+      paied: true,
+      status: OrderStatus.ACCEPTED,
+    });
+    const couvert = annule(9, { paiements: [{ status: PaiementStatus.SUCCESS, amount: 5050, total: 5050, created_at: plusTot(8) }] });
+    const vieux = annule(4 * 60);
+    const reprise = annule(9, { auto: false, entity_status: 'ACTIVE', status: OrderStatus.ACCEPTED });
+    const { service } = monterRelance({ commandes: [recommande, payee, couvert, vieux, reprise] });
+
+    expect(await refus(service.verifierReactivable(recommande.id, AWA))).toEqual({
+      classe: ConflictException,
+      message: "Cette commande n'est plus à relancer : a recommandé (ORD-261001-PAYEE).",
+    });
+    expect(await refus(service.verifierReactivable(couvert.id, AWA))).toEqual({
+      classe: ConflictException,
+      message: "Cette commande n'est plus à relancer : paiement reçu, confirmation en cours.",
+    });
+    expect(await refus(service.verifierReactivable(vieux.id, AWA))).toEqual({
+      classe: ConflictException,
+      message: "Cette commande a plus de 3 h : elle n'est plus suivie ici.",
+    });
+    expect(await refus(service.verifierReactivable(reprise.id, AWA))).toEqual({
+      classe: ConflictException,
+      message: "Cette commande n'est plus à relancer : reprise au téléphone.",
+    });
+  });
+
+  it('réservé au centre d’appels et aux administrateurs', async () => {
+    const a = annule(9);
+    const { service } = monterRelance({ commandes: [a] });
+    const gerant = agent('gerant', 'Gérant', { role: UserRole.MANAGER, type: UserType.RESTAURANT, restaurant_id: RESTO_A });
+    expect((await refus(service.verifierReactivable(a.id, gerant))).classe).toBe(ForbiddenException);
+  });
+
+  it('la reprise note au journal d’où vient la réactivation', async () => {
+    const a = annule(9);
+    const { service, journal } = monterRelance({ commandes: [a] });
+    await service.noterReprise(a.id, AWA.id, 'Annulée par le client le 01/10 à 11:58, réactivée');
+    expect(journal).toEqual([
+      expect.objectContaining({ order_id: a.id, action: 'REPRISE', user_id: AWA.id, raison: 'Annulée par le client le 01/10 à 11:58, réactivée' }),
+    ]);
   });
 });

@@ -4,7 +4,7 @@ import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { Order, OrderStatus } from '@prisma/client';
 import { OrderChannels } from '../enums/order-channels';
 import { sansIdentifiantsPush } from '../helpers/identifiants-push.helper';
-import { estBrouillon } from '../helpers/brouillons.rules';
+import { estBrouillon, estPanierAnnuleParClient } from '../helpers/brouillons.rules';
 
 /**
  * Ce qu'un brouillon (panier de l'application non payé) laisse voir au back
@@ -37,6 +37,9 @@ function chargeBrouillon(order: Order) {
  * caisse doit alors le recevoir en temps réel, comme la cloche le lui annonce.
  */
 function resteHorsDuRestaurant(order: Order, previousStatus: OrderStatus): boolean {
+    // Panier annulé par le client (01/10) : supprimé des listes, donc plus un
+    // brouillon au sens strict, mais le restaurant ne l'a jamais vu.
+    if (estPanierAnnuleParClient(order)) return true;
     return (
         estBrouillon({ ...order, status: previousStatus }) &&
         (order.status === OrderStatus.PENDING || order.status === OrderStatus.CANCELLED)
@@ -140,8 +143,9 @@ export class OrderWebSocketService {
         const data = { order, message: 'Commande mise à jour' };
         this.appGateway.emitToUser(order.customer_id, 'customer', OrderChannels.ORDER_UPDATED, data);
 
-        // Panier encore non payé (adresse changée par le client, par exemple).
-        if (estBrouillon(order)) {
+        // Panier encore non payé (adresse changée par le client, par exemple),
+        // ou annulé par le client et retouché par le centre d'appels.
+        if (estBrouillon(order) || estPanierAnnuleParClient(order)) {
             this.appGateway.emitToBackoffice(OrderChannels.ORDER_UPDATED, {
                 order: chargeBrouillon(order),
                 message: data.message,

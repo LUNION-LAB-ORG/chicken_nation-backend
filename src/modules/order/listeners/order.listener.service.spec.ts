@@ -115,6 +115,25 @@ describe('OrderListenerService : changement de statut', () => {
     expect(rewardService.restoreConsumedGiftsForOrder).toHaveBeenCalledTimes(1);
   });
 
+  it('panier annulé par le client, supprimé (01/10) : UNE seule notification au client, « Commande annulée »', async () => {
+    const { ecouteur, expoPushService, notificationsSender, userPushService } = monter();
+
+    await ecouteur.orderStatusUpdatedEventListener({
+      order: panier({ status: OrderStatus.CANCELLED, entity_status: EntityStatus.DELETED, cancelled_by: 'client' }),
+      etait_brouillon: true,
+      expo_token: 'ExponentPushToken[client]',
+      voucher: null,
+    });
+
+    expect(expoPushService.sendPushNotifications).toHaveBeenCalledTimes(1);
+    expect(expoPushService.sendPushNotifications.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ title: '😔 Commande annulée', categoryId: 'order-cancelled' }),
+    );
+    // Les restaurants ne reçoivent rien : ni cloche, ni notification.
+    expect(notificationsSender.sendOrderBell).not.toHaveBeenCalled();
+    expect(userPushService.notifyRestaurant).not.toHaveBeenCalled();
+  });
+
   it("sonne l'annulation d'une commande que le restaurant connaît", async () => {
     const { ecouteur, notificationsSender } = monter();
 

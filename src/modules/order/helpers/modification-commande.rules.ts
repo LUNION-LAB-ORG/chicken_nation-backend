@@ -23,6 +23,11 @@ import { OrderStatus, UserRole } from '@prisma/client';
  *    livraison : celles là restent à l'administrateur.
  *  - L'ADMINISTRATEUR modifie une commande quel que soit son statut (erreur
  *    de saisie, audit comptable).
+ *
+ * Seule exception à « elle reste annulée », décidée dans `OrderService.update`
+ * et non ici (la règle par statut ne change pas) : le PANIER ANNULÉ PAR LE
+ * CLIENT (`estPanierAnnuleParClient`, brouillons.rules.ts), repris au
+ * téléphone (`auto: false`) par ADMIN ou CALL_CENTER, est RÉACTIVÉ (01/10).
  */
 
 /** Statuts modifiables par tout rôle qui a le droit de modifier une commande. */

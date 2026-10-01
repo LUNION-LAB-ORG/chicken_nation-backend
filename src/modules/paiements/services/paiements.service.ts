@@ -30,6 +30,8 @@ import { RESTAURANT_COMMANDE_SELECT } from 'src/modules/restaurant/constantes/re
 import { CLIENT_COMMANDE_SELECT } from 'src/modules/order/constantes/client-commande.select';
 import { sansIdentifiantsPush } from 'src/modules/order/helpers/identifiants-push.helper';
 import { assertCanAccessRestaurant } from 'src/modules/order/helpers/restaurant-scope.helper';
+import { ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE } from 'src/modules/order/helpers/brouillons.rules';
+import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
 import {
   etatApresEncaissement,
   extraireEncaissement,
@@ -46,7 +48,49 @@ export class PaiementsService {
     private readonly promoCodeService: PromoCodeService,
     private readonly appGateway: AppGateway,
     private readonly eventEmitter: EventEmitter2,
+    private readonly alertes: AlertesService,
   ) { }
+
+  /**
+   * PAIEMENT REÇU SUR UN PANIER QUE LE CLIENT AVAIT ANNULÉ (revue du 01/10).
+   *
+   * Le panier annulé par le client avant de payer est supprimé des listes
+   * (`entity_status` DELETED) et suivi dans « À relancer ». Si son paiement
+   * en ligne est validé APRÈS l'annulation (Mobile Money confirmé sur le
+   * téléphone une fois l'application fermée), `paied` vient de passer à vrai :
+   * la commande n'est plus relançable, et resterait supprimée, donc absente
+   * de tous les écrans, alors que l'argent est reçu et que personne ne la
+   * rembourse.
+   *
+   * Elle redevient donc ACTIVE : une annulation payée ordinaire, visible dans
+   * Commandes avec le badge « Payé », et une alerte demande le remboursement.
+   * Écriture conditionnée (idempotente) : rejouée, elle ne fait rien. Ne
+   * touche aucune autre commande, annulée par le personnel comprise.
+   *
+   * @returns vrai si la commande vient d'être rendue visible.
+   */
+  private async retablirAnnuleeParClientPayee(
+    commande: { id: string; reference?: string | null; restaurant_id?: string | null },
+    transactionId: string,
+  ): Promise<boolean> {
+    const { count } = await this.prisma.order.updateMany({
+      where: { id: commande.id, ...ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE, paied: true },
+      data: { entity_status: EntityStatus.ACTIVE, deleted_at: null },
+    });
+    if (count !== 1) return false;
+    this.alertes.signaler({
+      code: CodeAlerte.PAIEMENT_SUR_COMMANDE_ANNULEE,
+      restaurantId: commande.restaurant_id ?? null,
+      reference: commande.reference ?? null,
+      details: [
+        `Le client a payé dans l'application une commande qu'il avait annulée avant la validation de son paiement.`,
+        `Elle réapparaît dans Commandes, au statut Annulée avec le badge Payé : la rembourser, ou la reprendre avec le client.`,
+      ],
+      cleBridage: `${CodeAlerte.PAIEMENT_SUR_COMMANDE_ANNULEE}:${commande.reference ?? commande.id}`,
+      meta: { orderId: commande.id, transactionId },
+    });
+    return true;
+  }
 
   // Payer avec Kkiapay
   async payWithKkiapay(
@@ -118,6 +162,17 @@ export class PaiementsService {
             ...this.buildPaymentDateAlignment(result.order, paymentAt),
           },
         });
+        // Panier annulé par le client entre-temps : visible de nouveau, et
+        // remboursement signalé. Isolé : la réponse au client ne doit pas
+        // échouer, et le webhook du même paiement rejoue ce geste.
+        try {
+          await this.retablirAnnuleeParClientPayee(result.order, transaction.transactionId);
+        } catch (e) {
+          console.error(
+            `[Paiement KKiaPay] Commande annulée par le client ${result.order.reference} payée, ` +
+            `non rétablie : ${(e as Error)?.message}`,
+          );
+        }
       } else {
         console.warn(
           `[Paiement KKiaPay] Commande ${result.order.reference} laissée NON payée ` +
@@ -532,6 +587,9 @@ export class PaiementsService {
     // soldée : l'appelant doit prévenir les écrans ouverts (aucun autre
     // événement ne part sur ce chemin).
     let payeApresCoup = false;
+    // Panier annulé par le client que ce paiement vient de rendre visible
+    // (`retablirAnnuleeParClientPayee`) : il ne rapporte rien.
+    let annuleeRetablie = false;
     // Motif lisible d'un paiement NON abouti — remonté à l'appelant (confirmation
     // manuelle admin) pour un 4xx explicite. `undefined` si isPaid=true.
     let notPaidReason: string | undefined;
@@ -575,15 +633,27 @@ export class PaiementsService {
             data: { paied: true, paied_at: paymentAt },
           });
           payeApresCoup = tardif.count === 1;
+          // Panier annulé par le client avant ce paiement : rendu visible,
+          // remboursement signalé. Rejoué à chaque passage (idempotent), y
+          // compris quand `paied` était déjà posé par un passage précédent ou
+          // par la confirmation de l'application. Une erreur remonte : le
+          // webhook est alors retenté, et la commande retrouvée par sa
+          // référence même payée (`findByReferenceOrNull`).
+          annuleeRetablie = await this.retablirAnnuleeParClientPayee(result.order, transaction.transactionId);
         }
 
         // Paiement tardif : c'est LUI qui solde la commande, plus personne ne
         // l'encaissera. Le code promo doit donc être compté ici, comme sur
         // tous les autres chemins qui soldent une commande. Idempotent ; isolé.
+        // Jamais sur une commande ANNULÉE : son coupon a été rendu à
+        // l'annulation, le compter de nouveau le ferait payer au client sans
+        // qu'il en profite.
         if (payeApresCoup) {
           try {
             const commandePayee = await this.prisma.order.findUnique({ where: { id: result.order.id } });
-            if (commandePayee) await this.promoCodeService.activateUsageForOrder(commandePayee);
+            if (commandePayee && commandePayee.status !== OrderStatus.CANCELLED) {
+              await this.promoCodeService.activateUsageForOrder(commandePayee);
+            }
           } catch (e) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             console.error(`Sync usage promo (paiement KKiaPay tardif) échoué pour ${result.order.id}: ${(e as any)?.message}`);
@@ -609,7 +679,7 @@ export class PaiementsService {
       }
     }
 
-    return { paiement: result.paiement, justPaid, isPaid, payeApresCoup, notPaidReason };
+    return { paiement: result.paiement, justPaid, isPaid, payeApresCoup, annuleeRetablie, notPaidReason };
   }
 
   // Récupération des paiements succès libres

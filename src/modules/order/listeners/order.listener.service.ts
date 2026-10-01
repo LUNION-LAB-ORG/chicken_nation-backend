@@ -401,7 +401,15 @@ export class OrderListenerService {
         /* =========================
            📦 COMMANDE SUPPRIMÉE
         ========================= */
-        if (payload.order.entity_status === EntityStatus.DELETED && payload.expo_token) {
+        // ⚠️ Jamais pour une commande ANNULÉE : le panier que le client annule
+        // lui-même passe aussi DELETED (01/10), et il vient de recevoir
+        // « Commande annulée » juste au-dessus. Une seule notification, celle
+        // qui décrit ce qui s'est produit (doublon corrigé le 30/09, 1c42592).
+        if (
+            payload.order.entity_status === EntityStatus.DELETED &&
+            payload.order.status !== OrderStatus.CANCELLED &&
+            payload.expo_token
+        ) {
             this.expoPushService.sendPushNotifications({
                 tokens: [payload.expo_token],
                 title: "Commande supprimée",

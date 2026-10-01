@@ -46,6 +46,7 @@ import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 import { ReceiptsService } from '../services/receipts.service';
 import { OrderCreateDto } from '../dto/order-create.dto';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
+import { peutVoirLesBrouillons } from '../helpers/brouillons.rules';
 import { Throttle } from '@nestjs/throttler';
 import { CouponCreationThrottlerGuard, LIMITE_COUPON } from '../guards/coupon-throttler.guard';
 
@@ -415,7 +416,13 @@ export class OrderController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.READ)
   async findOne(@Req() req: Request, @Param('id') id: string) {
-    const order = await this.orderService.findById(id);
+    // Panier annulé par le client (supprimé des listes, suivi dans « À
+    // relancer ») : rendu aux seuls ADMIN et CALL_CENTER, qui l'ouvrent et le
+    // reprennent au téléphone. Introuvable (404) pour les autres rôles, comme
+    // toute commande supprimée.
+    const order = await this.orderService.findById(id, {
+      inclurePanierAnnuleParClient: peutVoirLesBrouillons(req.user as User),
+    });
     // Un user RESTAURANT ne peut pas ouvrir la commande d'un autre restaurant
     // (même en devinant l'id). Le BACKOFFICE n'est pas restreint.
     assertCanAccessRestaurant(
@@ -606,7 +613,9 @@ export class OrderController {
      */
     const motif = typeof body.meta?.reason === 'string' ? body.meta.reason.slice(0, 500) : undefined;
     const userId = (req.user as Customer).id;
-    return this.orderService.updateStatus(id, body.status, { reason: motif, userId });
+    // `parLeClient` : un panier non payé que le client annule passe DELETED,
+    // suivi par la relance (OrderService.updateStatus).
+    return this.orderService.updateStatus(id, body.status, { reason: motif, userId }, { parLeClient: true });
   }
 
   /**

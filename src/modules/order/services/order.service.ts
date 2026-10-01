@@ -11,6 +11,7 @@ import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -56,11 +57,68 @@ import { CLIENT_COMMANDE_SELECT } from '../constantes/client-commande.select';
 import { assertCanAccessRestaurant } from '../helpers/restaurant-scope.helper';
 import { PAYMENT_AMOUNT_TOLERANCE } from 'src/modules/paiements/helpers/encaissement.helper';
 import { sansIdentifiantsPush } from '../helpers/identifiants-push.helper';
-import { assietteDesRemises, normaliserCode } from '../helpers/coupon.helper';
-import { ConsommationCoupon, CouponResolu, OrderCouponService } from './order-coupon.service';
-import { estBrouillon, peutVoirLesBrouillons } from '../helpers/brouillons.rules';
+import { assietteDesRemises, formaterFrancs, masquerCode, normaliserCode } from '../helpers/coupon.helper';
+import {
+  ConsommationCoupon,
+  CouponResolu,
+  OrderCouponService,
+  ReconsommationCoupon,
+} from './order-coupon.service';
+import {
+  ANNULEE_PAR_CLIENT,
+  ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE,
+  BROUILLON_WHERE,
+  PANIER_ANNULE_PAR_CLIENT_WHERE,
+  estBrouillon,
+  estPanierAnnuleParClient,
+  peutVoirLesBrouillons,
+} from '../helpers/brouillons.rules';
 import { motifRefusModification, peutModifierCommande } from '../helpers/modification-commande.rules';
 import { OrderRelanceService } from './order-relance.service';
+import {
+  cadeauxDesLignes,
+  cadeauxRefactures,
+  memesArticles,
+  reprendreCadeaux,
+} from '../helpers/cadeaux-reactivation.helper';
+
+/** Journal de la relance : de quelle annulation vient la réactivation. */
+function annotationReactivation(commande: Pick<Order, 'cancelled_at' | 'cancelled_reason'>): string {
+  const le = commande.cancelled_at
+    ? ` le ${format(commande.cancelled_at, 'dd/MM', { locale: fr })} à ${format(commande.cancelled_at, 'HH:mm', { locale: fr })}`
+    : '';
+  const motif = commande.cancelled_reason?.trim() ? ` (motif : ${commande.cancelled_reason.trim()})` : '';
+  return `Annulée par le client${le}${motif}, réactivée`;
+}
+
+/**
+ * Texte montré à l'agent quand un panier réactivé perd sa remise : le coupon
+ * ne pouvait plus être consommé. Il doit annoncer le nouveau total au client.
+ */
+export function avertissementReprise(coupon: ReconsommationCoupon, total: number): string {
+  const nature =
+    coupon.type === 'VOUCHER' ? 'le bon' : coupon.type === 'PROMO_CODE' ? 'le code promo' : 'le code';
+  const code = coupon.code ? ` ${coupon.type === 'VOUCHER' ? masquerCode(coupon.code) : coupon.code}` : '';
+  const raison = coupon.raison?.trim() ? ` ${coupon.raison.trim()}` : '';
+  return (
+    `Commande reprise sans la réduction de ${formaterFrancs(coupon.remise)} F : ${nature}${code} ne peut plus être utilisé.` +
+    `${raison} Nouveau total : ${formaterFrancs(total)} F, à annoncer au client.`
+  );
+}
+
+/**
+ * Texte montré à l'agent quand un panier réactivé avec des articles modifiés
+ * facture un cadeau que l'annulation avait rendu au client. Le total n'est
+ * cité que s'il ne l'est pas déjà par l'avertissement du coupon.
+ */
+export function avertissementCadeaux(noms: string[], total: number, avecTotal: boolean): string {
+  const liste = noms.join(', ');
+  const phrase =
+    noms.length > 1
+      ? `Les cadeaux offerts (${liste}) ont été rendus au client à l'annulation : ils sont facturés au prix de la carte sur la commande reprise.`
+      : `Le cadeau offert (${liste}) a été rendu au client à l'annulation : il est facturé au prix de la carte sur la commande reprise.`;
+  return avecTotal ? `${phrase} Nouveau total : ${formaterFrancs(total)} F, à annoncer au client.` : phrase;
+}
 
 @Injectable()
 export class OrderService {
@@ -902,10 +960,16 @@ export class OrderService {
   /**
    * Met à jour le statut d'une commande
    */
+  /**
+   * @param options.parLeClient  Posé par la seule route du CLIENT
+   *   (`PATCH /orders/:id/client/status`). Jamais lu dans `meta`, que la route
+   *   du personnel recopie depuis le corps de la requête.
+   */
   async updateStatus(
     id: string,
     status: OrderStatus,
     meta?: Record<string, any>,
+    options: { parLeClient?: boolean } = {},
   ) {
     const order = await this.findById(id);
     //Meta peut contenir estimated_delivery_time, estimated_preparation_time, deliveryDriverId, role
@@ -950,47 +1014,117 @@ export class OrderService {
      *
      * La suppression explicite d'une commande par le personnel
      * (`remove()`) n'est pas concernée : elle reste un geste délibéré.
+     *
+     * ⚠️ REVU LE 01/10, à la demande de l'utilisateur : le PANIER NON PAYÉ que
+     * le CLIENT annule lui-même repasse DELETED (CANCELLED, `deleted_at`), et
+     * `cancelled_by` vaut `ANNULEE_PAR_CLIENT`. Il sort de Commandes, En
+     * cours, statistiques et CRM, mais reste visible du centre d'appels dans
+     * « À relancer », avec le motif « Annulée par le client » : le signal
+     * qu'on voulait garder est là, et la reprise au téléphone le réactive.
+     * Strictement : route du client, brouillon (application, en ligne, non
+     * payé, en attente). Toute annulation par le personnel reste ACTIVE.
+     * Toujours UNE notification au client : l'écouteur n'envoie pas « Commande
+     * supprimée » pour une commande annulée.
      */
-    // Mettre à jour le statut
-    const updatedOrder = await this.prisma.order.update({
-      where: { id: order.id },
-      data: {
-        estimated_delivery_time: this.orderHelper.calculateEstimatedTime(
-          meta?.estimated_delivery_time ?? '',
-        ),
-        estimated_preparation_time: this.orderHelper.calculateEstimatedTime(
-          meta?.estimated_preparation_time ?? '',
-        ),
-        updated_at: new Date(),
-        status,
-        ...(status === OrderStatus.ACCEPTED && { accepted_at: new Date() }),
-        ...(status === OrderStatus.IN_PROGRESS && { prepared_at: new Date() }),
-        ...(status === OrderStatus.READY && { ready_at: new Date() }),
-        ...(status === OrderStatus.PICKED_UP && { picked_up_at: new Date() }),
-        ...(status === OrderStatus.COLLECTED && { collected_at: new Date() }),
-        ...(status === OrderStatus.COMPLETED && { completed_at: new Date() }),
-        ...(status === OrderStatus.CANCELLED && { cancelled_at: new Date(), cancelled_by: meta?.userId, cancelled_reason: meta?.reason || '' }),
-        // Audit : dernier modificateur staff (meta.role n'est présent que sur le
-        // flux backoffice ; côté client `/client/status` il est absent → on n'écrase pas).
-        ...(meta?.role && meta?.userId ? { updated_by: meta.userId } : {}),
-      },
-      include: {
-        order_items: {
-          include: {
-            dish: true,
-          },
+    const annulationDuPanierParLeClient =
+      options.parLeClient === true && status === OrderStatus.CANCELLED && estBrouillon(order);
+    const maintenant = new Date();
+    const donnees = {
+      estimated_delivery_time: this.orderHelper.calculateEstimatedTime(
+        meta?.estimated_delivery_time ?? '',
+      ),
+      estimated_preparation_time: this.orderHelper.calculateEstimatedTime(
+        meta?.estimated_preparation_time ?? '',
+      ),
+      updated_at: new Date(),
+      status,
+      ...(status === OrderStatus.ACCEPTED && { accepted_at: new Date() }),
+      ...(status === OrderStatus.IN_PROGRESS && { prepared_at: new Date() }),
+      ...(status === OrderStatus.READY && { ready_at: new Date() }),
+      ...(status === OrderStatus.PICKED_UP && { picked_up_at: new Date() }),
+      ...(status === OrderStatus.COLLECTED && { collected_at: new Date() }),
+      ...(status === OrderStatus.COMPLETED && { completed_at: new Date() }),
+      ...(status === OrderStatus.CANCELLED && { cancelled_at: maintenant, cancelled_by: meta?.userId, cancelled_reason: meta?.reason || '' }),
+      // Audit : dernier modificateur staff (meta.role n'est présent que sur le
+      // flux backoffice ; côté client `/client/status` il est absent → on n'écrase pas).
+      ...(meta?.role && meta?.userId ? { updated_by: meta.userId } : {}),
+    };
+    const includeStatut = {
+      order_items: {
+        include: {
+          dish: true,
         },
-        paiements: true,
-        // ⚠️ `notification_settings` y figurait : le jeton Expo et les
-        // identifiants OneSignal du client partaient dans la réponse et, par
-        // socket, vers tout le restaurant et tout le back office. Le jeton est
-        // relu à part, plus bas, pour la seule notification interne.
-        customer: { select: CLIENT_COMMANDE_SELECT },
-        // Liste blanche : nom, adresse, téléphone et courriel suffisent au
-        // ticket imprimé du backoffice ; la réponse part aussi au client.
-        restaurant: { select: RESTAURANT_COMMANDE_SELECT },
       },
-    });
+      paiements: true,
+      // ⚠️ `notification_settings` y figurait : le jeton Expo et les
+      // identifiants OneSignal du client partaient dans la réponse et, par
+      // socket, vers tout le restaurant et tout le back office. Le jeton est
+      // relu à part, plus bas, pour la seule notification interne.
+      customer: { select: CLIENT_COMMANDE_SELECT },
+      // Liste blanche : nom, adresse, téléphone et courriel suffisent au
+      // ticket imprimé du backoffice ; la réponse part aussi au client.
+      restaurant: { select: RESTAURANT_COMMANDE_SELECT },
+    } satisfies Prisma.OrderInclude;
+
+    /**
+     * Écriture CONDITIONNÉE de l'annulation par le client (revue du 01/10).
+     *
+     * La commande a été lue au début, puis le remboursement (s'il y a lieu)
+     * a pu prendre plusieurs secondes. Entre-temps, un paiement a pu arriver
+     * ou le centre d'appels la reprendre au téléphone. La suppression n'est
+     * donc posée que si, AU MOMENT DE L'ÉCRITURE, c'est encore un brouillon
+     * (application, en ligne, non payé, en attente) et qu'aucun paiement
+     * réussi n'y reste rattaché : un remboursement en échec laisse le
+     * paiement réussi (le client reçoit un bon à la place), et une commande
+     * dont l'argent a été reçu ne doit jamais disparaître des écrans. Même
+     * critère que la migration 20261001180000.
+     *
+     * Sinon, c'est l'annulation ordinaire (commande active, auteur = le
+     * client), elle aussi conditionnée au statut lu : si la commande a
+     * changé de statut entre-temps, 409, le client relit et recommence.
+     */
+    let updatedOrder: Prisma.OrderGetPayload<{ include: typeof includeStatut }> | null = null;
+    if (annulationDuPanierParLeClient) {
+      const { count } = await this.prisma.order.updateMany({
+        where: {
+          id: order.id,
+          ...BROUILLON_WHERE,
+          paiements: { none: { status: PaiementStatus.SUCCESS } },
+        },
+        data: {
+          ...donnees,
+          cancelled_by: ANNULEE_PAR_CLIENT,
+          entity_status: EntityStatus.DELETED,
+          deleted_at: maintenant,
+        },
+      });
+      if (count === 1) {
+        updatedOrder = await this.prisma.order.findUniqueOrThrow({
+          where: { id: order.id },
+          include: includeStatut,
+        });
+      }
+    }
+    if (!updatedOrder) {
+      try {
+        updatedOrder = await this.prisma.order.update({
+          where: { id: order.id, ...(options.parLeClient === true && { status: order.status }) },
+          data: donnees,
+          include: includeStatut,
+        });
+      } catch (e) {
+        if (
+          options.parLeClient === true &&
+          e instanceof Prisma.PrismaClientKnownRequestError &&
+          e.code === 'P2025'
+        ) {
+          throw new ConflictException(
+            'Cette commande vient de changer : actualisez-la avant de l\'annuler.',
+          );
+        }
+        throw e;
+      }
+    }
 
     // Destinataire de la notification « statut de commande » : lu ici, jamais
     // rangé dans la commande qui repart. Le statut est déjà enregistré : un
@@ -1337,7 +1471,14 @@ export class OrderService {
   /**
    * Récupère une commande par son ID
    */
-  async findById(id: string) {
+  /**
+   * @param options.inclurePanierAnnuleParClient  Rend aussi un panier annulé
+   *   par le client (supprimé des listes, mais relançable). Réservé aux rôles
+   *   qui voient les brouillons (`peutVoirLesBrouillons` : ADMIN, CALL_CENTER),
+   *   pour ouvrir le tiroir et le formulaire depuis « À relancer ». Toute
+   *   autre commande supprimée reste introuvable, pour tous.
+   */
+  async findById(id: string, options: { inclurePanierAnnuleParClient?: boolean } = {}) {
     if (!id) {
       throw new BadRequestException("L'identifiant de la commande est requis");
     }
@@ -1345,10 +1486,17 @@ export class OrderService {
     const whereCondition = parIdentifiantOuReference(id);
 
     const order = await this.prisma.order.findFirst({
-      where: {
-        ...whereCondition,
-        entity_status: { not: EntityStatus.DELETED },
-      },
+      where: options.inclurePanierAnnuleParClient
+        ? {
+            AND: [
+              whereCondition,
+              { OR: [{ entity_status: { not: EntityStatus.DELETED } }, PANIER_ANNULE_PAR_CLIENT_WHERE] },
+            ],
+          }
+        : {
+            ...whereCondition,
+            entity_status: { not: EntityStatus.DELETED },
+          },
       include: {
         order_items: {
           include: {
@@ -1461,15 +1609,32 @@ export class OrderService {
    * KKiaPay pour distinguer une commande INCONNUE (erreur permanente → ack sans
    * retry) d'une erreur DB TRANSITOIRE (Neon → à relancer). Ne PAS confondre avec
    * une erreur d'infra : ici un `null` = référence absente, pas un blip réseau.
+   *
+   * @param options.inclurePanierAnnuleParClient  Rend aussi un panier annulé
+   *   par le client (supprimé des listes), payé ou non
+   *   (`ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE`). Réservé au traitement d'un
+   *   paiement KKiaPay : un paiement validé APRÈS l'annulation doit être
+   *   rattaché à sa commande (paiement enregistré, commande payée, donc
+   *   sortie de la relance et de nouveau visible), et non acquitté comme
+   *   « commande introuvable ». Sans cela, le centre d'appels la réactivait
+   *   en paiement à la caisse et le client payait deux fois.
    */
-  async findByReferenceOrNull(reference: string) {
+  async findByReferenceOrNull(
+    reference: string,
+    options: { inclurePanierAnnuleParClient?: boolean } = {},
+  ) {
     if (!reference) return null;
 
     return this.prisma.order.findFirst({
-      where: {
-        reference,
-        entity_status: { not: EntityStatus.DELETED },
-      },
+      where: options.inclurePanierAnnuleParClient
+        ? {
+            reference,
+            OR: [{ entity_status: { not: EntityStatus.DELETED } }, ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE],
+          }
+        : {
+            reference,
+            entity_status: { not: EntityStatus.DELETED },
+          },
       include: {
         order_items: {
           include: {
@@ -1934,7 +2099,11 @@ export class OrderService {
     updateOrderDto: UpdateOrderDto,
     options: { skipStatusCheck?: boolean; userId?: string; user?: User } = {},
   ) {
-    const order = await this.findById(id);
+    // Un panier annulé par le client (supprimé des listes) s'ouvre ici pour
+    // les seuls rôles de la relance : c'est par cette route qu'on le reprend.
+    const order = await this.findById(id, {
+      inclurePanierAnnuleParClient: peutVoirLesBrouillons(options.user),
+    });
     // ⚠️ Cloisonnement absent jusqu'ici : un compte du restaurant A modifiait
     // (et pouvait rendre payée) la commande du restaurant B. Contrôle AVANT
     // celui du statut, pour ne rien apprendre d'une commande étrangère.
@@ -1983,8 +2152,33 @@ export class OrderService {
      *    d'alors, et `paied` décide encore de la suppression.
      * L'administrateur garde son contournement complet, inchangé.
      */
+    /**
+     * RÉACTIVATION D'UN PANIER ANNULÉ PAR LE CLIENT (demande du 01/10).
+     *
+     * Seule exception à la règle ci-dessous : le client a annulé dans
+     * l'application un panier qu'il n'a jamais payé, le centre d'appels le
+     * joint et il veut toujours sa commande. « Modifier la commande » avec
+     * `auto: false` (la reprise au téléphone) la RÉACTIVE : de nouveau active,
+     * acceptée, taxe à zéro, total refait, paiement à la caisse, et les effets
+     * d'une reprise de panier en attente (`signalerReprise`). L'annulation
+     * n'avait rien soldé d'autre que le coupon (aucun paiement, aucun point,
+     * aucun gain), consommé de nouveau dans la même transaction.
+     *
+     * ADMIN ou CALL_CENTER, et panier encore relançable (409 sinon). Toute
+     * autre modification d'une commande annulée suit la règle ci-dessous.
+     */
+    const reactivation = auto === false && estPanierAnnuleParClient(order);
+    if (reactivation) {
+      if (!peutVoirLesBrouillons(options.user)) {
+        throw new ForbiddenException(
+          "Seuls le centre d'appels et les administrateurs reprennent une commande annulée par le client.",
+        );
+      }
+      await this.orderRelance.verifierReactivable(order.id, options.user!);
+    }
+
     const retoucheApresAnnulation =
-      !options.skipStatusCheck && order.status === OrderStatus.CANCELLED;
+      !options.skipStatusCheck && order.status === OrderStatus.CANCELLED && !reactivation;
     if (
       retoucheApresAnnulation &&
       auto !== undefined &&
@@ -2045,7 +2239,22 @@ export class OrderService {
     }[] | null = null;
     let newNetAmount: number | null = null;
 
-    if (items && items.length > 0) {
+    /**
+     * RÉACTIVATION, articles renvoyés par le formulaire (revue du 01/10).
+     *
+     * « Modifier la commande » renvoie toujours les articles. Inchangés, la
+     * commande garde ses lignes d'origine : les lignes offertes restent à 0 F
+     * et leurs cadeaux, rendus par l'annulation, sont consommés de nouveau
+     * (409 s'ils ne sont plus disponibles). Modifiés, les lignes sont
+     * recalculées au prix de la carte : un cadeau dont le plat ou le
+     * supplément reste au panier y est facturé, et l'agent en est averti
+     * (`avertissement_reprise`) pour l'annoncer au client.
+     */
+    const articlesInchanges = reactivation && !!items?.length && memesArticles(order.order_items, items);
+    const cadeauxFactures =
+      reactivation && !!items?.length && !articlesInchanges ? cadeauxRefactures(order.order_items, items) : [];
+
+    if (items && items.length > 0 && !articlesInchanges) {
       // Récupérer les plats correspondants
       const dishIds = items.map((item) => item.dish_id);
       const dishes = await this.prisma.dish.findMany({
@@ -2176,6 +2385,8 @@ export class OrderService {
      */
     const montantEngage =
       passeEnManuel &&
+      // Un panier réactivé n'a jamais été payé ni préparé : rien d'engagé.
+      !reactivation &&
       (order.paied ||
         (order.type === OrderType.DELIVERY &&
           order.status !== OrderStatus.PENDING &&
@@ -2189,9 +2400,20 @@ export class OrderService {
        * ressusciterait. Le cas réel est le panier de l'application laissé en
        * attente, que le centre d'appels reprend et confirme.
        */
-      if (order.status === OrderStatus.PENDING) {
+      if (order.status === OrderStatus.PENDING || reactivation) {
         updateData.status = OrderStatus.ACCEPTED;
         updateData.accepted_at = new Date();
+      }
+      if (reactivation) {
+        // L'historique de l'annulation reste au journal de la relance
+        // (REPRISE) et au journal d'audit (COMMANDE_REACTIVEE).
+        Object.assign(updateData, {
+          entity_status: EntityStatus.ACTIVE,
+          deleted_at: null,
+          cancelled_at: null,
+          cancelled_by: null,
+          cancelled_reason: null,
+        });
       }
     }
 
@@ -2234,19 +2456,49 @@ export class OrderService {
       };
     }
 
-    let updatedOrder = await this.prisma.order.update({
-      where: { id: order.id },
-      data: updateData,
-      include: {
-        order_items: {
-          include: {
-            dish: true,
-          },
+    const includeEcriture = {
+      order_items: {
+        include: {
+          dish: true,
         },
-        paiements: true,
-        customer: true,
       },
-    });
+      paiements: true,
+      customer: true,
+    } satisfies Prisma.OrderInclude;
+
+    let coupon: ReconsommationCoupon | null = null;
+    let updatedOrder = reactivation
+      ? await this.prisma.$transaction(async (tx) => {
+          // Revendication : un seul geste réactive, et seulement un panier
+          // toujours annulé par le client (ni payé, ni repris entre-temps).
+          const revendique = await tx.order.updateMany({
+            where: { id: order.id, ...PANIER_ANNULE_PAR_CLIENT_WHERE },
+            data: { entity_status: EntityStatus.ACTIVE, deleted_at: null },
+          });
+          if (revendique.count !== 1) {
+            throw new ConflictException('Cette commande vient de changer : rechargez-la avant de la reprendre.');
+          }
+          // Cadeaux rendus par l'annulation : consommés de nouveau si les
+          // lignes offertes restent (articles non recalculés), 409 sinon.
+          if (!orderItemsData) {
+            await reprendreCadeaux(tx, order, cadeauxDesLignes(order.order_items));
+          }
+          coupon = await this.orderCoupon.reconsommerALaReactivation(tx, order);
+          if (coupon && !coupon.consomme && coupon.remise > 0) {
+            // Remise retirée : le total la récupère, le code ne reste pas
+            // affiché sur une commande qui n'en profite plus.
+            const retrait = Math.min(coupon.remise, Number(order.discount) || 0);
+            updateData.discount = Math.max(0, (Number(order.discount) || 0) - retrait);
+            updateData.amount = Number(updateData.amount ?? order.amount) + retrait;
+            updateData.code_promo = null;
+          }
+          return tx.order.update({ where: { id: order.id }, data: updateData, include: includeEcriture });
+        })
+      : await this.prisma.order.update({
+          where: { id: order.id },
+          data: updateData,
+          include: includeEcriture,
+        });
 
     // Si le montant a changé (recalcul des items, frais de livraison, etc.),
     // re-synchroniser le flag `paied` selon la somme des paiements SUCCESS :
@@ -2329,7 +2581,30 @@ export class OrderService {
     // Émettre via WebSocket
     this.orderWebSocketService.emitOrderUpdated(updatedOrder);
 
-    if (passeEnManuel) void this.signalerReprise(order, updatedOrder, options.userId ?? options.user?.id ?? null);
+    const auteurId = options.userId ?? options.user?.id ?? null;
+    if (passeEnManuel) void this.signalerReprise(order, updatedOrder, auteurId, { reactivation });
+
+    if (reactivation) {
+      const c = coupon as ReconsommationCoupon | null;
+      if (c) {
+        this.orderCoupon.signalerReactivation({ order: updatedOrder, coupon: c, acteur: options.user ?? null });
+      }
+      this.orderRelance.journaliserReactivation({
+        commande: order,
+        acteur: options.user ?? null,
+        coupon: c ? { code: c.code ?? '', type: c.type ?? 'INCONNU', consomme: c.consomme, remise: c.remise } : null,
+        ...(cadeauxFactures.length > 0 && { cadeauxFactures }),
+      });
+      const perteRemise = !!c && !c.consomme && c.remise > 0;
+      const avertissements: string[] = [];
+      if (perteRemise) avertissements.push(avertissementReprise(c!, updatedOrder.amount));
+      if (cadeauxFactures.length > 0) {
+        avertissements.push(avertissementCadeaux(cadeauxFactures, updatedOrder.amount, !perteRemise));
+      }
+      if (avertissements.length > 0) {
+        return { ...updatedOrder, avertissement_reprise: avertissements.join(' ') };
+      }
+    }
     return updatedOrder;
   }
 
@@ -2355,10 +2630,25 @@ export class OrderService {
    *
    * Ne lève jamais : la commande est déjà enregistrée.
    */
-  private async signalerReprise(avant: Order, apres: Order, auteurId: string | null): Promise<void> {
-    const etaitBrouillon = estBrouillon(avant);
-    if (etaitBrouillon) void this.orderRelance.noterReprise(avant.id, auteurId);
-    if (avant.status !== OrderStatus.PENDING || apres.status !== OrderStatus.ACCEPTED) return;
+  private async signalerReprise(
+    avant: Order,
+    apres: Order,
+    auteurId: string | null,
+    options: { reactivation?: boolean } = {},
+  ): Promise<void> {
+    // Un panier annulé par le client et réactivé se signale exactement comme
+    // un panier en attente qu'on reprend : le restaurant ne l'avait jamais vu.
+    const reactivation = options.reactivation === true;
+    const etaitBrouillon = estBrouillon(avant) || reactivation;
+    if (etaitBrouillon) {
+      void this.orderRelance.noterReprise(
+        avant.id,
+        auteurId,
+        reactivation ? annotationReactivation(avant) : null,
+      );
+    }
+    const depuisAttente = avant.status === OrderStatus.PENDING || reactivation;
+    if (!depuisAttente || apres.status !== OrderStatus.ACCEPTED) return;
 
     this.orderWebSocketService.emitStatusUpdate(apres, OrderStatus.PENDING);
 
