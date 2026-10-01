@@ -54,6 +54,7 @@ import { TwilioService } from 'src/twilio/services/twilio.service';
 import { RESTAURANT_COMMANDE_SELECT } from 'src/modules/restaurant/constantes/restaurant-public.select';
 import { CLIENT_COMMANDE_SELECT } from '../constantes/client-commande.select';
 import { assertCanAccessRestaurant } from '../helpers/restaurant-scope.helper';
+import { PAYMENT_AMOUNT_TOLERANCE } from 'src/modules/paiements/helpers/encaissement.helper';
 import { sansIdentifiantsPush } from '../helpers/identifiants-push.helper';
 import { assietteDesRemises, normaliserCode } from '../helpers/coupon.helper';
 import { ConsommationCoupon, CouponResolu, OrderCouponService } from './order-coupon.service';
@@ -2113,13 +2114,31 @@ export class OrderService {
      *    que personne ne saurait expliquer.
      *  - le STATUT passe à ACCEPTED. Reprendre une commande au téléphone,
      *    c'est la confirmer.
+     *  - le PAIEMENT passe à la caisse s'il reste à payer (après l'écriture
+     *    principale, voir plus bas).
      *
      * Uniquement sur la BASCULE, et jamais l'inverse : réenregistrer une
      * commande déjà manuelle ne doit pas refaire ces gestes.
      */
     const passeEnManuel = auto === false && order.auto === true;
+    /**
+     * ⚠️ Sauf quand le MONTANT est déjà ENGAGÉ : taxe et total ne bougent pas.
+     *  - commande déjà payée : le client a réglé la taxe, la retirer du total
+     *    laisserait un trop-perçu que plus aucun écran n'explique ;
+     *  - commande à livrer déjà prête ou plus loin : la course est partie (ou
+     *    part dans les minutes qui suivent) avec le montant à encaisser du
+     *    moment, et Turbo ne le relit jamais. Le livreur réclamerait l'ancien
+     *    total au client.
+     */
+    const montantEngage =
+      passeEnManuel &&
+      (order.paied ||
+        (order.type === OrderType.DELIVERY &&
+          order.status !== OrderStatus.PENDING &&
+          order.status !== OrderStatus.ACCEPTED &&
+          order.status !== OrderStatus.IN_PROGRESS));
     if (passeEnManuel) {
-      updateData.tax = 0;
+      if (!montantEngage) updateData.tax = 0;
       /**
        * ⚠️ On ne REMBOBINE jamais une commande plus avancée. Forcer ACCEPTED
        * sur une commande terminée la rouvrirait, sur une commande annulée la
@@ -2134,13 +2153,13 @@ export class OrderService {
 
     /**
      * Taxe à retenir pour tout recalcul de total plus bas : celle de la
-     * commande, ou zéro si elle vient de passer en manuel.
+     * commande, ou zéro si elle vient de passer en manuel (montant non engagé).
      */
-    const taxeEffective = passeEnManuel ? 0 : (order.tax ?? 0);
+    const taxeEffective = passeEnManuel && !montantEngage ? 0 : (order.tax ?? 0);
 
     // Les articles ne changent pas, mais la taxe si : le total doit être refait
     // ici, le bloc de recalcul ci-dessous ne s'exécutant que sur un panier modifié.
-    if (passeEnManuel && !(orderItemsData && newNetAmount !== null)) {
+    if (passeEnManuel && !montantEngage && !(orderItemsData && newNetAmount !== null)) {
       const net = order.net_amount ?? 0;
       const remise = order.discount ?? 0;
       updateData.amount = Number(net - remise + finalDeliveryFee);
@@ -2193,6 +2212,65 @@ export class OrderService {
     // affiche un mauvais solde.
     if (updateData.amount !== undefined) {
       updatedOrder = await this.recomputeOrderPaiedFlag(updatedOrder.id);
+    }
+
+    /**
+     * REPRISE PAR LE PERSONNEL, suite : le PAIEMENT passe à la caisse.
+     *
+     * Une commande de l'application gardait son paiement en ligne. Or la
+     * caisse (backoffice et appareil Sunmi) n'ouvre son formulaire
+     * d'encaissement qu'aux commandes payées au restaurant : la caissière ne
+     * pouvait plus rien enregistrer, et le client restait invité à payer dans
+     * l'application alors que le livreur ou la caisse allait encaisser.
+     *
+     * Seulement s'il RESTE à payer :
+     *  - commande non payée, et somme des paiements réussis sous le total. Un
+     *    paiement en ligne partiel ne la retient plus en ligne : la caisse
+     *    encaisse le reste (elle retranche le déjà perçu) ;
+     *  - aucun encaissement de livreur en attente de confirmation : il se
+     *    confirme déjà depuis l'onglet Paiement, sans dépendre du moyen ;
+     *  - ni annulée, ni venue de HubRise (commandes légitimement en ligne).
+     *
+     * Décidé sur l'ÉTAT de la commande enregistrée (manuelle et encore en
+     * ligne), pas sur la seule bascule : si cette seconde écriture échoue
+     * (coupure de la base), réenregistrer la commande suffit à la réparer. La
+     * règle est idempotente, et une commande du personnel naît déjà payable
+     * au restaurant : elle ne fait rien sur les autres.
+     *
+     * Écrit APRÈS la modification principale, pour qu'un `payment_method`
+     * venu du corps de la requête ne la défasse pas. Les conditions sont dans
+     * le `where` : un paiement arrivé entre-temps l'emporte.
+     *
+     * Jamais l'inverse : rattacher une commande à l'application ne la remet
+     * pas en paiement en ligne, ce serait refermer la caisse.
+     */
+    const dejaPercu = (updatedOrder.paiements ?? [])
+      .filter((p) => p.status === PaiementStatus.SUCCESS)
+      .reduce((somme, p) => somme + (p.total ?? p.amount ?? 0), 0);
+    const resteAPayer = updatedOrder.amount - dejaPercu > PAYMENT_AMOUNT_TOLERANCE;
+    if (
+      updatedOrder.auto === false &&
+      updatedOrder.payment_method === PaymentMethod.ONLINE &&
+      !updatedOrder.paied &&
+      !updatedOrder.hubrise_order_id &&
+      updatedOrder.status !== OrderStatus.CANCELLED &&
+      resteAPayer
+    ) {
+      const repriseEnCaisse = await this.prisma.order.updateMany({
+        where: {
+          id: order.id,
+          auto: false,
+          payment_method: PaymentMethod.ONLINE,
+          paied: false,
+          hubrise_order_id: null,
+          status: { not: OrderStatus.CANCELLED },
+          paiements: { none: { status: PaiementStatus.PENDING } },
+        },
+        data: { payment_method: PaymentMethod.OFFLINE },
+      });
+      if (repriseEnCaisse.count > 0) {
+        updatedOrder = { ...updatedOrder, payment_method: PaymentMethod.OFFLINE };
+      }
     }
 
     // Envoyer l'événement de mise à jour de statut de commande

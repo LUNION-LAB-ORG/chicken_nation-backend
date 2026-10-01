@@ -103,9 +103,10 @@ describe('PATCH /orders/:id', () => {
     paied: true,
     paied_at: '2026-09-25T10:00:00.000Z',
     amount: 0,
+    payment_method: 'OFFLINE',
   };
 
-  it("n'écrit jamais paied, paied_at ni amount pour un compte de restaurant", () => {
+  it("n'écrit jamais paied, paied_at, amount ni payment_method pour un compte de restaurant", () => {
     const { champs } = modifier(UserRole.CAISSIER, UserType.RESTAURANT, corps);
     expect(champs).toEqual({ note: 'Sans oignons' });
   });

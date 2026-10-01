@@ -13,7 +13,8 @@ import { LoyaltyService } from 'src/modules/fidelity/services/loyalty.service';
 import { RewardService } from 'src/modules/fidelity/services/reward.service';
 import { ScratchEngineService } from 'src/modules/fidelity/services/scratch-engine.service';
 import { ReferralService } from 'src/modules/referral/referral.service';
-import { OrderStatus, LoyaltyPointType, PaymentMethod } from '@prisma/client';
+import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
+import { Order, OrderStatus, LoyaltyPointType, PaymentMethod } from '@prisma/client';
 
 /**
  * Résultat structuré du traitement d'un paiement KKiaPay réussi.
@@ -58,6 +59,7 @@ export class KkiapayOrderListenerService {
         private readonly rewardService: RewardService,
         private readonly scratchEngineService: ScratchEngineService,
         private readonly referralService: ReferralService,
+        private readonly alertes: AlertesService,
     ) { }
 
     /**
@@ -121,6 +123,7 @@ export class KkiapayOrderListenerService {
         //              rejoués même sur retry (justPaid=false) pour garantir leur exécution.
         let justPaid: boolean;
         let isPaid: boolean;
+        let payeApresCoup = false;
         let notPaidReason: string | undefined;
         let paiement: { id: string } | null | undefined;
         try {
@@ -134,6 +137,7 @@ export class KkiapayOrderListenerService {
             paiement = linked.paiement;
             justPaid = linked.justPaid;
             isPaid = linked.isPaid;
+            payeApresCoup = linked.payeApresCoup;
             notPaidReason = linked.notPaidReason;
         } catch (error) {
             // KKiaPay INJOIGNABLE (réseau/5xx, levé par KkiapayService.rawVerify) :
@@ -172,6 +176,46 @@ export class KkiapayOrderListenerService {
         // précise le motif (statut non SUCCESS vs montant non couvert) pour l'admin.
         if (!isPaid) {
             return { confirmed: false, reason: notPaidReason ?? 'paiement non abouti' };
+        }
+
+        /**
+         * PAIEMENT TARDIF : la commande était déjà sortie de PENDING (reprise
+         * par le personnel, confirmée au téléphone) et ce paiement vient de la
+         * solder. Aucun autre événement ne part sur ce chemin : sans ce
+         * socket, la caisse et le tiroir d'opérations gardent la commande « à
+         * encaisser » et proposent d'encaisser une seconde fois.
+         */
+        if (payeApresCoup) {
+            try {
+                const commandePayee = await this.orderService.findById(order.id);
+                this.orderWebSocketService.emitOrderUpdated(commandePayee as Order);
+            } catch (error) {
+                this.logger.warn(
+                    `Commande ${order.reference} payée après coup, écrans non prévenus : ${(error as any)?.message}`,
+                );
+            }
+        }
+
+        /**
+         * Argent reçu en ligne sur une commande payable à la caisse : la
+         * caisse, le livreur ou Turbo (dont la course garde le montant à
+         * encaisser de son envoi) ont pu, ou vont, encaisser le client une
+         * seconde fois. Rien ne le rattrape automatiquement : on prévient.
+         */
+        if (!justPaid && order.payment_method === PaymentMethod.OFFLINE) {
+            this.alertes.signaler({
+                code: CodeAlerte.PAIEMENT_APRES_REPRISE,
+                restaurantId: order.restaurant_id,
+                reference: order.reference,
+                details: [
+                    `Le client a payé dans l'application alors que la commande est à encaisser en caisse ou à la livraison.`,
+                    order.paied
+                        ? `La commande était déjà marquée payée : comparer ses paiements, un double encaissement est probable.`
+                        : `Vérifier qu'elle n'a pas aussi été encaissée au comptoir ou par le livreur, et prévenir le livreur s'il ne l'a pas encore livrée.`,
+                ],
+                cleBridage: `${CodeAlerte.PAIEMENT_APRES_REPRISE}:${order.reference}`,
+                meta: { orderId: order.id, transactionId: payload.transactionId, statut: order.status },
+            });
         }
 
         /**

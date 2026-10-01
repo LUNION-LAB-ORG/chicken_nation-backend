@@ -206,6 +206,58 @@ describe('PaiementsService.addPaiement', () => {
     );
     expect(reponse.message).toBe('Paiement effectué avec succès');
   });
+
+  it("refuse d'encaisser une commande déjà soldée, sans rien écrire", async () => {
+    // Le client a fini de payer dans l'application pendant que la caisse,
+    // sur un écran pas encore rafraîchi, encaissait au comptoir.
+    const { service, prisma, creer } = monter();
+    prisma.order.findUnique.mockResolvedValue({
+      id: COMMANDE,
+      restaurant_id: RESTAURANT_A,
+      customer_id: CLIENT,
+      status: OrderStatus.READY,
+      entity_status: EntityStatus.ACTIVE,
+      amount: 8000,
+      paiements: [{ total: 8000, amount: 8000 }],
+    });
+
+    await expect(
+      service.addPaiement(requete(caissierA), {
+        items: [{ amount: 8000, mode: PaiementMode.CASH, order_id: COMMANDE }],
+      }),
+    ).rejects.toThrow('Commande déjà payée.');
+    expect(creer).not.toHaveBeenCalled();
+    expect(prisma.order.update).not.toHaveBeenCalled();
+  });
+
+  it('laisse encaisser le reste d\'une commande payée en partie', async () => {
+    const { service, prisma, creer } = monter();
+    prisma.order.findUnique.mockResolvedValueOnce({
+      id: COMMANDE,
+      restaurant_id: RESTAURANT_A,
+      customer_id: CLIENT,
+      status: OrderStatus.READY,
+      entity_status: EntityStatus.ACTIVE,
+      amount: 8000,
+      paiements: [{ total: 3000, amount: 3000 }],
+    });
+    prisma.order.findUnique.mockResolvedValueOnce({
+      id: COMMANDE,
+      amount: 8000,
+      status: OrderStatus.READY,
+      paied_at: null,
+      paiements: [{ total: 3000, amount: 3000 }, { total: 5000, amount: 5000 }],
+    });
+    prisma.order.update.mockResolvedValue({ id: COMMANDE, code_promo: null });
+
+    const reponse = await service.addPaiement(requete(caissierA), {
+      items: [{ amount: 5000, mode: PaiementMode.CASH, order_id: COMMANDE }],
+    });
+
+    expect(creer).toHaveBeenCalledTimes(1);
+    expect(prisma.order.update.mock.calls[0][0].data).toEqual(expect.objectContaining({ paied: true }));
+    expect(reponse.message).toBe('Paiement effectué avec succès');
+  });
 });
 
 describe('PaiementsService.confirmerEncaissement', () => {

@@ -170,10 +170,32 @@ export class PaiementsService {
           customer_id: true,
           status: true,
           entity_status: true,
+          amount: true,
+          paiements: {
+            where: { status: PaiementStatus.SUCCESS },
+            select: { amount: true, total: true },
+          },
         },
       }),
       req.user as User | undefined,
     );
+
+    // Commande déjà soldée : un nouvel encaissement serait un double
+    // encaissement. Cas réel : client qui finit de payer dans l'application
+    // pendant que la caisse, sur un écran pas encore rafraîchi, encaisse au
+    // comptoir. Des lignes toutes à zéro n'enregistrent rien : elles gardent
+    // leur traitement habituel, plus bas.
+    const dejaPercu = (commande.paiements ?? []).reduce(
+      (somme, p) => somme + (p.total ?? p.amount ?? 0),
+      0,
+    );
+    if (
+      lignes.length > 0 &&
+      commande.amount != null &&
+      dejaPercu >= commande.amount - PAYMENT_AMOUNT_TOLERANCE
+    ) {
+      throw new BadRequestException('Commande déjà payée.');
+    }
 
     // Résoudre toutes les créations en parallèle — le bug précédent utilisait
     // `items.map(async)` sans Promise.all, donc la vérification `length`
@@ -506,6 +528,10 @@ export class PaiementsService {
     // garde derrière justPaid que les effets STRICTEMENT one-time (cloche, push, WS).
     let justPaid = false;
     let isPaid = false;
+    // Paiement arrivé sur une commande déjà sortie de PENDING, et qui l'a
+    // soldée : l'appelant doit prévenir les écrans ouverts (aucun autre
+    // événement ne part sur ce chemin).
+    let payeApresCoup = false;
     // Motif lisible d'un paiement NON abouti — remonté à l'appelant (confirmation
     // manuelle admin) pour un 4xx explicite. `undefined` si isPaid=true.
     let notPaidReason: string | undefined;
@@ -538,6 +564,32 @@ export class PaiementsService {
         });
         justPaid = claim.count === 1;
 
+        // Commande sortie de PENDING sans être payée (reprise par le
+        // personnel, confirmée au téléphone) : le claim ne la touche pas, et
+        // `paied` restait faux alors que l'argent est reçu. Le livreur, Turbo
+        // ou la caisse le réclamaient une seconde fois. Même geste que
+        // payWithKkiapay : `paied` seul, le statut ne bouge pas. Idempotent.
+        if (!justPaid) {
+          const tardif = await this.prisma.order.updateMany({
+            where: { id: result.order.id, paied: false },
+            data: { paied: true, paied_at: paymentAt },
+          });
+          payeApresCoup = tardif.count === 1;
+        }
+
+        // Paiement tardif : c'est LUI qui solde la commande, plus personne ne
+        // l'encaissera. Le code promo doit donc être compté ici, comme sur
+        // tous les autres chemins qui soldent une commande. Idempotent ; isolé.
+        if (payeApresCoup) {
+          try {
+            const commandePayee = await this.prisma.order.findUnique({ where: { id: result.order.id } });
+            if (commandePayee) await this.promoCodeService.activateUsageForOrder(commandePayee);
+          } catch (e) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            console.error(`Sync usage promo (paiement KKiaPay tardif) échoué pour ${result.order.id}: ${(e as any)?.message}`);
+          }
+        }
+
         // Paiement confirmé (1re fois) → comptabiliser l'usage du code promo (usage_count++).
         // Isolé pour ne jamais casser la confirmation du paiement.
         if (justPaid && next_status === OrderStatus.ACCEPTED) {
@@ -557,7 +609,7 @@ export class PaiementsService {
       }
     }
 
-    return { paiement: result.paiement, justPaid, isPaid, notPaidReason };
+    return { paiement: result.paiement, justPaid, isPaid, payeApresCoup, notPaidReason };
   }
 
   // Récupération des paiements succès libres

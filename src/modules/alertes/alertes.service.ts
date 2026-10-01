@@ -42,6 +42,8 @@ export enum CodeAlerte {
   ACHEMINEMENT_SUSPECT = 'ACHEMINEMENT_SUSPECT',
   /** Course exceptionnellement longue. */
   LIVRAISON_TRES_LOIN = 'LIVRAISON_TRES_LOIN',
+  /** Paiement en ligne reçu sur une commande payable à la caisse. */
+  PAIEMENT_APRES_REPRISE = 'PAIEMENT_APRES_REPRISE',
 }
 
 /**
@@ -71,6 +73,7 @@ const TITRES: Record<CodeAlerte, string> = {
   [CodeAlerte.TARIF_LIVRAISON_INCOHERENT]: 'Frais de livraison incohérents',
   [CodeAlerte.ACHEMINEMENT_SUSPECT]: 'Commande partie au mauvais restaurant ?',
   [CodeAlerte.LIVRAISON_TRES_LOIN]: 'Livraison très éloignée',
+  [CodeAlerte.PAIEMENT_APRES_REPRISE]: 'Paiement en ligne sur une commande à encaisser en caisse',
 };
 
 /**

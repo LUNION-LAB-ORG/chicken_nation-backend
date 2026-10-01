@@ -53,9 +53,21 @@ import { CouponCreationThrottlerGuard, LIMITE_COUPON } from '../guards/coupon-th
  * Retire d'une modification de commande les champs qui la rendraient payée
  * sans encaissement : `paied`, `paied_at` et `amount`. Réservés à
  * l'administrateur (correction d'une erreur de saisie).
+ *
+ * `payment_method` aussi : il décide qui encaisse (l'application ou la
+ * caisse). Aucun écran ne l'envoie, c'est le serveur qui le pose à la reprise
+ * d'une commande par le personnel. Un autre compte qui l'écrirait par l'API
+ * ouvrirait l'encaissement en caisse d'une commande payable dans
+ * l'application, ou le fermerait.
  */
 function sansChampsDePaiement(dto: UpdateOrderDto): UpdateOrderDto {
-  const { paied: _paied, paied_at: _paiedAt, amount: _amount, ...champs } = dto;
+  const {
+    paied: _paied,
+    paied_at: _paiedAt,
+    amount: _amount,
+    payment_method: _moyen,
+    ...champs
+  } = dto;
   return champs;
 }
 
@@ -440,7 +452,9 @@ export class OrderController {
    *  - `paied`, `paied_at` et `amount` étaient écrits tels quels : une commande
    *    passait payée sans aucun encaissement, ou son montant tombait à zéro,
    *    puis on la terminait. Aucun écran ne les envoie (le montant se recalcule
-   *    à partir des articles) : seul l'administrateur les garde.
+   *    à partir des articles) : seul l'administrateur les garde. Même chose
+   *    pour `payment_method`, posé par le serveur à la reprise d'une commande
+   *    de l'application par le personnel.
    */
   @Patch(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
