@@ -466,7 +466,10 @@ export class OrderController {
     @Body() updateOrderDto: UpdateOrderDto,
   ) {
     // ADMIN bypass : peut modifier une commande quel que soit son statut
-    // (COMPLETED, COLLECTED, CANCELLED inclus). Cf. order.service.ts:update().
+    // (COMPLETED, COLLECTED, CANCELLED inclus). Les autres rôles suivent
+    // `peutModifierCommande` (helpers/modification-commande.rules.ts), appliqué
+    // par le service : le centre d'appels y modifie aussi une commande
+    // annulée, qui reste annulée. Cf. order.service.ts:update().
     const user = req.user as User;
     const isAdmin = user?.role === UserRole.ADMIN;
     return this.orderService.update(

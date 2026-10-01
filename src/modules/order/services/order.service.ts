@@ -59,6 +59,7 @@ import { sansIdentifiantsPush } from '../helpers/identifiants-push.helper';
 import { assietteDesRemises, normaliserCode } from '../helpers/coupon.helper';
 import { ConsommationCoupon, CouponResolu, OrderCouponService } from './order-coupon.service';
 import { estBrouillon, peutVoirLesBrouillons } from '../helpers/brouillons.rules';
+import { motifRefusModification, peutModifierCommande } from '../helpers/modification-commande.rules';
 import { OrderRelanceService } from './order-relance.service';
 
 @Injectable()
@@ -1921,7 +1922,9 @@ export class OrderService {
    *   désactivée (réservé à l'admin : un admin peut corriger une commande
    *   COMPLETED / COLLECTED / CANCELLED pour rectifier une erreur de saisie,
    *   un audit comptable, etc.). Le controller met ce flag à `true` UNIQUEMENT
-   *   si le user JWT a le rôle ADMIN.
+   *   si le user JWT a le rôle ADMIN. Sans lui, les statuts modifiables
+   *   dépendent du rôle de `options.user` (`peutModifierCommande` : le centre
+   *   d'appels modifie aussi une commande annulée, qui reste annulée).
    * @param options.user  Compte du personnel : un compte de restaurant ne
    *   modifie que les commandes de SON restaurant. Sans effet pour le back
    *   office.
@@ -1951,16 +1954,45 @@ export class OrderService {
       ...rest
     } = updateOrderDto;
 
-    // Vérifier que la commande peut être modifiée (admin peut bypasser)
+    /**
+     * Le STATUT ne se modifie jamais par cette route : il a la sienne
+     * (`PATCH /orders/:id/status`), qui porte les transitions et leurs effets.
+     * Le DTO ne le déclare pas, et le `ValidationPipe` (whitelist) le retire
+     * déjà du corps ; on le retire aussi ici, pour qu'un appel interne ou un
+     * réglage du pipe ne puisse pas, par exemple, réactiver une commande
+     * annulée en la modifiant.
+     */
+    delete (rest as { status?: unknown }).status;
+
+    // Vérifier que la commande peut être modifiée (admin peut bypasser).
+    // Règle partagée avec le back office : helpers/modification-commande.rules.ts
+    if (!options.skipStatusCheck && !peutModifierCommande(options.user?.role, order.status)) {
+      throw new ConflictException(motifRefusModification(options.user?.role, order.status));
+    }
+
+    /**
+     * RETOUCHE D'UNE COMMANDE ANNULÉE (centre d'appels, demande du 01/10).
+     *
+     * Elle reste annulée, et rien de ce que l'annulation a soldé ne doit
+     * bouger :
+     *  - son ORIGINE ne change pas : passer en manuel retirerait la taxe,
+     *    referait le total et préviendrait la relance et le restaurant comme
+     *    pour une reprise au téléphone ;
+     *  - son état de PAIEMENT est figé (voir après l'écriture) : le
+     *    remboursement ou le bon de remplacement ont été faits sur le paiement
+     *    d'alors, et `paied` décide encore de la suppression.
+     * L'administrateur garde son contournement complet, inchangé.
+     */
+    const retoucheApresAnnulation =
+      !options.skipStatusCheck && order.status === OrderStatus.CANCELLED;
     if (
-      !options.skipStatusCheck &&
-      order.status !== OrderStatus.PENDING &&
-      order.status !== OrderStatus.ACCEPTED &&
-      order.status !== OrderStatus.IN_PROGRESS &&
-      order.status !== OrderStatus.READY
+      retoucheApresAnnulation &&
+      auto !== undefined &&
+      auto !== null &&
+      Boolean(auto) !== Boolean(order.auto)
     ) {
       throw new ConflictException(
-        'Seules les commandes en attente, acceptées, en préparation ou prêtes peuvent être modifiées',
+        "L'origine d'une commande annulée ne peut pas être changée.",
       );
     }
 
@@ -2222,7 +2254,13 @@ export class OrderService {
     //  - amount baissé sous le total perçu → paied = true (trop perçu existe en BD)
     // Sans ce recompute, la commande modifiée garde son ancien `paied` et le drawer
     // affiche un mauvais solde.
-    if (updateData.amount !== undefined) {
+    //
+    // ⚠️ Jamais sur une commande annulée retouchée par le centre d'appels : son
+    // paiement est soldé par l'annulation (remboursement, ou bon du montant
+    // payé si le remboursement a échoué). Un total relevé la rendrait « non
+    // payée », donc supprimable, alors qu'un paiement réussi y est rattaché ;
+    // un total baissé la rendrait « payée ».
+    if (updateData.amount !== undefined && !retoucheApresAnnulation) {
       updatedOrder = await this.recomputeOrderPaiedFlag(updatedOrder.id);
     }
 
