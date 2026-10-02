@@ -7,6 +7,25 @@ import { LoyaltyQueryDto } from '../dto/loyalty-query.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { UpdateLoyaltyConfigDto } from '../dto/loyalty-config.dto';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import {
+    libelleRestitution,
+    libelleRetraitAnnule,
+    plafondRemiseFidelite,
+    pointsEngagesWhere,
+} from '../helpers/points-commande.rules';
+
+/**
+ * Sortie anticipée de la transaction d'un retrait : tout ce qu'elle a déjà
+ * écrit (le débit du solde) est annulé avec elle.
+ */
+class RetraitInterrompu extends Error {
+    constructor(
+        readonly motif: 'deja_deduit' | 'commande_annulee',
+        readonly ligne: LoyaltyPoint | null = null,
+    ) {
+        super(motif);
+    }
+}
 
 @Injectable()
 export class LoyaltyService {
@@ -298,13 +317,25 @@ export class LoyaltyService {
      * Réduction MAXIMALE autorisée par les points sur un panier donné.
      * Garde-fou anti-commande-quasi-gratuite : une remise fidélité ne peut pas
      * dépasser `max_redemption_pct` % du montant des plats (défaut 50 %).
-     * 0 ou 100 = pas de plafond.
+     * 0 ou 100 : plafonnée au montant des plats lui-même (règle partagée,
+     * `plafondRemiseFidelite`), jamais au-delà.
      */
     async capLoyaltyDiscount(amount: number, netAmount: number): Promise<number> {
         const config = await this.getConfig();
-        const pct = config.max_redemption_pct ?? 50;
-        if (!pct || pct >= 100 || netAmount <= 0) return amount;
-        return Math.min(amount, Math.floor((pct / 100) * netAmount));
+        return Math.min(amount, plafondRemiseFidelite(netAmount, config.max_redemption_pct ?? 50));
+    }
+
+    /**
+     * Points déjà promis à des commandes payées (ou confirmées) dont le retrait
+     * n'est pas encore enregistré. Ils ne peuvent pas payer un autre panier.
+     * Voir `pointsEngagesWhere`.
+     */
+    async pointsEngages(customer_id: string): Promise<number> {
+        const agg = await this.prisma.order.aggregate({
+            where: pointsEngagesWhere(customer_id),
+            _sum: { points: true },
+        });
+        return agg._sum.points ?? 0;
     }
 
     // Utiliser des points
@@ -340,7 +371,41 @@ export class LoyaltyService {
             throw new BadRequestException('Points insuffisants');
         }
 
-        const payload = await this.prisma.$transaction(async (tx) => {
+        const resultat = await this.prisma.$transaction(async (tx) => {
+            // 0. Débit du solde EN PREMIER, et seulement s'il le couvre (02/10).
+            // L'écriture verrouille la ligne du client jusqu'à la fin de la
+            // transaction : deux retraits simultanés pour la même commande
+            // (paiement et acceptation, double serveur) passent l'un après
+            // l'autre, et le second relit ci-dessous le retrait du premier.
+            // Avant, les deux passaient la vérification d'idempotence faite
+            // hors transaction, et le client était débité deux fois.
+            const debit = await tx.customer.updateMany({
+                where: { id: customer_id, total_points: { gte: points } },
+                data: { total_points: { decrement: points } },
+            });
+            // Relu AVANT de conclure à un solde insuffisant : si le retrait
+            // concurrent était celui de cette même commande, c'est un doublon,
+            // pas une erreur.
+            if (order_id) {
+                const deja = await tx.loyaltyPoint.findFirst({
+                    where: { order_id, type: LoyaltyPointType.REDEEMED },
+                });
+                if (deja) throw new RetraitInterrompu('deja_deduit', deja);
+                // Une commande annulée ne coûte aucun point. Un événement en
+                // retard (paiement, clôture) ne doit pas reprendre des points
+                // que l'annulation vient de rendre, ou n'a pas eu à rendre.
+                const commande = await tx.order.findUnique({
+                    where: { id: order_id },
+                    select: { status: true },
+                });
+                if (commande?.status === OrderStatus.CANCELLED) {
+                    throw new RetraitInterrompu('commande_annulee');
+                }
+            }
+            if (debit.count === 0) {
+                throw new BadRequestException('Points insuffisants');
+            }
+
             let remainingPointsToUse = points;
             const usedPointsDetails: any[] = [];
 
@@ -456,13 +521,7 @@ export class LoyaltyService {
                 }
             });
 
-            // Mettre à jour les points du client
-            await tx.customer.update({
-                where: { id: customer_id },
-                data: {
-                    total_points: { decrement: points }
-                }
-            });
+            // Le solde du client a été débité en tête de transaction (étape 0).
 
             // Vérifier et mettre à jour le niveau de fidélité
             await this.updateCustomerLoyaltyLevel(customer, tx);
@@ -472,7 +531,28 @@ export class LoyaltyService {
                 used_points_details: usedPointsDetails,
                 total_points_used: points,
             };
+        }).catch((error) => {
+            if (error instanceof RetraitInterrompu) return error;
+            throw error;
         });
+
+        // Transaction annulée par une sortie anticipée : le solde n'a pas bougé.
+        if (resultat instanceof RetraitInterrompu) {
+            return resultat.motif === 'deja_deduit'
+                ? {
+                    redemption_record: resultat.ligne,
+                    used_points_details: [],
+                    total_points_used: resultat.ligne?.points ?? 0,
+                    already_redeemed: true,
+                }
+                : {
+                    redemption_record: null,
+                    used_points_details: [],
+                    total_points_used: 0,
+                    commande_annulee: true,
+                };
+        }
+        const payload = resultat;
 
         // Evenement de rachat de points
         this.loyaltyEvent.redeemPointsEvent({
@@ -557,6 +637,99 @@ export class LoyaltyService {
         }
 
         return { revoked_records: earnedPoints.length, points_revoked: pointsRevoked };
+    }
+
+    /**
+     * Rend au client les points UTILISÉS sur une commande ANNULÉE (02/10).
+     *
+     * Depuis que le retrait se fait au paiement, une commande payée puis
+     * annulée (par le restaurant, le livreur, une course annulée) coûtait ses
+     * points au client sans rien lui donner. Une commande jamais déduite, comme
+     * un panier non payé, n'a rien à rendre : aucune ligne de retrait.
+     *
+     * Écritures, dans une seule transaction :
+     *  - la ligne de retrait (REDEEMED) passe EXPIRED, avec un libellé qui dit
+     *    que la commande a été annulée. C'est la REVENDICATION : une seule
+     *    passe la trouve encore REDEEMED, un rejeu ne rend donc rien de plus.
+     *    Elle ne compte plus dans les points utilisés des statistiques, et la
+     *    commande, si elle était un jour reprise, serait déduite de nouveau ;
+     *  - un crédit BONUS du même nombre de points, dépensable comme les
+     *    autres, au libellé clair dans l'historique ;
+     *  - le solde du client remonte d'autant. `lifetime_points` et
+     *    `status_points` ne bougent pas : ces points avaient déjà été comptés
+     *    quand ils ont été gagnés.
+     *
+     * Le crédit n'est volontairement PAS rattaché à la commande (`order_id`
+     * nul) : `revokeEarnedPointsForOrder` reprend les BONUS d'une commande
+     * annulée, et le reprendrait au prochain rejeu de l'annulation.
+     *
+     * Ne touche qu'une commande au statut CANCELLED.
+     */
+    async rendrePointsUtilises(order_id: string): Promise<{ points_rendus: number }> {
+        const retrait = await this.prisma.loyaltyPoint.findFirst({
+            where: { order_id, type: LoyaltyPointType.REDEEMED },
+            include: { order: { select: { reference: true, status: true } } },
+        });
+        if (!retrait || retrait.points <= 0) return { points_rendus: 0 };
+        if (retrait.order?.status !== OrderStatus.CANCELLED) return { points_rendus: 0 };
+
+        const config = await this.getConfig();
+        const reference = retrait.order.reference;
+        const points = retrait.points;
+        const maintenant = new Date();
+        const jours = config.points_expiration_days;
+
+        const rendu = await this.prisma.$transaction(async (tx) => {
+            // Statut relu dans la revendication elle-même : une commande
+            // réactivée entre la lecture ci-dessus et cette écriture garde son
+            // retrait (sinon le client aurait ses points ET la remise).
+            const claim = await tx.loyaltyPoint.updateMany({
+                where: {
+                    id: retrait.id,
+                    type: LoyaltyPointType.REDEEMED,
+                    order: { status: OrderStatus.CANCELLED },
+                },
+                data: {
+                    type: LoyaltyPointType.EXPIRED,
+                    reason: libelleRetraitAnnule(points, reference),
+                    updated_at: maintenant,
+                },
+            });
+            if (claim.count === 0) return false;
+
+            await tx.loyaltyPoint.create({
+                data: {
+                    customer_id: retrait.customer_id,
+                    points,
+                    type: LoyaltyPointType.BONUS,
+                    reason: libelleRestitution(points, reference),
+                    order_id: null,
+                    expires_at: jours ? new Date(maintenant.getTime() + jours * 24 * 60 * 60 * 1000) : null,
+                },
+            });
+            await tx.customer.update({
+                where: { id: retrait.customer_id },
+                data: { total_points: { increment: points } },
+            });
+            return true;
+        });
+        if (!rendu) return { points_rendus: 0 };
+
+        // Rafraîchit le solde à l'écran : l'application relit ses points à cet
+        // événement, comme après un gain.
+        this.appGateway.emitToUser(retrait.customer_id, 'customer', 'loyalty:points_added', {
+            points,
+            type: LoyaltyPointType.BONUS,
+            reason: libelleRestitution(points, reference),
+        });
+        this.appGateway.emitToBackoffice('loyalty:points_added', {
+            customerId: retrait.customer_id,
+            points,
+            type: LoyaltyPointType.BONUS,
+            reason: libelleRestitution(points, reference),
+        });
+
+        return { points_rendus: points };
     }
 
     /**
@@ -785,6 +958,9 @@ export class LoyaltyService {
                 break;
         }
 
+        // Points déjà promis à une commande payée, pas encore retirés (02/10).
+        const pointsEngages = await this.pointsEngages(customer_id);
+
         // Calculer les points disponibles par type
         const availablePointsByType = await this.prisma.loyaltyPoint.groupBy({
             by: ['type'],
@@ -833,7 +1009,13 @@ export class LoyaltyService {
             points_breakdown: pointsBreakdown,
             recent_points: customer.loyalty_points,
             level_history: customer.loyalty_level_history,
-            points_value_in_xof: customer.total_points * config.point_value_in_xof
+            points_value_in_xof: customer.total_points * config.point_value_in_xof,
+            // Points utilisables sur une NOUVELLE commande : le solde moins ceux
+            // déjà promis à une commande payée dont le retrait n'est pas encore
+            // enregistré. C'est ce chiffre que la création de commande compare
+            // aux points demandés. Champ ajouté : les écrans existants lisent
+            // toujours `total_points`.
+            redeemable_points: Math.max(0, customer.total_points - pointsEngages),
         };
     }
 

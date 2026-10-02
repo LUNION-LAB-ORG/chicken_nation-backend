@@ -267,6 +267,20 @@ export class OrderListenerService {
                     ),
                 );
 
+            // ⭐ RESTITUTION des points UTILISÉS : retirés dès le paiement, ils
+            // sont rendus au client si la commande est annulée. Rien pour une
+            // commande jamais déduite (panier non payé). Une seule fois, même si
+            // l'annulation est rejouée. Le filet `PointsRestitutionListener`
+            // rattrape un échec ici.
+            void this.loyaltyService
+                .rendrePointsUtilises(payload.order.id)
+                .catch((error) =>
+                    this.logger.error(
+                        `Échec restitution des points utilisés (annulation) pour la commande ${payload.order.reference}: ${error?.message}`,
+                        error?.stack,
+                    ),
+                );
+
             // 🤝 RÉVOCATION des gains PARRAINAGE (prime/commission) liés à la commande
             // annulée : on ne rémunère pas un ambassadeur sur une commande annulée.
             // PENDING/PAYABLE → CANCELLED ; un gain déjà PAYÉ est juste signalé (log).

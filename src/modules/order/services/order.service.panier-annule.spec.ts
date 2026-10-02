@@ -187,6 +187,7 @@ function monterEcouteur() {
     loyaltyService: {
       redeemPoints: jest.fn().mockResolvedValue(undefined),
       revokeEarnedPointsForOrder: jest.fn().mockResolvedValue(undefined),
+      rendrePointsUtilises: jest.fn().mockResolvedValue({ points_rendus: 0 }),
     },
     rewardService: {
       revokeForOrder: jest.fn().mockResolvedValue(undefined),

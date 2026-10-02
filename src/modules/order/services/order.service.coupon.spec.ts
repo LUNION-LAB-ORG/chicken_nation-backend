@@ -66,7 +66,7 @@ function monter(donnees: Parameters<typeof monterCoupons>[0] = {}) {
     assertDishesSoldInRestaurant: jest.fn().mockResolvedValue(undefined),
     calculatePromotionPrice: jest.fn().mockResolvedValue(null),
     checkPayment: jest.fn().mockResolvedValue(null),
-    calculateLoyaltyFee: jest.fn().mockResolvedValue(0),
+    remiseFidelite: jest.fn().mockResolvedValue({ remise: 0, points: 0 }),
     calculateTax: jest.fn().mockResolvedValue(50),
   });
 

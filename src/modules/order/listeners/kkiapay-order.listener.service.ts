@@ -15,6 +15,7 @@ import { ScratchEngineService } from 'src/modules/fidelity/services/scratch-engi
 import { ReferralService } from 'src/modules/referral/referral.service';
 import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
 import { Order, OrderStatus, LoyaltyPointType, PaymentMethod } from '@prisma/client';
+import { libelleRetrait } from 'src/modules/fidelity/helpers/points-commande.rules';
 
 /**
  * Résultat structuré du traitement d'un paiement KKiaPay réussi.
@@ -327,6 +328,60 @@ export class KkiapayOrderListenerService {
                 `rattaché, sans effet de fidélité (remboursement à traiter).`,
             );
             return { confirmed: true, justPaid, order: sansIdentifiantsPush(order), paiement, earnedPoints: 0, enDouble };
+        }
+
+        // ⭐ RETRAIT DES POINTS UTILISÉS, DÈS LE PAIEMENT (02/10).
+        // Le paiement fait passer la commande de PENDING à ACCEPTED sans
+        // événement de statut, et la création réémise plus haut porte la
+        // commande d'AVANT, encore PENDING : aucun retrait de
+        // OrderListenerService ne partait, les points n'étaient retirés qu'à la
+        // clôture. Entre-temps, ils pouvaient payer un second panier.
+        // Effet idempotent (une seule ligne de retrait par commande), rejoué à
+        // chaque passage comme le gain ci-dessous : sans effet si la reprise au
+        // téléphone ou l'acceptation a déjà retiré ces points.
+        if (order.points > 0) {
+            try {
+                await this.loyaltyService.redeemPoints({
+                    customer_id: order.customer_id,
+                    points: order.points,
+                    order_id: order.id,
+                    reason: libelleRetrait(order.points, order.reference),
+                });
+            } catch (error) {
+                if (this.isTransientDbError(error)) {
+                    this.logger.warn(
+                        `Erreur DB transitoire au retrait des points (commande ${order.reference}), ` +
+                        `relance pour que BullMQ retente.`,
+                    );
+                    throw error;
+                }
+                // Solde devenu insuffisant (deux paniers non payés portaient les
+                // mêmes points, et l'autre a été payé avant) : la remise est
+                // acquise, rien à reprendre automatiquement. Le filet de la
+                // clôture retentera, sans effet de plus si le solde reste court.
+                this.logger.error(
+                    `Échec du retrait de ${order.points} points au paiement de la commande ${order.reference} : ` +
+                    `${(error as any)?.message}`,
+                    (error as any)?.stack,
+                );
+                // Solde trop court : la remise a été accordée sur des points
+                // déjà dépensés ailleurs. Rien ne se rattrape tout seul, on
+                // prévient pour que l'équipe décide (ajuster le solde, appeler
+                // le client). Les autres échecs restent dans le journal.
+                if (/insuffisant/i.test(String((error as any)?.message ?? ''))) {
+                    this.alertes.signaler({
+                        code: CodeAlerte.POINTS_NON_RETIRES,
+                        restaurantId: order.restaurant_id,
+                        reference: order.reference,
+                        details: [
+                            `La commande a été payée avec une remise de ${order.points} points, mais le solde du client ne les couvre plus : ils ont déjà servi sur une autre commande.`,
+                            `Vérifier l'historique de points du client et ajuster son solde si besoin.`,
+                        ],
+                        cleBridage: `${CodeAlerte.POINTS_NON_RETIRES}:${order.reference}`,
+                        meta: { orderId: order.id, customerId: order.customer_id, points: order.points },
+                    });
+                }
+            }
         }
 
         let earnedPoints = 0;

@@ -12,6 +12,7 @@ import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
 import { OrderListenerService } from './listeners/order.listener.service';
 import { CouponRestitutionListener } from './listeners/coupon-restitution.listener';
+import { PointsRestitutionListener } from './listeners/points-restitution.listener';
 import { OrderEvent } from './events/order.event';
 import { OrderTask } from './tasks/order.task';
 import { JsonWebTokenModule } from 'src/json-web-token/json-web-token.module';
@@ -69,6 +70,8 @@ import { OrderRelanceTask } from './tasks/order-relance.task';
     OrderListenerService,
     // Coupon rendu quand une course annulée ou une livraison échouée annule la commande.
     CouponRestitutionListener,
+    // Points utilisés rendus sur ces mêmes annulations, plus un filet.
+    PointsRestitutionListener,
     OrderTask,
     OrderWebSocketService,
     ReceiptsService,

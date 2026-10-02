@@ -48,6 +48,8 @@ export enum CodeAlerte {
   PAIEMENT_SUR_COMMANDE_ANNULEE = 'PAIEMENT_SUR_COMMANDE_ANNULEE',
   /** Paiement en ligne reçu sur une commande que les paiements précédents réglaient déjà : à rembourser. */
   PAIEMENT_EN_DOUBLE = 'PAIEMENT_EN_DOUBLE',
+  /** Commande payée avec une remise en points que le solde ne couvrait plus : points utilisés deux fois. */
+  POINTS_NON_RETIRES = 'POINTS_NON_RETIRES',
 }
 
 /**
@@ -80,6 +82,7 @@ const TITRES: Record<CodeAlerte, string> = {
   [CodeAlerte.PAIEMENT_APRES_REPRISE]: 'Paiement en ligne sur une commande à encaisser en caisse',
   [CodeAlerte.PAIEMENT_SUR_COMMANDE_ANNULEE]: 'Paiement reçu sur une commande annulée, à rembourser',
   [CodeAlerte.PAIEMENT_EN_DOUBLE]: 'Paiement reçu deux fois, à rembourser',
+  [CodeAlerte.POINTS_NON_RETIRES]: 'Points de fidélité utilisés deux fois',
 };
 
 /**

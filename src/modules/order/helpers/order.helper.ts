@@ -35,6 +35,11 @@ import { JsonValue } from '@prisma/client/runtime/library';
 import { TurboService } from 'src/turbo/services/turbo.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { nomSurLaCommande } from './nom-client.helper';
+import {
+  AUCUNE_REMISE_FIDELITE,
+  calculerRemiseFidelite,
+  RemiseFidelite,
+} from 'src/modules/fidelity/helpers/points-commande.rules';
 
 @Injectable()
 export class OrderHelper {
@@ -93,6 +98,8 @@ export class OrderHelper {
       return {
         customer_id: customer.id,
         loyalty_level: customer.loyalty_level ?? undefined,
+        // Lu par le contrôle des plats réservés (audience ETUDIANT).
+        profile_type: customer.profile_type,
         total_points: customer.total_points ?? 0,
         // Jamais « null null » pour un client sans nom (cf. nom-client.helper.ts).
         fullname: nomSurLaCommande(orderData.fullname, customer, telephone),
@@ -901,26 +908,41 @@ export class OrderHelper {
     };
   }
 
-  // Calculer le montant à payer avec les points
-  async calculateLoyaltyFee(total_points: number, points: number, netAmount?: number) {
-    // Pas de points demandés → aucune réduction.
-    if (!points || points <= 0) return 0;
+  /**
+   * Remise accordée pour les points demandés, et points que la commande doit
+   * enregistrer (ceux que la remise coûte vraiment, voir
+   * `calculerRemiseFidelite`). Les deux chemins de création l'appellent.
+   *
+   * La réduction n'est accordée QUE si la commande pourra réellement consommer
+   * ces points (mêmes préconditions que LoyaltyService.redeemPoints). Sinon on
+   * afficherait une réduction « fantôme » jamais déduite côté fidélité : c'est
+   * exactement la source du bug « le client garde ses points ».
+   *
+   * Solde comparé : le solde DISPONIBLE, sans les points déjà promis à une
+   * autre commande payée dont le retrait n'est pas encore enregistré. Sinon
+   * les mêmes points payaient deux paniers.
+   */
+  async remiseFidelite(params: {
+    customer_id: string;
+    total_points: number;
+    points?: number | null;
+    netAmount: number;
+    autresRemises?: number;
+  }): Promise<RemiseFidelite> {
+    // Pas de points demandés → aucune réduction, aucune lecture.
+    if (!params.points || params.points <= 0) return AUCUNE_REMISE_FIDELITE;
 
-    // La réduction n'est accordée QUE si la commande pourra réellement consommer
-    // ces points (mêmes préconditions que LoyaltyService.redeemPoints). Sinon on
-    // afficherait une réduction « fantôme » jamais déduite côté fidélité : c'est
-    // exactement la source du bug « le client garde ses points ». On aligne donc
-    // l'éligibilité de la remise sur le seuil configuré (minimum_redemption_points).
-    const config = await this.loyaltyService.getConfig();
-    if (points < config.minimum_redemption_points) return 0;
-    if (total_points < points) return 0;
-
-    const brut = await this.loyaltyService.calculateAmountForPoints(points);
-    // Plafond anti-abus : la remise fidélité ne peut pas rendre la commande
-    // (quasi) gratuite. Sans netAmount (appelants historiques), pas de plafond.
-    return netAmount === undefined
-      ? brut
-      : this.loyaltyService.capLoyaltyDiscount(brut, netAmount);
+    const [config, engages] = await Promise.all([
+      this.loyaltyService.getConfig(),
+      this.loyaltyService.pointsEngages(params.customer_id),
+    ]);
+    return calculerRemiseFidelite({
+      pointsDemandes: params.points,
+      soldeDisponible: params.total_points - engages,
+      assiette: params.netAmount,
+      autresRemises: params.autresRemises,
+      reglages: config,
+    });
   }
 
   //Calculer le prix si promotion et création de l'utilisation de la promotion

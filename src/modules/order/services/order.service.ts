@@ -82,6 +82,12 @@ import {
   memesArticles,
   reprendreCadeaux,
 } from '../helpers/cadeaux-reactivation.helper';
+import {
+  libelleReservation,
+  messagePlatsReserves,
+  PlatAudience,
+  platsHorsAudience,
+} from 'src/modules/menu/utils/dish-audience.util';
 
 /** Journal de la relance : de quelle annulation vient la réactivation. */
 function annotationReactivation(commande: Pick<Order, 'cancelled_at' | 'cancelled_reason'>): string {
@@ -202,6 +208,13 @@ export class OrderService {
     // claim atomique dans la transaction. La consommation réelle se fait dans la txn.
     const gifts = await this.validateGiftLines(items, customerData.customer_id);
 
+    // Plats réservés à une audience : refusés au client, avant tout calcul et
+    // tout paiement. Les lignes-cadeau validées ci-dessus sont exemptées.
+    this.controlerPlatsReserves(items, dishesWithDetails, customerData, {
+      personnel: false,
+      lignesCadeau: gifts.dishLineIndexes,
+    });
+
     // Ton algorithme ajusté !
     // On passe `type` pour faire respecter `available_order_types` côté serveur :
     // un plat marqué "pas à livrer" ne doit pas pouvoir être commandé en DELIVERY
@@ -230,12 +243,16 @@ export class OrderService {
     );
     const promoDiscount = promoResult.discount;
 
-    // Calculer le montant de réduction des points de fidélité
-    const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(
-      customerData.total_points,
-      points ?? 0,
+    // Remise des points de fidélité, et points qu'elle coûte réellement (ce
+    // sont eux que la commande enregistre, donc eux qui seront retirés).
+    const fidelite = await this.orderHelper.remiseFidelite({
+      customer_id: customerData.customer_id,
+      total_points: customerData.total_points,
+      points,
       netAmount, // plafond anti-abus (% du panier)
-    );
+      autresRemises: promoDiscount,
+    });
+    const loyaltyFee = fidelite.remise;
 
     // ==========================================
     // 4. LE MOTEUR DE ROUTAGE DES RESTAURANTS
@@ -292,7 +309,8 @@ export class OrderService {
           fullname: customerData.fullname,
           phone: customerData.phone,
           email: customerData.email,
-          ...(loyaltyFee && { points: points }),
+          // Points effectivement consommés par la remise, pas ceux demandés.
+          ...(loyaltyFee > 0 && { points: fidelite.points }),
           customer: { connect: { id: customerData.customer_id } },
           restaurant: { connect: { id: restaurant.id } },
           reference: orderNumber,
@@ -453,6 +471,34 @@ export class OrderService {
   }
 
   /**
+   * PLATS RÉSERVÉS (`Dish.audiences`) à la création d'une commande.
+   *
+   * Client (create-v2, appli et site ; ancienne route POST /orders) : refus
+   * en 400, avec un message qui nomme chaque plat et son public. Jamais 401 :
+   * le site efface la session du client sur un 401.
+   *
+   * Personnel : la commande passe, le cas est journalisé. La grille de prise
+   * de commande n'est pas filtrée tant qu'aucun client n'est choisi, et un
+   * nouveau client n'est enregistré qu'à l'envoi, sans statut étudiant.
+   * Bloquer ici arrêterait le comptoir sans moyen de passer outre.
+   */
+  private controlerPlatsReserves(
+    items: readonly { dish_id: string }[],
+    plats: readonly PlatAudience[],
+    client: Parameters<typeof platsHorsAudience>[2] & { customer_id: string },
+    options: { personnel: boolean; lignesCadeau?: ReadonlySet<number> },
+  ): void {
+    const refuses = platsHorsAudience(items, plats, client, options.lignesCadeau);
+    if (refuses.length === 0) return;
+    if (options.personnel) {
+      const detail = refuses.map((plat) => `« ${plat.name} » (réservé ${libelleReservation(plat.audiences)})`);
+      this.logger.warn(`Commande du personnel avec un plat réservé, client ${client.customer_id} : ${detail.join(', ')}`);
+      return;
+    }
+    throw new BadRequestException(messagePlatsReserves(refuses));
+  }
+
+  /**
    * Valide les lignes-cadeau d'une commande app. Deux formes :
    *  - PLAT offert : un item porte `reward_id` → sa ligne est facturée 0 fr.
    *  - SUPPLÉMENT offert : un supplément d'une ligne porte `reward_id` → ce
@@ -602,6 +648,13 @@ export class OrderService {
       items.map((item) => item.dish_id),
     );
 
+    // Plats réservés à une audience : la route client historique les refuse,
+    // le personnel passe (le cas est seulement tracé). Les plats offerts par
+    // une promotion ne sont pas dans `items` et ne sont donc pas contrôlés.
+    this.controlerPlatsReserves(items, dishesWithDetails, customerData, {
+      personnel: !!user_id,
+    });
+
     // Calculer les montants et préparer les order items.
     // orderType : fait respecter available_order_types (plats + suppléments) côté serveur.
     const { orderItems, netAmount, totalDishes, totalDishesEtOptions } =
@@ -727,12 +780,16 @@ export class OrderService {
     // Vérifier le paiement
     const payment = await this.orderHelper.checkPayment(createOrderDto);
 
-    // Calculer le montant de réduction des points de fidélité
-    const loyaltyFee = await this.orderHelper.calculateLoyaltyFee(
-      customerData.total_points,
-      points ?? 0,
+    // Remise des points de fidélité, et points qu'elle coûte réellement. La
+    // promotion passe avant : les points ne couvrent que ce qu'elle laisse.
+    const fidelite = await this.orderHelper.remiseFidelite({
+      customer_id: customerData.customer_id,
+      total_points: customerData.total_points,
+      points,
       netAmount, // plafond anti-abus (% du panier)
-    );
+      autresRemises: discountPromotion + (coupon?.remise ?? 0),
+    });
+    const loyaltyFee = fidelite.remise;
 
     // Calcul de la remise. Le coupon est un MONTANT (l'ancienne formule le
     // multipliait par le panier). Plafond : les articles, jamais la livraison
@@ -773,7 +830,8 @@ export class OrderService {
           fullname: customerData.fullname,
           phone: customerData.phone,
           email: customerData.email,
-          ...(loyaltyFee && { points: points }),
+          // Points effectivement consommés par la remise, pas ceux demandés.
+          ...(loyaltyFee > 0 && { points: fidelite.points }),
           ...(applicable && { promotion: { connect: { id: promotion_id } } }),
           customer: {
             connect: {

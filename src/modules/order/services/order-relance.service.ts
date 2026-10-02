@@ -73,6 +73,9 @@ const SELECT_BROUILLON = {
   entity_status: true,
   cancelled_by: true,
   cancelled_at: true,
+  // Canal (02/10) : le backoffice signale un panier du site, que l'agent ne
+  // reprend pas avec les mêmes mots qu'un panier de l'application.
+  channel: true,
   relance: {
     select: {
       alerte_le: true,
@@ -117,6 +120,11 @@ export interface BrouillonLigne {
   paiement_refuse: boolean;
   /** Panier annulé par le client dans l'application, sans avoir payé (01/10). */
   annulee_par_client: boolean;
+  /**
+   * `Order.channel` tel quel (APP, WEB...), `null` pour une commande antérieure
+   * au canal (02/10). Le backoffice en tire la pastille « Site web ».
+   */
+  channel: string | null;
 }
 
 export interface GroupeRelance {
@@ -167,6 +175,7 @@ function ligne(b: BrouillonLu): BrouillonLigne {
     amount: b.amount,
     paiement_refuse: (b.paiements ?? []).some((p) => p.status === 'FAILED'),
     annulee_par_client: estPanierAnnuleParClient(b),
+    channel: b.channel ?? null,
   };
 }
 

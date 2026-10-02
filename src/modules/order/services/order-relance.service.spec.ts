@@ -368,6 +368,8 @@ describe('OrderRelanceService : liste', () => {
       amount: 5050,
       paiement_refuse: false,
       annulee_par_client: false,
+      // Commande antérieure au canal : `null`, jamais absent.
+      channel: null,
     });
     expect(g.signaux.annulee_par_client).toBeNull();
     expect(g.signaux.paiement_partiel).toEqual(
@@ -376,6 +378,32 @@ describe('OrderRelanceService : liste', () => {
     expect(g.crm).toBeNull();
     expect(liste.prochaine_echeance).not.toBeNull();
     expect(Date.parse(liste.maintenant)).not.toBeNaN();
+  });
+});
+
+describe('OrderRelanceService : canal du panier (02/10)', () => {
+  it('le canal suit chaque panier : tête, autres paniers du groupe et liste des ignorées', async () => {
+    const site = commande(maintenant(), 9, { customer_id: 'client-w', phone: '0700000088', channel: 'WEB' });
+    const appli = commande(maintenant(), 5, { customer_id: 'client-w', phone: '0700000088', channel: 'APP' });
+    const ancien = commande(maintenant(), 7);
+    const { service, prisma } = monterRelance({ commandes: [site, appli, ancien] });
+
+    const liste = await service.lister(AWA);
+    const groupe = liste.groupes.find((g) => [g.tete.id, ...g.autres.map((b) => b.id)].includes(site.id))!;
+    const parId = Object.fromEntries([groupe.tete, ...groupe.autres].map((b) => [b.id, b.channel]));
+    expect(parId).toEqual({ [site.id]: 'WEB', [appli.id]: 'APP' });
+    expect(liste.groupes.find((g) => g.tete.id === ancien.id)!.tete.channel).toBeNull();
+
+    // La base simulée ignore `select` : on vérifie que la vraie lecture des
+    // brouillons (celle qui lit aussi la relance) demande bien le canal.
+    const lectures = prisma.order.findMany.mock.calls.filter((c: [{ select?: { relance?: unknown } }]) => c[0].select?.relance);
+    expect(lectures.length).toBeGreaterThan(0);
+    for (const [arg] of lectures) expect(arg.select.channel).toBe(true);
+
+    await service.ignorer(site.id, { raison_code: 'CLIENT_INJOIGNABLE' }, AWA);
+    const { items } = await service.listerIgnorees(AWA);
+    expect(Object.fromEntries(items.map((i) => [i.id, i.channel]))).toEqual({ [site.id]: 'WEB', [appli.id]: 'APP' });
+    expect(prisma.orderRelance.findMany.mock.calls.at(-1)[0].select.order.select.channel).toBe(true);
   });
 });
 

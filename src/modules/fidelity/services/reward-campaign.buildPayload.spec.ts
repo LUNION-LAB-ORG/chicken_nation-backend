@@ -10,6 +10,8 @@ const makeService = (overrides: { dish?: any; promo?: any } = {}) => {
   const prisma = {
     dish: { findUnique: jest.fn().mockResolvedValue(overrides.dish ?? null) },
     promoCode: { findUnique: jest.fn().mockResolvedValue(overrides.promo ?? null) },
+    // Lu depuis 5296389 (plat composable offrable) : aucun groupe d'options.
+    dishOptionGroup: { findMany: jest.fn().mockResolvedValue([]) },
   };
   const service = Object.create(RewardCampaignService.prototype) as RewardCampaignService;
   (service as any).prisma = prisma;

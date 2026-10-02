@@ -250,6 +250,8 @@ export interface BrouillonLu {
   entity_status?: string | null;
   cancelled_by?: string | null;
   cancelled_at?: Date | null;
+  /** Canal de la commande (APP, WEB...) : affiché seulement, aucune règle ne le lit. */
+  channel?: string | null;
 }
 
 export interface CommandeEffectiveLue {

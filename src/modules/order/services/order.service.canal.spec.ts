@@ -55,7 +55,7 @@ function monter() {
       getClosestRestaurant: jest.fn().mockResolvedValue({ id: RESTAURANT_A, name: 'A' }),
       assertDishesSoldInRestaurant: jest.fn().mockResolvedValue(undefined),
       checkPayment: jest.fn().mockResolvedValue(null),
-      calculateLoyaltyFee: jest.fn().mockResolvedValue(0),
+      remiseFidelite: jest.fn().mockResolvedValue({ remise: 0, points: 0 }),
       calculateTax: jest.fn().mockResolvedValue(250),
     },
     orderHelperV2: { validateRestaurantChoice: jest.fn().mockResolvedValue({}) },

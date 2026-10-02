@@ -105,6 +105,8 @@ export class OrderV2Helper {
     return {
       customer_id: customer.id,
       loyalty_level: customer.loyalty_level ?? undefined,
+      // Lu par le contrôle des plats réservés (audience ETUDIANT).
+      profile_type: customer.profile_type,
       total_points: customer.total_points ?? 0,
       // Jamais « null null » pour un client sans nom (cf. nom-client.helper.ts).
       fullname: nomSurLaCommande(fullname, customer, telephone),

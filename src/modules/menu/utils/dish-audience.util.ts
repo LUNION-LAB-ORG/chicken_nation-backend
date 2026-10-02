@@ -126,3 +126,110 @@ export function dishAudienceClause(customer: AudienceCustomer): Prisma.DishWhere
     ],
   };
 }
+
+/** Ce que le contrôle des plats réservés lit d'un plat. */
+export type PlatAudience = {
+  id: string;
+  name: string;
+  audiences?: DishAudience[] | null;
+};
+
+/**
+ * PLATS RÉSERVÉS À LA COMMANDE (02/10).
+ *
+ * Le masque ci-dessus ne s'applique qu'à certaines LECTURES du menu. Un plat
+ * réservé restait commandable par quiconque connaissait son identifiant (lien
+ * direct, favori, `/dishes/get-all` public), au prix promotionnel s'il en a
+ * un. Cette règle est le contrôle de la création de commande.
+ *
+ * Même correspondance que {@link dishAudienceClause}, pour qu'un client ne
+ * puisse commander que ce qu'on lui montre : une ligne passe si son plat est
+ * public (`audiences` vide ou absent) ou partage au moins une audience avec le
+ * client ({@link customerAudiences}). Un invité ne passe que sur les plats
+ * publics.
+ *
+ * Lignes ignorées :
+ *  - celles de `lignesExemptees` : les lignes-cadeau déjà VALIDÉES
+ *    (`validateGiftLines`). Un lot Gratte&Gagne ou un parrainage peut offrir
+ *    un plat réservé, et une telle ligne est forcée à une unité et 0 F : elle
+ *    ne permet pas d'acheter le plat. Une ligne PAYANTE du même plat, elle,
+ *    reste contrôlée ;
+ *  - celles dont le plat est absent de `plats` : la lecture des plats a déjà
+ *    refusé ce cas avant d'arriver ici.
+ *
+ * Renvoie les plats refusés, chacun une seule fois, dans l'ordre du panier.
+ */
+export function platsHorsAudience<P extends PlatAudience>(
+  lignes: readonly { dish_id: string }[],
+  plats: readonly P[],
+  client: AudienceCustomer,
+  lignesExemptees: ReadonlySet<number> = new Set(),
+): P[] {
+  const mine = customerAudiences(client);
+  const parId = new Map(plats.map((plat) => [plat.id, plat]));
+  const refuses = new Map<string, P>();
+  lignes.forEach((ligne, index) => {
+    if (lignesExemptees.has(index)) return;
+    const plat = parId.get(ligne.dish_id);
+    if (!plat) return;
+    const audiences = plat.audiences ?? [];
+    if (audiences.length === 0) return;
+    if (audiences.some((audience) => mine.includes(audience))) return;
+    if (!refuses.has(plat.id)) refuses.set(plat.id, plat);
+  });
+  return [...refuses.values()];
+}
+
+/** À qui un plat est réservé, tel que le client le lit. */
+const LIBELLE_AUDIENCE: Record<DishAudience, string> = {
+  [DishAudience.ETUDIANT]: 'aux étudiants',
+  [DishAudience.STANDARD]: 'aux clients du niveau Standard',
+  [DishAudience.VIP]: 'aux clients VIP',
+  [DishAudience.VVIP]: 'aux clients VVIP',
+};
+
+/** Ordre de lecture fixe, quel que soit l'ordre des cases cochées. */
+const ORDRE_AUDIENCES: DishAudience[] = [
+  DishAudience.ETUDIANT,
+  DishAudience.STANDARD,
+  DishAudience.VIP,
+  DishAudience.VVIP,
+];
+
+/** « aux étudiants ou aux clients VIP ». */
+export function libelleReservation(audiences: readonly DishAudience[] | null | undefined): string {
+  return ORDRE_AUDIENCES.filter((audience) => (audiences ?? []).includes(audience))
+    .map((audience) => LIBELLE_AUDIENCE[audience])
+    .join(' ou ');
+}
+
+function listerNoms(noms: string[]): string {
+  const cites = noms.map((nom) => `« ${nom} »`);
+  return cites.length <= 1 ? cites.join('') : `${cites.slice(0, -1).join(', ')} et ${cites[cites.length - 1]}`;
+}
+
+/**
+ * Message de refus, montré tel quel par l'application et par le site. Il
+ * nomme chaque plat : le panier est conservé sur le téléphone, et le client
+ * doit savoir lequel retirer.
+ *
+ * « Le plat « Menu Campus » est réservé aux étudiants. Retirez-le du panier
+ * pour continuer. » Les plats réservés au même public sont regroupés.
+ *
+ * ⚠️ Ne jamais y écrire « en choisissant ses options » : l'application
+ * reconnaît cette phrase et affiche à la place un écran de mise à jour.
+ */
+export function messagePlatsReserves(plats: readonly PlatAudience[]): string {
+  const groupes = new Map<string, string[]>();
+  for (const plat of plats) {
+    const pour = libelleReservation(plat.audiences);
+    groupes.set(pour, [...(groupes.get(pour) ?? []), plat.name]);
+  }
+  const phrases = [...groupes].map(([pour, noms]) =>
+    noms.length === 1
+      ? `Le plat ${listerNoms(noms)} est réservé ${pour}.`
+      : `Les plats ${listerNoms(noms)} sont réservés ${pour}.`,
+  );
+  const consigne = plats.length > 1 ? 'Retirez-les du panier pour continuer.' : 'Retirez-le du panier pour continuer.';
+  return [...phrases, consigne].join(' ');
+}
