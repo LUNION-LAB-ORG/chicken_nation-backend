@@ -46,6 +46,8 @@ export enum CodeAlerte {
   PAIEMENT_APRES_REPRISE = 'PAIEMENT_APRES_REPRISE',
   /** Paiement en ligne validé après l'annulation de la commande par le client : à rembourser. */
   PAIEMENT_SUR_COMMANDE_ANNULEE = 'PAIEMENT_SUR_COMMANDE_ANNULEE',
+  /** Paiement en ligne reçu sur une commande que les paiements précédents réglaient déjà : à rembourser. */
+  PAIEMENT_EN_DOUBLE = 'PAIEMENT_EN_DOUBLE',
 }
 
 /**
@@ -77,6 +79,7 @@ const TITRES: Record<CodeAlerte, string> = {
   [CodeAlerte.LIVRAISON_TRES_LOIN]: 'Livraison très éloignée',
   [CodeAlerte.PAIEMENT_APRES_REPRISE]: 'Paiement en ligne sur une commande à encaisser en caisse',
   [CodeAlerte.PAIEMENT_SUR_COMMANDE_ANNULEE]: 'Paiement reçu sur une commande annulée, à rembourser',
+  [CodeAlerte.PAIEMENT_EN_DOUBLE]: 'Paiement reçu deux fois, à rembourser',
 };
 
 /**

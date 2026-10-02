@@ -18,8 +18,10 @@ import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { JwtRefreshAuthGuard } from '../guards/jwt-refresh-auth.guard';
 import { ConnexionThrottlerGuard } from '../guards/connexion-throttler.guard';
 import { CodeClientThrottlerGuard } from '../guards/code-client-throttler.guard';
+import { VerificationCodeThrottlerGuard } from '../guards/verification-code-throttler.guard';
 import { origineConnexion } from '../helpers/connexion-echecs.helper';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
+import { LoginCustomerDto } from '../dto/login-customer.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -53,12 +55,13 @@ export class AuthController {
     type: String,
     description: 'Client, Token et refreshToken envoyé',
   })
-  @ApiNotFoundResponse({ description: 'Client non trouvé' })
-  @ApiBody({ type: String })
+  @ApiBadRequestResponse({ description: 'Numéro de téléphone invalide' })
+  @ApiTooManyRequestsResponse({ description: 'Code déjà envoyé, ou plafond d\'envoi atteint' })
+  @ApiBody({ type: LoginCustomerDto })
   @UseGuards(CodeClientThrottlerGuard)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post('customer/login')
-  async loginCustomer(@Body() { phone }: { phone: string }) {
+  async loginCustomer(@Body() { phone }: LoginCustomerDto) {
     return this.authService.loginCustomer(phone);
   }
 
@@ -69,7 +72,13 @@ export class AuthController {
     description: 'Client, Token et refreshToken envoyé',
   })
   @ApiNotFoundResponse({ description: 'Client non trouvé' })
+  @ApiTooManyRequestsResponse({ description: 'Trop d\'essais de code' })
   @ApiBody({ type: VerifyOtpDto })
+  // Limite par IP en complément du verrou par numéro (AuthService.verifyOtp).
+  // 30 par minute : beaucoup de clients mobiles sortent par l'adresse de leur
+  // opérateur.
+  @UseGuards(VerificationCodeThrottlerGuard)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post('customer/verify-otp')
   async verifyOtpCustomer(@Body() data: VerifyOtpDto) {
     return this.authService.verifyOtp(data);

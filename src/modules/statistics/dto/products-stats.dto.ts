@@ -77,10 +77,13 @@ export class ProductsComparisonQueryDto {
 
 // ─── Response DTOs ─────────────────────────────────────────────────────────────
 
-// Répartition des ventes par source (App, Call Center, HubRise)
+// Répartition des ventes par source (App, Site web, Call Center, HubRise)
 export class SourceBreakdown {
   @ApiProperty({ description: 'Quantité vendue via l\'App' })
   app: number;
+
+  @ApiProperty({ description: 'Quantité vendue via le site web' })
+  web: number;
 
   @ApiProperty({ description: 'Quantité vendue via Call Center' })
   callCenter: number;
@@ -295,6 +298,12 @@ export class ChannelBreakdownResponse {
   @ApiProperty({ description: 'CA via App' })
   appRevenue: number;
 
+  @ApiProperty({ description: 'Plats vendus via le site web' })
+  webSold: number;
+
+  @ApiProperty({ description: 'CA via le site web' })
+  webRevenue: number;
+
   @ApiProperty({ description: 'Plats vendus via Call Center' })
   callCenterSold: number;
 
@@ -303,6 +312,9 @@ export class ChannelBreakdownResponse {
 
   @ApiProperty({ description: '% App' })
   appPercentage: number;
+
+  @ApiProperty({ description: '% site web' })
+  webPercentage: number;
 
   @ApiProperty({ description: '% Call Center' })
   callCenterPercentage: number;

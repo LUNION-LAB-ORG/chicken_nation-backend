@@ -19,6 +19,14 @@ import {
   buildDateFilter,
 } from '../helpers/statistics.helper';
 import {
+  ajouterAuCanal,
+  canalDeCommande,
+  CanalStats,
+  canalPrefere,
+  CompteParCanal,
+  compteParCanalVide,
+} from '../helpers/canal-commande.helper';
+import {
   ClientsStatsQueryDto,
   InactiveClientsQueryDto,
   ClientsOverviewResponse,
@@ -127,7 +135,7 @@ export class StatisticsClientsService {
 
     const ordersInPeriod = await this.prisma.order.findMany({
       where: paidWhere,
-      select: { customer_id: true, auto: true, net_amount: true },
+      select: { customer_id: true, auto: true, channel: true, net_amount: true },
     });
 
     const customerIds = [...new Set(ordersInPeriod.map((o) => o.customer_id!))] as string[];
@@ -167,7 +175,7 @@ export class StatisticsClientsService {
         totalClients: 0, newClients: 0, recurringClients: 0,
         newClientsRate: 0, averageLtv: 0, averageLtvFormatted: '0 XOF',
         averageBasket: 0, averageBasketFormatted: '0 XOF',
-        averageOrderFrequency: 0, appClients: 0, callCenterClients: 0,
+        averageOrderFrequency: 0, appClients: 0, webClients: 0, callCenterClients: 0,
         totalAllCustomers, noAppClients, hasOrderedClients,
         neverOrderedClients, incompleteProfileClients,
       };
@@ -188,12 +196,16 @@ export class StatisticsClientsService {
     const newClients = customerIds.filter((id) => !recurringIds.has(id)).length;
     const recurringClients = customerIds.filter((id) => recurringIds.has(id)).length;
 
-    const appCustomerIds = new Set(
-      ordersInPeriod.filter((o) => o.auto === true).map((o) => o.customer_id!),
-    );
-    const callCustomerIds = new Set(
-      ordersInPeriod.filter((o) => o.auto === false).map((o) => o.customer_id!),
-    );
+    // Clients distincts par canal (un client peut compter dans plusieurs)
+    const clientsDuCanal = (canal: CanalStats) =>
+      new Set(
+        ordersInPeriod
+          .filter((o) => canalDeCommande(o) === canal)
+          .map((o) => o.customer_id!),
+      );
+    const appCustomerIds = clientsDuCanal('APP');
+    const webCustomerIds = clientsDuCanal('WEB');
+    const callCustomerIds = clientsDuCanal('CALL_CENTER');
 
     const ltvByCustomer = await this.prisma.order.groupBy({
       by: ['customer_id'],
@@ -229,6 +241,7 @@ export class StatisticsClientsService {
       averageBasketFormatted: formatCurrency(averageBasket),
       averageOrderFrequency,
       appClients: appCustomerIds.size,
+      webClients: webCustomerIds.size,
       callCenterClients: callCustomerIds.size,
       totalAllCustomers,
       noAppClients,
@@ -253,7 +266,7 @@ export class StatisticsClientsService {
 
     const orders = await this.prisma.order.findMany({
       where: paidWhere,
-      select: { customer_id: true, auto: true, created_at: true },
+      select: { customer_id: true, auto: true, channel: true, created_at: true },
       orderBy: { created_at: 'asc' },
     });
 
@@ -282,26 +295,25 @@ export class StatisticsClientsService {
         return d >= dStart && d <= dEnd;
       });
 
+      // Un client compté une fois par jour, sur le canal de sa première commande
       const seen = new Set<string>();
-      let newViaApp = 0, newViaCall = 0, recurViaApp = 0, recurViaCall = 0;
+      const nouveaux = compteParCanalVide();
+      const recurrents = compteParCanalVide();
       for (const o of dayOrders) {
         if (!o.customer_id || seen.has(o.customer_id)) continue;
         seen.add(o.customer_id);
-        const n = isNew(o.customer_id);
-        const app = o.auto === true;
-        if (app && n) newViaApp++;
-        else if (app && !n) recurViaApp++;
-        else if (!app && n) newViaCall++;
-        else recurViaCall++;
+        ajouterAuCanal(isNew(o.customer_id) ? nouveaux : recurrents, o);
       }
 
       return {
         date: format(day, 'yyyy-MM-dd'),
         label: format(day, 'EEE dd MMM', { locale: fr }),
-        newViaApp,
-        newViaCallCenter: newViaCall,
-        recurringViaApp: recurViaApp,
-        recurringViaCallCenter: recurViaCall,
+        newViaApp: nouveaux.app,
+        newViaCallCenter: nouveaux.callCenter,
+        newViaWeb: nouveaux.web,
+        recurringViaApp: recurrents.app,
+        recurringViaCallCenter: recurrents.callCenter,
+        recurringViaWeb: recurrents.web,
       };
     });
 
@@ -396,7 +408,7 @@ export class StatisticsClientsService {
     const customerIds = grouped.map((g) => g.customer_id!) as string[];
 
     const channelData = await this.prisma.order.groupBy({
-      by: ['customer_id', 'auto'],
+      by: ['customer_id', 'auto', 'channel'],
       _count: { _all: true },
       where: {
         customer_id: { in: customerIds },
@@ -405,13 +417,11 @@ export class StatisticsClientsService {
       },
     });
 
-    const channelMap = new Map<string, { app: number; call: number }>();
+    const channelMap = new Map<string, CompteParCanal>();
     for (const c of channelData) {
       const id = c.customer_id!;
-      if (!channelMap.has(id)) channelMap.set(id, { app: 0, call: 0 });
-      const entry = channelMap.get(id)!;
-      if (c.auto) entry.app += c._count._all;
-      else entry.call += c._count._all;
+      if (!channelMap.has(id)) channelMap.set(id, compteParCanalVide());
+      ajouterAuCanal(channelMap.get(id)!, c, c._count._all);
     }
 
     const customers = await this.prisma.customer.findMany({
@@ -425,14 +435,9 @@ export class StatisticsClientsService {
 
     const items: TopClientItem[] = grouped.map((g) => {
       const customer = customerMap.get(g.customer_id!);
-      const channels = channelMap.get(g.customer_id!) ?? { app: 0, call: 0 };
+      const channels = channelMap.get(g.customer_id!) ?? compteParCanalVide();
       const totalSpent = g._sum?.net_amount ?? 0;
-      const preferredChannel =
-        channels.app > channels.call
-          ? 'APP'
-          : channels.call > channels.app
-          ? 'CALL_CENTER'
-          : 'MIXED';
+      const preferredChannel = canalPrefere(channels);
 
       return {
         id: g.customer_id!,
@@ -488,7 +493,7 @@ export class StatisticsClientsService {
     const customerIds = lastOrders.map((o) => o.customer_id!) as string[];
 
     const channelData = await this.prisma.order.groupBy({
-      by: ['customer_id', 'auto'],
+      by: ['customer_id', 'auto', 'channel'],
       _count: { _all: true },
       where: {
         customer_id: { in: customerIds },
@@ -496,13 +501,11 @@ export class StatisticsClientsService {
         status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
       },
     });
-    const channelMap = new Map<string, { app: number; call: number }>();
+    const channelMap = new Map<string, CompteParCanal>();
     for (const c of channelData) {
       const id = c.customer_id!;
-      if (!channelMap.has(id)) channelMap.set(id, { app: 0, call: 0 });
-      const entry = channelMap.get(id)!;
-      if (c.auto) entry.app += c._count._all;
-      else entry.call += c._count._all;
+      if (!channelMap.has(id)) channelMap.set(id, compteParCanalVide());
+      ajouterAuCanal(channelMap.get(id)!, c, c._count._all);
     }
 
     const customers = await this.prisma.customer.findMany({
@@ -517,9 +520,8 @@ export class StatisticsClientsService {
     const items: InactiveClientItem[] = lastOrders.map((g) => {
       const customer = customerMap.get(g.customer_id!);
       const lastOrderDate = g._max?.created_at!;
-      const channels = channelMap.get(g.customer_id!) ?? { app: 0, call: 0 };
-      const preferredChannel =
-        channels.app > channels.call ? 'APP' : channels.call > channels.app ? 'CALL_CENTER' : 'MIXED';
+      const channels = channelMap.get(g.customer_id!) ?? compteParCanalVide();
+      const preferredChannel = canalPrefere(channels);
 
       return {
         id: g.customer_id!,
@@ -627,7 +629,7 @@ export class StatisticsClientsService {
         paied: true,
         status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
       },
-      select: { auto: true, net_amount: true, created_at: true },
+      select: { auto: true, channel: true, net_amount: true, created_at: true },
       orderBy: { created_at: 'asc' },
     });
 
@@ -651,10 +653,9 @@ export class StatisticsClientsService {
       };
     }
 
-    const appOrders = orders.filter((o) => o.auto === true).length;
-    const callOrders = orders.filter((o) => o.auto === false).length;
-    const preferredChannel =
-      appOrders > callOrders ? 'APP' : callOrders > appOrders ? 'CALL_CENTER' : 'MIXED';
+    const parCanal = compteParCanalVide();
+    for (const o of orders) ajouterAuCanal(parCanal, o);
+    const preferredChannel = canalPrefere(parCanal);
 
     const ltv = orders.reduce((acc, o) => acc + (o.net_amount ?? 0), 0);
     const averageBasket = orders.length > 0 ? ltv / orders.length : 0;

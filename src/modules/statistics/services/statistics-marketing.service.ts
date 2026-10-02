@@ -10,6 +10,12 @@ import {
   buildDateFilter,
 } from '../helpers/statistics.helper';
 import {
+  ajouterAuCanal,
+  canalPrefere,
+  CompteParCanal,
+  compteParCanalVide,
+} from '../helpers/canal-commande.helper';
+import {
   PromoUsageQueryDto,
   ChurnExportQueryDto,
   TopZonesQueryDto,
@@ -263,7 +269,7 @@ export class StatisticsMarketingService {
     const customerIds = lastOrders.map((o) => o.customer_id!) as string[];
 
     const channelData = await this.prisma.order.groupBy({
-      by: ['customer_id', 'auto'],
+      by: ['customer_id', 'auto', 'channel'],
       _count: { _all: true },
       where: {
         customer_id: { in: customerIds },
@@ -271,13 +277,11 @@ export class StatisticsMarketingService {
         status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
       },
     });
-    const channelMap = new Map<string, { app: number; call: number }>();
+    const channelMap = new Map<string, CompteParCanal>();
     for (const c of channelData) {
       const id = c.customer_id!;
-      if (!channelMap.has(id)) channelMap.set(id, { app: 0, call: 0 });
-      const entry = channelMap.get(id)!;
-      if (c.auto) entry.app += c._count._all;
-      else entry.call += c._count._all;
+      if (!channelMap.has(id)) channelMap.set(id, compteParCanalVide());
+      ajouterAuCanal(channelMap.get(id)!, c, c._count._all);
     }
 
     const customers = await this.prisma.customer.findMany({
@@ -289,9 +293,8 @@ export class StatisticsMarketingService {
     const now = new Date();
     const items: ChurnExportItem[] = lastOrders.map((g) => {
       const customer = customerMap.get(g.customer_id!);
-      const channels = channelMap.get(g.customer_id!) ?? { app: 0, call: 0 };
-      const preferredChannel =
-        channels.app > channels.call ? 'APP' : channels.call > channels.app ? 'CALL_CENTER' : 'MIXED';
+      const channels = channelMap.get(g.customer_id!) ?? compteParCanalVide();
+      const preferredChannel = canalPrefere(channels);
       const maxCreatedAt = g._max?.created_at;
 
       return {

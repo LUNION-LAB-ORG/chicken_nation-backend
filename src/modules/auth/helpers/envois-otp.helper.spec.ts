@@ -1,52 +1,90 @@
 import {
-  apresEnvoi,
+  CLE_ENVOIS_ETRANGER,
+  CLE_ENVOIS_ETRANGER_CONNUS,
+  CLE_ENVOIS_NOUVEAUX,
+  cleDelaiEnvoi,
   cleEnvoisNumero,
-  FENETRE_ENVOIS_MS,
-  lireCompteur,
-  MAX_ENVOIS_GLOBAL_PAR_DEFAUT,
-  plafondAtteint,
-  plafondGlobal,
+  MAX_ENVOIS_ETRANGER_PAR_DEFAUT,
+  MAX_ENVOIS_NOUVEAUX_PAR_DEFAUT,
+  MAX_ENVOIS_PAR_NUMERO,
+  messageDelaiEnvoi,
+  plafondDepuisEnv,
+  plafondsEnvoi,
+  secondesRestantes,
 } from './envois-otp.helper';
 
 describe('envois-otp.helper', () => {
-  const t0 = 1_000_000_000;
-
-  it('la clé ne dépend pas de la graphie du numéro', () => {
+  it('les clés ne dépendent pas de la graphie du numéro', () => {
     expect(cleEnvoisNumero('+225 07 20 35 35 35')).toBe(cleEnvoisNumero('2250720353535'));
+    expect(cleDelaiEnvoi('+225 07 20 35 35 35')).toBe(cleDelaiEnvoi('2250720353535'));
+    expect(cleDelaiEnvoi('+2250720353535')).not.toBe(cleEnvoisNumero('+2250720353535'));
   });
 
-  it('compte les envois dans la fenêtre puis bloque au plafond', () => {
-    let compteur = lireCompteur(undefined, t0);
-    for (let i = 0; i < 5; i++) {
-      expect(plafondAtteint(compteur, 5)).toBe(false);
-      compteur = apresEnvoi(compteur, t0 + i * 1000).compteur;
-    }
-    expect(plafondAtteint(compteur, 5)).toBe(true);
+  it("le compteur par numéro ne reprend pas le nom de l'ancien (objet JSON du cache)", () => {
+    expect(cleEnvoisNumero('+2250720353535')).not.toBe('otp-envois:numero:2250720353535');
   });
 
-  it('la fenêtre écoulée remet le compteur à zéro', () => {
-    const { compteur } = apresEnvoi(null, t0);
-    expect(lireCompteur(compteur, t0 + FENETRE_ENVOIS_MS - 1)).not.toBeNull();
-    expect(lireCompteur(compteur, t0 + FENETRE_ENVOIS_MS)).toBeNull();
+  describe('plafondsEnvoi', () => {
+    const cles = (telephone: string, connu: boolean, env = {}) =>
+      plafondsEnvoi(telephone, connu, env).map((p) => p.cle);
+
+    it('client ivoirien connu : plafond par numéro seulement', () => {
+      expect(cles('+2250707000000', true)).toEqual([cleEnvoisNumero('+2250707000000')]);
+    });
+
+    it('numéro ivoirien inconnu : par numéro, puis plafond commun des inconnus', () => {
+      const plafonds = plafondsEnvoi('+2250707000000', false, {});
+      expect(plafonds.map((p) => [p.cle, p.max, p.commun])).toEqual([
+        [cleEnvoisNumero('+2250707000000'), MAX_ENVOIS_PAR_NUMERO, false],
+        [CLE_ENVOIS_NOUVEAUX, MAX_ENVOIS_NOUVEAUX_PAR_DEFAUT, true],
+      ]);
+    });
+
+    it('numéro étranger inconnu : par numéro, étranger, inconnus', () => {
+      expect(cles('+33612345678', false)).toEqual([
+        cleEnvoisNumero('+33612345678'),
+        CLE_ENVOIS_ETRANGER,
+        CLE_ENVOIS_NOUVEAUX,
+      ]);
+    });
+
+    it('numéro étranger connu : un plafond étranger reste (le fraudeur peut valider ses propres numéros), sur son propre compteur', () => {
+      expect(cles('+33612345678', true)).toEqual([cleEnvoisNumero('+33612345678'), CLE_ENVOIS_ETRANGER_CONNUS]);
+      const plafond = plafondsEnvoi('+33612345678', true, { OTP_ENVOIS_ETRANGER_MAX_PAR_HEURE: '7' })[1];
+      expect([plafond.max, plafond.commun]).toEqual([7, true]);
+    });
+
+    it('lit les plafonds communs dans l’environnement', () => {
+      const plafonds = plafondsEnvoi('+33612345678', false, {
+        OTP_ENVOIS_MAX_PAR_HEURE: '150',
+        OTP_ENVOIS_ETRANGER_MAX_PAR_HEURE: '5',
+      });
+      expect(plafonds.find((p) => p.cle === CLE_ENVOIS_ETRANGER)?.max).toBe(5);
+      expect(plafonds.find((p) => p.cle === CLE_ENVOIS_NOUVEAUX)?.max).toBe(150);
+      expect(plafondsEnvoi('+33612345678', false, {}).find((p) => p.cle === CLE_ENVOIS_ETRANGER)?.max).toBe(
+        MAX_ENVOIS_ETRANGER_PAR_DEFAUT,
+      );
+    });
   });
 
-  it('la durée de vie du cache suit la fin de la fenêtre', () => {
-    const premier = apresEnvoi(null, t0);
-    expect(premier.ttlMs).toBe(FENETRE_ENVOIS_MS);
-    const second = apresEnvoi(premier.compteur, t0 + 10 * 60 * 1000);
-    expect(second.ttlMs).toBe(FENETRE_ENVOIS_MS - 10 * 60 * 1000);
-    expect(second.compteur.depuis).toBe(t0);
+  it('plafondDepuisEnv : défaut si la variable est absente ou invalide', () => {
+    expect(plafondDepuisEnv(undefined, 400)).toBe(400);
+    expect(plafondDepuisEnv('abc', 400)).toBe(400);
+    expect(plafondDepuisEnv('0', 400)).toBe(400);
+    expect(plafondDepuisEnv('-3', 400)).toBe(400);
+    expect(plafondDepuisEnv('2.5', 400)).toBe(400);
+    expect(plafondDepuisEnv('150', 400)).toBe(150);
   });
 
-  it('une valeur de cache illisible vaut « aucun envoi »', () => {
-    expect(lireCompteur('n importe quoi', t0)).toBeNull();
-    expect(lireCompteur({ envois: -1, depuis: t0 }, t0)).toBeNull();
+  it('secondesRestantes : PTTL arrondi au-dessus, délai entier si Redis ne répond rien d’utile', () => {
+    expect(secondesRestantes(17_001, 30_000)).toBe(18);
+    expect(secondesRestantes(1, 30_000)).toBe(1);
+    expect(secondesRestantes(-2, 30_000)).toBe(30);
+    expect(secondesRestantes(null, 60_000)).toBe(60);
   });
 
-  it('plafond global : défaut si la variable est absente ou invalide', () => {
-    expect(plafondGlobal(undefined)).toBe(MAX_ENVOIS_GLOBAL_PAR_DEFAUT);
-    expect(plafondGlobal('abc')).toBe(MAX_ENVOIS_GLOBAL_PAR_DEFAUT);
-    expect(plafondGlobal('0')).toBe(MAX_ENVOIS_GLOBAL_PAR_DEFAUT);
-    expect(plafondGlobal('150')).toBe(150);
+  it('messageDelaiEnvoi : singulier et pluriel', () => {
+    expect(messageDelaiEnvoi(1)).toBe("Un code vient d'être envoyé. Réessayez dans 1 seconde.");
+    expect(messageDelaiEnvoi(29.2)).toBe("Un code vient d'être envoyé. Réessayez dans 30 secondes.");
   });
 });

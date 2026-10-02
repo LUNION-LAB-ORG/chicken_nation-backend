@@ -22,6 +22,7 @@ import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 import { TurboService } from 'src/turbo/services/turbo.service';
 import { OrderItemDto } from '../dto/order-create.dto';
+import { nomSurLaCommande } from './nom-client.helper';
 
 @Injectable()
 export class OrderV2Helper {
@@ -100,12 +101,14 @@ export class OrderV2Helper {
       throw new BadRequestException('Client introuvable ou compte supprimé.');
     }
 
+    const telephone = phone || customer.phone;
     return {
       customer_id: customer.id,
       loyalty_level: customer.loyalty_level ?? undefined,
       total_points: customer.total_points ?? 0,
-      fullname: fullname || `${customer.first_name} ${customer.last_name}`.trim(),
-      phone: phone || customer.phone,
+      // Jamais « null null » pour un client sans nom (cf. nom-client.helper.ts).
+      fullname: nomSurLaCommande(fullname, customer, telephone),
+      phone: telephone,
       email: email || customer.email,
       expo_token: customer.notification_settings ? customer.notification_settings?.expo_push_token : null,
     };

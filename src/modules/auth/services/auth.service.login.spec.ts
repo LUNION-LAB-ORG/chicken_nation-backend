@@ -7,6 +7,8 @@ import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
 import { OtpService } from 'src/modules/auth/otp/otp.service';
 import { TwilioService } from 'src/twilio/services/twilio.service';
 import { AuthService } from './auth.service';
+import type { EnvoisOtpService } from '../otp/envois-otp.service';
+import type { TentativesLivreurService } from 'src/modules/auth-deliverer/services/tentatives-livreur.service';
 import { MESSAGE_COMPTE_DESACTIVE } from '../helpers/staff-account-status.helper';
 import {
   MAX_ECHECS_CONNEXION,
@@ -61,6 +63,9 @@ function monter(utilisateur: ReturnType<typeof membre> | null) {
     {} as OtpService,
     {} as TwilioService,
     cache as unknown as Cache,
+    // Connexion par email : ni plafonds d'envoi de codes ni essais de code.
+    {} as EnvoisOtpService,
+    {} as TentativesLivreurService,
   );
   // Les avertissements de connexion ne doivent pas encombrer la sortie du test.
   jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);

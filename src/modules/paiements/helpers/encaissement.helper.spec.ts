@@ -9,6 +9,8 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { EntityStatus, OrderStatus, User, UserRole, UserType } from '@prisma/client';
 import {
+  encaisseAvant,
+  estPaiementEnDouble,
   etatApresEncaissement,
   extraireEncaissement,
   PAYMENT_AMOUNT_TOLERANCE,
@@ -149,5 +151,63 @@ describe('etatApresEncaissement', () => {
       soldee: false,
       aTerminer: false,
     });
+  });
+});
+
+describe('encaisseAvant (paiement reçu deux fois)', () => {
+  const t = (minute: number) => new Date(`2026-10-02T10:${String(minute).padStart(2, '0')}:00.000Z`);
+  const premier = { id: 'p1', reference: 'kk-1', amount: 10000, created_at: t(0) };
+  const second = { id: 'p2', reference: 'kk-2', amount: 10000, created_at: t(5) };
+
+  it('compte les paiements enregistrés avant celui-ci', () => {
+    expect(encaisseAvant([premier, second], second)).toBe(10000);
+  });
+
+  it("ne voit rien avant le premier, même une fois le second enregistré : seul le second est à rembourser", () => {
+    expect(encaisseAvant([premier, second], premier)).toBe(0);
+  });
+
+  it("ignore le paiement lui-même et un second enregistrement de la même transaction", () => {
+    const memeTransaction = { id: 'p1-bis', reference: 'kk-1', amount: 10000, created_at: t(0) };
+    expect(encaisseAvant([premier, memeTransaction], { ...premier, created_at: t(1) })).toBe(0);
+  });
+
+  it("deux transactions à la même milliseconde : une seule voit l'autre avant elle", () => {
+    const a = { ...premier, id: 'a', reference: 'kk-a', created_at: t(3) };
+    const b = { ...premier, id: 'b', reference: 'kk-b', created_at: t(3) };
+    expect(encaisseAvant([a, b], a)).toBe(0);
+    expect(encaisseAvant([a, b], b)).toBe(10000);
+  });
+
+  it('compte le montant sans la commission KKiaPay', () => {
+    // `amount` seul : la commission (dans `total`) n'est pas versée pour la commande.
+    expect(encaisseAvant([{ ...premier, amount: 9000 }], second)).toBe(9000);
+  });
+
+  it('ne compte rien quand une date manque', () => {
+    expect(encaisseAvant([{ ...premier, created_at: null }], second)).toBe(0);
+    expect(encaisseAvant([premier], { ...second, created_at: null })).toBe(0);
+  });
+});
+
+describe('estPaiementEnDouble', () => {
+  it('oui quand les paiements précédents couvraient déjà la commande, à la tolérance près', () => {
+    expect(estPaiementEnDouble(10000, 10000)).toBe(true);
+    expect(estPaiementEnDouble(10000, 10000 - PAYMENT_AMOUNT_TOLERANCE)).toBe(true);
+  });
+
+  it("non quand ce paiement complète un encaissement partiel", () => {
+    expect(estPaiementEnDouble(10000, 10000 - PAYMENT_AMOUNT_TOLERANCE - 1)).toBe(false);
+    expect(estPaiementEnDouble(10000, 4000)).toBe(false);
+  });
+
+  it("non pour le premier paiement, même d'une commande à zéro franc", () => {
+    expect(estPaiementEnDouble(10000, 0)).toBe(false);
+    expect(estPaiementEnDouble(0, 0)).toBe(false);
+  });
+
+  it('non sans montant de commande', () => {
+    expect(estPaiementEnDouble(null, 10000)).toBe(false);
+    expect(estPaiementEnDouble(undefined, 10000)).toBe(false);
   });
 });

@@ -62,11 +62,15 @@ enum PaiementMode {
   CASH // ESPÈCES
 }
 
-/// Canal par lequel une commande a été créée.
+/// Canal par lequel une commande a été créée : application, site web, centre
+/// d'appels, ou comptoir d'un restaurant (saisie par un compte de point de
+/// vente). Pour le personnel, le canal suit le type du compte qui saisit
+/// (cf. order/helpers/canal-commande.rules.ts).
 enum OrderChannel {
   APP
   WEB
   CALL_CENTER
+  RESTAURANT
 }
 
 enum PaymentMethod {

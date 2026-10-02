@@ -34,6 +34,7 @@ import { PromotionErrorKeys } from 'src/modules/fidelity/enums/promotion-error-k
 import { JsonValue } from '@prisma/client/runtime/library';
 import { TurboService } from 'src/turbo/services/turbo.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
+import { nomSurLaCommande } from './nom-client.helper';
 
 @Injectable()
 export class OrderHelper {
@@ -88,13 +89,14 @@ export class OrderHelper {
         throw new BadRequestException('Client introuvable');
       }
 
+      const telephone = orderData.phone || customer.phone;
       return {
         customer_id: customer.id,
         loyalty_level: customer.loyalty_level ?? undefined,
         total_points: customer.total_points ?? 0,
-        fullname:
-          orderData.fullname || `${customer.first_name} ${customer.last_name}`,
-        phone: orderData.phone || customer.phone,
+        // Jamais « null null » pour un client sans nom (cf. nom-client.helper.ts).
+        fullname: nomSurLaCommande(orderData.fullname, customer, telephone),
+        phone: telephone,
         email: orderData.email || customer.email,
       };
     }

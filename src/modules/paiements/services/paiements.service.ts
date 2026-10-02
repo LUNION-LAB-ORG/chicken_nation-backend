@@ -33,8 +33,11 @@ import { assertCanAccessRestaurant } from 'src/modules/order/helpers/restaurant-
 import { ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE } from 'src/modules/order/helpers/brouillons.rules';
 import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
 import {
+  encaisseAvant,
+  estPaiementEnDouble,
   etatApresEncaissement,
   extraireEncaissement,
+  PaiementReussi,
   PAYMENT_AMOUNT_TOLERANCE,
   verifierCommandeEncaissable,
 } from 'src/modules/paiements/helpers/encaissement.helper';
@@ -92,6 +95,55 @@ export class PaiementsService {
     return true;
   }
 
+  /**
+   * PAIEMENT REÇU DEUX FOIS (revue du 02/10).
+   *
+   * Le client paie de nouveau une commande déjà réglée : paiement rouvert au
+   * rechargement de la page de suivi du site, deux onglets, notification du
+   * premier paiement en retard. Le second paiement était enregistré sans que
+   * rien ne le signale : il n'était remboursé que sur réclamation du client.
+   *
+   * Une alerte demande donc de le rembourser, que la commande soit payable en
+   * ligne ou à la caisse. Elle ne part qu'au PREMIER enregistrement de la
+   * transaction (`nouveau`) : un rejeu (nouvelle tentative du webhook, ou
+   * webhook après la confirmation de l'application) reste silencieux. Bridage
+   * par transaction : un troisième paiement aurait sa propre alerte.
+   *
+   * @returns vrai si ce paiement arrive sur une commande déjà réglée, rejeu
+   *   compris.
+   */
+  private controlerPaiementEnDouble(
+    commande: { id: string; reference?: string | null; restaurant_id?: string | null; amount: number },
+    paiement: { id: string; reference: string; amount: number; source?: string | null; created_at: Date },
+    reussis: PaiementReussi[],
+    nouveau: boolean,
+  ): boolean {
+    const dejaEncaisse = encaisseAvant(reussis, paiement);
+    if (!estPaiementEnDouble(commande.amount, dejaEncaisse)) return false;
+    if (nouveau) {
+      const francs = (montant: number) => `${montant.toLocaleString('fr-FR')} F`;
+      this.alertes.signaler({
+        code: CodeAlerte.PAIEMENT_EN_DOUBLE,
+        restaurantId: commande.restaurant_id ?? null,
+        reference: commande.reference ?? null,
+        details: [
+          `Le client a payé en ligne une commande déjà réglée : ce paiement est à lui rembourser.`,
+          `Déjà encaissé avant lui : ${francs(dejaEncaisse)} pour ${francs(commande.amount)} dus.`,
+          `À rembourser : ${francs(paiement.amount)}${paiement.source ? ` (${paiement.source})` : ''}, transaction KKiaPay ${paiement.reference}.`,
+        ],
+        cleBridage: `${CodeAlerte.PAIEMENT_EN_DOUBLE}:${paiement.reference}`,
+        meta: {
+          orderId: commande.id,
+          paiementId: paiement.id,
+          transactionId: paiement.reference,
+          montant: paiement.amount,
+          dejaEncaisse,
+        },
+      });
+    }
+    return true;
+  }
+
   // Payer avec Kkiapay
   async payWithKkiapay(
     req: Request,
@@ -141,10 +193,14 @@ export class PaiementsService {
     // jeton de 50 F (famille B) valide une commande. cf. réconciliation KKiaPay.
     if (result.order) {
       const isSuccess = transaction.status === PaiementStatus.SUCCESS;
-      const totalSuccess = isSuccess
-        ? await this.sumSuccessPaiements(result.order.id)
-        : 0;
+      const reussis = isSuccess ? await this.paiementsReussis(result.order.id) : [];
+      const totalSuccess = this.sommeEncaissee(reussis);
       const covered = totalSuccess >= result.order.amount - PAYMENT_AMOUNT_TOLERANCE;
+      // Paiement reçu deux fois : même contrôle que le webhook, qui trouvera
+      // ensuite cette transaction déjà enregistrée et se taira.
+      if (isSuccess) {
+        this.controlerPaiementEnDouble(result.order, result.paiement, reussis, !result.dejaEnregistre);
+      }
       if (isSuccess && covered) {
         const paymentAt = result.paiement.created_at;
         // TODO(§3a) : unifier ce chemin app-confirm avec linkPaiementToOrder pour qu'il
@@ -593,16 +649,24 @@ export class PaiementsService {
     // Motif lisible d'un paiement NON abouti — remonté à l'appelant (confirmation
     // manuelle admin) pour un 4xx explicite. `undefined` si isPaid=true.
     let notPaidReason: string | undefined;
+    // Paiement arrivé sur une commande que les paiements précédents réglaient
+    // déjà (`controlerPaiementEnDouble`) : à rembourser. Vrai aussi au rejeu.
+    let enDouble = false;
     if (result.order) {
       // Ne confirmer la commande QUE si la transaction est SUCCESS ET si le cumul
       // des paiements SUCCESS couvre le total (pas d'acompte app). Bloque les
       // paiements FAILED (Z) et les paiements-jetons (B). cf. réconciliation KKiaPay.
       const isSuccess = transaction.status === PaiementStatus.SUCCESS;
-      const totalSuccess = isSuccess
-        ? await this.sumSuccessPaiements(result.order.id)
-        : 0;
+      const reussis = isSuccess ? await this.paiementsReussis(result.order.id) : [];
+      const totalSuccess = this.sommeEncaissee(reussis);
       const covered = totalSuccess >= result.order.amount - PAYMENT_AMOUNT_TOLERANCE;
       isPaid = isSuccess && covered;
+      // Contrôlé AVANT toute écriture sur la commande : si l'une d'elles
+      // échoue, le webhook retenté trouve la transaction déjà enregistrée et
+      // ne signalerait plus rien. L'alerte doit donc être partie.
+      if (isSuccess) {
+        enDouble = this.controlerPaiementEnDouble(result.order, result.paiement, reussis, !result.dejaEnregistre);
+      }
       if (!isPaid) {
         notPaidReason = !isSuccess ? 'KKiaPay: statut non SUCCESS' : 'montant non couvert';
       }
@@ -679,7 +743,7 @@ export class PaiementsService {
       }
     }
 
-    return { paiement: result.paiement, justPaid, isPaid, payeApresCoup, annuleeRetablie, notPaidReason };
+    return { paiement: result.paiement, justPaid, isPaid, payeApresCoup, annuleeRetablie, enDouble, notPaidReason };
   }
 
   // Récupération des paiements succès libres
@@ -791,7 +855,9 @@ export class PaiementsService {
         const order = createPaiementDto.order_id
           ? await this.prisma.order.findUnique({ where: { id: createPaiementDto.order_id } })
           : null;
-        return { paiement: existing, order };
+        // Rejeu d'une transaction connue : ce qui ne doit parler qu'une fois
+        // (paiement reçu deux fois) se tait.
+        return { paiement: existing, order, dejaEnregistre: true };
       }
     }
 
@@ -824,7 +890,7 @@ export class PaiementsService {
     // Émission de l'événement de paiement effectué
     this.paiementEvent.paiementEffectue(paiement);
 
-    return { paiement, order };
+    return { paiement, order, dejaEnregistre: false };
   }
 
   // Récupération de tous les paiements
@@ -982,12 +1048,19 @@ export class PaiementsService {
     return result;
   }
 
-  /** Somme des paiements SUCCESS d'une commande (montant réellement encaissé). */
-  private async sumSuccessPaiements(orderId: string): Promise<number> {
-    const paiements = await this.prisma.paiement.findMany({
+  /**
+   * Paiements SUCCESS d'une commande. Une seule lecture sert au cumul encaissé
+   * (`sommeEncaissee`) et au contrôle du paiement reçu deux fois.
+   */
+  private async paiementsReussis(orderId: string) {
+    return this.prisma.paiement.findMany({
       where: { order_id: orderId, status: PaiementStatus.SUCCESS },
-      select: { amount: true, total: true },
+      select: { id: true, reference: true, amount: true, total: true, created_at: true },
     });
+  }
+
+  /** Somme des paiements SUCCESS d'une commande (montant réellement encaissé). */
+  private sommeEncaissee(paiements: { amount: number | null; total: number | null }[]): number {
     return paiements.reduce((s, p) => s + (p.total ?? p.amount ?? 0), 0);
   }
 

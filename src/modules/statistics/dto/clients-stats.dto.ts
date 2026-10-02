@@ -70,8 +70,11 @@ export class ClientsOverviewResponse {
   @ApiProperty({ description: 'Fréquence de commande moyenne (commandes / client)' })
   averageOrderFrequency: number;
 
-  @ApiProperty({ description: 'Clients via App (auto=true)' })
+  @ApiProperty({ description: 'Clients via App (auto=true, hors site web)' })
   appClients: number;
+
+  @ApiProperty({ description: 'Clients via le site web (channel=WEB)' })
+  webClients: number;
 
   @ApiProperty({ description: 'Clients via Call Center (auto=false)' })
   callCenterClients: number;
@@ -110,6 +113,12 @@ export class ClientAcquisitionDailyPoint {
 
   @ApiProperty()
   recurringViaCallCenter: number;
+
+  @ApiProperty({ description: 'Nouveaux clients via le site web' })
+  newViaWeb: number;
+
+  @ApiProperty({ description: 'Clients récurrents via le site web' })
+  recurringViaWeb: number;
 }
 
 export class ClientsAcquisitionResponse {
@@ -183,7 +192,7 @@ export class TopClientItem {
   @ApiProperty({ description: 'Dernière commande' })
   lastOrderDate: string;
 
-  @ApiProperty({ description: 'Canal préféré', enum: ['APP', 'CALL_CENTER', 'MIXED'] })
+  @ApiProperty({ description: 'Canal préféré', enum: ['APP', 'WEB', 'CALL_CENTER', 'MIXED'] })
   preferredChannel: string;
 
   @ApiProperty({ description: 'Niveau fidélité', enum: ['STANDARD', 'VIP', 'VVIP'] })
@@ -223,7 +232,7 @@ export class InactiveClientItem {
   @ApiProperty()
   totalSpent: number;
 
-  @ApiProperty()
+  @ApiProperty({ description: 'Canal préféré', enum: ['APP', 'WEB', 'CALL_CENTER', 'MIXED'] })
   preferredChannel: string;
 }
 
@@ -359,7 +368,7 @@ export class ClientAnalyticsProfileResponse {
   @ApiProperty()
   image: string;
 
-  @ApiProperty({ description: 'Canal préféré', enum: ['APP', 'CALL_CENTER', 'MIXED'] })
+  @ApiProperty({ description: 'Canal préféré', enum: ['APP', 'WEB', 'CALL_CENTER', 'MIXED'] })
   preferredChannel: string;
 
   @ApiProperty({ description: 'Fréquence de commande (ex: 2.3 par mois)' })

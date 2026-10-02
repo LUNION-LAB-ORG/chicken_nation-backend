@@ -13,8 +13,8 @@ import { TwilioService } from 'src/twilio/services/twilio.service';
 import { permissionsByRole } from 'src/modules/auth/constantes/permissionsByRole';
 import { UserRole } from '@prisma/client';
 import {
-  canonicalizeCustomerPhone,
   customerPhoneVariants,
+  normaliserTelephoneClient,
 } from 'src/common/utils/customer-phone.util';
 import {
   motifRefusCompte,
@@ -31,18 +31,14 @@ import {
   pourJournal,
 } from 'src/modules/auth/helpers/connexion-echecs.helper';
 import { FileParCle, avantDelai } from 'src/modules/auth/helpers/file-par-cle.helper';
+import { MESSAGE_NUMERO_INVALIDE, messageDelaiEnvoi } from '../helpers/envois-otp.helper';
+import { EnvoisOtpService } from '../otp/envois-otp.service';
+import { TentativesLivreurService } from 'src/modules/auth-deliverer/services/tentatives-livreur.service';
 import {
-  apresEnvoi,
-  CLE_ENVOIS_GLOBAL,
-  cleEnvoisNumero,
-  CompteurEnvois,
-  lireCompteur,
-  MAX_ENVOIS_PAR_NUMERO,
-  MESSAGE_TROP_DE_CODES_GLOBAL,
-  MESSAGE_TROP_DE_CODES_NUMERO,
-  plafondAtteint,
-  plafondGlobal,
-} from '../helpers/envois-otp.helper';
+  POLITIQUE_CODE,
+  cleVerificationCode,
+  doitVerrouiller,
+} from 'src/modules/auth-deliverer/helpers/tentatives-livreur.helper';
 
 // Haché bcrypt (coût 10, celui de genSalt) d'une chaîne aléatoire jetée :
 // comparé quand l'email est inconnu, pour que la réponse prenne le même temps
@@ -66,6 +62,8 @@ export class AuthService {
     private readonly otpService: OtpService,
     private readonly twilioService: TwilioService,
     @Inject(CACHE_MANAGER) private readonly cache: Cache,
+    private readonly envoisOtp: EnvoisOtpService,
+    private readonly tentatives: TentativesLivreurService,
   ) { }
 
   // LOGIN USER
@@ -212,150 +210,141 @@ export class AuthService {
   // l'écran OTP mobile pour ne pas pénaliser le flux légitime.
   private static readonly OTP_RESEND_COOLDOWN_MS = 30 * 1000;
 
-  // ── Durcissement OTP (audit) : plafond de tentatives de VÉRIFICATION ──────
-  // Au-delà de MAX_OTP_VERIFY_ATTEMPTS échecs dans une fenêtre glissante de
-  // OTP_VERIFY_WINDOW_MS, le numéro est verrouillé pendant OTP_LOCKOUT_MS.
-  // Empêche le brute-force d'un code à 4 chiffres (10 000 combinaisons).
-  // Persisté en DB (OtpVerificationAttempt) → robuste au double backend.
-  private static readonly MAX_OTP_VERIFY_ATTEMPTS = 5;
-  private static readonly OTP_VERIFY_WINDOW_MS = 15 * 60 * 1000; // 15 min
-  private static readonly OTP_LOCKOUT_MS = 15 * 60 * 1000; // 15 min
-
   // LOGIN CUSTOMER
   async loginCustomer(phone: string) {
+    // Numéro inexploitable : 400, sans rien compter ni créer.
+    const canonical = normaliserTelephoneClient(phone);
+    if (!canonical) throw new BadRequestException(MESSAGE_NUMERO_INVALIDE);
+
     // ⚠️ Lookup TOLÉRANT aux deux graphies (`+225…` app / `225…` adhésion site) :
     // le match exact créait un DOUBLON vide pour les comptes pré-inscrits via le
     // site → formulaire re-affiché + demande de carte invisible. On cherche
     // toutes les variantes, on écrit toujours le format canonique `+…`.
-    const canonical = canonicalizeCustomerPhone(phone);
-    const variants = customerPhoneVariants(phone);
-
-    // Plafonds d'envoi (numéro puis total) AVANT toute écriture : un appel
-    // refusé ne crée pas de compte et ne coûte pas de message.
-    await this.verifierPlafondsEnvoiOtp(canonical);
-
+    // Lecture seule, AVANT les plafonds : un client connu n'est pas soumis au
+    // plafond commun des numéros inconnus (voir envois-otp.helper).
     let customer = await this.prisma.customer.findFirst({
       where: {
-        phone: { in: variants },
+        phone: { in: customerPhoneVariants(canonical) },
         entity_status: { not: EntityStatus.DELETED },
       },
       // Si un doublon existe malgré tout, privilégier la ligne canonique.
       orderBy: { created_at: 'asc' },
     });
 
-    if (customer && customer.phone !== canonical) {
-      // Auto-réparation : on normalise la ligne héritée (best-effort — si la
-      // graphie canonique est déjà prise par un twin, on garde l'existante).
-      try {
-        customer = await this.prisma.customer.update({
-          where: { id: customer.id },
-          data: { phone: canonical },
-        });
-      } catch {
-        /* conflit d'unicité → la migration de fusion s'en charge */
+    // Délai et plafonds d'envoi AVANT toute écriture : un appel refusé ne crée
+    // pas de compte et ne coûte pas de message. « Connu » = a déjà validé un
+    // code sur ce numéro (un compte créé par une simple demande ne compte pas,
+    // sinon chaque numéro inventé échapperait au plafond commun dès son
+    // deuxième envoi).
+    const demande = {
+      telephone: canonical,
+      compteConnu: !!customer?.last_login_at,
+      delaiMs: AuthService.OTP_RESEND_COOLDOWN_MS,
+    };
+    return this.envoisOtp.encadrerEnvoi(demande, async () => {
+      if (customer && customer.phone !== canonical) {
+        // Auto-réparation : on normalise la ligne héritée (best-effort — si la
+        // graphie canonique est déjà prise par un twin, on garde l'existante).
+        try {
+          customer = await this.prisma.customer.update({
+            where: { id: customer.id },
+            data: { phone: canonical },
+          });
+        } catch {
+          /* conflit d'unicité → la migration de fusion s'en charge */
+        }
       }
-    }
 
-    if (!customer) {
-      customer = await this.prisma.customer.create({ data: { phone: canonical } });
-    }
+      if (!customer) {
+        customer = await this.prisma.customer.create({ data: { phone: canonical } });
+      }
 
-    // Anti-flood : si un code a été envoyé il y a moins de COOLDOWN, on refuse
-    // d'en générer/envoyer un nouveau (le précédent reste valide 5 min).
-    const wait = await this.otpService.getResendCooldownSeconds(
-      customer.phone,
-      AuthService.OTP_RESEND_COOLDOWN_MS,
-    );
-    if (wait > 0) {
-      throw new HttpException(
-        `Un code vient d'être envoyé. Réessayez dans ${wait} seconde${wait > 1 ? 's' : ''}.`,
-        429,
+      // Anti-flood en base, seconde barrière (Redis indisponible) : si un code a
+      // été envoyé il y a moins de COOLDOWN, on refuse d'en générer/envoyer un
+      // nouveau (le précédent reste valide 5 min).
+      const wait = await this.otpService.getResendCooldownSeconds(
+        customer.phone,
+        AuthService.OTP_RESEND_COOLDOWN_MS,
       );
-    }
-
-    const otp = await this.otpService.generate(customer.phone);
-
-    // Compté avant l'envoi : le coût Twilio est engagé même si l'envoi échoue.
-    await this.compterEnvoiOtp(customer.phone);
-    const isSent = await this.twilioService.sendOtp({ phoneNumber: customer.phone, otp });
-    if (!isSent) {
-      // this.logger.error(`Échec de l'envoi de l'OTP au numéro ${customer.phone}`);
-      throw new HttpException('Envoi de l\'OTP impossible', 500);
-    }
-    /**
-     * ⚠️ FAILLE CRITIQUE CORRIGEE : le code était renvoyé EN CLAIR dans la
-     * réponse HTTP de cette route PUBLIQUE.
-     *
-     * Il suffisait d'appeler cette route avec un numéro pour lire le code dans
-     * la réponse, puis de le rejouer sur `verify-otp` : prise de contrôle
-     * complète de n'importe quel compte client à partir du seul numéro de
-     * téléphone, sans jamais recevoir le SMS. Et comme la table des codes est
-     * partagée avec le module livreur, le même appel ouvrait aussi la
-     * réinitialisation d'un compte livreur.
-     *
-     * Le code ne doit exister que dans le SMS. L'application ne s'en servait
-     * que pour l'afficher dans sa console.
-     */
-    return { phone: customer.phone, message: 'Code envoyé par SMS' };
-  }
-
-  // ── Plafonds d'envoi des codes (cf. envois-otp.helper) ───────────────────
-  // Best-effort : une panne du cache ne doit pas empêcher les clients de se
-  // connecter ; le délai de 30 s par numéro (en base) reste alors en place.
-
-  private async lireCompteurEnvois(cle: string): Promise<CompteurEnvois | null> {
-    try {
-      return lireCompteur(await avantDelai(this.cache.get(cle), DELAI_CACHE_CONNEXION_MS), Date.now());
-    } catch (error) {
-      this.logger.error(`Lecture du compteur d'envois de codes impossible : ${String(error)}`);
-      return null;
-    }
-  }
-
-  private async verifierPlafondsEnvoiOtp(telephone: string): Promise<void> {
-    if (plafondAtteint(await this.lireCompteurEnvois(cleEnvoisNumero(telephone)), MAX_ENVOIS_PAR_NUMERO)) {
-      throw new HttpException(MESSAGE_TROP_DE_CODES_NUMERO, HttpStatus.TOO_MANY_REQUESTS);
-    }
-    const max = plafondGlobal(process.env.OTP_ENVOIS_MAX_PAR_HEURE);
-    if (plafondAtteint(await this.lireCompteurEnvois(CLE_ENVOIS_GLOBAL), max)) {
-      this.logger.error(`Plafond global d'envoi de codes atteint (${max} par heure) : envois suspendus.`);
-      throw new HttpException(MESSAGE_TROP_DE_CODES_GLOBAL, HttpStatus.TOO_MANY_REQUESTS);
-    }
-  }
-
-  private async compterEnvoiOtp(telephone: string): Promise<void> {
-    for (const cle of [cleEnvoisNumero(telephone), CLE_ENVOIS_GLOBAL]) {
-      try {
-        const suivant = apresEnvoi(await this.lireCompteurEnvois(cle), Date.now());
-        await avantDelai(this.cache.set(cle, suivant.compteur, suivant.ttlMs), DELAI_CACHE_CONNEXION_MS);
-      } catch (error) {
-        this.logger.error(`Écriture du compteur d'envois de codes impossible : ${String(error)}`);
+      if (wait > 0) {
+        throw new HttpException(messageDelaiEnvoi(wait), 429);
       }
-    }
+
+      const otp = await this.otpService.generate(customer.phone);
+      const isSent = await this.twilioService.sendOtp({ phoneNumber: customer.phone, otp });
+      if (!isSent) {
+        // Rien n'est parti : on retire le code créé (encadrerEnvoi lève le
+        // délai), sinon la nouvelle tentative serait refusée par « Un code
+        // vient d'être envoyé ».
+        try {
+          await this.prisma.otpToken.deleteMany({ where: { phone: customer.phone, code: otp } });
+        } catch (error) {
+          this.logger.error(`Retrait du code non envoyé impossible : ${String(error)}`);
+        }
+        throw new HttpException('Envoi de l\'OTP impossible', 500);
+      }
+      /**
+       * ⚠️ FAILLE CRITIQUE CORRIGEE : le code était renvoyé EN CLAIR dans la
+       * réponse HTTP de cette route PUBLIQUE.
+       *
+       * Il suffisait d'appeler cette route avec un numéro pour lire le code dans
+       * la réponse, puis de le rejouer sur `verify-otp` : prise de contrôle
+       * complète de n'importe quel compte client à partir du seul numéro de
+       * téléphone, sans jamais recevoir le SMS. Et comme la table des codes est
+       * partagée avec le module livreur, le même appel ouvrait aussi la
+       * réinitialisation d'un compte livreur.
+       *
+       * Le code ne doit exister que dans le SMS. L'application ne s'en servait
+       * que pour l'afficher dans sa console.
+       */
+      return { phone: customer.phone, message: 'Code envoyé par SMS' };
+    });
   }
 
   // VERIFY OTP
+  // Durcissement (code à 4 chiffres, 10 000 combinaisons) : 5 essais par
+  // numéro en 15 minutes, puis 429 pendant 15 minutes (POLITIQUE_CODE).
+  //
+  // ⚠️ Le numéro est ramené à UNE clé canonique avant tout : le verrou était
+  // indexé sur la saisie brute alors que la recherche du code tolère toutes
+  // les graphies, si bien que `+225 07…`, `22507…`, `+22507-…` avaient chacune
+  // leurs 5 essais sur le même code (prise de compte en quelques milliers de
+  // requêtes). La clé est aussi celle de la vérification livreur
+  // (`cleVerificationCode`) : la table des codes est commune, le compteur aussi.
+  //
+  // L'essai est compté AVANT d'être jugé, par un incrément atomique en base :
+  // des essais simultanés reçoivent chacun leur rang et seuls les 5 premiers
+  // sont examinés (TentativesLivreurService).
   async verifyOtp(data: VerifyOtpDto) {
-    // ── Durcissement : rejeter d'emblée si le numéro est verrouillé (trop
-    // d'échecs récents) AVANT toute comparaison de code. ──────────────────
-    await this.assertOtpNotLocked(data.phone);
+    const telephone = normaliserTelephoneClient(data.phone);
+    // Aucun code n'a pu être envoyé à un numéro inexploitable : 400, sans
+    // rien compter ni chercher (même réponse que la demande de code).
+    if (!telephone) throw new BadRequestException(MESSAGE_NUMERO_INVALIDE);
+
+    const maintenant = new Date();
+    const cle = cleVerificationCode(telephone);
+    const rang = await this.tentatives.reserver(cle, POLITIQUE_CODE, maintenant);
 
     // Validation COMPLÈTE et suffisante : le token stocké correspond-il au
     // (téléphone + code) saisi, et n'est-il pas expiré ? Le token est stocké
     // sous la graphie DB du client (canonique `+…`, ou héritée `225…` si la
     // normalisation a rencontré un twin) → lookup tolérant aux variantes.
+    const variantes = customerPhoneVariants(telephone);
     const otpToken = await this.prisma.otpToken.findFirst({
       where: {
         code: data.otp,
-        phone: { in: customerPhoneVariants(data.phone) },
-        expire: { gte: new Date() },
+        phone: { in: variantes },
+        expire: { gte: maintenant },
       },
     });
 
     if (!otpToken) {
-      // Échec : on incrémente le compteur (fenêtre glissante) et on verrouille
-      // le numéro si le plafond est atteint. Ne casse pas le flux normal.
-      await this.registerFailedOtpAttempt(data.phone);
+      if (doitVerrouiller(rang, POLITIQUE_CODE)) {
+        // Plafond atteint : verrou, et les codes en cours du numéro sont
+        // retirés. Un code exposé à 5 essais n'est plus jamais accepté.
+        await this.tentatives.constaterEchec(cle, rang, POLITIQUE_CODE, maintenant);
+        await this.retirerCodes(variantes);
+      }
       throw new UnauthorizedException('Code OTP invalide');
     }
 
@@ -388,88 +377,18 @@ export class AuthService {
     // du même code et purge les anciens codes encore valides pour ce téléphone.
     await this.prisma.otpToken.deleteMany({ where: { phone: otpToken.phone } });
 
-    // Succès : on remet à zéro le compteur d'échecs de vérification.
-    await this.clearOtpAttempts(otpToken.phone);
+    // Succès : on remet à zéro le compteur d'essais.
+    await this.tentatives.effacer(cle);
 
     return { ...rest, token };
   }
 
-  // ── Helpers durcissement OTP ───────────────────────────────────────────────
-
-  /**
-   * Bloque la vérification si le numéro est actuellement verrouillé (429).
-   * Purge le verrou expiré au passage (dégradation naturelle).
-   */
-  private async assertOtpNotLocked(phone: string): Promise<void> {
-    const attempt = await this.prisma.otpVerificationAttempt.findUnique({
-      where: { phone },
-    });
-    if (!attempt?.locked_until) return;
-
-    const remainingMs = attempt.locked_until.getTime() - Date.now();
-    if (remainingMs > 0) {
-      const minutes = Math.ceil(remainingMs / 60000);
-      throw new HttpException(
-        `Trop de tentatives. Réessayez dans ${minutes} minute${minutes > 1 ? 's' : ''}.`,
-        429,
-      );
-    }
-    // Verrou expiré → repartir d'une fenêtre propre.
-    await this.prisma.otpVerificationAttempt.update({
-      where: { phone },
-      data: { failed_count: 0, window_start: new Date(), locked_until: null },
-    });
-  }
-
-  /**
-   * Enregistre un échec de vérification (fenêtre glissante) et pose un verrou
-   * temporaire dès que le plafond est atteint. Best-effort : une erreur DB ici
-   * ne doit jamais empêcher de renvoyer « OTP invalide » (flux normal préservé).
-   */
-  private async registerFailedOtpAttempt(phone: string): Promise<void> {
+  /** Retire les codes en cours d'un numéro (toutes graphies). Best-effort. */
+  private async retirerCodes(variantes: string[]): Promise<void> {
     try {
-      const now = new Date();
-      const existing = await this.prisma.otpVerificationAttempt.findUnique({
-        where: { phone },
-      });
-
-      if (!existing) {
-        await this.prisma.otpVerificationAttempt.create({
-          data: { phone, failed_count: 1, window_start: now },
-        });
-        return;
-      }
-
-      // Fenêtre expirée → on repart à 1.
-      const windowExpired =
-        now.getTime() - existing.window_start.getTime() >
-        AuthService.OTP_VERIFY_WINDOW_MS;
-      const nextCount = windowExpired ? 1 : existing.failed_count + 1;
-      const reachedCap = nextCount >= AuthService.MAX_OTP_VERIFY_ATTEMPTS;
-
-      await this.prisma.otpVerificationAttempt.update({
-        where: { phone },
-        data: {
-          failed_count: nextCount,
-          window_start: windowExpired ? now : existing.window_start,
-          locked_until: reachedCap
-            ? new Date(now.getTime() + AuthService.OTP_LOCKOUT_MS)
-            : existing.locked_until,
-        },
-      });
+      await this.prisma.otpToken.deleteMany({ where: { phone: { in: variantes } } });
     } catch (error) {
-      this.logger.error(
-        `Suivi des tentatives OTP échoué pour ${phone}: ${String(error)}`,
-      );
-    }
-  }
-
-  /** Remet à zéro le suivi des tentatives après une vérification réussie. */
-  private async clearOtpAttempts(phone: string): Promise<void> {
-    try {
-      await this.prisma.otpVerificationAttempt.deleteMany({ where: { phone } });
-    } catch {
-      // best-effort : sans importance si la ligne n'existait pas.
+      this.logger.error(`Retrait des codes après verrou impossible : ${String(error)}`);
     }
   }
 

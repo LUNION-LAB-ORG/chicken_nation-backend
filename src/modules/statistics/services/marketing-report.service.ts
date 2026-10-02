@@ -9,6 +9,11 @@ import {
   buildRestaurantFilter,
   buildDateFilter,
 } from '../helpers/statistics.helper';
+import {
+  ajouterAuCanal,
+  CompteParCanal,
+  compteParCanalVide,
+} from '../helpers/canal-commande.helper';
 import { StatisticsOrdersService } from './statistics-orders.service';
 import { StatisticsProductsService } from './statistics-products.service';
 import { StatisticsClientsService } from './statistics-clients.service';
@@ -53,18 +58,21 @@ interface ReportData {
   }>;
   channel: {
     app: { orders: number; revenue: number; averageBasket: number; newRate: number; percentage: number };
+    web: { orders: number; revenue: number; averageBasket: number; newRate: number; percentage: number };
     call: { orders: number; revenue: number; averageBasket: number; newRate: number; percentage: number };
   };
   byRestaurant: {
     items: Array<{
       name: string;
       appOrders: number;
+      webOrders: number;
       callOrders: number;
       totalOrders: number;
       revenue: number;
       percentage: number;
     }>;
     totalApp: number;
+    totalWeb: number;
     totalCall: number;
     totalOrders: number;
     totalRevenue: number;
@@ -138,11 +146,11 @@ export class MarketingReportService {
       this.ordersService.getOrdersOverview(subQuery),
       this.ordersService.getOrdersByChannel(subQuery),
 
-      // Détail par restaurant : ventilé App/Call Center + CA net, scopé au
-      // restaurant si demandé (getOrdersByRestaurantAndSource ignore le
-      // restaurantId et ne renvoie pas le CA, donc requête dédiée ici).
+      // Détail par restaurant : ventilé App/Site web/Call Center + CA net,
+      // scopé au restaurant si demandé (getOrdersByRestaurantAndSource ignore
+      // le restaurantId et ne renvoie pas le CA, donc requête dédiée ici).
       this.prisma.order.groupBy({
-        by: ['restaurant_id', 'auto'],
+        by: ['restaurant_id', 'auto', 'channel'],
         _count: { _all: true },
         _sum: { net_amount: true },
         where: baseWhere,
@@ -180,27 +188,25 @@ export class MarketingReportService {
         averageBasket: t.count > 0 ? Math.round(t.revenue / t.count) : 0,
       }));
 
-    // --- Détail par restaurant : App / Call Center + CA net (scopé) ---
+    // --- Détail par restaurant : App / Site web / Call Center + CA net (scopé) ---
     const restaurantMap = new Map(allRestaurants.map((r) => [r.id, r.name]));
     const restoAgg = new Map<
       string,
-      { name: string; appOrders: number; callOrders: number; totalOrders: number; revenue: number }
+      { name: string; parCanal: CompteParCanal; totalOrders: number; revenue: number }
     >();
     for (const row of restaurantSourceRaw) {
       const id = row.restaurant_id;
       if (!restoAgg.has(id)) {
         restoAgg.set(id, {
           name: restaurantMap.get(id) ?? 'Inconnu',
-          appOrders: 0,
-          callOrders: 0,
+          parCanal: compteParCanalVide(),
           totalOrders: 0,
           revenue: 0,
         });
       }
       const e = restoAgg.get(id)!;
       const count = row._count._all;
-      if (row.auto === true) e.appOrders += count;
-      else e.callOrders += count;
+      ajouterAuCanal(e.parCanal, row, count);
       e.totalOrders += count;
       e.revenue += row._sum.net_amount ?? 0;
     }
@@ -209,22 +215,24 @@ export class MarketingReportService {
     const byRestaurant = {
       items: restoItems.map((r) => ({
         name: r.name,
-        appOrders: r.appOrders,
-        callOrders: r.callOrders,
+        appOrders: r.parCanal.app,
+        webOrders: r.parCanal.web,
+        callOrders: r.parCanal.callCenter,
         totalOrders: r.totalOrders,
         revenue: r.revenue,
         percentage:
           totalRestoRevenue > 0 ? Math.round((r.revenue / totalRestoRevenue) * 1000) / 10 : 0,
       })),
-      totalApp: restoItems.reduce((s, r) => s + r.appOrders, 0),
-      totalCall: restoItems.reduce((s, r) => s + r.callOrders, 0),
+      totalApp: restoItems.reduce((s, r) => s + r.parCanal.app, 0),
+      totalWeb: restoItems.reduce((s, r) => s + r.parCanal.web, 0),
+      totalCall: restoItems.reduce((s, r) => s + r.parCanal.callCenter, 0),
       totalOrders: restoItems.reduce((s, r) => s + r.totalOrders, 0),
       totalRevenue: totalRestoRevenue,
     };
 
-    // Part App/Call sur l'ensemble (répartition par source).
+    // Part App/Site web/Call sur l'ensemble (répartition par source).
     const channelTotalOrders =
-      channelRaw.app.totalOrders + channelRaw.callCenter.totalOrders;
+      channelRaw.app.totalOrders + channelRaw.web.totalOrders + channelRaw.callCenter.totalOrders;
     const channelPct = (n: number) =>
       channelTotalOrders > 0 ? Math.round((n / channelTotalOrders) * 1000) / 10 : 0;
 
@@ -258,6 +266,13 @@ export class MarketingReportService {
           averageBasket: channelRaw.app.averageBasket,
           newRate: channelRaw.app.newClientsRate,
           percentage: channelPct(channelRaw.app.totalOrders),
+        },
+        web: {
+          orders: channelRaw.web.totalOrders,
+          revenue: channelRaw.web.revenue,
+          averageBasket: channelRaw.web.averageBasket,
+          newRate: channelRaw.web.newClientsRate,
+          percentage: channelPct(channelRaw.web.totalOrders),
         },
         call: {
           orders: channelRaw.callCenter.totalOrders,
@@ -410,6 +425,7 @@ export class MarketingReportService {
 
     .badge { display: inline-block; padding: 1px 7px; border-radius: 8px; font-size: 9.5px; font-weight: 700; }
     .badge-app { background: #e6f4ec; color: #1e8e5a; }
+    .badge-web { background: #f3ecfb; color: #7b3fb8; }
     .badge-call { background: #e7f0fb; color: #2b6cb0; }
 
     .callout { background: #faf7f4; border: 1px solid #efe6dd; border-radius: 9px; padding: 10px 12px; text-align: center; }
@@ -493,7 +509,7 @@ export class MarketingReportService {
     <div class="section">
       <div class="section-title">Détail par restaurant</div>
       <table>
-        <thead><tr><th>Restaurant</th><th class="text-center">Application</th><th class="text-center">Call Center</th><th class="text-center">Total cmd.</th><th class="text-right">CA net</th><th class="text-center">Part CA</th></tr></thead>
+        <thead><tr><th>Restaurant</th><th class="text-center">Application</th><th class="text-center">Site web</th><th class="text-center">Call Center</th><th class="text-center">Total cmd.</th><th class="text-right">CA net</th><th class="text-center">Part CA</th></tr></thead>
         <tbody>
           ${
             data.byRestaurant.items.length > 0
@@ -503,6 +519,7 @@ export class MarketingReportService {
           <tr>
             <td>${esc(r.name)}</td>
             <td class="text-center">${fmt(r.appOrders)}</td>
+            <td class="text-center">${fmt(r.webOrders)}</td>
             <td class="text-center">${fmt(r.callOrders)}</td>
             <td class="text-center">${fmt(r.totalOrders)}</td>
             <td class="text-right">${money(r.revenue)}</td>
@@ -510,13 +527,14 @@ export class MarketingReportService {
           </tr>`,
                   )
                   .join('')
-              : emptyRow(6)
+              : emptyRow(7)
           }
         </tbody>
         <tfoot>
           <tr class="total-row">
             <td><strong>TOTAL</strong></td>
             <td class="text-center"><strong>${fmt(data.byRestaurant.totalApp)}</strong></td>
+            <td class="text-center"><strong>${fmt(data.byRestaurant.totalWeb)}</strong></td>
             <td class="text-center"><strong>${fmt(data.byRestaurant.totalCall)}</strong></td>
             <td class="text-center"><strong>${fmt(data.byRestaurant.totalOrders)}</strong></td>
             <td class="text-right"><strong>${money(data.byRestaurant.totalRevenue)}</strong></td>
@@ -567,6 +585,14 @@ export class MarketingReportService {
             <td class="text-right">${money(data.channel.app.revenue)}</td>
             <td class="text-right">${money(data.channel.app.averageBasket)}</td>
             <td class="text-right">${pctv(data.channel.app.newRate)}</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-web">Site web</span></td>
+            <td class="text-center">${fmt(data.channel.web.orders)}</td>
+            <td class="text-center">${pctv(data.channel.web.percentage)}</td>
+            <td class="text-right">${money(data.channel.web.revenue)}</td>
+            <td class="text-right">${money(data.channel.web.averageBasket)}</td>
+            <td class="text-right">${pctv(data.channel.web.newRate)}</td>
           </tr>
           <tr>
             <td><span class="badge badge-call">Call Center</span></td>

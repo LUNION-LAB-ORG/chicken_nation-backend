@@ -32,6 +32,8 @@ export interface ProcessTransactionSuccessResult {
     order?: Awaited<ReturnType<OrderService['findByReferenceOrNull']>>;
     paiement?: { id: string } | null;
     earnedPoints?: number;
+    /** Paiement reçu sur une commande déjà réglée : à rembourser (alerte levée à son enregistrement). */
+    enDouble?: boolean;
 }
 
 /**
@@ -131,6 +133,7 @@ export class KkiapayOrderListenerService {
         let isPaid: boolean;
         let payeApresCoup = false;
         let annuleeRetablie = false;
+        let enDouble = false;
         let notPaidReason: string | undefined;
         let paiement: { id: string } | null | undefined;
         try {
@@ -146,6 +149,7 @@ export class KkiapayOrderListenerService {
             isPaid = linked.isPaid;
             payeApresCoup = linked.payeApresCoup;
             annuleeRetablie = linked.annuleeRetablie;
+            enDouble = linked.enDouble;
             notPaidReason = linked.notPaidReason;
         } catch (error) {
             // KKiaPay INJOIGNABLE (réseau/5xx, levé par KkiapayService.rawVerify) :
@@ -205,12 +209,25 @@ export class KkiapayOrderListenerService {
         }
 
         /**
-         * Argent reçu en ligne sur une commande payable à la caisse : la
-         * caisse, le livreur ou Turbo (dont la course garde le montant à
-         * encaisser de son envoi) ont pu, ou vont, encaisser le client une
-         * seconde fois. Rien ne le rattrape automatiquement : on prévient.
+         * PAIEMENT REÇU DEUX FOIS : la commande était déjà réglée. L'alerte
+         * « à rembourser » est partie à l'enregistrement du paiement
+         * (`PaiementsService`), une seule fois et quelle que soit la façon de
+         * payer de la commande. On ne la double pas de l'alerte de reprise
+         * ci-dessous, qui dirait moins bien la même chose ; un rejeu reste
+         * silencieux.
          */
-        if (!justPaid && order.payment_method === PaymentMethod.OFFLINE) {
+        if (enDouble) {
+            this.logger.warn(
+                `Paiement ${payload.transactionId} reçu sur la commande ${order.reference} déjà réglée : ` +
+                `à rembourser.`,
+            );
+        } else if (!justPaid && order.payment_method === PaymentMethod.OFFLINE) {
+            /**
+             * Argent reçu en ligne sur une commande payable à la caisse : la
+             * caisse, le livreur ou Turbo (dont la course garde le montant à
+             * encaisser de son envoi) ont pu, ou vont, encaisser le client une
+             * seconde fois. Rien ne le rattrape automatiquement : on prévient.
+             */
             this.alertes.signaler({
                 code: CodeAlerte.PAIEMENT_APRES_REPRISE,
                 restaurantId: order.restaurant_id,
@@ -309,7 +326,7 @@ export class KkiapayOrderListenerService {
                 `Paiement ${payload.transactionId} reçu sur la commande annulée ${order.reference} : ` +
                 `rattaché, sans effet de fidélité (remboursement à traiter).`,
             );
-            return { confirmed: true, justPaid, order: sansIdentifiantsPush(order), paiement, earnedPoints: 0 };
+            return { confirmed: true, justPaid, order: sansIdentifiantsPush(order), paiement, earnedPoints: 0, enDouble };
         }
 
         let earnedPoints = 0;
@@ -425,7 +442,7 @@ export class KkiapayOrderListenerService {
 
         // Le jeton Expo lu plus haut ne quitte pas ce service : ce résultat
         // devient la réponse HTTP de la confirmation manuelle.
-        return { confirmed: true, justPaid, order: sansIdentifiantsPush(order), paiement, earnedPoints };
+        return { confirmed: true, justPaid, order: sansIdentifiantsPush(order), paiement, earnedPoints, enDouble };
     }
 
     /**

@@ -24,6 +24,13 @@ import {
   buildDateFilter,
 } from '../helpers/statistics.helper';
 import {
+  ajouterAuCanal,
+  canalDeCommande,
+  CLE_CANAL,
+  CompteParCanal,
+  compteParCanalVide,
+} from '../helpers/canal-commande.helper';
+import {
   OrdersStatsQueryDto,
   OrdersOverviewResponse,
   OrdersByChannelResponse,
@@ -193,7 +200,9 @@ export class StatisticsOrdersService {
   }
 
   /**
-   * Commandes par canal (App vs Call Center) avec courbes journalières.
+   * Commandes par canal (App, Site web, Call Center) avec courbes journalières.
+   * Le canal d'une commande suit canalDeCommande : le site web est compté à
+   * part, le reste garde la règle fondée sur `auto`.
    * Nouveaux clients = première commande sur la période.
    * Récurrents = avaient déjà commandé avant la période.
    */
@@ -215,6 +224,7 @@ export class StatisticsOrdersService {
         id: true,
         customer_id: true,
         auto: true,
+        channel: true,
         net_amount: true,
         created_at: true,
       },
@@ -226,7 +236,7 @@ export class StatisticsOrdersService {
         totalOrders: 0, revenue: 0, averageBasket: 0,
         newClientsOrders: 0, recurringClientsOrders: 0, newClientsRate: 0,
       };
-      return { app: empty, callCenter: empty, dailyTrend: [] };
+      return { app: empty, web: empty, callCenter: empty, dailyTrend: [] };
     }
 
     // Identifier les clients "nouveaux" : première commande >= startDate
@@ -249,45 +259,32 @@ export class StatisticsOrdersService {
       customerId ? !recurringCustomerIds.has(customerId) : true;
 
     // Agréger par canal
-    let appNew = 0, appRecurring = 0, appRevenue = 0;
-    let callNew = 0, callRecurring = 0, callRevenue = 0;
+    const nouveaux = compteParCanalVide();
+    const recurrents = compteParCanalVide();
+    const chiffre = compteParCanalVide();
 
     for (const order of orders) {
-      const isApp = order.auto === true;
-      const isNewCustomer = isNew(order.customer_id);
-      const amount = order.net_amount ?? 0;
-
-      if (isApp) {
-        appRevenue += amount;
-        if (isNewCustomer) appNew++;
-        else appRecurring++;
-      } else {
-        callRevenue += amount;
-        if (isNewCustomer) callNew++;
-        else callRecurring++;
-      }
+      const cle = CLE_CANAL[canalDeCommande(order)];
+      chiffre[cle] += order.net_amount ?? 0;
+      if (isNew(order.customer_id)) nouveaux[cle]++;
+      else recurrents[cle]++;
     }
 
-    const appTotal = appNew + appRecurring;
-    const callTotal = callNew + callRecurring;
-
-    const app: ChannelStats = {
-      totalOrders: appTotal,
-      revenue: appRevenue,
-      averageBasket: appTotal > 0 ? appRevenue / appTotal : 0,
-      newClientsOrders: appNew,
-      recurringClientsOrders: appRecurring,
-      newClientsRate: appTotal > 0 ? Math.round((appNew / appTotal) * 100) : 0,
+    const statsDuCanal = (cle: keyof CompteParCanal): ChannelStats => {
+      const total = nouveaux[cle] + recurrents[cle];
+      return {
+        totalOrders: total,
+        revenue: chiffre[cle],
+        averageBasket: total > 0 ? chiffre[cle] / total : 0,
+        newClientsOrders: nouveaux[cle],
+        recurringClientsOrders: recurrents[cle],
+        newClientsRate: total > 0 ? Math.round((nouveaux[cle] / total) * 100) : 0,
+      };
     };
 
-    const callCenter: ChannelStats = {
-      totalOrders: callTotal,
-      revenue: callRevenue,
-      averageBasket: callTotal > 0 ? callRevenue / callTotal : 0,
-      newClientsOrders: callNew,
-      recurringClientsOrders: callRecurring,
-      newClientsRate: callTotal > 0 ? Math.round((callNew / callTotal) * 100) : 0,
-    };
+    const app = statsDuCanal('app');
+    const web = statsDuCanal('web');
+    const callCenter = statsDuCanal('callCenter');
 
     // Tendance journalière pour les Line Charts
     const days = eachDayOfInterval({ start: dateRange.startDate, end: dateRange.endDate });
@@ -302,29 +299,27 @@ export class StatisticsOrdersService {
           return d >= dayStart && d <= dayEnd;
         });
 
-        let newViaApp = 0, newViaCall = 0, recurViaApp = 0, recurViaCall = 0;
+        const nouveauxDuJour = compteParCanalVide();
+        const recurrentsDuJour = compteParCanalVide();
         for (const o of dayOrders) {
-          const isApp = o.auto === true;
-          const isNewC = isNew(o.customer_id);
-          if (isApp && isNewC) newViaApp++;
-          else if (isApp && !isNewC) recurViaApp++;
-          else if (!isApp && isNewC) newViaCall++;
-          else recurViaCall++;
+          ajouterAuCanal(isNew(o.customer_id) ? nouveauxDuJour : recurrentsDuJour, o);
         }
 
         return {
           date: format(day, 'yyyy-MM-dd'),
           label: format(day, 'EEE dd MMM', { locale: fr }),
-          newViaApp,
-          newViaCallCenter: newViaCall,
-          recurringViaApp: recurViaApp,
-          recurringViaCallCenter: recurViaCall,
+          newViaApp: nouveauxDuJour.app,
+          newViaCallCenter: nouveauxDuJour.callCenter,
+          newViaWeb: nouveauxDuJour.web,
+          recurringViaApp: recurrentsDuJour.app,
+          recurringViaCallCenter: recurrentsDuJour.callCenter,
+          recurringViaWeb: recurrentsDuJour.web,
           total: dayOrders.length,
         };
       }),
     );
 
-    return { app, callCenter, dailyTrend };
+    return { app, web, callCenter, dailyTrend };
   }
 
   /**
@@ -723,7 +718,7 @@ export class StatisticsOrdersService {
   }
 
   /**
-   * Répartition par restaurant ET par source (App vs Call Center).
+   * Répartition par restaurant ET par source (App, Site web, Call Center).
    * Pour histogrammes empilés par canal.
    */
   async getOrdersByRestaurantAndSource(
@@ -739,7 +734,7 @@ export class StatisticsOrdersService {
 
     const [grouped, restaurants] = await Promise.all([
       this.prisma.order.groupBy({
-        by: ['restaurant_id', 'auto'],
+        by: ['restaurant_id', 'auto', 'channel'],
         _count: true,
         where: baseWhere,
       }),
@@ -750,10 +745,10 @@ export class StatisticsOrdersService {
 
     const restaurantMap = new Map(restaurants.map((r) => [r.id, r.name]));
 
-    // Agréger : { restaurantId → { app: n, callCenter: n, total: n } }
+    // Agréger : { restaurantId → { app: n, web: n, callCenter: n, total: n } }
     const dataMap = new Map<
       string,
-      { name: string; app: number; callCenter: number; total: number }
+      CompteParCanal & { name: string; total: number }
     >();
 
     for (const g of grouped) {
@@ -761,17 +756,12 @@ export class StatisticsOrdersService {
       if (!dataMap.has(id)) {
         dataMap.set(id, {
           name: restaurantMap.get(id) ?? 'Inconnu',
-          app: 0,
-          callCenter: 0,
+          ...compteParCanalVide(),
           total: 0,
         });
       }
       const entry = dataMap.get(id)!;
-      if (g.auto === true) {
-        entry.app += g._count;
-      } else {
-        entry.callCenter += g._count;
-      }
+      ajouterAuCanal(entry, g, g._count);
       entry.total += g._count;
     }
 
@@ -780,6 +770,7 @@ export class StatisticsOrdersService {
         restaurantId: id,
         restaurantName: data.name,
         app: data.app,
+        web: data.web,
         callCenter: data.callCenter,
         total: data.total,
       }))

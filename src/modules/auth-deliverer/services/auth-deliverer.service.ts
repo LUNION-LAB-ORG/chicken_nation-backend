@@ -12,6 +12,8 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Deliverer, DelivererStatus, EntityStatus } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
+import { customerPhoneVariants } from 'src/common/utils/customer-phone.util';
+import { EnvoisOtpService } from 'src/modules/auth/otp/envois-otp.service';
 import { OtpService } from 'src/modules/auth/otp/otp.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { TwilioService } from 'src/twilio/services/twilio.service';
@@ -30,6 +32,7 @@ import {
   cleConnexion,
   cleConnexionJour,
   cleVerificationCode,
+  doitVerrouiller,
   messageDelaiRenvoi,
 } from '../helpers/tentatives-livreur.helper';
 import { TentativesLivreurService } from './tentatives-livreur.service';
@@ -71,6 +74,7 @@ export class AuthDelivererService {
     private readonly twilioService: TwilioService,
     private readonly eventEmitter: EventEmitter2,
     private readonly tentatives: TentativesLivreurService,
+    private readonly envoisOtp: EnvoisOtpService,
   ) {}
 
   // ============================================================
@@ -93,7 +97,8 @@ export class AuthDelivererService {
       throw new ConflictException('Un livreur avec ce numéro existe déjà');
     }
 
-    await this.envoyerCode(dto.phone);
+    // Numéro sans compte livreur : plafonds communs des numéros inconnus.
+    await this.envoyerCode(dto.phone, false);
 
     return { phone: dto.phone, message: 'Code OTP envoyé' };
   }
@@ -264,7 +269,9 @@ export class AuthDelivererService {
       throw new NotFoundException('Aucun compte livreur associé à ce numéro');
     }
 
-    await this.envoyerCode(dto.phone);
+    // Compte livreur existant : son numéro a été vérifié par code à
+    // l'inscription, seuls le délai et le plafond par numéro s'appliquent.
+    await this.envoyerCode(dto.phone, true);
 
     return { phone: dto.phone, message: 'Code OTP envoyé' };
   }
@@ -487,6 +494,11 @@ export class AuthDelivererService {
     });
     if (!otpToken) {
       await this.tentatives.constaterEchec(cle, rang, POLITIQUE_CODE, maintenant);
+      if (doitVerrouiller(rang, POLITIQUE_CODE)) {
+        // Verrou posé : les codes en cours du numéro (toutes graphies, la
+        // table est commune avec les clients) ne seront plus jamais acceptés.
+        await this.retirerCodes(phone);
+      }
       throw new UnauthorizedException('Code OTP invalide ou expiré');
     }
 
@@ -502,32 +514,51 @@ export class AuthDelivererService {
     await this.tentatives.effacer(cle);
   }
 
+  /** Retire les codes en cours d'un numéro, toutes graphies. Best-effort. */
+  private async retirerCodes(phone: string): Promise<void> {
+    try {
+      await this.prisma.otpToken.deleteMany({
+        where: { phone: { in: customerPhoneVariants(phone) } },
+      });
+    } catch (erreur) {
+      this.logger.error(`Retrait des codes après verrou impossible : ${String(erreur)}`);
+    }
+  }
+
   /**
    * Génère et envoie un code, en respectant le délai entre deux envois au
-   * même numéro (le code précédent reste valide 5 minutes).
+   * même numéro (le code précédent reste valide 5 minutes) et les plafonds
+   * d'envoi communs avec les clients (EnvoisOtpService, AVANT toute écriture).
    *
    * `phone` est déjà normalisé par RegisterPhoneDto, sous la forme où le code
    * est enregistré : le délai porte donc sur la bonne ligne.
+   *
+   * `compteConnu` : un livreur inscrit détient ce numéro (vérifié par code à
+   * l'inscription) ; sinon, plafonds communs des numéros inconnus.
    */
-  private async envoyerCode(phone: string): Promise<void> {
-    const attente = await this.otpService.getResendCooldownSeconds(phone, DELAI_RENVOI_CODE_MS);
-    if (attente > 0) {
-      throw new HttpException(messageDelaiRenvoi(attente), HttpStatus.TOO_MANY_REQUESTS);
-    }
-
-    const otp = await this.otpService.generate(phone);
-    const isSent = await this.twilioService.sendOtp({ phoneNumber: phone, otp });
-    if (!isSent) {
-      // Rien n'est parti : on retire le code créé, sinon la nouvelle tentative
-      // (l'appli relance d'elle-même une réponse 500) serait refusée par le
-      // délai avec « Un code vient d'être envoyé ».
-      try {
-        await this.prisma.otpToken.deleteMany({ where: { phone, code: otp } });
-      } catch (erreur) {
-        this.logger.error(`Retrait du code non envoyé impossible : ${String(erreur)}`);
+  private async envoyerCode(phone: string, compteConnu: boolean): Promise<void> {
+    const demande = { telephone: phone, compteConnu, delaiMs: DELAI_RENVOI_CODE_MS };
+    await this.envoisOtp.encadrerEnvoi(demande, async () => {
+      // Seconde barrière, en base (Redis indisponible).
+      const attente = await this.otpService.getResendCooldownSeconds(phone, DELAI_RENVOI_CODE_MS);
+      if (attente > 0) {
+        throw new HttpException(messageDelaiRenvoi(attente), HttpStatus.TOO_MANY_REQUESTS);
       }
-      throw new HttpException("Envoi de l'OTP impossible", 500);
-    }
+
+      const otp = await this.otpService.generate(phone);
+      const isSent = await this.twilioService.sendOtp({ phoneNumber: phone, otp });
+      if (!isSent) {
+        // Rien n'est parti : on retire le code créé (encadrerEnvoi lève le
+        // délai), sinon la nouvelle tentative (l'appli relance d'elle-même une
+        // réponse 500) serait refusée avec « Un code vient d'être envoyé ».
+        try {
+          await this.prisma.otpToken.deleteMany({ where: { phone, code: otp } });
+        } catch (erreur) {
+          this.logger.error(`Retrait du code non envoyé impossible : ${String(erreur)}`);
+        }
+        throw new HttpException("Envoi de l'OTP impossible", 500);
+      }
+    });
   }
 
   /**

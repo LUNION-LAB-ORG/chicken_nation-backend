@@ -75,6 +75,7 @@ import {
 } from '../helpers/brouillons.rules';
 import { motifRefusModification, peutModifierCommande } from '../helpers/modification-commande.rules';
 import { OrderRelanceService } from './order-relance.service';
+import { canalDeSaisie, libelleSource } from '../helpers/canal-commande.rules';
 import {
   cadeauxDesLignes,
   cadeauxRefactures,
@@ -786,8 +787,9 @@ export class OrderService {
               },
             },
           }),
-          // Saisie du personnel → centre d'appels ; sinon l'ancienne route client.
-          channel: user_id ? OrderChannel.CALL_CENTER : OrderChannel.APP,
+          // Ancienne route client → APP ; personnel → comptoir (compte de
+          // restaurant) ou centre d'appels. Auteur pris du jeton.
+          channel: canalDeSaisie(user_id, req.user as User | undefined),
           restaurant: {
             connect: {
               id: restaurant.id,
@@ -3134,7 +3136,7 @@ export class OrderService {
         contact: order.customer.phone || 'N/A',
         email: order.customer.email || 'N/A',
         restaurant: order.restaurant.name,
-        source: order.channel === OrderChannel.WEB ? 'Site web' : order.auto ? 'Appli' : 'Téléphone',
+        source: libelleSource(order),
         payment_mode: paymentMethods.toLowerCase(),
       });
 
@@ -3509,7 +3511,7 @@ export class OrderService {
             order.delivery?.delivered_at ?? order.collected_at ?? order.completed_at;
           return d ? format(new Date(d), 'dd/MM/yyyy HH:mm', { locale: fr }) : '';
         })(),
-        source: order.channel === OrderChannel.WEB ? 'Site web' : order.auto ? 'Appli' : 'Téléphone',
+        source: libelleSource(order),
         paid: order.paied ? 'Oui' : 'Non',
       });
 
@@ -3831,5 +3833,21 @@ export class OrderService {
       channel: 'APP',
       orderAmount: body.order_amount ?? 0,
     });
+  }
+
+  /**
+   * La livraison est-elle ouverte aux commandes des clients (application et
+   * site) ? Même réglage que le refus de `createv2`
+   * (`delivery.app_disabled`, sa date de fin et son message).
+   *
+   * Sans cette lecture publique, le client ne découvrait la coupure qu'au
+   * moment de payer, après avoir cherché son adresse et vu des frais. Le
+   * refus de `createv2` reste la vraie garantie.
+   */
+  async obtenirDisponibiliteLivraison(): Promise<{ disponible: boolean; message: string | null }> {
+    const blocage = await this.deliveryFeeHelper.isAppDeliveryDisabled();
+    return blocage.disabled
+      ? { disponible: false, message: blocage.message }
+      : { disponible: true, message: null };
   }
 }

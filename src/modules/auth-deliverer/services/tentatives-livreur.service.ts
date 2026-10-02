@@ -17,16 +17,20 @@ import {
  * dans la table OtpVerificationAttempt. Voir `tentatives-livreur.helper.ts`
  * pour les clés et les seuils.
  *
+ * Fourni par OtpModule : la vérification des codes des CLIENTS
+ * (AuthService.verifyOtp) l'emploie aussi, avec la même clé que les livreurs
+ * (`cleVerificationCode`), puisque la table des codes est commune.
+ *
  * Déroulé attendu par l'appelant :
  *  1. `reserver` AVANT de juger la tentative : elle est comptée tout de suite,
  *     de façon atomique, et refusée en 429 si le plafond est dépassé ;
  *  2. `constaterEchec` si la tentative échoue : pose le verrou au plafond ;
  *  3. `effacer` si elle réussit : remet le compteur à zéro.
  *
- * Pourquoi compter avant : le mécanisme client lit le compte puis le réécrit,
- * si bien que cent requêtes simultanées n'enregistrent qu'un échec. Ici,
- * l'incrément est fait par la base (`failed_count = failed_count + 1`) et
- * chaque requête reçoit son propre rang.
+ * Pourquoi compter avant : l'ancien mécanisme client lisait le compte puis le
+ * réécrivait, si bien que cent requêtes simultanées n'enregistraient qu'un
+ * échec. Ici, l'incrément est fait par la base (`failed_count = failed_count
+ * + 1`) et chaque requête reçoit son propre rang.
  *
  * Toute erreur de base remonte : sans compteur, on ne juge pas la tentative.
  */

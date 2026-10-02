@@ -113,6 +113,12 @@ export class DailyTrendPoint {
   @ApiProperty({ description: 'Clients récurrents via Call Center' })
   recurringViaCallCenter: number;
 
+  @ApiProperty({ description: 'Nouveaux clients via le site web' })
+  newViaWeb: number;
+
+  @ApiProperty({ description: 'Clients récurrents via le site web' })
+  recurringViaWeb: number;
+
   @ApiProperty({ description: 'Total commandes du jour' })
   total: number;
 }
@@ -138,8 +144,11 @@ export class ChannelStats {
 }
 
 export class OrdersByChannelResponse {
-  @ApiProperty({ type: ChannelStats, description: 'Canal App mobile (auto=true)' })
+  @ApiProperty({ type: ChannelStats, description: 'Canal App mobile (auto=true, hors site web)' })
   app: ChannelStats;
+
+  @ApiProperty({ type: ChannelStats, description: 'Canal site web (channel=WEB)' })
+  web: ChannelStats;
 
   @ApiProperty({ type: ChannelStats, description: 'Canal Call Center (auto=false)' })
   callCenter: ChannelStats;
@@ -308,7 +317,7 @@ export class OrdersByRestaurantAndTypeResponse {
   items: RestaurantTypeItem[];
 }
 
-// ─── Par Restaurant et Source (App / Call Center) ──────────────────────────────
+// ─── Par Restaurant et Source (App / Site web / Call Center) ───────────────────
 
 export class RestaurantSourceItem {
   @ApiProperty()
@@ -317,8 +326,11 @@ export class RestaurantSourceItem {
   @ApiProperty()
   restaurantName: string;
 
-  @ApiProperty({ description: 'Commandes via App (auto=true)' })
+  @ApiProperty({ description: 'Commandes via App (auto=true, hors site web)' })
   app: number;
+
+  @ApiProperty({ description: 'Commandes via le site web (channel=WEB)' })
+  web: number;
 
   @ApiProperty({ description: 'Commandes via Call Center (auto=false)' })
   callCenter: number;

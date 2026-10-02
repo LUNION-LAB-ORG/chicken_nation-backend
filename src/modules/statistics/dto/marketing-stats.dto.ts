@@ -151,7 +151,7 @@ export class ChurnExportItem {
   @ApiProperty({ description: 'CA total dépensé' })
   totalSpent: number;
 
-  @ApiProperty({ description: 'Canal préféré' })
+  @ApiProperty({ description: 'Canal préféré', enum: ['APP', 'WEB', 'CALL_CENTER', 'MIXED'] })
   preferredChannel: string;
 }
 

@@ -83,3 +83,41 @@ export function normaliserTelephoneCI(raw: string): string | null {
 
   return `+${digits}`;
 }
+
+/**
+ * Numéro CLIENT de la connexion par code (demande ET vérification) : forme
+ * canonique `+<indicatif><numéro>`, ou `null` si le numéro est inexploitable.
+ *
+ * C'est la seule clé du numéro : verrou des essais de code, plafonds d'envoi
+ * et recherche du code portent tous sur elle. Un verrou indexé sur la saisie
+ * brute se contournait en changeant de graphie (`+225 07…`, `22507…`,
+ * `+22507-…` avaient chacune leurs 5 essais sur le même code).
+ *
+ *  - Indicatif explicite (`+` ou `00`, ce qu'envoient l'application et le
+ *    site) : gardé tel quel, jamais relu comme un numéro local. `+2389912345`
+ *    (Cap-Vert) ne devient pas `+2252389912345`. Après `+225`, il faut un
+ *    numéro ivoirien à 10 chiffres ; un autre indicatif est admis de 8 à 15
+ *    chiffres en tout.
+ *  - Sans indicatif : règles de `normaliserTelephoneCI` (Côte d'Ivoire par défaut).
+ *  - Lettres ou autres signes que espace, point, tiret et parenthèses : refusés.
+ */
+export function normaliserTelephoneClient(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const saisie = raw.trim();
+  if (!/^\+?[\d\s.\-()]+$/.test(saisie)) return null;
+
+  const chiffres = saisie.replace(/\D/g, '');
+  const international = saisie.startsWith('+')
+    ? chiffres
+    : saisie.startsWith('00')
+      ? chiffres.slice(2)
+      : null;
+  if (international === null) return normaliserTelephoneCI(saisie);
+
+  // Aucun indicatif pays ne commence par 0.
+  if (!/^[1-9]\d{7,14}$/.test(international)) return null;
+  if (international.startsWith(INDICATIF_CI)) {
+    return estNumeroLocalCI(international.slice(INDICATIF_CI.length)) ? `+${international}` : null;
+  }
+  return `+${international}`;
+}

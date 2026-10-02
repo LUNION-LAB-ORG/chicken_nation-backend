@@ -7,6 +7,10 @@ import type { JsonWebTokenService } from 'src/json-web-token/json-web-token.serv
 import type { OtpService } from 'src/modules/auth/otp/otp.service';
 import type { TwilioService } from 'src/twilio/services/twilio.service';
 
+import { CLE_ENVOIS_NOUVEAUX, cleEnvoisNumero } from 'src/modules/auth/helpers/envois-otp.helper';
+import { EnvoisOtpService } from 'src/modules/auth/otp/envois-otp.service';
+import { creerRedisSimule } from 'src/modules/auth/otp/redis-envois-simule-spec';
+
 import { AuthDelivererService } from './auth-deliverer.service';
 import { creerTableTentativesSimulee } from './table-tentatives-simulee-spec';
 import { TentativesLivreurService } from './tentatives-livreur.service';
@@ -50,6 +54,7 @@ async function erreurDe(appel: Promise<unknown>): Promise<HttpException> {
 describe('AuthDelivererService (verrous et délais)', () => {
   let service: AuthDelivererService;
   let simulee: ReturnType<typeof creerTableTentativesSimulee>;
+  let redis: ReturnType<typeof creerRedisSimule>;
   let prisma: {
     otpVerificationAttempt: ReturnType<typeof creerTableTentativesSimulee>['table'];
     deliverer: { findUnique: jest.Mock; findFirst: jest.Mock; update: jest.Mock };
@@ -62,6 +67,7 @@ describe('AuthDelivererService (verrous et délais)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     simulee = creerTableTentativesSimulee();
+    redis = creerRedisSimule();
     prisma = {
       otpVerificationAttempt: simulee.table,
       deliverer: {
@@ -95,6 +101,7 @@ describe('AuthDelivererService (verrous et délais)', () => {
       twilio as unknown as TwilioService,
       { emit: jest.fn() } as unknown as EventEmitter2,
       new TentativesLivreurService(prismaService),
+      new EnvoisOtpService(redis.client),
     );
   });
 
@@ -265,6 +272,16 @@ describe('AuthDelivererService (verrous et délais)', () => {
       expect(prisma.otpToken.findFirst).not.toHaveBeenCalled();
     });
 
+    it('au 5e échec, retire les codes en cours du numéro (toutes graphies)', async () => {
+      for (let i = 1; i <= 4; i++) await erreurDe(verifierInscription(MAUVAIS_CODE));
+      expect(prisma.otpToken.deleteMany).not.toHaveBeenCalled();
+
+      await erreurDe(verifierInscription(MAUVAIS_CODE));
+      expect(prisma.otpToken.deleteMany).toHaveBeenCalledWith({
+        where: { phone: { in: [TELEPHONE, TELEPHONE.slice(1)] } },
+      });
+    });
+
     it('partage un seul compteur entre inscription et réinitialisation, clé = téléphone nu', async () => {
       for (let i = 0; i < 3; i++) await erreurDe(verifierInscription(MAUVAIS_CODE));
       for (let i = 0; i < 2; i++) await erreurDe(verifierReinitialisation(MAUVAIS_CODE));
@@ -343,6 +360,9 @@ describe('AuthDelivererService (verrous et délais)', () => {
       expect(refus.message).toBe("Un code vient d'être envoyé. Réessayez dans 1 seconde.");
       expect(otpService.generate).not.toHaveBeenCalled();
 
+      // Le délai Redis (60 s), posé par la demande refusée en base, court encore.
+      expect((await erreurDe(service.forgotPassword({ phone: TELEPHONE }))).getStatus()).toBe(429);
+      redis.avancer(60_000);
       await expect(service.forgotPassword({ phone: TELEPHONE })).resolves.toEqual({
         phone: TELEPHONE,
         message: 'Code OTP envoyé',
@@ -357,6 +377,48 @@ describe('AuthDelivererService (verrous et délais)', () => {
       expect(prisma.otpToken.deleteMany).toHaveBeenCalledWith({
         where: { phone: TELEPHONE, code: '4321' },
       });
+
+      // Le délai Redis est levé aussi : la relance de l'appli passe.
+      await expect(service.registerPhone({ phone: TELEPHONE })).resolves.toMatchObject({
+        message: 'Code OTP envoyé',
+      });
+    });
+
+    it('délai Redis : une rafale de demandes au même numéro ne génère qu’un code', async () => {
+      const resultats = await Promise.allSettled(
+        Array.from({ length: 10 }, () => service.registerPhone({ phone: TELEPHONE })),
+      );
+      expect(resultats.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      expect(otpService.generate).toHaveBeenCalledTimes(1);
+      expect(twilio.sendOtp).toHaveBeenCalledTimes(1);
+    });
+
+    it('plafonds communs avec les clients : inscription comptée parmi les numéros inconnus, pas la réinitialisation', async () => {
+      await service.registerPhone({ phone: TELEPHONE });
+      expect(redis.valeur(cleEnvoisNumero(TELEPHONE))).toBe('1');
+      expect(redis.valeur(CLE_ENVOIS_NOUVEAUX)).toBe('1');
+
+      redis.avancer(60_000);
+      prisma.deliverer.findFirst.mockResolvedValue({ ...LIVREUR });
+      await service.forgotPassword({ phone: TELEPHONE });
+      expect(redis.valeur(cleEnvoisNumero(TELEPHONE))).toBe('2');
+      expect(redis.valeur(CLE_ENVOIS_NOUVEAUX)).toBe('1');
+    });
+
+    it('plafond par numéro atteint : 429 sans générer ni envoyer', async () => {
+      prisma.deliverer.findFirst.mockResolvedValue({ ...LIVREUR });
+      for (let i = 0; i < 5; i++) {
+        await service.forgotPassword({ phone: TELEPHONE });
+        redis.avancer(60_000);
+      }
+      otpService.generate.mockClear();
+      twilio.sendOtp.mockClear();
+
+      const refus = await erreurDe(service.forgotPassword({ phone: TELEPHONE }));
+      expect(refus.getStatus()).toBe(429);
+      expect(refus.message).toBe('Trop de codes demandés pour ce numéro. Réessayez dans une heure.');
+      expect(otpService.generate).not.toHaveBeenCalled();
+      expect(twilio.sendOtp).not.toHaveBeenCalled();
     });
   });
 });

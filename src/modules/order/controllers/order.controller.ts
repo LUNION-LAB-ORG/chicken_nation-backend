@@ -423,6 +423,23 @@ export class OrderController {
     return this.orderService.obtenirFraisLivraison(params);
   }
 
+  /**
+   * GET /orders/livraison-disponible
+   *
+   * Publique, comme les frais : le site (et l'application) savent AVANT la
+   * saisie de l'adresse que la livraison est coupée, et proposent « À
+   * emporter ». Répond `{ disponible, message }` ; `message` n'est rempli
+   * que pendant une coupure.
+   * Doit rester AVANT `@Get(':id')`, sinon Nest prend « livraison-disponible »
+   * pour un identifiant de commande (test : order-routes-publiques.spec.ts).
+   */
+  @Get('/livraison-disponible')
+  @ApiOperation({ summary: 'La livraison est-elle ouverte aux commandes des clients ?' })
+  @ApiResponse({ status: 200, description: '{ disponible: boolean, message: string | null }' })
+  async obtenirDisponibiliteLivraison() {
+    return this.orderService.obtenirDisponibiliteLivraison();
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.READ)

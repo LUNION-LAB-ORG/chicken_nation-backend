@@ -98,3 +98,64 @@ export function etatApresEncaissement(
   const soldee = totalEncaisse >= montantCommande - PAYMENT_AMOUNT_TOLERANCE;
   return { soldee, aTerminer: soldee && statut === OrderStatus.COLLECTED };
 }
+
+/** Ce qu'il faut savoir d'un paiement réussi pour repérer un paiement reçu deux fois. */
+export interface PaiementReussi {
+  id: string;
+  reference: string | null;
+  amount: number | null;
+  created_at: Date | null;
+}
+
+/**
+ * PAIEMENT REÇU DEUX FOIS (revue du 02/10) : ce que la commande avait déjà
+ * encaissé AVANT ce paiement.
+ *
+ * Seuls comptent les paiements réussis enregistrés avant lui, d'une autre
+ * transaction. L'ordre d'enregistrement rend la réponse stable : rejoué,
+ * le second paiement reste « en double » et le premier ne le devient jamais,
+ * même une fois le second enregistré. Sans lui, chacun des deux se
+ * verrait couvert par l'autre, et l'équipe rembourserait les deux. Deux
+ * transactions enregistrées à la même milliseconde sont départagées par leur
+ * identifiant : l'une des deux, et une seule, est signalée.
+ *
+ * Une même transaction enregistrée deux fois (webhook et confirmation de
+ * l'application au même instant) ne compte pas : c'est le même argent.
+ *
+ * Montant sans la commission KKiaPay (`amount`, pas `total`) : c'est ce que
+ * le client a réglé pour la commande. Plus prudent que le cumul qui marque la
+ * commande payée (`total`, commission comprise) : un paiement qui complète
+ * vraiment un acompte ne doit jamais être annoncé « à rembourser ».
+ */
+export function encaisseAvant(
+  paiements: PaiementReussi[],
+  courant: { id: string; reference: string | null; created_at: Date | null },
+): number {
+  const instant = (date: Date | null) => (date ? new Date(date).getTime() : Number.NaN);
+  const enregistreLe = instant(courant.created_at);
+  // NaN (date absente) n'est jamais « avant » ni « au même instant » : dans
+  // le doute, rien.
+  const avant = (p: PaiementReussi) => {
+    const le = instant(p.created_at);
+    return le < enregistreLe || (le === enregistreLe && p.id < courant.id);
+  };
+  return paiements
+    .filter((p) => p.id !== courant.id && p.reference !== courant.reference && avant(p))
+    .reduce((somme, p) => somme + (p.amount ?? 0), 0);
+}
+
+/**
+ * Le paiement arrive-t-il sur une commande déjà réglée ?
+ *
+ * Oui quand les paiements précédents couvraient déjà son montant, à la
+ * tolérance près (même règle que `etatApresEncaissement`). Un paiement qui
+ * complète un encaissement partiel n'est pas en double, même s'il dépasse le
+ * reste dû.
+ */
+export function estPaiementEnDouble(
+  montantCommande: number | null | undefined,
+  dejaEncaisse: number,
+): boolean {
+  if (montantCommande == null || dejaEncaisse <= 0) return false;
+  return dejaEncaisse >= montantCommande - PAYMENT_AMOUNT_TOLERANCE;
+}

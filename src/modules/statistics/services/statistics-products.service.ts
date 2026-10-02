@@ -12,6 +12,11 @@ import {
   buildDateFilter,
 } from '../helpers/statistics.helper';
 import {
+  canalDeCommande,
+  CLE_CANAL,
+  compteParCanalVide,
+} from '../helpers/canal-commande.helper';
+import {
   ProductsStatsQueryDto,
   ProductsComparisonQueryDto,
   TopProductItem,
@@ -123,26 +128,27 @@ export class StatisticsProductsService {
       where: { dish_id: { in: dishIds }, order: baseOrderWhere },
     });
 
-    // Répartition par source (App / Call Center / HubRise) pour les top plats
+    // Répartition par source (App / Site web / Call Center / HubRise) pour les top plats
     const sourceItems = await this.prisma.orderItem.findMany({
       where: { dish_id: { in: dishIds }, order: baseOrderWhere },
       select: {
         dish_id: true,
         quantity: true,
-        order: { select: { auto: true, hubrise_order_id: true } },
+        order: { select: { auto: true, channel: true, hubrise_order_id: true } },
       },
     });
 
-    // Agréger par dish_id → { app, callCenter, hubrise }
-    const sourceMap = new Map<string, { app: number; callCenter: number; hubrise: number }>();
+    // Agréger par dish_id → { app, web, callCenter, hubrise }
+    const sourceMap = new Map<
+      string,
+      { app: number; web: number; callCenter: number; hubrise: number }
+    >();
     for (const si of sourceItems) {
-      const existing = sourceMap.get(si.dish_id) ?? { app: 0, callCenter: 0, hubrise: 0 };
+      const existing = sourceMap.get(si.dish_id) ?? { ...compteParCanalVide(), hubrise: 0 };
       if (si.order.hubrise_order_id) {
         existing.hubrise += si.quantity;
-      } else if (si.order.auto) {
-        existing.app += si.quantity;
       } else {
-        existing.callCenter += si.quantity;
+        existing[CLE_CANAL[canalDeCommande(si.order)]] += si.quantity;
       }
       sourceMap.set(si.dish_id, existing);
     }
@@ -194,7 +200,8 @@ export class StatisticsProductsService {
           percentage,
           previousPeriodSold,
           evolution: calculateTrend(totalSold, previousPeriodSold),
-          sourceBreakdown: sourceMap.get(item.dish_id) ?? { app: 0, callCenter: 0, hubrise: 0 },
+          sourceBreakdown:
+            sourceMap.get(item.dish_id) ?? { app: 0, web: 0, callCenter: 0, hubrise: 0 },
         } as TopProductItem;
       })
       .filter((i): i is TopProductItem => i !== null);
@@ -615,7 +622,8 @@ export class StatisticsProductsService {
   }
 
   /**
-   * Répartition des ventes par canal : App (auto=true) vs Call Center (auto=false).
+   * Répartition des ventes par canal : App, Site web et Call Center.
+   * Site web = channel WEB ; le reste suit `auto` (cf. canalDeCommande).
    */
   async getChannelBreakdown(query: ProductsStatsQueryDto): Promise<ChannelBreakdownResponse> {
     const dateRange = parseDateRange(query);
@@ -634,31 +642,37 @@ export class StatisticsProductsService {
       return up * i.quantity;
     };
 
-    // App (auto = true)
-    const appItems = await this.prisma.orderItem.findMany({
-      where: { order: { ...baseWhere, auto: true } },
-      select: { quantity: true, dish: { select: dishSelect } },
+    // Une seule lecture : chaque ligne va dans le canal de sa commande
+    const items = await this.prisma.orderItem.findMany({
+      where: { order: baseWhere },
+      select: {
+        quantity: true,
+        dish: { select: dishSelect },
+        order: { select: { auto: true, channel: true } },
+      },
     });
 
-    // Call Center (auto = false)
-    const ccItems = await this.prisma.orderItem.findMany({
-      where: { order: { ...baseWhere, auto: false } },
-      select: { quantity: true, dish: { select: dishSelect } },
-    });
-
-    const appSold = appItems.reduce((acc, i) => acc + i.quantity, 0);
-    const appRevenue = appItems.reduce((acc, i) => acc + calcRevenue(i), 0);
-    const callCenterSold = ccItems.reduce((acc, i) => acc + i.quantity, 0);
-    const callCenterRevenue = ccItems.reduce((acc, i) => acc + calcRevenue(i), 0);
-    const totalSold = appSold + callCenterSold;
+    const vendus = compteParCanalVide();
+    const chiffre = compteParCanalVide();
+    for (const i of items) {
+      const cle = CLE_CANAL[canalDeCommande(i.order)];
+      vendus[cle] += i.quantity;
+      chiffre[cle] += calcRevenue(i);
+    }
+    const totalSold = vendus.app + vendus.web + vendus.callCenter;
+    const part = (n: number) =>
+      totalSold > 0 ? parseFloat(((n / totalSold) * 100).toFixed(1)) : 0;
 
     return {
-      appSold,
-      appRevenue: Math.round(appRevenue),
-      callCenterSold,
-      callCenterRevenue: Math.round(callCenterRevenue),
-      appPercentage: totalSold > 0 ? parseFloat(((appSold / totalSold) * 100).toFixed(1)) : 0,
-      callCenterPercentage: totalSold > 0 ? parseFloat(((callCenterSold / totalSold) * 100).toFixed(1)) : 0,
+      appSold: vendus.app,
+      appRevenue: Math.round(chiffre.app),
+      webSold: vendus.web,
+      webRevenue: Math.round(chiffre.web),
+      callCenterSold: vendus.callCenter,
+      callCenterRevenue: Math.round(chiffre.callCenter),
+      appPercentage: part(vendus.app),
+      webPercentage: part(vendus.web),
+      callCenterPercentage: part(vendus.callCenter),
       totalSold,
     };
   }
