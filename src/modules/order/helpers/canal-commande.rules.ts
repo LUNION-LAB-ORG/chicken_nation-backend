@@ -41,7 +41,9 @@ export function libelleSource(commande: {
   channel?: OrderChannel | string | null;
   auto?: boolean | null;
 }): string {
-  if (commande.channel === OrderChannel.WEB) return 'Site web';
+  // Commande du site reprise au téléphone (`auto` faux) : « Manuel », comme
+  // toute commande passée par le personnel (choix de l'équipe du 03/10).
+  if (commande.channel === OrderChannel.WEB && commande.auto !== false) return 'Site web';
   if (commande.channel === OrderChannel.RESTAURANT) return 'Manuel';
   return commande.auto ? 'Appli' : 'Manuel';
 }

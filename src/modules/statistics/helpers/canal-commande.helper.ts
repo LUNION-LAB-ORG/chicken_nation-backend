@@ -41,7 +41,9 @@ export const CLE_CANAL: Record<CanalStats, keyof CompteParCanal> = {
 };
 
 export function canalDeCommande(commande: CommandeCanal): CanalStats {
-  if (commande.channel === OrderChannel.WEB) return 'WEB';
+  // Reprise au téléphone (`auto` faux) : comptée avec le centre d'appels,
+  // comme l'écran et l'export l'affichent « Manuel ».
+  if (commande.channel === OrderChannel.WEB && commande.auto !== false) return 'WEB';
   return commande.auto === true ? 'APP' : 'CALL_CENTER';
 }
 

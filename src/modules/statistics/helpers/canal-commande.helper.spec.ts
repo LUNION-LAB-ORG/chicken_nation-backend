@@ -16,6 +16,10 @@ describe('canalDeCommande', () => {
     expect(canalDeCommande({ auto: true, channel: OrderChannel.WEB })).toBe('WEB');
   });
 
+  it('commande du site reprise au téléphone (auto faux) : centre d\'appels, comme l\'écran (« Manuel »)', () => {
+    expect(canalDeCommande({ auto: false, channel: OrderChannel.WEB })).toBe('CALL_CENTER');
+  });
+
   it('garde la règle auto pour les commandes antérieures (channel vide)', () => {
     expect(canalDeCommande({ auto: true, channel: null })).toBe('APP');
     expect(canalDeCommande({ auto: false, channel: null })).toBe('CALL_CENTER');
