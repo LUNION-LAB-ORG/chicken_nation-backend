@@ -255,10 +255,13 @@ export class OrderListenerService {
             // ⭐ RÉVOCATION — on retire les points GAGNÉS pour cette commande annulée.
             // No-op si aucun point gagné (commande non payée / non-app). Idempotent.
             // Non bloquant : on trace l'échec sans casser le flux d'annulation.
+            // Le libellé est affiché tel quel dans l'historique du client : deux
+            // points, pas de tiret cadratin (02/10). Les lignes déjà en base
+            // gardent l'ancien texte : aucun code ne lit ni ne filtre ce libellé.
             void this.loyaltyService
                 .revokeEarnedPointsForOrder(
                     payload.order.id,
-                    `Commande #${payload.order.reference} annulée — points retirés`,
+                    `Commande #${payload.order.reference} annulée : points retirés`,
                 )
                 .catch((error) =>
                     this.logger.error(

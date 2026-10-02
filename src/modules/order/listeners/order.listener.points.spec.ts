@@ -60,6 +60,18 @@ describe('OrderListenerService : points utilisés à l’annulation', () => {
     expect(loyaltyService.redeemPoints).not.toHaveBeenCalled();
   });
 
+  it('le libellé de révocation, affiché tel quel au client, n’a pas de tiret cadratin', async () => {
+    const { ecouteur, loyaltyService } = monter();
+
+    await ecouteur.orderStatusUpdatedEventListener({ order: commande() });
+
+    expect(loyaltyService.revokeEarnedPointsForOrder).toHaveBeenCalledWith(
+      COMMANDE,
+      'Commande #ORD-1 annulée : points retirés',
+    );
+    expect(loyaltyService.revokeEarnedPointsForOrder.mock.calls[0][1]).not.toContain('—');
+  });
+
   it('un échec de la restitution est tracé sans casser l’annulation', async () => {
     const { ecouteur, loyaltyService, logger } = monter();
     loyaltyService.rendrePointsUtilises.mockRejectedValueOnce(new Error('base injoignable'));
