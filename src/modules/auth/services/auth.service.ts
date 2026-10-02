@@ -31,6 +31,18 @@ import {
   pourJournal,
 } from 'src/modules/auth/helpers/connexion-echecs.helper';
 import { FileParCle, avantDelai } from 'src/modules/auth/helpers/file-par-cle.helper';
+import {
+  apresEnvoi,
+  CLE_ENVOIS_GLOBAL,
+  cleEnvoisNumero,
+  CompteurEnvois,
+  lireCompteur,
+  MAX_ENVOIS_PAR_NUMERO,
+  MESSAGE_TROP_DE_CODES_GLOBAL,
+  MESSAGE_TROP_DE_CODES_NUMERO,
+  plafondAtteint,
+  plafondGlobal,
+} from '../helpers/envois-otp.helper';
 
 // Haché bcrypt (coût 10, celui de genSalt) d'une chaîne aléatoire jetée :
 // comparé quand l'email est inconnu, pour que la réponse prenne le même temps
@@ -217,6 +229,11 @@ export class AuthService {
     // toutes les variantes, on écrit toujours le format canonique `+…`.
     const canonical = canonicalizeCustomerPhone(phone);
     const variants = customerPhoneVariants(phone);
+
+    // Plafonds d'envoi (numéro puis total) AVANT toute écriture : un appel
+    // refusé ne crée pas de compte et ne coûte pas de message.
+    await this.verifierPlafondsEnvoiOtp(canonical);
+
     let customer = await this.prisma.customer.findFirst({
       where: {
         phone: { in: variants },
@@ -258,6 +275,8 @@ export class AuthService {
 
     const otp = await this.otpService.generate(customer.phone);
 
+    // Compté avant l'envoi : le coût Twilio est engagé même si l'envoi échoue.
+    await this.compterEnvoiOtp(customer.phone);
     const isSent = await this.twilioService.sendOtp({ phoneNumber: customer.phone, otp });
     if (!isSent) {
       // this.logger.error(`Échec de l'envoi de l'OTP au numéro ${customer.phone}`);
@@ -278,6 +297,41 @@ export class AuthService {
      * que pour l'afficher dans sa console.
      */
     return { phone: customer.phone, message: 'Code envoyé par SMS' };
+  }
+
+  // ── Plafonds d'envoi des codes (cf. envois-otp.helper) ───────────────────
+  // Best-effort : une panne du cache ne doit pas empêcher les clients de se
+  // connecter ; le délai de 30 s par numéro (en base) reste alors en place.
+
+  private async lireCompteurEnvois(cle: string): Promise<CompteurEnvois | null> {
+    try {
+      return lireCompteur(await avantDelai(this.cache.get(cle), DELAI_CACHE_CONNEXION_MS), Date.now());
+    } catch (error) {
+      this.logger.error(`Lecture du compteur d'envois de codes impossible : ${String(error)}`);
+      return null;
+    }
+  }
+
+  private async verifierPlafondsEnvoiOtp(telephone: string): Promise<void> {
+    if (plafondAtteint(await this.lireCompteurEnvois(cleEnvoisNumero(telephone)), MAX_ENVOIS_PAR_NUMERO)) {
+      throw new HttpException(MESSAGE_TROP_DE_CODES_NUMERO, HttpStatus.TOO_MANY_REQUESTS);
+    }
+    const max = plafondGlobal(process.env.OTP_ENVOIS_MAX_PAR_HEURE);
+    if (plafondAtteint(await this.lireCompteurEnvois(CLE_ENVOIS_GLOBAL), max)) {
+      this.logger.error(`Plafond global d'envoi de codes atteint (${max} par heure) : envois suspendus.`);
+      throw new HttpException(MESSAGE_TROP_DE_CODES_GLOBAL, HttpStatus.TOO_MANY_REQUESTS);
+    }
+  }
+
+  private async compterEnvoiOtp(telephone: string): Promise<void> {
+    for (const cle of [cleEnvoisNumero(telephone), CLE_ENVOIS_GLOBAL]) {
+      try {
+        const suivant = apresEnvoi(await this.lireCompteurEnvois(cle), Date.now());
+        await avantDelai(this.cache.set(cle, suivant.compteur, suivant.ttlMs), DELAI_CACHE_CONNEXION_MS);
+      } catch (error) {
+        this.logger.error(`Écriture du compteur d'envois de codes impossible : ${String(error)}`);
+      }
+    }
   }
 
   // VERIFY OTP

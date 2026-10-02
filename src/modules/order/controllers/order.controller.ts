@@ -25,7 +25,7 @@ import {
   ApiResponse,
   ApiTags
 } from '@nestjs/swagger';
-import { Customer, OrderStatus, User, UserRole, UserType } from '@prisma/client';
+import { Customer, OrderChannel, OrderStatus, User, UserRole, UserType } from '@prisma/client';
 import type { Request, Response } from 'express';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Action } from 'src/modules/auth/enums/action.enum';
@@ -129,7 +129,18 @@ export class OrderController {
   @ApiBody({ type: OrderCreateDto })
   async createorderv2(@Req() req: Request, @Body() createOrderDto: OrderCreateDto) {
     const customer_id = (req.user as Customer).id;
-    const order = await this.orderService.createv2(customer_id, createOrderDto);
+    // Le site s'annonce par cet en-tête (cf. OrderService.createv2).
+    const canal =
+      String(req.headers['x-canal-commande'] ?? '').toLowerCase() === 'web'
+        ? OrderChannel.WEB
+        : OrderChannel.APP;
+    const order = await this.orderService.createv2(
+      customer_id,
+      // Le service de livraison est une décision du serveur ou du personnel,
+      // jamais du client (même logique que delivery_fee sur POST /orders).
+      { ...createOrderDto, delivery_service: undefined },
+      canal,
+    );
     return this.attachPaymentConfig(order);
   }
 

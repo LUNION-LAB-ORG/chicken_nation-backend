@@ -17,6 +17,7 @@ import { permissionsByRole } from '../constantes/permissionsByRole';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { JwtRefreshAuthGuard } from '../guards/jwt-refresh-auth.guard';
 import { ConnexionThrottlerGuard } from '../guards/connexion-throttler.guard';
+import { CodeClientThrottlerGuard } from '../guards/code-client-throttler.guard';
 import { origineConnexion } from '../helpers/connexion-echecs.helper';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 
@@ -54,6 +55,8 @@ export class AuthController {
   })
   @ApiNotFoundResponse({ description: 'Client non trouvé' })
   @ApiBody({ type: String })
+  @UseGuards(CodeClientThrottlerGuard)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post('customer/login')
   async loginCustomer(@Body() { phone }: { phone: string }) {
     return this.authService.loginCustomer(phone);

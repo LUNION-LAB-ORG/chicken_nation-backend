@@ -47,7 +47,7 @@ import { OrderV2Helper } from '../helpers/orderv2.helper';
 import { DeliveryFeeHelper } from '../helpers/delivery-fee.helper';
 import { DeliveryOfferService } from 'src/modules/delivery-offer/services/delivery-offer.service';
 import { MapsService } from 'src/modules/maps/maps.service';
-import { PromoCodeUsageStatus, RewardType, RewardStatus } from '@prisma/client';
+import { PromoCodeUsageStatus, RewardType, RewardStatus, OrderChannel } from '@prisma/client';
 import { OrderCreateDto, OrderItemDto } from '../dto/order-create.dto';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
@@ -141,11 +141,27 @@ export class OrderService {
     private readonly orderRelance: OrderRelanceService,
   ) { }
 
-  async createv2(customer_id: string, createOrderDto: OrderCreateDto): Promise<Order> {
+  /**
+   * `canal` : APP pour l'application, WEB pour le site. Il ne vient que d'un
+   * en-tête déclaratif ; il ne donne donc aucun droit, il en retire : sur le
+   * site, seul le paiement en ligne est accepté.
+   */
+  async createv2(
+    customer_id: string,
+    createOrderDto: OrderCreateDto,
+    canal: OrderChannel = OrderChannel.APP,
+  ): Promise<Order> {
     const {
       items, address, restaurant_id, type, code_promo, date, fullname, phone, email, payment_method, points,
       delivery_service: overrideDeliveryService,
     } = createOrderDto;
+
+    // Site web : paiement en ligne obligatoire. Une commande en espèces part au
+    // restaurant sans rien encaisser ; depuis un formulaire public, c'est la
+    // porte ouverte aux fausses commandes.
+    if (canal === OrderChannel.WEB && payment_method !== PaymentMethod.ONLINE) {
+      throw new BadRequestException('Sur le site, le paiement se fait en ligne.');
+    }
 
     // 🚫 Livraison désactivée pour l'app (réglage backoffice temporaire).
     // createv2 = chemin EXCLUSIF de l'app → ne bloque jamais le call center.
@@ -307,6 +323,7 @@ export class OrderService {
           ...(next_status === OrderStatus.ACCEPTED && { accepted_at: new Date() }),
           paied: false,
           auto: true,
+          channel: canal,
           order_items: {
             create: orderItems.map((item) => ({
               dish_id: item.dish_id,
@@ -769,6 +786,8 @@ export class OrderService {
               },
             },
           }),
+          // Saisie du personnel → centre d'appels ; sinon l'ancienne route client.
+          channel: user_id ? OrderChannel.CALL_CENTER : OrderChannel.APP,
           restaurant: {
             connect: {
               id: restaurant.id,
@@ -3115,7 +3134,7 @@ export class OrderService {
         contact: order.customer.phone || 'N/A',
         email: order.customer.email || 'N/A',
         restaurant: order.restaurant.name,
-        source: order.auto ? 'Appli' : 'Téléphone',
+        source: order.channel === OrderChannel.WEB ? 'Site web' : order.auto ? 'Appli' : 'Téléphone',
         payment_mode: paymentMethods.toLowerCase(),
       });
 
@@ -3490,7 +3509,7 @@ export class OrderService {
             order.delivery?.delivered_at ?? order.collected_at ?? order.completed_at;
           return d ? format(new Date(d), 'dd/MM/yyyy HH:mm', { locale: fr }) : '';
         })(),
-        source: order.auto ? 'Appli' : 'Téléphone',
+        source: order.channel === OrderChannel.WEB ? 'Site web' : order.auto ? 'Appli' : 'Téléphone',
         paid: order.paied ? 'Oui' : 'Non',
       });
 
