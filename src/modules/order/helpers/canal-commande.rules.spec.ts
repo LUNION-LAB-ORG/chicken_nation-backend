@@ -40,20 +40,20 @@ describe('libelleSource (exports Excel)', () => {
   it('site web et comptoir se lisent sur le canal, quel que soit auto', () => {
     expect(libelleSource({ channel: OrderChannel.WEB, auto: true })).toBe('Site web');
     expect(libelleSource({ channel: OrderChannel.WEB, auto: false })).toBe('Site web');
-    expect(libelleSource({ channel: OrderChannel.RESTAURANT, auto: false })).toBe('Restaurant');
-    expect(libelleSource({ channel: OrderChannel.RESTAURANT, auto: true })).toBe('Restaurant');
+    expect(libelleSource({ channel: OrderChannel.RESTAURANT, auto: false })).toBe('Manuel');
+    expect(libelleSource({ channel: OrderChannel.RESTAURANT, auto: true })).toBe('Manuel');
   });
 
   it("le reste garde l'ancienne lecture par auto", () => {
     expect(libelleSource({ channel: OrderChannel.APP, auto: true })).toBe('Appli');
     // Commande de l'application reprise au téléphone.
-    expect(libelleSource({ channel: OrderChannel.APP, auto: false })).toBe('Téléphone');
-    expect(libelleSource({ channel: OrderChannel.CALL_CENTER, auto: false })).toBe('Téléphone');
+    expect(libelleSource({ channel: OrderChannel.APP, auto: false })).toBe('Manuel');
+    expect(libelleSource({ channel: OrderChannel.CALL_CENTER, auto: false })).toBe('Manuel');
   });
 
   it('commandes antérieures au canal (channel vide) : lecture par auto', () => {
     expect(libelleSource({ channel: null, auto: true })).toBe('Appli');
-    expect(libelleSource({ channel: null, auto: false })).toBe('Téléphone');
-    expect(libelleSource({})).toBe('Téléphone');
+    expect(libelleSource({ channel: null, auto: false })).toBe('Manuel');
+    expect(libelleSource({})).toBe('Manuel');
   });
 });
