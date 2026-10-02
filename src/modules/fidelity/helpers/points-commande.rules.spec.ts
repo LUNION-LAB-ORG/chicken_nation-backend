@@ -7,7 +7,11 @@ import {
   calculerRemiseFidelite,
   plafondRemiseFidelite,
   pointsEngagesWhere,
+  pointsRetiresNets,
+  libelleRestitution,
+  libelleRendusExpires,
   DEBUT_POINTS_ENGAGES,
+  TYPES_POINTS_DEPENSABLES,
   ReglagesPoints,
 } from './points-commande.rules';
 
@@ -123,5 +127,48 @@ describe('pointsEngagesWhere', () => {
 
   it("les anciennes commandes jamais déduites ne baissent pas le solde utilisable (réconciliation à part)", () => {
     expect(DEBUT_POINTS_ENGAGES.toISOString()).toBe('2026-10-02T00:00:00.000Z');
+  });
+});
+
+describe('points rendus (REFUNDED)', () => {
+  const ligne = (type: LoyaltyPointType, points: number) => ({ type, points });
+
+  it('points encore retirés : retraits moins points rendus, jamais négatif', () => {
+    expect(pointsRetiresNets([])).toBe(0);
+    expect(pointsRetiresNets([ligne(LoyaltyPointType.REDEEMED, 150)])).toBe(150);
+    expect(
+      pointsRetiresNets([ligne(LoyaltyPointType.REDEEMED, 150), ligne(LoyaltyPointType.REFUNDED, 150)]),
+    ).toBe(0);
+    // Reprise puis nouveau retrait : de nouveau déduite.
+    expect(
+      pointsRetiresNets([
+        ligne(LoyaltyPointType.REDEEMED, 150),
+        ligne(LoyaltyPointType.REFUNDED, 150),
+        ligne(LoyaltyPointType.REDEEMED, 150),
+      ]),
+    ).toBe(150);
+    // Les gains, bonus et expirations de la commande n'entrent pas dans le calcul.
+    expect(
+      pointsRetiresNets([
+        ligne(LoyaltyPointType.EARNED, 60),
+        ligne(LoyaltyPointType.BONUS, 150),
+        ligne(LoyaltyPointType.EXPIRED, 60),
+      ]),
+    ).toBe(0);
+    expect(pointsRetiresNets([ligne(LoyaltyPointType.REFUNDED, 150)])).toBe(0);
+  });
+
+  it('dépensables et soumis à l’expiration comme les gains et les bonus', () => {
+    expect(TYPES_POINTS_DEPENSABLES).toEqual([
+      LoyaltyPointType.EARNED,
+      LoyaltyPointType.BONUS,
+      LoyaltyPointType.REFUNDED,
+    ]);
+  });
+
+  it('libellés tels que l’historique les affiche (la reprise SQL compare le premier à l’identique)', () => {
+    expect(libelleRestitution(150, 'ORD-261002-1')).toBe('150 points rendus : commande #ORD-261002-1 annulée');
+    expect(libelleRendusExpires(50, 'ORD-261002-1')).toBe('50 points rendus expirés : commande #ORD-261002-1');
+    expect(libelleRendusExpires(50, null)).toBe('50 points rendus expirés');
   });
 });

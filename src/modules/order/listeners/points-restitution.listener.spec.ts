@@ -51,7 +51,7 @@ describe('PointsRestitutionListener', () => {
     await outils.listener.apresCourseAnnulee({ course: { id: 'course-1' }, cancelled_by: 'system' } as never);
 
     expect(outils.solde()).toBe(400);
-    expect(outils.lignesDe(LoyaltyPointType.BONUS)).toHaveLength(1);
+    expect(outils.lignesDe(LoyaltyPointType.REFUNDED)).toHaveLength(1);
   });
 
   it('course d’une autre commande : rien', async () => {
@@ -86,7 +86,21 @@ describe('PointsRestitutionListener', () => {
     expect(await outils.listener.rattraperRestitutions(MAINTENANT)).toBe(0);
 
     expect(outils.solde()).toBe(400);
-    expect(outils.lignesDe(LoyaltyPointType.BONUS)).toHaveLength(1);
+    expect(outils.lignesDe(LoyaltyPointType.REFUNDED)).toHaveLength(1);
+  });
+
+  it('filet : une commande déjà remboursée n’est plus relue (sa ligne de retrait reste REDEEMED)', async () => {
+    const outils = await monter();
+    await outils.service.rendrePointsUtilises(COMMANDE);
+    const rendre = jest.spyOn(outils.service, 'rendrePointsUtilises');
+
+    expect(await outils.listener.rattraperRestitutions(MAINTENANT)).toBe(0);
+    await outils.listener.apresCourseAnnulee({ course: { id: 'course-1' }, cancelled_by: 'system' } as never);
+
+    // Elle ne prend plus de place dans le lot du filet.
+    expect(rendre).not.toHaveBeenCalled();
+    expect(outils.lignesDe(LoyaltyPointType.REDEEMED)).toHaveLength(1);
+    expect(outils.solde()).toBe(400);
   });
 
   it('filet : laisse au chemin normal les annulations de moins de 5 minutes', async () => {

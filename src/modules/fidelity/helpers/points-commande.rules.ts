@@ -125,17 +125,55 @@ export function pointsEngagesWhere(customer_id: string): Prisma.OrderWhereInput 
   };
 }
 
+/**
+ * Lignes qui créditent des points DÉPENSABLES : un retrait les consomme, et
+ * elles expirent. Les points rendus (REFUNDED) en font partie, même s'ils ne
+ * comptent ni pour le niveau ni pour `lifetime_points` : ce ne sont pas des
+ * gains, seulement des points que le client avait déjà et qu'on lui rend.
+ */
+export const TYPES_POINTS_DEPENSABLES: LoyaltyPointType[] = [
+  LoyaltyPointType.EARNED,
+  LoyaltyPointType.BONUS,
+  LoyaltyPointType.REFUNDED,
+];
+
+/**
+ * Points encore retirés au client pour UNE commande : ses retraits (REDEEMED)
+ * moins les points déjà rendus (REFUNDED). Depuis le 03/10, la ligne de
+ * retrait ne change plus quand la commande est annulée ; c'est ce solde qui
+ * dit si la commande a encore des points à rendre, ou si elle est déjà
+ * déduite. 0 : rien de retiré, ou tout a été rendu.
+ */
+export function pointsRetiresNets(lignes: { type: LoyaltyPointType; points: number }[]): number {
+  let net = 0;
+  for (const ligne of lignes) {
+    if (ligne.type === LoyaltyPointType.REDEEMED) net += ligne.points;
+    else if (ligne.type === LoyaltyPointType.REFUNDED) net -= ligne.points;
+  }
+  return Math.max(0, net);
+}
+
 /** Libellé du retrait, dans l'historique du client (inchangé depuis l'origine). */
 export function libelleRetrait(points: number, reference: string): string {
   return `🔥 ${points} points utilisés pour la commande #${reference}`;
 }
 
-/** Libellé de la ligne de retrait d'une commande annulée, une fois les points rendus. */
-export function libelleRetraitAnnule(points: number, reference: string): string {
-  return `${points} points utilisés pour la commande #${reference}, annulée`;
-}
-
-/** Libellé du crédit qui rend les points d'une commande annulée. */
+/**
+ * Libellé de la ligne REFUNDED qui rend les points d'une commande annulée.
+ * L'application l'affiche tel quel, en vert avec un « + » : elle ne connaît
+ * pas ce type et le traite comme un crédit. La phrase porte le nombre de
+ * points et la commande : elle se comprend seule, sans le badge à côté.
+ *
+ * Même texte que le crédit BONUS écrit du 02/10 au 03/10 : la migration
+ * 20261003090100_points_rendus_reprise le retrouve à l'identique.
+ */
 export function libelleRestitution(points: number, reference: string): string {
   return `${points} points rendus : commande #${reference} annulée`;
+}
+
+/** Libellé de la part expirée de points rendus jamais dépensés. */
+export function libelleRendusExpires(points: number, reference: string | null): string {
+  return reference
+    ? `${points} points rendus expirés : commande #${reference}`
+    : `${points} points rendus expirés`;
 }

@@ -223,6 +223,7 @@ enum LoyaltyPointType {
   REDEEMED // Points utilisés
   EXPIRED // Points expirés
   BONUS // Points bonus
+  REFUNDED // Points rendus : ceux d'une commande annulée, rattachés à la commande (ni gain, ni niveau)
 }
 
 enum LoyaltyPointIsUsed {

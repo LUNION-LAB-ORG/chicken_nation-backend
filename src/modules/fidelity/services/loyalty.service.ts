@@ -9,9 +9,11 @@ import { UpdateLoyaltyConfigDto } from '../dto/loyalty-config.dto';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import {
     libelleRestitution,
-    libelleRetraitAnnule,
     plafondRemiseFidelite,
     pointsEngagesWhere,
+    libelleRendusExpires,
+    pointsRetiresNets,
+    TYPES_POINTS_DEPENSABLES,
 } from '../helpers/points-commande.rules';
 
 /**
@@ -24,6 +26,16 @@ class RetraitInterrompu extends Error {
         readonly ligne: LoyaltyPoint | null = null,
     ) {
         super(motif);
+    }
+}
+
+/**
+ * Sortie anticipée de la transaction d'une restitution : le crédit du solde
+ * déjà écrit est annulé avec elle.
+ */
+class RestitutionInterrompue extends Error {
+    constructor() {
+        super('restitution_interrompue');
     }
 }
 
@@ -338,6 +350,32 @@ export class LoyaltyService {
         return agg._sum.points ?? 0;
     }
 
+    /**
+     * Où en est le retrait de points d'une commande : points encore retirés
+     * (retraits moins points rendus, voir `pointsRetiresNets`) et dernière
+     * ligne de retrait. Depuis le 03/10, la ligne REDEEMED d'une commande
+     * annulée reste telle quelle : seule la ligne REFUNDED dit que ses points
+     * ont été rendus. `client` : celui d'une transaction pour relire sous
+     * verrou.
+     */
+    private async lireRetrait(
+        client: Prisma.TransactionClient,
+        order_id: string,
+    ): Promise<{ net: number; retrait: LoyaltyPoint | null }> {
+        const lignes = await client.loyaltyPoint.findMany({
+            where: {
+                order_id,
+                type: { in: [LoyaltyPointType.REDEEMED, LoyaltyPointType.REFUNDED] },
+            },
+            orderBy: { created_at: 'asc' },
+        });
+        const retraits = lignes.filter((l) => l.type === LoyaltyPointType.REDEEMED);
+        return {
+            net: pointsRetiresNets(lignes),
+            retrait: retraits[retraits.length - 1] ?? null,
+        };
+    }
+
     // Utiliser des points
     async redeemPoints({ customer_id, points, reason, order_id }: Omit<AddLoyaltyPointDto, 'type'>) {
         const config = await this.getConfig();
@@ -345,11 +383,11 @@ export class LoyaltyService {
         // Idempotence : si cette commande a déjà consommé des points, on ne déduit
         // pas une seconde fois (ré-acceptation, événement rejoué, double backend…).
         // Le rachat reste ainsi lié à la commande et jamais dupliqué.
+        // Un retrait dont les points ont été rendus (REFUNDED) ne compte plus :
+        // la commande n'a alors plus rien de déduit.
         if (order_id) {
-            const existing = await this.prisma.loyaltyPoint.findFirst({
-                where: { order_id, type: LoyaltyPointType.REDEEMED },
-            });
-            if (existing) {
+            const { net, retrait: existing } = await this.lireRetrait(this.prisma, order_id);
+            if (net > 0 && existing) {
                 return {
                     redemption_record: existing,
                     used_points_details: [],
@@ -387,10 +425,8 @@ export class LoyaltyService {
             // concurrent était celui de cette même commande, c'est un doublon,
             // pas une erreur.
             if (order_id) {
-                const deja = await tx.loyaltyPoint.findFirst({
-                    where: { order_id, type: LoyaltyPointType.REDEEMED },
-                });
-                if (deja) throw new RetraitInterrompu('deja_deduit', deja);
+                const deja = await this.lireRetrait(tx, order_id);
+                if (deja.net > 0) throw new RetraitInterrompu('deja_deduit', deja.retrait);
                 // Une commande annulée ne coûte aucun point. Un événement en
                 // retard (paiement, clôture) ne doit pas reprendre des points
                 // que l'annulation vient de rendre, ou n'a pas eu à rendre.
@@ -455,12 +491,17 @@ export class LoyaltyService {
                 }
             }
 
-            // 2. Si les bonus ne suffisent pas, utiliser les points EARNED
+            // 2. Si les bonus ne suffisent pas, utiliser les points EARNED et
+            // les points RENDUS (REFUNDED), ensemble, les plus proches de
+            // l'expiration d'abord. Les points rendus sont des points que le
+            // client avait déjà : ils passent avec ses gains, pas avant eux
+            // comme un bonus. Sinon ses gains plus anciens, qui expirent plus
+            // tôt, resteraient de côté et finiraient perdus.
             if (remainingPointsToUse > 0) {
                 const earnedPoints = await tx.loyaltyPoint.findMany({
                     where: {
                         customer_id,
-                        type: LoyaltyPointType.EARNED,
+                        type: { in: [LoyaltyPointType.EARNED, LoyaltyPointType.REFUNDED] },
                         is_used: { in: [LoyaltyPointIsUsed.NO, LoyaltyPointIsUsed.PARTIAL] },
                         OR: [
                             { expires_at: null },
@@ -493,7 +534,7 @@ export class LoyaltyService {
 
                         usedPointsDetails.push({
                             point_id: earnedPoint.id,
-                            type: LoyaltyPointType.EARNED,
+                            type: earnedPoint.type,
                             points_used: pointsToUse,
                             points_remaining: earnedPoint.points - newPointsUsed
                         });
@@ -580,6 +621,10 @@ export class LoyaltyService {
      * EARNED passe en EXPIRED (retiré des points disponibles) avec le motif d'annulation.
      * Idempotent : une 2e passe ne trouve plus de EARNED actif pour la commande.
      * `lifetime_points` n'est PAS décrémenté (évite un déclassement de niveau).
+     *
+     * Ne reprend JAMAIS les points rendus (REFUNDED) : rattachés eux aussi à la
+     * commande annulée, ce sont les points que le client y avait dépensés, pas
+     * un gain. La liste des types ci-dessous ne doit pas s'élargir.
      */
     async revokeEarnedPointsForOrder(order_id: string, reason: string) {
         // On révoque les points GAGNÉS sur la commande ET le BONUS de palier
@@ -640,7 +685,8 @@ export class LoyaltyService {
     }
 
     /**
-     * Rend au client les points UTILISÉS sur une commande ANNULÉE (02/10).
+     * Rend au client les points UTILISÉS sur une commande ANNULÉE (02/10,
+     * forme revue le 03/10).
      *
      * Depuis que le retrait se fait au paiement, une commande payée puis
      * annulée (par le restaurant, le livreur, une course annulée) coûtait ses
@@ -648,84 +694,102 @@ export class LoyaltyService {
      * un panier non payé, n'a rien à rendre : aucune ligne de retrait.
      *
      * Écritures, dans une seule transaction :
-     *  - la ligne de retrait (REDEEMED) passe EXPIRED, avec un libellé qui dit
-     *    que la commande a été annulée. C'est la REVENDICATION : une seule
-     *    passe la trouve encore REDEEMED, un rejeu ne rend donc rien de plus.
-     *    Elle ne compte plus dans les points utilisés des statistiques, et la
-     *    commande, si elle était un jour reprise, serait déduite de nouveau ;
-     *  - un crédit BONUS du même nombre de points, dépensable comme les
-     *    autres, au libellé clair dans l'historique ;
+     *  - une ligne REFUNDED de +points, rattachée à la commande, au libellé
+     *    « N points rendus : commande #REF annulée ». Ces points se dépensent
+     *    et expirent comme les autres ;
      *  - le solde du client remonte d'autant. `lifetime_points` et
-     *    `status_points` ne bougent pas : ces points avaient déjà été comptés
-     *    quand ils ont été gagnés.
+     *    `status_points` ne bougent pas, et le niveau n'est pas recalculé : ces
+     *    points avaient déjà été comptés quand ils ont été gagnés, les rendre
+     *    n'est pas un nouveau gain.
      *
-     * Le crédit n'est volontairement PAS rattaché à la commande (`order_id`
-     * nul) : `revokeEarnedPointsForOrder` reprend les BONUS d'une commande
-     * annulée, et le reprendrait au prochain rejeu de l'annulation.
+     * La ligne de retrait (REDEEMED) ne change pas : l'historique montre la
+     * dépense, puis le remboursement. Du 02/10 au 03/10 elle passait EXPIRED et
+     * le crédit était un BONUS sans commande, si bien que la dépense
+     * apparaissait « expirée » et le remboursement « bonus ». La migration
+     * 20261003090100_points_rendus_reprise a remis ces lignes dans la forme
+     * actuelle.
      *
+     * Une seule fois : les points à rendre sont ceux retirés moins ceux déjà
+     * rendus (`pointsRetiresNets`), relus sous verrou. Une fois la ligne
+     * REFUNDED écrite il n'en reste plus, un rejeu ne rend rien.
+     *
+     * `revokeEarnedPointsForOrder` ne reprend jamais une ligne REFUNDED.
      * Ne touche qu'une commande au statut CANCELLED.
      */
     async rendrePointsUtilises(order_id: string): Promise<{ points_rendus: number }> {
-        const retrait = await this.prisma.loyaltyPoint.findFirst({
-            where: { order_id, type: LoyaltyPointType.REDEEMED },
-            include: { order: { select: { reference: true, status: true } } },
+        // Lecture hors transaction : la plupart des annulations (panier non
+        // payé, commande sans points) n'ont rien à rendre, inutile d'ouvrir
+        // une transaction pour elles.
+        const { net: points, retrait } = await this.lireRetrait(this.prisma, order_id);
+        if (points <= 0 || !retrait) return { points_rendus: 0 };
+        const commande = await this.prisma.order.findUnique({
+            where: { id: order_id },
+            select: { reference: true, status: true },
         });
-        if (!retrait || retrait.points <= 0) return { points_rendus: 0 };
-        if (retrait.order?.status !== OrderStatus.CANCELLED) return { points_rendus: 0 };
+        if (commande?.status !== OrderStatus.CANCELLED) return { points_rendus: 0 };
 
         const config = await this.getConfig();
-        const reference = retrait.order.reference;
-        const points = retrait.points;
+        const reference = commande.reference;
+        const customer_id = retrait.customer_id;
         const maintenant = new Date();
         const jours = config.points_expiration_days;
 
         const rendu = await this.prisma.$transaction(async (tx) => {
-            // Statut relu dans la revendication elle-même : une commande
-            // réactivée entre la lecture ci-dessus et cette écriture garde son
-            // retrait (sinon le client aurait ses points ET la remise).
-            const claim = await tx.loyaltyPoint.updateMany({
-                where: {
-                    id: retrait.id,
-                    type: LoyaltyPointType.REDEEMED,
-                    order: { status: OrderStatus.CANCELLED },
-                },
-                data: {
-                    type: LoyaltyPointType.EXPIRED,
-                    reason: libelleRetraitAnnule(points, reference),
-                    updated_at: maintenant,
-                },
+            // 1. Crédit du solde EN PREMIER, comme le débit de redeemPoints :
+            // l'écriture verrouille la fiche du client jusqu'à la fin de la
+            // transaction. Deux restitutions simultanées de la même commande
+            // (annulation, course annulée, filet, double serveur) passent
+            // l'une après l'autre, et la seconde relit ci-dessous la ligne
+            // REFUNDED de la première. Un retrait de cette commande, qui
+            // verrouille la même fiche, ne peut pas non plus se glisser entre
+            // la relecture et l'écriture.
+            await tx.customer.update({
+                where: { id: customer_id },
+                data: { total_points: { increment: points } },
             });
-            if (claim.count === 0) return false;
 
+            // 2. Relu sous verrou : toujours autant de points à rendre, et la
+            // commande toujours annulée. Une commande réactivée entre-temps
+            // garde son retrait (sinon le client aurait ses points ET la
+            // remise). Sinon tout est annulé, crédit compris.
+            const sousVerrou = await this.lireRetrait(tx, order_id);
+            const statut = await tx.order.findUnique({
+                where: { id: order_id },
+                select: { status: true },
+            });
+            if (sousVerrou.net !== points || statut?.status !== OrderStatus.CANCELLED) {
+                throw new RestitutionInterrompue();
+            }
+
+            // 3. La ligne des points rendus, rattachée à la commande.
             await tx.loyaltyPoint.create({
                 data: {
-                    customer_id: retrait.customer_id,
+                    customer_id,
+                    order_id,
                     points,
-                    type: LoyaltyPointType.BONUS,
+                    type: LoyaltyPointType.REFUNDED,
                     reason: libelleRestitution(points, reference),
-                    order_id: null,
                     expires_at: jours ? new Date(maintenant.getTime() + jours * 24 * 60 * 60 * 1000) : null,
                 },
             });
-            await tx.customer.update({
-                where: { id: retrait.customer_id },
-                data: { total_points: { increment: points } },
-            });
             return true;
+        }).catch((error) => {
+            if (error instanceof RestitutionInterrompue) return false;
+            throw error;
         });
         if (!rendu) return { points_rendus: 0 };
 
         // Rafraîchit le solde à l'écran : l'application relit ses points à cet
-        // événement, comme après un gain.
-        this.appGateway.emitToUser(retrait.customer_id, 'customer', 'loyalty:points_added', {
+        // événement, comme après un gain (elle ne lit pas le type).
+        this.appGateway.emitToUser(customer_id, 'customer', 'loyalty:points_added', {
             points,
-            type: LoyaltyPointType.BONUS,
+            type: LoyaltyPointType.REFUNDED,
             reason: libelleRestitution(points, reference),
         });
         this.appGateway.emitToBackoffice('loyalty:points_added', {
-            customerId: retrait.customer_id,
+            customerId: customer_id,
             points,
-            type: LoyaltyPointType.BONUS,
+            type: LoyaltyPointType.REFUNDED,
             reason: libelleRestitution(points, reference),
         });
 
@@ -1179,17 +1243,19 @@ export class LoyaltyService {
     async expirePoints() {
         const now = new Date();
 
-        // Récupérer tous les points qui ne sont pas totalement utilisés et qui sont expirés
+        // Récupérer tous les points qui ne sont pas totalement utilisés et qui sont expirés.
+        // Les points rendus (REFUNDED) expirent comme les gains et les bonus.
         const expiredPoints = await this.prisma.loyaltyPoint.findMany({
             where: {
                 type: {
-                    in: [LoyaltyPointType.EARNED, LoyaltyPointType.BONUS]
+                    in: TYPES_POINTS_DEPENSABLES
                 },
                 expires_at: { lt: now },
                 is_used: { in: [LoyaltyPointIsUsed.NO, LoyaltyPointIsUsed.PARTIAL] } // Seulement les points non totalement utilisés
             },
             include: {
-                customer: true
+                customer: true,
+                order: { select: { reference: true } },
             }
         });
 
@@ -1200,14 +1266,38 @@ export class LoyaltyService {
                 const remainingPoints = point.points - (point.points_used || 0);
 
                 if (remainingPoints > 0) {
-                    // Marquer le point comme expiré
-                    await tx.loyaltyPoint.update({
-                        where: { id: point.id },
-                        data: {
-                            type: LoyaltyPointType.EXPIRED,
-                            is_used: LoyaltyPointIsUsed.YES // Marquer comme totalement "utilisé" (expiré)
-                        }
-                    });
+                    if (point.type === LoyaltyPointType.REFUNDED) {
+                        // Une ligne de points rendus GARDE son type en expirant :
+                        // c'est elle qui dit que la commande a déjà été remboursée
+                        // (`pointsRetiresNets`). Passée EXPIRED, une annulation
+                        // rejouée plus tard rendrait ces points une seconde fois.
+                        // Elle est seulement close, et la part perdue s'inscrit sur
+                        // une ligne EXPIRED à part, visible dans l'historique.
+                        await tx.loyaltyPoint.update({
+                            where: { id: point.id },
+                            data: { is_used: LoyaltyPointIsUsed.YES },
+                        });
+                        await tx.loyaltyPoint.create({
+                            data: {
+                                customer_id: point.customer_id,
+                                order_id: point.order_id,
+                                points: remainingPoints,
+                                points_used: remainingPoints,
+                                is_used: LoyaltyPointIsUsed.YES,
+                                type: LoyaltyPointType.EXPIRED,
+                                reason: libelleRendusExpires(remainingPoints, point.order?.reference ?? null),
+                            },
+                        });
+                    } else {
+                        // Marquer le point comme expiré
+                        await tx.loyaltyPoint.update({
+                            where: { id: point.id },
+                            data: {
+                                type: LoyaltyPointType.EXPIRED,
+                                is_used: LoyaltyPointIsUsed.YES // Marquer comme totalement "utilisé" (expiré)
+                            }
+                        });
+                    }
 
                     // Décrémenter les points restants du client
                     await tx.customer.update({
@@ -1234,14 +1324,15 @@ export class LoyaltyService {
             where: {
                 customer_id,
                 is_used: { in: [LoyaltyPointIsUsed.NO, LoyaltyPointIsUsed.PARTIAL] },
-                type: { in: [LoyaltyPointType.EARNED, LoyaltyPointType.BONUS] },
+                // Points rendus compris : ils font partie du solde dépensable.
+                type: { in: TYPES_POINTS_DEPENSABLES },
                 OR: [
                     { expires_at: null },
                     { expires_at: { gt: new Date() } }
                 ]
             },
             orderBy: [
-                { type: 'desc' }, // BONUS avant EARNED
+                { type: 'desc' }, // Ordre de l'enum inversé : REFUNDED, BONUS, puis EARNED
                 { expires_at: 'asc' }, // Les plus proches de l'expiration d'abord
                 { created_at: 'asc' }
             ]
@@ -1266,7 +1357,8 @@ export class LoyaltyService {
      *   jamais décrémenté → fiable même après expiration ou rachat).
      * - points_available  : points encore EN CIRCULATION (somme des total_points) ;
      *   c'est l'engagement financier de l'entreprise envers ses clients.
-     * - points_redeemed   : points effectivement UTILISÉS sur des commandes (REDEEMED).
+     * - points_redeemed   : points effectivement UTILISÉS sur des commandes (REDEEMED),
+     *   moins ceux rendus après une annulation (REFUNDED).
      * - eligible_customers: clients atteignant le seuil minimum → peuvent utiliser
      *   leurs points dès maintenant.
      *
@@ -1276,7 +1368,7 @@ export class LoyaltyService {
     async getLoyaltyStats() {
         const config = await this.getConfig();
 
-        const [customerAgg, eligibleCustomers, customersWithPoints, redeemedAgg] =
+        const [customerAgg, eligibleCustomers, customersWithPoints, redeemedAgg, refundedAgg] =
             await Promise.all([
                 // Points distribués (lifetime) + en circulation (total) — clients actifs.
                 this.prisma.customer.aggregate({
@@ -1302,12 +1394,18 @@ export class LoyaltyService {
                     where: { type: LoyaltyPointType.REDEEMED },
                     _sum: { points: true },
                 }),
+                // Points rendus après annulation : la ligne de retrait reste
+                // REDEEMED, ces points ne sont pourtant plus utilisés.
+                this.prisma.loyaltyPoint.aggregate({
+                    where: { type: LoyaltyPointType.REFUNDED },
+                    _sum: { points: true },
+                }),
             ]);
 
         const pointValue = config.point_value_in_xof;
         const pointsDistributed = customerAgg._sum.lifetime_points ?? 0;
         const pointsAvailable = customerAgg._sum.total_points ?? 0;
-        const pointsRedeemed = redeemedAgg._sum.points ?? 0;
+        const pointsRedeemed = Math.max(0, (redeemedAgg._sum.points ?? 0) - (refundedAgg._sum.points ?? 0));
 
         return {
             points_distributed: pointsDistributed,

@@ -271,7 +271,9 @@ export class OrderListenerService {
             // sont rendus au client si la commande est annulée. Rien pour une
             // commande jamais déduite (panier non payé). Une seule fois, même si
             // l'annulation est rejouée. Le filet `PointsRestitutionListener`
-            // rattrape un échec ici.
+            // rattrape un échec ici. Les points rendus sont une ligne REFUNDED
+            // rattachée à la commande, que la révocation ci-dessus, lancée en
+            // même temps, ne reprend jamais (elle ne lit que EARNED et BONUS).
             void this.loyaltyService
                 .rendrePointsUtilises(payload.order.id)
                 .catch((error) =>

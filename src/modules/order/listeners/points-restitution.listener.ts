@@ -53,12 +53,16 @@ export class PointsRestitutionListener {
     const courseId = payload?.course?.id;
     if (!courseId) return;
     try {
-      // Lu depuis les lignes de retrait : seules les commandes déduites ont
-      // quelque chose à rendre.
+      // Lu depuis les lignes de retrait : seules les commandes déduites, et
+      // pas encore remboursées, ont quelque chose à rendre.
       const retraits = await this.prisma.loyaltyPoint.findMany({
         where: {
           type: LoyaltyPointType.REDEEMED,
-          order: { status: OrderStatus.CANCELLED, delivery: { course_id: courseId } },
+          order: {
+            status: OrderStatus.CANCELLED,
+            delivery: { course_id: courseId },
+            loyalty_points: { none: { type: LoyaltyPointType.REFUNDED } },
+          },
         },
         select: { order_id: true },
       });
@@ -87,12 +91,19 @@ export class PointsRestitutionListener {
     const jusqua = new Date(maintenant.getTime() - DELAI_AVANT_RATTRAPAGE_MS);
     if (jusqua.getTime() <= depuis.getTime()) return 0;
     try {
-      // Une ligne de retrait encore REDEEMED sur une commande annulée : ses
-      // points n'ont pas été rendus. Lu depuis les lignes de points, jamais
-      // un balayage des commandes.
+      // Une ligne de retrait sur une commande annulée qui n'a pas de ligne de
+      // points rendus : ses points n'ont pas été rendus. Depuis le 03/10, la
+      // ligne de retrait reste REDEEMED après la restitution ; sans ce
+      // filtre, les commandes déjà remboursées rempliraient le lot pendant
+      // 48 heures et cacheraient celles qui attendent encore. Lu depuis les
+      // lignes de points, jamais un balayage des commandes.
       const where: Prisma.LoyaltyPointWhereInput = {
         type: LoyaltyPointType.REDEEMED,
-        order: { status: OrderStatus.CANCELLED, cancelled_at: { gte: depuis, lte: jusqua } },
+        order: {
+          status: OrderStatus.CANCELLED,
+          cancelled_at: { gte: depuis, lte: jusqua },
+          loyalty_points: { none: { type: LoyaltyPointType.REFUNDED } },
+        },
       };
       const retraits = await this.prisma.loyaltyPoint.findMany({
         where,

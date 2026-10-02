@@ -71,6 +71,10 @@ function correspond(ligne: Ligne, where: Ligne = {}, tables?: Tables): boolean {
       if (valeur !== null && valeur !== undefined) return false;
     } else if (typeof condition === 'object' && !(condition instanceof Date)) {
       const c = condition as Ligne;
+      // Comme en SQL, une valeur nulle ne passe aucune comparaison (sinon
+      // `null < date` vaudrait vrai en JavaScript).
+      const compare = 'gte' in c || 'gt' in c || 'lt' in c || 'lte' in c;
+      if (compare && (valeur === null || valeur === undefined)) return false;
       if ('not' in c && valeur === c.not) return false;
       if ('gte' in c && !(valeur >= c.gte)) return false;
       if ('gt' in c && !(valeur > c.gt)) return false;
@@ -200,12 +204,20 @@ export function monterFidelite({
         }
         return copie;
       }),
-      findMany: jest.fn(async ({ where, select, take }: Ligne) => {
+      findMany: jest.fn(async ({ where, select, take, include }: Ligne) => {
         const lignes = tables.loyaltyPoint
           .filter((l) => correspond(l, where, tables))
           .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())
           .slice(0, take ?? undefined);
-        return lignes.map((l) => choisir(l, select));
+        return lignes.map((l) => {
+          const copie = choisir(l, select);
+          // Relation lue par l'expiration (référence de la commande).
+          if (include?.order) {
+            const o = tables.order.find((x) => x.id === l.order_id);
+            copie.order = o ? choisir(o, include.order.select) : null;
+          }
+          return copie;
+        });
       }),
       update: jest.fn(async ({ where, data }: Ligne) => {
         const ligne = tables.loyaltyPoint.find((l) => l.id === where.id);
