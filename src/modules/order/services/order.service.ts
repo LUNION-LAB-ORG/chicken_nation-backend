@@ -57,12 +57,13 @@ import { CLIENT_COMMANDE_SELECT } from '../constantes/client-commande.select';
 import { assertCanAccessRestaurant } from '../helpers/restaurant-scope.helper';
 import { PAYMENT_AMOUNT_TOLERANCE } from 'src/modules/paiements/helpers/encaissement.helper';
 import { sansIdentifiantsPush } from '../helpers/identifiants-push.helper';
-import { assietteDesRemises, formaterFrancs, masquerCode, normaliserCode } from '../helpers/coupon.helper';
+import { assietteDesRemises, formaterFrancs, LigneAssiette, masquerCode, normaliserCode } from '../helpers/coupon.helper';
 import {
   ConsommationCoupon,
   CouponResolu,
   OrderCouponService,
   ReconsommationCoupon,
+  RetraitCoupon,
 } from './order-coupon.service';
 import {
   ANNULEE_PAR_CLIENT,
@@ -96,6 +97,36 @@ function annotationReactivation(commande: Pick<Order, 'cancelled_at' | 'cancelle
     : '';
   const motif = commande.cancelled_reason?.trim() ? ` (motif : ${commande.cancelled_reason.trim()})` : '';
   return `Annulée par le client${le}${motif}, réactivée`;
+}
+
+/**
+ * Assiette des remises d'une commande à partir de ses lignes ENREGISTRÉES
+ * (modification sans renvoi des articles) : prix figé du plat et de ses options
+ * de menu composable, suppléments à la carte exclus. Même règle que
+ * `assietteDesRemises` sur des articles recalculés.
+ *
+ * `unit_price` n'existe que depuis le 06/08 : une ligne plus ancienne n'en a
+ * pas, et une assiette à zéro ferait refuser le coupon (« sans réduction »)
+ * sur un panier plein. Repli sur le prix du plat au catalogue (toujours inclus
+ * par `findById`). Une ligne offerte garde son 0 F : seul un prix absent se
+ * replie.
+ */
+function assietteDesLignes(
+  lignes: {
+    dish_id: string;
+    quantity: number;
+    unit_price?: number | null;
+    options?: unknown;
+    dish?: { price?: number | null } | null;
+  }[],
+): LigneAssiette[] {
+  return lignes.map((l) => {
+    // Choix retenus tels qu'enregistrés par `resoudreSelection` (`price_delta`).
+    const options = Array.isArray(l.options) ? (l.options as { price_delta?: number }[]) : [];
+    const optionsUnitaire = options.reduce((t, o) => t + (Number(o?.price_delta) || 0), 0);
+    const unitaire = Number(l.unit_price ?? l.dish?.price ?? 0) || 0;
+    return { dish_id: l.dish_id, quantity: l.quantity, price: unitaire + optionsUnitaire };
+  });
 }
 
 /**
@@ -2199,6 +2230,7 @@ export class OrderService {
       points,
       promotion_id,
       code_promo,
+      retirer_coupon,
       ...rest
     } = updateOrderDto;
 
@@ -2247,6 +2279,61 @@ export class OrderService {
      * autre modification d'une commande annulée suit la règle ci-dessous.
      */
     const reactivation = auto === false && estPanierAnnuleParClient(order);
+
+    /**
+     * CHANGER LE COUPON D'UNE COMMANDE (demande du 02/10).
+     *
+     * Le coupon n'était figé qu'à défaut : à la création seulement (25/09).
+     * Désormais « Modifier la commande » applique un code promo ou un bon
+     * (`code_promo`) sur une commande qui n'en a pas, le retire
+     * (`retirer_coupon`), ou le remplace (les deux). Mêmes briques et mêmes
+     * règles qu'à la création : un seul coupon, jamais avec des points ni une
+     * promotion, remise calculée par le serveur sur les articles FINAUX de la
+     * requête (jamais la livraison), consommation et restitution dans la
+     * transaction de la modification, journal avec l'agent.
+     *
+     * Jamais sur une commande payée (le client a réglé un total), ni annulée
+     * (l'annulation a déjà rendu le coupon). Droit : celui de la création
+     * (COMMANDES CREATE), vérifié ici parce que la route n'exige que
+     * UPDATE_FULL.
+     */
+    const codeCoupon = normaliserCode(code_promo);
+    const retraitCoupon = retirer_coupon === true;
+    const changementCoupon = retraitCoupon || codeCoupon !== '';
+    // Réactiver, c'est reprendre la commande telle qu'elle était : son coupon
+    // est reconsommé (ou perdu) par ce chemin, qui a ses propres règles.
+    if (reactivation && changementCoupon) {
+      throw new ConflictException("Reprenez d'abord la commande, puis changez son coupon.");
+    }
+    if (changementCoupon) {
+      this.orderCoupon.assertPeutChangerCoupon(options.user);
+      if (order.status === OrderStatus.CANCELLED) {
+        throw new ConflictException('Commande annulée : la réduction ne peut plus changer.');
+      }
+      // Payée en tout ou partie : un paiement réussi suffit, même si `paied`
+      // n'a pas encore suivi (reste dû).
+      const paiementReussi = (order.paiements ?? []).some((p) => p.status === PaiementStatus.SUCCESS);
+      if (order.paied || paiementReussi) {
+        throw new ConflictException('Commande déjà payée : la réduction ne peut plus changer.');
+      }
+      if (retraitCoupon && !order.code_promo) {
+        throw new ConflictException("Cette commande n'a pas de coupon à retirer.");
+      }
+      if (codeCoupon && order.code_promo && !retraitCoupon) {
+        throw new ConflictException("Cette commande a déjà un coupon : retirez-le avant d'en appliquer un autre.");
+      }
+      if (codeCoupon && ((Number(order.points) || 0) > 0 || order.promotion_id)) {
+        throw new ConflictException('Non-cumul : cette commande utilise déjà des points (ou une promotion).');
+      }
+      // Remise sans coupon, ni points, ni promotion (donnée ancienne) : on ne
+      // sait pas d'où elle vient, on ne lui ajoute rien.
+      if (codeCoupon && !retraitCoupon && (Number(order.discount) || 0) > 0) {
+        throw new ConflictException(
+          "Cette commande porte déjà une réduction qui n'est pas un coupon : elle ne peut pas en recevoir.",
+        );
+      }
+    }
+
     if (reactivation) {
       if (!peutVoirLesBrouillons(options.user)) {
         throw new ForbiddenException(
@@ -2317,6 +2404,8 @@ export class OrderService {
       options: any[];
     }[] | null = null;
     let newNetAmount: number | null = null;
+    /** Assiette des remises des articles recalculés (plats et options, suppléments exclus). */
+    let assietteRecalculee: ReturnType<typeof assietteDesRemises> | null = null;
 
     /**
      * RÉACTIVATION, articles renvoyés par le formulaire (revue du 01/10).
@@ -2390,6 +2479,7 @@ export class OrderService {
         options: item.options ?? [],
       }));
       newNetAmount = netAmount;
+      assietteRecalculee = assietteDesRemises(orderItems);
     }
 
     // Si le type n'est pas DELIVERY, forcer les frais de livraison à 0
@@ -2502,31 +2592,34 @@ export class OrderService {
      */
     const taxeEffective = passeEnManuel && !montantEngage ? 0 : (order.tax ?? 0);
 
+    /**
+     * Articles FINAUX de la requête : recalculés, ou ceux de la commande. Le
+     * total vaut toujours articles moins remise, plus taxe effective et
+     * livraison.
+     */
+    const netFinal = newNetAmount ?? (order.net_amount ?? 0);
+    const totalPour = (remise: number) => Number(netFinal - remise + taxeEffective + finalDeliveryFee);
+
     // Les articles ne changent pas, mais la taxe si : le total doit être refait
     // ici, le bloc de recalcul ci-dessous ne s'exécutant que sur un panier modifié.
     if (passeEnManuel && !montantEngage && !(orderItemsData && newNetAmount !== null)) {
-      const net = order.net_amount ?? 0;
-      const remise = order.discount ?? 0;
-      updateData.amount = Number(net - remise + finalDeliveryFee);
+      updateData.amount = totalPour(order.discount ?? 0);
     }
 
     // Si les items ont été recalculés, mettre à jour le montant et les order_items
     if (orderItemsData && newNetAmount !== null) {
-      // Recalculer le montant total
-      const tax = taxeEffective;
       const discount = order.discount ?? 0;
-      // La remise est figée : un panier réduit sous son montant donnerait un
-      // total négatif. Refus, avant toute écriture.
-      if (discount > 0 && newNetAmount < discount) {
+      // La remise est figée (sauf si cette requête retire le coupon) : un
+      // panier réduit sous son montant donnerait un total négatif. Refus,
+      // avant toute écriture.
+      if (!retraitCoupon && discount > 0 && newNetAmount < discount) {
         throw new ConflictException(
           `La réduction de cette commande (${Math.round(discount).toLocaleString('fr-FR')} F) dépasserait le montant des articles (${Math.round(newNetAmount).toLocaleString('fr-FR')} F). Annulez la commande et créez-en une nouvelle.`,
         );
       }
-      const totalAfterDiscount = newNetAmount - discount;
-      const totalAmount = totalAfterDiscount + tax + finalDeliveryFee;
 
       updateData.net_amount = Number(newNetAmount);
-      updateData.amount = Number(totalAmount);
+      updateData.amount = totalPour(discount);
 
       // Supprimer les anciens items et créer les nouveaux
       updateData.order_items = {
@@ -2534,6 +2627,32 @@ export class OrderService {
         create: orderItemsData,
       };
     }
+
+    /**
+     * NOUVEAU COUPON : vérifié ICI, sur les articles finaux et le restaurant
+     * retenu, avec la fonction de l'aperçu et de la création. Un refus arrête
+     * tout, rien n'est écrit. Consommé dans la transaction, plus bas.
+     *
+     * Remplacement : les usages de cette commande, rendus dans la même
+     * transaction, ne comptent pas dans la limite par client, pour que le même
+     * code puisse être réappliqué sur des articles changés.
+     */
+    const clientDuCoupon = customer_id ?? order.customer_id;
+    const restaurantDuCoupon = restaurant_id ?? order.restaurant_id;
+    const nouveauCoupon: CouponResolu | null = codeCoupon
+      ? await this.orderCoupon.resoudre({
+          code: codeCoupon,
+          customerId: clientDuCoupon,
+          netAmount: netFinal,
+          assiette: assietteRecalculee ?? assietteDesLignes(order.order_items ?? []),
+          restaurantId: restaurantDuCoupon,
+          ignorerCommandeId: retraitCoupon ? order.id : null,
+        })
+      : null;
+    // Statut après cette écriture : une commande encore en attente verra son
+    // code promo compté à l'acceptation, comme un panier de l'application.
+    const statutApres: OrderStatus = updateData.status ?? order.status;
+    const compterUsage = statutApres !== OrderStatus.PENDING;
 
     const includeEcriture = {
       order_items: {
@@ -2546,7 +2665,55 @@ export class OrderService {
     } satisfies Prisma.OrderInclude;
 
     let coupon: ReconsommationCoupon | null = null;
-    let updatedOrder = reactivation
+    let retrait: RetraitCoupon | null = null;
+    let consommation: ConsommationCoupon | null = null;
+    let updatedOrder = changementCoupon
+      ? await this.prisma.$transaction(async (tx) => {
+          /**
+           * Revendication : l'état lu tient encore (même coupon, même statut,
+           * toujours impayée). Deux agents qui appliquent un coupon en même
+           * temps passent l'un après l'autre : le second lit un coupon déjà
+           * posé et s'arrête. Le code est écrit dès maintenant pour que la
+           * condition du second ne tienne plus ; `order.update` le réécrit à
+           * l'identique.
+           */
+          const tenu = await tx.order.updateMany({
+            where: {
+              id: order.id,
+              code_promo: order.code_promo ?? null,
+              status: order.status,
+              paied: false,
+              paiements: { none: { status: PaiementStatus.SUCCESS } },
+            },
+            data: { code_promo: nouveauCoupon?.code ?? null },
+          });
+          if (tenu.count !== 1) {
+            throw new ConflictException('Cette commande vient de changer : rechargez-la avant de modifier sa réduction.');
+          }
+          // Dans l'ordre : l'ancien est rendu, puis le nouveau consommé. Si le
+          // nouveau est refusé, la transaction entière est annulée : rien n'est
+          // rendu, l'ancien coupon reste sur la commande.
+          let remise = Number(order.discount) || 0;
+          if (retraitCoupon) {
+            retrait = await this.orderCoupon.retirerDansTransaction(tx, order);
+            remise = Math.max(0, remise - retrait.remise);
+          }
+          if (nouveauCoupon) {
+            consommation = await this.orderCoupon.consommer(tx, {
+              coupon: nouveauCoupon,
+              orderId: order.id,
+              customerId: clientDuCoupon,
+              restaurantId: restaurantDuCoupon,
+              compter: compterUsage,
+            });
+            remise += nouveauCoupon.remise;
+          }
+          updateData.discount = Number(Math.min(netFinal, remise));
+          updateData.code_promo = nouveauCoupon?.code ?? null;
+          updateData.amount = totalPour(updateData.discount);
+          return tx.order.update({ where: { id: order.id }, data: updateData, include: includeEcriture });
+        })
+      : reactivation
       ? await this.prisma.$transaction(async (tx) => {
           // Revendication : un seul geste réactive, et seulement un panier
           // toujours annulé par le client (ni payé, ni repris entre-temps).
@@ -2573,11 +2740,7 @@ export class OrderService {
           }
           return tx.order.update({ where: { id: order.id }, data: updateData, include: includeEcriture });
         })
-      : await this.prisma.order.update({
-          where: { id: order.id },
-          data: updateData,
-          include: includeEcriture,
-        });
+      : await this.ecrireSansChangerLaRemise(order, updateData, includeEcriture);
 
     // Si le montant a changé (recalcul des items, frais de livraison, etc.),
     // re-synchroniser le flag `paied` selon la somme des paiements SUCCESS :
@@ -2663,6 +2826,31 @@ export class OrderService {
     const auteurId = options.userId ?? options.user?.id ?? null;
     if (passeEnManuel) void this.signalerReprise(order, updatedOrder, auteurId, { reactivation });
 
+    if (changementCoupon) {
+      const r = retrait as RetraitCoupon | null;
+      const c = consommation as ConsommationCoupon | null;
+      if (r) {
+        void this.orderCoupon.signalerRetrait({ order: updatedOrder, retrait: r, acteur: options.user ?? null });
+      }
+      if (c) {
+        this.orderCoupon.signalerUsage({
+          order: updatedOrder,
+          consommation: c,
+          acteur: options.user ?? null,
+          requete: { methode: 'PATCH', chemin: `/orders/${order.id}`, statut: 200 },
+        });
+        // Déjà acceptée ou plus loin : l'usage est compté (idempotent, comme
+        // après la création). En attente : il le sera à l'acceptation.
+        if (compterUsage && c.type === 'PROMO_CODE') {
+          try {
+            await this.promoCodeService.activateUsageForOrder(updatedOrder);
+          } catch (e) {
+            this.logger.error(`Sync usage promo (coupon appliqué en modification) échoué pour ${order.id}: ${(e as Error)?.message}`);
+          }
+        }
+      }
+    }
+
     if (reactivation) {
       const c = coupon as ReconsommationCoupon | null;
       if (c) {
@@ -2685,6 +2873,45 @@ export class OrderService {
       }
     }
     return updatedOrder;
+  }
+
+  /**
+   * Écriture d'une modification qui ne touche PAS au coupon.
+   *
+   * Depuis que la remise peut changer en modification (02/10), un total refait
+   * ici (`amount`, calculé avec la remise LUE au début) peut écraser le travail
+   * d'un autre agent : A retire le coupon (remise 0, total plein), B, qui avait
+   * ouvert la commande avant, change une quantité et enregistre un total qui
+   * déduit encore l'ancienne remise. La commande se retrouverait sans coupon
+   * mais avec sa remise dans le total (ou l'inverse : coupon consommé, remise
+   * perdue).
+   *
+   * Dès que le total est réécrit, l'écriture exige donc que la remise et le
+   * code lus tiennent encore (même geste que l'annulation par le client :
+   * condition dans le `where`, P2025 rendu en 409). Sans total à réécrire,
+   * rien de ce qui dépend de la remise ne bouge : écriture ordinaire.
+   */
+  private async ecrireSansChangerLaRemise<I extends Prisma.OrderInclude>(
+    order: { id: string; code_promo: string | null; discount: number | null },
+    updateData: Prisma.OrderUpdateInput,
+    include: I,
+  ): Promise<Prisma.OrderGetPayload<{ include: I }>> {
+    const totalRefait = updateData.amount !== undefined;
+    try {
+      return await this.prisma.order.update({
+        where: {
+          id: order.id,
+          ...(totalRefait && { code_promo: order.code_promo ?? null, discount: order.discount ?? 0 }),
+        },
+        data: updateData,
+        include,
+      });
+    } catch (e) {
+      if (totalRefait && e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
+        throw new ConflictException('Cette commande vient de changer : rechargez-la avant de la modifier.');
+      }
+      throw e;
+    }
   }
 
   /**

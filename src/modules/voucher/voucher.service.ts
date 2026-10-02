@@ -193,7 +193,8 @@ export class VoucherService {
 
   /**
    * Prévient le client qu'un de ses bons a servi (prise de commande par le
-   * personnel) ou qu'il a été recrédité (commande annulée ou supprimée).
+   * personnel) ou qu'il a été recrédité (commande annulée ou supprimée, ou
+   * coupon retiré d'une commande modifiée).
    * Notification dans l'application puis notification push. Ne lève jamais :
    * la commande est déjà enregistrée, seule l'alerte peut se perdre.
    */
@@ -204,7 +205,7 @@ export class VoucherService {
     montant: number;
     solde: number;
     reference?: string | null;
-    motif?: 'ANNULATION' | 'SUPPRESSION';
+    motif?: 'ANNULATION' | 'SUPPRESSION' | 'RETRAIT';
     valableJusquau?: Date | null;
   }): Promise<void> {
     try {

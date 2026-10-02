@@ -91,6 +91,11 @@ function table(lignes: Ligne[]) {
       cibles.forEach((l) => appliquer(l, data));
       return { count: cibles.length };
     }),
+    deleteMany: jest.fn(async ({ where }: { where: Ligne }) => {
+      const cibles = lignes.filter((x) => correspond(x, where));
+      cibles.forEach((l) => lignes.splice(lignes.indexOf(l), 1));
+      return { count: cibles.length };
+    }),
   };
 }
 

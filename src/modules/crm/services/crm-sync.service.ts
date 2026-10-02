@@ -380,28 +380,44 @@ export class CrmSyncService {
   /**
    * Un coupon du CRM utilisé sur une commande effective est rattaché, puis sa
    * fiche est synchronisée : elle sort de la liste même si la commande vient
-   * d'un autre compte (règle du code promo de l'acquisition). Une commande
-   * supprimée rend au contraire ses coupons, avant que leurs fiches ne soient
-   * rejugées : sans cela, la fiche perdrait son statut « coupon envoyé ».
+   * d'un autre compte (règle du code promo de l'acquisition).
+   *
+   * À l'inverse, un coupon est RENDU (et sa fiche rejugée, sans quoi elle
+   * perdrait son statut « coupon envoyé ») quand la commande est supprimée, ou
+   * quand elle ne porte plus son code : « Modifier la commande » retire ou
+   * remplace le coupon depuis le 02/10, et le code promo est alors rendu au
+   * client côté commandes. Garder le coupon « utilisé » ici afficherait une
+   * fiche à tort sortie, compterait une utilisation de trop et laisserait
+   * passer la vraie réutilisation du code plus tard (`used_at` déjà posé).
    */
   async rattacherCoupon(commandeId: string): Promise<void> {
-    const supprimee = await this.prisma.order.count({
-      where: { id: commandeId, entity_status: EntityStatus.DELETED },
+    const etat = await this.prisma.order.findUnique({
+      where: { id: commandeId },
+      select: { entity_status: true, code_promo: true },
     });
-    if (supprimee > 0) {
-      const rendus = await this.prisma.crmCoupon.findMany({
-        where: { order_id: commandeId },
-        select: { id: true, contact_id: true },
-      });
-      if (rendus.length === 0) return;
+    if (!etat) return;
+    const supprimee = etat.entity_status === EntityStatus.DELETED;
+    const codeTenu = supprimee ? '' : (etat.code_promo?.trim() ?? '');
+
+    // 1. Rendus : tous les coupons d'une commande supprimée ; sur une commande
+    //    vivante, ceux dont le code n'est plus le sien (retiré ou remplacé).
+    const rendus = await this.prisma.crmCoupon.findMany({
+      where: {
+        order_id: commandeId,
+        ...(codeTenu && { NOT: { code: { equals: codeTenu, mode: 'insensitive' } } }),
+      },
+      select: { id: true, contact_id: true },
+    });
+    if (rendus.length > 0) {
       await this.prisma.crmCoupon.updateMany({
         where: { id: { in: rendus.map((k) => k.id) }, order_id: commandeId },
         data: { used_at: null, order_id: null, order_amount: null },
       });
       for (const k of rendus) await this.synchroniserContact(k.contact_id);
-      return;
     }
+    if (!codeTenu) return;
 
+    // 2. Rattachement du code que la commande porte, si elle est effective.
     const commande = await this.prisma.order.findFirst({
       where: { id: commandeId, ...commandeEffective() },
       select: SELECT_COMMANDE,

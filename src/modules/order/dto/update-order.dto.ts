@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from "@nestjs/swagger";
 import { CreateOrderDto } from "src/modules/order/dto/create-order.dto";
 import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString } from "class-validator";
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import { OrderCreateDto } from "./order-create.dto";
 import { OrderStatus } from "@prisma/client";
 
@@ -33,6 +33,21 @@ export class UpdateOrderDto extends PartialType(CreateOrderDto) {
     @IsNumber()
     @Type(() => Number)
     amount?: number;
+
+    /**
+     * Retire le code promo ou le bon de la commande : bon recrédité, usage du
+     * code rendu, remise retirée du total. Avec `code_promo` dans la même
+     * requête, le nouveau coupon remplace l'ancien (une seule transaction).
+     * Même droit qu'à la création (COMMANDES CREATE), contrôlé par le service.
+     */
+    @ApiPropertyOptional({ type: Boolean, required: false, description: "Retirer le code promo ou le bon de la commande (le client le récupère). Avec code_promo : remplacement.", example: true })
+    @IsOptional()
+    // Jamais `Type(() => Boolean)` : Boolean("false") vaut vrai.
+    @Transform(({ value }) =>
+        value === undefined || value === null ? value : value === true || String(value).trim().toLowerCase() === 'true',
+    )
+    @IsBoolean()
+    retirer_coupon?: boolean;
 }
 
 export class OrderUpdatedDto extends PartialType(OrderCreateDto) {

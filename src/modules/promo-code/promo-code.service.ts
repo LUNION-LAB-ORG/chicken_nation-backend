@@ -477,7 +477,7 @@ export class PromoCodeService {
     customerId: string,
     orderAmount: number,
     orderItems?: { dish_id: string; quantity: number; price: number }[],
-    options: { restaurantId?: string } = {},
+    options: { restaurantId?: string; ignorerCommandeId?: string } = {},
   ) {
     const promoCode = await this.prismaService.promoCode.findUnique({
       where: { code: code.toUpperCase().trim() },
@@ -528,13 +528,18 @@ export class PromoCodeService {
       throw new HttpException('Ce code promo a atteint son nombre maximum d\'utilisations', HttpStatus.BAD_REQUEST);
     }
 
-    // Validate per-user usage limit (usages ACTIFS uniquement)
+    // Validate per-user usage limit (usages ACTIFS uniquement).
+    // `ignorerCommandeId` : commande en modification dont le coupon est retiré
+    // dans la même requête ; son usage, sur le point d'être rendu, ne compte pas.
     if (promoCode.max_usage_per_user) {
       const userUsageCount = await this.prismaService.promoCodeUsage.count({
         where: {
           promo_code_id: promoCode.id,
           customer_id: customerId,
           status: PromoCodeUsageStatus.ACTIVE,
+          ...(options.ignorerCommandeId
+            ? { OR: [{ order_id: null }, { order_id: { not: options.ignorerCommandeId } }] }
+            : {}),
         },
       });
 

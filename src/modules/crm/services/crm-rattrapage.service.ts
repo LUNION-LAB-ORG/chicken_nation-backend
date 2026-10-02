@@ -62,11 +62,17 @@ export class CrmRattrapageService {
       WHERE cc."used_at" IS NULL
         AND upper(trim(o."code_promo")) = upper(cc."code")
         AND ${EFFECTIVE}`);
+    // Rendus : commande supprimée, ou commande vivante qui ne porte plus le
+    // code (coupon retiré ou remplacé en modification). Même règle que
+    // `CrmSyncService.rattacherCoupon`.
     const couponsLiberes = await this.prisma.$executeRawUnsafe(`
       UPDATE "CrmCoupon" cc
       SET "used_at" = NULL, "order_id" = NULL, "order_amount" = NULL
       FROM "Order" o
-      WHERE cc."order_id" = o."id" AND o."entity_status" = 'DELETED'`);
+      WHERE cc."order_id" = o."id"
+        AND (o."entity_status" = 'DELETED'
+          OR o."code_promo" IS NULL
+          OR upper(trim(o."code_promo")) <> upper(cc."code"))`);
     // Ventes d'une commande supprimée : annulées partout (source et cycle confondus).
     await this.prisma.$executeRawUnsafe(`
       UPDATE "CrmConversion" v SET "cancelled_at" = now()

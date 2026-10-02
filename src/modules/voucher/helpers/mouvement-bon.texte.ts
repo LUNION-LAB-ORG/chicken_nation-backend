@@ -11,7 +11,7 @@ export function texteMouvementBon(p: {
   montant: number;
   solde: number;
   reference?: string | null;
-  motif?: 'ANNULATION' | 'SUPPRESSION';
+  motif?: 'ANNULATION' | 'SUPPRESSION' | 'RETRAIT';
   valableJusquau?: Date | null;
 }): { titre: string; message: string } {
   if (p.sens === 'DEBIT') {
@@ -27,11 +27,22 @@ export function texteMouvementBon(p: {
         " Si vous n'êtes pas à l'origine de cette commande, contactez-nous.",
     };
   }
-  const commande = p.reference ? `La commande ${p.reference}` : 'Une commande';
-  const evenement = p.motif === 'SUPPRESSION' ? 'supprimée' : 'annulée';
   const echeance = p.valableJusquau
     ? ` Il est valable jusqu'au ${new Date(p.valableJusquau).toLocaleDateString('fr-FR')}.`
     : '';
+  // Coupon retiré d'une commande modifiée par le personnel : la commande
+  // continue, c'est le bon qui n'y sert plus.
+  if (p.motif === 'RETRAIT') {
+    const commande = p.reference ? `la commande ${p.reference}` : 'une commande';
+    return {
+      titre: "Bon d'achat recrédité",
+      message:
+        `Votre bon ${p.code} ne sert plus pour ${commande} : il est recrédité de ${francs(p.montant)} F CFA.` +
+        ` Solde disponible : ${francs(p.solde)} F CFA.${echeance}`,
+    };
+  }
+  const commande = p.reference ? `La commande ${p.reference}` : 'Une commande';
+  const evenement = p.motif === 'SUPPRESSION' ? 'supprimée' : 'annulée';
   return {
     titre: "Bon d'achat recrédité",
     message:

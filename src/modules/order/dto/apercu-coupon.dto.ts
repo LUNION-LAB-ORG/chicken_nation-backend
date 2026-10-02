@@ -1,10 +1,11 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
   IsEnum,
   IsNotEmpty,
+  IsOptional,
   IsString,
   IsUUID,
   MaxLength,
@@ -45,4 +46,15 @@ export class ApercuCouponDto {
   @ValidateNested({ each: true })
   @Type(() => CreateOrderItemDto)
   items: CreateOrderItemDto[];
+
+  /**
+   * Commande en cours de MODIFICATION dont le coupon va être retiré : ses
+   * usages ne comptent pas dans la limite par client, pour que le même code
+   * puisse être réappliqué (articles changés, remise à refaire). Ignoré si la
+   * commande n'est pas celle du client ou n'a pas de coupon.
+   */
+  @ApiPropertyOptional({ description: 'Commande en modification dont le coupon est retiré (remplacement)' })
+  @IsOptional()
+  @IsUUID(undefined, { message: 'Identifiant de commande invalide.' })
+  commande_id?: string;
 }

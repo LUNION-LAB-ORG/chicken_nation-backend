@@ -15,12 +15,16 @@ import {
   PromoCodeUsageStatus,
   TargetType,
   User,
+  UserRole,
   UserType,
   VoucherStatus,
 } from '@prisma/client';
 import { addDays } from 'date-fns';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { AuditService } from 'src/modules/audit/audit.service';
+import { permissionsByRole } from 'src/modules/auth/constantes/permissionsByRole';
+import { Action } from 'src/modules/auth/enums/action.enum';
+import { Modules } from 'src/modules/auth/enums/module-enum';
 import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
@@ -46,6 +50,13 @@ import {
 import { OrderHelper } from '../helpers/order.helper';
 
 export type TypeCoupon = 'PROMO_CODE' | 'VOUCHER';
+
+/** Requête à l'origine d'un usage, pour le journal : la création par défaut. */
+export interface RequeteCoupon {
+  methode: string;
+  chemin: string;
+  statut: number;
+}
 
 /** Coupon vérifié pour une commande précise. `remise` est au franc, > 0, ≤ netAmount. */
 export interface CouponResolu {
@@ -100,7 +111,18 @@ export interface RestitutionCoupon {
   codesPromo: { promoCodeId: string; code: string | null; montant: number }[];
 }
 
-export type MotifRestitution = 'ANNULATION' | 'SUPPRESSION';
+/** RETRAIT : coupon retiré d'une commande modifiée par le personnel (02/10). */
+export type MotifRestitution = 'ANNULATION' | 'SUPPRESSION' | 'RETRAIT';
+
+/** Coupon retiré d'une commande dans la transaction de sa modification. */
+export interface RetraitCoupon {
+  restitution: RestitutionCoupon;
+  /** Part de `Order.discount` qui venait du coupon (ses traces, sinon la remise entière). */
+  remise: number;
+}
+
+export const MESSAGE_DROIT_COUPON =
+  "L'application d'un coupon est réservée au centre d'appels, à la caisse et aux administrateurs.";
 
 /** Coupon d'un panier annulé par le client, à sa réactivation. */
 export interface ReconsommationCoupon {
@@ -156,6 +178,9 @@ const ERREUR_SOLDE_CHANGE =
  *    commande entière : jamais de bon débité sans commande, ni l'inverse.
  *  - `restituerPourCommande` : à l'annulation et à la suppression, pour TOUTES
  *    les commandes (personnel et application). Idempotent.
+ *  - `retirerDansTransaction` : le coupon d'une commande MODIFIÉE (02/10), dans
+ *    la transaction de la modification, pour qu'un remplacement soit tout ou
+ *    rien. `consommer` sert ensuite au nouveau coupon, comme à la création.
  *
  * Le chemin de l'application (createv2, OrderV2Helper.applyPromoCode) n'est pas
  * modifié ; il profite seulement de la restitution.
@@ -183,6 +208,8 @@ export class OrderCouponService {
     netAmount: number;
     assiette: LigneAssiette[];
     restaurantId?: string | null;
+    /** Commande dont le coupon est retiré dans la même requête : ses usages ne comptent pas. */
+    ignorerCommandeId?: string | null;
   }): Promise<CouponResolu> {
     const code = normaliserCode(params.code);
     if (!code) throw new BadRequestException('Saisissez un code promo ou un bon.');
@@ -199,7 +226,7 @@ export class OrderCouponService {
         params.customerId,
         netAmount,
         params.assiette,
-        { restaurantId: params.restaurantId ?? undefined },
+        { restaurantId: params.restaurantId ?? undefined, ignorerCommandeId: params.ignorerCommandeId ?? undefined },
       );
     } catch (e) {
       const introuvable = e instanceof HttpException && e.getStatus() === HttpStatus.NOT_FOUND;
@@ -285,12 +312,24 @@ export class OrderCouponService {
       orderType: dto.type,
     });
 
+    // Remplacement sur une commande en modification : seulement si elle est
+    // bien celle du client et porte un coupon (sinon rien n'est ignoré).
+    let ignorerCommandeId: string | undefined;
+    if (dto.commande_id) {
+      const commande = await this.prisma.order.findFirst({
+        where: { id: dto.commande_id, customer_id: client.customer_id },
+        select: { id: true, code_promo: true },
+      });
+      if (commande?.code_promo) ignorerCommandeId = commande.id;
+    }
+
     const coupon = await this.resoudre({
       code: dto.code,
       customerId: client.customer_id,
       netAmount,
       assiette: assietteDesRemises(orderItems),
       restaurantId: restaurant.id,
+      ignorerCommandeId,
     });
     return this.versReponse(coupon, netAmount);
   }
@@ -364,11 +403,26 @@ export class OrderCouponService {
      CONSOMMATION (dans la transaction de création)
   ================================================================ */
 
+  /**
+   * `compter` (vrai par défaut) : l'usage d'un code promo est compté tout de
+   * suite (usage ACTIVE, compteur +1), comme pour une commande du personnel qui
+   * naît acceptée. Faux pour une commande encore EN ATTENTE : l'usage est
+   * préparé (INACTIVE) et compté à l'acceptation par `activateUsageForOrder`,
+   * comme le code d'un panier de l'application. Un bon est débité dans les
+   * deux cas : l'annulation le rend.
+   */
   async consommer(
     tx: Transaction,
-    params: { coupon: CouponResolu; orderId: string; customerId: string; restaurantId?: string | null },
+    params: {
+      coupon: CouponResolu;
+      orderId: string;
+      customerId: string;
+      restaurantId?: string | null;
+      compter?: boolean;
+    },
   ): Promise<ConsommationCoupon> {
     const { coupon, orderId, customerId } = params;
+    const compter = params.compter !== false;
     const remise = coupon.remise;
     if (!(remise > 0)) throw new BadRequestException(MESSAGE_SANS_REDUCTION);
 
@@ -387,10 +441,12 @@ export class OrderCouponService {
           customer_id: customerId,
           order_id: orderId,
           discount_amount: remise,
-          status: PromoCodeUsageStatus.ACTIVE,
+          status: compter ? PromoCodeUsageStatus.ACTIVE : PromoCodeUsageStatus.INACTIVE,
         },
       });
-      await tx.promoCode.update({ where: { id }, data: { usage_count: { increment: 1 } } });
+      if (compter) {
+        await tx.promoCode.update({ where: { id }, data: { usage_count: { increment: 1 } } });
+      }
       return { type: 'PROMO_CODE', code: coupon.code, remise, promoCodeId: id, usageId: usage.id };
     }
 
@@ -477,10 +533,14 @@ export class OrderCouponService {
     order: { id: string; reference?: string | null; customer_id: string; restaurant_id?: string | null };
     consommation: ConsommationCoupon;
     acteur?: Pick<User, 'id' | 'fullname' | 'email' | 'role' | 'restaurant_id'> | null;
+    /** Absente : la création (`POST /orders/create`). Modification : `PATCH /orders/:id`. */
+    requete?: RequeteCoupon;
   }): void {
     const { order, consommation: c, acteur } = params;
+    const requete = params.requete ?? { methode: 'POST', chemin: '/orders/create', statut: 201 };
     try {
       const nature = c.type === 'VOUCHER' ? 'Bon' : 'Code promo';
+      const ou = requete.methode === 'PATCH' ? 'sur la commande modifiée' : 'sur la commande';
       this.auditService.record({
         actor_id: acteur?.id ?? null,
         actor_name: acteur?.fullname ?? acteur?.email ?? null,
@@ -489,10 +549,10 @@ export class OrderCouponService {
         action: 'COUPON_APPLIQUE',
         module: 'orders',
         entity_id: order.id,
-        method: 'POST',
-        path: '/orders/create',
-        status_code: 201,
-        summary: `${nature} ${c.code} appliqué sur la commande ${order.reference ?? order.id} : réduction de ${formaterFrancs(c.remise)} F`,
+        method: requete.methode,
+        path: requete.chemin,
+        status_code: requete.statut,
+        summary: `${nature} ${c.code} appliqué ${ou} ${order.reference ?? order.id} : réduction de ${formaterFrancs(c.remise)} F`,
         metadata: {
           code: c.code,
           type: c.type,
@@ -646,11 +706,16 @@ export class OrderCouponService {
         .catch(() => null);
     }
     const parLeClient = !contexte.acteurRole && !!contexte.acteurId && !contexte.origine;
-    const evenement = contexte.motif === 'SUPPRESSION' ? 'supprimée' : 'annulée';
     const ref = commande.reference ?? commande.id;
+    // Fin du résumé : « commande CMD annulée », « commande CMD supprimée », ou
+    // « coupon retiré de la commande CMD » (la commande continue).
+    const evenement =
+      contexte.motif === 'RETRAIT'
+        ? `coupon retiré de la commande ${ref}`
+        : `commande ${ref} ${contexte.motif === 'SUPPRESSION' ? 'supprimée' : 'annulée'}`;
     const chemin =
       contexte.origine?.chemin ??
-      (contexte.motif === 'SUPPRESSION' ? `/orders/${commande.id}` : `/orders/${commande.id}/status`);
+      (contexte.motif === 'ANNULATION' ? `/orders/${commande.id}/status` : `/orders/${commande.id}`);
     const methode = contexte.origine?.methode ?? (contexte.motif === 'SUPPRESSION' ? 'DELETE' : 'PATCH');
     const complement = parLeClient
       ? ' (par le client)'
@@ -681,7 +746,7 @@ export class OrderCouponService {
 
     for (const b of resultat.bons) {
       ecrire(
-        `Bon ${b.code} recrédité de ${formaterFrancs(b.montant)} F : commande ${ref} ${evenement}`,
+        `Bon ${b.code} recrédité de ${formaterFrancs(b.montant)} F : ${evenement}`,
         {
           code: b.code,
           type: 'VOUCHER',
@@ -710,7 +775,7 @@ export class OrderCouponService {
 
     for (const c of resultat.codesPromo) {
       ecrire(
-        `Code promo${c.code ? ` ${c.code}` : ''} rendu : commande ${ref} ${evenement}`,
+        `Code promo${c.code ? ` ${c.code}` : ''} rendu : ${evenement}`,
         {
           code: c.code,
           type: 'PROMO_CODE',
@@ -720,6 +785,123 @@ export class OrderCouponService {
           motif: contexte.motif,
         },
       );
+    }
+  }
+
+  /* ================================================================
+     RETRAIT DU COUPON D'UNE COMMANDE MODIFIÉE (02/10)
+  ================================================================ */
+
+  /**
+   * Rend le coupon d'une commande que le personnel MODIFIE, DANS la
+   * transaction de la modification : si elle échoue (nouveau coupon refusé,
+   * commande changée entre-temps), rien n'est rendu.
+   *
+   *  - Bons : chaque utilisation active est rendue (`rendreUneUtilisation`,
+   *    solde recrédité, prolongé de 30 jours s'il a expiré).
+   *  - Code promo compté (usage ACTIVE) : l'usage repasse INACTIVE et le
+   *    compteur baisse, comme `deactivateUsageForOrder`, mais sur `tx`.
+   *  - Usage seulement PRÉPARÉ (INACTIVE, commande encore en attente) : effacé.
+   *    Laissé en place, l'acceptation le compterait (`activateUsageForOrder`
+   *    prend le premier usage de la commande) pour un code qu'elle n'a plus,
+   *    ou à la place du coupon qui le remplace.
+   *
+   * `remise` : ce que le coupon pesait dans `Order.discount`, d'après ses
+   * traces (utilisations rendues, usage), sinon la remise entière de la
+   * commande. L'appelant la retire du total. Les notifications et le journal
+   * partent après la validation (`signalerRetrait`).
+   */
+  async retirerDansTransaction(
+    tx: Transaction,
+    commande: { id: string; discount?: number | null },
+  ): Promise<RetraitCoupon> {
+    const restitution: RestitutionCoupon = { bons: [], codesPromo: [] };
+    let remise = 0;
+
+    const lignes = await tx.redemption.findMany({
+      where: { order_id: commande.id, entity_status: EntityStatus.ACTIVE },
+      select: { id: true, voucher_id: true, amount: true },
+    });
+    for (const ligne of lignes) {
+      const rendu = await this.rendreUneUtilisation(tx, ligne);
+      if (!rendu) continue;
+      restitution.bons.push(rendu);
+      remise += ligne.amount;
+    }
+
+    const usages = await tx.promoCodeUsage.findMany({
+      where: { order_id: commande.id },
+      orderBy: { created_at: 'desc' },
+      include: { promo_code: { select: { code: true } } },
+    });
+    for (const u of usages) {
+      if (u.status !== PromoCodeUsageStatus.ACTIVE) continue;
+      const reserve = await tx.promoCodeUsage.updateMany({
+        where: { id: u.id, status: PromoCodeUsageStatus.ACTIVE },
+        data: { status: PromoCodeUsageStatus.INACTIVE },
+      });
+      if (reserve.count === 0) continue;
+      await tx.promoCode.updateMany({
+        where: { id: u.promo_code_id, usage_count: { gt: 0 } },
+        data: { usage_count: { decrement: 1 } },
+      });
+      restitution.codesPromo.push({ promoCodeId: u.promo_code_id, code: u.promo_code?.code ?? null, montant: u.discount_amount });
+      remise += u.discount_amount;
+    }
+    if (remise <= 0 && usages.length > 0) {
+      // Usage préparé, jamais compté : sa remise est bien dans le total.
+      remise = usages[0].discount_amount;
+    }
+    // Toute trace de code promo de cette commande disparaît : les usages rendus
+    // comme les usages préparés (voir ci-dessus). Les utilisations de bons
+    // rendues restent, marquées supprimées, comme à l'annulation.
+    if (usages.length > 0) {
+      await tx.promoCodeUsage.deleteMany({ where: { order_id: commande.id } });
+    }
+
+    if (remise <= 0) remise = Math.max(0, Number(commande.discount) || 0);
+    return { restitution, remise };
+  }
+
+  /**
+   * Après la modification (transaction validée) : journal COUPON_RESTITUE
+   * (motif RETRAIT), mouvement du bon notifié au client, écrans rafraîchis.
+   * Ne lève jamais.
+   */
+  async signalerRetrait(params: {
+    order: { id: string; reference?: string | null; customer_id?: string | null; restaurant_id?: string | null };
+    retrait: RetraitCoupon;
+    acteur?: Pick<User, 'id' | 'role'> | null;
+  }): Promise<void> {
+    const { order, retrait, acteur } = params;
+    const { restitution } = retrait;
+    if (restitution.bons.length === 0 && restitution.codesPromo.length === 0) return;
+    try {
+      await this.signalerRestitution(
+        order,
+        { motif: 'RETRAIT', acteurId: acteur?.id ?? null, acteurRole: acteur?.role ?? null },
+        restitution,
+      );
+      for (const c of restitution.codesPromo) {
+        this.appGateway.emitToBackoffice('promo_code:usage_reverted', { promoCodeId: c.promoCodeId, orderId: order.id });
+      }
+    } catch (e: any) {
+      this.logger.warn(`Signalement du retrait du coupon de ${order.id} impossible : ${e?.message}`);
+    }
+  }
+
+  /**
+   * Qui change le coupon d'une commande : les rôles qui ont COMMANDES CREATE
+   * (ADMIN, CALL_CENTER, CAISSIER), ceux qui l'appliquent à la création. La
+   * route de modification n'exige que UPDATE_FULL (un gestionnaire l'a) : le
+   * droit se vérifie donc ici, dans la même table que la garde des routes.
+   */
+  assertPeutChangerCoupon(user?: Pick<User, 'role'> | null): void {
+    const droits = user?.role ? permissionsByRole[user.role as UserRole] : undefined;
+    const actions = droits?.modules[Modules.COMMANDES] ?? droits?.modules[Modules.ALL] ?? [];
+    const exclu = droits?.exclusions?.includes(Modules.COMMANDES) ?? false;
+    if (!droits || exclu || !actions.includes(Action.CREATE)) {
+      throw new ForbiddenException(MESSAGE_DROIT_COUPON);
     }
   }
 
