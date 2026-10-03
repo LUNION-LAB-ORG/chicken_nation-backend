@@ -27,23 +27,17 @@ export function canalDeSaisie(
 }
 
 /**
- * Colonne « Source » des exports Excel : « Site web », « Appli » ou
- * « Manuel » (saisie du personnel : centre d'appels, comptoir, HubRise).
- * « Manuel » plutôt que « Téléphone », choix de l'équipe du 02/10 : une
- * commande saisie à la main n'est pas forcément un appel.
- *
- * Le site se lit sur `channel`. Le reste garde la lecture par `auto`, qui
- * couvre aussi les commandes antérieures au canal (`channel` vide) et la
- * commande de l'application reprise au téléphone (`auto` repassé à false).
- * Jumeau du libellé du backoffice (features/orders/utils/canal-commande.ts).
+ * Colonne « Source » des exports Excel : « Appli » ou « Téléphone », comme
+ * avant le 02/10. Demande de l'utilisateur du 03/10 : revenir au libellé
+ * historique. Une commande du site reste « Appli » (elle est passée par le
+ * client, `auto` vrai), et toute saisie du personnel reste « Téléphone »,
+ * jamais « Manuel ». Le canal enregistré (`channel`) ne change pas et reste
+ * disponible pour les statistiques ; l'écran du backoffice garde son propre
+ * libellé (features/orders/utils/canal-commande.ts).
  */
 export function libelleSource(commande: {
   channel?: OrderChannel | string | null;
   auto?: boolean | null;
 }): string {
-  // Commande du site reprise au téléphone (`auto` faux) : « Manuel », comme
-  // toute commande passée par le personnel (choix de l'équipe du 03/10).
-  if (commande.channel === OrderChannel.WEB && commande.auto !== false) return 'Site web';
-  if (commande.channel === OrderChannel.RESTAURANT) return 'Manuel';
-  return commande.auto ? 'Appli' : 'Manuel';
+  return commande.auto ? 'Appli' : 'Téléphone';
 }
