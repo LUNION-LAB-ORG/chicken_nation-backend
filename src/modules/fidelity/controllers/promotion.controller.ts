@@ -77,6 +77,16 @@ export class PromotionController {
     return this.promotionService.findAllForCustomer(req, filters);
   }
 
+  // Publique : la section « Offres du moment » du site. Déclarée AVANT `:id`,
+  // sinon « public » serait lu comme un identifiant (route gardée : 401).
+  // Seulement les promotions actives et publiques, et les champs de la carte.
+  @Get('public')
+  @ApiOperation({ summary: 'Promotions en cours visibles par tous (site public)' })
+  @ApiOkResponse({ type: QueryResponseDto })
+  findPublicActive(@Query('limit') limit?: string) {
+    return this.promotionService.findPublicActive(limit);
+  }
+
   // ⚠️ Aucune garde : le détail d'une promotion, y compris PRIVEE, était
   // lisible par un tiers non authentifié muni de l'identifiant.
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)

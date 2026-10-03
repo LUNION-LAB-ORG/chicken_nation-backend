@@ -19,6 +19,12 @@ import { PromotionErrorKeys } from '../enums/promotion-error-keys.enum';
 import { PromotionException } from '../filters/promotion.filter';
 import { S3Service } from '../../../s3/s3.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import {
+  CHAMPS_PROMOTION_PUBLIQUE,
+  limitePromotionsPubliques,
+  PromotionPublique,
+  promotionsPubliquesWhere,
+} from '../helpers/promotions-publiques.rules';
 
 @Injectable()
 export class PromotionService {
@@ -518,6 +524,23 @@ export class PromotionService {
       status: PromotionStatus.ACTIVE,
     });
     return promotions.data;
+  }
+
+  /** Promotions visibles par un visiteur du site (route publique « Offres du moment »). */
+  async findPublicActive(
+    limite?: unknown,
+  ): Promise<QueryResponseDto<PromotionPublique>> {
+    const take = limitePromotionsPubliques(limite);
+    const data = await this.prisma.promotion.findMany({
+      where: promotionsPubliquesWhere(new Date()),
+      select: CHAMPS_PROMOTION_PUBLIQUE,
+      orderBy: { created_at: 'desc' },
+      take,
+    });
+    return {
+      data,
+      meta: { total: data.length, page: 1, limit: take, totalPages: 1 },
+    };
   }
 
   async findOne(id: string): Promise<PromotionResponseDto> {
