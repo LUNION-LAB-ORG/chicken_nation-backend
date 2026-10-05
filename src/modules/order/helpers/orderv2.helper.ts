@@ -39,7 +39,12 @@ export class OrderV2Helper {
     private readonly dishOptionService: DishOptionService,
   ) {}
 
-  private async getTaxRate(): Promise<number> {
+  /**
+   * Taux des frais de service de `createv2`. Public pour que
+   * `GET /orders/conditions-commande` publie exactement le taux facturé, sans
+   * recopier la clé ni la valeur par défaut.
+   */
+  async getTaxRate(): Promise<number> {
     const val = await this.settingsService.getOrEnv('order_tax_rate', 'ORDER_TAX_RATE', '0.05');
     return Number(val);
   }

@@ -440,6 +440,27 @@ export class OrderController {
     return this.orderService.obtenirDisponibiliteLivraison();
   }
 
+  /**
+   * GET /orders/conditions-commande
+   *
+   * Publique et en lecture seule : le taux des frais de service et la grille
+   * des frais de livraison, pour que le site les annonce avant la création
+   * de la commande. Rien d'autre n'est publié (conditions-commande.rules.ts).
+   * Doit rester AVANT `@Get(':id')`, sinon Nest prend « conditions-commande »
+   * pour un identifiant de commande et répond 401 (test :
+   * order-routes-publiques.spec.ts).
+   */
+  @Get('/conditions-commande')
+  @ApiOperation({ summary: 'Frais de service et grille des frais de livraison, avant commande' })
+  @ApiResponse({
+    status: 200,
+    description:
+      '{ taux_frais_service: number | null, grille_frais: { distance_max_km: number | null, montant: number }[], grille_frais_appliquee: boolean }',
+  })
+  async obtenirConditionsCommande() {
+    return this.orderService.obtenirConditionsCommande();
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.READ)

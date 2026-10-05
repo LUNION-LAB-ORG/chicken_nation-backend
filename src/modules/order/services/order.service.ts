@@ -77,6 +77,7 @@ import {
 import { motifRefusModification, peutModifierCommande } from '../helpers/modification-commande.rules';
 import { OrderRelanceService } from './order-relance.service';
 import { canalDeSaisie, libelleSource } from '../helpers/canal-commande.rules';
+import { ConditionsCommande, conditionsCommandePubliques } from '../helpers/conditions-commande.rules';
 import {
   cadeauxDesLignes,
   cadeauxRefactures,
@@ -4134,5 +4135,26 @@ export class OrderService {
     return blocage.disabled
       ? { disponible: false, message: blocage.message }
       : { disponible: true, message: null };
+  }
+
+  /**
+   * Taux des frais de service et grille des frais de livraison, publics, pour
+   * que le site les montre AVANT la création de la commande.
+   *
+   * Lecture seule, par les mêmes fonctions que `createv2` (taux) et que le
+   * calcul des frais (grille) : aucune divergence entre l'affichage et le
+   * débit. La mise en forme et ce qui est publié sont réglés par
+   * `conditions-commande.rules.ts`.
+   */
+  async obtenirConditionsCommande(): Promise<ConditionsCommande> {
+    const [taux, livraison] = await Promise.all([
+      this.orderHelperV2.getTaxRate(),
+      this.deliveryFeeHelper.load(),
+    ]);
+    return conditionsCommandePubliques({
+      tauxFraisService: taux,
+      grille: livraison.grid,
+      zonesLivreurActives: livraison.turboZonesEnabled,
+    });
   }
 }
