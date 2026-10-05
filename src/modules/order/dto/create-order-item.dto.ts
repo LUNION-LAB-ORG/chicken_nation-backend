@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsArray, IsBoolean, IsNumber, IsOptional, IsUUID, Min, ValidateNested } from "class-validator";
+import { IsArray, IsBoolean, IsInt, IsOptional, IsUUID, Max, Min, ValidateNested } from "class-validator";
+import { QUANTITE_MAX_LIGNE } from "./order-create.dto";
 import { Transform, Type } from "class-transformer";
 
 /**
@@ -10,8 +11,9 @@ export class SupplementItemBackofficeDto {
     @IsUUID()
     id: string;
 
-    @IsNumber()
+    @IsInt()
     @Min(1)
+    @Max(QUANTITE_MAX_LIGNE)
     @Transform(({ value }) => Number(value))
     quantity: number;
 }
@@ -21,9 +23,10 @@ export class CreateOrderItemDto {
     @IsUUID()
     dish_id: string;
 
-    @ApiProperty({ description: "Quantité commandée", minimum: 1, default: 1 })
-    @IsNumber()
+    @ApiProperty({ description: "Quantité commandée", minimum: 1, maximum: QUANTITE_MAX_LIGNE, default: 1 })
+    @IsInt()
     @Min(1)
+    @Max(QUANTITE_MAX_LIGNE)
     @Transform(({ value }) => Number(value))
     quantity: number;
 

@@ -1,13 +1,21 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsBoolean, IsUUID, ValidateNested, IsNumber, Min } from "class-validator";
+import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsBoolean, IsUUID, ValidateNested, IsNumber, Max, Min } from "class-validator";
 import { Transform, Type } from "class-transformer";
 import { OrderType } from "src/modules/order/enums/order-type.enum";
 import { DeliveryService, PaymentMethod } from "@prisma/client";
 
+/** Quantité maximale d'un plat ou d'un supplément sur une ligne de commande. */
+export const QUANTITE_MAX_LIGNE = 500;
+
 export class SupplementItemDto {
     @IsUUID()
     id: string;
-    @IsNumber()
+    // Entier d'au moins 1 : une quantité négative ou décimale (-3, 0,01) faisait
+    // baisser le prix de la commande (le serveur multiplie prix x quantité).
+    @IsInt()
+    @Min(1)
+    @Max(QUANTITE_MAX_LIGNE)
+    @Transform(({ value }) => Number(value))
     quantity: number;
 
     @ApiPropertyOptional({
@@ -25,9 +33,10 @@ export class OrderItemDto {
     @IsUUID()
     dish_id: string;
 
-    @ApiProperty({ description: "Quantité commandée", minimum: 1, default: 1 })
-    @IsNumber()
+    @ApiProperty({ description: "Quantité commandée", minimum: 1, maximum: QUANTITE_MAX_LIGNE, default: 1 })
+    @IsInt()
     @Min(1)
+    @Max(QUANTITE_MAX_LIGNE)
     @Transform(({ value }) => Number(value))
     quantity: number;
 
