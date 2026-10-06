@@ -46,6 +46,19 @@ export class CardGenerationService {
   private static readonly VOYELLES = 'AEIOU';
   /** Syllabes écartées : elles forment un mot qu'on n'imprime pas sur une carte. */
   private static readonly SYLLABES_EXCLUES = new Set(['KU', 'NU', 'PU']);
+  /**
+   * Forme du numéro ACTUEL, en expression régulière PostgreSQL.
+   *
+   * Sert à reconnaître une carte restée à l'ancien format `CN-XXXXXX`
+   * (cf. CardRequestService.renumeroterCartes). Construite à partir des mêmes
+   * constantes que le générateur : une seule source, donc pas de dérive le
+   * jour où l'alphabet bouge.
+   *
+   * ⚠️ Vérifie la FORME, pas la validité : les syllabes écartées y passeraient,
+   * mais aucune carte n'en porte puisqu'on n'en génère pas.
+   */
+  static readonly FORMAT_NUMERO_SQL = `^CN-[${CardGenerationService.CONSONNES}][${CardGenerationService.VOYELLES}][0-9]{3}$`;
+
   private static readonly SYLLABES: string[] = Array.from(
     CardGenerationService.CONSONNES,
   ).flatMap((c) =>

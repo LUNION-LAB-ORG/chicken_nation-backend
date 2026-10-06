@@ -24,7 +24,7 @@ import {
   ApiConsumes,
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
-import { NationCardStatus, User } from '@prisma/client';
+import { NationCardStatus, User, UserRole } from '@prisma/client';
 import { CardRequestQueryDto, NationCardQueryDto } from '../dtos/card-query.dto';
 import { PreviewCardDto } from '../dtos/preview-card.dto';
 import { RegenerateCardDto } from '../dtos/regenerate-card.dto';
@@ -33,6 +33,9 @@ import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.g
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
+import { RenumeroterCartesDto } from '../dtos/renumeroter-cartes.dto';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
+import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
 
 
 @ApiTags('Carte Nation - Administration')
@@ -186,6 +189,25 @@ export class CardAdminController {
     @UploadedFile() photo?: Express.Multer.File,
   ) {
     return this.cardRequestService.previewCard(dto, photo);
+  }
+
+  /**
+   * Renumérote les cartes restées à l'ancien format `CN-XXXXXX`.
+   *
+   * ⚠️ ADMIN uniquement, et SIMULATION par défaut : sans `simulation: false`,
+   * la route se contente de compter et de montrer. L'écriture est
+   * irréversible et visible par le client, dont l'ancien numéro ne
+   * correspondra plus à rien.
+   */
+  @Post('cards/renumeroter')
+  @UseGuards(UserRolesGuard)
+  @UserRoles(UserRole.ADMIN)
+  @RequirePermission(Modules.CARD_NATION, Action.UPDATE)
+  @ApiOperation({
+    summary: "Renuméroter les cartes à l'ancien format (simulation par défaut)",
+  })
+  async renumeroterCartes(@Body() dto: RenumeroterCartesDto) {
+    return this.cardRequestService.renumeroterCartes(dto);
   }
 
   /**

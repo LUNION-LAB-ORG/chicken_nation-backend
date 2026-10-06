@@ -44,6 +44,23 @@ describe('numéro de carte', () => {
   });
 
   /**
+   * Le test qui compte le plus : la renumérotation repère les anciennes cartes
+   * avec cette expression, côté PostgreSQL. Si elle cessait de reconnaître ce
+   * que le générateur produit, elle renumérroterait en boucle des cartes déjà
+   * au bon format, en redessinant leur image à chaque passage.
+   */
+  it('la forme SQL reconnaît ce que le générateur produit, et rejette l’ancien format', () => {
+    const forme = new RegExp(CardGenerationService.FORMAT_NUMERO_SQL);
+    for (let i = 0; i < 500; i++) {
+      expect(forme.test(generer())).toBe(true);
+    }
+    // Anciennes cartes, et code de coupon du CRM : tous à reprendre.
+    expect(forme.test('CN-JJJDE2')).toBe(false);
+    expect(forme.test('CN-NDPXZ5')).toBe(false);
+    expect(forme.test('CN-7KQ4MX')).toBe(false);
+  });
+
+  /**
    * Le format reste distinct d'un CODE DE COUPON du CRM, qui porte le même
    * préfixe suivi de 6 caractères : en caisse, on doit voir lequel est lequel.
    */

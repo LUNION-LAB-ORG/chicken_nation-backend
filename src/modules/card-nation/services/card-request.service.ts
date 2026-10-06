@@ -149,6 +149,115 @@ export class CardRequestService {
   }
 
   /**
+   * Renumérote les cartes restées à l'ancien format `CN-XXXXXX` et redessine
+   * leur image avec le nouveau numéro et le nouveau QR.
+   *
+   * ⚠️ IRRÉVERSIBLE ET VISIBLE PAR LE CLIENT. L'image déjà reçue porte
+   * l'ancien numéro : après passage, celui-ci ne correspond plus à rien. Le
+   * client voit la nouvelle carte dans l'application (événement `card:updated`),
+   * mais celui qui avait noté son numéro sur un papier l'a pour rien.
+   * `simulation` vaut donc VRAI par défaut : il faut demander l'écriture
+   * explicitement pour que quoi que ce soit bouge.
+   *
+   * ⚠️ Ne touche QUE le numéro, le QR et l'image. Ni le niveau, ni le marqueur
+   * étudiant, ni le profil du client. `regenerateCard` ne convenait pas : elle
+   * remet `Customer.profile_type` à `null` dès que la carte n'est pas
+   * étudiante, ce qui aurait effacé le profil de tout un parc.
+   *
+   * Travaille par lots : une image par carte, dessinée puis déposée sur S3.
+   * Un échec n'interrompt pas le lot, il est rendu dans `echecs`.
+   */
+  async renumeroterCartes(options: { simulation?: boolean; limite?: number } = {}) {
+    const simulation = options.simulation !== false;
+    const limite = Math.min(Math.max(options.limite ?? 50, 1), 200);
+    const format = CardGenerationService.FORMAT_NUMERO_SQL;
+
+    const [{ total }] = await this.prisma.$queryRaw<{ total: number }[]>`
+      SELECT COUNT(*)::int AS total FROM "NationCard" WHERE card_number !~ ${format}
+    `;
+
+    const aTraiter = await this.prisma.$queryRaw<{ id: string; card_number: string }[]>`
+      SELECT id, card_number FROM "NationCard"
+      WHERE card_number !~ ${format}
+      ORDER BY created_at ASC
+      LIMIT ${limite}
+    `;
+
+    if (simulation) {
+      return {
+        simulation: true,
+        restantes: total,
+        apercu: aTraiter.map((c) => c.card_number),
+        message:
+          total === 0
+            ? 'Aucune carte à renuméroter.'
+            : `${total} carte(s) à renuméroter. Rappelez cette route avec simulation=false pour traiter un lot de ${limite}.`,
+      };
+    }
+
+    const traitees: { avant: string; apres: string }[] = [];
+    const echecs: { carte: string; raison: string }[] = [];
+
+    for (const { id } of aTraiter) {
+      try {
+        const card = await this.prisma.nationCard.findUnique({
+          where: { id },
+          include: {
+            customer: { select: { first_name: true, last_name: true } },
+            card_request: { select: { photo: true } },
+          },
+        });
+        if (!card) continue;
+
+        const nouveauNumero = await this.allocateCardNumber();
+        const nouveauQr = this.cardGenerationService.generateQRValue(
+          nouveauNumero,
+          card.customer_id,
+        );
+        const image = await this.cardGenerationService.generateCardImage(
+          (card.customer.first_name || '').split(' ')[0],
+          card.customer.last_name || '',
+          nouveauNumero,
+          nouveauQr,
+          card.nickname ?? undefined,
+          {
+            level: card.level,
+            is_student: card.is_student,
+            photo_key: card.card_request?.photo,
+          },
+        );
+
+        const ancienneImage = card.card_image_url;
+        await this.prisma.nationCard.update({
+          where: { id },
+          data: {
+            card_number: nouveauNumero,
+            qr_code_value: nouveauQr,
+            card_image_url: image,
+          },
+        });
+
+        if (ancienneImage && ancienneImage !== image) {
+          await this.deleteS3Files([ancienneImage]);
+        }
+        this.emitCardUpdated(card.customer_id, 'card_renumbered');
+        traitees.push({ avant: card.card_number, apres: nouveauNumero });
+      } catch (e) {
+        const carte = aTraiter.find((c) => c.id === id)?.card_number ?? id;
+        echecs.push({ carte, raison: (e as Error)?.message ?? 'erreur inconnue' });
+        this.logger.error(`Renumérotation échouée pour ${carte} : ${(e as Error)?.message}`);
+      }
+    }
+
+    return {
+      simulation: false,
+      traitees,
+      echecs,
+      restantes: Math.max(total - traitees.length, 0),
+    };
+  }
+
+  /**
    * Motif d'une demande de RÉVISION, généré automatiquement en comparant la
    * demande à la carte existante → le staff voit immédiatement ce qui change,
    * sans que le client ait à l'écrire. (Demandes issues de l'app.)
