@@ -92,10 +92,25 @@ describe('rôle MARKETING (décision du 28/09)', () => {
     }
   });
 
-  it('exactement ces droits : lecture et statistiques, aucun geste nulle part', () => {
+  /**
+   * Décision du 06/10 : le marketing GÈRE les cartes de la nation —
+   * approuver, rejeter, suspendre, révoquer, réactiver, régénérer. C'est la
+   * seule entorse à « aucun geste nulle part », et elle s'arrête à la
+   * suppression : effacer une demande ou une carte effacerait aussi la trace
+   * de ce qui a été décidé.
+   */
+  it('peut gérer les cartes de la nation, mais jamais les supprimer', () => {
+    expect(peut(Modules.CARD_NATION, Action.UPDATE)).toBe(true);
+    expect(peut(Modules.CARD_NATION, Action.DELETE)).toBe(false);
+    expect(peut(Modules.CARD_NATION, Action.CREATE)).toBe(false);
+  });
+
+  it('aucun autre geste, nulle part', () => {
     const autorises = new Set<Action>([Action.READ, Action.REPORT]);
     for (const module of modules) {
       for (const action of actions) {
+        // Seule exception, décidée le 06/10 : la gestion des cartes.
+        if (module === Modules.CARD_NATION && action === Action.UPDATE) continue;
         if (!autorises.has(action)) {
           expect([module, action, peut(module, action)]).toEqual([module, action, false]);
         }

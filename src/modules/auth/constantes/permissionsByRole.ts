@@ -36,7 +36,11 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.MENUS]: [Action.READ],
       [Modules.PROMOTIONS]: [Action.READ],
       [Modules.FIDELITE]: [Action.READ],
-      [Modules.CARD_NATION]: [Action.READ, Action.REPORT],
+      // Le marketing gère les cartes : approuver ou rejeter une demande,
+      // suspendre, révoquer, réactiver, régénérer. La SUPPRESSION lui reste
+      // fermée (pas de DELETE) : effacer une demande ou une carte efface
+      // aussi la trace de ce qui a été décidé.
+      [Modules.CARD_NATION]: [Action.READ, Action.UPDATE, Action.REPORT],
 
       [Modules.CLIENTS]: [Action.READ],
       [Modules.COMMENTAIRES]: [Action.READ],
