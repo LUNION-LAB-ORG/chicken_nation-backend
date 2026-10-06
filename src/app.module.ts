@@ -54,6 +54,8 @@ import { SchedulingModule } from 'src/modules/schedule/schedule.module';
 import { MapsModule } from 'src/modules/maps/maps.module';
 import { AdhesionModule } from 'src/modules/adhesion/adhesion.module';
 import { CallsModule } from 'src/modules/calls/calls.module';
+import { MasquerContactsInterceptor } from './common/securite/masquer-contacts.interceptor';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 
 @Module({
   imports: [
@@ -154,6 +156,19 @@ import { CallsModule } from 'src/modules/calls/calls.module';
     CrmModule,
     AdhesionModule,
     CallsModule,
+  ],
+  providers: [
+    /*
+      Masquage des coordonnées, GLOBAL à dessein.
+
+      Le marketing atteint onze contrôleurs qui charrient un téléphone ou une
+      adresse. Poser le masquage contrôleur par contrôleur revenait à tenir une
+      liste à jour, et c'est le douzième contrôleur, celui qu'on ajoute six
+      mois plus tard, qui aurait fuité. La règle est donc « masqué partout », et
+      la dérogation se demande avec @SansMasquage() — un décorateur qu'on voit
+      en relecture, contrairement à une pose manquante.
+    */
+    { provide: APP_INTERCEPTOR, useClass: MasquerContactsInterceptor },
   ],
 })
 export class AppModule { }

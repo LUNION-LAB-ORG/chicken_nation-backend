@@ -37,6 +37,7 @@ import { ResetUserPasswordResponseDto } from '../dto/reset-user-password.dto';
 import { RegisterUserExpoPushTokenDto } from '../dto/register-expo-push-token.dto';
 import { S3Service } from 'src/s3/s3.service';
 import { UserPushService } from '../services/user-push.service';
+import { SansMasquage } from 'src/common/securite/sans-masquage.decorator';
 
 /**
  * Aucun cache sur ce contrôleur. Le `CacheInterceptor` d'origine rangeait les
@@ -52,6 +53,7 @@ import { UserPushService } from '../services/user-push.service';
  * seconde : il n'apportait rien.
  */
 @Controller('users')
+@SansMasquage()
 export class UsersController {
   constructor(
     private readonly usersService: UsersService,

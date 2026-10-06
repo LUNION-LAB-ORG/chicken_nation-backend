@@ -39,6 +39,21 @@ export function masquerEmail(valeur: string): string {
 const CLES = new Set(['phone', 'email', 'telephone', 'whatsapp', 'phone_number']);
 
 /**
+ * Un objet SIMPLE, c'est-à-dire bon à reconstruire champ par champ.
+ *
+ * ⚠️ Le reste doit passer SANS ÊTRE TOUCHÉ. Recopier les champs d'un `Buffer`
+ * (export de fichier), d'un flux, d'une `Date` ou d'un `Decimal` Prisma (les
+ * montants) rendrait un objet nu qui a perdu ses méthodes : le fichier
+ * arriverait illisible et le montant se sérialiserait en `{}`. Le masquage
+ * couvre un contrôleur sur dix ; il ne doit rien casser sur les neuf autres.
+ */
+function estObjetSimple(valeur: unknown): boolean {
+  if (valeur === null || typeof valeur !== 'object') return false;
+  const prototype = Object.getPrototypeOf(valeur) as object | null;
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
  * Parcourt une réponse et masque toute coordonnée, à n'importe quelle
  * profondeur.
  *
@@ -51,9 +66,7 @@ export function masquerContacts<T>(valeur: T): T {
   if (Array.isArray(valeur)) {
     return valeur.map((v) => masquerContacts(v)) as unknown as T;
   }
-  if (valeur instanceof Date || valeur === null || typeof valeur !== 'object') {
-    return valeur;
-  }
+  if (!estObjetSimple(valeur)) return valeur;
   const source = valeur as Record<string, unknown>;
   const copie: Record<string, unknown> = {};
   for (const [cle, v] of Object.entries(source)) {

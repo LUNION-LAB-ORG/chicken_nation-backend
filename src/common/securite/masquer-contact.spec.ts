@@ -40,6 +40,31 @@ describe('masquer les coordonnées', () => {
     expect(rendu).toContain('"total":1');
   });
 
+  /**
+   * Le masquage traverse une réponse sur dix ; il ne doit rien casser sur les
+   * neuf autres. Reconstruire champ par champ un tampon ou un montant Prisma
+   * rendrait un objet nu, privé de ses méthodes : le fichier exporté
+   * arriverait illisible et le montant se sérialiserait en « {} ».
+   */
+  it('laisse intact ce qui n’est pas un objet simple', () => {
+    const tampon = Buffer.from('classeur');
+    class Montant {
+      constructor(private readonly v: string) { }
+      toString() { return this.v; }
+      toJSON() { return this.v; }
+    }
+    const montant = new Montant('12500');
+    const r = masquerContacts({ tampon, montant, phone: '+2250140735992' }) as {
+      tampon: Buffer; montant: Montant; phone: string;
+    };
+    expect(Buffer.isBuffer(r.tampon)).toBe(true);
+    expect(r.tampon.toString()).toBe('classeur');
+    expect(r.montant).toBeInstanceOf(Montant);
+    expect(JSON.stringify(r.montant)).toBe('"12500"');
+    // La coordonnée voisine est bien masquée, elle.
+    expect(r.phone).toBe('+225••••••••92');
+  });
+
   it('ne casse ni les dates ni les valeurs nulles', () => {
     const d = new Date('2026-10-04T00:00:00.000Z');
     const r = masquerContacts({ date: d, rien: null, n: 3 }) as { date: Date; rien: null; n: number };

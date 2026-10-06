@@ -24,14 +24,13 @@ import {
   ApiConsumes,
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
-import { NationCardStatus, User, UserRole } from '@prisma/client';
+import { NationCardStatus, User } from '@prisma/client';
 import { CardRequestQueryDto, NationCardQueryDto } from '../dtos/card-query.dto';
 import { PreviewCardDto } from '../dtos/preview-card.dto';
 import { RegenerateCardDto } from '../dtos/regenerate-card.dto';
 import { ReviewCardRequestDto } from '../dtos/review-card-request.dto';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
-import { masquerContacts } from 'src/common/securite/masquer-contact';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
 
@@ -41,18 +40,6 @@ import { Action } from 'src/modules/auth/enums/action.enum';
 @Controller('admin/card-nation')
 @UseGuards(JwtAuthGuard, UserPermissionsGuard)
 export class CardAdminController {
-  /**
-   * MARKETING : les dossiers sans les coordonnées.
-   *
-   * Il gère les cartes — approuver, suspendre, révoquer, régénérer — mais il
-   * n'a aucune raison de repartir avec les numéros et les adresses des
-   * clients. Le masquage est appliqué à la RÉPONSE, pas à l'écran : une
-   * valeur cachée en CSS part quand même sur le réseau.
-   */
-  private sansCoordonnees<T>(req: Request, donnees: T): T {
-    const role = (req.user as User | undefined)?.role;
-    return role === UserRole.MARKETING ? masquerContacts(donnees) : donnees;
-  }
 
   constructor(private readonly cardRequestService: CardRequestService) { }
 
@@ -62,8 +49,8 @@ export class CardAdminController {
   @Get('requests')
   @RequirePermission(Modules.CARD_NATION, Action.READ)
   @ApiOperation({ summary: 'Récupérer toutes les demandes de carte' })
-  async getAllRequests(@Req() req: Request, @Query() query: CardRequestQueryDto) {
-    return this.sansCoordonnees(req, await this.cardRequestService.getAllRequests(query));
+  async getAllRequests(@Query() query: CardRequestQueryDto) {
+    return this.cardRequestService.getAllRequests(query);
   }
 
   /**
@@ -72,8 +59,8 @@ export class CardAdminController {
   @Get('requests/:id')
   @RequirePermission(Modules.CARD_NATION, Action.READ)
   @ApiOperation({ summary: 'Récupérer les détails d\'une demande' })
-  async getRequestById(@Req() req: Request, @Param('id') id: string) {
-    return this.sansCoordonnees(req, await this.cardRequestService.getRequestById(id));
+  async getRequestById(@Param('id') id: string) {
+    return this.cardRequestService.getRequestById(id);
   }
 
   /**
@@ -114,8 +101,8 @@ export class CardAdminController {
   @Get('cards')
   @RequirePermission(Modules.CARD_NATION, Action.READ)
   @ApiOperation({ summary: 'Récupérer toutes les cartes Nation' })
-  async getAllCards(@Req() req: Request, @Query() query: NationCardQueryDto) {
-    return this.sansCoordonnees(req, await this.cardRequestService.getAllCards(query));
+  async getAllCards(@Query() query: NationCardQueryDto) {
+    return this.cardRequestService.getAllCards(query);
   }
 
   /**
@@ -124,8 +111,8 @@ export class CardAdminController {
   @Get('cards/:id')
   @RequirePermission(Modules.CARD_NATION, Action.READ)
   @ApiOperation({ summary: 'Récupérer les détails d\'une carte' })
-  async getCardById(@Req() req: Request, @Param('id') id: string) {
-    return this.sansCoordonnees(req, await this.cardRequestService.getCardById(id));
+  async getCardById(@Param('id') id: string) {
+    return this.cardRequestService.getCardById(id);
   }
 
   /**

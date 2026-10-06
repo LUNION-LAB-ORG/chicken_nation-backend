@@ -22,8 +22,10 @@ import { VerificationCodeThrottlerGuard } from '../guards/verification-code-thro
 import { origineConnexion } from '../helpers/connexion-echecs.helper';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { LoginCustomerDto } from '../dto/login-customer.dto';
+import { SansMasquage } from 'src/common/securite/sans-masquage.decorator';
 
 @Controller('auth')
+@SansMasquage()
 export class AuthController {
   constructor(private readonly authService: AuthService) { }
 
