@@ -8,6 +8,7 @@ import {
   customerPhoneVariants,
   normaliserTelephoneCI,
 } from 'src/common/utils/customer-phone.util';
+import { profilDeclare } from 'src/modules/card-nation/utils/profil-declare';
 
 /**
  * Tunnel d'adhésion (Phase 4) — PRÉ-INSCRIPTION SILENCIEUSE depuis le site.
@@ -106,6 +107,14 @@ export class AdhesionService {
       }
     }
 
+    /*
+      Même règle que CardRequestService.createRequest : un établissement
+      renseigné vaut déclaration d'études. Dérivé ICI aussi parce que
+      l'adhésion écrit `Customer.profile_type` AVANT de créer la demande, et
+      que c'est ce champ-là que lit l'application.
+    */
+    const profil = profilDeclare(dto.profile_type, dto.establishment);
+
     const customer = existing
       ? // À la mise à jour : on ne réécrit le nom que s'il n'était pas déjà connu
         // (ne pas écraser un profil déjà renseigné par le client dans l'app).
@@ -116,7 +125,7 @@ export class AdhesionService {
             last_name: existing.last_name?.trim() ? undefined : (lastName ?? undefined),
             email: existing.email?.trim() ? undefined : placeholderEmail,
             image: existing.image?.trim() ? undefined : (avatarKey ?? undefined),
-            profile_type: dto.profile_type,
+            profile_type: profil,
             ...optInData,
           },
         })
@@ -128,7 +137,7 @@ export class AdhesionService {
             last_name: lastName,
             email: placeholderEmail,
             image: avatarKey,
-            profile_type: dto.profile_type,
+            profile_type: profil,
             whatsapp_opt_in: dto.whatsapp_opt_in === true,
             whatsapp_opt_in_at: dto.whatsapp_opt_in === true ? now : null,
           },
@@ -143,7 +152,7 @@ export class AdhesionService {
       await this.cardRequestService.createRequest(
         customer.id,
         {
-          profile_type: dto.profile_type,
+          profile_type: profil,
           nickname: firstName || undefined,
           institution: dto.establishment,
         },

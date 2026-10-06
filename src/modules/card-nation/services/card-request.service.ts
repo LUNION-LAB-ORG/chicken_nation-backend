@@ -12,6 +12,7 @@ import { CardNotificationService } from './card-notification.service';
 import { S3Service } from 'src/s3/s3.service';
 import { TwilioService } from 'src/twilio/services/twilio.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import { profilDeclare } from '../utils/profil-declare';
 
 @Injectable()
 export class CardRequestService {
@@ -180,6 +181,17 @@ export class CardRequestService {
     file?: Express.Multer.File,
     photoInput?: { file?: Express.Multer.File; base64?: string },
   ) {
+    /*
+      Un ÉTABLISSEMENT renseigné vaut déclaration d'études.
+
+      Les formulaires (app et site) ne demandent l'établissement qu'après un
+      « Oui » à « Êtes-vous étudiant ou élève ? ». Un établissement sans profil
+      est donc une réponse perdue en route, pas un choix : 7 demandes étaient
+      dans ce cas, affichées « Étudiant : Non » à côté de leur école. On déduit
+      ici plutôt que de laisser l'incohérence entrer en base.
+    */
+    createDto.profile_type = profilDeclare(createDto.profile_type, createDto.institution);
+
     // Vérifier si une demande en attente existe déjà
     const existingRequest = await this.prisma.cardRequest.findFirst({
       where: {
