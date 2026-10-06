@@ -123,12 +123,19 @@ export class CardRequestService {
   }
 
   /**
-   * Alloue un numéro de carte UNIQUE (`CN-XXXXXX`).
+   * Alloue un numéro de carte UNIQUE (`CN-BA123`).
+   *
    * Le générateur est aléatoire : on vérifie la contrainte `card_number @unique`
-   * et on régénère en cas de collision (improbable : ~887 M combinaisons).
+   * et on régénère en cas de collision.
+   *
+   * ⚠️ 12 essais, et non 8 : le format lisible n'offre que 67 000 numéros,
+   * contre 887 M pour l'ancien. Sur 20 000 cartes émises, un tirage tombe déjà
+   * juste 3 fois sur 10 ; 12 essais ramènent l'échec à moins d'une allocation
+   * sur 4 millions. Au-delà de ce parc, ajouter un quatrième chiffre plutôt que
+   * des essais (cf. CardGenerationService.generateCardNumber).
    */
   private async allocateCardNumber(): Promise<string> {
-    for (let attempt = 0; attempt < 8; attempt++) {
+    for (let attempt = 0; attempt < 12; attempt++) {
       const candidate = this.cardGenerationService.generateCardNumber();
       const exists = await this.prisma.nationCard.findUnique({
         where: { card_number: candidate },

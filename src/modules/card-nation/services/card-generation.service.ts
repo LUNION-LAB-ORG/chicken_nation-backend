@@ -32,9 +32,27 @@ export class CardGenerationService {
   private readonly CARD_WIDTH = 1536;
   private readonly CARD_HEIGHT = 1024;
 
-  /** Alphabet du code carte : ni 0/O, ni 1/I/L → aucune erreur de lecture/dictée. */
-  private static readonly CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
-  private static readonly CODE_LENGTH = 6;
+  /*
+    Numéro de carte : une SYLLABE puis trois chiffres, « CN-BA123 ».
+
+    Deux lettres tirées au hasard s'épellent (« B, A ») et se confondent au
+    téléphone. Une consonne suivie d'une voyelle se PRONONCE d'un bloc : le
+    client dit « CN BA cent vingt-trois », et le numéro tient en deux
+    morceaux au lieu de six caractères sans structure.
+
+    Ni I, ni L, ni O, ni Q : à l'écrit ils se lisent pour des chiffres.
+  */
+  private static readonly CONSONNES = 'BDFGJKMNPRSTVZ';
+  private static readonly VOYELLES = 'AEIOU';
+  /** Syllabes écartées : elles forment un mot qu'on n'imprime pas sur une carte. */
+  private static readonly SYLLABES_EXCLUES = new Set(['KU', 'NU', 'PU']);
+  private static readonly SYLLABES: string[] = Array.from(
+    CardGenerationService.CONSONNES,
+  ).flatMap((c) =>
+    Array.from(CardGenerationService.VOYELLES)
+      .map((v) => `${c}${v}`)
+      .filter((syllabe) => !CardGenerationService.SYLLABES_EXCLUES.has(syllabe)),
+  );
 
   /**
    * Photo par défaut du titulaire : la mascotte « champion » CN.
@@ -59,27 +77,30 @@ export class CardGenerationService {
   }
 
   /**
-   * Génère le code affiché sur la carte : `CN-XXXXXX`.
+   * Génère le numéro affiché sur la carte : `CN-BA123`.
    *
-   * Préfixe marque + 6 caractères d'un alphabet NON AMBIGU (ni 0/O, ni 1/I/L) →
-   * 31^6 ≈ 887 M combinaisons, lisible et dictable sans erreur. Même convention
-   * que les codes de parrainage.
+   * ⚠️ Remplace `CN-XXXXXX` (6 caractères tirés au hasard). L'ancien format
+   * offrait 887 M combinaisons mais ne se retenait ni ne se dictait : lettres
+   * et chiffres mélangés, aucun groupement, et au téléphone le B, le V et le P
+   * s'entendent pareil. Celui-ci se dit en deux morceaux.
    *
-   * ⚠️ Remplace l'ancien format `DDMM YYXX MMYY RAND` (16 chiffres) qui était
-   * long ET encodait la DATE DE NAISSANCE du titulaire (donnée perso imprimée
-   * sur la carte).
+   * ⚠️ Il distingue aussi une CARTE d'un COUPON : les codes de coupon du CRM
+   * portent le même préfixe `CN-` suivi de 6 caractères (genererCodeCoupon).
+   * Jusqu'ici rien ne permettait de les différencier à l'œil en caisse.
+   *
+   * ⚠️ 67 syllabes × 1000 = 67 000 numéros. Large pour le parc actuel, mais
+   * les collisions deviennent fréquentes au-delà de ~20 000 cartes : il
+   * faudra alors un quatrième chiffre (`CN-BA1234`, 670 000).
    *
    * ⚠️ Ne garantit pas à lui seul l'unicité : l'appelant vérifie la contrainte
    * `card_number @unique` et régénère en cas de collision
    * (cf. CardRequestService.allocateCardNumber).
    */
   generateCardNumber(): string {
-    const alphabet = CardGenerationService.CODE_ALPHABET;
-    let code = '';
-    for (let i = 0; i < CardGenerationService.CODE_LENGTH; i++) {
-      code += alphabet[randomInt(alphabet.length)];
-    }
-    return `CN-${code}`;
+    const syllabes = CardGenerationService.SYLLABES;
+    const syllabe = syllabes[randomInt(syllabes.length)];
+    const chiffres = String(randomInt(1000)).padStart(3, '0');
+    return `CN-${syllabe}${chiffres}`;
   }
 
   generateQRValue(cardNumber: string, customerId: string): string {
