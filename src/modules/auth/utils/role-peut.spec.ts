@@ -156,8 +156,10 @@ describe('rôle LIVRAISON_OPS (demande du 08/10)', () => {
   const peut = (module: Modules, action: Action) =>
     rolePeut(UserRole.LIVRAISON_OPS, module, action);
 
-  it('lit les commandes', () => {
+  it('lit les commandes, les courses, les livreurs et leur planning', () => {
     expect(peut(Modules.COMMANDES, Action.READ)).toBe(true);
+    // Un seul droit couvre les trois écrans du suivi des livraisons.
+    expect(peut(Modules.LIVREURS, Action.READ)).toBe(true);
   });
 
   /**
@@ -185,14 +187,17 @@ describe('rôle LIVRAISON_OPS (demande du 08/10)', () => {
   });
 
   it('n’a rien d’autre, nulle part', () => {
+    // Deux droits, tous deux en LECTURE. Le reste du tableau doit rester vide.
+    const lectures = new Set<Modules>([Modules.COMMANDES, Modules.LIVREURS]);
     for (const module of modules) {
       for (const action of actions) {
-        const attendu = module === Modules.COMMANDES && action === Action.READ;
+        const attendu = lectures.has(module) && action === Action.READ;
         expect([module, action, peut(module, action)]).toEqual([module, action, attendu]);
       }
     }
     expect(Object.keys(permissionsByRole[UserRole.LIVRAISON_OPS].modules)).toEqual([
       Modules.COMMANDES,
+      Modules.LIVREURS,
     ]);
   });
 

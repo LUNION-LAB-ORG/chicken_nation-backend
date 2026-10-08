@@ -11,6 +11,7 @@ import { QueryDeliverersDto } from '../dto/query-deliverers.dto';
 import { RejectDelivererDto, SuspendDelivererDto } from '../dto/reject-deliverer.dto';
 import { DelivererInfoService } from '../services/deliverer-info.service';
 import { DeliverersService } from '../services/deliverers.service';
+import { ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
 
 /**
  * Endpoints réservés aux utilisateurs backoffice (admin / manager).
@@ -30,6 +31,7 @@ export class DeliverersAdminController {
 
   @ApiOperation({ summary: 'Liste paginée des livreurs avec filtres' })
   @Get()
+  @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async findAll(@Query() query: QueryDeliverersDto) {
     return this.deliverersService.findAll(query);
   }
@@ -42,6 +44,7 @@ export class DeliverersAdminController {
       '(> `deliverer.gps_expiration_minutes`) sont exclus par défaut.',
   })
   @Get('live-locations')
+  @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async getLiveLocations(
     @Query('restaurantId') restaurantId?: string,
     @Query('includeOffline') includeOffline?: string,
@@ -54,6 +57,7 @@ export class DeliverersAdminController {
 
   @ApiOperation({ summary: "Détail d'un livreur" })
   @Get(':id')
+  @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.deliverersService.findOne(id);
   }
@@ -65,6 +69,7 @@ export class DeliverersAdminController {
       'Consommé par le drawer livreur du backoffice pour afficher la section "Scoring & Queue".',
   })
   @Get(':id/scoring-info')
+  @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async getScoringInfo(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.delivererInfoService.getScoringInfo(id);
   }

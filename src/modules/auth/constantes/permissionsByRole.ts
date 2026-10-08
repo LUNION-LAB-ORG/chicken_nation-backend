@@ -225,6 +225,11 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
   [UserRole.LIVRAISON_OPS]: {
     modules: {
       [Modules.COMMANDES]: [Action.READ],
+      // Courses, livreurs et planning, en lecture (ajout du 08/10).
+      // ⚠️ Ce droit ne fait qu'AFFICHER les entrées du menu : ces écrans sont
+      // gardés côté serveur par une liste de rôles (ROLES_SUIVI_LIVRAISON),
+      // pas par une permission. Les deux doivent rester alignés.
+      [Modules.LIVREURS]: [Action.READ],
     },
   },
 

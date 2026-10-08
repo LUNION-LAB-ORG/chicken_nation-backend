@@ -22,6 +22,7 @@ import { RegeneratePlanDto } from '../dto/regenerate-plan.dto';
 import { SetDelivererDayDto } from '../dto/set-deliverer-day.dto';
 import { SchedulePlanningService } from '../services/schedule-planning.service';
 import { ScheduleQueryService } from '../services/schedule-query.service';
+import { ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
 
 /**
  * Endpoints admin du module Schedule.
@@ -45,6 +46,7 @@ export class ScheduleAdminController {
   @ApiQuery({ name: 'restaurantId', required: false })
   @ApiQuery({ name: 'status', required: false, enum: SchedulePlanStatus })
   @Get('plans')
+  @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async listPlans(
     @Query('restaurantId') restaurantId?: string,
     @Query('status') status?: SchedulePlanStatus,
@@ -56,6 +58,7 @@ export class ScheduleAdminController {
     summary: "Détail d'un plan : shifts + assignments + livreurs",
   })
   @Get('plans/:id')
+  @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async getPlanDetail(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.queryService.getPlanDetail(id);
   }
@@ -156,6 +159,7 @@ export class ScheduleAdminController {
     summary: "Compteurs en temps réel d'un plan (confirmed / refused / pending)",
   })
   @Get('plans/:id/stats')
+  @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async getPlanStats(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.queryService.countConfirmations(id);
   }

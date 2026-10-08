@@ -13,6 +13,7 @@ import { QueryCoursesDto } from '../dto/query-courses.dto';
 import { CourseActionService } from '../services/course-action.service';
 import { CourseOfferService } from '../services/course-offer.service';
 import { CourseQueryService } from '../services/course-query.service';
+import { ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
 
 /**
  * Endpoints admin pour le module course.
@@ -31,6 +32,7 @@ export class CourseAdminController {
 
   @ApiOperation({ summary: 'Liste paginée des courses (toutes)' })
   @Get()
+  @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async findAll(@Query() query: QueryCoursesDto) {
     return this.queryService.findAllAdmin(query);
   }
@@ -39,12 +41,14 @@ export class CourseAdminController {
     summary: 'Stats agrégées (KPI + daily breakdown + distribution) pour la page Courses',
   })
   @Get('stats')
+  @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async stats(@Query() query: QueryCourseStatsDto) {
     return this.queryService.getStats(query);
   }
 
   @ApiOperation({ summary: "Détail d'une course (+ tentatives d'affectation)" })
   @Get(':id')
+  @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.queryService.findOne(id);
   }
