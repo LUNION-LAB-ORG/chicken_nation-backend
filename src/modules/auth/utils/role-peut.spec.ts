@@ -1,4 +1,5 @@
-import { UserRole } from '@prisma/client';
+import { UserRole, UserType } from '@prisma/client';
+import { isStoreRole, resolveStaffType } from 'src/modules/users/helpers/staff-type.helper';
 import { Reflector } from '@nestjs/core';
 import { UserPermissionsGuard } from '../guards/user-permissions.guard';
 import { Action } from '../enums/action.enum';
@@ -148,6 +149,64 @@ describe('rôle MARKETING (décision du 28/09)', () => {
     }
   });
 });
+
+describe('rôle LIVRAISON_OPS (demande du 08/10)', () => {
+  const modules = Object.values(Modules) as Modules[];
+  const actions = Object.values(Action) as Action[];
+  const peut = (module: Modules, action: Action) =>
+    rolePeut(UserRole.LIVRAISON_OPS, module, action);
+
+  it('lit les commandes', () => {
+    expect(peut(Modules.COMMANDES, Action.READ)).toBe(true);
+  });
+
+  /**
+   * Le cœur de la demande : « il peut juste consulter sans modifier, pas
+   * d'action à mener ». Chaque geste est nommé, pour qu'un ajout de droit se
+   * voie en relecture plutôt que de passer dans un test générique.
+   */
+  it('ne mène aucune action sur une commande', () => {
+    expect(peut(Modules.COMMANDES, Action.CREATE)).toBe(false);
+    expect(peut(Modules.COMMANDES, Action.UPDATE)).toBe(false);
+    expect(peut(Modules.COMMANDES, Action.UPDATE_FULL)).toBe(false);
+    expect(peut(Modules.COMMANDES, Action.DELETE)).toBe(false);
+    // Le reçu PDF emporte les coordonnées du client hors du backoffice.
+    expect(peut(Modules.COMMANDES, Action.EXPORT)).toBe(false);
+  });
+
+  /**
+   * Le tableau de bord porte le chiffre d'affaires du réseau, et les exports
+   * de commandes en dépendent : un suivi de livraisons n'a pas à l'ouvrir.
+   */
+  it('n’a ni tableau de bord ni statistiques', () => {
+    for (const action of actions) {
+      expect([action, peut(Modules.DASHBOARD, action)]).toEqual([action, false]);
+    }
+  });
+
+  it('n’a rien d’autre, nulle part', () => {
+    for (const module of modules) {
+      for (const action of actions) {
+        const attendu = module === Modules.COMMANDES && action === Action.READ;
+        expect([module, action, peut(module, action)]).toEqual([module, action, attendu]);
+      }
+    }
+    expect(Object.keys(permissionsByRole[UserRole.LIVRAISON_OPS].modules)).toEqual([
+      Modules.COMMANDES,
+    ]);
+  });
+
+  /**
+   * Compte de SIÈGE : il voit les commandes de tous les restaurants. Le test
+   * attrape l'ajout involontaire à STORE_ROLES, qui le limiterait en silence
+   * à un point de vente et le priverait de la moitié des livraisons.
+   */
+  it('est un compte de siège, pas un compte de point de vente', () => {
+    expect(isStoreRole(UserRole.LIVRAISON_OPS)).toBe(false);
+    expect(resolveStaffType(UserRole.LIVRAISON_OPS)).toBe(UserType.BACKOFFICE);
+  });
+});
+
 
 describe('filtrerParDroit', () => {
   it('alertes de commande : tous les rôles sauf MARKETING lisent les commandes', () => {

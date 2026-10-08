@@ -202,6 +202,32 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
     },
   },
 
+  /* ===================== LIVRAISON OPS ===================== */
+  /**
+   * Suivi des livraisons, en CONSULTATION SEULE (demande du 08/10).
+   *
+   * Une seule entrée : les Commandes, en lecture. Il ouvre la liste et le
+   * détail d'une commande, et c'est tout. Aucun geste : ni création, ni
+   * changement de statut, ni encaissement, ni suppression.
+   *
+   * ⚠️ Volontairement SANS `DASHBOARD` : les statistiques, le tableau de bord
+   * et les exports de commandes en dépendent. Les ajouter ouvrirait le chiffre
+   * d'affaires du réseau à un rôle qui n'a pas à le voir.
+   *
+   * ⚠️ Volontairement SANS `COMMANDES.EXPORT` : le reçu PDF d'une commande
+   * emporte les coordonnées du client hors du backoffice.
+   *
+   * Compte de SIÈGE (`resolveStaffType` → BACKOFFICE, il n'est pas dans
+   * STORE_ROLES) : il voit les commandes de tous les restaurants, ce qu'un
+   * suivi de livraisons suppose. Pour le limiter à un point de vente, il
+   * faudrait l'ajouter à STORE_ROLES et lui rattacher un restaurant.
+   */
+  [UserRole.LIVRAISON_OPS]: {
+    modules: {
+      [Modules.COMMANDES]: [Action.READ],
+    },
+  },
+
   /* ===================== CUISINE ===================== */
   [UserRole.CUISINE]: {
     modules: {

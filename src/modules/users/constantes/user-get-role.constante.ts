@@ -16,6 +16,8 @@ export const userGetRole = (role: UserRole) => {
             return 'Agent Call Center';
         case UserRole.CUISINE:
             return 'Agent Cuisinier';
+        case UserRole.LIVRAISON_OPS:
+            return 'Suivi Livraisons';
         default:
             return 'Inconnu';
     }
