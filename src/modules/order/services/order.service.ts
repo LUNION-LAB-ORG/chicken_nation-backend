@@ -1290,7 +1290,15 @@ export class OrderService {
     // Émettre l'événement de mise à jour de statut avec l'ancien statut
     this.orderWebSocketService.emitStatusUpdate(updatedOrder, order.status);
 
-    this.signalerAnomaliePaiement(updatedOrder, status);
+    /*
+      L'alerte « terminée sans paiement » ne part PLUS d'ici.
+
+      Elle partait à la seconde du changement de statut, alors que le paiement
+      arrive parfois bien après : un cas mesuré en production montrait
+      1 h 00 min 15 s d'écart. Le groupe recevait donc des impayés qui n'en
+      étaient pas. C'est désormais OrderImpayeTask qui juge, 90 minutes plus
+      tard, et qui annonce la régularisation si le paiement finit par tomber.
+    */
 
     return updatedOrder;
   }
@@ -1512,72 +1520,6 @@ export class OrderService {
     );
   }
 
-  private signalerAnomaliePaiement(
-    commande: { id: string; reference: string; amount: number; paied?: boolean; restaurant_id?: string | null; paiements?: { status: PaiementStatus; amount: number; total?: number | null }[] },
-    status: OrderStatus,
-  ): void {
-    try {
-      if (status !== OrderStatus.COLLECTED && status !== OrderStatus.COMPLETED) return;
-
-      /**
-       * ⚠️ `paied` FAIT FOI, et rien d'autre.
-       *
-       * Premier signalement en production, première fausse alerte : une
-       * commande manuelle réglée au restaurant est marquée payée sans qu'une
-       * ligne de paiement existe forcément. Ne regarder que ces lignes faisait
-       * donc crier « aucun paiement » sur une commande que tous les écrans
-       * affichent « Payé », puisque le badge lit ce même drapeau
-       * (backoffice, orderMapper.getPaymentStatus).
-       *
-       * Une alerte qui contredit l'écran n'alerte plus personne : elle apprend
-       * à ignorer le canal. On se tait donc dès que la maison considère la
-       * commande payée. Un drapeau posé à tort reste un problème comptable, à
-       * traiter par un rapprochement, pas par une alerte opérationnelle.
-       */
-      if (commande.paied) return;
-
-      const encaisse = (commande.paiements ?? [])
-        .filter((p) => p.status === PaiementStatus.SUCCESS)
-        .reduce((somme, p) => somme + (p.total ?? p.amount ?? 0), 0);
-
-      const du = Number(commande.amount) || 0;
-      if (du <= 0) return;
-
-      // Même tolérance que la vérification de paiement : un écart d'arrondi de
-      // taxe entre l'application et le serveur n'est pas un impayé.
-      const TOLERANCE = 50;
-
-      if (encaisse <= 0) {
-        this.alertes.signaler({
-          code: CodeAlerte.COMMANDE_SANS_PAIEMENT,
-          restaurantId: commande.restaurant_id ?? null,
-          reference: commande.reference,
-          details: [
-            `Montant dû : ${du} F`,
-            'Aucun paiement enregistré sur cette commande.',
-          ],
-          meta: { orderId: commande.id, du, encaisse },
-        });
-        return;
-      }
-
-      if (encaisse < du - TOLERANCE) {
-        this.alertes.signaler({
-          code: CodeAlerte.PAIEMENT_PARTIEL,
-          restaurantId: commande.restaurant_id ?? null,
-          reference: commande.reference,
-          details: [
-            `Encaissé ${encaisse} F sur ${du} F`,
-            `Manque ${du - encaisse} F.`,
-          ],
-          meta: { orderId: commande.id, du, encaisse },
-        });
-      }
-    } catch (e) {
-      // Une alerte ratée ne doit jamais remonter jusqu'au client.
-      this.logger.warn(`Contrôle de paiement non effectué pour ${commande?.reference} : ${(e as Error)?.message}`);
-    }
-  }
 
   /**
    * Récupère une commande par son ID

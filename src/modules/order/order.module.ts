@@ -34,6 +34,7 @@ import { MapsModule } from 'src/modules/maps/maps.module';
 import { OrderRelanceController } from './controllers/order-relance.controller';
 import { OrderRelanceService } from './services/order-relance.service';
 import { OrderRelanceTask } from './tasks/order-relance.task';
+import { OrderImpayeTask } from './tasks/order-impaye.task';
 
 @Module({
   imports: [
@@ -79,6 +80,7 @@ import { OrderRelanceTask } from './tasks/order-relance.task';
     // Relance des paniers de l'application non payés (SettingsService est global).
     OrderRelanceService,
     OrderRelanceTask,
+    OrderImpayeTask,
   ],
 })
 export class OrderModule {}

@@ -30,6 +30,8 @@ export enum CodeAlerte {
   COMMANDE_SANS_PAIEMENT = 'COMMANDE_SANS_PAIEMENT',
   /** Encaissé strictement inférieur au montant dû. */
   PAIEMENT_PARTIEL = 'PAIEMENT_PARTIEL',
+  /** Le paiement d'une commande déjà signalée impayée a fini par arriver. */
+  PAIEMENT_REGULARISE = 'PAIEMENT_REGULARISE',
   /** KKiaPay appelle, nous refusons : secret désaligné. */
   WEBHOOK_REFUSE = 'WEBHOOK_REFUSE',
   /** Livraison facturée zéro sans qu'aucune offre ne s'applique. */
@@ -73,6 +75,7 @@ const TITRES: Record<CodeAlerte, string> = {
   [CodeAlerte.PAIEMENT_NON_CONFIRME]: 'Paiement encaissé, commande NON confirmée',
   [CodeAlerte.COMMANDE_SANS_PAIEMENT]: 'Commande terminée SANS paiement',
   [CodeAlerte.PAIEMENT_PARTIEL]: 'Paiement PARTIEL',
+  [CodeAlerte.PAIEMENT_REGULARISE]: 'Paiement régularisé',
   [CodeAlerte.WEBHOOK_REFUSE]: 'Notifications de paiement refusées',
   [CodeAlerte.LIVRAISON_GRATUITE_ANORMALE]: 'Livraison facturée 0 F sans offre',
   [CodeAlerte.COMMANDE_EN_ATTENTE]: 'Commande en attente de paiement',

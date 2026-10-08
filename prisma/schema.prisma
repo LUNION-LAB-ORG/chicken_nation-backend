@@ -1643,6 +1643,11 @@ model Order {
   cancelled_at      DateTime?
   deleted_at        DateTime?
   paied_at          DateTime?
+  /// Horodatage de l'alerte « impayé » déjà postée pour cette commande.
+  /// Non nul = alerte émise, on ne la repostera pas. Remis à NULL quand le
+  /// paiement finit par arriver, en même temps que le message de
+  /// régularisation : si la commande redevenait impayée, elle doit réalerter.
+  alerte_impaye_at  DateTime?             @db.Timestamp(6)
   /// Instant de SOUMISSION initiale de la commande (création du panier, avant paiement).
   /// Pour les paiements différés (commande créée un jour, payée un autre), `created_at`
   /// est aligné sur l'instant du PAIEMENT afin que la commande remonte en tête de liste
