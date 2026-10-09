@@ -22,6 +22,8 @@ export const CRM_SETTINGS = {
   APP_LINK: 'crm.app_link',
   DEFAULT_OFFER_ID: 'crm.default_offer_id',
   INACTIVE_DAYS: 'crm.inactive_days',
+  /** Jours avant qu'un « intéressé » ou un « coupon envoyé » endormi revienne à relancer. */
+  DORMANT_DAYS: 'crm.dormant_days',
   /** Posée au premier passage de la reprise acquisition : avant, les ventes sont « historique ». */
   BASCULE_ACQUISITION: 'crm.bascule_acquisition',
 } as const;
@@ -30,6 +32,46 @@ export const DEFAULT_MAX_ATTEMPTS = 5;
 export const DEFAULT_ALERT_DELAY_HOURS = 48;
 /** Un client qui a commandé devient « inactif » après ce nombre de jours sans commande. */
 export const DEFAULT_INACTIVE_DAYS = 30;
+
+/**
+ * Au bout de combien de jours un contact OUVERT mais endormi revient-il à
+ * relancer.
+ *
+ * « Intéressé » et « coupon envoyé » ne vieillissaient pas : un contact
+ * appelé une fois restait dans la file des semaines sans que rien ne le fasse
+ * bouger (cas constaté : trois intéressés à 24 jours). L'agent voyait une file
+ * qui ne descend jamais, et le client n'était jamais rappelé.
+ */
+export const DEFAULT_DORMANT_DAYS = 7;
+
+/**
+ * Les contacts endormis à réveiller, en conditions Prisma.
+ *
+ * ⚠️ Fonction PURE, pour être testée sans base : c'est elle qui décide qui est
+ * réveillé, la tâche ne fait que l'exécuter.
+ *
+ * Un coupon sans date d'envoi se juge sur le dernier appel : sinon il dormirait
+ * pour toujours, ce qui est exactement le défaut qu'on corrige.
+ */
+export function conditionDormants(limite: Date) {
+  return {
+    entity_status: { not: EntityStatus.DELETED },
+    OR: [
+      { status: CrmStatus.INTERESSE, last_call_at: { lte: limite } },
+      { status: CrmStatus.COUPON_ENVOYE, coupon_sent_at: { lte: limite } },
+      {
+        status: CrmStatus.COUPON_ENVOYE,
+        coupon_sent_at: null,
+        last_call_at: { lte: limite },
+      },
+    ],
+  };
+}
+
+/** La date avant laquelle un contact ouvert est considéré endormi. */
+export function limiteDormants(maintenant: Date, jours: number): Date {
+  return new Date(maintenant.getTime() - jours * 24 * 60 * 60 * 1000);
+}
 export const DEFAULT_APP_LINK = 'https://www.chicken-nation.com/fr/app-mobile';
 // Valable pour un inscrit comme pour un ancien client, et sans emoji : un
 // emoji fait passer le SMS en Unicode, soit 3 segments facturés au lieu de 2.

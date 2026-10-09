@@ -7,6 +7,7 @@ import { CrmCampaignService } from '../services/crm-campaign.service';
 import { CrmRattrapageService, TAILLE_REVUE } from '../services/crm-rattrapage.service';
 import { CrmRepriseAcquisitionService } from '../services/crm-reprise-acquisition.service';
 import { CrmRepriseService } from '../services/crm-reprise.service';
+import { CrmDormantsService } from '../services/crm-dormants.service';
 
 /**
  * Tâches planifiées du CRM. Toutes sont sûres en double backend : les
@@ -18,6 +19,7 @@ export class CrmTask implements OnApplicationBootstrap {
   private enCours = new Set<string>();
 
   constructor(
+    private readonly dormants: CrmDormantsService,
     private readonly prisma: PrismaService,
     private readonly rattrapage: CrmRattrapageService,
     private readonly reprise: CrmRepriseService,
@@ -117,6 +119,19 @@ export class CrmTask implements OnApplicationBootstrap {
           this.logger.warn(`Clôture de la campagne ${c.id} impossible : ${(e as Error).message}`);
         }
       }
+    });
+  }
+
+  /**
+   * Réveil des contacts endormis, une fois par heure.
+   *
+   * À l'heure plutôt qu'au jour : un délai réglé à 1 jour doit se voir le
+   * lendemain matin, pas à l'heure arbitraire d'un passage quotidien.
+   */
+  @Cron('35 * * * *')
+  async reveillerDormants() {
+    await this.uneFois('dormants', async () => {
+      await this.dormants.reveiller();
     });
   }
 

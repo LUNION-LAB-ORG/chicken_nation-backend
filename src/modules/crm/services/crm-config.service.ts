@@ -6,6 +6,7 @@ import {
   CRM_SETTINGS,
   DEFAULT_ALERT_DELAY_HOURS,
   DEFAULT_APP_LINK,
+  DEFAULT_DORMANT_DAYS,
   DEFAULT_INACTIVE_DAYS,
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_MESSAGE_TEMPLATE,
@@ -22,6 +23,8 @@ import {
 
 export interface ReglagesCrm {
   max_attempts: number;
+  /** Jours avant qu'un contact ouvert endormi revienne à relancer. */
+  dormant_days: number;
   alert_delay_hours: number;
   inactive_days: number;
   whatsapp_template_sid: string;
@@ -160,6 +163,7 @@ export class CrmConfigService {
       Number(valeur) > 0 ? Math.floor(Number(valeur)) : defaut;
     return {
       max_attempts: entier(v[CRM_SETTINGS.MAX_ATTEMPTS], DEFAULT_MAX_ATTEMPTS),
+      dormant_days: entier(v[CRM_SETTINGS.DORMANT_DAYS], DEFAULT_DORMANT_DAYS),
       alert_delay_hours: entier(v[CRM_SETTINGS.ALERT_DELAY_HOURS], DEFAULT_ALERT_DELAY_HOURS),
       inactive_days: entier(v[CRM_SETTINGS.INACTIVE_DAYS], DEFAULT_INACTIVE_DAYS),
       whatsapp_template_sid: v[CRM_SETTINGS.WHATSAPP_TEMPLATE_SID] || '',
@@ -173,6 +177,7 @@ export class CrmConfigService {
     if (dto.default_offer_id) await this.trouver('offre', dto.default_offer_id);
     const correspondances: [keyof UpdateCrmSettingsDto, string][] = [
       ['max_attempts', CRM_SETTINGS.MAX_ATTEMPTS],
+      ['dormant_days', CRM_SETTINGS.DORMANT_DAYS],
       ['alert_delay_hours', CRM_SETTINGS.ALERT_DELAY_HOURS],
       ['inactive_days', CRM_SETTINGS.INACTIVE_DAYS],
       ['whatsapp_template_sid', CRM_SETTINGS.WHATSAPP_TEMPLATE_SID],

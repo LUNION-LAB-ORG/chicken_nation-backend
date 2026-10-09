@@ -28,6 +28,7 @@ import { CrmRepriseService } from './services/crm-reprise.service';
 import { CrmSyncService } from './services/crm-sync.service';
 import { CrmVentesService } from './services/crm-ventes.service';
 import { CrmTask } from './tasks/crm.task';
+import { CrmDormantsService } from './services/crm-dormants.service';
 
 /**
  * CRM : relance des inscrits qui n'ont jamais commandé et des anciens clients
@@ -43,6 +44,7 @@ import { CrmTask } from './tasks/crm.task';
     CrmAnalyticsController,
   ],
   providers: [
+    CrmDormantsService,
     CrmAccessService,
     CrmEventsService,
     CrmIdentiteService,

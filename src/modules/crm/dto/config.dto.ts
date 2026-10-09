@@ -87,6 +87,14 @@ export class UpdateCrmSettingsDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(20)
   max_attempts?: number;
 
+  /** Jours avant qu'un « intéressé » ou un « coupon envoyé » endormi revienne à relancer. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  dormant_days?: number;
+
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(720)
   alert_delay_hours?: number;
 
