@@ -166,24 +166,25 @@ export class CrmAccessService {
   }
 
   /**
-   * Portée d'une recherche PAR NUMÉRO COMPLET.
+   * Portée de l'onglet CONTACTS : le fichier entier, pour tout le monde.
    *
-   * Un agent ne voit que son portefeuille dans les listes, et c'est voulu : il
-   * n'a pas à parcourir le fichier client. Mais quand un client l'appelle, il
-   * doit retrouver sa fiche, quel que soit l'agent à qui elle est confiée.
+   * ⚠️ DÉCISION DE L'UTILISATEUR, prise après que le risque lui a été exposé.
+   * Un agent ne voyait que son portefeuille : il ne retrouvait pas un client
+   * suivi par un collègue, et le centre d'appels passait son temps à se
+   * demander qui détient qui. Contacts est l'annuaire de toute la base, il se
+   * consulte entièrement.
    *
-   * Le CRM accordait déjà exactement cela par « Un client appelle ? »
-   * (`rechercher`). Ici on ouvre la MÊME capacité à la recherche de l'onglet
-   * Contacts, où les agents la cherchent naturellement : rien de nouveau n'est
-   * accordé, le cloisonnement par RESTAURANT reste en place, et il faut
-   * connaître le numéro complet.
+   * Ce qui reste fermé, et qui n'a pas été ouvert :
+   *  - le CLOISONNEMENT PAR RESTAURANT, autre règle, autre objet : un compte
+   *    de point de vente ne voit toujours que les fiches de son restaurant ;
+   *  - l'EXPORT, qui exige `CRM EXPORT`, détenu par le seul ADMIN. Un agent
+   *    parcourt donc l'annuaire, il ne l'emporte pas ;
+   *  - la FILE de travail, qui reste le portefeuille de chacun (`portee`).
    *
-   * ⚠️ Ne vaut QUE pour un numéro complet. Une recherche par nom reste
-   * cloisonnée : sinon n'importe quel agent parcourrait et exporterait toute la
-   * base en tapant une lettre.
+   * ⚠️ Toute route qui laisse SORTIR des données (export, rapport exportable)
+   * doit continuer d'utiliser `portee`, jamais celle-ci.
    */
-  porteeRecherche(user: User, parNumero: boolean): Prisma.CrmContactWhereInput {
-    if (!parNumero) return this.portee(user);
+  porteeListe(user: User): Prisma.CrmContactWhereInput {
     const restaurant = this.restaurantDe(user);
     return restaurant === undefined ? {} : ficheDuRestaurant(restaurant);
   }

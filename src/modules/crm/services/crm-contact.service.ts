@@ -15,7 +15,6 @@ import { CrmEventsService } from './crm-events.service';
 import {
   SELECT_LIGNE,
   codeMasque,
-  estRechercheParNumero,
   etatCoupon,
   filtreContacts,
   pourAnnuaire,
@@ -35,15 +34,8 @@ export class CrmContactService {
   async lister(user: User, q: QueryCrmContactDto) {
     const page = q.page ?? 1;
     const limit = q.limit ?? 25;
-    /*
-      Un agent qui tape un NUMÉRO COMPLET cherche le client qui l'appelle : il
-      doit le retrouver même s'il appartient à un collègue. Par son nom, il
-      reste dans son portefeuille, sinon il parcourrait toute la base.
-    */
-    const where = filtreContacts(
-      this.access.porteeRecherche(user, estRechercheParNumero(q.search)),
-      q,
-    );
+    // Contacts est l'annuaire : tout le monde le parcourt (cf. porteeListe).
+    const where = filtreContacts(this.access.porteeListe(user), q);
     const [lignes, total] = await Promise.all([
       this.prisma.crmContact.findMany({
         where,
@@ -97,7 +89,9 @@ export class CrmContactService {
    */
   async repartition(user: User, q: QueryCrmContactDto) {
     const { segment: _public, compte: _compte, page: _p, limit: _l, ...reste } = q;
-    const base = filtreContacts(this.access.portee(user), reste as QueryCrmContactDto);
+    // MÊME portée que la liste : sinon les pastilles compteraient une
+    // population que les lignes en dessous ne montrent pas.
+    const base = filtreContacts(this.access.porteeListe(user), reste as QueryCrmContactDto);
 
     const [parPublic, ...parCompte] = await Promise.all([
       this.prisma.crmContact.groupBy({ by: ['segment'], where: base, _count: { _all: true } }),
