@@ -115,13 +115,17 @@ export function filtreContacts(
   ];
 
   const statuts = (q.status ?? '').split(',').map((s) => s.trim()).filter((s) => STATUTS.includes(s));
-  // Un client qui a commandé sort de la liste (cahier §3) : on ne le revoit
-  // que si on le demande, pour l'historique.
-  et.push(
-    statuts.length > 0
-      ? { status: { in: statuts as CrmStatus[] } }
-      : { status: { not: CrmStatus.CONVERTI } },
-  );
+  /*
+    AUCUNE EXCLUSION PAR DÉFAUT.
+
+    La liste écartait les convertis d'office (cahier §3). Résultat : chercher un
+    client qui vient de commander ne donnait RIEN, alors qu'il est bien là. Sur
+    un écran qui doit réunir tous les clients du système, un filtre invisible
+    qui cache une partie de la base fait croire à une absence.
+
+    « Hors convertis » reste disponible, mais en choix explicite.
+  */
+  if (statuts.length > 0) et.push({ status: { in: statuts as CrmStatus[] } });
 
   if (q.segment) et.push({ segment: q.segment });
 
