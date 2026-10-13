@@ -3262,6 +3262,9 @@ enum CrmSegment {
   INACTIF // a déjà commandé, plus rien depuis le délai réglé (30 jours par défaut)
   GLOVO // numéro relevé sur une commande Glovo (lot 2)
   YANGO // numéro relevé sur une commande Yango (lot 2)
+  /// Client qui a commandé récemment : il n'est PAS à démarcher, il est là
+  /// pour que l'onglet Contacts soit l'annuaire de toute la base.
+  CLIENT
 }
 
 enum CampaignDistributionMode {
@@ -3277,6 +3280,10 @@ enum CrmStatus {
   NON_INTERESSE // joint, ne souhaite pas commander (raison)
   INJOIGNABLE // numéro invalide, ou trop de tentatives sans réponse
   CONVERTI // première commande passée
+  /// Jamais travaillé par le call center. ⚠️ Hors de STATUTS_OUVERTS : ne
+  /// compte dans aucun portefeuille, n'entre dans aucune file. Devient
+  /// A_APPELER le jour où un agent le prend en charge.
+  NON_DEMARCHE
 }
 
 /// Effet d'un statut d'appel sur le prospect. Les libellés sont configurables

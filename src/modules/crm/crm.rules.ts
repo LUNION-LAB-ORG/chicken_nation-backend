@@ -163,6 +163,7 @@ export const LIBELLES_PUBLIC: Record<string, string> = {
   INACTIF: 'Client inactif',
   GLOVO: 'Client Glovo',
   YANGO: 'Client Yango',
+  CLIENT: 'Client actif',
 };
 
 /** Issues où le client a décroché. */

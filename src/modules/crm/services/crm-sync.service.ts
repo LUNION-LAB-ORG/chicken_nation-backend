@@ -240,6 +240,28 @@ export class CrmSyncService {
         },
         `Plus aucune commande depuis ${compter(jours, 'jour')}`,
       );
+    } else if (derniere) {
+      /*
+        CLIENT ACTIF : il a commandé, et pas assez anciennement pour être
+        inactif. Il n'est pas à démarcher, mais il doit figurer dans l'annuaire,
+        sinon il n'apparaît nulle part depuis que la page Clients a été versée
+        dans le CRM.
+
+        ⚠️ `NON_DEMARCHE`, et surtout PAS `CONVERTI` : un client qui a commandé
+        sans qu'on l'appelle fausserait les taux de conversion.
+      */
+      await this.creerContact(
+        {
+          customer_id: client.id,
+          ...telephone,
+          registered_at: client.created_at,
+          segment: CrmSegment.CLIENT,
+          segment_since: derniere.created_at,
+          last_order_at: derniere.created_at,
+          status: CrmStatus.NON_DEMARCHE,
+        },
+        "Client actif, ajouté à l'annuaire",
+      );
     }
   }
 

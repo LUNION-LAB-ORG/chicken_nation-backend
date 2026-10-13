@@ -259,6 +259,8 @@ export const LIBELLES_PERIODE: Record<CrmSegment, string> = {
   INACTIF: 'Devenus inactifs',
   GLOVO: 'Captés sur Glovo',
   YANGO: 'Captés sur Yango',
+  // Jamais ciblé par une campagne : le libellé ne sert qu'aux listes.
+  CLIENT: 'Clients actifs',
 };
 
 /** Critères d'un public écrits en clair, pour le rapport et la synthèse. */

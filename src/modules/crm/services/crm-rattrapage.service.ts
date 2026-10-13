@@ -179,6 +179,84 @@ export class CrmRattrapageService {
    * reconquis qui a de nouveau décroché repart pour un cycle. La date d'entrée
    * est celle où le délai a été franchi, pas l'heure du traitement.
    */
+  /**
+   * Un client de l'annuaire qui a franchi le délai devient INACTIF, donc un
+   * contact à reconquérir.
+   *
+   * ⚠️ SANS la rechute des convertis, et c'est délibéré. Celle-ci ouvre un
+   * nouveau cycle et enregistre une vente : légitime pour quelqu'un que le call
+   * center avait converti, faux pour un client de l'annuaire que personne n'a
+   * jamais appelé. Il entre simplement « à appeler », `call_count` à zéro, donc
+   * dans « Jamais appelés ».
+   *
+   * ⚠️ Sans ce passage, un client actif le resterait pour toujours et
+   * n'entrerait jamais en reconquête : toute la relance des inactifs s'arrêtait
+   * le jour où l'annuaire a été créé.
+   */
+  async basculerClientsDevenusInactifs(): Promise<number> {
+    const jours = await this.config.joursInactivite();
+    const libelle = `Plus aucune commande depuis ${compter(jours, 'jour')}`;
+
+    return this.prisma.$executeRawUnsafe(
+      `WITH d AS (${DERNIERES}),
+      r AS (
+        UPDATE "CrmContact" x
+        SET "segment" = 'INACTIF',
+            "segment_since" = d.derniere + make_interval(days => $1::int),
+            "last_order_at" = d.derniere,
+            "status" = 'A_APPELER',
+            "updated_at" = now()
+        FROM d
+        WHERE d."customer_id" = x."customer_id"
+          AND x."segment" = 'CLIENT' AND x."status" = 'NON_DEMARCHE'
+          AND x."entity_status" <> 'DELETED'
+          AND d.derniere < now() - make_interval(days => $1::int)
+        RETURNING x."id"
+      )
+      INSERT INTO "CrmEvent" ("id", "contact_id", "type", "label")
+      SELECT gen_random_uuid(), r."id", 'ENTREE', $2 FROM r`,
+      jours,
+      libelle,
+    );
+  }
+
+  /**
+   * Fiches des CLIENTS ACTIFS, pour que l'onglet Contacts soit l'annuaire de
+   * toute la base.
+   *
+   * ⚠️ Elles entrent en `NON_DEMARCHE`, et surtout PAS en `CONVERTI` : un
+   * client qui a commandé sans qu'on l'appelle compterait comme une conversion
+   * du call center et fausserait les taux comme les statistiques de campagne.
+   *
+   * ⚠️ `NON_DEMARCHE` est hors de STATUTS_OUVERTS : ces fiches ne comptent dans
+   * aucun portefeuille et n'entrent dans la file d'aucun agent. Elles ne
+   * deviennent du travail que le jour où quelqu'un les prend en charge.
+   *
+   * Mêmes garde-fous que les deux autres entrées : jamais deux fiches pour un
+   * compte, jamais une seconde fiche sur un numéro déjà connu sans compte.
+   */
+  async creerFichesClientsActifs(): Promise<number> {
+    const jours = await this.config.joursInactivite();
+
+    return this.prisma.$executeRawUnsafe(
+      `WITH d AS (${DERNIERES}),
+      n AS (
+        INSERT INTO "CrmContact" ("id", "customer_id", "phone", "phone_key", "registered_at", "segment", "segment_since", "last_order_at", "status", "updated_at")
+        SELECT gen_random_uuid(), c."id", nullif(regexp_replace(c."phone", '\\D', '', 'g'), ''), ${CLE_CLIENT}, c."created_at",
+               'CLIENT', d.derniere, d.derniere, 'NON_DEMARCHE', now()
+        FROM d JOIN "Customer" c ON c."id" = d."customer_id" AND c."entity_status" <> 'DELETED'
+        WHERE d.derniere >= now() - make_interval(days => $1::int)
+          AND NOT EXISTS (SELECT 1 FROM "CrmContact" x WHERE x."customer_id" = c."id")
+          AND ${SANS_FICHE_DU_NUMERO}
+        ON CONFLICT DO NOTHING
+        RETURNING "id"
+      )
+      INSERT INTO "CrmEvent" ("id", "contact_id", "type", "label")
+      SELECT gen_random_uuid(), n."id", 'ENTREE', 'Client actif, ajouté à l''annuaire' FROM n`,
+      jours,
+    );
+  }
+
   async detecterInactifs(): Promise<{ nouveaux: number; rechutes: number }> {
     const jours = await this.config.joursInactivite();
     const libelle = `Plus aucune commande depuis ${compter(jours, 'jour')}`;

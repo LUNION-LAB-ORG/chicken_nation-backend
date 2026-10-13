@@ -82,6 +82,26 @@ export class CrmTask implements OnApplicationBootstrap {
     if (r.nouveaux + r.rechutes > 0) {
       this.logger.log(`CRM : ${r.nouveaux} nouveaux inactifs, ${r.rechutes} clients redevenus inactifs`);
     }
+
+    /*
+      ORDRE IMPOSÉ, les trois requêtes regardent la même dernière commande :
+       1. les inactifs, déjà faits au-dessus ;
+       2. les clients de l'annuaire qui viennent de franchir le délai, sinon ils
+          resteraient « actifs » pour toujours et n'entreraient jamais en
+          reconquête ;
+       3. seulement ensuite, les fiches des clients encore actifs.
+      Inverser 2 et 3 créerait une fiche « client actif » juste avant de la
+      basculer, ou pire, laisserait passer un tour.
+    */
+    const bascules = await this.rattrapage.basculerClientsDevenusInactifs();
+    if (bascules > 0) {
+      this.logger.log(`CRM : ${bascules} client(s) de l'annuaire devenu(s) inactif(s)`);
+    }
+
+    const annuaire = await this.rattrapage.creerFichesClientsActifs();
+    if (annuaire > 0) {
+      this.logger.log(`CRM : ${annuaire} client(s) actif(s) ajouté(s) à l'annuaire`);
+    }
   }
 
   /** Toutes les heures : contacts affectés et toujours pas appelés. */

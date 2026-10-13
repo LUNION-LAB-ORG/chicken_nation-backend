@@ -23,6 +23,16 @@ export type EtatCoupon = (typeof ETATS_COUPON)[number];
 export const SEGMENTS_CRM = ['JAMAIS_COMMANDE', 'INACTIF', 'GLOVO', 'YANGO'] as const;
 
 /**
+ * Publics acceptés comme FILTRE DE LISTE.
+ *
+ * ⚠️ `CLIENT` n'est volontairement PAS dans `SEGMENTS_CRM` : on ne cible pas
+ * une campagne sur des clients actifs, on se mettrait à démarcher des gens qui
+ * commandent déjà. Il n'existe que pour que l'onglet Contacts soit l'annuaire
+ * de toute la base, et on doit donc pouvoir filtrer dessus.
+ */
+export const SEGMENTS_LISTE = [...SEGMENTS_CRM, 'CLIENT'] as const;
+
+/**
  * État du COMPTE CLIENT, repris de l'ancienne page Clients.
  *
  * ⚠️ À ne pas confondre avec le PUBLIC (`segment`), qui dit par où le contact
@@ -65,8 +75,8 @@ export class QueryCrmContactDto {
   @IsOptional() @IsString() @MaxLength(100)
   search?: string;
 
-  @ApiPropertyOptional({ description: 'Public : inscrits sans commande, inactifs…', enum: SEGMENTS_CRM })
-  @IsOptional() @IsIn(SEGMENTS_CRM)
+  @ApiPropertyOptional({ description: 'Public : inscrits sans commande, inactifs, clients actifs…', enum: SEGMENTS_LISTE })
+  @IsOptional() @IsIn(SEGMENTS_LISTE)
   segment?: (typeof SEGMENTS_CRM)[number];
 
   @ApiPropertyOptional({ enum: COMPTES_CLIENT, description: "État du compte client (ancienne page Clients)" })
