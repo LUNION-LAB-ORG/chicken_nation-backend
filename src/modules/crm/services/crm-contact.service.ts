@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   CampaignStatus,
   CrmEventType,
@@ -369,6 +369,24 @@ export class CrmContactService {
         where: { id: { in: ids } },
         data: { assigned_to_id: agent?.id ?? null, assigned_at: agent ? maintenant : null },
       });
+
+      /*
+        Assigner un client de l'ANNUAIRE vaut prise en charge.
+
+        Sans ça, l'assignation était un geste SANS EFFET : le statut
+        « non démarché » exclut la fiche de toutes les files, l'agent la
+        recevait donc sans jamais la voir. On le promeut « à appeler », comme le
+        ferait le bouton de sa fiche.
+
+        Seulement quand on assigne à quelqu'un : retirer l'agent d'un contact ne
+        doit pas le faire entrer dans l'entonnoir.
+      */
+      if (agent) {
+        await tx.crmContact.updateMany({
+          where: { id: { in: ids }, status: CrmStatus.NON_DEMARCHE },
+          data: { status: CrmStatus.A_APPELER },
+        });
+      }
       await tx.crmCampaignMember.updateMany({
         where: { contact_id: { in: ids }, released_at: null },
         data: { agent_id: agent?.id ?? null, assigned_at: agent ? maintenant : null, alert_sent_at: null },
@@ -538,6 +556,60 @@ export class CrmContactService {
    * c'est le même client : un nom qui ne vivrait que dans le CRM laisserait
    * la caisse, les reçus et les messages continuer à dire « Client sans nom ».
    */
+  /**
+   * PRENDRE EN CHARGE un client de l'annuaire.
+   *
+   * Les fiches « non démarchées » existent pour que l'onglet Contacts réunisse
+   * toute la base : ce sont des clients qui commandent déjà, que le call center
+   * ne travaille pas. Elles n'appellent donc aucun geste, et la fiche n'en
+   * propose aucun tant qu'on n'a pas décidé de s'en occuper.
+   *
+   * Ce geste-ci est cette décision : le contact passe « à appeler », il est
+   * confié à l'agent qui l'a pris, et il apparaît dans sa file.
+   *
+   * ⚠️ `call_count` n'est PAS touché : il reste à zéro pour un client jamais
+   * appelé, qui doit donc atterrir dans « Jamais appelés » et non dans « À
+   * relancer ». Un client repris après un cycle garde son compteur.
+   */
+  async prendreEnCharge(user: User, id: string) {
+    this.access.assertAgent(user);
+
+    const contact = await this.prisma.crmContact.findFirst({
+      where: { id, entity_status: { not: EntityStatus.DELETED } },
+      select: { id: true, status: true, campaign_id: true },
+    });
+    if (!contact) throw new NotFoundException('Contact introuvable');
+    if (contact.status !== CrmStatus.NON_DEMARCHE) {
+      throw new BadRequestException('Ce contact est déjà suivi par le call center.');
+    }
+
+    // Revendication : deux agents qui cliquent en même temps, un seul l'obtient.
+    const { count } = await this.prisma.crmContact.updateMany({
+      where: { id, status: CrmStatus.NON_DEMARCHE },
+      data: {
+        status: CrmStatus.A_APPELER,
+        assigned_to_id: user.id,
+        assigned_at: new Date(),
+      },
+    });
+    if (count !== 1) {
+      throw new ConflictException("Ce contact vient d'être pris par quelqu'un d'autre.");
+    }
+
+    await this.events.journaliser([
+      {
+        contact_id: id,
+        campaign_id: contact.campaign_id,
+        actor_id: user.id,
+        type: CrmEventType.ASSIGNATION,
+        label: 'Pris en charge depuis l’annuaire',
+      },
+    ]);
+    this.events.signaler([id], 'prise_en_charge');
+
+    return { success: true };
+  }
+
   async renommer(user: User, id: string, dto: RenommerContactDto) {
     const prenom = (dto.prenom ?? '').trim();
     const nom = (dto.nom ?? '').trim();

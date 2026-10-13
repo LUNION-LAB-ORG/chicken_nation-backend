@@ -218,6 +218,14 @@ export function statutApresAppel(
   outcome: CrmCallOutcome,
   ctx: { dejaJoint: boolean; tentatives: number; maxTentatives: number },
 ): CrmStatus {
+  /*
+    Qualifier un appel sur un client de l'ANNUAIRE vaut prise en charge : il
+    entre dans l'entonnoir comme n'importe quel contact à appeler. Sans ça, un
+    « pas de réponse » le laissait « non démarché » avec des tentatives au
+    compteur, c'est-à-dire travaillé mais invisible dans toutes les files.
+  */
+  if (courant === CrmStatus.NON_DEMARCHE) courant = CrmStatus.A_APPELER;
+
   const couponEnvoye = courant === CrmStatus.COUPON_ENVOYE;
   switch (outcome) {
     case CrmCallOutcome.NON_JOINT:

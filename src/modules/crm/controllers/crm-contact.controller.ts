@@ -123,6 +123,18 @@ export class CrmContactController {
     return this.contacts.renommer(req.user as User, id, dto);
   }
 
+  /**
+   * Prendre en charge un client de l'annuaire : il passe « à appeler » et entre
+   * dans la file de l'agent. Tant qu'il est « non démarché », la fiche ne
+   * propose aucun geste.
+   */
+  @Post('contacts/:id/prendre-en-charge')
+  @RequirePermission(Modules.CRM, Action.UPDATE)
+  @ApiOperation({ summary: "Prendre en charge un client de l'annuaire" })
+  prendreEnCharge(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
+    return this.contacts.prendreEnCharge(req.user as User, id);
+  }
+
   @Post('contacts/:id/calls')
   @RequirePermission(Modules.CRM, Action.UPDATE)
   @ApiOperation({ summary: "Qualifier un appel : statut, raison, commentaire, rappel" })
