@@ -224,6 +224,19 @@ function filtreCoupon(etat: EtatCoupon | undefined, maintenant: Date): Prisma.Cr
  * « Kouassi Jean » doit trouver Jean Kouassi : chaque mot doit figurer dans le
  * prénom, le nom ou l'e-mail. Une saisie de chiffres cherche le téléphone.
  */
+/**
+ * La saisie est-elle un NUMÉRO COMPLET ?
+ *
+ * Même condition que `filtreRecherche`, sortie à part parce qu'elle décide
+ * aussi de la PORTÉE : un agent retrouve n'importe quel client par son numéro,
+ * jamais par son nom (cf. CrmAccessService.porteeRecherche).
+ */
+export function estRechercheParNumero(search?: string): boolean {
+  const s = (search ?? '').trim();
+  const chiffres = s.replace(/\D/g, '');
+  return chiffres.length >= 8 && chiffres.length === s.replace(/[\s+.-]/g, '').length;
+}
+
 function filtreRecherche(search?: string): Prisma.CrmContactWhereInput | null {
   const s = (search ?? '').trim();
   if (!s) return null;

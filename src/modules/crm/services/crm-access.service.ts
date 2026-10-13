@@ -165,6 +165,29 @@ export class CrmAccessService {
     return restaurant === undefined ? role : { AND: [role, ficheDuRestaurant(restaurant)] };
   }
 
+  /**
+   * Portée d'une recherche PAR NUMÉRO COMPLET.
+   *
+   * Un agent ne voit que son portefeuille dans les listes, et c'est voulu : il
+   * n'a pas à parcourir le fichier client. Mais quand un client l'appelle, il
+   * doit retrouver sa fiche, quel que soit l'agent à qui elle est confiée.
+   *
+   * Le CRM accordait déjà exactement cela par « Un client appelle ? »
+   * (`rechercher`). Ici on ouvre la MÊME capacité à la recherche de l'onglet
+   * Contacts, où les agents la cherchent naturellement : rien de nouveau n'est
+   * accordé, le cloisonnement par RESTAURANT reste en place, et il faut
+   * connaître le numéro complet.
+   *
+   * ⚠️ Ne vaut QUE pour un numéro complet. Une recherche par nom reste
+   * cloisonnée : sinon n'importe quel agent parcourrait et exporterait toute la
+   * base en tapant une lettre.
+   */
+  porteeRecherche(user: User, parNumero: boolean): Prisma.CrmContactWhereInput {
+    if (!parNumero) return this.portee(user);
+    const restaurant = this.restaurantDe(user);
+    return restaurant === undefined ? {} : ficheDuRestaurant(restaurant);
+  }
+
   private porteeRole(user: User): Prisma.CrmContactWhereInput {
     // L'annuaire voit le fichier entier, comme l'ancienne page Clients : il
     // n'est pas agent, il n'a pas de portefeuille à restreindre.

@@ -15,6 +15,7 @@ import { CrmEventsService } from './crm-events.service';
 import {
   SELECT_LIGNE,
   codeMasque,
+  estRechercheParNumero,
   etatCoupon,
   filtreContacts,
   pourAnnuaire,
@@ -34,7 +35,15 @@ export class CrmContactService {
   async lister(user: User, q: QueryCrmContactDto) {
     const page = q.page ?? 1;
     const limit = q.limit ?? 25;
-    const where = filtreContacts(this.access.portee(user), q);
+    /*
+      Un agent qui tape un NUMÉRO COMPLET cherche le client qui l'appelle : il
+      doit le retrouver même s'il appartient à un collègue. Par son nom, il
+      reste dans son portefeuille, sinon il parcourrait toute la base.
+    */
+    const where = filtreContacts(
+      this.access.porteeRecherche(user, estRechercheParNumero(q.search)),
+      q,
+    );
     const [lignes, total] = await Promise.all([
       this.prisma.crmContact.findMany({
         where,
