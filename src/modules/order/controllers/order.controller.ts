@@ -49,6 +49,7 @@ import { OrderWebSocketService } from '../websockets/order-websocket.service';
 import { peutVoirLesBrouillons } from '../helpers/brouillons.rules';
 import { Throttle } from '@nestjs/throttler';
 import { CouponCreationThrottlerGuard, LIMITE_COUPON } from '../guards/coupon-throttler.guard';
+import { champsClientModifiables } from '../helpers/modification-client.rules';
 
 /**
  * Retire d'une modification de commande les champs qui la rendraient payée
@@ -573,8 +574,14 @@ export class OrderController {
      * utilisation du code écrit, celui d'un autre client compris (coupon CRM
      * à usage unique grillé). Un code ne s'applique qu'à la création.
      */
-    const { status, code_promo: _codePromo, ...champsClient } = orderUpdatedDto as any;
-    return this.orderService.updateClient(id, champsClient);
+    /*
+      ⚠️ Et RIEN d'autre non plus : liste BLANCHE. Retirer deux champs puis
+      laisser passer le reste permettait à un client de réécrire le
+      restaurant, le type, le paiement ou les points de sa commande
+      (cf. modification-client.rules.ts).
+    */
+    const champsClient = champsClientModifiables(orderUpdatedDto as unknown as Record<string, unknown>);
+    return this.orderService.updateClient(id, champsClient as OrderUpdatedDto);
   }
 
   @Patch(':id/status')
