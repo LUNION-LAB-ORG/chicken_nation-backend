@@ -35,6 +35,8 @@ import { JsonValue } from '@prisma/client/runtime/library';
 import { TurboService } from 'src/turbo/services/turbo.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { nomSurLaCommande } from './nom-client.helper';
+import { MapsService } from 'src/modules/maps/maps.service';
+import { choisirRestaurant } from './acheminement.rules';
 import {
   AUCUNE_REMISE_FIDELITE,
   calculerRemiseFidelite,
@@ -54,6 +56,7 @@ export class OrderHelper {
     private promotionService: PromotionService,
     private restaurantService: RestaurantService,
     private readonly turboService: TurboService,
+    private readonly maps: MapsService,
     private readonly voucherService: VoucherService,
     private readonly dishOptionService: DishOptionService,
   ) {}
@@ -132,31 +135,38 @@ export class OrderHelper {
     if (!restaurants.length) {
       throw new BadRequestException('Aucun restaurant disponible');
     }
-    // 3. Calcul de la distance et sélection du plus proche
-    const closest = restaurants.reduce((prev, curr) => {
-      const prevDistance = this.generateDataService.haversineDistance(
-        addressData.latitude,
-        addressData.longitude,
-        prev.latitude ?? 0,
-        prev.longitude ?? 0,
-      );
+    /*
+      3. OUVERTS D'ABORD, puis le choix. Le code prenait le plus proche, PUIS
+      refusait la commande s'il était fermé, au lieu de passer au suivant : un
+      client pouvait se voir refuser une commande alors qu'un autre restaurant
+      ouvert l'attendait à trois kilomètres.
+    */
+    const ouverts = restaurants.filter((r) =>
+      this.restaurantService.isRestaurantOpen(JSON.parse(r.schedule?.toString() ?? '[]')),
+    );
+    if (ouverts.length === 0) {
+      throw new BadRequestException('Aucun restaurant ouvert pour le moment');
+    }
 
-      const currDistance = this.generateDataService.haversineDistance(
-        addressData.latitude,
-        addressData.longitude,
-        curr.latitude ?? 0,
-        curr.longitude ?? 0,
-      );
-      return currDistance < prevDistance ? curr : prev;
-    });
-    if (!closest) {
+    // 4. Le plus proche PAR LA ROUTE, pas à vol d'oiseau (cf. acheminement.rules).
+    const adresse = { latitude: addressData.latitude, longitude: addressData.longitude };
+    const choix = await choisirRestaurant(ouverts, adresse, (r) =>
+      this.maps.distanceRoutiereMetres({
+        originLat: r.latitude!,
+        originLng: r.longitude!,
+        destLat: adresse.latitude,
+        destLng: adresse.longitude,
+      }),
+    );
+    if (!choix) {
       throw new BadRequestException('Aucun restaurant disponible');
     }
-    const schedule = JSON.parse(closest.schedule?.toString() ?? '[]');
-    if (!this.restaurantService.isRestaurantOpen(schedule)) {
-      throw new BadRequestException('Le restaurant est fermé');
+    if (choix.renverse) {
+      this.logger.log(
+        `Acheminement par la route : ${choix.restaurant.name} retenu alors qu'un autre était plus proche à vol d'oiseau (${adresse.latitude},${adresse.longitude})`,
+      );
     }
-    return closest;
+    return choix.restaurant;
   }
 
   // Récupérer le restaurant le plus proche

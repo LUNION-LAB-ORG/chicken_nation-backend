@@ -1,7 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import {
   Address,
@@ -23,10 +20,12 @@ import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
 import { TurboService } from 'src/turbo/services/turbo.service';
 import { OrderItemDto } from '../dto/order-create.dto';
 import { nomSurLaCommande } from './nom-client.helper';
+import { MapsService } from 'src/modules/maps/maps.service';
+import { choisirRestaurant } from './acheminement.rules';
 
 @Injectable()
 export class OrderV2Helper {
-  // private readonly logger = new Logger(OrderV2Helper.name);
+  private readonly logger = new Logger(OrderV2Helper.name);
 
   constructor(
     private prisma: PrismaService,
@@ -34,6 +33,7 @@ export class OrderV2Helper {
     private generateDataService: GenerateDataService,
     private restaurantService: RestaurantService,
     private readonly turboService: TurboService,
+    private readonly maps: MapsService,
     private voucherService: VoucherService,
     private promoCodeService: PromoCodeService,
     private readonly dishOptionService: DishOptionService,
@@ -198,18 +198,26 @@ export class OrderV2Helper {
       throw new BadRequestException("Actuellement, aucun restaurant ouvert ne propose l'ensemble de ces plats.");
     }
 
-    // c. Trouver le plus proche parmi les éligibles
-    const closest = eligibleRestaurants.reduce((prev, curr) => {
-      const prevDist = this.generateDataService.haversineDistance(
-        addressData.latitude, addressData.longitude, prev.latitude ?? 0, prev.longitude ?? 0,
+    // c. Le plus proche PAR LA ROUTE parmi les éligibles, pas à vol d'oiseau
+    //    (cf. acheminement.rules : la lagune et le péage du pont HKB).
+    const adresse = { latitude: addressData.latitude, longitude: addressData.longitude };
+    const choix = await choisirRestaurant(eligibleRestaurants, adresse, (r) =>
+      this.maps.distanceRoutiereMetres({
+        originLat: r.latitude!,
+        originLng: r.longitude!,
+        destLat: adresse.latitude,
+        destLng: adresse.longitude,
+      }),
+    );
+    if (!choix) {
+      throw new BadRequestException("Actuellement, aucun restaurant ouvert ne propose l'ensemble de ces plats.");
+    }
+    if (choix.renverse) {
+      this.logger.log(
+        `Acheminement par la route : ${choix.restaurant.name} retenu alors qu'un autre était plus proche à vol d'oiseau (${adresse.latitude},${adresse.longitude})`,
       );
-      const currDist = this.generateDataService.haversineDistance(
-        addressData.latitude, addressData.longitude, curr.latitude ?? 0, curr.longitude ?? 0,
-      );
-      return currDist < prevDist ? curr : prev;
-    });
-
-    return closest;
+    }
+    return choix.restaurant;
   }
 
   // 3. NOUVEAU : Valider le choix du client pour EMPORTER / SUR PLACE (Manuel)
