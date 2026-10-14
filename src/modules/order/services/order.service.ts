@@ -847,7 +847,12 @@ export class OrderService {
         'Le montant du paiement est inférieur au montant de la commande',
       );
     }
-    this.orderHelperV2.validateRestaurantChoice(restaurant.id, items.map((item) => item.dish_id))
+    /*
+      ⚠️ Était appelé SANS await : la vérification (restaurant ouvert, plats
+      proposés) partait dans le vide, son rejet n'était jamais rattrapé, et
+      selon le réglage de Node un rejet non géré fait tomber le processus.
+    */
+    await this.orderHelperV2.validateRestaurantChoice(restaurant.id, items.map((item) => item.dish_id));
     // Générer un numéro de commande unique
     const orderNumber = this.generateDataService.generateOrderReference();
 
