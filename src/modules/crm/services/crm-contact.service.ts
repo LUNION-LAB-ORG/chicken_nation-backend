@@ -63,9 +63,9 @@ export class CrmContactService {
   }
 
   /**
-   * `telephone` : numéro tapé par l'agent dans « Un client appelle ? ». Seul
-   * ce numéro, s'il est bien celui de la fiche, ouvre en lecture la fiche d'un
-   * client suivi par un collègue : un identifiant seul ne suffit pas.
+   * `telephone` : numéro tapé dans « Un client appelle ? ». Conservé pour
+   * cette entrée-là ; il ne conditionne PLUS l'ouverture d'une fiche, depuis
+   * que Contacts est l'annuaire entier.
    *
    * `mode` de la fiche : « gestion » (direction), « sien » ou « commune »
    * (l'agent peut agir), « lecture » (agent, client d'un collègue retrouvé par
@@ -223,13 +223,18 @@ export class CrmContactService {
       : this.access.estLecteur(user)
         ? ('consultation' as const)
         : await this.access.assertPeutTraiter(user, p).catch(() => 'lecture' as const);
-    if (mode === 'lecture') {
-      this.access.assertAgent(user);
-      const cle = cleTelephone(telephone);
-      if (!cle || (cle !== p.phone_key && cle !== cleTelephone(p.customer?.phone))) {
-        throw new ForbiddenException("Ce client est suivi par un collègue : retrouvez-le par son numéro dans « Un client appelle ? »");
-      }
-    }
+    /*
+      TOUT AGENT CONSULTE TOUTE FICHE.
+
+      Il fallait auparavant TAPER LE NUMÉRO du client pour ouvrir la fiche d'un
+      collègue : seul « Un client appelle ? » la donnait. Depuis que Contacts
+      est l'annuaire entier, la liste montrait des clients que cliquer
+      refusait — on voyait la ligne et on butait sur un message.
+
+      Consulter s'ouvre donc, AGIR reste fermé : le mode « lecture » n'autorise
+      ni appel, ni coupon, ni changement d'agent.
+    */
+    if (mode === 'lecture') this.access.assertAgent(user);
 
     const [commande, abandons, achats] = await Promise.all([
       p.conversion_order_id
