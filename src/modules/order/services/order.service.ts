@@ -132,6 +132,14 @@ function assietteDesLignes(
 }
 
 /**
+ * Adresse d'une commande, comparable : le texte JSON que le site enregistre
+ * et que le formulaire du back office renvoie tel quel (espaces du bord
+ * ignorés), ou un objet d'une donnée plus ancienne.
+ */
+const texteAdresse = (adresse: unknown): string =>
+  typeof adresse === 'string' ? adresse.trim() : JSON.stringify(adresse ?? '');
+
+/**
  * Texte montré à l'agent quand un panier réactivé perd sa remise : le coupon
  * ne pouvait plus être consommé. Il doit annoncer le nouveau total au client.
  */
@@ -150,11 +158,19 @@ export function avertissementReprise(coupon: ReconsommationCoupon, total: number
  * Texte montré à l'agent quand un panier réactivé avec des articles modifiés
  * facture un cadeau que l'annulation avait rendu au client. Le total n'est
  * cité que s'il ne l'est pas déjà par l'avertissement du coupon.
+ *
+ * `rendus` faux : commande du site à payer à la livraison reprise (sans
+ * annulation) avec d'autres articles. Le cadeau n'a pas été rendu, il est
+ * seulement facturé désormais : l'agent l'annonce au client avec le
+ * nouveau total.
  */
-export function avertissementCadeaux(noms: string[], total: number, avecTotal: boolean): string {
+export function avertissementCadeaux(noms: string[], total: number, avecTotal: boolean, rendus = true): string {
   const liste = noms.join(', ');
-  const phrase =
-    noms.length > 1
+  const phrase = !rendus
+    ? noms.length > 1
+      ? `Les articles ont changé : les cadeaux offerts (${liste}) sont désormais facturés au prix de la carte.`
+      : `Les articles ont changé : le cadeau offert (${liste}) est désormais facturé au prix de la carte.`
+    : noms.length > 1
       ? `Les cadeaux offerts (${liste}) ont été rendus au client à l'annulation : ils sont facturés au prix de la carte sur la commande reprise.`
       : `Le cadeau offert (${liste}) a été rendu au client à l'annulation : il est facturé au prix de la carte sur la commande reprise.`;
   return avecTotal ? `${phrase} Nouveau total : ${formaterFrancs(total)} F, à annoncer au client.` : phrase;
@@ -2291,6 +2307,36 @@ export class OrderService {
     const reactivation = auto === false && estPanierAnnuleParClient(order);
 
     /**
+     * REPRISE PAR LE PERSONNEL (bascule « auto » vers « manuel »), voir plus
+     * bas. Décidée ici parce que les articles et les frais de livraison en
+     * dépendent.
+     */
+    const passeEnManuel = auto === false && order.auto === true;
+    /**
+     * ⚠️ Commande du site à payer à la livraison (19/10) : le client a validé
+     * ce total sur le site, frais de service compris, et le livreur le lui
+     * réclamera. La reprendre au téléphone ne doit pas le changer. Vaut aussi
+     * quand elle est réactivée après une annulation par le client.
+     *  - TAXE : gardée (voir `garderTaxe`) ;
+     *  - ARTICLES : le formulaire les renvoie toujours ; inchangés, la commande
+     *    garde ses lignes d'origine, comme à la réactivation. Recalculées au
+     *    prix de la carte, elles factureraient un plat ou un supplément offert,
+     *    et un prix de carte changé depuis la commande ;
+     *  - LIVRAISON : le formulaire remplace les frais par l'aperçu
+     *    (`GET /orders/frais-livraison`), qui ne connaît pas le client : une
+     *    offre réservée à son niveau de fidélité, ou limitée par client, y est
+     *    sautée, et une offre a pu expirer pendant l'attente. Tant que
+     *    l'adresse, le restaurant et le type ne changent pas, les frais de la
+     *    commande restent.
+     * Si l'agent change les articles ou la livraison, le total est refait et
+     * l'agent est averti d'un cadeau désormais facturé.
+     */
+    const fraisAcceptesSurLeSite =
+      passeEnManuel &&
+      order.channel === OrderChannel.WEB &&
+      order.payment_method === PaymentMethod.OFFLINE;
+
+    /**
      * CHANGER LE COUPON D'UNE COMMANDE (demande du 02/10).
      *
      * Le coupon n'était figé qu'à défaut : à la création seulement (25/09).
@@ -2427,10 +2473,16 @@ export class OrderService {
      * recalculées au prix de la carte : un cadeau dont le plat ou le
      * supplément reste au panier y est facturé, et l'agent en est averti
      * (`avertissement_reprise`) pour l'annoncer au client.
+     *
+     * Même règle pour la reprise d'une commande du site à payer à la
+     * livraison (`fraisAcceptesSurLeSite`) : le total validé sur le site ne
+     * bouge pas tant que l'agent ne touche pas aux articles. Ses cadeaux n'ont
+     * pas été rendus (aucune annulation) : rien à consommer de nouveau.
      */
-    const articlesInchanges = reactivation && !!items?.length && memesArticles(order.order_items, items);
+    const lignesGardables = reactivation || fraisAcceptesSurLeSite;
+    const articlesInchanges = lignesGardables && !!items?.length && memesArticles(order.order_items, items);
     const cadeauxFactures =
-      reactivation && !!items?.length && !articlesInchanges ? cadeauxRefactures(order.order_items, items) : [];
+      lignesGardables && !!items?.length && !articlesInchanges ? cadeauxRefactures(order.order_items, items) : [];
 
     if (items && items.length > 0 && !articlesInchanges) {
       // Récupérer les plats correspondants
@@ -2494,7 +2546,18 @@ export class OrderService {
 
     // Si le type n'est pas DELIVERY, forcer les frais de livraison à 0
     const isDelivery = (rest.type ?? order.type) === OrderType.DELIVERY;
-    const finalDeliveryFee = isDelivery ? (delivery_fee ?? order.delivery_fee ?? 0) : 0;
+    // Commande du site à payer à la livraison : ses frais restent tant que la
+    // livraison ne change pas (voir `fraisAcceptesSurLeSite`).
+    const memeLivraison =
+      (rest.type === undefined || rest.type === order.type) &&
+      (!restaurant_id || restaurant_id === order.restaurant_id) &&
+      (rest.address === undefined || texteAdresse(rest.address) === texteAdresse(order.address));
+    const garderFraisLivraison = fraisAcceptesSurLeSite && memeLivraison;
+    const finalDeliveryFee = isDelivery
+      ? garderFraisLivraison
+        ? (order.delivery_fee ?? 0)
+        : (delivery_fee ?? order.delivery_fee ?? 0)
+      : 0;
 
     // Construire les données de mise à jour (uniquement les champs Prisma valides)
     const updateData: any = {
@@ -2549,10 +2612,10 @@ export class OrderService {
      *  - le PAIEMENT passe à la caisse s'il reste à payer (après l'écriture
      *    principale, voir plus bas).
      *
-     * Uniquement sur la BASCULE, et jamais l'inverse : réenregistrer une
-     * commande déjà manuelle ne doit pas refaire ces gestes.
+     * Uniquement sur la BASCULE (`passeEnManuel`, plus haut), et jamais
+     * l'inverse : réenregistrer une commande déjà manuelle ne doit pas
+     * refaire ces gestes.
      */
-    const passeEnManuel = auto === false && order.auto === true;
     /**
      * ⚠️ Sauf quand le MONTANT est déjà ENGAGÉ : taxe et total ne bougent pas.
      *  - commande déjà payée : le client a réglé la taxe, la retirer du total
@@ -2572,17 +2635,12 @@ export class OrderService {
           order.status !== OrderStatus.ACCEPTED &&
           order.status !== OrderStatus.IN_PROGRESS));
     /**
-     * ⚠️ Ni pour une commande du site à payer à la livraison (19/10) : le
-     * client a validé ce total sur le site, frais de service compris, et le
-     * livreur le lui réclamera. La reprendre au téléphone ne doit pas le
-     * changer. Vaut aussi quand elle est réactivée après une annulation par
-     * le client. Si l'agent change les articles, la taxe garde sa valeur de
-     * création et le total est refait, comme pour un montant engagé.
+     * ⚠️ Ni pour une commande du site à payer à la livraison
+     * (`fraisAcceptesSurLeSite`, plus haut) : le client a validé ce total sur
+     * le site, frais de service compris. Si l'agent change les articles, la
+     * taxe garde sa valeur de création et le total est refait, comme pour un
+     * montant engagé.
      */
-    const fraisAcceptesSurLeSite =
-      passeEnManuel &&
-      order.channel === OrderChannel.WEB &&
-      order.payment_method === PaymentMethod.OFFLINE;
     const garderTaxe = montantEngage || fraisAcceptesSurLeSite;
     if (passeEnManuel) {
       if (!garderTaxe) updateData.tax = 0;
@@ -2626,7 +2684,16 @@ export class OrderService {
 
     // Les articles ne changent pas, mais la taxe si : le total doit être refait
     // ici, le bloc de recalcul ci-dessous ne s'exécutant que sur un panier modifié.
-    if (passeEnManuel && !garderTaxe && !(orderItemsData && newNetAmount !== null)) {
+    // De même pour une commande du site dont l'agent a changé la livraison :
+    // ses nouveaux frais entrent dans le total (sinon le total et la colonne
+    // des frais divergent, et Turbo facture un prix des plats faux).
+    const fraisLivraisonChanges =
+      fraisAcceptesSurLeSite && finalDeliveryFee !== (order.delivery_fee ?? 0);
+    if (
+      passeEnManuel &&
+      (!garderTaxe || fraisLivraisonChanges) &&
+      !(orderItemsData && newNetAmount !== null)
+    ) {
       updateData.amount = totalPour(order.discount ?? 0);
     }
 
@@ -2764,7 +2831,22 @@ export class OrderService {
           }
           return tx.order.update({ where: { id: order.id }, data: updateData, include: includeEcriture });
         })
-      : await this.ecrireSansChangerLaRemise(order, updateData, includeEcriture);
+      : await this.ecrireSansChangerLaRemise(
+          order,
+          updateData,
+          includeEcriture,
+          /**
+           * REPRISE AU TÉLÉPHONE (hors réactivation, qui revendique déjà) :
+           * l'acceptation est décidée sur la commande LUE au début, puis les
+           * articles et les frais ont été recalculés. Entre-temps, un collègue
+           * a pu l'annuler (« Annuler la commande »), ou le client
+           * (« Modifier ma commande »). Sans condition, la reprise écrasait
+           * l'annulation : commande annulée de nouveau acceptée, transmise au
+           * restaurant, alors que son coupon et ses cadeaux venaient d'être
+           * rendus. L'écriture exige donc l'état lu ; sinon 409.
+           */
+          passeEnManuel ? { status: order.status, entity_status: order.entity_status, auto: true } : undefined,
+        );
 
     // Si le montant a changé (recalcul des items, frais de livraison, etc.),
     // re-synchroniser le flag `paied` selon la somme des paiements SUCCESS :
@@ -2896,6 +2978,14 @@ export class OrderService {
         return { ...updatedOrder, avertissement_reprise: avertissements.join(' ') };
       }
     }
+    // Commande du site reprise avec d'autres articles : un cadeau resté au
+    // panier est désormais facturé. L'agent annonce le nouveau total.
+    if (!reactivation && cadeauxFactures.length > 0) {
+      return {
+        ...updatedOrder,
+        avertissement_reprise: avertissementCadeaux(cadeauxFactures, updatedOrder.amount, true, false),
+      };
+    }
     return updatedOrder;
   }
 
@@ -2914,11 +3004,15 @@ export class OrderService {
    * code lus tiennent encore (même geste que l'annulation par le client :
    * condition dans le `where`, P2025 rendu en 409). Sans total à réécrire,
    * rien de ce qui dépend de la remise ne bouge : écriture ordinaire.
+   *
+   * `etatLu` : état que la commande doit encore avoir (reprise au téléphone),
+   * ajouté à la même condition, avec son propre message.
    */
   private async ecrireSansChangerLaRemise<I extends Prisma.OrderInclude>(
     order: { id: string; code_promo: string | null; discount: number | null },
     updateData: Prisma.OrderUpdateInput,
     include: I,
+    etatLu?: Pick<Prisma.OrderWhereInput, 'status' | 'entity_status' | 'auto'>,
   ): Promise<Prisma.OrderGetPayload<{ include: I }>> {
     const totalRefait = updateData.amount !== undefined;
     try {
@@ -2926,13 +3020,18 @@ export class OrderService {
         where: {
           id: order.id,
           ...(totalRefait && { code_promo: order.code_promo ?? null, discount: order.discount ?? 0 }),
+          ...etatLu,
         },
         data: updateData,
         include,
       });
     } catch (e) {
-      if (totalRefait && e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
-        throw new ConflictException('Cette commande vient de changer : rechargez-la avant de la modifier.');
+      if ((totalRefait || etatLu) && e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
+        throw new ConflictException(
+          etatLu
+            ? 'Cette commande vient de changer : rechargez-la avant de la reprendre.'
+            : 'Cette commande vient de changer : rechargez-la avant de la modifier.',
+        );
       }
       throw e;
     }

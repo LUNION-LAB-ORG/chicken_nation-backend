@@ -26,14 +26,19 @@ export function peutVoirLesBrouillons(user?: { role?: UserRole | string | null }
 
 /**
  * Brouillon, en Prisma : commande passée par le client (`auto`), non
- * supprimée, qui n'est PAS une commande effective au sens du CRM. Le
- * complément est pris de `commandeEffective()`, jamais recopié : si la
+ * supprimée, EN ATTENTE, qui n'est PAS une commande effective au sens du CRM.
+ * Le complément est pris de `commandeEffective()`, jamais recopié : si la
  * définition d'une commande qui compte évolue, celle du brouillon suit.
  * Revient à : non payée, en attente, non supprimée, et soit payable en ligne,
  * soit du site à payer à la livraison (commande à confirmer).
+ *
+ * « En attente » : une commande du site annulée par le centre d'appels avant
+ * d'être confirmée ne compte pas au CRM (`ANNULEE_AVANT_CONFIRMATION_WHERE`),
+ * mais n'est pas un brouillon pour autant (annulée, rien à relancer).
  */
 export const BROUILLON_WHERE: Prisma.OrderWhereInput = {
   auto: true,
+  status: OrderStatus.PENDING,
   entity_status: { not: EntityStatus.DELETED },
   NOT: commandeEffective(),
 };

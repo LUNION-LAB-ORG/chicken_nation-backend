@@ -1,5 +1,9 @@
 import { CrmCallOutcome as O, CrmSegment as P, CrmStatus as S } from '@prisma/client';
-import { A_CONFIRMER_SQL, PAS_A_CONFIRMER_WHERE } from 'src/modules/order/helpers/paiement-livraison.rules';
+import {
+  A_CONFIRMER_SQL,
+  PAS_A_CONFIRMER_WHERE,
+  PAS_ANNULEE_AVANT_CONFIRMATION_WHERE,
+} from 'src/modules/order/helpers/paiement-livraison.rules';
 import { correspond } from 'src/modules/order/relance/relance.base-simulee-spec';
 import {
   commandeEffective,
@@ -161,7 +165,7 @@ describe('commandeEffective', () => {
       customer_id: 'c1',
       entity_status: { not: 'DELETED' },
       NOT: { payment_method: 'ONLINE', paied: false, status: 'PENDING' },
-      AND: [PAS_A_CONFIRMER_WHERE],
+      AND: [PAS_A_CONFIRMER_WHERE, PAS_ANNULEE_AVANT_CONFIRMATION_WHERE],
     });
   });
 
@@ -190,6 +194,15 @@ describe('commandeEffective', () => {
     expect(effective(commande({ channel: 'APP' }))).toBe(true);
     expect(effective(commande({ channel: null }))).toBe(true);
     expect(effective(commande({ channel: 'CALL_CENTER', auto: false }))).toBe(true);
+  });
+
+  // Revue du 19/10 : « Annuler la commande » de « À relancer » la laisse
+  // active et annulée ; le client n'a jamais commandé (D5).
+  it('annulée par le centre d’appels sans avoir été confirmée : ne compte pas ; annulée après sa confirmation : compte', () => {
+    expect(effective(commande({ status: 'CANCELLED', accepted_at: null, cancelled_by: 'agent' }))).toBe(false);
+    expect(effective(commande({ status: 'CANCELLED', auto: false, accepted_at: new Date() }))).toBe(true);
+    expect(effective(commande({ status: 'CANCELLED', channel: 'APP', accepted_at: null }))).toBe(true);
+    expect(effective(commande({ status: 'CANCELLED', channel: null, accepted_at: null }))).toBe(true);
   });
 
   it('en SQL : même exclusion, écrite pour ne jamais valoir NULL', () => {

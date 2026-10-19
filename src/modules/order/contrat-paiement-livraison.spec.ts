@@ -139,15 +139,16 @@ const T = new Date('2026-10-19T12:00:00.000Z');
 
 /**
  * Trois clients :
- *  - Awa : un panier de l'application non payé (10 min), puis une commande du
- *    site à payer à la livraison (1 min) : un groupe, tête = la commande à
- *    confirmer ;
+ *  - Awa : un panier de l'application non payé (2 min, le client le paie
+ *    peut-être encore), puis une commande du site à payer à la livraison
+ *    (1 min) : un groupe, tête = la commande à confirmer, signal « paiement en
+ *    ligne en cours » jusqu'à la fin du délai ;
  *  - Yao : une commande à confirmer de 4 h (hors fenêtre, toujours listée),
  *    puis une commande confirmée il y a 30 min : doublon possible ;
  *  - Blé : un panier de l'application seul (8 min) : inchangé.
  */
 const SCENARIO = () => [
-  commande(T, 10, {
+  commande(T, 2, {
     id: 'a0000000-0000-4000-8000-000000000001',
     reference: 'ORD-261019-00001',
     customer_id: 'c0000000-0000-4000-8000-0000000000a1',
@@ -231,6 +232,7 @@ const SIGNAUX_VIDES = {
   commande_recente: null,
   annulee_par_client: null,
   commande_suivante: null,
+  paiement_en_ligne_en_cours: null,
 };
 
 /**
@@ -240,7 +242,7 @@ const SIGNAUX_VIDES = {
 const REPONSE_RELANCES = {
   maintenant: '2026-10-19T12:00:00.000Z',
   regles: { delai_minutes: 3, fenetre_heures: 3, duree_prise_minutes: 10, rappel_minutes: 5 },
-  prochaine_echeance: null,
+  prochaine_echeance: '2026-10-19T12:01:00.000Z',
   compteurs: { a_relancer: 3, pris: 0, pris_par_moi: 0, en_cours: 0, ignorees: 0, a_confirmer: 2 },
   groupes: [
     {
@@ -284,7 +286,7 @@ const REPONSE_RELANCES = {
         ligne(
           'a0000000-0000-4000-8000-000000000001',
           'ORD-261019-00001',
-          '2026-10-19T11:50:00.000Z',
+          '2026-10-19T11:58:00.000Z',
           'Awa Koné',
           '0700000001',
           5050,
@@ -294,7 +296,10 @@ const REPONSE_RELANCES = {
       ],
       alerte_le: null,
       prise: null,
-      signaux: SIGNAUX_VIDES,
+      signaux: {
+        ...SIGNAUX_VIDES,
+        paiement_en_ligne_en_cours: { reference: 'ORD-261019-00001', jusqua: '2026-10-19T12:01:00.000Z' },
+      },
       crm: null,
     },
     {
@@ -345,7 +350,7 @@ describe('contrat : GET /orders/relances', () => {
   });
   afterEach(() => jest.useRealTimers());
 
-  it('forme exacte : commandes à confirmer en tête, pastille, doublon possible, compteur', async () => {
+  it('forme exacte : commandes à confirmer en tête, pastille, doublon possible, paiement en ligne en cours, compteur', async () => {
     const { service } = monterRelance({ commandes: SCENARIO() });
 
     expect(enJson(await service.lister(AWA))).toEqual(REPONSE_RELANCES);

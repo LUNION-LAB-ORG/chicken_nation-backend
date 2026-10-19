@@ -15,8 +15,12 @@ import { BROUILLON_WHERE, estBrouillon } from './brouillons.rules';
 import {
   A_CONFIRMER_SQL,
   A_CONFIRMER_WHERE,
+  ANNULEE_AVANT_CONFIRMATION_SQL,
+  ANNULEE_AVANT_CONFIRMATION_WHERE,
   estAConfirmer,
+  estAnnuleeAvantConfirmation,
   PAS_A_CONFIRMER_WHERE,
+  PAS_ANNULEE_AVANT_CONFIRMATION_WHERE,
   paiementLivraisonActif,
   REFUS_PAIEMENT_SITE,
   REGLAGE_PAIEMENT_LIVRAISON_SITE,
@@ -192,11 +196,93 @@ describe('commandeEffective et BROUILLON_WHERE avec la logique de SQL', () => {
       const effective = retenue(commande, commandeEffective());
       const brouillon = retenue(commande, BROUILLON_WHERE);
       expect({ commande, deux: effective && brouillon }).toEqual({ commande, deux: false });
-      // Hors moyen de paiement vide (règle d'avant, inchangée), aucune ne se perd.
-      if (commande.payment_method !== null && commande.entity_status !== EntityStatus.DELETED) {
+      // Hors moyen de paiement vide (règle d'avant, inchangée), aucune ne se
+      // perd, sauf la commande du site annulée avant d'être confirmée :
+      // ni commande, ni brouillon (voir plus bas).
+      if (
+        commande.payment_method !== null &&
+        commande.entity_status !== EntityStatus.DELETED &&
+        !estAnnuleeAvantConfirmation(commande)
+      ) {
         expect({ commande, une: effective || brouillon }).toEqual({ commande, une: true });
       }
     }
+  });
+});
+
+/**
+ * Revue du 19/10 : le centre d'appels annule une commande à confirmer
+ * (client injoignable, doublon, fausse commande). Elle reste ACTIVE et
+ * annulée : la règle « en attente » ne l'écartait plus, et le CRM la
+ * comptait comme une commande (conversion, sortie des inactifs, dernière
+ * commande), alors que le client n'a jamais commandé (D5).
+ */
+describe('commande du site annulée avant toute confirmation', () => {
+  const DATES = [null, new Date('2026-10-19T10:00:00.000Z')];
+  function* avecAcceptation(): Generator<Ligne> {
+    for (const commande of combinaisons()) for (const accepted_at of DATES) yield { ...commande, accepted_at };
+  }
+  /** Annulée par l'agent depuis « À relancer » : reste active, jamais acceptée. */
+  const annuleeParLAgent = (surcharge: Ligne = {}) =>
+    aConfirmer({ status: OrderStatus.CANCELLED, accepted_at: null, cancelled_by: 'agent-awa', ...surcharge });
+
+  it('estAnnuleeAvantConfirmation ≡ ANNULEE_AVANT_CONFIRMATION_WHERE, logique de SQL comprise', () => {
+    for (const commande of avecAcceptation()) {
+      const attendu = correspond(commande, ANNULEE_AVANT_CONFIRMATION_WHERE as Ligne);
+      expect({ commande, verdict: estAnnuleeAvantConfirmation(commande) }).toEqual({ commande, verdict: attendu });
+      expect({ commande, verdict: retenue(commande, ANNULEE_AVANT_CONFIRMATION_WHERE) }).toEqual({
+        commande,
+        verdict: attendu,
+      });
+    }
+  });
+
+  it('PAS_ANNULEE_AVANT_CONFIRMATION_WHERE : complément exact, jamais inconnu avec la logique de SQL', () => {
+    for (const commande of avecAcceptation()) {
+      expect({ commande, verdict: sql3(commande, PAS_ANNULEE_AVANT_CONFIRMATION_WHERE) }).toEqual({
+        commande,
+        verdict: !estAnnuleeAvantConfirmation(commande),
+      });
+    }
+  });
+
+  it('annulée par l’agent sans avoir été confirmée : ni effective (CRM), ni brouillon (rien à relancer)', () => {
+    const c = annuleeParLAgent();
+    expect(retenue(c, commandeEffective())).toBe(false);
+    expect(retenue(c, BROUILLON_WHERE)).toBe(false);
+    expect(estBrouillon(c)).toBe(false);
+  });
+
+  it('annulée APRÈS sa confirmation (manuelle, ou acceptée) : compte, comme toute commande annulée', () => {
+    for (const surcharge of [{ auto: false }, { accepted_at: new Date('2026-10-19T10:00:00.000Z') }]) {
+      expect({ surcharge, effective: retenue(annuleeParLAgent(surcharge), commandeEffective()) }).toEqual({
+        surcharge,
+        effective: true,
+      });
+    }
+  });
+
+  it('espèces de l’application, canal vide, paiement en ligne : annulées, elles comptent comme avant', () => {
+    for (const surcharge of [
+      { channel: OrderChannel.APP },
+      { channel: null },
+      { payment_method: PaymentMethod.ONLINE },
+      { payment_method: null },
+    ]) {
+      expect({ surcharge, effective: retenue(annuleeParLAgent(surcharge), commandeEffective()) }).toEqual({
+        surcharge,
+        effective: true,
+      });
+    }
+  });
+
+  it('SQL : jamais NULL, alias contrôlé, écarté de COMMANDE_EFFECTIVE_SQL', () => {
+    const sql = ANNULEE_AVANT_CONFIRMATION_SQL('o').replace(/\s+/g, ' ');
+    expect(sql).toBe(
+      `(o."auto" IS TRUE AND o."channel" IS NOT DISTINCT FROM 'WEB' AND o."payment_method" IS NOT DISTINCT FROM 'OFFLINE' AND o."paied" = false AND o."status" = 'CANCELLED' AND o."accepted_at" IS NULL)`,
+    );
+    expect(() => ANNULEE_AVANT_CONFIRMATION_SQL('o; DROP TABLE "Order"')).toThrow();
+    expect(COMMANDE_EFFECTIVE_SQL.replace(/\s+/g, ' ')).toContain(`AND NOT ${sql}`);
   });
 });
 

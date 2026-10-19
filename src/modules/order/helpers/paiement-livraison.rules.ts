@@ -136,3 +136,67 @@ export function A_CONFIRMER_SQL(alias: string): string {
     AND ${alias}."payment_method" IS NOT DISTINCT FROM 'OFFLINE'
     AND ${alias}."paied" = false AND ${alias}."status" = 'PENDING')`;
 }
+
+// ---------------------------------------------------------------------------
+// Annulée avant toute confirmation (CRM)
+// ---------------------------------------------------------------------------
+
+/**
+ * Commande du site à payer à la livraison ANNULÉE PAR LE CENTRE D'APPELS
+ * AVANT D'AVOIR ÉTÉ CONFIRMÉE (« Annuler la commande » de « À relancer » :
+ * client injoignable, doublon, fausse commande). Elle reste active et annulée
+ * (règle des annulations par le personnel), mais le client n'a jamais
+ * commandé : elle ne compte pas au CRM (D5), ni pour sortir un inactif, ni
+ * comme conversion, ni comme dernière commande. Une commande annulée APRÈS sa
+ * confirmation (manuelle, `accepted_at` posé) compte, comme toute commande
+ * annulée (règle du lot 1). Annulée par le client, elle est supprimée : déjà
+ * écartée.
+ *
+ * Mêmes précautions que la règle « à confirmer » : complément écrit en
+ * POSITIF, SQL en `IS NOT DISTINCT FROM`.
+ */
+export const ANNULEE_AVANT_CONFIRMATION_WHERE: Prisma.OrderWhereInput = {
+  auto: true,
+  channel: OrderChannel.WEB,
+  payment_method: PaymentMethod.OFFLINE,
+  paied: false,
+  status: OrderStatus.CANCELLED,
+  accepted_at: null,
+};
+
+/** Complément EXACT de `ANNULEE_AVANT_CONFIRMATION_WHERE`, en positif : sûr avec NULL. */
+export const PAS_ANNULEE_AVANT_CONFIRMATION_WHERE: Prisma.OrderWhereInput = {
+  OR: [
+    { auto: false },
+    { channel: null },
+    { channel: { not: OrderChannel.WEB } },
+    { payment_method: null },
+    { payment_method: { not: PaymentMethod.OFFLINE } },
+    { paied: true },
+    { status: { not: OrderStatus.CANCELLED } },
+    { accepted_at: { not: null } },
+  ],
+};
+
+/** Même règle sur une commande en mémoire. */
+export function estAnnuleeAvantConfirmation(
+  commande?: (EtatAConfirmer & { accepted_at?: Date | string | null }) | null,
+): boolean {
+  if (!commande) return false;
+  return (
+    commande.auto === true &&
+    commande.channel === OrderChannel.WEB &&
+    commande.payment_method === PaymentMethod.OFFLINE &&
+    commande.paied !== true &&
+    commande.status === OrderStatus.CANCELLED &&
+    (commande.accepted_at === null || commande.accepted_at === undefined)
+  );
+}
+
+/** Même règle en SQL, jamais NULL : un `NOT` devant reste sûr. Alias contrôlé. */
+export function ANNULEE_AVANT_CONFIRMATION_SQL(alias: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(alias)) throw new Error(`Alias SQL invalide : ${alias}`);
+  return `(${alias}."auto" IS TRUE AND ${alias}."channel" IS NOT DISTINCT FROM 'WEB'
+    AND ${alias}."payment_method" IS NOT DISTINCT FROM 'OFFLINE'
+    AND ${alias}."paied" = false AND ${alias}."status" = 'CANCELLED' AND ${alias}."accepted_at" IS NULL)`;
+}

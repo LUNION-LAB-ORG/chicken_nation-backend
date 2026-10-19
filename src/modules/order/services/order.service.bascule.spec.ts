@@ -15,12 +15,15 @@
  * fait donc casser le test de la règle qu'elle porte.
  */
 
+import { ConflictException } from '@nestjs/common';
 import {
+  EntityStatus,
   OrderChannel,
   OrderStatus,
   OrderType,
   PaiementStatus,
   PaymentMethod,
+  Prisma,
   User,
   UserRole,
   UserType,
@@ -81,7 +84,16 @@ function correspond(ligne: Commande, where: Record<string, any>): boolean {
   return true;
 }
 
-function monter(commande: Commande, apresRecalcul: Record<string, unknown> = {}) {
+/**
+ * `entreTemps` : ce qui change en base entre la lecture du début et la
+ * première écriture (un collègue, le client). L'écriture principale évalue
+ * son `where` contre la base, comme Postgres : introuvable, P2025.
+ */
+function monter(
+  commande: Commande,
+  apresRecalcul: Record<string, unknown> = {},
+  entreTemps?: (enBase: Commande) => Commande,
+) {
   /** Ce que la base contient, mis à jour par chaque écriture simulée. */
   let enBase: Commande = { ...commande };
   const prisma = {
@@ -92,7 +104,17 @@ function monter(commande: Commande, apresRecalcul: Record<string, unknown> = {})
         ...enBase,
         restaurant: { name: 'Riviera' },
       })),
-      update: jest.fn(async (args: { data: Record<string, unknown> }) => {
+      update: jest.fn(async (args: { where: Record<string, any>; data: Record<string, unknown> }) => {
+        if (entreTemps) {
+          enBase = entreTemps(enBase);
+          entreTemps = undefined;
+        }
+        if (!correspond(enBase, args.where)) {
+          throw new Prisma.PrismaClientKnownRequestError('Record to update not found.', {
+            code: 'P2025',
+            clientVersion: 'test',
+          });
+        }
         enBase = { ...enBase, ...args.data };
         return enBase;
       }),
@@ -501,6 +523,165 @@ describe('OrderService.update : reprise d’une commande du site à payer à la 
     const ecriture = monte.prisma.order.update.mock.calls[0][0].data;
     expect(ecriture).not.toHaveProperty('tax');
     expect(ecriture).toEqual(expect.objectContaining({ net_amount: 12000, amount: 13500 }));
+  });
+
+  /**
+   * Revue du 19/10 : le formulaire « Modifier la commande » renvoie TOUJOURS
+   * les articles, et des frais de livraison pris de l'aperçu
+   * (`GET /orders/frais-livraison`), qui ne connaît pas le client. Avant ce
+   * correctif, enregistrer sans rien toucher refacturait un plat offert au prix
+   * de la carte et remplaçait les frais : le livreur réclamait plus que ce que
+   * le site avait affiché. Corps ci-dessous : celui que le formulaire envoie
+   * (`prepareOrderData`).
+   */
+  describe('corps réel du formulaire', () => {
+    const ADRESSE = JSON.stringify({ title: 'Maison', address: 'Cocody Angré', latitude: 5.39, longitude: -3.98 });
+    /** Un plat offert (cadeau, 0 F, 3 000 F à la carte) et deux plats payés. */
+    const LIGNES = [
+      {
+        dish_id: 'plat-cadeau',
+        quantity: 1,
+        unit_price: 0,
+        epice: false,
+        supplements: [],
+        options: [],
+        dish: { price: 3000, name: 'Burger' },
+      },
+      { dish_id: 'plat-1', quantity: 2, unit_price: 5000, epice: false, supplements: [], options: [], dish: { price: 5000, name: 'Poulet' } },
+    ];
+    const siteAvecCadeau = () =>
+      aConfirmer({ order_items: LIGNES, address: ADRESSE, restaurant_id: RESTAURANT_A, net_amount: 10000 });
+    const article = (dish_id: string, quantity: number) => ({
+      dish_id,
+      quantity,
+      supplements: [],
+      option_item_ids: [],
+      epice: false,
+    });
+    const formulaire = (surcharge: Record<string, unknown> = {}) => ({
+      type: OrderType.DELIVERY,
+      address: ADRESSE,
+      restaurant_id: RESTAURANT_A,
+      user_id: 'u1',
+      items: [article('plat-cadeau', 1), article('plat-1', 2)],
+      // Aperçu sans le client : l'offre de livraison de son niveau est sautée.
+      delivery_fee: 1500,
+      ...surcharge,
+    });
+    /** Prix de la carte : ce que le recalcul ferait du cadeau. */
+    const recalcul = (monte: ReturnType<typeof monter>, lignes: { dish_id: string; quantity: number; prix: number }[]) => {
+      Object.assign(monte.prisma, { dish: { findMany: jest.fn().mockResolvedValue([]) } });
+      Object.assign(monte.orderHelper, {
+        calculateOrderDetails: jest.fn().mockResolvedValue({
+          orderItems: lignes.map((l) => ({
+            dish_id: l.dish_id,
+            quantity: l.quantity,
+            amount: l.prix * l.quantity,
+            dishPrice: l.prix,
+            supplementsPrice: 0,
+            lineTotal: l.prix * l.quantity,
+            epice: false,
+            supplements: [],
+            options: [],
+          })),
+          netAmount: lignes.reduce((t, l) => t + l.prix * l.quantity, 0),
+        }),
+      });
+    };
+
+    it('rien de changé : lignes d’origine (cadeau à 0 F), frais de la commande, total validé sur le site', async () => {
+      const monte = monter(siteAvecCadeau());
+      recalcul(monte, [
+        { dish_id: 'plat-cadeau', quantity: 1, prix: 3000 },
+        { dish_id: 'plat-1', quantity: 2, prix: 5000 },
+      ]);
+
+      const commande = await basculer(monte.service, formulaire());
+
+      expect((monte.orderHelper as { calculateOrderDetails?: jest.Mock }).calculateOrderDetails).not.toHaveBeenCalled();
+      const ecriture = monte.prisma.order.update.mock.calls[0][0].data;
+      expect(ecriture).not.toHaveProperty('order_items');
+      expect(ecriture).not.toHaveProperty('amount');
+      expect(ecriture.delivery_fee).toBe(1000);
+      expect(monte.base()).toEqual(
+        expect.objectContaining({ status: OrderStatus.ACCEPTED, tax: 500, delivery_fee: 1000, amount: 11500 }),
+      );
+      expect(commande).not.toHaveProperty('avertissement_reprise');
+    });
+
+    it('articles changés, cadeau resté au panier : total refait, l’agent est averti du cadeau facturé', async () => {
+      const monte = monter(siteAvecCadeau());
+      recalcul(monte, [
+        { dish_id: 'plat-cadeau', quantity: 1, prix: 3000 },
+        { dish_id: 'plat-1', quantity: 3, prix: 5000 },
+      ]);
+
+      const commande = (await basculer(
+        monte.service,
+        formulaire({ items: [article('plat-cadeau', 1), article('plat-1', 3)] }),
+      )) as { avertissement_reprise?: string };
+
+      // 18 000 F d'articles, taxe de création, frais de la commande (livraison inchangée).
+      expect(monte.base()).toEqual(expect.objectContaining({ net_amount: 18000, tax: 500, delivery_fee: 1000, amount: 19500 }));
+      const texte = (commande.avertissement_reprise ?? '').replace(/[\u00a0\u202f]/g, ' ');
+      expect(texte).toContain('le cadeau offert (Burger) est désormais facturé au prix de la carte');
+      expect(texte).toContain('Nouveau total : 19 500 F, à annoncer au client.');
+      expect(texte).not.toContain("rendu au client à l'annulation");
+    });
+
+    it('adresse changée par l’agent : frais de l’aperçu, total refait, lignes gardées', async () => {
+      const monte = monter(siteAvecCadeau());
+      const ailleurs = JSON.stringify({ title: 'Bureau', address: 'Plateau', latitude: 5.32, longitude: -4.02 });
+
+      await basculer(monte.service, formulaire({ address: ailleurs }));
+
+      const ecriture = monte.prisma.order.update.mock.calls[0][0].data;
+      expect(ecriture).not.toHaveProperty('order_items');
+      expect(monte.base()).toEqual(expect.objectContaining({ tax: 500, delivery_fee: 1500, amount: 12000 }));
+    });
+  });
+
+  /**
+   * Revue du 19/10 : l'acceptation était décidée sur la commande lue au début,
+   * puis écrite sans condition. Un collègue qui annule la commande, ou le
+   * client qui la modifie, entre la lecture et l'écriture : la reprise
+   * ressuscitait la commande annulée (ACCEPTED, transmise au restaurant, points
+   * retirés, code promo compté), alors que son coupon et ses cadeaux venaient
+   * d'être rendus.
+   */
+  it.each([
+    [
+      'un collègue l’annule (« Annuler la commande »)',
+      (c: Commande) => ({ ...c, status: OrderStatus.CANCELLED, cancelled_by: 'agent-yao' }),
+    ],
+    [
+      'le client la modifie (« Modifier ma commande »)',
+      (c: Commande) => ({
+        ...c,
+        status: OrderStatus.CANCELLED,
+        entity_status: EntityStatus.DELETED,
+        cancelled_by: 'client',
+      }),
+    ],
+  ])('%s pendant la reprise : 409, l’annulation reste, rien ne part au restaurant', async (_cas, changement) => {
+    const monte = monter(aConfirmer({ entity_status: EntityStatus.ACTIVE }), {}, changement);
+
+    const refus = await basculer(monte.service).then(
+      () => null,
+      (e: Error) => e,
+    );
+
+    expect(refus).toBeInstanceOf(ConflictException);
+    expect(refus?.message.replace(/\u00a0/g, ' ')).toBe(
+      'Cette commande vient de changer : rechargez-la avant de la reprendre.',
+    );
+    expect(monte.base().status).toBe(OrderStatus.CANCELLED);
+    expect(monte.base().auto).toBe(true);
+    await attendre();
+    expect(monte.orderRelance.noterReprise).not.toHaveBeenCalled();
+    expect(monte.orderEvent.orderStatusUpdatedEvent).not.toHaveBeenCalled();
+    expect(monte.orderWebSocketService.emitOrderUpdated).not.toHaveBeenCalled();
+    expect(monte.promoCodeService.activateUsageForOrder).not.toHaveBeenCalled();
   });
 
   it('panier en ligne du site, repris : taxe à zéro et paiement à la caisse, comme avant', async () => {

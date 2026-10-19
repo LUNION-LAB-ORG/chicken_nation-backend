@@ -2,7 +2,10 @@ import { ForbiddenException } from '@nestjs/common';
 import { EntityStatus, User, UserRole as R, UserType as T } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { COMMANDE_EFFECTIVE_SQL, ficheDuRestaurant, ficheDuRestaurantSql } from '../crm.rules';
-import { PAS_A_CONFIRMER_WHERE } from 'src/modules/order/helpers/paiement-livraison.rules';
+import {
+  PAS_A_CONFIRMER_WHERE,
+  PAS_ANNULEE_AVANT_CONFIRMATION_WHERE,
+} from 'src/modules/order/helpers/paiement-livraison.rules';
 import { CrmAccessService } from './crm-access.service';
 import { filtreRestaurant } from './crm-passages.query';
 
@@ -88,8 +91,9 @@ describe('ficheDuRestaurant', () => {
                 restaurant_id: RESTAURANT,
                 entity_status: { not: EntityStatus.DELETED },
                 NOT: { payment_method: 'ONLINE', paied: false, status: 'PENDING' },
-                // Commande du site à payer à la livraison pas encore confirmée : ne compte pas.
-                AND: [PAS_A_CONFIRMER_WHERE],
+                // Commande du site à payer à la livraison pas encore confirmée,
+                // ou annulée par le centre d'appels sans l'avoir été : ne compte pas.
+                AND: [PAS_A_CONFIRMER_WHERE, PAS_ANNULEE_AVANT_CONFIRMATION_WHERE],
               },
             },
           },

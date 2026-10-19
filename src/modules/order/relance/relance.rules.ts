@@ -1,4 +1,4 @@
-import { OrderStatus, PaiementStatus } from '@prisma/client';
+import { OrderStatus, PaiementStatus, PaymentMethod } from '@prisma/client';
 import { cleTelephone } from 'src/modules/crm/crm.rules';
 import { etatApresEncaissement } from 'src/modules/paiements/helpers/encaissement.helper';
 import {
@@ -311,6 +311,14 @@ export interface SignauxGroupe {
    * pas une commande effective.
    */
   commande_suivante: { reference: string; created_at: Date } | null;
+  /**
+   * Tête à confirmer seulement : un autre panier du groupe, payable en ligne,
+   * vient d'être créé ou d'avoir un paiement lancé (moins de `delai_minutes`).
+   * Le client paie peut-être en ligne en ce moment : transmettre la commande
+   * à confirmer ferait deux commandes préparées et deux encaissements.
+   * `jusqua` : fin de cette activité, comme la fin d'un « Paiement en cours ».
+   */
+  paiement_en_ligne_en_cours: { reference: string; jusqua: Date } | null;
 }
 
 export interface GroupeClasse {
@@ -479,6 +487,32 @@ export function regrouper(brouillons: BrouillonLu[]): BrouillonLu[][] {
 // Classement
 // ---------------------------------------------------------------------------
 
+/**
+ * Autre panier du groupe d'une commande à confirmer, payable en ligne et en
+ * attente, créé ou avec un paiement lancé il y a moins de `delai_minutes` :
+ * le plus tardif. Même repère que « Paiement en cours ». Un panier annulé
+ * par le client ne se paie plus ; une seconde commande à confirmer n'attend
+ * aucun paiement. `payment_method` absent : panier en ligne (lecture
+ * ancienne, avant le paiement à la livraison).
+ */
+export function paiementEnLigneEnCours(
+  autres: BrouillonLu[],
+  regles: Pick<ReglesRelance, 'delai_minutes'>,
+  maintenant: Date,
+): { reference: string; jusqua: Date } | null {
+  let retenu: { reference: string; jusqua: Date } | null = null;
+  for (const b of autres) {
+    if (estAConfirmer(b) || estPanierAnnuleParClient(b) || b.payment_method === PaymentMethod.OFFLINE) continue;
+    const repere = (b.paiements ?? []).reduce(
+      (max, p) => (p.created_at > max ? p.created_at : max),
+      b.created_at,
+    );
+    const jusqua = ajouterMinutes(repere, regles.delai_minutes);
+    if (jusqua > maintenant && (!retenu || jusqua > retenu.jusqua)) retenu = { reference: b.reference, jusqua };
+  }
+  return retenu;
+}
+
 /** Le même client, par compte ou par clé téléphone. */
 function memeClient(b: BrouillonLu, e: CommandeEffectiveLue): boolean {
   if (b.customer_id && e.customer_id && b.customer_id === e.customer_id) return true;
@@ -609,6 +643,10 @@ export function classerBrouillons(entree: {
           .filter((e) => e.created_at > tete.created_at && memeClient(tete, e))
           .sort((x, y) => x.created_at.getTime() - y.created_at.getTime())[0]
       : undefined;
+    // La tête à confirmer n'est jamais « Paiement en cours » (D7) : l'activité
+    // de paiement des autres paniers du groupe, qui le rendrait EN_COURS pour
+    // un panier en ligne, devient un signal.
+    const paiementEnLigne = aConfirmer ? paiementEnLigneEnCours(autres, regles, maintenant) : null;
 
     groupes.push({
       cle: tete.id,
@@ -629,6 +667,7 @@ export function classerBrouillons(entree: {
         commande_recente: recente ? { reference: recente.reference, created_at: recente.created_at } : null,
         annulee_par_client: annulation ? { le: annulation } : null,
         commande_suivante: suivante ? { reference: suivante.reference, created_at: suivante.created_at } : null,
+        paiement_en_ligne_en_cours: paiementEnLigne,
       },
     });
   }
@@ -644,8 +683,9 @@ export function classerBrouillons(entree: {
     (a, b) => rang(a) - rang(b) || a.tete.created_at.getTime() - b.tete.created_at.getTime(),
   );
 
+  // Fin d'un paiement en ligne signalé : la liste se relit pour l'effacer.
   const prochaineEcheance = groupes
-    .map((g) => g.echeance)
+    .flatMap((g) => [g.echeance, g.signaux.paiement_en_ligne_en_cours?.jusqua ?? null])
     .filter((d): d is Date => !!d)
     .reduce<Date | null>((min, d) => (!min || d < min ? d : min), null);
 

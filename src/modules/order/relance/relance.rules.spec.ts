@@ -515,6 +515,50 @@ describe('classerBrouillons : commandes du site à payer à la livraison (19/10)
     ]);
   });
 
+  /**
+   * Revue du 19/10 : le client valide « Payer à la livraison », puis paie en
+   * ligne un autre panier (site ou application). La tête à confirmer n'est
+   * jamais « Paiement en cours » : sans signal, l'agent transmettait la
+   * commande à confirmer pendant que l'autre se payait, deux commandes
+   * préparées et deux encaissements.
+   */
+  it('autre panier du groupe créé à l’instant : « paiement en ligne en cours », jusqu’à la fin du délai', () => {
+    const tete = aConfirmer(5);
+    const panier = enLigne(1, { channel: 'WEB' });
+    const { groupes, prochaineEcheance } = classer([tete, panier]);
+    expect(groupes).toHaveLength(1);
+    expect(groupes[0]).toEqual(expect.objectContaining({ cle: tete.id, etat: 'A_RELANCER', a_confirmer: true }));
+    expect(groupes[0].signaux.paiement_en_ligne_en_cours).toEqual({
+      reference: panier.reference,
+      jusqua: dans(REGLES.delai_minutes - 1),
+    });
+    // La liste se relit à la fin du délai pour retirer le signal.
+    expect(prochaineEcheance).toEqual(dans(REGLES.delai_minutes - 1));
+  });
+
+  it('vieux panier dont un paiement vient d’être lancé : signalé depuis ce paiement', () => {
+    const tete = aConfirmer(5);
+    const panier = enLigne(30, {
+      paiements: [{ status: PaiementStatus.PENDING, amount: 5050, total: 5050, created_at: ilYa(2) }],
+    });
+    expect(classer([tete, panier]).groupes[0].signaux.paiement_en_ligne_en_cours).toEqual({
+      reference: panier.reference,
+      jusqua: dans(REGLES.delai_minutes - 2),
+    });
+  });
+
+  it('aucun signal : panier hors délai, panier annulé par le client, seconde commande à confirmer, tête en ligne', () => {
+    const tete = aConfirmer(5);
+    expect(classer([tete, enLigne(REGLES.delai_minutes + 1)]).groupes[0].signaux.paiement_en_ligne_en_cours).toBeNull();
+    const annule = enLigne(1, { status: 'CANCELLED', entity_status: 'DELETED', cancelled_by: 'client', cancelled_at: ilYa(1) });
+    expect(classer([tete, annule]).groupes[0].signaux.paiement_en_ligne_en_cours).toBeNull();
+    expect(classer([tete, aConfirmer(1)]).groupes[0].signaux.paiement_en_ligne_en_cours).toBeNull();
+    // Tête en ligne : c'est l'état du groupe qui le dit (EN_COURS), comme avant.
+    const g = classer([enLigne(1), enLigne(10)]).groupes[0];
+    expect(g.etat).toBe('EN_COURS');
+    expect(g.signaux.paiement_en_ligne_en_cours).toBeNull();
+  });
+
   it('non-régression : un panier en ligne seul garde délai, fenêtre, tête et signaux d’avant', () => {
     const jeune = enLigne(2);
     expect(classer([jeune]).groupes[0]).toEqual(

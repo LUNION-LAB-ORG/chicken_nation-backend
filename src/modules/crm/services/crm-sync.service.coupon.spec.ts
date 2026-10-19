@@ -9,6 +9,7 @@
  */
 import { CrmSegment, EntityStatus, Prisma } from '@prisma/client';
 import { COMMANDE_EFFECTIVE_SQL } from '../crm.rules';
+import { correspond } from 'src/modules/order/relance/relance.base-simulee-spec';
 import { CrmSyncService } from './crm-sync.service';
 
 const COMMANDE = '11111111-1111-4111-8111-111111111111';
@@ -173,5 +174,67 @@ describe('CrmSyncService.commandeCandidate : requête brute', () => {
     expect(texte).toContain(`o."channel" IS NOT DISTINCT FROM 'WEB'`);
     // Paramètres liés, jamais collés dans le texte.
     expect(requete!.values).toEqual(['x1', contact.segment_since]);
+  });
+});
+
+/**
+ * Revue du 19/10 : une commande du site à payer à la livraison, annulée par le
+ * centre d'appels AVANT d'être confirmée (client injoignable, doublon, fausse
+ * commande), reste active et annulée. La règle « en attente » ne l'écartait
+ * plus : elle convertissait la fiche (« Reconquis »), alors que le client n'a
+ * jamais commandé (D5). Base simulée qui lit le vrai `where`.
+ */
+describe('CrmSyncService.commandeCandidate : commande du site annulée avant sa confirmation', () => {
+  const CLIENT = 'c1';
+  const contact = {
+    id: 'x1',
+    customer_id: CLIENT,
+    segment: CrmSegment.INACTIF,
+    segment_since: new Date('2026-10-01T00:00:00.000Z'),
+  };
+  /** Commande du site à payer à la livraison, annulée depuis « À relancer ». */
+  const annuleeParLAgent = (surcharge: Ligne = {}): Ligne => ({
+    id: COMMANDE,
+    reference: 'ORD-261019-00001',
+    customer_id: CLIENT,
+    created_at: new Date('2026-10-19T10:00:00.000Z'),
+    amount: 7600,
+    code_promo: null,
+    restaurant_id: 'r1',
+    auto: true,
+    channel: 'WEB',
+    payment_method: 'OFFLINE',
+    paied: false,
+    status: 'CANCELLED',
+    accepted_at: null,
+    entity_status: EntityStatus.ACTIVE,
+    cancelled_by: 'agent-awa',
+    ...surcharge,
+  });
+
+  const candidate = async (commandes: Ligne[]) => {
+    const prisma = {
+      order: {
+        findFirst: jest.fn(
+          async ({ where }: { where: Ligne }) =>
+            commandes
+              .filter((c) => correspond(c, where))
+              .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())[0] ?? null,
+        ),
+      },
+      $queryRaw: jest.fn(async () => []),
+    };
+    const service = Object.create(CrmSyncService.prototype) as CrmSyncService;
+    Object.assign(service, { prisma });
+    return (service as unknown as { commandeCandidate: (c: unknown) => Promise<Ligne | null> }).commandeCandidate(contact);
+  };
+
+  it('jamais confirmée, annulée par l’agent : ne fait pas sortir la fiche', async () => {
+    expect(await candidate([annuleeParLAgent()])).toBeNull();
+  });
+
+  it('confirmée au téléphone puis annulée : compte, comme toute commande annulée (règle du lot 1)', async () => {
+    const confirmee = annuleeParLAgent({ auto: false, accepted_at: new Date('2026-10-19T10:05:00.000Z') });
+    expect(await candidate([confirmee])).toEqual(expect.objectContaining({ id: COMMANDE }));
   });
 });

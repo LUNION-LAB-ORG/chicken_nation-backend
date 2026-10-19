@@ -158,6 +158,12 @@ export interface GroupeRelance {
     annulee_par_client: { le: string } | null;
     /** Tête à confirmer : commande effective du même client créée après elle (doublon possible). */
     commande_suivante: { reference: string; created_at: string } | null;
+    /**
+     * Tête à confirmer : un autre panier du groupe se paie peut-être en ligne
+     * en ce moment (créé ou paiement lancé il y a moins de `delai_minutes`).
+     * `jusqua` en ISO.
+     */
+    paiement_en_ligne_en_cours: { reference: string; jusqua: string } | null;
   };
   crm: { contact_id: string; statut: string; agent: string | null } | null;
 }
@@ -951,6 +957,12 @@ export class OrderRelanceService {
           ? {
               reference: g.signaux.commande_suivante.reference,
               created_at: g.signaux.commande_suivante.created_at.toISOString(),
+            }
+          : null,
+        paiement_en_ligne_en_cours: g.signaux.paiement_en_ligne_en_cours
+          ? {
+              reference: g.signaux.paiement_en_ligne_en_cours.reference,
+              jusqua: g.signaux.paiement_en_ligne_en_cours.jusqua.toISOString(),
             }
           : null,
       },
