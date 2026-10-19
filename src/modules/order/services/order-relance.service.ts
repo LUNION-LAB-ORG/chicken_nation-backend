@@ -7,13 +7,14 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { EntityStatus, OrderStatus, Prisma, User, UserRole } from '@prisma/client';
+import { EntityStatus, OrderChannel, OrderStatus, PaymentMethod, Prisma, User, UserRole } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { commandeEffective } from 'src/modules/crm/crm.rules';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { RELANCABLE_WHERE, estPanierAnnuleParClient, estRelancable, peutVoirLesBrouillons } from '../helpers/brouillons.rules';
+import { A_CONFIRMER_WHERE, estAConfirmer } from '../helpers/paiement-livraison.rules';
 import { resolveRestaurantScope } from '../helpers/restaurant-scope.helper';
 import {
   ACTIONS_JOURNAL_RELANCE,
@@ -50,6 +51,11 @@ const MESSAGE_INTROUVABLE = 'Commande introuvable.';
 const MESSAGE_IGNOREE = "Cette commande est ignorée : rétablissez-la d'abord.";
 const MESSAGE_DEJA_IGNOREE = 'Cette commande est déjà ignorée.';
 const MESSAGE_A_RECHARGER = 'Cette commande vient de changer : rechargez la liste.';
+const MESSAGE_A_CONFIRMER_NON_IGNORABLE =
+  "Une commande à payer à la livraison ne s'ignore pas\u00a0: transmettez-la au restaurant avec " +
+  '«\u00a0Reprendre au téléphone\u00a0», ou annulez-la.';
+const MESSAGE_DEJA_ANNULEE_PAR_CLIENT = 'Le client a déjà annulé cette commande.';
+const MESSAGE_NON_ANNULABLE = "Seule une commande à payer à la livraison s'annule ici.";
 
 /** Ce qu'on lit d'un brouillon pour le classer et l'afficher. */
 const SELECT_BROUILLON = {
@@ -100,6 +106,9 @@ const SELECT_COMMANDE = {
   entity_status: true,
   cancelled_by: true,
   created_at: true,
+  // Obligatoire depuis le 19/10 : sans le canal, une commande du site à
+  // confirmer n'est pas reconnue (`estAConfirmer`) et chaque geste répond 409.
+  channel: true,
 } satisfies Prisma.OrderSelect;
 
 type CommandeLue = Prisma.OrderGetPayload<{ select: typeof SELECT_COMMANDE }>;
@@ -125,11 +134,18 @@ export interface BrouillonLigne {
    * au canal (02/10). Le backoffice en tire la pastille « Site web ».
    */
   channel: string | null;
+  /**
+   * Commande du site à payer au livreur (WEB et OFFLINE, 19/10), à confirmer
+   * ou annulée par le client. Le backoffice en tire la pastille « À la livraison ».
+   */
+  paiement_a_la_livraison: boolean;
 }
 
 export interface GroupeRelance {
   cle: string;
   etat: 'A_RELANCER' | 'PRIS' | 'EN_COURS';
+  /** La tête est une commande du site à payer à la livraison, à confirmer (19/10). */
+  a_confirmer: boolean;
   tete: BrouillonLigne;
   autres: BrouillonLigne[];
   alerte_le: string | null;
@@ -140,6 +156,8 @@ export interface GroupeRelance {
     commande_recente: { reference: string; created_at: string } | null;
     /** Date d'annulation (ISO) de la tête, ou du panier annulé le plus récent du groupe. */
     annulee_par_client: { le: string } | null;
+    /** Tête à confirmer : commande effective du même client créée après elle (doublon possible). */
+    commande_suivante: { reference: string; created_at: string } | null;
   };
   crm: { contact_id: string; statut: string; agent: string | null } | null;
 }
@@ -148,7 +166,15 @@ export interface RelancesReponse {
   maintenant: string;
   regles: { delai_minutes: number; fenetre_heures: number; duree_prise_minutes: number; rappel_minutes: number };
   prochaine_echeance: string | null;
-  compteurs: { a_relancer: number; pris: number; pris_par_moi: number; en_cours: number; ignorees: number };
+  compteurs: {
+    a_relancer: number;
+    pris: number;
+    pris_par_moi: number;
+    en_cours: number;
+    ignorees: number;
+    /** Groupes à relancer ou pris dont la tête est une commande à confirmer (19/10). */
+    a_confirmer: number;
+  };
   groupes: GroupeRelance[];
 }
 
@@ -176,11 +202,13 @@ function ligne(b: BrouillonLu): BrouillonLigne {
     paiement_refuse: (b.paiements ?? []).some((p) => p.status === 'FAILED'),
     annulee_par_client: estPanierAnnuleParClient(b),
     channel: b.channel ?? null,
+    paiement_a_la_livraison: b.payment_method === PaymentMethod.OFFLINE && b.channel === OrderChannel.WEB,
   };
 }
 
 /**
- * RELANCE DES COMMANDES EN ATTENTE (paniers de l'application non payés).
+ * RELANCE DES COMMANDES EN ATTENTE (paniers de l'application non payés, et
+ * depuis le 19/10 commandes du site à payer à la livraison, à confirmer).
  *
  * Lecture : tout passe par `classerBrouillons`, jamais par un compteur tenu à
  * jour. Gestes d'agent : écritures conditionnées dans une transaction, sur les
@@ -225,6 +253,8 @@ export class OrderRelanceService {
    * Brouillons de la fenêtre et commandes effectives qui peuvent les
    * contredire. La seconde lecture est bornée aux clients des brouillons lus
    * (comptes et fins de numéro) : jamais toutes les commandes du réseau.
+   * Les commandes à confirmer sont lues quel que soit leur âge : la fenêtre
+   * ne les sort jamais de la liste (19/10).
    */
   async lireBrouillons(
     restaurantId: string | undefined,
@@ -236,7 +266,7 @@ export class OrderRelanceService {
       where: {
         AND: [
           RELANCABLE_WHERE,
-          { created_at: { gte: debutFenetre } },
+          { OR: [{ created_at: { gte: debutFenetre } }, A_CONFIRMER_WHERE] },
           ...(restaurantId ? [{ restaurant_id: restaurantId }] : []),
         ],
       },
@@ -328,6 +358,7 @@ export class OrderRelanceService {
         pris_par_moi: compter((g) => g.etat === 'PRIS' && !!g.prise?.par_moi),
         en_cours: compter((g) => g.etat === 'EN_COURS'),
         ignorees,
+        a_confirmer: compter((g) => g.a_confirmer && (g.etat === 'A_RELANCER' || g.etat === 'PRIS')),
       },
       groupes: classement.groupes.map((g) => this.versGroupeRelance(g, crm)),
     };
@@ -458,16 +489,15 @@ export class OrderRelanceService {
     user: User,
   ): Promise<{ ok: true; nombre: number }> {
     this.verifierRole(user);
-    if (!(RAISONS_IGNORER as readonly string[]).includes(corps?.raison_code)) {
-      throw new BadRequestException('Choisissez une raison.');
-    }
-    const texte = corps.raison_texte?.trim() || null;
-    if (corps.raison_code === 'AUTRE' && !texte) throw new BadRequestException('Précisez la raison.');
+    const texte = this.lireRaison(corps);
 
     const maintenant = new Date();
     const regles = await this.regles();
     const { groupe } = await this.situation(orderId, user, maintenant, regles);
     if (!groupe) throw new ConflictException(MESSAGE_DEJA_IGNOREE);
+    // Ignorée, une commande à confirmer attendrait pour toujours : le client
+    // verrait « À confirmer » sans fin. Elle se transmet ou s'annule (19/10).
+    if (groupe.a_confirmer) throw new ConflictException(MESSAGE_A_CONFIRMER_NON_IGNORABLE);
     const admin = user.role === UserRole.ADMIN;
     if (groupe.prise && !groupe.prise.par_moi && !admin) {
       throw new ConflictException(`${groupe.prise.par_nom} s'occupe de cette commande : laissez-le conclure.`);
@@ -595,6 +625,73 @@ export class OrderRelanceService {
     this.signaler('reprise', [orderId], userId ?? undefined);
   }
 
+  // =========================================================================
+  // Commandes du site à payer à la livraison (19/10)
+  // =========================================================================
+
+  /**
+   * Avant « Annuler la commande » (`POST /orders/relances/:orderId/annuler`) :
+   * seule une commande du site à confirmer s'annule ici, et pas pendant qu'un
+   * collègue l'a en main, sauf pour un administrateur. Lève 400 (raison), 403,
+   * 404 ou 409 avec le motif. Renvoie la raison telle qu'elle s'écrit au
+   * journal et dans le motif d'annulation de la commande.
+   *
+   * L'annulation elle-même est une écriture conditionnée
+   * (`OrderService.updateStatus`, `conditionEcriture`) : si un collègue la
+   * reprend au téléphone entre ce contrôle et l'écriture, la reprise
+   * l'emporte et l'annulation répond 409.
+   */
+  async verifierAnnulable(
+    orderId: string,
+    corps: { raison_code: string; raison_texte?: string | null },
+    user: User,
+  ): Promise<string> {
+    this.verifierRole(user);
+    const texte = this.lireRaison(corps);
+
+    const maintenant = new Date();
+    const regles = await this.regles();
+    // Plus relançable (reprise, confirmée, annulée par un agent...) : 409 avec
+    // le motif, lu par `situation` comme pour tout autre geste.
+    const { commande, groupe } = await this.situation(orderId, user, maintenant, regles);
+    if (!estAConfirmer(commande)) {
+      throw new ConflictException(
+        estPanierAnnuleParClient(commande) ? MESSAGE_DEJA_ANNULEE_PAR_CLIENT : MESSAGE_NON_ANNULABLE,
+      );
+    }
+    if (groupe?.prise && !groupe.prise.par_moi && user.role !== UserRole.ADMIN) {
+      throw new ConflictException(`${groupe.prise.par_nom} s'occupe de cette commande\u00a0: laissez-le conclure.`);
+    }
+    return `${libelleRaison(corps.raison_code)}${texte ? `\u00a0: ${texte}` : ''}`.slice(0, 200);
+  }
+
+  /**
+   * Après l'annulation d'une commande à confirmer depuis « À relancer » : la
+   * prise s'efface, le journal garde l'agent et la raison, les agents relisent
+   * leur liste. Ne lève jamais : la commande est déjà annulée.
+   */
+  async noterAnnulation(orderId: string, userId: string, raison: string): Promise<void> {
+    try {
+      await this.prisma.$transaction([
+        this.prisma.orderRelance.updateMany({
+          where: { order_id: orderId },
+          data: { pris_par_id: null, pris_le: null, prise_expire_le: null },
+        }),
+        this.prisma.orderRelanceJournal.create({
+          data: {
+            order_id: orderId,
+            action: ACTIONS_JOURNAL_RELANCE.ANNULATION,
+            user_id: userId,
+            raison: raison.slice(0, 200),
+          },
+        }),
+      ]);
+    } catch (e) {
+      this.logger.warn(`Relance : annulation de ${orderId} non journalisée : ${(e as Error)?.message}`);
+    }
+    this.signaler('annulation', [orderId], userId);
+  }
+
   /**
    * RÉACTIVATION d'un panier annulé par le client (reprise au téléphone, dans
    * `OrderService.update`) : il doit être encore relançable au moment du geste.
@@ -675,6 +772,16 @@ export class OrderRelanceService {
     if (!peutVoirLesBrouillons(user)) throw new ForbiddenException(MESSAGE_ROLE);
   }
 
+  /** Raison d'ignorer ou d'annuler : connue, et précisée si « Autre ». Renvoie le texte nettoyé. */
+  private lireRaison(corps: { raison_code: string; raison_texte?: string | null }): string | null {
+    if (!(RAISONS_IGNORER as readonly string[]).includes(corps?.raison_code)) {
+      throw new BadRequestException('Choisissez une raison.');
+    }
+    const texte = corps.raison_texte?.trim() || null;
+    if (corps.raison_code === 'AUTRE' && !texte) throw new BadRequestException('Précisez la raison.');
+    return texte;
+  }
+
   /**
    * La commande, dans le périmètre du compte. Hors périmètre de restaurant :
    * « introuvable » (404), pas « interdit », pour ne rien apprendre d'une
@@ -692,8 +799,9 @@ export class OrderRelanceService {
   /**
    * État actuel du groupe d'une commande, recalculé au moment du geste. Lève
    * 409 si la commande n'est plus à relancer (payée, annulée, reprise,
-   * supprimée, exclue, trop ancienne). `groupe` vaut null si tous les paniers
-   * du client sont ignorés.
+   * supprimée, exclue, trop ancienne ; une commande à confirmer n'est jamais
+   * trop ancienne). `groupe` vaut null si tous les paniers du client sont
+   * ignorés.
    */
   private async situation(
     orderId: string,
@@ -707,7 +815,11 @@ export class OrderRelanceService {
       const auteur = motif === 'REPRISE' ? await this.auteurReprise(orderId) : null;
       throw new ConflictException(messageSortie(motif, { auteur }));
     }
-    if (commande.created_at.getTime() < maintenant.getTime() - regles.fenetre_heures * 60 * MINUTE) {
+    // Une commande à confirmer ne sort jamais par l'âge (19/10).
+    if (
+      !estAConfirmer(commande) &&
+      commande.created_at.getTime() < maintenant.getTime() - regles.fenetre_heures * 60 * MINUTE
+    ) {
       throw new ConflictException(messageSortie('HORS_FENETRE', { fenetre_heures: regles.fenetre_heures }));
     }
 
@@ -806,6 +918,7 @@ export class OrderRelanceService {
     return {
       cle: g.cle,
       etat: g.etat,
+      a_confirmer: g.a_confirmer,
       tete: ligne(g.tete),
       autres: g.autres.map(ligne),
       alerte_le: g.tete.relance?.alerte_le?.toISOString() ?? null,
@@ -833,6 +946,12 @@ export class OrderRelanceService {
           : null,
         annulee_par_client: g.signaux.annulee_par_client
           ? { le: g.signaux.annulee_par_client.le.toISOString() }
+          : null,
+        commande_suivante: g.signaux.commande_suivante
+          ? {
+              reference: g.signaux.commande_suivante.reference,
+              created_at: g.signaux.commande_suivante.created_at.toISOString(),
+            }
           : null,
       },
       crm: (g.tete.customer_id && crm.get(g.tete.customer_id)) || null,

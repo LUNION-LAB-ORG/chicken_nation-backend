@@ -13,15 +13,18 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { User } from '@prisma/client';
+import { OrderStatus, User } from '@prisma/client';
 import type { Request } from 'express';
 import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
+import { AnnulerRelanceDto } from '../dto/annuler-relance.dto';
 import { IgnorerRelanceDto } from '../dto/ignorer-relance.dto';
 import { QueryRelanceDto } from '../dto/query-relance.dto';
 import { ROLES_BROUILLONS } from '../helpers/brouillons.rules';
+import { A_CONFIRMER_WHERE } from '../helpers/paiement-livraison.rules';
 import { OrderRelanceService } from '../services/order-relance.service';
+import { OrderService } from '../services/order.service';
 
 /** Identifiant de commande illisible : même réponse qu'une commande inconnue. */
 const ID_COMMANDE = new ParseUUIDPipe({
@@ -29,7 +32,8 @@ const ID_COMMANDE = new ParseUUIDPipe({
 });
 
 /**
- * RELANCE DES COMMANDES EN ATTENTE (paniers de l'application non payés).
+ * RELANCE DES COMMANDES EN ATTENTE (paniers de l'application non payés, et
+ * commandes du site à payer à la livraison, à confirmer, depuis le 19/10).
  *
  * Déclaré AVANT `OrderController` dans `OrderModule` : sinon `GET orders/:id`
  * capterait `orders/relances`.
@@ -45,7 +49,13 @@ const ID_COMMANDE = new ParseUUIDPipe({
 @ApiTags('Commandes')
 @Controller('orders/relances')
 export class OrderRelanceController {
-  constructor(private readonly relances: OrderRelanceService) {}
+  constructor(
+    private readonly relances: OrderRelanceService,
+    // Annulation d'une commande à confirmer : le chemin ordinaire des
+    // annulations (coupon et cadeaux rendus, client prévenu). Aucun cycle :
+    // c'est OrderService qui dépend de la relance, pas ce contrôleur.
+    private readonly orders: OrderService,
+  ) {}
 
   @Get()
   @UseGuards(JwtAuthGuard, UserRolesGuard)
@@ -93,6 +103,39 @@ export class OrderRelanceController {
     @Body() corps: IgnorerRelanceDto,
   ) {
     return this.relances.ignorer(orderId, corps, req.user as User);
+  }
+
+  /**
+   * « Annuler la commande » : seulement une commande du site à payer à la
+   * livraison, encore à confirmer (19/10). Elle ne s'ignore pas : le client
+   * attendrait l'appel pour toujours.
+   *
+   * L'écriture est CONDITIONNÉE à l'état « à confirmer » : si un collègue la
+   * reprend au téléphone pendant ce temps, sa reprise l'emporte et
+   * l'annulation répond 409, au lieu d'annuler une commande tout juste
+   * transmise au restaurant.
+   */
+  @Post(':orderId/annuler')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, UserRolesGuard)
+  @UserRoles(...ROLES_BROUILLONS)
+  @ApiBody({ type: AnnulerRelanceDto })
+  @ApiOperation({ summary: 'Annuler une commande du site à payer à la livraison' })
+  async annuler(
+    @Req() req: Request,
+    @Param('orderId', ID_COMMANDE) orderId: string,
+    @Body() corps: AnnulerRelanceDto,
+  ): Promise<{ ok: true }> {
+    const user = req.user as User;
+    const raison = await this.relances.verifierAnnulable(orderId, corps, user);
+    await this.orders.updateStatus(
+      orderId,
+      OrderStatus.CANCELLED,
+      { userId: user.id, role: user.role, reason: raison },
+      { conditionEcriture: A_CONFIRMER_WHERE },
+    );
+    await this.relances.noterAnnulation(orderId, user.id, raison);
+    return { ok: true };
   }
 
   @Post(':orderId/retablir')

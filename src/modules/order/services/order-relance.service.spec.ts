@@ -6,7 +6,9 @@
  * règle qu'elle porte.
  */
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { OrderStatus, PaiementStatus, UserRole, UserType } from '@prisma/client';
+import { OrderStatus, PaiementStatus, User, UserRole, UserType } from '@prisma/client';
+import { OrderRelanceController } from '../controllers/order-relance.controller';
+import { A_CONFIRMER_WHERE } from '../helpers/paiement-livraison.rules';
 import {
   ADMIN,
   AWA,
@@ -15,6 +17,7 @@ import {
   YAO,
   agent,
   commande,
+  correspond,
   monterRelance,
 } from '../relance/relance.base-simulee-spec';
 import { RELANCE_SOCKET_EVENT } from '../relance/relance.events';
@@ -354,7 +357,7 @@ describe('OrderRelanceService : liste', () => {
     const liste = await service.lister(AWA);
 
     expect(liste.regles).toEqual({ delai_minutes: 3, fenetre_heures: 3, duree_prise_minutes: 15, rappel_minutes: 5 });
-    expect(liste.compteurs).toEqual({ a_relancer: 1, pris: 1, pris_par_moi: 0, en_cours: 1, ignorees: 0 });
+    expect(liste.compteurs).toEqual({ a_relancer: 1, pris: 1, pris_par_moi: 0, en_cours: 1, ignorees: 0, a_confirmer: 0 });
     expect(liste.groupes.map((g) => g.etat)).toEqual(['A_RELANCER', 'PRIS', 'EN_COURS']);
     const [g] = liste.groupes;
     expect(g.tete).toEqual({
@@ -370,8 +373,11 @@ describe('OrderRelanceService : liste', () => {
       annulee_par_client: false,
       // Commande antérieure au canal : `null`, jamais absent.
       channel: null,
+      paiement_a_la_livraison: false,
     });
+    expect(g.a_confirmer).toBe(false);
     expect(g.signaux.annulee_par_client).toBeNull();
+    expect(g.signaux.commande_suivante).toBeNull();
     expect(g.signaux.paiement_partiel).toEqual(
       expect.objectContaining({ recu: 2000, montant: 5050, libelle: expect.stringMatching(/^Paiement partiel : 2.000 F reçus sur 5.050 F$/) }),
     );
@@ -525,5 +531,363 @@ describe('OrderRelanceService : paniers annulés par le client (01/10)', () => {
     expect(journal).toEqual([
       expect.objectContaining({ order_id: a.id, action: 'REPRISE', user_id: AWA.id, raison: 'Annulée par le client le 01/10 à 11:58, réactivée' }),
     ]);
+  });
+});
+
+// ===========================================================================
+// Commandes du site à payer à la livraison (19/10)
+// ===========================================================================
+
+/** Commande du site à payer à la livraison, que personne n'a encore confirmée. */
+const aConfirmer = (minutes: number, surcharge: Record<string, unknown> = {}) =>
+  commande(maintenant(), minutes, { payment_method: 'OFFLINE', channel: 'WEB', ...surcharge });
+
+const NON_IGNORABLE =
+  "Une commande à payer à la livraison ne s'ignore pas : transmettez-la au restaurant avec " +
+  '« Reprendre au téléphone », ou annulez-la.';
+
+describe('OrderRelanceService : commandes du site à payer à la livraison (19/10)', () => {
+  it('listée tout de suite, à relancer, devant un panier plus ancien, avec ses champs', async () => {
+    const panier = commande(maintenant(), 20);
+    const c = aConfirmer(0.1);
+    const { service } = monterRelance({ commandes: [panier, c] });
+
+    const liste = await service.lister(AWA);
+
+    expect(liste.groupes.map((g) => [g.cle, g.etat, g.a_confirmer])).toEqual([
+      [c.id, 'A_RELANCER', true],
+      [panier.id, 'A_RELANCER', false],
+    ]);
+    expect(liste.groupes[0].tete).toEqual(
+      expect.objectContaining({ id: c.id, channel: 'WEB', paiement_a_la_livraison: true, annulee_par_client: false }),
+    );
+    expect(liste.groupes[0].signaux.commande_suivante).toBeNull();
+    expect(liste.groupes[1].tete.paiement_a_la_livraison).toBe(false);
+    expect(liste.compteurs).toEqual({ a_relancer: 2, pris: 0, pris_par_moi: 0, en_cours: 0, ignorees: 0, a_confirmer: 1 });
+    // Rien n'attend un délai : aucune échéance à surveiller.
+    expect(liste.prochaine_echeance).toBeNull();
+  });
+
+  it('plus de 3 h : toujours listée, et « Je m’en occupe » accepté ; la lecture du geste demande le canal', async () => {
+    const c = aConfirmer(5 * 60);
+    const { service, relances, prisma } = monterRelance({ commandes: [c] });
+
+    expect((await service.lister(AWA)).groupes.map((g) => g.cle)).toEqual([c.id]);
+    const { groupe } = await service.prendre(c.id, AWA);
+
+    expect(groupe).toEqual(expect.objectContaining({ cle: c.id, etat: 'PRIS', a_confirmer: true }));
+    expect(relances.map((r) => r.pris_par_id)).toEqual([AWA.id]);
+    // La base simulée rend seulement les champs demandés : sans le canal, le
+    // geste ne reconnaîtrait pas la commande et répondrait 409.
+    expect(prisma.order.findUnique.mock.calls[0][0].select.channel).toBe(true);
+  });
+
+  it('« Je m’en occupe » dès la création : jamais « le client est peut-être en train de payer »', async () => {
+    const c = aConfirmer(0.1);
+    const { service } = monterRelance({ commandes: [c] });
+    await expect(service.prendre(c.id, AWA)).resolves.toEqual({ groupe: expect.objectContaining({ etat: 'PRIS' }) });
+  });
+
+  it('compteur : à relancer ou prise, par moi ou par un collègue ; jamais une commande annulée par le client', async () => {
+    const priseYao = aConfirmer(5);
+    const priseAwa = aConfirmer(6);
+    const annulee = aConfirmer(9, {
+      status: OrderStatus.CANCELLED,
+      entity_status: 'DELETED',
+      cancelled_by: 'client',
+      cancelled_at: plusTot(1),
+    });
+    const { service } = monterRelance({
+      commandes: [priseYao, priseAwa, annulee],
+      relances: [
+        { id: 'r1', order_id: priseYao.id, alerte_le: plusTot(4), pris_par_id: YAO.id, pris_le: plusTot(1), prise_expire_le: plusTard(9), ignore_le: null },
+        { id: 'r2', order_id: priseAwa.id, alerte_le: plusTot(5), pris_par_id: AWA.id, pris_le: plusTot(1), prise_expire_le: plusTard(9), ignore_le: null },
+      ],
+    });
+
+    const liste = await service.lister(AWA);
+
+    expect(liste.compteurs).toEqual(expect.objectContaining({ a_relancer: 1, pris: 2, pris_par_moi: 1, a_confirmer: 2 }));
+    const groupeAnnule = liste.groupes.find((g) => g.cle === annulee.id)!;
+    expect(groupeAnnule.a_confirmer).toBe(false);
+    // La pastille « À la livraison » reste : c'était une commande à payer au livreur.
+    expect(groupeAnnule.tete).toEqual(expect.objectContaining({ annulee_par_client: true, paiement_a_la_livraison: true }));
+  });
+
+  it('commande suivante du même client : renvoyée en ISO', async () => {
+    const c = aConfirmer(30, { customer_id: 'client-s', phone: '0700000044' });
+    const reprise = commande(maintenant(), 10, {
+      customer_id: 'client-s',
+      phone: '0700000044',
+      reference: 'ORD-261019-REPRISE',
+      auto: false,
+      status: OrderStatus.ACCEPTED,
+      payment_method: 'OFFLINE',
+      channel: 'WEB',
+    });
+    const { service } = monterRelance({ commandes: [c, reprise] });
+
+    const [groupe] = (await service.lister(AWA)).groupes;
+
+    expect(groupe.cle).toBe(c.id);
+    expect(groupe.signaux.commande_suivante).toEqual({
+      reference: 'ORD-261019-REPRISE',
+      created_at: reprise.created_at.toISOString(),
+    });
+  });
+
+  it('« Ignorer » : 409, sur la commande comme sur un autre panier de son groupe, même pour un administrateur ; rien écrit', async () => {
+    const panier = commande(maintenant(), 20, { customer_id: 'client-l', phone: '0700000066' });
+    const c = aConfirmer(2, { customer_id: 'client-l', phone: '0700000066' });
+    const { service, relances, journal, appGateway } = monterRelance({ commandes: [panier, c] });
+
+    for (const [id, qui] of [
+      [c.id, AWA],
+      [panier.id, AWA],
+      [c.id, ADMIN],
+    ] as [string, User][]) {
+      expect(await refus(service.ignorer(id, { raison_code: 'CLIENT_INJOIGNABLE' }, qui))).toEqual({
+        classe: ConflictException,
+        message: NON_IGNORABLE,
+      });
+    }
+    expect(relances).toEqual([]);
+    expect(journal).toEqual([]);
+    expect(appGateway.emitToRelances).not.toHaveBeenCalled();
+    expect(NON_IGNORABLE).not.toMatch(/[–—]/);
+  });
+
+  it('un panier en ligne déjà ignoré du même client n’empêche pas la commande d’être affichée', async () => {
+    const panier = commande(maintenant(), 20, { customer_id: 'client-i', phone: '0700000055' });
+    const c = aConfirmer(1, { customer_id: 'client-i', phone: '0700000055' });
+    const { service } = monterRelance({
+      commandes: [panier, c],
+      relances: [{ id: 'r1', order_id: panier.id, alerte_le: null, pris_par_id: null, prise_expire_le: null, ignore_le: plusTot(5) }],
+    });
+
+    const liste = await service.lister(AWA);
+
+    expect(liste.groupes.map((g) => [g.cle, g.etat, g.a_confirmer])).toEqual([[c.id, 'A_RELANCER', true]]);
+    expect(liste.groupes[0].autres).toEqual([]);
+  });
+
+  it('non-régression : un panier en ligne seul reste « paiement en cours » 3 min, puis sort après 3 h', async () => {
+    const jeune = commande(maintenant(), 1);
+    const vieux = commande(maintenant(), 4 * 60);
+    const { service } = monterRelance({ commandes: [jeune, vieux] });
+    const liste = await service.lister(AWA);
+    expect(liste.groupes.map((g) => [g.cle, g.etat, g.a_confirmer])).toEqual([[jeune.id, 'EN_COURS', false]]);
+    expect(liste.compteurs.a_confirmer).toBe(0);
+  });
+});
+
+describe('OrderRelanceService.verifierAnnulable et noterAnnulation (19/10)', () => {
+  it('raison connue, précisée si « Autre » ; renvoyée telle qu’elle s’écrit au journal ; rien écrit', async () => {
+    const c = aConfirmer(5);
+    const { service, relances, journal, appGateway } = monterRelance({ commandes: [c] });
+
+    await expect(service.verifierAnnulable(c.id, { raison_code: 'CLIENT_INJOIGNABLE' }, AWA)).resolves.toBe(
+      'Client injoignable',
+    );
+    await expect(
+      service.verifierAnnulable(c.id, { raison_code: 'AUTRE', raison_texte: ' Adresse hors zone ' }, AWA),
+    ).resolves.toBe('Autre : Adresse hors zone');
+    expect(await refus(service.verifierAnnulable(c.id, { raison_code: 'AUTRE', raison_texte: '  ' }, AWA))).toEqual({
+      classe: BadRequestException,
+      message: 'Précisez la raison.',
+    });
+    expect(await refus(service.verifierAnnulable(c.id, { raison_code: 'FLEMME' }, AWA))).toEqual({
+      classe: BadRequestException,
+      message: 'Choisissez une raison.',
+    });
+    expect(relances).toEqual([]);
+    expect(journal).toEqual([]);
+    expect(appGateway.emitToRelances).not.toHaveBeenCalled();
+  });
+
+  it('prise par un collègue : 409 pour le centre d’appels ; un administrateur, ou l’agent qui la tient, passe', async () => {
+    const c = aConfirmer(5);
+    const { service } = monterRelance({
+      commandes: [c],
+      relances: [{ id: 'r1', order_id: c.id, alerte_le: plusTot(4), pris_par_id: AWA.id, pris_le: plusTot(1), prise_expire_le: plusTard(9), ignore_le: null }],
+    });
+
+    expect(await refus(service.verifierAnnulable(c.id, { raison_code: 'DOUBLON' }, YAO))).toEqual({
+      classe: ConflictException,
+      message: "Agent Awa s'occupe de cette commande : laissez-le conclure.",
+    });
+    await expect(service.verifierAnnulable(c.id, { raison_code: 'DOUBLON' }, ADMIN)).resolves.toBe('Doublon');
+    await expect(service.verifierAnnulable(c.id, { raison_code: 'DOUBLON' }, AWA)).resolves.toBe('Doublon');
+  });
+
+  it('plus de 3 h : annulable', async () => {
+    const c = aConfirmer(26 * 60);
+    const { service } = monterRelance({ commandes: [c] });
+    await expect(service.verifierAnnulable(c.id, { raison_code: 'CLIENT_INJOIGNABLE' }, AWA)).resolves.toBe(
+      'Client injoignable',
+    );
+  });
+
+  it('pas une commande à confirmer : 409 qui dit pourquoi', async () => {
+    const panier = commande(maintenant(), 20);
+    const annuleeParClient = aConfirmer(9, {
+      status: OrderStatus.CANCELLED,
+      entity_status: 'DELETED',
+      cancelled_by: 'client',
+      cancelled_at: plusTot(1),
+    });
+    const reprise = aConfirmer(9, { auto: false, status: OrderStatus.ACCEPTED });
+    const annuleeParAgent = aConfirmer(9, { status: OrderStatus.CANCELLED, cancelled_by: AWA.id });
+    const especesAppli = commande(maintenant(), 9, { payment_method: 'OFFLINE', channel: 'APP' });
+    const { service } = monterRelance({ commandes: [panier, annuleeParClient, reprise, annuleeParAgent, especesAppli] });
+    const message = async (id: string) =>
+      (await refus(service.verifierAnnulable(id, { raison_code: 'DOUBLON' }, AWA))).message;
+
+    expect(await message(panier.id)).toBe("Seule une commande à payer à la livraison s'annule ici.");
+    expect(await message(annuleeParClient.id)).toBe('Le client a déjà annulé cette commande.');
+    expect(await message(reprise.id)).toBe("Cette commande n'est plus à relancer : reprise au téléphone.");
+    expect(await message(annuleeParAgent.id)).toBe("Cette commande n'est plus à relancer : annulée.");
+    expect(await message(especesAppli.id)).toBe("Cette commande n'est plus à relancer.");
+  });
+
+  it('rôle non habilité : 403 ; commande d’un autre restaurant : 404 ; inconnue : 404', async () => {
+    const ailleurs = aConfirmer(5, { restaurant_id: RESTO_B });
+    const local = agent('11111111-0000-4000-8000-000000000009', 'Agent local', {
+      type: UserType.RESTAURANT,
+      restaurant_id: RESTO_A,
+    });
+    const { service } = monterRelance({ commandes: [ailleurs], users: [local] });
+
+    const caissier = agent('11111111-0000-4000-8000-0000000000aa', 'Caissier', { role: UserRole.CAISSIER });
+    expect((await refus(service.verifierAnnulable(ailleurs.id, { raison_code: 'DOUBLON' }, caissier))).classe).toBe(
+      ForbiddenException,
+    );
+    expect(await refus(service.verifierAnnulable(ailleurs.id, { raison_code: 'DOUBLON' }, local))).toEqual({
+      classe: NotFoundException,
+      message: 'Commande introuvable.',
+    });
+    expect(
+      await refus(service.verifierAnnulable('99999999-0000-4000-8000-000000000000', { raison_code: 'DOUBLON' }, AWA)),
+    ).toEqual({ classe: NotFoundException, message: 'Commande introuvable.' });
+  });
+
+  it('noterAnnulation : prise effacée, journal ANNULATION avec l’agent et la raison, agents prévenus', async () => {
+    const c = aConfirmer(5);
+    const { service, relances, journal, appGateway } = monterRelance({
+      commandes: [c],
+      relances: [{ id: 'r1', order_id: c.id, alerte_le: plusTot(4), pris_par_id: AWA.id, pris_le: plusTot(1), prise_expire_le: plusTard(9), ignore_le: null }],
+    });
+
+    await service.noterAnnulation(c.id, AWA.id, 'Client injoignable');
+
+    expect(relances[0]).toEqual(expect.objectContaining({ pris_par_id: null, pris_le: null, prise_expire_le: null }));
+    expect(journal).toEqual([
+      expect.objectContaining({ order_id: c.id, action: 'ANNULATION', user_id: AWA.id, raison: 'Client injoignable' }),
+    ]);
+    expect(appGateway.emitToRelances).toHaveBeenCalledWith(RELANCE_SOCKET_EVENT, {
+      motif: 'annulation',
+      ids: [c.id],
+      nouvelles: [],
+      par: AWA.id,
+    });
+  });
+
+  it('noterAnnulation ne lève jamais : base en panne, les agents sont quand même prévenus', async () => {
+    const c = aConfirmer(5);
+    const { service, prisma, appGateway } = monterRelance({ commandes: [c] });
+    prisma.$transaction = jest.fn().mockRejectedValue(new Error('P1001'));
+
+    await expect(service.noterAnnulation(c.id, AWA.id, 'Doublon')).resolves.toBeUndefined();
+    expect(appGateway.emitToRelances).toHaveBeenCalledWith(RELANCE_SOCKET_EVENT, expect.objectContaining({ motif: 'annulation' }));
+  });
+});
+
+/**
+ * `POST /orders/relances/:orderId/annuler` : vrai contrôleur, vrai service de
+ * relance sur la base en mémoire. `OrderService.updateStatus` est simulé par
+ * une écriture qui ÉVALUE la condition reçue contre la commande, comme la
+ * base ; son vrai `where` est vérifié dans `order.service.paiement-livraison.spec.ts`.
+ */
+describe('POST /orders/relances/:orderId/annuler : déroulé', () => {
+  function monterAnnulation(commandes: Record<string, any>[], relances: Record<string, any>[] = []) {
+    const monte = monterRelance({ commandes, relances });
+    /** Ce qui arrive en base entre le contrôle et l'écriture (un collègue la reprend...). */
+    let entreTemps: (() => void) | null = null;
+    const orders = {
+      updateStatus: jest.fn(
+        async (id: string, status: OrderStatus, meta: Record<string, any>, options: { conditionEcriture?: object } = {}) => {
+          entreTemps?.();
+          const c = monte.commandes.find((x) => x.id === id)!;
+          if (options.conditionEcriture && !correspond(c, options.conditionEcriture)) {
+            throw new ConflictException('Cette commande vient de changer : actualisez la liste.');
+          }
+          Object.assign(c, { status, cancelled_by: meta.userId, cancelled_reason: meta.reason, cancelled_at: new Date() });
+          return c;
+        },
+      ),
+    };
+    const controleur = new OrderRelanceController(monte.service, orders as never);
+    const annuler = (id: string, user: User, corps: Record<string, unknown> = { raison_code: 'CLIENT_INJOIGNABLE' }) =>
+      controleur.annuler({ user } as never, id, corps as never);
+    return { ...monte, orders, annuler, entreTemps: (f: () => void) => (entreTemps = f) };
+  }
+
+  it('annule la commande : écriture conditionnée à « à confirmer », journal ANNULATION, sortie de la liste', async () => {
+    const c = aConfirmer(5);
+    const { annuler, orders, service, journal, appGateway } = monterAnnulation([c]);
+
+    await expect(annuler(c.id, AWA)).resolves.toEqual({ ok: true });
+
+    expect(orders.updateStatus).toHaveBeenCalledTimes(1);
+    const [id, status, meta, options] = orders.updateStatus.mock.calls[0];
+    expect([id, status, meta]).toEqual([
+      c.id,
+      OrderStatus.CANCELLED,
+      { userId: AWA.id, role: UserRole.CALL_CENTER, reason: 'Client injoignable' },
+    ]);
+    expect(options?.conditionEcriture).toBe(A_CONFIRMER_WHERE);
+    expect(c).toEqual(expect.objectContaining({ status: OrderStatus.CANCELLED, entity_status: 'ACTIVE', cancelled_by: AWA.id }));
+    expect(journal.map((j) => [j.action, j.user_id, j.raison])).toEqual([['ANNULATION', AWA.id, 'Client injoignable']]);
+    expect(appGateway.emitToRelances).toHaveBeenCalledWith(RELANCE_SOCKET_EVENT, expect.objectContaining({ motif: 'annulation', ids: [c.id] }));
+    expect((await service.lister(AWA)).groupes).toEqual([]);
+  });
+
+  it('un collègue la reprend au téléphone pendant ce temps : 409, la reprise l’emporte, rien au journal', async () => {
+    const c = aConfirmer(5);
+    const monte = monterAnnulation([c]);
+    monte.entreTemps(() => Object.assign(c, { auto: false, status: OrderStatus.ACCEPTED }));
+
+    expect(await refus(monte.annuler(c.id, AWA))).toEqual({
+      classe: ConflictException,
+      message: 'Cette commande vient de changer : actualisez la liste.',
+    });
+    expect(c).toEqual(expect.objectContaining({ auto: false, status: OrderStatus.ACCEPTED }));
+    expect(monte.journal).toEqual([]);
+    expect(monte.appGateway.emitToRelances).not.toHaveBeenCalled();
+  });
+
+  it('refusée avant toute écriture : raison absente, prise d’un collègue, commande qui n’est pas à confirmer', async () => {
+    const c = aConfirmer(5);
+    const panier = commande(maintenant(), 20);
+    const { annuler, orders, journal } = monterAnnulation(
+      [c, panier],
+      [{ id: 'r1', order_id: c.id, alerte_le: plusTot(4), pris_par_id: AWA.id, pris_le: plusTot(1), prise_expire_le: plusTard(9), ignore_le: null }],
+    );
+
+    expect((await refus(annuler(c.id, AWA, {}))).classe).toBe(BadRequestException);
+    expect((await refus(annuler(c.id, YAO))).classe).toBe(ConflictException);
+    expect((await refus(annuler(panier.id, AWA))).classe).toBe(ConflictException);
+    expect(orders.updateStatus).not.toHaveBeenCalled();
+    expect(journal).toEqual([]);
+  });
+
+  it('un administrateur annule même pendant la prise d’un collègue', async () => {
+    const c = aConfirmer(5);
+    const { annuler, journal } = monterAnnulation(
+      [c],
+      [{ id: 'r1', order_id: c.id, alerte_le: plusTot(4), pris_par_id: AWA.id, pris_le: plusTot(1), prise_expire_le: plusTard(9), ignore_le: null }],
+    );
+    await expect(annuler(c.id, ADMIN, { raison_code: 'TEST_INTERNE' })).resolves.toEqual({ ok: true });
+    expect(journal.map((j) => [j.action, j.user_id, j.raison])).toEqual([['ANNULATION', ADMIN.id, 'Test interne']]);
   });
 });

@@ -7,7 +7,8 @@
  * `GET /orders/relances`.
  *
  * Émetteurs, et eux seuls :
- *  - les gestes d'agent (prise, libération, ignorer, rétablir) ;
+ *  - les gestes d'agent (prise, libération, ignorer, rétablir, et
+ *    l'annulation d'une commande du site à payer à la livraison) ;
  *  - la tâche d'alerte (passage du délai, ou prise expirée sans traitement) ;
  *  - la reprise au téléphone (bascule d'une commande de l'application vers le
  *    personnel, dans `OrderService.update`).
@@ -23,7 +24,8 @@ export type MotifRelanceChanged =
   | 'liberation'
   | 'ignore'
   | 'retablissement'
-  | 'reprise';
+  | 'reprise'
+  | 'annulation';
 
 export interface RelanceChangedPayload {
   motif: MotifRelanceChanged;
@@ -43,4 +45,6 @@ export const ACTIONS_JOURNAL_RELANCE = {
   IGNORE: 'IGNORE',
   RETABLISSEMENT: 'RETABLISSEMENT',
   REPRISE: 'REPRISE',
+  /** Commande du site à payer à la livraison annulée depuis « À relancer » (19/10). */
+  ANNULATION: 'ANNULATION',
 } as const;

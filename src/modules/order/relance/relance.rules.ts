@@ -8,6 +8,7 @@ import {
   estPanierAnnuleParClient,
   estRelancable,
 } from '../helpers/brouillons.rules';
+import { estAConfirmer } from '../helpers/paiement-livraison.rules';
 
 /**
  * RELANCE DES COMMANDES EN ATTENTE : les règles, sans base ni horloge.
@@ -18,9 +19,17 @@ import {
  * agent) : c'est elle que testent `relance.rules.spec.ts`.
  *
  * Conception : `.banc-test-crm/conception-relance-commandes.md`.
+ *
+ * COMMANDES DU SITE À PAYER À LA LIVRAISON (19/10,
+ * `.banc-test-crm/conception-paiement-livraison.md`) : une commande à
+ * confirmer (`estAConfirmer`) n'attend aucun paiement, elle attend l'appel du
+ * centre d'appels. Elle n'est donc jamais « paiement en cours », jamais sortie
+ * par l'âge, jamais exclue automatiquement, et passe en tête de son groupe et
+ * devant les autres groupes à relancer. Rien ne l'annule tout seul : sortie
+ * de la liste, elle resterait en attente pour toujours, vue de personne.
  */
 
-export { BROUILLON_WHERE, RELANCABLE_WHERE, estBrouillon, estPanierAnnuleParClient, estRelancable };
+export { BROUILLON_WHERE, RELANCABLE_WHERE, estAConfirmer, estBrouillon, estPanierAnnuleParClient, estRelancable };
 
 // ---------------------------------------------------------------------------
 // Réglages
@@ -250,7 +259,10 @@ export interface BrouillonLu {
   entity_status?: string | null;
   cancelled_by?: string | null;
   cancelled_at?: Date | null;
-  /** Canal de la commande (APP, WEB...) : affiché seulement, aucune règle ne le lit. */
+  /**
+   * Canal de la commande (APP, WEB...). Affiché, et lu par `estAConfirmer` :
+   * seule une commande du site (WEB) à payer à la livraison est à confirmer.
+   */
   channel?: string | null;
 }
 
@@ -291,6 +303,14 @@ export interface SignauxGroupe {
    * tête si c'est elle, sinon du panier annulé le plus récent du groupe.
    */
   annulee_par_client: { le: Date } | null;
+  /**
+   * Tête à confirmer seulement : première commande effective, non annulée, du
+   * même client, créée APRÈS elle. Doublon probable (panier payé en ligne
+   * entre-temps, seconde commande déjà confirmée) : l'agent vérifie avec le
+   * client avant de transmettre. Jamais une commande à confirmer, qui n'est
+   * pas une commande effective.
+   */
+  commande_suivante: { reference: string; created_at: Date } | null;
 }
 
 export interface GroupeClasse {
@@ -298,10 +318,15 @@ export interface GroupeClasse {
   cle: string;
   etat: EtatGroupe;
   restaurant_id: string;
-  /** Brouillon non ignoré le plus récent. */
+  /**
+   * Brouillon non ignoré le plus récent, ou, s'il y en a une, la commande à
+   * confirmer la plus récente : « Reprendre au téléphone » ouvre la tête.
+   */
   tete: BrouillonLu;
   /** Autres brouillons non ignorés, plus récents d'abord. */
   autres: BrouillonLu[];
+  /** La tête est une commande du site à payer à la livraison, à confirmer (19/10). */
+  a_confirmer: boolean;
   /** Brouillons non ignorés du groupe, triés (ordre fixe des écritures). */
   ids: string[];
   /** Brouillons ignorés du même client, triés. */
@@ -469,6 +494,12 @@ const plusRecentDAbord = (a: { created_at: Date }, b: { created_at: Date }) =>
  * : paniers en attente ET paniers annulés par le client (01/10). Les seconds
  * suivent exactement les mêmes règles (fenêtre, exclusions, regroupement,
  * délai, prise, ignorance) ; seul le signal `annulee_par_client` les distingue.
+ *
+ * Les commandes du site à confirmer (19/10) échappent à la fenêtre, aux
+ * exclusions et au délai : à relancer dès leur création, en tête de groupe,
+ * signalées par `a_confirmer` et `commande_suivante`. Annulée par le client
+ * (« Modifier ma commande »), une telle commande n'est plus à confirmer : elle
+ * suit les règles des paniers annulés.
  */
 export function classerBrouillons(entree: {
   brouillons: BrouillonLu[];
@@ -484,8 +515,13 @@ export function classerBrouillons(entree: {
   const exclus = new Map<string, Exclusion>();
 
   // 1. Fenêtre, puis exclusions automatiques (1.5), brouillon par brouillon.
+  // Une commande à confirmer n'y passe pas : elle reste jusqu'à un geste.
   const retenus: BrouillonLu[] = [];
   for (const b of entree.brouillons) {
+    if (estAConfirmer(b)) {
+      retenus.push(b);
+      continue;
+    }
     if (b.created_at < debutFenetre) continue;
     if (paiementCouvert(b)) {
       exclus.set(b.id, { motif: 'PAIEMENT_A_CONFIRMER' });
@@ -517,7 +553,11 @@ export function classerBrouillons(entree: {
       continue;
     }
 
-    const tete = actifs[0];
+    // Une commande à confirmer passe devant un panier en ligne plus récent :
+    // c'est elle que l'agent doit ouvrir.
+    const tete = actifs.find(estAConfirmer) ?? actifs[0];
+    const autres = actifs.filter((b) => b !== tete);
+    const aConfirmer = estAConfirmer(tete);
 
     // Prise valable sur l'un des paniers : tout le groupe est pris, y compris
     // un panier apparu après la prise.
@@ -543,7 +583,8 @@ export function classerBrouillons(entree: {
     const repereActivite =
       dernierPaiement && dernierPaiement > tete.created_at ? dernierPaiement : tete.created_at;
     const finEnCours = ajouterMinutes(repereActivite, regles.delai_minutes);
-    const enCours = finEnCours > maintenant;
+    // Personne n'est en train de payer une commande à confirmer.
+    const enCours = !aConfirmer && finEnCours > maintenant;
 
     const etat: EtatGroupe = prise ? 'PRIS' : enCours ? 'EN_COURS' : 'A_RELANCER';
     const echeance = etat === 'PRIS' ? prise!.expire_le : etat === 'EN_COURS' ? finEnCours : null;
@@ -563,13 +604,19 @@ export function classerBrouillons(entree: {
         .map(annuleeParClientLe)
         .filter((d): d is Date => !!d)
         .reduce<Date | null>((max, d) => (!max || d > max ? d : max), null);
+    const suivante = aConfirmer
+      ? effectives
+          .filter((e) => e.created_at > tete.created_at && memeClient(tete, e))
+          .sort((x, y) => x.created_at.getTime() - y.created_at.getTime())[0]
+      : undefined;
 
     groupes.push({
       cle: tete.id,
       etat,
       restaurant_id: tete.restaurant_id,
       tete,
-      autres: actifs.slice(1),
+      autres,
+      a_confirmer: aConfirmer,
       ids: actifs.map((b) => b.id).sort(),
       ignores,
       prise,
@@ -581,14 +628,18 @@ export function classerBrouillons(entree: {
           : null,
         commande_recente: recente ? { reference: recente.reference, created_at: recente.created_at } : null,
         annulee_par_client: annulation ? { le: annulation } : null,
+        commande_suivante: suivante ? { reference: suivante.reference, created_at: suivante.created_at } : null,
       },
     });
   }
 
-  // 3. Ordre de l'écran : mes prises, à relancer (plus ancien d'abord), prises
-  // des collègues, paiements en cours.
-  const rang = (g: GroupeClasse) =>
-    g.etat === 'PRIS' && g.prise?.par_moi ? 0 : g.etat === 'A_RELANCER' ? 1 : g.etat === 'PRIS' ? 2 : 3;
+  // 3. Ordre de l'écran : mes prises, commandes à confirmer, à relancer, prises
+  // des collègues, paiements en cours. À rang égal, plus ancien d'abord.
+  const rang = (g: GroupeClasse) => {
+    if (g.etat === 'PRIS') return g.prise?.par_moi ? 0 : 3;
+    if (g.etat === 'A_RELANCER') return g.a_confirmer ? 1 : 2;
+    return 4;
+  };
   groupes.sort(
     (a, b) => rang(a) - rang(b) || a.tete.created_at.getTime() - b.tete.created_at.getTime(),
   );

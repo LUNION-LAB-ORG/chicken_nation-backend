@@ -12,6 +12,10 @@
  * Méthode testée en isolation, comme order.service.audience.spec.ts : seules
  * les dépendances qu'elle lit sont greffées. La recherche d'une commande à
  * confirmer ÉVALUE le `where` reçu contre les commandes en base.
+ *
+ * En fin de fichier : l'annulation par le centre d'appels depuis « À
+ * relancer » (`updateStatus` avec `conditionEcriture`), écriture évaluée de
+ * même contre la ligne en base.
  */
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
@@ -21,9 +25,12 @@ import {
   OrderStatus,
   OrderType,
   PaymentMethod,
+  Prisma,
+  UserRole,
 } from '@prisma/client';
 import { estBrouillon } from '../helpers/brouillons.rules';
 import { OrderV2Helper } from '../helpers/orderv2.helper';
+import { A_CONFIRMER_WHERE } from '../helpers/paiement-livraison.rules';
 import { correspond } from '../relance/relance.base-simulee-spec';
 import { OrderService } from './order.service';
 
@@ -299,5 +306,133 @@ describe('OrderV2Helper.paiementLivraisonSiteActif : lecture du réglage', () =>
   it('« 1 » : proposé ; « 0 » : coupé', async () => {
     expect(await lire('1')).toBe(true);
     expect(await lire('0')).toBe(false);
+  });
+});
+
+// ===========================================================================
+// Annulation depuis « À relancer » : écriture conditionnée (19/10)
+// ===========================================================================
+
+describe('OrderService.updateStatus : annulation conditionnée à « à confirmer » (conditionEcriture)', () => {
+  const ID = '11111111-1111-4111-8111-111111111111';
+  const AGENT = { userId: 'agent-awa', role: UserRole.CALL_CENTER, reason: 'Client injoignable' };
+
+  /** Commande du site à payer à la livraison, telle que `createv2` l'écrit. */
+  const aConfirmer: Ligne = {
+    id: ID,
+    reference: 'ORD-261019-11111',
+    type: OrderType.DELIVERY,
+    customer_id: CLIENT,
+    restaurant_id: RESTAURANT_A,
+    auto: true,
+    channel: OrderChannel.WEB,
+    payment_method: PaymentMethod.OFFLINE,
+    paied: false,
+    status: OrderStatus.PENDING,
+    entity_status: EntityStatus.ACTIVE,
+    cancelled_by: null,
+    cancelled_reason: null,
+    paiements: [],
+  };
+
+  /** `entreTemps` : ce qui change en base entre la lecture du début et l'écriture. */
+  function monterStatut(commande: Ligne, entreTemps?: (enBase: Ligne) => Ligne) {
+    let enBase: Ligne = { ...commande };
+    const prisma = {
+      order: {
+        updateMany: jest.fn(),
+        update: jest.fn(async ({ where, data }: { where: Ligne; data: Ligne }) => {
+          if (entreTemps) {
+            enBase = entreTemps(enBase);
+            entreTemps = undefined;
+          }
+          if (!correspond(enBase, where)) {
+            throw new Prisma.PrismaClientKnownRequestError('Record to update not found.', {
+              code: 'P2025',
+              clientVersion: 'test',
+            });
+          }
+          enBase = { ...enBase, ...data };
+          return { ...enBase };
+        }),
+      },
+      notificationSetting: { findUnique: jest.fn().mockResolvedValue(null) },
+    };
+    const greffes = {
+      prisma,
+      findById: jest.fn().mockResolvedValue(commande),
+      orderHelper: {
+        validateStatusTransition: jest.fn(),
+        assertPreparationAutorisee: jest.fn(),
+        handleStatusSpecificActions: jest.fn().mockResolvedValue(undefined),
+        calculateEstimatedTime: jest.fn().mockReturnValue(null),
+      },
+      promoCodeService: { activateUsageForOrder: jest.fn().mockResolvedValue(undefined) },
+      orderCoupon: { restituerPourCommande: jest.fn().mockResolvedValue({ bons: [], codesPromo: [] }) },
+      orderEvent: { orderStatusUpdatedEvent: jest.fn() },
+      orderWebSocketService: { emitStatusUpdate: jest.fn() },
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
+    };
+    const service = Object.create(OrderService.prototype) as OrderService;
+    Object.assign(service, greffes);
+    return { service, ...greffes, base: () => enBase };
+  }
+
+  it('encore à confirmer : annulée par l’agent, reste active, coupon rendu, aucun son au restaurant', async () => {
+    const m = monterStatut(aConfirmer);
+
+    await m.service.updateStatus(ID, OrderStatus.CANCELLED, AGENT, { conditionEcriture: A_CONFIRMER_WHERE });
+
+    expect(m.prisma.order.updateMany).not.toHaveBeenCalled();
+    expect(m.prisma.order.update.mock.calls[0][0].where).toEqual({ id: ID, AND: [A_CONFIRMER_WHERE] });
+    expect(m.base()).toEqual(
+      expect.objectContaining({
+        status: OrderStatus.CANCELLED,
+        entity_status: EntityStatus.ACTIVE,
+        cancelled_by: 'agent-awa',
+        cancelled_reason: 'Client injoignable',
+      }),
+    );
+    expect(m.orderCoupon.restituerPourCommande).toHaveBeenCalledWith(expect.objectContaining({ id: ID }), {
+      motif: 'ANNULATION',
+      acteurId: 'agent-awa',
+      acteurRole: UserRole.CALL_CENTER,
+    });
+    // Le restaurant ne l'a jamais vue : pas de cloche (`etait_brouillon`).
+    expect(m.orderEvent.orderStatusUpdatedEvent).toHaveBeenCalledWith(expect.objectContaining({ etait_brouillon: true }));
+  });
+
+  it.each([
+    ['un collègue la reprend au téléphone', (c: Ligne) => ({ ...c, auto: false, status: OrderStatus.ACCEPTED })],
+    [
+      'le client l’annule (« Modifier ma commande »)',
+      (c: Ligne) => ({ ...c, status: OrderStatus.CANCELLED, entity_status: EntityStatus.DELETED, cancelled_by: 'client' }),
+    ],
+  ])('%s entre la lecture et l’écriture : 409 « vient de changer », rien écrit ni rendu', async (_cas, changement) => {
+    const m = monterStatut(aConfirmer, changement);
+    const avant = changement({ ...aConfirmer });
+
+    expect(
+      await refus(m.service.updateStatus(ID, OrderStatus.CANCELLED, AGENT, { conditionEcriture: A_CONFIRMER_WHERE })),
+    ).toEqual({ classe: ConflictException, message: 'Cette commande vient de changer : actualisez la liste.' });
+    expect(m.base()).toEqual(avant);
+    expect(m.orderCoupon.restituerPourCommande).not.toHaveBeenCalled();
+    expect(m.orderEvent.orderStatusUpdatedEvent).not.toHaveBeenCalled();
+    expect(m.orderWebSocketService.emitStatusUpdate).not.toHaveBeenCalled();
+  });
+
+  it('sans l’option : écriture et erreurs inchangées', async () => {
+    const m = monterStatut(aConfirmer);
+    await m.service.updateStatus(ID, OrderStatus.CANCELLED, AGENT);
+    expect(m.prisma.order.update.mock.calls[0][0].where).toEqual({ id: ID });
+
+    // Une écriture introuvable remonte telle quelle, comme avant.
+    const n = monterStatut(aConfirmer);
+    const introuvable = new Prisma.PrismaClientKnownRequestError('Record to update not found.', {
+      code: 'P2025',
+      clientVersion: 'test',
+    });
+    n.prisma.order.update.mockRejectedValueOnce(introuvable);
+    await expect(n.service.updateStatus(ID, OrderStatus.CANCELLED, AGENT)).rejects.toBe(introuvable);
   });
 });

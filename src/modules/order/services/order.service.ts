@@ -1131,12 +1131,18 @@ export class OrderService {
    * @param options.parLeClient  Posé par la seule route du CLIENT
    *   (`PATCH /orders/:id/client/status`). Jamais lu dans `meta`, que la route
    *   du personnel recopie depuis le corps de la requête.
+   * @param options.conditionEcriture  État que la commande doit encore avoir
+   *   AU MOMENT DE L'ÉCRITURE, ajouté au `where` de l'écriture ordinaire.
+   *   Sinon 409 « vient de changer ». Posé par l'annulation d'une commande à
+   *   confirmer depuis « À relancer » (`A_CONFIRMER_WHERE`, 19/10) : un
+   *   collègue qui la reprend au téléphone pendant ce temps l'emporte, au lieu
+   *   de voir annulée une commande qu'il vient de transmettre au restaurant.
    */
   async updateStatus(
     id: string,
     status: OrderStatus,
     meta?: Record<string, any>,
-    options: { parLeClient?: boolean } = {},
+    options: { parLeClient?: boolean; conditionEcriture?: Prisma.OrderWhereInput } = {},
   ) {
     const order = await this.findById(id);
     //Meta peut contenir estimated_delivery_time, estimated_preparation_time, deliveryDriverId, role
@@ -1275,19 +1281,24 @@ export class OrderService {
     if (!updatedOrder) {
       try {
         updatedOrder = await this.prisma.order.update({
-          where: { id: order.id, ...(options.parLeClient === true && { status: order.status }) },
+          where: {
+            id: order.id,
+            ...(options.parLeClient === true && { status: order.status }),
+            ...(options.conditionEcriture && { AND: [options.conditionEcriture] }),
+          },
           data: donnees,
           include: includeStatut,
         });
       } catch (e) {
-        if (
-          options.parLeClient === true &&
-          e instanceof Prisma.PrismaClientKnownRequestError &&
-          e.code === 'P2025'
-        ) {
-          throw new ConflictException(
-            'Cette commande vient de changer : actualisez-la avant de l\'annuler.',
-          );
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
+          if (options.parLeClient === true) {
+            throw new ConflictException(
+              'Cette commande vient de changer : actualisez-la avant de l\'annuler.',
+            );
+          }
+          if (options.conditionEcriture) {
+            throw new ConflictException('Cette commande vient de changer\u00a0: actualisez la liste.');
+          }
         }
         throw e;
       }

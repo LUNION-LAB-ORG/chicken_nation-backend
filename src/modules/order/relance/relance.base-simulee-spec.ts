@@ -7,6 +7,10 @@
  * `updateMany` est évalué et appliqué d'un seul tenant, comme un UPDATE ...
  * WHERE en base.
  *
+ * `order.findUnique` rend seulement les champs de son `select`, comme la
+ * base : un champ oublié dans la lecture d'un geste (`SELECT_COMMANDE`) manque
+ * aussi ici, et le test du geste casse.
+ *
  * Les transactions interactives passent une à une (comme deux transactions
  * qui se disputent les mêmes lignes) et sont ANNULÉES si leur fonction lève :
  * ce qu'elles ont écrit disparaît.
@@ -24,6 +28,10 @@ const egal = (a: unknown, b: unknown) =>
   a instanceof Date && b instanceof Date ? a.getTime() === b.getTime() : a === b;
 
 const OPERATEURS = ['not', 'in', 'gte', 'gt', 'lt', 'lte', 'endsWith', 'equals'];
+
+/** Les seuls champs demandés par un `select` Prisma (relations rendues telles quelles). */
+const projeter = (ligne: Ligne, select?: Ligne): Ligne =>
+  select ? Object.fromEntries(Object.keys(select).filter((k) => select[k]).map((k) => [k, ligne[k]])) : ligne;
 
 /** Le sous-ensemble des filtres Prisma employé par la relance, évalué en mémoire. */
 export function correspond(ligne: Ligne | null | undefined, where: Ligne | undefined): boolean {
@@ -138,9 +146,9 @@ export function monterRelance(donnees: { commandes?: Ligne[]; relances?: Ligne[]
 
   const prisma: any = {
     order: {
-      findUnique: jest.fn(async ({ where }: { where: Ligne }) => {
+      findUnique: jest.fn(async ({ where, select }: { where: Ligne; select?: Ligne }) => {
         const c = commandes.find((x) => x.id === where.id);
-        return c ? vueCommande(c) : null;
+        return c ? projeter(vueCommande(c), select) : null;
       }),
       findMany: jest.fn(async ({ where }: { where: Ligne }) =>
         commandes.filter((c) => correspond(vueCommande(c), where)).map(vueCommande)

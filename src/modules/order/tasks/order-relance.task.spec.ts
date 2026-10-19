@@ -125,4 +125,17 @@ describe('OrderRelanceTask', () => {
     expect(journal.filter((j) => j.action === 'ALERTE').map((j) => j.order_id)).toEqual([a.id]);
     await expect(tache().passage(new Date(MAINTENANT.getTime() + 30_000))).resolves.toEqual([]);
   });
+
+  it('commande du site à payer à la livraison (19/10) : alertée au premier passage, sans attendre le délai, même ancienne', async () => {
+    const neuve = commande(MAINTENANT, 0.1, { payment_method: 'OFFLINE', channel: 'WEB' });
+    const ancienne = commande(MAINTENANT, 5 * 60, { payment_method: 'OFFLINE', channel: 'WEB' });
+    const panierNeuf = commande(MAINTENANT, 0.1);
+    const { tache, alertes, journal } = monterTache({ commandes: [neuve, ancienne, panierNeuf] });
+
+    await expect(tache().passage(MAINTENANT)).resolves.toEqual([neuve.id, ancienne.id].sort());
+    expect(alertes()).toHaveLength(1);
+    expect(journal.filter((j) => j.action === 'ALERTE').map((j) => j.order_id).sort()).toEqual([neuve.id, ancienne.id].sort());
+    // Une fois : le passage suivant ne sonne plus.
+    await expect(tache().passage(new Date(MAINTENANT.getTime() + 30_000))).resolves.toEqual([]);
+  });
 });

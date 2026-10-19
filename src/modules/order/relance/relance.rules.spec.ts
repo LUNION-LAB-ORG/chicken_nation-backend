@@ -350,6 +350,185 @@ describe('classerBrouillons : paniers annulés par le client (01/10)', () => {
   });
 });
 
+describe('classerBrouillons : commandes du site à payer à la livraison (19/10)', () => {
+  /** Commande du site à payer à la livraison, que personne n'a encore confirmée. */
+  const aConfirmer = (minutes: number, surcharge: Partial<BrouillonLu> = {}) =>
+    brouillon(minutes, {
+      auto: true,
+      status: 'PENDING',
+      paied: false,
+      payment_method: 'OFFLINE',
+      channel: 'WEB',
+      entity_status: 'ACTIVE',
+      ...surcharge,
+    });
+  /** Panier en ligne de l'application, explicitement. */
+  const enLigne = (minutes: number, surcharge: Partial<BrouillonLu> = {}) =>
+    brouillon(minutes, { auto: true, status: 'PENDING', paied: false, payment_method: 'ONLINE', channel: 'APP', ...surcharge });
+
+  it('à relancer dès sa création : jamais « paiement en cours », aucune échéance', () => {
+    const b = aConfirmer(0);
+    const { groupes, prochaineEcheance } = classer([b]);
+    expect(groupes).toHaveLength(1);
+    expect(groupes[0]).toEqual(expect.objectContaining({ etat: 'A_RELANCER', a_confirmer: true, echeance: null }));
+    expect(prochaineEcheance).toBeNull();
+  });
+
+  it('même un paiement tenté à l’instant ne la met pas en cours', () => {
+    const b = aConfirmer(10, {
+      paiements: [{ status: PaiementStatus.FAILED, amount: 5050, total: 5050, created_at: ilYa(1) }],
+    });
+    expect(classer([b]).groupes[0].etat).toBe('A_RELANCER');
+  });
+
+  it('plus de 3 h, ou plus d’un jour : toujours listée', () => {
+    for (const minutes of [FENETRE_HEURES * 60 + 1, 26 * 60]) {
+      const b = aConfirmer(minutes);
+      const { groupes } = classer([b]);
+      expect(groupes.map((g) => [g.cle, g.etat])).toEqual([[b.id, 'A_RELANCER']]);
+    }
+  });
+
+  it('jamais exclue : ni « a recommandé » par une commande payée ensuite, ni « paiement à confirmer »', () => {
+    const b = aConfirmer(20, {
+      paiements: [{ status: PaiementStatus.SUCCESS, amount: 5050, total: 5050, created_at: ilYa(19) }],
+    });
+    const e = effective(5);
+    const { groupes, exclus } = classer([b], [e]);
+    expect(exclus.size).toBe(0);
+    expect(groupes.map((g) => g.cle)).toEqual([b.id]);
+  });
+
+  it('signal « commande suivante » : la première commande effective du client créée après elle', () => {
+    const b = aConfirmer(30);
+    const avant = effective(40);
+    const premiere = effective(20);
+    const seconde = effective(10);
+    const annulee = effective(25, { status: 'CANCELLED' });
+    const autreClient = effective(15, { customer_id: 'client-9', phone: '0799999999', customer: { phone: null } });
+    const { groupes } = classer([b], [seconde, avant, annulee, autreClient, premiere]);
+    expect(groupes[0].signaux.commande_suivante).toEqual({ reference: premiere.reference, created_at: premiere.created_at });
+    // Celle d'avant reste le signal « commande récente », comme pour un panier.
+    expect(groupes[0].signaux.commande_recente).toEqual({ reference: avant.reference, created_at: avant.created_at });
+  });
+
+  it('sans commande effective après elle : pas de signal ; un panier en ligne ne le porte jamais', () => {
+    expect(classer([aConfirmer(10)], [effective(20)]).groupes[0].signaux.commande_suivante).toBeNull();
+    expect(classer([enLigne(10)]).groupes[0].signaux.commande_suivante).toBeNull();
+  });
+
+  it('tête de son groupe, même plus ancienne qu’un panier en ligne du même client', () => {
+    const commande = aConfirmer(20);
+    const panier = enLigne(5);
+    const { groupes } = classer([panier, commande]);
+    expect(groupes).toHaveLength(1);
+    expect(groupes[0]).toEqual(expect.objectContaining({ cle: commande.id, etat: 'A_RELANCER', a_confirmer: true }));
+    expect(groupes[0].tete.id).toBe(commande.id);
+    expect(groupes[0].autres.map((b) => b.id)).toEqual([panier.id]);
+    expect(groupes[0].ids).toEqual([commande.id, panier.id].sort());
+  });
+
+  it('deux commandes à confirmer du même client (double clic) : la plus récente en tête, l’autre reste listée', () => {
+    const premiere = aConfirmer(6);
+    const seconde = aConfirmer(5);
+    const { groupes } = classer([premiere, seconde]);
+    expect(groupes).toHaveLength(1);
+    expect(groupes[0].tete.id).toBe(seconde.id);
+    expect(groupes[0].autres.map((b) => b.id)).toEqual([premiere.id]);
+  });
+
+  it('reprise au téléphone : le panier en ligne plus ancien du client sort « a recommandé »', () => {
+    const panier = enLigne(30);
+    // La commande reprise est devenue effective, créée après le panier.
+    const reprise = effective(10);
+    const { groupes, exclus } = classer([panier], [reprise]);
+    expect(groupes).toEqual([]);
+    expect(exclus.get(panier.id)).toEqual({ motif: 'RECOMMANDE', reference: reprise.reference });
+  });
+
+  it('commande reprise, puis une autre commande à confirmer plus ancienne du client : listée avec le doublon possible', () => {
+    const ancienne = aConfirmer(30);
+    const reprise = effective(10);
+    const { groupes } = classer([ancienne], [reprise]);
+    expect(groupes.map((g) => g.cle)).toEqual([ancienne.id]);
+    expect(groupes[0].signaux.commande_suivante).toEqual({ reference: reprise.reference, created_at: reprise.created_at });
+  });
+
+  it('annulée par le client (« Modifier ma commande ») : plus à confirmer, règles des paniers annulés', () => {
+    const annulee = aConfirmer(6, {
+      status: 'CANCELLED',
+      entity_status: 'DELETED',
+      cancelled_by: 'client',
+      cancelled_at: ilYa(2),
+    });
+    const { groupes } = classer([annulee]);
+    expect(groupes[0]).toEqual(expect.objectContaining({ etat: 'A_RELANCER', a_confirmer: false }));
+    expect(groupes[0].signaux.annulee_par_client).toEqual({ le: ilYa(2) });
+    // Même fenêtre que les autres paniers annulés.
+    expect(classer([aConfirmer(FENETRE_HEURES * 60 + 1, { status: 'CANCELLED', entity_status: 'DELETED', cancelled_by: 'client' })]).groupes).toEqual([]);
+  });
+
+  it('« Modifier ma commande » puis nouvelle commande à confirmer : un groupe, la nouvelle en tête, l’ancienne marquée annulée', () => {
+    const ancienne = aConfirmer(8, { status: 'CANCELLED', entity_status: 'DELETED', cancelled_by: 'client', cancelled_at: ilYa(2) });
+    const nouvelle = aConfirmer(1);
+    const { groupes } = classer([ancienne, nouvelle]);
+    expect(groupes).toHaveLength(1);
+    expect(groupes[0]).toEqual(expect.objectContaining({ cle: nouvelle.id, etat: 'A_RELANCER', a_confirmer: true }));
+    expect(groupes[0].signaux.annulee_par_client).toEqual({ le: ilYa(2) });
+  });
+
+  it('prise par un collègue : prise, comme un panier', () => {
+    const prise = aConfirmer(5, { relance: relance({ pris_par_id: YAO, pris_le: ilYa(1), prise_expire_le: dans(9) }) });
+    expect(classer([prise]).groupes[0]).toEqual(expect.objectContaining({ etat: 'PRIS', a_confirmer: true }));
+  });
+
+  it('commande en espèces de l’application, ou sans canal : jamais à confirmer (elle n’arrive d’ailleurs pas ici)', () => {
+    for (const channel of ['APP', 'CALL_CENTER', null, undefined]) {
+      const b = aConfirmer(1, { channel });
+      expect({ channel, a_confirmer: classer([b]).groupes[0]?.a_confirmer }).toEqual({ channel, a_confirmer: false });
+    }
+  });
+
+  it('ordre : mes prises, à confirmer, à relancer, prises des collègues, en cours ; à rang égal, plus ancien d’abord', () => {
+    const enCours = enLigne(1, { customer_id: 'c-1', phone: '0700000011' });
+    const priseYao = enLigne(20, { customer_id: 'c-2', phone: '0700000022', relance: relance({ pris_par_id: YAO, prise_expire_le: dans(5) }) });
+    const ancien = enLigne(40, { customer_id: 'c-4', phone: '0700000044' });
+    const priseAwa = enLigne(15, { customer_id: 'c-5', phone: '0700000055', relance: relance({ pris_par_id: AWA, prise_expire_le: dans(5) }) });
+    const confirmerRecente = aConfirmer(0, { customer_id: 'c-6', phone: '0700000066' });
+    const confirmerAncienne = aConfirmer(4 * 60, { customer_id: 'c-7', phone: '0700000077' });
+    const confirmerPriseYao = aConfirmer(2, {
+      customer_id: 'c-8',
+      phone: '0700000088',
+      relance: relance({ pris_par_id: YAO, prise_expire_le: dans(5) }),
+    });
+    const ordre = classer([enCours, priseYao, ancien, priseAwa, confirmerRecente, confirmerAncienne, confirmerPriseYao]).groupes.map(
+      (g) => g.cle,
+    );
+    expect(ordre).toEqual([
+      priseAwa.id,
+      confirmerAncienne.id,
+      confirmerRecente.id,
+      ancien.id,
+      priseYao.id,
+      confirmerPriseYao.id,
+      enCours.id,
+    ]);
+  });
+
+  it('non-régression : un panier en ligne seul garde délai, fenêtre, tête et signaux d’avant', () => {
+    const jeune = enLigne(2);
+    expect(classer([jeune]).groupes[0]).toEqual(
+      expect.objectContaining({ etat: 'EN_COURS', a_confirmer: false, echeance: dans(REGLES.delai_minutes - 2) }),
+    );
+    expect(classer([enLigne(FENETRE_HEURES * 60 + 1)]).groupes).toEqual([]);
+    const ancien = enLigne(6);
+    const recent = enLigne(4);
+    const { groupes } = classer([ancien, recent]);
+    expect(groupes[0].tete.id).toBe(recent.id);
+    expect(groupes[0].signaux.commande_suivante).toBeNull();
+  });
+});
+
 describe('réglages', () => {
   it('15. hors bornes ou illisibles : défauts', () => {
     expect(lireRegles({})).toEqual({

@@ -26,6 +26,7 @@ import {
 import { OrderService } from '../services/order.service';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+import { AnnulerRelanceDto } from '../dto/annuler-relance.dto';
 import { IgnorerRelanceDto } from '../dto/ignorer-relance.dto';
 import { OrderModule } from '../order.module';
 import { correspond } from '../relance/relance.base-simulee-spec';
@@ -39,6 +40,8 @@ const ROUTES: [string, (...args: never[]) => unknown][] = [
   ['POST /orders/relances/:orderId/liberer', OrderRelanceController.prototype.liberer],
   ['POST /orders/relances/:orderId/ignorer', OrderRelanceController.prototype.ignorer],
   ['POST /orders/relances/:orderId/retablir', OrderRelanceController.prototype.retablir],
+  // Commande du site à payer à la livraison, à confirmer (19/10).
+  ['POST /orders/relances/:orderId/annuler', OrderRelanceController.prototype.annuler],
 ];
 
 const garde = new UserRolesGuard(new Reflector());
@@ -54,7 +57,7 @@ function autorise(role: UserRole, route: (...args: never[]) => unknown): boolean
 describe('Relance des paniers : droits', () => {
   it('toutes les méthodes du contrôleur sont listées ici', () => {
     const methodes = Object.getOwnPropertyNames(OrderRelanceController.prototype).filter((m) => m !== 'constructor');
-    expect(methodes.sort()).toEqual(['ignorer', 'liberer', 'lister', 'listerIgnorees', 'prendre', 'retablir']);
+    expect(methodes.sort()).toEqual(['annuler', 'ignorer', 'liberer', 'lister', 'listerIgnorees', 'prendre', 'retablir']);
   });
 
   it.each(ROUTES)('%s : jeton puis rôle, sur la méthode elle-même', (_route, methode) => {
@@ -251,9 +254,12 @@ describe('GET /orders/:id : panier annulé par le client', () => {
   });
 });
 
-describe('IgnorerRelanceDto', () => {
+describe.each([
+  ['IgnorerRelanceDto', IgnorerRelanceDto],
+  ['AnnulerRelanceDto (19/10)', AnnulerRelanceDto],
+])('%s', (_nom, Dto) => {
   const erreurs = async (corps: Record<string, unknown>) =>
-    (await validate(plainToInstance(IgnorerRelanceDto, corps))).flatMap((e) => Object.values(e.constraints ?? {}));
+    (await validate(plainToInstance(Dto, corps))).flatMap((e) => Object.values(e.constraints ?? {}));
 
   it('raison absente ou inconnue : « Choisissez une raison. »', async () => {
     expect(await erreurs({})).toEqual(['Choisissez une raison.']);
