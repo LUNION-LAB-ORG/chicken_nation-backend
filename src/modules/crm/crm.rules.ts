@@ -8,6 +8,7 @@ import {
   PaymentMethod,
   Prisma,
 } from '@prisma/client';
+import { A_CONFIRMER_SQL, PAS_A_CONFIRMER_WHERE } from 'src/modules/order/helpers/paiement-livraison.rules';
 
 /**
  * Règles du module Contacts qui ne dépendent d'aucun service : elles sont
@@ -83,8 +84,14 @@ export const CRM_SOCKET_EVENT = 'crm:contact-updated';
 
 /**
  * Une commande qui COMPTE : ni supprimée, ni paiement en ligne encore en
- * attente. Un paiement en ligne abandonné finit supprimé ; tant qu'il est en
- * cours, le client n'a pas encore commandé et doit rester dans la file.
+ * attente, ni commande du site à payer à la livraison pas encore confirmée.
+ * Un paiement en ligne abandonné finit supprimé ; tant qu'il est en cours, le
+ * client n'a pas encore commandé et doit rester dans la file. De même, une
+ * commande à confirmer (`paiement-livraison.rules.ts`) ne compte qu'une fois
+ * que le centre d'appels l'a transmise au restaurant.
+ *
+ * Les brouillons (`BROUILLON_WHERE`) en sont le complément : toucher cette
+ * règle change aussi ce que le restaurant ne voit pas.
  */
 export function commandeEffective(customerId?: string): Prisma.OrderWhereInput {
   return {
@@ -95,6 +102,8 @@ export function commandeEffective(customerId?: string): Prisma.OrderWhereInput {
       paied: false,
       status: OrderStatus.PENDING,
     },
+    // Écrit en positif : sûr avec un canal ou un mode de paiement vide.
+    AND: [PAS_A_CONFIRMER_WHERE],
   };
 }
 
@@ -127,9 +136,14 @@ export const NOUVEAU_CYCLE_SQL = Object.keys(NOUVEAU_CYCLE)
   .map((cle) => `"${cle}" = ${cle === 'status' ? `'A_APPELER'` : cle === 'call_count' ? '0' : 'NULL'}`)
   .join(', ');
 
-/** Une commande qui compte, écrite en SQL pour la table "Order" aliasée « o ». */
+/**
+ * Une commande qui compte, écrite en SQL pour la table "Order" aliasée « o ».
+ * `A_CONFIRMER_SQL` ne vaut jamais NULL : le `NOT` devant ne fait sortir
+ * aucune commande sans canal ni mode de paiement.
+ */
 export const COMMANDE_EFFECTIVE_SQL = `o."entity_status" <> 'DELETED'
-  AND NOT (o."payment_method" = 'ONLINE' AND o."paied" = false AND o."status" = 'PENDING')`;
+  AND NOT (o."payment_method" = 'ONLINE' AND o."paied" = false AND o."status" = 'PENDING')
+  AND NOT ${A_CONFIRMER_SQL('o')}`;
 
 /**
  * Vente comptée dans les chiffres (alias `v` sur "CrmConversion") : ni annulée

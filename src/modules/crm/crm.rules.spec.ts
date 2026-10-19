@@ -1,4 +1,6 @@
 import { CrmCallOutcome as O, CrmSegment as P, CrmStatus as S } from '@prisma/client';
+import { A_CONFIRMER_SQL, PAS_A_CONFIRMER_WHERE } from 'src/modules/order/helpers/paiement-livraison.rules';
+import { correspond } from 'src/modules/order/relance/relance.base-simulee-spec';
 import {
   commandeEffective,
   chiffresTelephone,
@@ -17,6 +19,7 @@ import {
   statutSansConversion,
   versE164,
   BRUT_DEVENIR_VIDE,
+  COMMANDE_EFFECTIVE_SQL,
   COMMANDE_VALIDE_SQL,
   COUPON_UTILISE_SQL,
   VENTE_VALIDE_SQL,
@@ -153,12 +156,48 @@ describe('genererCodeCoupon', () => {
 });
 
 describe('commandeEffective', () => {
-  it('exclut les commandes supprimées et les paiements en ligne encore en attente', () => {
+  it('exclut les commandes supprimées, les paiements en ligne encore en attente et les commandes du site à confirmer', () => {
     expect(commandeEffective('c1')).toEqual({
       customer_id: 'c1',
       entity_status: { not: 'DELETED' },
       NOT: { payment_method: 'ONLINE', paied: false, status: 'PENDING' },
+      AND: [PAS_A_CONFIRMER_WHERE],
     });
+  });
+
+  // Moteur en mémoire de la relance : AND, OR, NOT, null et `not` évalués.
+  const commande = (surcharge: Record<string, unknown> = {}) => ({
+    customer_id: 'c1',
+    auto: true,
+    channel: 'WEB',
+    payment_method: 'OFFLINE',
+    paied: false,
+    status: 'PENDING',
+    entity_status: 'ACTIVE',
+    ...surcharge,
+  });
+  const effective = (c: Record<string, unknown>) => correspond(c, commandeEffective('c1') as Record<string, unknown>);
+
+  it('commande du site à payer à la livraison, pas encore confirmée : ne compte pas', () => {
+    expect(effective(commande())).toBe(false);
+  });
+
+  it('confirmée par le centre d’appels (manuelle, acceptée) : compte', () => {
+    expect(effective(commande({ auto: false, status: 'ACCEPTED' }))).toBe(true);
+  });
+
+  it('en espèces depuis l’application, ou sans canal (avant le 02/10, HubRise) : compte, comme avant', () => {
+    expect(effective(commande({ channel: 'APP' }))).toBe(true);
+    expect(effective(commande({ channel: null }))).toBe(true);
+    expect(effective(commande({ channel: 'CALL_CENTER', auto: false }))).toBe(true);
+  });
+
+  it('en SQL : même exclusion, écrite pour ne jamais valoir NULL', () => {
+    const sql = COMMANDE_EFFECTIVE_SQL.replace(/\s+/g, ' ');
+    expect(sql).toContain(`AND NOT (o."payment_method" = 'ONLINE' AND o."paied" = false AND o."status" = 'PENDING')`);
+    expect(sql).toContain(`AND NOT ${A_CONFIRMER_SQL('o').replace(/\s+/g, ' ')}`);
+    expect(sql).toContain(`o."channel" IS NOT DISTINCT FROM 'WEB'`);
+    expect(sql).toContain(`o."payment_method" IS NOT DISTINCT FROM 'OFFLINE'`);
   });
 });
 

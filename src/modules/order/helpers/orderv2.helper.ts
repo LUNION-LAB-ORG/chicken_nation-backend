@@ -22,6 +22,7 @@ import { OrderItemDto } from '../dto/order-create.dto';
 import { nomSurLaCommande } from './nom-client.helper';
 import { MapsService } from 'src/modules/maps/maps.service';
 import { choisirRestaurant } from './acheminement.rules';
+import { paiementLivraisonActif, REGLAGE_PAIEMENT_LIVRAISON_SITE } from './paiement-livraison.rules';
 
 @Injectable()
 export class OrderV2Helper {
@@ -47,6 +48,16 @@ export class OrderV2Helper {
   async getTaxRate(): Promise<number> {
     const val = await this.settingsService.getOrEnv('order_tax_rate', 'ORDER_TAX_RATE', '0.05');
     return Number(val);
+  }
+
+  /**
+   * Paiement à la livraison proposé sur le site (Paramètres > Commandes).
+   * Public pour que `GET /orders/conditions-commande` l'annonce avec la même
+   * lecture que `createv2` : le site ne montre jamais une option que la
+   * création refuserait. Absent : proposé (`paiementLivraisonActif`).
+   */
+  async paiementLivraisonSiteActif(): Promise<boolean> {
+    return paiementLivraisonActif(await this.settingsService.get(REGLAGE_PAIEMENT_LIVRAISON_SITE));
   }
 
   /**

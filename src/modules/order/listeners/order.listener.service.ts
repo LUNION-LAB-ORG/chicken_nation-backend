@@ -37,7 +37,8 @@ export class OrderListenerService {
         // primaire de l'update temps réel ; le push est l'alerte "app fermée".
         // ⚠️ Jamais pour un panier non payé de l'application (`brouillon`) :
         // le restaurant ne le voit nulle part. Le push part au paiement, quand
-        // KKiaPay réémet la création.
+        // KKiaPay réémet la création. Ni pour une commande du site à confirmer
+        // (`brouillon` aussi) : il part à la reprise au téléphone.
         if (!payload.brouillon) this.prevenirNouvelleCommande(payload.order);
 
         // 🔔 CLOCHE staff resto — commandes ACTIONNABLES uniquement (status != PENDING) :
@@ -96,11 +97,14 @@ export class OrderListenerService {
         // création (PENDING/non payée) : le push « Commande confirmée » part au succès du
         // paiement (cf. KkiapayOrderListenerService). Les commandes cash/app (OFFLINE) et
         // staff conservent le comportement actuel (push à la création).
+        // Pas non plus pour une commande du site à payer à la livraison (`brouillon`) :
+        // elle n'est confirmée qu'une fois que le centre d'appels a joint le client. Pour un
+        // panier en ligne, `brouillon` dit la même chose que `isUnpaidOnlineAppOrder`.
         const isUnpaidOnlineAppOrder =
             payload.order.auto === true &&
             payload.order.payment_method === PaymentMethod.ONLINE &&
             payload.order.paied !== true;
-        if (payload.expo_token && !isUnpaidOnlineAppOrder) {
+        if (payload.expo_token && !isUnpaidOnlineAppOrder && !payload.brouillon) {
             const promotionMessage = isPromotionUsed
                 ? "🎉 Une promotion a été appliquée à votre commande !"
                 : "";

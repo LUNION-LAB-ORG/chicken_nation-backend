@@ -78,6 +78,7 @@ import { motifRefusModification, peutModifierCommande } from '../helpers/modific
 import { OrderRelanceService } from './order-relance.service';
 import { canalDeSaisie, libelleSource } from '../helpers/canal-commande.rules';
 import { ConditionsCommande, conditionsCommandePubliques } from '../helpers/conditions-commande.rules';
+import { A_CONFIRMER_WHERE, REFUS_PAIEMENT_SITE } from '../helpers/paiement-livraison.rules';
 import {
   cadeauxDesLignes,
   cadeauxRefactures,
@@ -183,7 +184,8 @@ export class OrderService {
   /**
    * `canal` : APP pour l'application, WEB pour le site. Il ne vient que d'un
    * en-tête déclaratif ; il ne donne donc aucun droit, il en retire : sur le
-   * site, seul le paiement en ligne est accepté.
+   * site, le paiement est en ligne, ou à la livraison sous conditions
+   * (`controlerPaiementSite`).
    */
   async createv2(
     customer_id: string,
@@ -195,11 +197,10 @@ export class OrderService {
       delivery_service: overrideDeliveryService,
     } = createOrderDto;
 
-    // Site web : paiement en ligne obligatoire. Une commande en espèces part au
-    // restaurant sans rien encaisser ; depuis un formulaire public, c'est la
-    // porte ouverte aux fausses commandes.
-    if (canal === OrderChannel.WEB && payment_method !== PaymentMethod.ONLINE) {
-      throw new BadRequestException('Sur le site, le paiement se fait en ligne.');
+    // Site web : en ligne, ou à la livraison sous conditions. L'application
+    // n'est pas concernée : elle accepte toujours OFFLINE, sans contrôle.
+    if (canal === OrderChannel.WEB) {
+      await this.controlerPaiementSite(customer_id, payment_method, type);
     }
 
     // 🚫 Livraison désactivée pour l'app (réglage backoffice temporaire).
@@ -486,6 +487,8 @@ export class OrderService {
       orderItems: promoItems,
       // Panier non payé : pas de notification « Nouvelle commande » au
       // restaurant, elle partira au paiement (KKiaPay réémet la création).
+      // Commande du site à confirmer : elle partira à la reprise au téléphone.
+      // Ni l'un ni l'autre ne reçoit « Commande confirmée ! » à la création.
       brouillon: estBrouillon(order),
     });
 
@@ -494,12 +497,60 @@ export class OrderService {
     void this.signalerAnomalieLivraison(order);
 
     // Émettre l'événement WebSocket de création de commande. Un panier payable
-    // en ligne et non payé est un BROUILLON : les restaurants ne le reçoivent
-    // pas, le back office n'en reçoit qu'une charge réduite. createv2 est le
-    // seul chemin qui crée des brouillons.
+    // en ligne et non payé, ou une commande du site à confirmer, est un
+    // BROUILLON : les restaurants ne le reçoivent pas, le back office n'en
+    // reçoit qu'une charge réduite. createv2 est le seul chemin qui crée des
+    // brouillons.
     this.orderWebSocketService.emitOrderCreated(order, { brouillon: estBrouillon(order) });
 
     return order;
+  }
+
+  /**
+   * PAIEMENT SUR LE SITE (19/10/2026) : en ligne, ou à la livraison.
+   *
+   * Une commande du site à payer à la livraison est une COMMANDE À CONFIRMER
+   * (`paiement-livraison.rules.ts`) : le restaurant ne la voit pas, le centre
+   * d'appels appelle le client puis la transmet ou l'annule. Depuis un
+   * formulaire public, c'est la porte ouverte aux fausses commandes, d'où
+   * quatre contrôles, dans cet ordre :
+   *  1. un moyen de paiement connu ;
+   *  2. l'option ouverte dans Paramètres > Commandes (coupée en cas de
+   *     fausses commandes ou en l'absence du centre d'appels) ;
+   *  3. une livraison : c'est le livreur qui encaisse ; au retrait, le site
+   *     ne propose que le paiement en ligne (décision du client) ;
+   *  4. une seule commande à confirmer à la fois par client : ferme le double
+   *     onglet et l'envoi en rafale. « Modifier ma commande » annule d'abord
+   *     la précédente, il n'est donc pas gêné.
+   *
+   * Le 4 se lit avant la transaction : deux requêtes parties ensemble
+   * peuvent encore passer toutes les deux. La relance les regroupe alors, et
+   * l'agent annule le doublon.
+   */
+  private async controlerPaiementSite(
+    customer_id: string,
+    payment_method: PaymentMethod | undefined,
+    type: OrderType,
+  ): Promise<void> {
+    if (payment_method !== PaymentMethod.ONLINE && payment_method !== PaymentMethod.OFFLINE) {
+      throw new BadRequestException(REFUS_PAIEMENT_SITE.moyenAbsent);
+    }
+    if (payment_method === PaymentMethod.ONLINE) return;
+
+    if (!(await this.orderHelperV2.paiementLivraisonSiteActif())) {
+      throw new BadRequestException(REFUS_PAIEMENT_SITE.indisponible);
+    }
+    if (type !== OrderType.DELIVERY) {
+      throw new BadRequestException(REFUS_PAIEMENT_SITE.livraisonSeulement);
+    }
+    const enAttente = await this.prisma.order.findFirst({
+      where: { customer_id, ...A_CONFIRMER_WHERE },
+      orderBy: { created_at: 'desc' },
+      select: { reference: true },
+    });
+    if (enAttente) {
+      throw new ConflictException(REFUS_PAIEMENT_SITE.dejaEnAttente(enAttente.reference));
+    }
   }
 
   /**
@@ -2509,8 +2560,21 @@ export class OrderService {
           order.status !== OrderStatus.PENDING &&
           order.status !== OrderStatus.ACCEPTED &&
           order.status !== OrderStatus.IN_PROGRESS));
+    /**
+     * ⚠️ Ni pour une commande du site à payer à la livraison (19/10) : le
+     * client a validé ce total sur le site, frais de service compris, et le
+     * livreur le lui réclamera. La reprendre au téléphone ne doit pas le
+     * changer. Vaut aussi quand elle est réactivée après une annulation par
+     * le client. Si l'agent change les articles, la taxe garde sa valeur de
+     * création et le total est refait, comme pour un montant engagé.
+     */
+    const fraisAcceptesSurLeSite =
+      passeEnManuel &&
+      order.channel === OrderChannel.WEB &&
+      order.payment_method === PaymentMethod.OFFLINE;
+    const garderTaxe = montantEngage || fraisAcceptesSurLeSite;
     if (passeEnManuel) {
-      if (!montantEngage) updateData.tax = 0;
+      if (!garderTaxe) updateData.tax = 0;
       /**
        * ⚠️ On ne REMBOBINE jamais une commande plus avancée. Forcer ACCEPTED
        * sur une commande terminée la rouvrirait, sur une commande annulée la
@@ -2536,9 +2600,10 @@ export class OrderService {
 
     /**
      * Taxe à retenir pour tout recalcul de total plus bas : celle de la
-     * commande, ou zéro si elle vient de passer en manuel (montant non engagé).
+     * commande, ou zéro si elle vient de passer en manuel (montant non engagé,
+     * frais pas acceptés sur le site).
      */
-    const taxeEffective = passeEnManuel && !montantEngage ? 0 : (order.tax ?? 0);
+    const taxeEffective = passeEnManuel && !garderTaxe ? 0 : (order.tax ?? 0);
 
     /**
      * Articles FINAUX de la requête : recalculés, ou ceux de la commande. Le
@@ -2550,7 +2615,7 @@ export class OrderService {
 
     // Les articles ne changent pas, mais la taxe si : le total doit être refait
     // ici, le bloc de recalcul ci-dessous ne s'exécutant que sur un panier modifié.
-    if (passeEnManuel && !montantEngage && !(orderItemsData && newNetAmount !== null)) {
+    if (passeEnManuel && !garderTaxe && !(orderItemsData && newNetAmount !== null)) {
       updateData.amount = totalPour(order.discount ?? 0);
     }
 
@@ -4094,14 +4159,18 @@ export class OrderService {
    * `conditions-commande.rules.ts`.
    */
   async obtenirConditionsCommande(): Promise<ConditionsCommande> {
-    const [taux, livraison] = await Promise.all([
+    const [taux, livraison, paiementLivraison] = await Promise.all([
       this.orderHelperV2.getTaxRate(),
       this.deliveryFeeHelper.load(),
+      // Même lecture que le refus de `createv2` : le site ne propose jamais
+      // une option que la création refuserait.
+      this.orderHelperV2.paiementLivraisonSiteActif(),
     ]);
     return conditionsCommandePubliques({
       tauxFraisService: taux,
       grille: livraison.grid,
       zonesLivreurActives: livraison.turboZonesEnabled,
+      paiementLivraisonActif: paiementLivraison,
     });
   }
 }

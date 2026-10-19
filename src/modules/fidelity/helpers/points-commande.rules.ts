@@ -1,4 +1,5 @@
 import { EntityStatus, LoyaltyPointType, OrderStatus, Prisma } from '@prisma/client';
+import { A_CONFIRMER_WHERE } from 'src/modules/order/helpers/paiement-livraison.rules';
 
 /**
  * POINTS DE FIDÉLITÉ UTILISÉS SUR UNE COMMANDE : règles pures (02/10).
@@ -105,6 +106,12 @@ export function calculerRemiseFidelite(params: {
  * ne paient pas deux paniers. Un panier non payé n'engage rien : ses points ne
  * sont pas encore promis.
  *
+ * Sauf une commande du site à payer à la livraison, en attente de l'appel du
+ * centre d'appels (19/10) : le client l'a validée, ses points ne sont retirés
+ * qu'à la confirmation, parfois bien plus tard. Sans ce garde-fou, il les
+ * dépenserait entre-temps sur un panier payé en ligne, et le second retrait
+ * échouerait (alerte `POINTS_NON_RETIRES`).
+ *
  * Seules les commandes passées depuis la mise en place de cette règle
  * comptent. Les anciennes commandes jamais déduites (fuite d'avant le 23/07)
  * auraient sinon baissé en silence le solde utilisable de leurs clients, alors
@@ -120,7 +127,7 @@ export function pointsEngagesWhere(customer_id: string): Prisma.OrderWhereInput 
     points: { gt: 0 },
     entity_status: { not: EntityStatus.DELETED },
     status: { not: OrderStatus.CANCELLED },
-    OR: [{ paied: true }, { status: { not: OrderStatus.PENDING } }],
+    OR: [{ paied: true }, { status: { not: OrderStatus.PENDING } }, A_CONFIRMER_WHERE],
     loyalty_points: { none: { type: LoyaltyPointType.REDEEMED } },
   };
 }

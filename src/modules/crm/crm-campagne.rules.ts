@@ -1,6 +1,7 @@
 import { CampaignStatus, CrmSegment, CrmStatus, EntityStatus, OrderStatus, OrderType, Prisma, ProspectPlatform } from '@prisma/client';
 import { LIBELLES_PUBLIC, STATUTS_OUVERTS, VENTE_VALIDE_SQL, dateCourte, identiteContact } from './crm.rules';
 import { codeMasque } from './services/crm-contact.query';
+import { A_CONFIRMER_SQL } from 'src/modules/order/helpers/paiement-livraison.rules';
 
 /**
  * Règles des campagnes multi-publics (lot 3), sans aucune dépendance : elles
@@ -314,12 +315,17 @@ export type EtatCommande = (typeof ETATS_COMMANDE)[number];
  * effectives), sinon valide. Un mode de paiement absent se lit comme le
  * défaut, en ligne : `COMMANDE_EFFECTIVE_SQL` écarte aussi cette commande-là
  * (la comparaison à NULL la fait sortir), les deux règles disent la même chose.
+ *
+ * Une commande du site à payer à la livraison, pas encore confirmée, n'est
+ * pas effective non plus : elle se lit « en attente de paiement », ce qui est
+ * exact (le client paiera au livreur) et n'ajoute aucun état à l'écran.
  */
 export function ETAT_COMMANDE_SQL(a: string): string {
   if (!/^[a-z_][a-z0-9_]*$/i.test(a)) throw new Error(`Alias SQL invalide : ${a}`);
   return `CASE WHEN ${a}."entity_status" = 'DELETED' THEN 'SUPPRIMEE'
             WHEN ${a}."status" = 'CANCELLED' THEN 'ANNULEE'
             WHEN coalesce(${a}."payment_method"::text, 'ONLINE') = 'ONLINE' AND ${a}."paied" = false AND ${a}."status" = 'PENDING' THEN 'PAIEMENT_EN_ATTENTE'
+            WHEN ${A_CONFIRMER_SQL(a)} THEN 'PAIEMENT_EN_ATTENTE'
             ELSE 'VALIDE' END`;
 }
 

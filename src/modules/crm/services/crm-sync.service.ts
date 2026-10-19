@@ -10,6 +10,7 @@ import {
 import { PrismaService } from 'src/database/services/prisma.service';
 import {
   COLONNES_VENTE,
+  COMMANDE_EFFECTIVE_SQL,
   NOUVEAU_CYCLE,
   venteManquante,
   chiffresTelephone,
@@ -196,8 +197,7 @@ export class CrmSyncService {
         FROM "CrmCoupon" k
         JOIN "Order" o ON upper(trim(o."code_promo")) = upper(k."code")
         WHERE k."contact_id" = ${c.id}::uuid
-          AND o."entity_status" <> 'DELETED'
-          AND NOT (o."payment_method" = 'ONLINE' AND o."paied" = false AND o."status" = 'PENDING')
+          AND ${Prisma.raw(COMMANDE_EFFECTIVE_SQL)}
           AND o."created_at" >= GREATEST(${c.segment_since}, k."sent_at")
         ORDER BY o."created_at" ASC
         LIMIT 1`.then((l) => l[0] ?? null),

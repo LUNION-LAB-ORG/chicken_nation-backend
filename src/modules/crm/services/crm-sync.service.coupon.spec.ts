@@ -7,7 +7,8 @@
  * `order_amount` effacés) et la fiche est rejugée. `rattacherCoupon` testé en
  * isolation, Prisma simulé sur les deux tables qu'il touche.
  */
-import { EntityStatus } from '@prisma/client';
+import { CrmSegment, EntityStatus, Prisma } from '@prisma/client';
+import { COMMANDE_EFFECTIVE_SQL } from '../crm.rules';
 import { CrmSyncService } from './crm-sync.service';
 
 const COMMANDE = '11111111-1111-4111-8111-111111111111';
@@ -135,5 +136,42 @@ describe('CrmSyncService.rattacherCoupon : coupon retiré ou remplacé en modifi
     await m.service.rattacherCoupon(COMMANDE);
     expect(m.prisma.crmCoupon.findMany).not.toHaveBeenCalled();
     expect(m.coupons[0].order_id).toBe(COMMANDE);
+  });
+});
+
+/**
+ * La commande qui fait sortir une fiche, trouvée par l'un de ses coupons :
+ * la requête brute lit la règle partagée des commandes effectives, plus une
+ * copie en dur. Une copie avait oublié les commandes du site à confirmer
+ * (19/10) : une commande à payer à la livraison pas encore confirmée aurait
+ * converti la fiche.
+ */
+describe('CrmSyncService.commandeCandidate : requête brute', () => {
+  it('lit COMMANDE_EFFECTIVE_SQL, sans recopier la règle', async () => {
+    let requete: Prisma.Sql | null = null;
+    const prisma = {
+      order: { findFirst: jest.fn().mockResolvedValue(null) },
+      $queryRaw: jest.fn(async (morceaux: TemplateStringsArray, ...valeurs: unknown[]) => {
+        requete = Prisma.sql(morceaux, ...valeurs);
+        return [];
+      }),
+    };
+    const service = Object.create(CrmSyncService.prototype) as CrmSyncService;
+    Object.assign(service, { prisma });
+
+    const contact = {
+      id: 'x1',
+      customer_id: 'c1',
+      segment: CrmSegment.INACTIF,
+      segment_since: new Date('2026-10-01T00:00:00.000Z'),
+    };
+    await (service as unknown as { commandeCandidate: (c: unknown) => Promise<unknown> }).commandeCandidate(contact);
+
+    expect(requete).not.toBeNull();
+    const texte = requete!.sql.replace(/\s+/g, ' ');
+    expect(texte).toContain(`AND ${COMMANDE_EFFECTIVE_SQL.replace(/\s+/g, ' ')} AND o."created_at" >= GREATEST(?, k."sent_at")`);
+    expect(texte).toContain(`o."channel" IS NOT DISTINCT FROM 'WEB'`);
+    // Paramètres liés, jamais collés dans le texte.
+    expect(requete!.values).toEqual(['x1', contact.segment_since]);
   });
 });

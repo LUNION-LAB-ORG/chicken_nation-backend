@@ -42,6 +42,7 @@ import {
   calculerRemiseFidelite,
   RemiseFidelite,
 } from 'src/modules/fidelity/helpers/points-commande.rules';
+import { PAS_A_CONFIRMER_WHERE } from './paiement-livraison.rules';
 
 @Injectable()
 export class OrderHelper {
@@ -881,8 +882,14 @@ export class OrderHelper {
     return payment;
   }
 
+  /**
+   * Filtre des statistiques `/orders/statistics`. Une commande du site à
+   * payer à la livraison, pas encore confirmée, passerait le `OR` (elle est
+   * OFFLINE) : elle n'est pas encore une commande, elle est écartée. Écrit en
+   * positif, sûr avec un canal vide.
+   */
   buildWhereClause(filters?: QueryOrderDto) {
-    if (!filters) return { entity_status: { not: EntityStatus.DELETED } };
+    if (!filters) return { entity_status: { not: EntityStatus.DELETED }, AND: [PAS_A_CONFIRMER_WHERE] };
 
     const {
       status,
@@ -915,6 +922,7 @@ export class OrderHelper {
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
       ...(restaurantId && { restaurant_id: restaurantId }),
+      AND: [PAS_A_CONFIRMER_WHERE],
     };
   }
 

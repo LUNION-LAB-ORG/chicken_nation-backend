@@ -16,6 +16,7 @@
  */
 
 import {
+  OrderChannel,
   OrderStatus,
   OrderType,
   PaiementStatus,
@@ -412,5 +413,115 @@ describe('OrderService.update : reprise au téléphone, qui est prévenu', () =>
 
     expect(monte.logger.error).toHaveBeenCalled();
     expect(monte.orderEvent.orderStatusUpdatedEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Commande du site à payer à la livraison (19/10) : le client a validé son
+ * total sur le site, frais de service compris, et le livreur le lui
+ * réclamera. La reprise au téléphone la confirme sans toucher ni à la taxe ni
+ * au total : c'est le seul écart avec la reprise d'un panier en ligne.
+ */
+describe('OrderService.update : reprise d’une commande du site à payer à la livraison', () => {
+  const attendre = () => new Promise((r) => setImmediate(r));
+
+  /** Créée par le site : 10 000 F d'articles, 500 F de frais de service, 1 000 F de livraison. */
+  const aConfirmer = (surcharge: Record<string, unknown> = {}) =>
+    commandeAppli({
+      type: OrderType.DELIVERY,
+      payment_method: PaymentMethod.OFFLINE,
+      channel: OrderChannel.WEB,
+      delivery_fee: 1000,
+      amount: 11500,
+      points: 0,
+      code_promo: null,
+      ...surcharge,
+    });
+
+  it('confirmée : acceptée, manuelle, taxe et total conservés, toujours à payer à la livraison', async () => {
+    const monte = monter(aConfirmer());
+
+    const commande = await basculer(monte.service);
+    await attendre();
+
+    const ecriture = monte.prisma.order.update.mock.calls[0][0].data;
+    expect(ecriture).toEqual(expect.objectContaining({ auto: false, status: OrderStatus.ACCEPTED }));
+    expect(ecriture.accepted_at).toBeInstanceOf(Date);
+    expect(ecriture).not.toHaveProperty('tax');
+    expect(ecriture).not.toHaveProperty('amount');
+    expect(monte.base()).toEqual(
+      expect.objectContaining({
+        auto: false,
+        status: OrderStatus.ACCEPTED,
+        tax: 500,
+        amount: 11500,
+        payment_method: PaymentMethod.OFFLINE,
+      }),
+    );
+    // Déjà payable au livreur : aucune bascule de paiement à faire.
+    expect(monte.prisma.order.updateMany).not.toHaveBeenCalled();
+    expect(commande.payment_method).toBe(PaymentMethod.OFFLINE);
+
+    // Un brouillon que le restaurant n'a jamais vu : relance notée, avis
+    // d'acceptation (points, cloche, « Nouvelle commande »), code promo compté.
+    expect(monte.orderRelance.noterReprise).toHaveBeenCalledWith(COMMANDE, 'u1', null);
+    expect(monte.orderWebSocketService.emitStatusUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ status: OrderStatus.ACCEPTED, auto: false }),
+      OrderStatus.PENDING,
+    );
+    expect(monte.orderEvent.orderStatusUpdatedEvent).toHaveBeenCalledTimes(1);
+    expect(monte.orderEvent.orderStatusUpdatedEvent.mock.calls[0][0].etait_brouillon).toBe(true);
+    expect(monte.promoCodeService.activateUsageForOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('articles changés au téléphone : la taxe garde sa valeur de création, le total est refait sur les nouveaux articles', async () => {
+    const monte = monter(aConfirmer());
+    Object.assign(monte.prisma, { dish: { findMany: jest.fn().mockResolvedValue([{ id: 'plat-1', price: 6000 }]) } });
+    Object.assign(monte.orderHelper, {
+      calculateOrderDetails: jest.fn().mockResolvedValue({
+        orderItems: [
+          {
+            dish_id: 'plat-1',
+            quantity: 2,
+            amount: 12000,
+            dishPrice: 6000,
+            supplementsPrice: 0,
+            lineTotal: 12000,
+            epice: false,
+            supplements: [],
+            options: [],
+          },
+        ],
+        netAmount: 12000,
+      }),
+    });
+
+    await basculer(monte.service, { items: [{ dish_id: 'plat-1', quantity: 2, epice: false, supplements: [] }] });
+
+    const ecriture = monte.prisma.order.update.mock.calls[0][0].data;
+    expect(ecriture).not.toHaveProperty('tax');
+    expect(ecriture).toEqual(expect.objectContaining({ net_amount: 12000, amount: 13500 }));
+  });
+
+  it('panier en ligne du site, repris : taxe à zéro et paiement à la caisse, comme avant', async () => {
+    const monte = monter(commandeAppli({ channel: OrderChannel.WEB }));
+
+    await basculer(monte.service);
+
+    expect(monte.prisma.order.update.mock.calls[0][0].data).toEqual(
+      expect.objectContaining({ tax: 0, amount: 10000, status: OrderStatus.ACCEPTED }),
+    );
+    expect(monte.base().payment_method).toBe(PaymentMethod.OFFLINE);
+  });
+
+  it('commande en espèces de l’application : taxe à zéro, pas présentée comme nouvelle, comme avant', async () => {
+    const monte = monter(commandeAppli({ payment_method: PaymentMethod.OFFLINE, channel: OrderChannel.APP }));
+
+    await basculer(monte.service);
+    await attendre();
+
+    expect(monte.prisma.order.update.mock.calls[0][0].data).toEqual(expect.objectContaining({ tax: 0, amount: 10000 }));
+    expect(monte.orderRelance.noterReprise).not.toHaveBeenCalled();
+    expect(monte.orderEvent.orderStatusUpdatedEvent.mock.calls[0][0].etait_brouillon).toBe(false);
   });
 });

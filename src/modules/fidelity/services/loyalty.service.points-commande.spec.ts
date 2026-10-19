@@ -397,6 +397,44 @@ describe('LoyaltyService : points engagés', () => {
     expect(await outils.service.pointsEngages(CLIENT)).toBe(270);
   });
 
+  it('commande du site à payer à la livraison, en attente de l’appel : ses points sont engagés', async () => {
+    const id = (n: number) => `0000000${n}-0000-4000-8000-000000000000`;
+    const aConfirmer = {
+      status: OrderStatus.PENDING,
+      paied: false,
+      auto: true,
+      channel: 'WEB',
+      payment_method: 'OFFLINE',
+    };
+    const outils = monterFidelite({
+      solde: 1000,
+      commandes: [
+        commande({ id: id(1), points: 400, ...aConfirmer }), // à confirmer : engagée
+        // Panier en ligne non payé : n'engage rien (inchangé).
+        commande({ id: id(2), points: 100, ...aConfirmer, payment_method: 'ONLINE' }),
+        // Espèces depuis l'application, ou sans canal, en attente : rien non plus (inchangé).
+        commande({ id: id(3), points: 50, ...aConfirmer, channel: 'APP' }),
+        commande({ id: id(4), points: 60, ...aConfirmer, channel: null }),
+        // Annulée par le client (« Modifier ma commande ») : plus rien d'engagé.
+        commande({ id: id(5), points: 70, ...aConfirmer, status: OrderStatus.CANCELLED, entity_status: 'DELETED' }),
+      ],
+    });
+
+    expect(await outils.service.pointsEngages(CLIENT)).toBe(400);
+  });
+
+  it('commande à confirmer reprise au téléphone puis déduite : plus engagée', async () => {
+    const outils = monterFidelite({
+      solde: 1000,
+      commandes: [
+        commande({ points: 400, status: OrderStatus.ACCEPTED, paied: false, auto: false, channel: 'WEB', payment_method: 'OFFLINE' }),
+      ],
+      lignes: [gain(1000), gain(400, { type: LoyaltyPointType.REDEEMED, order_id: COMMANDE })],
+    });
+
+    expect(await outils.service.pointsEngages(CLIENT)).toBe(0);
+  });
+
   it('solde utilisable exposé au client : solde moins points engagés', async () => {
     const outils = monterFidelite({ solde: 400 });
     // Le service lit la fiche complète : on greffe ce qu'il en attend.

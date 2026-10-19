@@ -131,14 +131,15 @@ describe('grillePublique', () => {
 });
 
 describe('conditionsCommandePubliques', () => {
-  it('ne publie que le taux, la grille et son statut : rien d\'autre', () => {
+  it('ne publie que le taux, la grille, son statut et le paiement à la livraison : rien d\'autre', () => {
     const conditions = conditionsCommandePubliques({
       tauxFraisService: 0.01,
       grille: [{ maxKm: 2, price: 1000 }, { maxKm: null, price: 2000 }],
       zonesLivreurActives: false,
+      paiementLivraisonActif: true,
     });
     expect(Object.keys(conditions).sort()).toEqual(
-      ['grille_frais', 'grille_frais_appliquee', 'taux_frais_service'].sort(),
+      ['grille_frais', 'grille_frais_appliquee', 'paiement_livraison', 'taux_frais_service'].sort(),
     );
     expect(conditions).toEqual({
       taux_frais_service: 0.01,
@@ -147,6 +148,7 @@ describe('conditionsCommandePubliques', () => {
         { distance_max_km: null, montant: 2000 },
       ],
       grille_frais_appliquee: true,
+      paiement_livraison: { disponible: true },
     });
   });
 
@@ -155,9 +157,20 @@ describe('conditionsCommandePubliques', () => {
       tauxFraisService: 0.01,
       grille: DELIVERY_FEE_DEFAULT_GRID,
       zonesLivreurActives: true,
+      paiementLivraisonActif: true,
     });
     expect(conditions.grille_frais_appliquee).toBe(false);
     expect(conditions.grille_frais).toHaveLength(9);
+  });
+
+  it('paiement à la livraison coupé : annoncé indisponible, le site cache l\'option', () => {
+    const conditions = conditionsCommandePubliques({
+      tauxFraisService: 0.01,
+      grille: DELIVERY_FEE_DEFAULT_GRID,
+      zonesLivreurActives: true,
+      paiementLivraisonActif: false,
+    });
+    expect(conditions.paiement_livraison).toEqual({ disponible: false });
   });
 });
 

@@ -6,7 +6,7 @@
  * commande.
  */
 
-import { EntityStatus, Order, OrderStatus, PaymentMethod } from '@prisma/client';
+import { EntityStatus, Order, OrderChannel, OrderStatus, PaymentMethod } from '@prisma/client';
 import { OrderChannels } from '../enums/order-channels';
 import { CLES_IDENTIFIANTS_PUSH } from '../helpers/identifiants-push.helper';
 import { OrderWebSocketService } from './order-websocket.service';
@@ -227,5 +227,51 @@ describe('OrderWebSocketService : brouillons', () => {
       appGateway.emitToRestaurant.mock.calls[0][2],
     ];
     for (const charge of charges) expect(charge).toEqual({ orderId: 'o1', message: 'Commande supprimée' });
+  });
+
+  /**
+   * Commande du site à payer à la livraison (19/10) : un brouillon tant que le
+   * centre d'appels ne l'a pas confirmée. Le restaurant la reçoit à la reprise.
+   */
+  describe('commande du site à payer à la livraison', () => {
+    const aConfirmer = (surcharge: Record<string, unknown> = {}) =>
+      brouillon({ payment_method: PaymentMethod.OFFLINE, channel: OrderChannel.WEB, type: 'DELIVERY', ...surcharge });
+
+    it('création (`brouillon` posé par createv2) : rien au restaurant, charge réduite au back office', () => {
+      const { service, charges } = monter();
+      service.emitOrderCreated(aConfirmer(), { brouillon: true });
+      verifierReduite(charges());
+    });
+
+    it('adresse changée par le client avant l’appel : rien au restaurant, charge réduite', () => {
+      const { service, charges } = monter();
+      service.emitOrderUpdated(aConfirmer());
+      verifierReduite(charges());
+    });
+
+    it('annulée par le client (« Modifier ma commande ») : rien au restaurant', () => {
+      const { service, charges } = monter();
+      service.emitStatusUpdate(
+        aConfirmer({ status: OrderStatus.CANCELLED, entity_status: EntityStatus.DELETED, cancelled_by: 'client' }),
+        OrderStatus.PENDING,
+      );
+      verifierReduite(charges());
+    });
+
+    it('confirmée au téléphone (manuelle, acceptée) : transmise au restaurant', () => {
+      const { service, charges } = monter();
+      service.emitStatusUpdate(aConfirmer({ status: OrderStatus.ACCEPTED, auto: false }), OrderStatus.PENDING);
+      const emissions = charges();
+      expect(emissions.map((e) => e.salle).sort()).toEqual(['backoffice', 'client', 'restaurant']);
+      expect(emissions.find((e) => e.salle === 'restaurant')!.charge.order.fullname).toBe('Anne Marie Aka');
+    });
+
+    it('commande en espèces de l’application, ou sans canal : le restaurant la reçoit, comme avant', () => {
+      for (const channel of [OrderChannel.APP, null]) {
+        const { service, charges } = monter();
+        service.emitOrderUpdated(aConfirmer({ channel }));
+        expect(charges().map((e) => e.salle).sort()).toEqual(['backoffice', 'client', 'restaurant']);
+      }
+    });
   });
 });

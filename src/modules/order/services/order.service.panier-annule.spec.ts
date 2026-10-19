@@ -1077,3 +1077,123 @@ describe('OrderCouponService.reconsommerALaReactivation : code sans trace d’us
     expect(coupons.base.promoCode.lignes[0].usage_count).toBe(4);
   });
 });
+
+// ===========================================================================
+// Commande du site à payer à la livraison (19/10)
+// ===========================================================================
+
+/**
+ * « Modifier ma commande » sur le site annule la commande à confirmer : même
+ * chemin qu'un panier en ligne. Elle reste visible du centre d'appels, et la
+ * reprise au téléphone la réactive en gardant les frais de service que le
+ * client a acceptés sur le site.
+ */
+describe('Commande du site à payer à la livraison, annulée par le client', () => {
+  /** 10 000 F d'articles, 500 F de frais de service, 1 000 F de livraison. */
+  const aConfirmer = (surcharge: Commande = {}): Commande =>
+    panier({
+      type: OrderType.DELIVERY,
+      payment_method: PaymentMethod.OFFLINE,
+      channel: 'WEB',
+      delivery_fee: 1000,
+      amount: 11500,
+      ...surcharge,
+    });
+  const aConfirmerAnnulee = (surcharge: Commande = {}): Commande =>
+    aConfirmer({
+      status: OrderStatus.CANCELLED,
+      entity_status: EntityStatus.DELETED,
+      deleted_at: ANNULEE_LE,
+      cancelled_at: ANNULEE_LE,
+      cancelled_by: ANNULEE_PAR_CLIENT,
+      cancelled_reason: 'Je change ma commande',
+      ...surcharge,
+    });
+
+  it('annulée par le client : CANCELLED, DELETED, « par le client », coupon rendu, rien aux restaurants', async () => {
+    const { service, prisma, orderCoupon, orderEvent, base } = monterStatut(aConfirmer());
+
+    await service.updateStatus(
+      COMMANDE,
+      OrderStatus.CANCELLED,
+      { reason: 'Je change ma commande', userId: CLIENT },
+      { parLeClient: true },
+    );
+
+    expect(prisma.order.update).not.toHaveBeenCalled();
+    expect(base()).toEqual(
+      expect.objectContaining({
+        status: OrderStatus.CANCELLED,
+        entity_status: EntityStatus.DELETED,
+        cancelled_by: ANNULEE_PAR_CLIENT,
+      }),
+    );
+    expect(orderCoupon.restituerPourCommande).toHaveBeenCalledWith(
+      expect.objectContaining({ id: COMMANDE }),
+      { motif: 'ANNULATION', acteurId: CLIENT, acteurRole: null },
+    );
+    const evenement = orderEvent.orderStatusUpdatedEvent.mock.calls[0][0];
+    expect(evenement.etait_brouillon).toBe(true);
+
+    const e = monterEcouteur();
+    await e.ecouteur.orderStatusUpdatedEventListener(evenement);
+    expect(e.notificationsSender.sendOrderBell).not.toHaveBeenCalled();
+    expect(e.userPushService.notifyRestaurant).not.toHaveBeenCalled();
+  });
+
+  it('confirmée entre-temps par le centre d’appels : annulation ordinaire conditionnée, 409 au client', async () => {
+    const { service, prisma } = monterStatut(aConfirmer(), (enBase) => ({
+      ...enBase,
+      auto: false,
+      status: OrderStatus.ACCEPTED,
+    }));
+
+    const erreur = await refus(
+      service.updateStatus(COMMANDE, OrderStatus.CANCELLED, { userId: CLIENT }, { parLeClient: true }),
+    );
+
+    expect(prisma.order.updateMany).toHaveBeenCalledTimes(1);
+    expect(erreur.classe).toBe(ConflictException);
+  });
+
+  it('commande en espèces de l’application (canal APP ou vide) annulée par le client : reste active, comme avant', async () => {
+    for (const channel of ['APP', null]) {
+      const { service, prisma } = monterStatut(aConfirmer({ channel }));
+      await service.updateStatus(COMMANDE, OrderStatus.CANCELLED, { userId: CLIENT }, { parLeClient: true });
+      expect(prisma.order.updateMany).not.toHaveBeenCalled();
+      const ecriture = prisma.order.update.mock.calls[0][0].data;
+      expect(ecriture).not.toHaveProperty('entity_status');
+      expect(ecriture.cancelled_by).toBe(CLIENT);
+    }
+  });
+
+  it('reprise au téléphone : réactivée, acceptée, frais de service et total conservés, toujours à la livraison', async () => {
+    const m = monterReprise(aConfirmerAnnulee());
+
+    const reponse = await reprendre(m.service);
+    await attendre();
+
+    expect(m.orderRelance.verifierReactivable).toHaveBeenCalledWith(COMMANDE, CALL_CENTER);
+    expect(m.base()).toEqual(
+      expect.objectContaining({
+        entity_status: EntityStatus.ACTIVE,
+        deleted_at: null,
+        status: OrderStatus.ACCEPTED,
+        cancelled_by: null,
+        auto: false,
+        tax: 500,
+        amount: 11500,
+        payment_method: PaymentMethod.OFFLINE,
+      }),
+    );
+    expect(reponse.payment_method).toBe(PaymentMethod.OFFLINE);
+    expect(m.orderRelance.noterReprise).toHaveBeenCalledWith(
+      COMMANDE,
+      'u1',
+      expect.stringMatching(/^Annulée par le client le .*\(motif : Je change ma commande\), réactivée$/),
+    );
+    expect(m.orderEvent.orderStatusUpdatedEvent.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ etait_brouillon: true }),
+    );
+  });
+});

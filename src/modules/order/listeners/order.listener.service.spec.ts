@@ -89,6 +89,49 @@ describe('OrderListenerService : création', () => {
     );
   });
 
+  it('commande du site à payer à la livraison (`brouillon`) : ni « Nouvelle commande » au restaurant, ni « Commande confirmée ! » au client', async () => {
+    const { ecouteur, userPushService, notificationsSender, expoPushService } = monter();
+
+    await ecouteur.orderCreatedEventListener({
+      order: panier({ payment_method: PaymentMethod.OFFLINE, channel: 'WEB' }),
+      expo_token: 'ExponentPushToken[client]',
+      brouillon: true,
+    });
+
+    expect(userPushService.notifyRestaurant).not.toHaveBeenCalled();
+    expect(notificationsSender.sendOrderBell).not.toHaveBeenCalled();
+    // Personne n'a encore appelé le client : rien n'est confirmé.
+    expect(expoPushService.sendPushNotifications).not.toHaveBeenCalled();
+  });
+
+  it('commande en espèces de l’application (sans `brouillon`) : « Commande confirmée ! » au client, comme avant', async () => {
+    const { ecouteur, userPushService, expoPushService } = monter();
+
+    await ecouteur.orderCreatedEventListener({
+      order: panier({ payment_method: PaymentMethod.OFFLINE, channel: 'APP' }),
+      expo_token: 'ExponentPushToken[client]',
+      brouillon: false,
+    });
+
+    expect(userPushService.notifyRestaurant).toHaveBeenCalledTimes(1);
+    expect(expoPushService.sendPushNotifications).toHaveBeenCalledTimes(1);
+    expect(expoPushService.sendPushNotifications.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ title: '🍗 Commande confirmée !', categoryId: 'order-created' }),
+    );
+  });
+
+  it('panier en ligne non payé : toujours aucun push au client à la création', async () => {
+    const { ecouteur, expoPushService } = monter();
+
+    await ecouteur.orderCreatedEventListener({
+      order: panier(),
+      expo_token: 'ExponentPushToken[client]',
+      brouillon: true,
+    });
+
+    expect(expoPushService.sendPushNotifications).not.toHaveBeenCalled();
+  });
+
   it('prévient le restaurant de toute autre commande dès sa création', async () => {
     const { ecouteur, userPushService, notificationsSender } = monter();
 
@@ -156,6 +199,30 @@ describe('OrderListenerService : changement de statut', () => {
 
     expect(loyaltyService.redeemPoints).toHaveBeenCalledWith(
       expect.objectContaining({ customer_id: CLIENT, points: 500, order_id: COMMANDE }),
+    );
+    expect(notificationsSender.sendOrderBell).toHaveBeenCalledTimes(1);
+    expect(userPushService.notifyRestaurant).toHaveBeenCalledTimes(1);
+    expect(userPushService.notifyRestaurant.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ restaurantId: RESTAURANT, type: 'new_order' }),
+    );
+  });
+
+  it('confirme au téléphone une commande du site à payer à la livraison : annoncée au restaurant comme nouvelle', async () => {
+    const { ecouteur, notificationsSender, loyaltyService, userPushService } = monter();
+
+    await ecouteur.orderStatusUpdatedEventListener({
+      order: panier({
+        status: OrderStatus.ACCEPTED,
+        auto: false,
+        payment_method: PaymentMethod.OFFLINE,
+        channel: 'WEB',
+        points: 400,
+      }),
+      etait_brouillon: true,
+    });
+
+    expect(loyaltyService.redeemPoints).toHaveBeenCalledWith(
+      expect.objectContaining({ customer_id: CLIENT, points: 400, order_id: COMMANDE }),
     );
     expect(notificationsSender.sendOrderBell).toHaveBeenCalledTimes(1);
     expect(userPushService.notifyRestaurant).toHaveBeenCalledTimes(1);

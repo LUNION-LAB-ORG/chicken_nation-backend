@@ -1,4 +1,5 @@
 import { CampaignStatus as C, CrmSegment as P, CrmStatus as S, EntityStatus as E } from '@prisma/client';
+import { A_CONFIRMER_SQL } from 'src/modules/order/helpers/paiement-livraison.rules';
 import {
   bacsApercu,
   critereCampagne,
@@ -394,6 +395,15 @@ describe('ventes de campagne : fragments SQL partagés', () => {
     expect(sql).toContain("THEN 'SUPPRIMEE'");
     expect(sql).toContain("THEN 'ANNULEE'");
     expect(sql).toContain("THEN 'PAIEMENT_EN_ATTENTE'");
+  });
+
+  it('commande du site à payer à la livraison, pas encore confirmée : « en attente de paiement », avant « valide »', () => {
+    const sql = ETAT_COMMANDE_SQL('oa').replace(/\s+/g, ' ');
+    const aConfirmer = sql.indexOf(`WHEN ${A_CONFIRMER_SQL('oa').replace(/\s+/g, ' ')} THEN 'PAIEMENT_EN_ATTENTE'`);
+    expect(aConfirmer).toBeGreaterThan(sql.indexOf(`oa."status" = 'CANCELLED'`));
+    expect(aConfirmer).toBeLessThan(sql.indexOf(`ELSE 'VALIDE'`));
+    // Canal et moyen de paiement vides : jamais pris pour une commande à confirmer.
+    expect(sql).toContain(`oa."channel" IS NOT DISTINCT FROM 'WEB'`);
   });
 
   it("refuse un alias qui n'est pas un simple nom", () => {

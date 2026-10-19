@@ -79,10 +79,13 @@ describe('OrderService.obtenirDisponibiliteLivraison', () => {
 });
 
 describe('OrderService.obtenirConditionsCommande', () => {
-  const monter = (taux: number, reglages: Record<string, unknown>) => {
+  const monter = (taux: number, reglages: Record<string, unknown>, paiementLivraison = true) => {
     const service = Object.create(OrderService.prototype) as OrderService;
     Object.assign(service, {
-      orderHelperV2: { getTaxRate: jest.fn().mockResolvedValue(taux) },
+      orderHelperV2: {
+        getTaxRate: jest.fn().mockResolvedValue(taux),
+        paiementLivraisonSiteActif: jest.fn().mockResolvedValue(paiementLivraison),
+      },
       deliveryFeeHelper: { load: jest.fn().mockResolvedValue(reglages) },
     });
     return service;
@@ -109,8 +112,18 @@ describe('OrderService.obtenirConditionsCommande', () => {
         { distance_max_km: null, montant: 3000 },
       ],
       grille_frais_appliquee: true,
+      paiement_livraison: { disponible: true },
     });
     expect(JSON.stringify(conditions)).not.toMatch(/TURBO|CHICKEN_NATION|restaurant-1/);
+  });
+
+  it('paiement à la livraison : même lecture du réglage que la création', async () => {
+    expect((await monter(0.01, reglages(false), true).obtenirConditionsCommande()).paiement_livraison).toEqual({
+      disponible: true,
+    });
+    expect((await monter(0.01, reglages(false), false).obtenirConditionsCommande()).paiement_livraison).toEqual({
+      disponible: false,
+    });
   });
 
   it('zones du livreur actives : grille signalée non appliquée', async () => {
@@ -137,6 +150,7 @@ describe('GET /orders/conditions-commande, chaîne HTTP', () => {
     taux_frais_service: 0.01,
     grille_frais: DELIVERY_FEE_DEFAULT_GRID.map((p) => ({ distance_max_km: p.maxKm, montant: p.price })),
     grille_frais_appliquee: false,
+    paiement_livraison: { disponible: true },
   };
   const service = {
     obtenirConditionsCommande: jest.fn(),

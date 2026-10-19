@@ -3,6 +3,7 @@
  * Règle pure partagée par create-v2 (appli, site) et create (personnel).
  */
 import { EntityStatus, LoyaltyPointType, OrderStatus } from '@prisma/client';
+import { A_CONFIRMER_WHERE } from 'src/modules/order/helpers/paiement-livraison.rules';
 import {
   calculerRemiseFidelite,
   plafondRemiseFidelite,
@@ -113,14 +114,14 @@ describe('calculerRemiseFidelite', () => {
 });
 
 describe('pointsEngagesWhere', () => {
-  it('commandes payées ou confirmées depuis le 02/10, non annulées, non supprimées, sans retrait enregistré', () => {
+  it('commandes payées, confirmées ou du site à confirmer depuis le 02/10, non annulées, non supprimées, sans retrait enregistré', () => {
     expect(pointsEngagesWhere('client-1')).toEqual({
       customer_id: 'client-1',
       created_at: { gte: DEBUT_POINTS_ENGAGES },
       points: { gt: 0 },
       entity_status: { not: EntityStatus.DELETED },
       status: { not: OrderStatus.CANCELLED },
-      OR: [{ paied: true }, { status: { not: OrderStatus.PENDING } }],
+      OR: [{ paied: true }, { status: { not: OrderStatus.PENDING } }, A_CONFIRMER_WHERE],
       loyalty_points: { none: { type: LoyaltyPointType.REDEEMED } },
     });
   });

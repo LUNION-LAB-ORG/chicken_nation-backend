@@ -8,7 +8,7 @@
 import { ExecutionContext, NotFoundException } from '@nestjs/common';
 import { GUARDS_METADATA, INTERCEPTORS_METADATA, ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
-import { EntityStatus, OrderStatus, PaymentMethod, UserRole } from '@prisma/client';
+import { EntityStatus, OrderChannel, OrderStatus, PaymentMethod, UserRole } from '@prisma/client';
 import { USER_ROLES_KEY } from 'src/modules/auth/decorators/user-roles.decorator';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
@@ -122,21 +122,26 @@ describe('Règle unique des brouillons', () => {
     expect(peutVoirLesBrouillons({ role: null })).toBe(false);
   });
 
+  /** Canal vide (commandes d'avant le 02/10, HubRise) compris. */
+  const CANAUX = [null, ...Object.values(OrderChannel)];
+
   it('estBrouillon et BROUILLON_WHERE donnent le même verdict sur toutes les combinaisons', () => {
     let brouillons = 0;
     for (const auto of [true, false])
       for (const status of Object.values(OrderStatus))
         for (const paied of [true, false])
           for (const payment_method of Object.values(PaymentMethod))
-            for (const entity_status of Object.values(EntityStatus)) {
-              const commande = { auto, status, paied, payment_method, entity_status };
-              const attendu = correspond(commande, BROUILLON_WHERE);
-              expect({ commande, verdict: estBrouillon(commande) }).toEqual({ commande, verdict: attendu });
-              if (attendu) brouillons += 1;
-            }
-    // Un seul cas : application, en attente, non payée, en ligne, non supprimée
-    // (ACTIVE ou INACTIVE).
-    expect(brouillons).toBe(Object.values(EntityStatus).length - 1);
+            for (const entity_status of Object.values(EntityStatus))
+              for (const channel of CANAUX) {
+                const commande = { auto, status, paied, payment_method, entity_status, channel };
+                const attendu = correspond(commande, BROUILLON_WHERE);
+                expect({ commande, verdict: estBrouillon(commande) }).toEqual({ commande, verdict: attendu });
+                if (attendu) brouillons += 1;
+              }
+    // En attente, non payée, auto, non supprimée (ACTIVE ou INACTIVE), et :
+    // en ligne quel que soit le canal (5, vide compris), ou à la livraison
+    // sur le site (1, commande à confirmer, 19/10).
+    expect(brouillons).toBe(6 * (Object.values(EntityStatus).length - 1));
   });
 
   it('estPanierAnnuleParClient, estRelancable et leurs `where` donnent le même verdict sur toutes les combinaisons', () => {
@@ -146,20 +151,38 @@ describe('Règle unique des brouillons', () => {
         for (const paied of [true, false])
           for (const payment_method of Object.values(PaymentMethod))
             for (const entity_status of Object.values(EntityStatus))
-              for (const cancelled_by of [ANNULEE_PAR_CLIENT, 'id-du-client', 'id-agent', null]) {
-                const commande = { auto, status, paied, payment_method, entity_status, cancelled_by };
-                const attendu = correspond(commande, PANIER_ANNULE_PAR_CLIENT_WHERE);
-                expect({ commande, verdict: estPanierAnnuleParClient(commande) }).toEqual({ commande, verdict: attendu });
-                expect({ commande, verdict: estRelancable(commande) }).toEqual({
-                  commande,
-                  verdict: correspond(commande, RELANCABLE_WHERE),
-                });
-                // Jamais les deux à la fois : un brouillon n'est jamais supprimé.
-                if (attendu) expect(estBrouillon(commande)).toBe(false);
-                if (attendu) annules += 1;
-              }
-    // Un seul cas : application, annulée, non payée, en ligne, supprimée, par le client.
-    expect(annules).toBe(1);
+              for (const channel of CANAUX)
+                for (const cancelled_by of [ANNULEE_PAR_CLIENT, 'id-du-client', 'id-agent', null]) {
+                  const commande = { auto, status, paied, payment_method, entity_status, channel, cancelled_by };
+                  const attendu = correspond(commande, PANIER_ANNULE_PAR_CLIENT_WHERE);
+                  expect({ commande, verdict: estPanierAnnuleParClient(commande) }).toEqual({ commande, verdict: attendu });
+                  expect({ commande, verdict: estRelancable(commande) }).toEqual({
+                    commande,
+                    verdict: correspond(commande, RELANCABLE_WHERE),
+                  });
+                  // Jamais les deux à la fois : un brouillon n'est jamais supprimé.
+                  if (attendu) expect(estBrouillon(commande)).toBe(false);
+                  if (attendu) annules += 1;
+                }
+    // Annulée, non payée, auto, supprimée, par le client, et : en ligne quel
+    // que soit le canal (5, vide compris), ou commande du site à payer à la
+    // livraison (1, « Modifier ma commande », 19/10).
+    expect(annules).toBe(6);
+  });
+
+  it('une commande en espèces de l’application, ou sans canal, n’est jamais un brouillon', () => {
+    const base = {
+      auto: true,
+      status: OrderStatus.PENDING,
+      paied: false,
+      payment_method: PaymentMethod.OFFLINE,
+      entity_status: EntityStatus.ACTIVE,
+    };
+    expect(estBrouillon({ ...base, channel: OrderChannel.WEB })).toBe(true);
+    for (const channel of [OrderChannel.APP, OrderChannel.CALL_CENTER, OrderChannel.RESTAURANT, null, undefined]) {
+      expect({ channel, brouillon: estBrouillon({ ...base, channel }) }).toEqual({ channel, brouillon: false });
+      expect({ channel, brouillon: correspond({ ...base, channel }, BROUILLON_WHERE) }).toEqual({ channel, brouillon: false });
+    }
   });
 });
 

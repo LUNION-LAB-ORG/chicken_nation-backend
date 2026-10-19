@@ -18,10 +18,14 @@ import type { IDeliveryFeeTier } from './delivery-fee.helper';
  *    la grille (`delivery.turbo_zones_enabled`, actif par défaut). La grille
  *    ne sert alors que de secours et le prix vient de la zone : l'afficher
  *    comme un tarif serait une promesse fausse. Le site décide (masquer, ou
- *    présenter comme indicative).
+ *    présenter comme indicative) ;
+ *  - `paiement_livraison.disponible` : le paiement à la livraison est proposé
+ *    sur le site (réglage `order_paiement_livraison_site`, lu par
+ *    `OrderV2Helper.paiementLivraisonSiteActif` comme à la création). Un
+ *    serveur plus ancien n'envoie pas ce champ : le site cache alors l'option.
  *
- * Rien d'autre : ni service de livraison par restaurant, ni clé, ni offre.
- * Le prix réel d'une adresse reste donné par `/orders/frais-livraison`, et le
+ * Rien d'autre que les frais et la disponibilité du paiement à la livraison :
+ * ni service de livraison par restaurant, ni clé, ni offre. Le prix réel d'une adresse reste donné par `/orders/frais-livraison`, et le
  * montant payé par la commande créée.
  */
 export interface PalierPublic {
@@ -35,6 +39,8 @@ export interface ConditionsCommande {
   taux_frais_service: number | null;
   grille_frais: PalierPublic[];
   grille_frais_appliquee: boolean;
+  /** Paiement à la livraison proposé sur le site (livraison seulement). */
+  paiement_livraison: { disponible: boolean };
 }
 
 /** Taux publié : un nombre fini et positif, sinon `null` (réglage mal saisi). */
@@ -90,10 +96,12 @@ export function conditionsCommandePubliques(reglages: {
   tauxFraisService: number | null | undefined;
   grille: readonly IDeliveryFeeTier[] | null | undefined;
   zonesLivreurActives: boolean;
+  paiementLivraisonActif: boolean;
 }): ConditionsCommande {
   return {
     taux_frais_service: tauxPublic(reglages.tauxFraisService),
     grille_frais: grillePublique(reglages.grille),
     grille_frais_appliquee: !reglages.zonesLivreurActives,
+    paiement_livraison: { disponible: reglages.paiementLivraisonActif === true },
   };
 }
