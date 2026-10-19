@@ -1,8 +1,9 @@
-import { IsEnum, IsUUID, IsOptional, IsNumber, Min, IsString, IsDateString, IsBoolean } from 'class-validator';
+import { IsEnum, IsUUID, IsOptional, IsNumber, Min, IsString, IsDateString, IsBoolean, IsIn } from 'class-validator';
 import { OrderStatus, OrderType } from '@prisma/client';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { parse, isValid } from 'date-fns';
+import { SOURCES_COMMANDE, SourceCommande } from '../helpers/canal-commande.rules';
 
 export class QueryOrderDto {
     @ApiPropertyOptional({ description: "Filtrer par statut de commande", enum: OrderStatus })
@@ -98,6 +99,23 @@ export class QueryOrderDto {
     @Transform(({ value }) => String(value).trim() == "true" ? true : false)
     @IsBoolean()
     auto?: boolean;
+
+    /**
+     * Source de la commande (filtre « Toutes les sources » du backoffice).
+     * Facultatif ; quand il est là, il prime sur `auto`. Règle et valeurs
+     * nulles : helpers/canal-commande.rules.ts (`conditionSource`).
+     */
+    @ApiPropertyOptional({
+        description:
+            "Source de la commande : site (site web), appli (application, commandes sans canal comprises) " +
+            "ou telephone (saisie du personnel, commandes du site reprises au téléphone comprises). " +
+            "Prime sur `auto`. Lu par la liste, l'export Excel et le tableau des livraisons par restaurant.",
+        enum: [...SOURCES_COMMANDE],
+    })
+    @IsOptional()
+    @Transform(({ value }) => (value === '' ? undefined : value))
+    @IsIn(SOURCES_COMMANDE)
+    source?: SourceCommande;
 
     @ApiPropertyOptional({ description: "Pagination" })
     @IsOptional()

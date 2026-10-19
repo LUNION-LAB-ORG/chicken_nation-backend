@@ -76,7 +76,12 @@ import {
 } from '../helpers/brouillons.rules';
 import { motifRefusModification, peutModifierCommande } from '../helpers/modification-commande.rules';
 import { OrderRelanceService } from './order-relance.service';
-import { canalDeSaisie, libelleSource } from '../helpers/canal-commande.rules';
+import {
+  ajouterAuEt,
+  canalDeSaisie,
+  conditionsFiltreSource,
+  libelleSource,
+} from '../helpers/canal-commande.rules';
 import { ConditionsCommande, conditionsCommandePubliques } from '../helpers/conditions-commande.rules';
 import { A_CONFIRMER_WHERE, REFUS_PAIEMENT_SITE } from '../helpers/paiement-livraison.rules';
 import {
@@ -1963,7 +1968,12 @@ export class OrderService {
     // rôle habilité les demande EXPLICITEMENT via status=PENDING.
     const adminWantsPending = canSeePending && status === OrderStatus.PENDING;
 
-    if (filters.auto === undefined) {
+    // Filtre « source » (site, appli, téléphone) : prime sur `auto`. Sans lui,
+    // le filtre historique ci-dessous, inchangé (canal-commande.rules.ts).
+    if (filters.source) {
+      ajouterAuEt(where, conditionsFiltreSource(filters.source, { avecBrouillons: adminWantsPending }));
+    }
+    else if (filters.auto === undefined) {
       if (!adminWantsPending) {
         where.OR = [
           { auto: false },
@@ -3417,7 +3427,11 @@ export class OrderService {
       };
     }
 
-    if (filters.auto === undefined) {
+    // Filtre « source » : prime sur `auto` (canal-commande.rules.ts). L'export
+    // n'écrit jamais les brouillons.
+    if (filters.source) {
+      ajouterAuEt(where, conditionsFiltreSource(filters.source, { avecBrouillons: false }));
+    } else if (filters.auto === undefined) {
       where.OR = [
         { auto: false }, // Voit tout du Call Center
         {
@@ -4010,7 +4024,10 @@ export class OrderService {
       };
     }
 
-    if (filters.auto === undefined) {
+    // Filtre « source » : prime sur `auto` (canal-commande.rules.ts).
+    if (filters.source) {
+      ajouterAuEt(where, conditionsFiltreSource(filters.source, { avecBrouillons: false }));
+    } else if (filters.auto === undefined) {
       where.OR = [
         { auto: false },
         {
