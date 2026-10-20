@@ -3,6 +3,7 @@ import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsStrin
 import { Transform, Type } from "class-transformer";
 import { OrderType } from "src/modules/order/enums/order-type.enum";
 import { DeliveryService, PaymentMethod } from "@prisma/client";
+import { REFUS_PAIEMENT_SITE } from "../helpers/paiement-livraison.rules";
 
 /** Quantité maximale d'un plat ou d'un supplément sur une ligne de commande. */
 export const QUANTITE_MAX_LIGNE = 500;
@@ -80,8 +81,11 @@ export class OrderCreateDto {
     @IsEnum(OrderType)
     type: OrderType;
 
+    // Obligatoire malgré le « ? » (aucun @IsOptional). Message en français :
+    // le site l'affiche tel quel (recette du 20/10, la réponse était
+    // « payment_method must be one of… »).
     @ApiPropertyOptional({ description: "Type de paiement", enum: PaymentMethod })
-    @IsEnum(PaymentMethod)
+    @IsEnum(PaymentMethod, { message: REFUS_PAIEMENT_SITE.moyenAbsent })
     payment_method?: PaymentMethod;
     
     @ApiPropertyOptional({ description: "l'adresse de livraison/retrait" })

@@ -272,6 +272,13 @@ export interface CommandeEffectiveLue {
   created_at: Date;
   /** Une commande annulée ne contredit aucun panier (la lecture les écarte déjà). */
   status?: OrderStatus | string | null;
+  /**
+   * Payée ou non : une commande effective ne l'est pas toujours (espèces dans
+   * l'application, commande du site confirmée, à payer au livreur). Le signal
+   * `commande_recente` le dit, pour que l'écran ne parle de paiement que si
+   * elle l'est. Absent : non payée.
+   */
+  paied?: boolean | null;
   customer_id: string | null;
   phone: string | null;
   customer?: { phone?: string | null } | null;
@@ -296,8 +303,12 @@ export interface SignauxGroupe {
   paiement_refuse: boolean;
   /** Paiement reçu sans couvrir le panier : « Paiement partiel : X F reçus sur Y F ». */
   paiement_partiel: { reference: string; recu: number; montant: number } | null;
-  /** Le même client a payé une commande peu avant : doublon probable. */
-  commande_recente: { reference: string; created_at: Date } | null;
+  /**
+   * Le même client a passé une commande effective peu avant : doublon
+   * probable. `payee` : elle est payée. Sinon (espèces, à payer à la
+   * livraison), le client a commandé sans rien payer encore.
+   */
+  commande_recente: { reference: string; created_at: Date; payee: boolean } | null;
   /**
    * Le client a annulé lui-même dans l'application : date d'annulation de la
    * tête si c'est elle, sinon du panier annulé le plus récent du groupe.
@@ -609,16 +620,21 @@ export function classerBrouillons(entree: {
         }
       : null;
 
-    // Paiement en cours : panier de tête trop jeune, ou paiement tenté à
+    // Paiement en cours : panier en ligne trop jeune, ou paiement tenté à
     // l'instant sur l'un des paniers (le client repaie un vieux panier).
-    const dernierPaiement = actifs
-      .flatMap((b) => b.paiements ?? [])
-      .reduce<Date | null>((max, p) => (!max || p.created_at > max ? p.created_at : max), null);
-    const repereActivite =
-      dernierPaiement && dernierPaiement > tete.created_at ? dernierPaiement : tete.created_at;
-    const finEnCours = ajouterMinutes(repereActivite, regles.delai_minutes);
+    // Une commande à payer à la livraison, même annulée par le client
+    // (« Modifier ma commande »), ne se paie jamais en ligne : son âge ne
+    // compte pas (recette R15 du 20/10 : annulée dans les 3 min, elle restait
+    // « Paiement en cours » et « Je m'en occupe » était refusé).
+    const repereActivite = actifs
+      .flatMap((b) => [
+        ...(b.payment_method === PaymentMethod.OFFLINE ? [] : [b.created_at]),
+        ...(b.paiements ?? []).map((p) => p.created_at),
+      ])
+      .reduce<Date | null>((max, d) => (!max || d > max ? d : max), null);
+    const finEnCours = repereActivite ? ajouterMinutes(repereActivite, regles.delai_minutes) : null;
     // Personne n'est en train de payer une commande à confirmer.
-    const enCours = !aConfirmer && finEnCours > maintenant;
+    const enCours = !aConfirmer && !!finEnCours && finEnCours > maintenant;
 
     const etat: EtatGroupe = prise ? 'PRIS' : enCours ? 'EN_COURS' : 'A_RELANCER';
     const echeance = etat === 'PRIS' ? prise!.expire_le : etat === 'EN_COURS' ? finEnCours : null;
@@ -664,7 +680,9 @@ export function classerBrouillons(entree: {
         paiement_partiel: partiel
           ? { reference: partiel.b.reference, recu: partiel.recu, montant: partiel.b.amount }
           : null,
-        commande_recente: recente ? { reference: recente.reference, created_at: recente.created_at } : null,
+        commande_recente: recente
+          ? { reference: recente.reference, created_at: recente.created_at, payee: recente.paied === true }
+          : null,
         annulee_par_client: annulation ? { le: annulation } : null,
         commande_suivante: suivante ? { reference: suivante.reference, created_at: suivante.created_at } : null,
         paiement_en_ligne_en_cours: paiementEnLigne,

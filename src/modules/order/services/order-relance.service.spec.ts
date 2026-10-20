@@ -588,6 +588,58 @@ describe('OrderRelanceService : commandes du site à payer à la livraison (19/1
     await expect(service.prendre(c.id, AWA)).resolves.toEqual({ groupe: expect.objectContaining({ etat: 'PRIS' }) });
   });
 
+  /** Recette R15 du 20/10 : refusé avec « Le client est peut-être en train de payer : attendez 3 min. » */
+  it('annulée par le client juste après sa création : « Je m’en occupe » accepté tout de suite', async () => {
+    const annulee = aConfirmer(0.5, {
+      status: OrderStatus.CANCELLED,
+      entity_status: 'DELETED',
+      cancelled_by: 'client',
+      cancelled_at: plusTot(0.2),
+    });
+    const { service } = monterRelance({ commandes: [annulee] });
+
+    const [groupe] = (await service.lister(AWA)).groupes;
+    expect(groupe).toEqual(expect.objectContaining({ cle: annulee.id, etat: 'A_RELANCER', a_confirmer: false }));
+    await expect(service.prendre(annulee.id, AWA)).resolves.toEqual({
+      groupe: expect.objectContaining({ cle: annulee.id, etat: 'PRIS' }),
+    });
+  });
+
+  /**
+   * Recette du 20/10 : « A déjà payé ORD-… » sur une commande confirmée, à
+   * payer au livreur. La lecture des commandes effectives demande `paied`.
+   */
+  it('commande récente du même client : payée ou non, renvoyé tel quel', async () => {
+    const client = { customer_id: 'client-r', phone: '0700000077' };
+    const confirmee = commande(maintenant(), 20, {
+      ...client,
+      reference: 'ORD-261020-CONFIRMEE',
+      auto: false,
+      status: OrderStatus.ACCEPTED,
+      payment_method: 'OFFLINE',
+      channel: 'WEB',
+    });
+    const c = aConfirmer(5, client);
+    const { service } = monterRelance({ commandes: [confirmee, c] });
+
+    const [groupe] = (await service.lister(AWA)).groupes;
+    expect(groupe.cle).toBe(c.id);
+    expect(groupe.signaux.commande_recente).toEqual({
+      reference: 'ORD-261020-CONFIRMEE',
+      created_at: confirmee.created_at.toISOString(),
+      payee: false,
+    });
+
+    const payee = commande(maintenant(), 20, { ...client, reference: 'ORD-261020-PAYEE', paied: true, status: OrderStatus.ACCEPTED });
+    const panier = commande(maintenant(), 5, client);
+    const relu = monterRelance({ commandes: [payee, panier] });
+    expect((await relu.service.lister(AWA)).groupes[0].signaux.commande_recente).toEqual({
+      reference: 'ORD-261020-PAYEE',
+      created_at: payee.created_at.toISOString(),
+      payee: true,
+    });
+  });
+
   it('compteur : à relancer ou prise, par moi ou par un collègue ; jamais une commande annulée par le client', async () => {
     const priseYao = aConfirmer(5);
     const priseAwa = aConfirmer(6);

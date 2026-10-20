@@ -95,7 +95,7 @@ export class NotificationsSenderService {
      * (`notification:new` → cloche + bip), en respectant la préférence
      * in_app_notifications_enabled de chacun.
      * `order` doit porter : id, reference, status, amount, restaurant_id, restaurant?.name,
-     * fullname, payment_method.
+     * fullname, payment_method, type, auto.
      */
     async sendOrderBell(order: any) {
         if (!order?.restaurant_id) return;
@@ -124,6 +124,10 @@ export class NotificationsSenderService {
                 restaurant_name: order.restaurant?.name ?? '',
                 customer_name: order.fullname ?? 'Client',
                 payment_method: order.payment_method ?? PaymentMethod.ONLINE,
+                // Le texte d'une commande acceptée dépend du type (livraison,
+                // à emporter, sur place) et de qui l'a saisie.
+                order_type: order.type ?? null,
+                auto: order.auto ?? null,
             },
             'restaurant',
         );

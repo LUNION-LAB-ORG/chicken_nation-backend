@@ -1,14 +1,52 @@
-import { OrderStatus, PaymentMethod } from '@prisma/client';
+import { OrderStatus, OrderType, PaymentMethod } from '@prisma/client';
 import { notificationIcons } from 'src/modules/notifications/constantes/notifications.constante';
 
-export const getOrderNotificationContent = (orderData: {
+/** Ce que les messages lisent d'une commande. */
+export interface CommandeNotifiee {
     reference: string;
     status: OrderStatus;
     amount: number;
     restaurant_name: string;
     customer_name: string;
-    payment_method:PaymentMethod
-}, type: 'customer' | 'restaurant') => {
+    payment_method: PaymentMethod;
+    /** Livraison, à emporter ou sur place. Absent : message neutre. */
+    order_type?: OrderType | string | null;
+    /** `false` : saisie par le personnel. Absent : on ne suppose rien. */
+    auto?: boolean | null;
+}
+
+/**
+ * Le client a-t-il confirmé sa présence au restaurant ? Seulement pour une
+ * commande de l'application (`auto`) à emporter ou sur place, à payer au
+ * restaurant : c'est le geste « Je suis arrivé » qui l'accepte. Une livraison
+ * n'y passe jamais (recette du 20/10 : la reprise au téléphone d'une commande
+ * du site à livrer disait « a confirmé sa présence »), ni une commande payée
+ * en ligne, ni une commande saisie par le personnel.
+ */
+export function presenceConfirmee(commande: Pick<CommandeNotifiee, 'order_type' | 'payment_method' | 'auto'>): boolean {
+    return (
+        commande.auto === true &&
+        commande.payment_method === PaymentMethod.OFFLINE &&
+        (commande.order_type === OrderType.PICKUP || commande.order_type === OrderType.TABLE)
+    );
+}
+
+const LIBELLE_TYPE_COMMANDE: Record<string, string> = {
+    [OrderType.DELIVERY]: 'Commande à livrer',
+    [OrderType.PICKUP]: 'Commande à emporter',
+    [OrderType.TABLE]: 'Commande sur place',
+};
+
+/** Cloche du restaurant pour une commande acceptée : juste selon le type de commande. */
+export function messageAccepteeRestaurant(commande: CommandeNotifiee): string {
+    if (presenceConfirmee(commande)) {
+        return `Le client ${commande.customer_name} a confirmé sa présence. Lancez la cuisson pour la commande #${commande.reference} !`;
+    }
+    const libelle = (commande.order_type && LIBELLE_TYPE_COMMANDE[commande.order_type]) || 'Commande';
+    return `${libelle} #${commande.reference} (${commande.customer_name}) confirmée. Lancez la cuisson !`;
+}
+
+export const getOrderNotificationContent = (orderData: CommandeNotifiee, type: 'customer' | 'restaurant') => {
 
     const statusConfig = {
       PENDING: {
@@ -24,8 +62,10 @@ export const getOrderNotificationContent = (orderData: {
         ACCEPTED: {
             title: '🔥 Cuisson lancée !',
             message: type === 'customer' ?
-                `C'est parti ! Votre présence est confirmée. ${orderData.restaurant_name} commence la cuisson de votre commande #${orderData.reference}.` :
-                `Le client ${orderData.customer_name} a confirmé sa présence. Lancez la cuisson pour la commande #${orderData.reference} !`,
+                (presenceConfirmee(orderData) ?
+                    `C'est parti ! Votre présence est confirmée. ${orderData.restaurant_name} commence la cuisson de votre commande #${orderData.reference}.` :
+                    `C'est parti ! Votre commande #${orderData.reference} est confirmée. ${orderData.restaurant_name} commence la cuisson.`) :
+                messageAccepteeRestaurant(orderData),
             icon: notificationIcons.ok.url,
             iconBgColor: notificationIcons.ok.color,
         },

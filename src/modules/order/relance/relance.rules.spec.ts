@@ -231,13 +231,31 @@ describe('classerBrouillons', () => {
     expect(groupeDeLaCommande(seul, ignore.id)).toEqual({ ignore: seul.groupesIgnores[0] });
   });
 
-  it('12. commande payée 6 min avant le panier : signal commande récente', () => {
+  it('12. commande payée 6 min avant le panier : signal commande récente, payée', () => {
     const b = brouillon(5);
-    const e = effective(11);
+    const e = effective(11, { paied: true });
     const { groupes } = classer([b], [e]);
-    expect(groupes[0].signaux.commande_recente).toEqual({ reference: e.reference, created_at: e.created_at });
+    expect(groupes[0].signaux.commande_recente).toEqual({ reference: e.reference, created_at: e.created_at, payee: true });
     // Au delà de la fenêtre « récente » : aucun signal.
     expect(classer([b], [effective(5 + RECENTE_MINUTES + 1)]).groupes[0].signaux.commande_recente).toBeNull();
+  });
+
+  /**
+   * Recette du 20/10 : le backoffice disait « A déjà payé » pour toute
+   * commande récente, alors qu'une commande effective n'est pas forcément
+   * payée (espèces dans l'application, commande du site confirmée, à payer
+   * au livreur). Le signal dit si elle l'est.
+   */
+  it('12 bis. commande récente non payée (espèces, ou à payer à la livraison) : signal, non payée', () => {
+    const b = brouillon(5);
+    for (const paied of [false, null, undefined]) {
+      const e = effective(11, { paied });
+      expect(classer([b], [e]).groupes[0].signaux.commande_recente).toEqual({
+        reference: e.reference,
+        created_at: e.created_at,
+        payee: false,
+      });
+    }
   });
 
   it('13. paiement refusé : signal', () => {
@@ -409,7 +427,7 @@ describe('classerBrouillons : commandes du site à payer à la livraison (19/10)
     const { groupes } = classer([b], [seconde, avant, annulee, autreClient, premiere]);
     expect(groupes[0].signaux.commande_suivante).toEqual({ reference: premiere.reference, created_at: premiere.created_at });
     // Celle d'avant reste le signal « commande récente », comme pour un panier.
-    expect(groupes[0].signaux.commande_recente).toEqual({ reference: avant.reference, created_at: avant.created_at });
+    expect(groupes[0].signaux.commande_recente).toEqual({ reference: avant.reference, created_at: avant.created_at, payee: false });
   });
 
   it('sans commande effective après elle : pas de signal ; un panier en ligne ne le porte jamais', () => {
@@ -466,6 +484,34 @@ describe('classerBrouillons : commandes du site à payer à la livraison (19/10)
     expect(groupes[0].signaux.annulee_par_client).toEqual({ le: ilYa(2) });
     // Même fenêtre que les autres paniers annulés.
     expect(classer([aConfirmer(FENETRE_HEURES * 60 + 1, { status: 'CANCELLED', entity_status: 'DELETED', cancelled_by: 'client' })]).groupes).toEqual([]);
+  });
+
+  /**
+   * Recette R15 du 20/10 : annulée par le client moins de 3 min après sa
+   * création, la commande s'affichait « Paiement en cours », et « Je m'en
+   * occupe » répondait « Le client est peut-être en train de payer ».
+   * Personne ne la paie en ligne : son âge ne met pas le groupe en cours.
+   */
+  it('annulée par le client dans les 3 min : à relancer tout de suite, jamais « paiement en cours »', () => {
+    const annulee = aConfirmer(1, { status: 'CANCELLED', entity_status: 'DELETED', cancelled_by: 'client', cancelled_at: ilYa(0.5) });
+    const { groupes, prochaineEcheance } = classer([annulee]);
+    expect(groupes).toHaveLength(1);
+    expect(groupes[0]).toEqual(expect.objectContaining({ cle: annulee.id, etat: 'A_RELANCER', a_confirmer: false, echeance: null }));
+    expect(groupes[0].signaux.annulee_par_client).toEqual({ le: ilYa(0.5) });
+    expect(prochaineEcheance).toBeNull();
+  });
+
+  it('annulée par le client, un paiement lancé à l’instant sur un autre panier du groupe : en cours, depuis ce paiement', () => {
+    const panier = enLigne(30, {
+      paiements: [{ status: PaiementStatus.PENDING, amount: 5050, total: 5050, created_at: ilYa(2) }],
+    });
+    const annulee = aConfirmer(1, { status: 'CANCELLED', entity_status: 'DELETED', cancelled_by: 'client', cancelled_at: ilYa(0.5) });
+    const { groupes } = classer([panier, annulee]);
+    expect(groupes).toHaveLength(1);
+    // Le client paie peut-être l'autre panier : on attend la fin du délai compté depuis CE paiement.
+    expect(groupes[0]).toEqual(
+      expect.objectContaining({ cle: annulee.id, etat: 'EN_COURS', echeance: dans(REGLES.delai_minutes - 2) }),
+    );
   });
 
   it('« Modifier ma commande » puis nouvelle commande à confirmer : un groupe, la nouvelle en tête, l’ancienne marquée annulée', () => {

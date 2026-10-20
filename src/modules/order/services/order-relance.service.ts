@@ -153,7 +153,12 @@ export interface GroupeRelance {
   signaux: {
     paiement_refuse: boolean;
     paiement_partiel: { reference: string; recu: number; montant: number; libelle: string } | null;
-    commande_recente: { reference: string; created_at: string } | null;
+    /**
+     * Commande effective du même client, peu avant : doublon probable.
+     * `payee` : elle est payée ; sinon (espèces, à payer à la livraison),
+     * l'écran ne parle pas de paiement.
+     */
+    commande_recente: { reference: string; created_at: string; payee: boolean } | null;
     /** Date d'annulation (ISO) de la tête, ou du panier annulé le plus récent du groupe. */
     annulee_par_client: { le: string } | null;
     /** Tête à confirmer : commande effective du même client créée après elle (doublon possible). */
@@ -318,6 +323,8 @@ export class OrderRelanceService {
         reference: true,
         created_at: true,
         status: true,
+        // Le signal « commande récente » dit si elle est payée.
+        paied: true,
         customer_id: true,
         phone: true,
         customer: { select: { phone: true } },
@@ -948,6 +955,7 @@ export class OrderRelanceService {
           ? {
               reference: g.signaux.commande_recente.reference,
               created_at: g.signaux.commande_recente.created_at.toISOString(),
+              payee: g.signaux.commande_recente.payee,
             }
           : null,
         annulee_par_client: g.signaux.annulee_par_client
