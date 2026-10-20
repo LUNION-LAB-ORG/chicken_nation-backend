@@ -1,7 +1,22 @@
 import { PaiementMode } from "@prisma/client";
 import { PaiementMethode } from "../interfaces/turbo.interfaces";
 
-const TURBO_BASE = 'https://backend-prod.turbodeliveryapp.com';
+/** Adresse de Turbo en PRODUCTION : la seule qu'ils nous ont donnée. */
+export const TURBO_BASE_PRODUCTION = 'https://backend-prod.turbodeliveryapp.com';
+
+/**
+ * Adresse de l'API de Turbo : `TURBO_API_URL` si l'environnement la donne,
+ * sinon la production. Le banc local la pointe vers une adresse fermée
+ * (127.0.0.1:9) : le 20/10, une commande passée « prête » sur le banc a
+ * appelé 12 fois la production de Turbo (relais d'une course sans livreur).
+ * Lue au chargement du module, comme le reste de l'environnement.
+ */
+export function adresseTurbo(env: Record<string, string | undefined> = process.env): string {
+    const reglee = env.TURBO_API_URL?.trim().replace(/\/+$/, '');
+    return reglee || TURBO_BASE_PRODUCTION;
+}
+
+const TURBO_BASE = adresseTurbo();
 
 export const TURBO_API = {
     CREATION_COURSE: `${TURBO_BASE}/api/restaurant/course-externe/commande`, // création d'une commande (ou d'un GROUPE : `commandes` accepte N entrées)

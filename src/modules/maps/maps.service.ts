@@ -82,7 +82,21 @@ const TTL = {
   STATIC_ROUTE:     12 * 60 * 60 * 1000,    //  12h     — image d'itinéraire
 } as const;
 
-const BASE_URL = 'https://maps.googleapis.com/maps/api';
+/** Adresse de l'API Google Maps en production. */
+export const GOOGLE_MAPS_API_PRODUCTION = 'https://maps.googleapis.com/maps/api';
+
+/**
+ * Adresse de l'API Google Maps : `GOOGLE_MAPS_API_URL` si l'environnement la
+ * donne, sinon Google. Le banc local la pointe vers une adresse fermée
+ * (127.0.0.1:9) : aucune requête ne part chez Google, et la distance retombe
+ * sur le vol d'oiseau, repli déjà prévu quand Google ne répond pas.
+ */
+export function adresseGoogleMaps(env: Record<string, string | undefined> = process.env): string {
+  const reglee = env.GOOGLE_MAPS_API_URL?.trim().replace(/\/+$/, '');
+  return reglee || GOOGLE_MAPS_API_PRODUCTION;
+}
+
+const BASE_URL = adresseGoogleMaps();
 
 /**
  * Temps passé chez un client avant de repartir : trouver la porte, remettre la
@@ -616,7 +630,7 @@ export class MapsService {
     });
 
     const construireUrl = (avecPastilles: boolean) => {
-      const url = new URL('https://maps.googleapis.com/maps/api/staticmap');
+      const url = new URL(`${BASE_URL}/staticmap`);
       url.searchParams.set('size', `${width}x${height}`);
       url.searchParams.set('scale', String(scale));
       url.searchParams.set('language', 'fr');
