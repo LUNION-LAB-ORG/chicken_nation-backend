@@ -2,10 +2,17 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { CourseStatut, EntityStatus, Prisma } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
+import { ComptePersonnel } from 'src/modules/users/helpers/personnel-scope.helper';
 
 import { QueryCourseStatsDto } from '../dto/query-course-stats.dto';
 import { QueryCoursesDto } from '../dto/query-courses.dto';
+import {
+  restaurantDuRetrait,
+  retenirCourseARemettre,
+  whereCoursesARemettre,
+} from '../helpers/code-retrait.rules';
 import { COURSE_ADMIN_INCLUDE, COURSE_FULL_INCLUDE } from '../helpers/course.includes';
+import { journeeDeService } from '../helpers/journee-service.rules';
 
 /**
  * Service : lectures Course (queries read-only).
@@ -30,17 +37,30 @@ export class CourseQueryService {
   }
 
   /**
-   * Recherche une course active par son code de retrait (3 chiffres).
-   * `pickup_code` n'est PAS unique — s'il y a collision (statistiquement rare, 1/1000),
-   * on retourne la plus récente active.
+   * Course à remettre pour un code de retrait (3 chiffres) : aperçu de la
+   * caisse ET validation du retrait passent par ici, ils voient donc la même
+   * course.
+   *
+   * Cherchée dans le restaurant du compte connecté (ou celui demandé par un
+   * compte du siège, ou tous), parmi les courses créées pendant la journée de
+   * service en cours (code-retrait.rules.ts). Lève 404 si aucune, 409 si
+   * plusieurs, 403 si un compte de restaurant demande un autre restaurant.
    */
-  async findByActivePickupCode(pickupCode: string) {
-    const active: CourseStatut[] = [CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT];
-    return this.prisma.course.findFirst({
-      where: { pickup_code: pickupCode, statut: { in: active } },
+  async findByActivePickupCode(
+    pickupCode: string,
+    user: ComptePersonnel | undefined,
+    restaurantIdDemande?: string,
+    maintenant: Date = new Date(),
+  ) {
+    const restaurantId = restaurantDuRetrait(user, restaurantIdDemande);
+    const courses = await this.prisma.course.findMany({
+      where: whereCoursesARemettre(pickupCode, restaurantId, journeeDeService(maintenant)),
       include: COURSE_FULL_INCLUDE,
-      orderBy: { assigned_at: 'desc' },
+      orderBy: [{ assigned_at: 'desc' }, { created_at: 'desc' }],
+      // Au-delà d'une, on refuse : inutile de tout charger.
+      take: 5,
     });
+    return retenirCourseARemettre(courses, restaurantId);
   }
 
   /** Historique livreur : COMPLETED + CANCELLED + EXPIRED */

@@ -1,5 +1,24 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, Length, Matches } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
+import { IsNotEmpty, IsOptional, IsString, IsUUID, Length, Matches } from 'class-validator';
+
+/** Champ vide envoyé par un formulaire : traité comme absent. */
+const videEnAbsent = ({ value }: { value: unknown }) => (value === '' ? undefined : value);
+
+/**
+ * Restaurant où chercher le code de retrait. Ignoré pour un compte de
+ * restaurant (caissière, manager) : c'est toujours le sien, et un autre est
+ * refusé. Un compte du siège sans restaurant cherche dans tout le réseau.
+ */
+export class QueryPickupCodeDto {
+  @ApiPropertyOptional({
+    description: 'Restaurant où chercher le code (compte du siège). Sans lui : tous les restaurants.',
+  })
+  @Transform(videEnAbsent)
+  @IsOptional()
+  @IsUUID(undefined, { message: 'Restaurant inconnu.' })
+  restaurant_id?: string;
+}
 
 /**
  * Payload de validation d'une récupération au restaurant par la caissière.
@@ -9,8 +28,11 @@ import { IsNotEmpty, IsString, Length, Matches } from 'class-validator';
  *   Course AT_RESTAURANT/ACCEPTED → IN_DELIVERY
  *   Orders READY → PICKED_UP
  *   Timestamps à jour partout
+ *
+ * La caisse Sunmi n'envoie que `pickup_code` : le restaurant est alors celui
+ * du compte connecté.
  */
-export class ValidatePickupDto {
+export class ValidatePickupDto extends QueryPickupCodeDto {
   @ApiProperty({
     description: 'Code de retrait à 3 chiffres donné par le livreur',
     example: '421',

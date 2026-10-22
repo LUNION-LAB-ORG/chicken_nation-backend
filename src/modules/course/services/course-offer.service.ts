@@ -85,30 +85,36 @@ export class CourseOfferService {
 
     const totalFee = orders.reduce((sum, o) => sum + o.delivery_fee, 0);
 
-    // 2. Créer la Course (retry sur collision unique sur reference)
+    // 2. Créer la Course (retry sur collision unique sur reference).
+    //    Le code de retrait est tiré DANS la transaction de création, sous le
+    //    verrou du restaurant : unique dans le restaurant pour la journée de
+    //    service, même si deux courses du restaurant naissent en même temps.
     let course: Course | null = null;
     for (let attempt = 0; attempt < 3 && !course; attempt++) {
       try {
-        course = await this.prisma.course.create({
-          data: {
-            reference: this.helper.generateReference(),
-            pickup_code: this.helper.generatePickupCode(),
-            restaurant_id: input.restaurantId,
-            statut: CourseStatut.PENDING_ASSIGNMENT,
-            total_delivery_fee: totalFee,
-            deliveries: {
-              create: orders.map((order, index) => ({
-                order_id: order.id,
-                sequence_order: index + 1,
-                // Le code du client vient de la COMMANDE : il l'a déjà sous les
-                // yeux dans l'application depuis la création. Tirer un second
-                // code ici lui en donnerait deux, dont un seul serait accepté.
-                // Repli sur un tirage pour les commandes antérieures au champ.
-                delivery_pin: order.recovery_code ?? this.helper.generateDeliveryPin(),
-                statut: DeliveryStatut.PENDING,
-              })),
+        course = await this.prisma.$transaction(async (tx) => {
+          const pickupCode = await this.helper.genererCodeRetrait(tx, input.restaurantId);
+          return tx.course.create({
+            data: {
+              reference: this.helper.generateReference(),
+              pickup_code: pickupCode,
+              restaurant_id: input.restaurantId,
+              statut: CourseStatut.PENDING_ASSIGNMENT,
+              total_delivery_fee: totalFee,
+              deliveries: {
+                create: orders.map((order, index) => ({
+                  order_id: order.id,
+                  sequence_order: index + 1,
+                  // Le code du client vient de la COMMANDE : il l'a déjà sous les
+                  // yeux dans l'application depuis la création. Tirer un second
+                  // code ici lui en donnerait deux, dont un seul serait accepté.
+                  // Repli sur un tirage pour les commandes antérieures au champ.
+                  delivery_pin: order.recovery_code ?? this.helper.generateDeliveryPin(),
+                  statut: DeliveryStatut.PENDING,
+                })),
+              },
             },
-          },
+          });
         });
       } catch (err: any) {
         if (err?.code === 'P2002' && err?.meta?.target?.includes('reference')) continue;
@@ -1159,19 +1165,23 @@ export class CourseOfferService {
       };
     }
 
-    // Nouvelle course (retry sur collision de référence, comme à la création).
+    // Nouvelle course (retry sur collision de référence, comme à la création ;
+    // code de retrait tiré sous le verrou du restaurant, comme à la création).
     const totalFee = relancables.reduce((sum, d) => sum + d.order.delivery_fee, 0);
     let nouvelle: Course | null = null;
     for (let attempt = 0; attempt < 3 && !nouvelle; attempt++) {
       try {
-        nouvelle = await this.prisma.course.create({
-          data: {
-            reference: this.helper.generateReference(),
-            pickup_code: this.helper.generatePickupCode(),
-            restaurant_id: course.restaurant_id,
-            statut: CourseStatut.PENDING_ASSIGNMENT,
-            total_delivery_fee: totalFee,
-          },
+        nouvelle = await this.prisma.$transaction(async (tx) => {
+          const pickupCode = await this.helper.genererCodeRetrait(tx, course.restaurant_id);
+          return tx.course.create({
+            data: {
+              reference: this.helper.generateReference(),
+              pickup_code: pickupCode,
+              restaurant_id: course.restaurant_id,
+              statut: CourseStatut.PENDING_ASSIGNMENT,
+              total_delivery_fee: totalFee,
+            },
+          });
         });
       } catch (err: any) {
         if (err?.code === 'P2002' && err?.meta?.target?.includes('reference')) continue;

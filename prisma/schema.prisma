@@ -565,8 +565,10 @@ model Course {
   reference String @unique @db.VarChar(20)
 
   /// Code de retrait à 3 chiffres donné au restaurant par le livreur.
-  /// NON unique : collisions possibles (1000 codes, tolérables à l'échelle d'un resto).
-  /// En cas de collision, le resto discrimine via le livreur et la commande.
+  /// Unique dans le restaurant pour la journée de service (05 h à 05 h), garanti
+  /// à la création sous verrou consultatif, sans contrainte en base : le même
+  /// code revient d'un restaurant à l'autre et d'un jour à l'autre. La caisse ne
+  /// cherche que dans son restaurant et dans la journée (code-retrait.rules.ts).
   pickup_code String @db.VarChar(3)
 
   statut CourseStatut @default(PENDING_ASSIGNMENT)

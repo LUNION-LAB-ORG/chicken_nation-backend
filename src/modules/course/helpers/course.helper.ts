@@ -1,15 +1,29 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+
+import { choisirCodeRetrait } from './code-retrait.rules';
+import { journeeDeService } from './journee-service.rules';
+
+/**
+ * Classe du verrou consultatif des codes de retrait : un verrou par
+ * restaurant (`hashtext(restaurant_id)`), tenu jusqu'à la fin de la
+ * transaction de création. Les classes 727224 à 727226 sont au CRM.
+ */
+export const CLASSE_VERROU_CODE_RETRAIT = 727227;
 
 /**
  * Générateurs de références/codes pour le module course.
  *
  * Trois types de codes :
  *  - `reference` : CRS-YYMMDD-XXXXX — identifiant UNIQUE (tracking interne)
- *  - `pickup_code` : 3 chiffres — donné au restaurant, NON unique (collisions tolérées)
+ *  - `pickup_code` : 3 chiffres — donné au restaurant, UNIQUE dans le restaurant
+ *    pour la journée de service (`genererCodeRetrait`, code-retrait.rules.ts)
  *  - `delivery_pin` : 4 chiffres — donné au client pour confirmer la réception
  */
 @Injectable()
 export class CourseHelper {
+  private readonly logger = new Logger(CourseHelper.name);
+
   /**
    * Génère une référence unique : `CRS-YYMMDD-XXXXX` (5 chiffres random).
    * Le backend boucle avec retry en cas de collision unique (très rare).
@@ -24,13 +38,39 @@ export class CourseHelper {
   }
 
   /**
-   * Code retrait à 3 chiffres (000-999) — non unique.
-   * Affiché au livreur, donné au restaurant pour retrouver les commandes à retirer.
+   * Code de retrait à 3 chiffres d'une nouvelle course : libre parmi les
+   * courses du restaurant créées pendant la journée de service, tous statuts
+   * confondus, tiré au hasard. Affiché au livreur, dicté à la caisse.
+   *
+   * À appeler DANS la transaction qui crée la course : le verrou consultatif
+   * du restaurant est tenu jusqu'à sa fin. Deux créations simultanées pour le
+   * même restaurant passent l'une après l'autre, et la seconde voit le code
+   * de la première. Les autres restaurants ne sont pas bloqués.
+   *
+   * Si les 1 000 codes ont servi (improbable), repli journalisé : voir
+   * `choisirCodeRetrait`.
    */
-  generatePickupCode(): string {
-    return Math.floor(Math.random() * 1000)
-      .toString()
-      .padStart(3, '0');
+  async genererCodeRetrait(
+    tx: Prisma.TransactionClient,
+    restaurantId: string,
+    maintenant: Date = new Date(),
+  ): Promise<string> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${CLASSE_VERROU_CODE_RETRAIT}::int, hashtext(${restaurantId}))`;
+
+    const { debut, fin } = journeeDeService(maintenant);
+    const codesDuJour = await tx.course.findMany({
+      where: { restaurant_id: restaurantId, created_at: { gte: debut, lt: fin } },
+      select: { pickup_code: true, statut: true },
+    });
+
+    const choix = choisirCodeRetrait(codesDuJour);
+    if (choix.repli) {
+      this.logger.warn(
+        `Codes de retrait épuisés pour le restaurant ${restaurantId} (journée du ${debut.toISOString()}, ` +
+          `${codesDuJour.length} courses) : repli ${choix.repli}, code ${choix.code} réutilisé.`,
+      );
+    }
+    return choix.code;
   }
 
   /**

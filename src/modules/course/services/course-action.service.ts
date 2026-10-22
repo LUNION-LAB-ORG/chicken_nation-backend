@@ -16,9 +16,11 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer-queue.service';
 import { MapsService } from 'src/modules/maps/maps.service';
+import { ComptePersonnel } from 'src/modules/users/helpers/personnel-scope.helper';
 import { TurboService } from 'src/turbo/services/turbo.service';
 
 import { parseOrderLatLng } from '../helpers/geo.helper';
+import { messageCommandesPasPretes } from '../helpers/code-retrait.rules';
 import { CancelCourseDto } from '../dto/cancel-course.dto';
 import { ConfirmDeliveryDto } from '../dto/confirm-delivery.dto';
 import { FailDeliveryDto } from '../dto/fail-delivery.dto';
@@ -27,6 +29,7 @@ import { ValidatePickupDto } from '../dto/validate-pickup.dto';
 import { CourseEvent } from '../events/course.event';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { CourseOfferService } from './course-offer.service';
+import { CourseQueryService } from './course-query.service';
 
 /**
  * Service : transitions de statut d'une Course + actions sur les Delivery.
@@ -47,6 +50,8 @@ export class CourseActionService {
     private readonly turboService: TurboService,
     // Estimation de la tournée (trafic + arrêts) pour détecter les retards.
     private readonly maps: MapsService,
+    // Recherche de la course par code de retrait : la même que l'aperçu caisse.
+    private readonly queryService: CourseQueryService,
   ) {}
 
   // ============================================================
@@ -275,40 +280,25 @@ export class CourseActionService {
    *   Remplace l'ancienne action livreur `markPickedUp` (supprimée côté mobile).
    *
    * Préconditions : toutes les Orders liées doivent être READY (sinon 400).
+   *
+   * La course est cherchée dans le restaurant de la caissière (ou celui choisi
+   * par un compte du siège), parmi les courses de la journée de service :
+   * même recherche que l'aperçu (`CourseQueryService.findByActivePickupCode`).
+   * Course SOUS-TRAITÉE encore PENDING_ASSIGNMENT comprise : le livreur Turbo
+   * peut se présenter AVANT que leurs webhooks n'aient fait avancer la course.
    */
-  async validatePickupByCashier(dto: ValidatePickupDto) {
-    const activeStatuts: CourseStatut[] = [CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT];
+  async validatePickupByCashier(dto: ValidatePickupDto, user: ComptePersonnel | undefined) {
+    const course = await this.queryService.findByActivePickupCode(
+      dto.pickup_code,
+      user,
+      dto.restaurant_id,
+    );
 
-    const course = await this.prisma.course.findFirst({
-      where: {
-        pickup_code: dto.pickup_code,
-        OR: [
-          { statut: { in: activeStatuts } },
-          // Course SOUS-TRAITÉE encore PENDING_ASSIGNMENT : le livreur Turbo
-          // peut se présenter AVANT que leurs webhooks (courier_assigned…)
-          // n'aient fait avancer la course. Le code de retrait reste le
-          // garde-fou — la caissière ne doit jamais être bloquée par un
-          // webhook en retard.
-          {
-            statut: CourseStatut.PENDING_ASSIGNMENT,
-            turbo_escalated_at: { not: null },
-          },
-        ],
-      },
-      include: COURSE_FULL_INCLUDE,
-      orderBy: { assigned_at: 'desc' },
-    });
-
-    if (!course) {
-      throw new NotFoundException('Aucune course active trouvée pour ce code de retrait');
-    }
-
-    // Toutes les commandes doivent être READY
+    // Toutes les commandes doivent être READY. Le refus nomme les commandes
+    // et leur statut : la caissière sait laquelle attendre.
     const notReady = course.deliveries.filter((d) => d.order.status !== OrderStatus.READY);
     if (notReady.length > 0) {
-      throw new BadRequestException(
-        `${notReady.length} commande(s) sur ${course.deliveries.length} ne sont pas encore prête(s)`,
-      );
+      throw new BadRequestException(messageCommandesPasPretes(notReady.map((d) => d.order)));
     }
 
     const now = new Date();
@@ -377,7 +367,7 @@ export class CourseActionService {
     }
 
     this.logger.log(
-      `Course ${updated.reference} validée par caissière (code ${dto.pickup_code}) — ${course.deliveries.length} order(s) → PICKED_UP`,
+      `Course ${updated.reference} validée par caissière (code ${dto.pickup_code}, restaurant ${updated.restaurant_id}, compte ${user?.id ?? 'inconnu'}) — ${course.deliveries.length} order(s) → PICKED_UP`,
     );
 
     return updated;
