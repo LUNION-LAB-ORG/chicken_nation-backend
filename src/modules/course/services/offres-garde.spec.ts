@@ -13,7 +13,7 @@
  *  - expiration : réservation atomique, pas de pénalité dans les cas prévus ;
  *  - bascule manuelle vers Turbo : offre close avant l'envoi.
  */
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { CourseOfferStatus, CourseStatut, OrderStatus } from '@prisma/client';
 
 import { busSimule } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
@@ -622,6 +622,69 @@ describe('expiration des offres', () => {
     expect(t.queue.onOfferExpired).toHaveBeenCalledTimes(1);
     expect(c.refusal_count).toBe(1);
     expect(t.courseEvent.offerExpired).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ============================================================
+// REFUS
+// ============================================================
+
+describe('refus d’une offre (POST /courses/deliverer/:id/refuse)', () => {
+  it('offre en attente : refusée, une pénalité, un refus compté, livreur suivant', async () => {
+    const d = livreur({ last_available_at: avant(3600) });
+    const suivant = livreur({ last_available_at: avant(60) });
+    const c = course();
+    const o = offre({ course_id: c.id, deliverer_id: d.id, expires_at: apres(60) });
+    const t = monter({ livreurs: [d, suivant], courses: [c], offres: [o] });
+
+    await t.actions.refuseOffer(c.id, d.id, { reason: 'trop loin' } as never);
+
+    expect(o.status).toBe(CourseOfferStatus.REFUSED);
+    expect(t.queue.onRefuse).toHaveBeenCalledTimes(1);
+    expect(c.refusal_count).toBe(1);
+    expect(t.offres.find((x) => x.status === CourseOfferStatus.PENDING)?.deliverer_id).toBe(suivant.id);
+  });
+
+  it('l’offre expire entre la lecture et l’écriture du refus : une seule pénalité, pas deux', async () => {
+    // Relecture adverse : le refus écrasait sans condition l'offre déjà
+    // expirée par la tâche de 10 s ; le livreur payait l'expiration ET le refus.
+    const d = livreur();
+    const c = course();
+    const o = offre({ course_id: c.id, deliverer_id: d.id, expires_at: avant(1) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [o] });
+    const lire = t.prisma.courseOfferAttempt.findFirst.getMockImplementation();
+    t.prisma.courseOfferAttempt.findFirst.mockImplementationOnce(async (args: any) => {
+      const lue = await lire(args);
+      await t.serviceOffres.expirePendingOffers(); // la tâche passe à cet instant
+      return lue;
+    });
+
+    expect(await refus(t.actions.refuseOffer(c.id, d.id, { reason: 'trop loin' } as never))).toEqual({
+      classe: BadRequestException,
+      message: "Cette offre n'est plus en attente.",
+    });
+    expect(o.status).toBe(CourseOfferStatus.EXPIRED);
+    expect(t.queue.onOfferExpired).toHaveBeenCalledTimes(1);
+    expect(t.queue.onRefuse).not.toHaveBeenCalled();
+    expect(c.refusal_count).toBe(1);
+  });
+
+  it('offre close par le serveur (livreur en pause ailleurs) : le refus ne la transforme pas en pénalité', async () => {
+    const d = livreur();
+    const c = course();
+    const o = offre({ course_id: c.id, deliverer_id: d.id, expires_at: apres(60) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [o] });
+    const lire = t.prisma.courseOfferAttempt.findFirst.getMockImplementation();
+    t.prisma.courseOfferAttempt.findFirst.mockImplementationOnce(async (args: any) => {
+      const lue = await lire(args);
+      o.status = CourseOfferStatus.CANCELLED; // pause posée depuis un autre téléphone
+      return lue;
+    });
+
+    await expect(t.actions.refuseOffer(c.id, d.id, {} as never)).rejects.toBeInstanceOf(BadRequestException);
+    expect(o.status).toBe(CourseOfferStatus.CANCELLED);
+    expect(t.queue.onRefuse).not.toHaveBeenCalled();
+    expect(c.refusal_count).toBe(0);
   });
 });
 

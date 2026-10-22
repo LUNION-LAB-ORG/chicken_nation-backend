@@ -2,9 +2,18 @@
  * Annulation automatique d'une course bloquée : jamais une commande de client
  * (« une commande ne s'annule que manuellement »), et frais de livraison.
  */
-import { DeliveryStatut, OrderStatus } from '@prisma/client';
+import { CourseStatut, DeliveryStatut, OrderStatus } from '@prisma/client';
 
-import { fraisLivraisonCourse, issueAnnulationAuto, trierCommandesAnnulationAuto } from './remise-course.rules';
+import { evaluer } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
+
+import {
+  WHERE_COURSE_ENCORE_A_REMETTRE,
+  fraisLivraisonCourse,
+  issueAnnulationAuto,
+  messageValidationImpossible,
+  trierCommandesAnnulationAuto,
+} from './remise-course.rules';
+import { whereCoursesARemettre } from './code-retrait.rules';
 
 const l = (id: string, status: OrderStatus, statut: DeliveryStatut = DeliveryStatut.PENDING) => ({
   id,
@@ -48,5 +57,49 @@ describe('fraisLivraisonCourse', () => {
       ]),
     ).toBe(2500);
     expect(fraisLivraisonCourse([])).toBe(0);
+  });
+});
+
+describe('validation par code : condition d’écriture', () => {
+  const journee = { debut: new Date('2026-10-22T04:00:00.000Z'), fin: new Date('2026-10-23T04:00:00.000Z') };
+  const recherche = whereCoursesARemettre('421', undefined, journee);
+  const ligne = (statut: CourseStatut, turbo: Date | null = null) => ({
+    pickup_code: '421',
+    created_at: new Date('2026-10-22T12:00:00.000Z'),
+    statut,
+    turbo_escalated_at: turbo,
+  });
+
+  it('mêmes statuts que la recherche par code : le GPS ou un webhook Turbo ne bloque pas la remise', () => {
+    const cas = [
+      ligne(CourseStatut.PENDING_ASSIGNMENT),
+      ligne(CourseStatut.PENDING_ASSIGNMENT, new Date()),
+      ligne(CourseStatut.ACCEPTED),
+      ligne(CourseStatut.AT_RESTAURANT),
+      ligne(CourseStatut.ACCEPTED, new Date()),
+      ligne(CourseStatut.IN_DELIVERY),
+      ligne(CourseStatut.COMPLETED),
+      ligne(CourseStatut.CANCELLED),
+      ligne(CourseStatut.EXPIRED),
+    ];
+    for (const c of cas) {
+      expect([c.statut, c.turbo_escalated_at !== null, evaluer(c, WHERE_COURSE_ENCORE_A_REMETTRE)]).toEqual([
+        c.statut,
+        c.turbo_escalated_at !== null,
+        evaluer(c, recherche),
+      ]);
+    }
+  });
+
+  it('refus : le message dit si la course est partie, annulée, ou si rien n’est enregistré', () => {
+    expect(messageValidationImpossible(CourseStatut.IN_DELIVERY)).toBe("Cette course vient d'être remise au livreur.");
+    expect(messageValidationImpossible(CourseStatut.COMPLETED)).toBe("Cette course vient d'être remise au livreur.");
+    expect(messageValidationImpossible(CourseStatut.CANCELLED)).toBe(
+      "Cette course vient d'être annulée : la remise n'est pas enregistrée.",
+    );
+    expect(messageValidationImpossible(null)).toBe(
+      "Cette course vient de changer : la remise n'est pas enregistrée, saisissez le code à nouveau.",
+    );
+    for (const statut of Object.values(CourseStatut)) expect(messageValidationImpossible(statut)).not.toMatch(/[—–]/);
   });
 });

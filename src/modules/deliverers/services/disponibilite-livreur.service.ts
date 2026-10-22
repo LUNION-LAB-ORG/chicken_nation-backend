@@ -237,7 +237,18 @@ export class DisponibiliteLivreurService {
     const reserve = await this.prisma.deliverer.updateMany({
       where: {
         id: delivererId,
-        OR: [{ dernier_signal_at: null }, { dernier_signal_at: { lt: seuil } }],
+        // Aucun signe de vie depuis le seuil. Signal jamais noté (champ ajouté
+        // le 22/10, rempli à la première requête ou position) : la dernière
+        // position connue en tient lieu. Sinon, juste après le déploiement,
+        // un livreur qui venait d'envoyer sa position passerait hors service
+        // à sa première offre manquée.
+        OR: [
+          { dernier_signal_at: { lt: seuil } },
+          {
+            dernier_signal_at: null,
+            OR: [{ last_location_at: null }, { last_location_at: { lt: seuil } }],
+          },
+        ],
         // Déjà en pause : rien à faire (et pas de second message).
         AND: [{ OR: [{ pause_until: null }, { pause_until: { lte: maintenant } }] }],
       },

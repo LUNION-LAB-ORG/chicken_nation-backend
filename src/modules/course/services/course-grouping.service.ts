@@ -20,6 +20,7 @@ import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { recalculerFraisCourse } from '../helpers/frais-course';
 import { haversineMeters, nearestNeighborOrder, parseOrderLatLng, type ILatLng } from '../helpers/geo.helper';
+import { estCourseTurboDOrigine } from '../helpers/offres.rules';
 import { CourseOfferService } from './course-offer.service';
 import { DispatchJournalService } from './dispatch-journal.service';
 import { OffresClotureService } from './offres-cloture.service';
@@ -452,8 +453,11 @@ export class CourseGroupingService {
       await this.emitUpdatedEvents([...touchedCourseIds]);
       // Course touchée encore sans livreur ni offre : recherche relancée tout de
       // suite (le livreur de la course absorbée vient de revenir dans la file).
+      // Jamais pour une course Turbo d'origine (envoi à Turbo à retenter) : ses
+      // commandes ne vont pas à un livreur interne.
       for (const c of courses) {
         if (!touchedCourseIds.has(c.id) || c.statut !== CourseStatut.PENDING_ASSIGNMENT) continue;
+        if (estCourseTurboDOrigine(c.deliveries)) continue;
         await this.courseOfferService.offerNextDeliverer(c.id).catch(() => undefined);
       }
     }

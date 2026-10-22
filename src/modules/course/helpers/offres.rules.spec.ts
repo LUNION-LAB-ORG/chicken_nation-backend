@@ -2,7 +2,7 @@
  * Règles des offres hors sélection automatique : expiration, relances,
  * affectation forcée et acceptation. Toutes passent par `peutRecevoirOffre`.
  */
-import { CourseStatut, DelivererStatus, EntityStatus } from '@prisma/client';
+import { CourseStatut, DelivererStatus, DeliveryService, EntityStatus } from '@prisma/client';
 
 import { EtatLivreur, FIN_PAUSE_INDEFINIE } from 'src/modules/deliverers/helpers/disponibilite.rules';
 
@@ -14,6 +14,7 @@ import {
   decisionCreationOffre,
   decisionExpiration,
   decisionRelance,
+  estCourseTurboDOrigine,
 } from './offres.rules';
 
 const MAINTENANT = new Date('2026-10-22T14:00:00.000Z');
@@ -44,6 +45,17 @@ describe('courseChercheLivreur', () => {
       expect(courseChercheLivreur({ statut, turbo_escalated_at: null })).toBe(false);
     }
     expect(courseChercheLivreur(null)).toBe(false);
+  });
+});
+
+describe('estCourseTurboDOrigine', () => {
+  const l = (delivery_service: DeliveryService) => ({ order: { delivery_service } });
+  it('toutes les commandes livrées par Turbo : jamais d’offre interne', () => {
+    expect(estCourseTurboDOrigine([l(DeliveryService.TURBO), l(DeliveryService.TURBO)])).toBe(true);
+  });
+  it('une commande interne, ou aucune livraison : course interne', () => {
+    expect(estCourseTurboDOrigine([l(DeliveryService.TURBO), l(DeliveryService.CHICKEN_NATION)])).toBe(false);
+    expect(estCourseTurboDOrigine([])).toBe(false);
   });
 });
 

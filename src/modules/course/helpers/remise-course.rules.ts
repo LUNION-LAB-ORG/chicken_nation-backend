@@ -1,4 +1,4 @@
-import { CourseStatut, DeliveryStatut, OrderStatus } from '@prisma/client';
+import { CourseStatut, DeliveryStatut, OrderStatus, Prisma } from '@prisma/client';
 
 /**
  * REMISE DES COMMANDES ET ANNULATION AUTOMATIQUE D'UNE COURSE, règles pures.
@@ -17,6 +17,43 @@ export const STATUTS_COURSE_AVANT_DEPART: CourseStatut[] = [
   CourseStatut.ACCEPTED,
   CourseStatut.AT_RESTAURANT,
 ];
+
+/**
+ * Condition d'écriture de la validation par code : la course est ENCORE à
+ * remettre au comptoir (mêmes statuts que la recherche par code,
+ * `whereCoursesARemettre`) : acceptée ou au restaurant, ou chez Turbo encore
+ * en recherche.
+ *
+ * Pas le statut exact lu juste avant : le GPS du livreur (acceptée vers « au
+ * restaurant ») ou un webhook Turbo peut faire avancer la course entre la
+ * lecture et l'écriture. Ce n'est pas un retrait : la validation doit passer.
+ * Seul un départ (bouton de la caisse, autre poste) ou une annulation la refuse.
+ */
+export const WHERE_COURSE_ENCORE_A_REMETTRE: Prisma.CourseWhereInput = {
+  OR: [
+    { statut: { in: STATUTS_COURSE_AVANT_DEPART } },
+    { statut: CourseStatut.PENDING_ASSIGNMENT, turbo_escalated_at: { not: null } },
+  ],
+};
+
+/**
+ * Refus de la validation par code quand la course a changé entre la lecture et
+ * l'écriture, selon son statut relu. La caissière ne doit pas croire la course
+ * remise si elle ne l'est pas : elle remettrait les plats sans retrait
+ * enregistré, et la course bloquée repartirait vers un second livreur.
+ */
+export function messageValidationImpossible(statut: CourseStatut | null | undefined): string {
+  switch (statut) {
+    case CourseStatut.IN_DELIVERY:
+    case CourseStatut.COMPLETED:
+      return "Cette course vient d'être remise au livreur.";
+    case CourseStatut.CANCELLED:
+    case CourseStatut.EXPIRED:
+      return "Cette course vient d'être annulée : la remise n'est pas enregistrée.";
+    default:
+      return "Cette course vient de changer : la remise n'est pas enregistrée, saisissez le code à nouveau.";
+  }
+}
 
 /** Commande remise au livreur (ou déjà livrée). */
 export const STATUTS_COMMANDE_REMISE: OrderStatus[] = [

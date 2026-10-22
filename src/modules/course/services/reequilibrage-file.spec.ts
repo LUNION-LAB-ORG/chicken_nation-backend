@@ -7,7 +7,7 @@
  *  - frais de livraison recalculés, offre à jour renvoyée au livreur sollicité ;
  *  - course annulée : offres closes, livreur remis dans la file (sauf en pause).
  */
-import { CourseOfferStatus, CourseStatut, OrderStatus } from '@prisma/client';
+import { CourseOfferStatus, CourseStatut, DeliveryService, OrderStatus } from '@prisma/client';
 
 import { FIN_PAUSE_INDEFINIE } from 'src/modules/deliverers/helpers/disponibilite.rules';
 import { busSimule } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
@@ -149,6 +149,24 @@ describe('rééquilibrage : fusion de courses', () => {
     });
     // La cible, encore sans livreur, est reproposée tout de suite.
     expect(t.offresService.offerNextDeliverer).toHaveBeenCalledWith(cible.course.id);
+  });
+
+  it('courses Turbo d’origine (envoi à retenter) fusionnées : aucune offre à un livreur interne', async () => {
+    // Relecture adverse : la relance ajoutée au rééquilibrage proposait aux
+    // livreurs internes une course Turbo dont l'envoi avait échoué
+    // (`turbo_escalated_at` remis à nul en attendant le nouvel essai).
+    const cible = courseA(ADRESSE_A, { created_at: avant(3) });
+    const absorbee = courseA(ADRESSE_B, { created_at: avant(1) });
+    for (const o of [...cible.commandes, ...absorbee.commandes]) o.delivery_service = DeliveryService.TURBO;
+    const t = monter({
+      livreurs: [livreur()],
+      courses: [cible.course, absorbee.course],
+      commandes: [...cible.commandes, ...absorbee.commandes],
+      livraisons: [...cible.livraisons, ...absorbee.livraisons],
+    });
+
+    expect(await t.regroupement.rebalanceActiveCourses()).toEqual({ merged: 1, transferred: 1 });
+    expect(t.offresService.offerNextDeliverer).not.toHaveBeenCalled();
   });
 
   it('livreur de la cible en pause : aucune commande ajoutée à sa course', async () => {

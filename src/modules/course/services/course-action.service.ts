@@ -30,9 +30,13 @@ import { RefuseOfferDto } from '../dto/refuse-offer.dto';
 import { ValidatePickupDto } from '../dto/validate-pickup.dto';
 import { CourseEvent } from '../events/course.event';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
+import { WHERE_COURSE_ENCORE_A_REMETTRE, messageValidationImpossible } from '../helpers/remise-course.rules';
 import { CourseOfferService } from './course-offer.service';
 import { CourseQueryService } from './course-query.service';
 import { GardeOffresService } from './garde-offres.service';
+
+/** Refus d'une offre déjà expirée, close ou traitée (texte montré au livreur). */
+export const MESSAGE_OFFRE_PLUS_EN_ATTENTE = "Cette offre n'est plus en attente.";
 
 /**
  * Service : transitions de statut d'une Course + actions sur les Delivery.
@@ -101,17 +105,23 @@ export class CourseActionService {
       },
     });
     if (!offer) {
-      throw new BadRequestException('Offer invalide ou déjà traitée');
+      throw new BadRequestException(MESSAGE_OFFRE_PLUS_EN_ATTENTE);
     }
 
-    await this.prisma.courseOfferAttempt.update({
-      where: { id: offer.id },
+    // Écriture CONDITIONNÉE : l'offre a pu expirer (tâche de 10 s) ou être
+    // close par le serveur entre la lecture et l'écriture. Sans condition, le
+    // refus l'écrasait et le livreur payait deux pénalités (expiration + refus).
+    const refusee = await this.prisma.courseOfferAttempt.updateMany({
+      where: { id: offer.id, status: CourseOfferStatus.PENDING },
       data: {
         status: CourseOfferStatus.REFUSED,
         responded_at: new Date(),
         refusal_reason: dto.reason,
       },
     });
+    if (refusee.count !== 1) {
+      throw new BadRequestException(MESSAGE_OFFRE_PLUS_EN_ATTENTE);
+    }
 
     await this.prisma.course.update({
       where: { id: courseId },
@@ -300,12 +310,14 @@ export class CourseActionService {
 
     const now = new Date();
     const previousStatut = course.statut;
-    // Écriture CONDITIONNÉE au statut lu : le bouton de la caisse « Livreur a
-    // récupéré » (CourseEnLivraisonService) peut faire partir la course en même
-    // temps. Un seul des deux la remet, l'autre reçoit 409.
+    // Écriture CONDITIONNÉE : la course doit être encore à remettre. Le bouton
+    // de la caisse « Livreur a récupéré » (CourseEnLivraisonService) peut la
+    // faire partir en même temps : un seul des deux la remet, l'autre reçoit
+    // 409. Le GPS ou un webhook Turbo qui la fait avancer (« au restaurant »)
+    // ne bloque pas la validation.
     const [updated] = await this.prisma.$transaction([
       this.prisma.course.update({
-        where: { id: course.id, statut: previousStatut },
+        where: { id: course.id, AND: [WHERE_COURSE_ENCORE_A_REMETTRE] },
         data: {
           statut: CourseStatut.IN_DELIVERY,
           // Si le livreur n'a pas encore déclenché at_restaurant (pas de GPS ou GPS tardif),
@@ -320,9 +332,12 @@ export class CourseActionService {
         where: { delivery: { course_id: course.id } },
         data: { status: OrderStatus.PICKED_UP, picked_up_at: now },
       }),
-    ]).catch((err) => {
+    ]).catch(async (err) => {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
-        throw new ConflictException("Cette course vient d'être remise au livreur.");
+        const relue = await this.prisma.course
+          .findUnique({ where: { id: course.id }, select: { statut: true } })
+          .catch(() => null);
+        throw new ConflictException(messageValidationImpossible(relue?.statut));
       }
       throw err;
     });

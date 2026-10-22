@@ -1,4 +1,4 @@
-import { CourseStatut } from '@prisma/client';
+import { CourseStatut, DeliveryService } from '@prisma/client';
 
 import {
   EtatLivreur,
@@ -37,6 +37,18 @@ export interface EtatCourse {
 /** La course cherche encore un livreur interne : en recherche et pas confiée à Turbo. */
 export function courseChercheLivreur(c: EtatCourse | null | undefined): boolean {
   return !!c && c.statut === CourseStatut.PENDING_ASSIGNMENT && c.turbo_escalated_at === null;
+}
+
+/**
+ * Course TURBO D'ORIGINE : toutes ses commandes sont livrées par Turbo (zone,
+ * choix de l'administration). Jamais d'offre à un livreur interne, même quand
+ * son envoi à Turbo a échoué et attend d'être retenté (`turbo_escalated_at`
+ * remis à nul) : même règle que `retryUnassignedCourses`.
+ */
+export function estCourseTurboDOrigine(
+  livraisons: { order: { delivery_service?: DeliveryService | null } }[],
+): boolean {
+  return livraisons.length > 0 && livraisons.every((l) => l.order.delivery_service === DeliveryService.TURBO);
 }
 
 // ============================================================

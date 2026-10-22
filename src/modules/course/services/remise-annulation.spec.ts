@@ -231,6 +231,61 @@ describe('bouton de la caisse « Livreur a récupéré » (PATCH /orders/:id/sta
     expect(t.push.notifyPickupValidated).not.toHaveBeenCalled();
   });
 
+  it('le GPS fait passer la course « au restaurant » pendant la validation par code : le retrait passe', async () => {
+    // Relecture adverse : l'écriture exigeait le statut EXACT lu juste avant.
+    // La caisse recevait « Cette course vient d'être remise au livreur. »,
+    // remettait les plats, et la course bloquée partait 30 min plus tard vers
+    // un second livreur.
+    const d = livreur({ last_available_at: null });
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.ACCEPTED, deliverer_id: d.id },
+      [OrderStatus.READY],
+    );
+    const t = monter({ livreurs: [d], courses: [c], commandes, livraisons });
+    t.queryService.findByActivePickupCode.mockResolvedValue({ ...c, deliveries: [{ order: { ...commandes[0] } }] });
+    // Arrivée vue par le GPS entre la lecture de la caisse et son écriture.
+    Object.assign(c, { statut: CourseStatut.AT_RESTAURANT, at_restaurant_at: avant(1) });
+
+    await t.actions.validatePickupByCashier({ pickup_code: '421' } as never, undefined);
+
+    expect(c.statut).toBe(CourseStatut.IN_DELIVERY);
+    expect(commandes[0].status).toBe(OrderStatus.PICKED_UP);
+    expect(t.push.notifyPickupValidated).toHaveBeenCalledTimes(1);
+  });
+
+  it('course Turbo : le webhook « livreur trouvé » arrive pendant la validation par code : le retrait passe', async () => {
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.PENDING_ASSIGNMENT, turbo_escalated_at: avant(10) },
+      [OrderStatus.READY],
+    );
+    const t = monter({ courses: [c], commandes, livraisons });
+    t.queryService.findByActivePickupCode.mockResolvedValue({ ...c, deliveries: [{ order: { ...commandes[0] } }] });
+    c.statut = CourseStatut.ACCEPTED;
+
+    await t.actions.validatePickupByCashier({ pickup_code: '421' } as never, undefined);
+
+    expect(c.statut).toBe(CourseStatut.IN_DELIVERY);
+  });
+
+  it('course annulée pendant la validation par code : 409 qui dit que rien n’est enregistré', async () => {
+    const d = livreur({ last_available_at: null });
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.AT_RESTAURANT, deliverer_id: d.id },
+      [OrderStatus.READY],
+    );
+    const t = monter({ livreurs: [d], courses: [c], commandes, livraisons });
+    t.queryService.findByActivePickupCode.mockResolvedValue({ ...c, deliveries: [{ order: { ...commandes[0] } }] });
+    c.statut = CourseStatut.CANCELLED;
+
+    expect(await t.actions.validatePickupByCashier({ pickup_code: '421' } as never, undefined).catch((e) => e)).toEqual(
+      new ConflictException("Cette course vient d'être annulée : la remise n'est pas enregistrée."),
+    );
+    // (La commande reste prête en vrai : `$transaction([...])` de Prisma est
+    // atomique ; la base simulée n'annule que la forme fonction.)
+    expect(c.statut).toBe(CourseStatut.CANCELLED);
+    expect(t.push.notifyPickupValidated).not.toHaveBeenCalled();
+  });
+
   it('code validé d’abord : le bouton ne fait rien de plus', async () => {
     const d = livreur({ last_available_at: null });
     const { course: c, commandes, livraisons } = courseAvecCommandes(

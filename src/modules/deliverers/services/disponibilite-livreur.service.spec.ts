@@ -361,6 +361,29 @@ describe('filet : offre ignorée sans aucun signal', () => {
     expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(true);
   });
 
+  it('signal jamais noté (juste après le déploiement) mais position il y a 5 min : rien', async () => {
+    const l = livreur({ dernier_signal_at: null, last_location_at: avant(5) });
+    const t = monter({ livreurs: [l] });
+    expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(false);
+    expect(l.last_available_at).not.toBeNull();
+    expect(l.pause_until).toBeNull();
+    expect(t.push.notifyMisEnPause).not.toHaveBeenCalled();
+  });
+
+  it('signal jamais noté et dernière position il y a 30 min : hors service', async () => {
+    const l = livreur({ dernier_signal_at: null, last_location_at: avant(30) });
+    const t = monter({ livreurs: [l] });
+    expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(true);
+  });
+
+  it('signal ancien : une position récente notée avant le champ ne compte plus', async () => {
+    // dernier_signal_at est tenu à jour par chaque position depuis le 22/10 :
+    // s'il est ancien, c'est lui qui fait foi.
+    const l = livreur({ dernier_signal_at: avant(25), last_location_at: avant(25) });
+    const t = monter({ livreurs: [l] });
+    expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(true);
+  });
+
   it('signal il y a 5 min : rien (il a simplement laissé passer l’offre)', async () => {
     const l = livreur({ dernier_signal_at: avant(5) });
     const t = monter({ livreurs: [l] });
