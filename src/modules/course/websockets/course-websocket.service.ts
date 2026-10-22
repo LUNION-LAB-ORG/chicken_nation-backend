@@ -11,6 +11,7 @@ import type {
   CourseStatutChangedPayload,
   DeliveryStatutChangedPayload,
 } from '../interfaces/course-event.interface';
+import type { OffreExpireePayload } from '../services/offres-cloture.service';
 
 /**
  * Wrapper WebSocket du module course.
@@ -36,7 +37,7 @@ export class CourseWebSocketService {
     );
   }
 
-  emitOfferExpired(payload: { course_id: string; deliverer_id: string }) {
+  emitOfferExpired(payload: OffreExpireePayload) {
     this.appGateway.emitToDeliverer(
       payload.deliverer_id,
       CourseChannels.COURSE_OFFER_EXPIRED,

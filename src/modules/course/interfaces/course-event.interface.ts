@@ -26,6 +26,11 @@ export interface CourseOfferNewPayload {
    * Permet à l'app mobile d'afficher un badge explicatif "Chaînage".
    */
   is_chain_bonus?: boolean;
+  /**
+   * `true` : nouvel envoi d'une offre déjà en attente (affectation forcée
+   * répétée par l'admin). Le journal ne la compte pas deux fois.
+   */
+  renvoi?: boolean;
 }
 
 export interface CourseAssignedPayload {

@@ -43,4 +43,10 @@ export enum DelivererChannels {
   // Émis pour CHAQUE remontée GPS d'un livreur opérationnel (pas seulement en
   // course) → la Carte Live admin voit glisser tous les livreurs en direct.
   DELIVERER_LOCATION_LIVE = 'deliverer:location:live',
+
+  // ÉVÉNEMENT INTERNE : le livreur s'est déconnecté de l'appli (POST
+  // /auth/deliverer/logout). Émis par AuthDelivererService (qui ne peut pas
+  // importer le module des livreurs) et attendu (`emitAsync`) ; écouté par
+  // DisponibiliteListener → mise hors service, offres closes, journal.
+  DELIVERER_LOGGED_OUT = 'deliverer:logged-out',
 }

@@ -136,6 +136,11 @@ export class CourseActionService {
 
     // P5 : pénalité queue + check auto-pause éventuelle (logique interne)
     await this.queueService.onRefuse(delivererId);
+    void this.courseEvent.offerRefused({
+      course_id: courseId,
+      deliverer_id: delivererId,
+      raison: dto.reason ?? null,
+    });
 
     await this.offerService.offerNextDeliverer(courseId);
     this.logger.log(`Course ${courseId} refusée par ${delivererId}, retry lancé`);

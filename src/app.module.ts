@@ -15,6 +15,7 @@ import { AuthModule } from 'src/modules/auth/auth.module';
 import { AuthDelivererModule } from 'src/modules/auth-deliverer/auth-deliverer.module';
 import { DeliverersModule } from 'src/modules/deliverers/deliverers.module';
 import { CourseModule } from 'src/modules/course/course.module';
+import { DispatchCommunModule } from 'src/modules/course/dispatch-commun.module';
 import { DatabaseModule } from 'src/database/database.module';
 import { RestaurantModule } from 'src/modules/restaurant/restaurant.module';
 import { MenuModule } from 'src/modules/menu/menu.module';
@@ -120,6 +121,8 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
     AuthDelivererModule,
     DeliverersModule,
     CourseModule,
+    // Journal de la diffusion et clôture des offres (global : livreurs, authentification, course).
+    DispatchCommunModule,
     RestaurantModule,
     MenuModule,
     CustomerModule,

@@ -19,6 +19,8 @@ import { DelivererQueueService } from './services/deliverer-queue.service';
 import { DelivererRewardsService } from './services/deliverer-rewards.service';
 import { DelivererScoringService } from './services/deliverer-scoring.service';
 import { DeliverersService } from './services/deliverers.service';
+import { DisponibiliteLivreurService } from './services/disponibilite-livreur.service';
+import { DisponibiliteListener } from './listeners/disponibilite.listener';
 import { DeliverersTask } from './tasks/deliverers.task';
 import { DeliverersWebSocketService } from './websockets/deliverers-websocket.service';
 
@@ -45,6 +47,9 @@ import { DeliverersWebSocketService } from './websockets/deliverers-websocket.se
     DelivererPushService,
     DelivererRewardsService,
     DelivererAdminNotificationService,
+    // Pause, reprise, file, déconnexion, mise hors service (demande du 22/10).
+    DisponibiliteLivreurService,
+    DisponibiliteListener,
   ],
   exports: [
     DeliverersService,
@@ -60,6 +65,8 @@ import { DeliverersWebSocketService } from './websockets/deliverers-websocket.se
     // I-admin notif : exporté pour que les listeners auth-deliverer / queue
     // émettent les emails au moment opportun (inscription, auto-pause).
     DelivererAdminNotificationService,
+    // Filet « hors service sans signal », appelé par le module course à l'expiration d'une offre.
+    DisponibiliteLivreurService,
   ],
 })
 export class DeliverersModule {}

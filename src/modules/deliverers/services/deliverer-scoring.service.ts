@@ -14,7 +14,20 @@ import {
 } from 'src/modules/course/helpers/geo.helper';
 
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
+import { filtreLivreursPouvantRecevoirOffre } from '../helpers/disponibilite.rules';
 import { MapsService } from 'src/modules/maps/maps.service';
+
+/**
+ * CHAÎNAGE SUSPENDU (offre pendant la dernière livraison d'une course).
+ *
+ * L'appli n'affiche qu'une course : une offre acceptée pendant une livraison
+ * masque la livraison en cours, dont le code client ne peut alors plus être
+ * saisi (`getCurrentForDeliverer` rend la plus récemment acceptée). Le
+ * réglage `deliverer.chain_max_per_hour` ne le réactive plus : le chaînage
+ * reviendra avec sa propre règle et une appli qui montre la « course
+ * suivante » (lot 9 de la conception de la diffusion, 22/10).
+ */
+const CHAINAGE_SUSPENDU: boolean = true;
 
 export interface IRankInput {
   restaurantId: string;
@@ -82,7 +95,7 @@ export class DelivererScoringService {
    *
    * Deux sources fusionnées :
    *   1. **Candidats « normaux »** : livreurs en queue, sans course active.
-   *   2. **Candidats « chaînage »** : livreurs avec une course `IN_DELIVERY`
+   *   2. **Candidats « chaînage »** (SUSPENDU, voir `CHAINAGE_SUSPENDU`) : livreurs avec une course `IN_DELIVERY`
    *      dont la dernière delivery est `DELIVERED < 2 min` ou `ARRIVED`, distance
    *      au nouveau restaurant ≤ `chain_max_distance_meters`, et qui n'ont pas
    *      déjà dépassé `chain_max_per_hour` chaînages dans la dernière heure.
@@ -174,10 +187,10 @@ export class DelivererScoringService {
         ? { lat: restaurant.latitude, lng: restaurant.longitude }
         : null;
 
-    // Lance les 2 fetches en parallèle
+    // Lance les 2 fetches en parallèle (chaînage suspendu : voir CHAINAGE_SUSPENDU).
     const [regular, chainable] = await Promise.all([
       this.findRegularCandidates(restaurantId, excludeIds, now),
-      settings.chainMaxPerHour > 0
+      !CHAINAGE_SUSPENDU && settings.chainMaxPerHour > 0
         ? this.findChainableCandidates(restaurantId, excludeIds, now, settings, restaurantLoc)
         : Promise.resolve([] as IChainableCandidate[]),
     ]);
@@ -263,6 +276,12 @@ export class DelivererScoringService {
   // FETCH CANDIDATS — split regular / chainable
   // ============================================================
 
+  /**
+   * Candidats du restaurant qui peuvent recevoir une offre : la règle unique
+   * `peutRecevoirOffre` (disponibilite.rules.ts), traduite en filtre Prisma.
+   * Exclut donc aussi les livreurs hors service (`last_available_at` nul) et
+   * ceux qui ont déjà une offre en attente : jamais deux offres au même livreur.
+   */
   private async findRegularCandidates(
     restaurantId: string,
     excludeIds: string[],
@@ -270,28 +289,9 @@ export class DelivererScoringService {
   ) {
     return this.prisma.deliverer.findMany({
       where: {
+        ...filtreLivreursPouvantRecevoirOffre(now),
         restaurant_id: restaurantId,
-        status: DelivererStatus.ACTIVE,
-        is_operational: true,
-        entity_status: EntityStatus.ACTIVE,
         id: { notIn: excludeIds },
-        OR: [{ pause_until: null }, { pause_until: { lt: now } }],
-        AND: [
-          { OR: [{ auto_pause_until: null }, { auto_pause_until: { lt: now } }] },
-          {
-            courses: {
-              none: {
-                statut: {
-                  in: [
-                    CourseStatut.ACCEPTED,
-                    CourseStatut.AT_RESTAURANT,
-                    CourseStatut.IN_DELIVERY,
-                  ],
-                },
-              },
-            },
-          },
-        ],
       },
       select: {
         id: true,

@@ -14,6 +14,7 @@ import { RefuseOfferDto } from '../dto/refuse-offer.dto';
 import { CourseActionService } from '../services/course-action.service';
 import { CourseQueryService } from '../services/course-query.service';
 import { DeliveryActionService } from '../services/delivery-action.service';
+import { OffreEnAttenteService } from '../services/offre-en-attente.service';
 
 /**
  * Endpoints livreur pour le module course.
@@ -27,6 +28,7 @@ export class CourseDelivererController {
     private readonly actionService: CourseActionService,
     private readonly deliveryService: DeliveryActionService,
     private readonly queryService: CourseQueryService,
+    private readonly offreEnAttente: OffreEnAttenteService,
   ) {}
 
   // ============================================================
@@ -37,6 +39,18 @@ export class CourseDelivererController {
   @Get('me/current')
   async getCurrent(@CurrentDeliverer() deliverer: Deliverer) {
     return this.queryService.getCurrentForDeliverer(deliverer.id);
+  }
+
+  @ApiOperation({
+    summary: 'Offre en attente du livreur (ou rien)',
+    description:
+      'Même forme que l\'événement socket `course:offer:new` : `{ offer_id, course, expires_at, ' +
+      'is_chain_bonus }`. Corps vide (null) si aucune offre valable. Pour l\'appli ouverte depuis ' +
+      'une notification : le socket ne rejoue pas une offre émise pendant qu\'elle était fermée.',
+  })
+  @Get('me/offre')
+  async getOffreEnAttente(@CurrentDeliverer() deliverer: Deliverer) {
+    return this.offreEnAttente.pourLivreur(deliverer.id);
   }
 
   @ApiOperation({ summary: 'Historique des courses du livreur (COMPLETED + CANCELLED + EXPIRED)' })

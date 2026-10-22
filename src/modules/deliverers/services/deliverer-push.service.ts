@@ -15,6 +15,8 @@ export type DelivererPushType =
   | 'course_completed' // Course terminée
   | 'course_cancelled' // Course annulée
   | 'auto_paused' // Auto-pause déclenchée
+  | 'pause_rappel' // L'appli demande « disponible » pendant une pause : rien ne change
+  | 'mis_en_pause' // Offre ignorée sans aucun signal : mis hors service par le serveur
   | 'account_activated' // Admin a validé ton compte
   | 'account_rejected' // Admin a refusé la candidature
   | 'account_suspended' // Admin a suspendu le compte
@@ -253,6 +255,33 @@ export class DelivererPushService {
       type: 'auto_paused',
       title: 'Auto-pause activée',
       body: `${input.refusalCount} refus en ${input.windowMinutes} min — pause ${input.durationMinutes} min`,
+      data: {},
+      critical: true,
+    });
+  }
+
+  /**
+   * L'appli a demandé « disponible » pendant une pause (ancienne appli qui se
+   * croit disponible à l'ouverture) : le serveur garde la pause et le dit au
+   * livreur. Au plus une fois toutes les 30 minutes (DisponibiliteLivreurService).
+   */
+  notifyRappelPause(input: { delivererId: string }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'pause_rappel',
+      title: 'Tu es en pause',
+      body: 'Tu es en pause. Touche Reprendre pour recevoir des courses.',
+      data: {},
+    });
+  }
+
+  /** Offre ignorée sans aucun signal depuis longtemps : le serveur a mis le livreur en pause. */
+  notifyMisEnPause(input: { delivererId: string }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'mis_en_pause',
+      title: 'Tu as été mis en pause',
+      body: 'Tu as été mis en pause : touche Reprendre pour recevoir des courses.',
       data: {},
       critical: true,
     });

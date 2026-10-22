@@ -10,6 +10,7 @@ import type {
   CourseStatutChangedPayload,
   DeliveryStatutChangedPayload,
 } from '../interfaces/course-event.interface';
+import type { OffreExpireePayload } from '../services/offres-cloture.service';
 import { CourseWebSocketService } from '../websockets/course-websocket.service';
 
 /**
@@ -26,7 +27,7 @@ export class CourseListenerService {
   }
 
   @OnEvent(CourseChannels.COURSE_OFFER_EXPIRED)
-  onOfferExpired(payload: { course_id: string; deliverer_id: string }) {
+  onOfferExpired(payload: OffreExpireePayload) {
     this.ws.emitOfferExpired(payload);
   }
 

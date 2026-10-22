@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Patch,
   Post,
   UploadedFile,
@@ -23,6 +25,7 @@ import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { DelivererInfoService } from '../services/deliverer-info.service';
 import { DelivererRewardsService } from '../services/deliverer-rewards.service';
 import { DeliverersService } from '../services/deliverers.service';
+import { DisponibiliteLivreurService } from '../services/disponibilite-livreur.service';
 
 /**
  * Endpoints consommés par le livreur lui-même (mobile).
@@ -37,6 +40,7 @@ export class DeliverersSelfController {
     private readonly deliverersService: DeliverersService,
     private readonly delivererInfoService: DelivererInfoService,
     private readonly rewardsService: DelivererRewardsService,
+    private readonly disponibilite: DisponibiliteLivreurService,
   ) {}
 
   @ApiOperation({ summary: 'Profil livreur connecté' })
@@ -156,7 +160,8 @@ export class DeliverersSelfController {
   @ApiOperation({
     summary: 'Met le livreur en pause (bouton "Je prends une pause")',
     description:
-      '`durationMinutes` optionnel : si absent, pause indéfinie jusqu\'à appel de `/resume`.',
+      '`durationMinutes` optionnel : si absent, pause jusqu\'à « Reprendre ». Sort de la file ' +
+      'et clôt les offres en attente, sans pénalité (`course:offer:expired`, recherche relancée).',
   })
   @ApiBody({ type: PauseDelivererDto })
   @Post('pause')
@@ -164,27 +169,31 @@ export class DeliverersSelfController {
     @CurrentDeliverer() deliverer: Deliverer,
     @Body() dto: PauseDelivererDto,
   ) {
-    return this.deliverersService.pauseDeliverer(deliverer.id, dto);
+    return this.disponibilite.mettreEnPause(deliverer.id, dto);
   }
 
   @ApiOperation({
-    summary: 'Sort de pause (manuelle ou forcée)',
+    summary: 'Sort de la pause MANUELLE (premier appel de « Reprendre »)',
     description:
-      "Ne remet PAS automatiquement en queue. Le livreur doit ensuite appeler `/available`.",
+      'Ne lève jamais une pause automatique : 409 « Pause automatique jusqu\'à 14 h 32. ». ' +
+      'Ne remet PAS dans la file : le livreur appelle ensuite `/available`.',
   })
   @Post('resume')
   async resume(@CurrentDeliverer() deliverer: Deliverer) {
-    return this.deliverersService.resumeDeliverer(deliverer.id);
+    return this.disponibilite.reprendre(deliverer.id);
   }
 
   @ApiOperation({
-    summary: 'Entrée file d\'attente FIFO (prêt à recevoir des offres)',
+    summary: 'Entrée dans la file (prêt à recevoir des offres)',
     description:
-      'À appeler après une connexion, fin de pause, ou fin de course. `last_available_at = now`.',
+      'Ne lève JAMAIS une pause : pendant une pause ou une pause automatique, rien ne change et ' +
+      'la réponse est 200 `{ en_pause: true, pause_until, auto_pause_until }`. Sinon ' +
+      '`last_available_at` est posé s\'il était vide : le livreur garde sa place dans la file.',
   })
   @Post('available')
+  @HttpCode(HttpStatus.OK)
   async markAvailable(@CurrentDeliverer() deliverer: Deliverer) {
-    return this.deliverersService.markAvailable(deliverer.id);
+    return this.disponibilite.marquerDisponible(deliverer.id);
   }
 
   @ApiOperation({

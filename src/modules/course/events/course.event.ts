@@ -10,6 +10,7 @@ import type {
   CourseStatutChangedPayload,
   DeliveryStatutChangedPayload,
 } from '../interfaces/course-event.interface';
+import type { OffreExpireePayload } from '../services/offres-cloture.service';
 
 /**
  * Émetteur d'événements internes du module course (pattern OrderEvent).
@@ -23,8 +24,13 @@ export class CourseEvent {
     this.eventEmitter.emit(CourseChannels.COURSE_OFFER_NEW, payload);
   }
 
-  async offerExpired(payload: { course_id: string; deliverer_id: string }) {
+  async offerExpired(payload: OffreExpireePayload) {
     this.eventEmitter.emit(CourseChannels.COURSE_OFFER_EXPIRED, payload);
+  }
+
+  /** Refus explicite d'une offre par le livreur (journal de la diffusion). */
+  async offerRefused(payload: { course_id: string; deliverer_id: string; raison?: string | null }) {
+    this.eventEmitter.emit(CourseChannels.COURSE_OFFER_REFUSED, payload);
   }
 
   async courseAssigned(payload: CourseAssignedPayload) {

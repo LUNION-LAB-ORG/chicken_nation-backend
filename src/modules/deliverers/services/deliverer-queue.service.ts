@@ -5,6 +5,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 
 import { DelivererEvent } from '../events/deliverer.event';
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
+import { estEnPause, estEnPauseAuto } from '../helpers/disponibilite.rules';
 import { DelivererPushService } from './deliverer-push.service';
 
 /**
@@ -47,7 +48,8 @@ export class DelivererQueueService {
   /**
    * Course terminée (toutes deliveries DELIVERED / FAILED / CANCELLED).
    * Remet le livreur en queue SEULEMENT s'il n'est ni en pause ni en auto-pause
-   * (ne pas contourner la volonté du livreur ou la sanction).
+   * (ne pas contourner la volonté du livreur ou la sanction). Pause lue par la
+   * règle unique (disponibilite.rules.ts).
    */
   async onComplete(delivererId: string): Promise<void> {
     const now = new Date();
@@ -57,11 +59,7 @@ export class DelivererQueueService {
     });
     if (!deliverer) return;
 
-    const inPause = deliverer.pause_until !== null && deliverer.pause_until > now;
-    const inAutoPause =
-      deliverer.auto_pause_until !== null && deliverer.auto_pause_until > now;
-
-    if (inPause || inAutoPause) {
+    if (estEnPause(deliverer, now) || estEnPauseAuto(deliverer, now)) {
       this.logger.debug(
         `Deliverer ${delivererId.slice(0, 8)} completed en pause/auto-pause → pas de remise en queue`,
       );

@@ -6,8 +6,15 @@ export enum CourseChannels {
   /** Nouvelle offer envoyée à un livreur (push vers `deliverer_{id}`) */
   COURSE_OFFER_NEW = 'course:offer:new',
 
-  /** Offer expirée sans réponse */
+  /**
+   * Offre fermée : expirée sans réponse (`motif: 'EXPIREE'`) ou close par le
+   * serveur sans pénalité (motif de clôture). Relayée au livreur, dont l'appli
+   * ferme l'offre affichée.
+   */
   COURSE_OFFER_EXPIRED = 'course:offer:expired',
+
+  /** Offre refusée par le livreur. INTERNE (journal), pas relayée aux sockets. */
+  COURSE_OFFER_REFUSED = 'course:offer:refused',
 
   /** Livreur a accepté l'offer — devient sa course active */
   COURSE_ASSIGNED = 'course:assigned',

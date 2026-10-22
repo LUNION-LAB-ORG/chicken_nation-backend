@@ -29,6 +29,7 @@ import {
   sallesLivreursARetirer,
   salleUtilisateur,
 } from '../utils/salles.util';
+import { EVENEMENT_LIVREUR_CONNECTE } from '../utils/evenements-connexion.util';
 
 // Interface pour le cache
 interface CachedUser {
@@ -113,6 +114,8 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // soit connecté.
       if (userInfo.type === 'deliverer') {
         void this.sendPendingPresenceCheck(client, userInfo.id);
+        // Offre en attente : renvoyée par le module course (DispatchListener).
+        this.eventEmitter.emit(EVENEMENT_LIVREUR_CONNECTE, { delivererId: userInfo.id });
       }
 
       // Pour les agents support (type='user') : émettre un event pour que le module

@@ -17,6 +17,7 @@ import { EnvoisOtpService } from 'src/modules/auth/otp/envois-otp.service';
 import { OtpService } from 'src/modules/auth/otp/otp.service';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { TwilioService } from 'src/twilio/services/twilio.service';
+import { DelivererChannels } from 'src/modules/deliverers/enums/deliverer-channels';
 
 import { CompleteRegistrationDto } from '../dto/complete-registration.dto';
 import { DeleteAccountDto } from '../dto/delete-account.dto';
@@ -326,11 +327,26 @@ export class AuthDelivererService {
     return { token };
   }
 
+  /**
+   * Déconnexion : révoque le jeton de renouvellement, puis met le livreur hors
+   * service (sorti de la file, pause « jusqu'à Reprendre »), efface son jeton
+   * de notification et clôt ses offres en attente. Ce second temps vit dans le
+   * module des livreurs (DisponibiliteLivreurService), joint par le bus
+   * interne et attendu ; un échec y est journalisé sans empêcher la
+   * déconnexion.
+   */
   async logout(delivererId: string) {
     await this.prisma.deliverer.update({
       where: { id: delivererId },
       data: { refresh_token: null },
     });
+    try {
+      await this.eventEmitter.emitAsync(DelivererChannels.DELIVERER_LOGGED_OUT, { delivererId });
+    } catch (err) {
+      this.logger.error(
+        `Mise hors service à la déconnexion de ${delivererId.slice(0, 8)} impossible : ${(err as Error)?.message}`,
+      );
+    }
     return { message: 'Déconnexion réussie' };
   }
 

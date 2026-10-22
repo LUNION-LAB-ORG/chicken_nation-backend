@@ -170,6 +170,10 @@ enum CourseOfferStatus {
   ACCEPTED // Acceptée (devient la course active du livreur)
   REFUSED // Refusée explicitement
   EXPIRED // Pas de réponse dans le délai imparti
+  /// Close par le serveur, SANS pénalité : le livreur s'est mis en pause ou
+  /// s'est déconnecté, ou la course a été fusionnée, confiée à Turbo, annulée
+  /// ou n'est plus en recherche. Motif dans `DispatchEvenement`.
+  CANCELLED
 }
 
 enum TypeTable {
@@ -515,6 +519,19 @@ model Deliverer {
 
   // Pause forcée après N refus consécutifs en X min (auto_pause_*).
   auto_pause_until DateTime? @db.Timestamp(6)
+
+  // Dernier signe de vie du livreur : position reçue ou requête authentifiée,
+  // écrit au plus une fois par minute. Un livreur qui laisse expirer une offre
+  // sans aucun signal depuis `deliverer.hors_service_sans_signal_min` passe
+  // hors service (disponibilite.rules.ts).
+  dernier_signal_at DateTime? @db.Timestamp(6)
+  // Version du protocole de l'appli, lue dans l'en-tête `x-deli-protocole`
+  // de chaque requête : 1 = ancienne appli (en-tête absent), 2 = appli qui lit
+  // sa pause au serveur. Null = aucune requête depuis l'ajout du champ.
+  protocole_appli   Int?
+  // Dernier rappel « Tu es en pause » envoyé quand l'appli demande à être
+  // disponible pendant une pause : au plus un toutes les 30 minutes.
+  rappel_pause_at   DateTime? @db.Timestamp(6)
 
   // Pénalité queue après un refus : descend de N positions pendant X min.
   queue_penalty_until     DateTime? @db.Timestamp(6)
@@ -3810,4 +3827,35 @@ model OrderRelanceJournal {
 
   @@index([order_id, created_at])
   @@index([user_id, created_at])
+}
+
+/// JOURNAL DE LA DIFFUSION DES OFFRES : une ligne par décision (offre proposée,
+/// acceptée, refusée, expirée, close avec son motif ; pause, reprise, refus de
+/// disponibilité pendant une pause, déconnexion, mise hors service…).
+///
+/// Sans clé étrangère, comme `audit_logs` : une ligne doit survivre à la
+/// suppression de sa course, et son écriture ne doit jamais faire échouer
+/// l'action métier. Les journaux Docker ne gardent que 30 Mo par conteneur :
+/// cette table est la source des mesures.
+model DispatchEvenement {
+  id            String   @id @default(uuid()) @db.Uuid
+  /// OFFRE_PROPOSEE | OFFRE_ACCEPTEE | OFFRE_CLOSE | PAUSE | DISPONIBLE_REFUSE_EN_PAUSE | … (dispatch-journal.service.ts)
+  type          String   @db.VarChar(60)
+  /// Raison de la décision (motif de clôture, de refus…).
+  motif         String?  @db.VarChar(60)
+  /// appli | serveur | admin | caisse | restaurant
+  source        String?  @db.VarChar(20)
+  restaurant_id String?  @db.Uuid
+  course_id     String?  @db.Uuid
+  deliverer_id  String?  @db.Uuid
+  order_id      String?  @db.Uuid
+  offre_id      String?  @db.Uuid
+  details       Json?
+  created_at    DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([created_at])
+  @@index([type, created_at])
+  @@index([deliverer_id, created_at])
+  @@index([restaurant_id, created_at])
+  @@index([course_id])
 }

@@ -1,3 +1,4 @@
+import { EVENEMENT_LIVREUR_CONNECTE } from '../utils/evenements-connexion.util';
 import { AppGateway } from './app.gateway';
 
 /**
@@ -38,7 +39,7 @@ function creerPasserelle() {
   const gateway = new AppGateway(prisma as never, jwt as never, eventEmitter as never);
   const { server, emissions } = fauxServeur();
   gateway.server = server as never;
-  return { gateway, prisma, jwt, server, emissions };
+  return { gateway, prisma, jwt, server, emissions, eventEmitter };
 }
 
 function fauxClient(type: string, id = 'socket-1') {
@@ -64,6 +65,16 @@ describe('AppGateway', () => {
       expect(client.disconnect).not.toHaveBeenCalled();
       expect(client.join).toHaveBeenCalledTimes(1);
       expect(client.join).toHaveBeenCalledWith(['deliverer_d1', 'livreurs_restaurant_r1']);
+    });
+
+    it('livreur : annonce sa connexion pour que son offre en attente lui soit renvoyée', async () => {
+      const { gateway, prisma, jwt, eventEmitter } = creerPasserelle();
+      jwt.verifyToken.mockResolvedValue({ sub: 'd1' });
+      prisma.deliverer.findUnique.mockResolvedValue({ id: 'd1', restaurant_id: 'r1' });
+
+      await gateway.handleConnection(fauxClient('deliverer') as never);
+
+      expect(eventEmitter.emit).toHaveBeenCalledWith(EVENEMENT_LIVREUR_CONNECTE, { delivererId: 'd1' });
     });
 
     it('personnel du point de vente : la salle de son restaurant', async () => {

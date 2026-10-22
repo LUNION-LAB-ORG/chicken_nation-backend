@@ -22,6 +22,7 @@ import { DelivererScoringSettingsHelper } from 'src/modules/deliverers/helpers/d
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer-queue.service';
 import { DelivererScoringService } from 'src/modules/deliverers/services/deliverer-scoring.service';
+import { filtreLivreursPouvantRecevoirOffre } from 'src/modules/deliverers/helpers/disponibilite.rules';
 
 import { CourseEvent } from '../events/course.event';
 import { CourseHelper } from '../helpers/course.helper';
@@ -281,28 +282,16 @@ export class CourseOfferService {
     };
   }
 
-  /** Ancien algo (avant P4) — conservé pour le shadow mode P6d. */
+  /**
+   * Ancien algo (avant P4), conservé pour le shadow mode P6d, où il DÉCIDE.
+   * Même règle que la sélection : `peutRecevoirOffre` (disponibilite.rules.ts).
+   */
   private async findBestDelivererLegacy(restaurantId: string, excludedIds: string[]) {
-    const now = new Date();
     return this.prisma.deliverer.findFirst({
       where: {
+        ...filtreLivreursPouvantRecevoirOffre(new Date()),
         restaurant_id: restaurantId,
-        is_operational: true,
-        status: 'ACTIVE',
-        entity_status: EntityStatus.ACTIVE,
         id: { notIn: excludedIds },
-        // Exclure les livreurs en pause manuelle ou en pause automatique (refus répétés)
-        AND: [
-          { OR: [{ pause_until: null }, { pause_until: { lt: now } }] },
-          { OR: [{ auto_pause_until: null }, { auto_pause_until: { lt: now } }] },
-        ],
-        courses: {
-          none: {
-            statut: {
-              in: [CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT, CourseStatut.IN_DELIVERY],
-            },
-          },
-        },
       },
       orderBy: { last_login_at: 'desc' },
       select: { id: true },
@@ -408,6 +397,7 @@ export class CourseOfferService {
       // Pour un re-send : réutiliser l'expiry actuelle (non modifiée)
       expires_at: wasExisting ? (course as any).offer_expires_at ?? expiresAt : expiresAt,
       is_chain_bonus: isChainBonus,
+      renvoi: wasExisting,
     });
 
     // P-push livreur : push CRITIQUE pour réveiller le livreur même app fermée.
@@ -455,6 +445,13 @@ export class CourseOfferService {
           `Pénalité queue échouée pour ${e.deliverer_id}: ${(err as Error).message}`,
         );
       }
+      // L'appli ferme l'offre affichée ; DispatchListener journalise et applique
+      // le filet « hors service sans signal ».
+      void this.courseEvent.offerExpired({
+        course_id: e.course_id,
+        deliverer_id: e.deliverer_id,
+        motif: 'EXPIREE',
+      });
     }
 
     // Incrémenter refusal_count + retry pour chaque course

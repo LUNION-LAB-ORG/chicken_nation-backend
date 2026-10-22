@@ -16,7 +16,6 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { S3Service } from 'src/s3/s3.service';
 
 import { AssignRestaurantDto } from '../dto/assign-restaurant.dto';
-import { PauseDelivererDto } from '../dto/pause-deliverer.dto';
 import { QueryDeliverersDto } from '../dto/query-deliverers.dto';
 import { UpdateDelivererLocationDto } from '../dto/update-location.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
@@ -485,6 +484,8 @@ export class DeliverersService {
         last_location_at: now,
         last_speed_kmh: validatedSpeed,
         last_heading_deg: dto.heading ?? null,
+        // Une position reçue est un signe de vie (filet hors service sans signal).
+        dernier_signal_at: now,
       },
       select: {
         id: true,
@@ -515,88 +516,8 @@ export class DeliverersService {
     return updated;
   }
 
-  /**
-   * Mise en pause manuelle via bouton mobile. `durationMinutes` optionnel :
-   * si absent → pause indéfinie jusqu'à appel de `resume()`.
-   * Effet : exclut le livreur du scoring. Sort aussi de la queue FIFO.
-   */
-  async pauseDeliverer(delivererId: string, dto: PauseDelivererDto) {
-    const pauseUntil = dto.durationMinutes
-      ? new Date(Date.now() + dto.durationMinutes * 60 * 1000)
-      : new Date('2099-12-31T23:59:59Z'); // pause indéfinie = date lointaine
-
-    const updated = await this.prisma.deliverer.update({
-      where: { id: delivererId },
-      data: {
-        pause_until: pauseUntil,
-        // Sortie automatique de la queue FIFO — on ne veut plus d'offres
-        last_available_at: null,
-      },
-      select: {
-        id: true,
-        pause_until: true,
-        last_available_at: true,
-        restaurant_id: true,
-      },
-    });
-
-    // Notifie tous les livreurs du restaurant → recalcul du rang en temps réel
-    this.delivererEvent.queueChanged(updated.id, updated.restaurant_id);
-
-    return updated;
-  }
-
-  /**
-   * Sortie de pause (manuelle ou forcée). Clear les 2 champs de pause.
-   * NE remet PAS automatiquement en queue — le livreur doit explicitement
-   * appeler `markAvailable()` pour signifier « je reprends, je suis prêt ».
-   */
-  async resumeDeliverer(delivererId: string) {
-    const updated = await this.prisma.deliverer.update({
-      where: { id: delivererId },
-      data: {
-        pause_until: null,
-        auto_pause_until: null,
-      },
-      select: {
-        id: true,
-        pause_until: true,
-        auto_pause_until: true,
-        restaurant_id: true,
-      },
-    });
-
-    // Notifie tous les livreurs du restaurant → recalcul du rang en temps réel
-    this.delivererEvent.queueChanged(updated.id, updated.restaurant_id);
-
-    return updated;
-  }
-
-  /**
-   * Livreur entre dans la file d'attente FIFO — il est prêt à recevoir des offres.
-   * Utilisé à la connexion initiale, en fin de pause, ou en fin de course.
-   * `last_available_at = now` → il se retrouve en queue de liste (FIFO ASC).
-   */
-  async markAvailable(delivererId: string) {
-    const updated = await this.prisma.deliverer.update({
-      where: { id: delivererId },
-      data: {
-        last_available_at: new Date(),
-        pause_until: null,
-        auto_pause_until: null,
-      },
-      select: {
-        id: true,
-        last_available_at: true,
-        restaurant_id: true,
-      },
-    });
-
-    // Notifie tous les livreurs du restaurant → recalcul du rang en temps réel
-    this.delivererEvent.queueChanged(updated.id, updated.restaurant_id);
-
-    return updated;
-  }
+  // Pause, reprise, entrée dans la file et déconnexion : DisponibiliteLivreurService
+  // (la pause enregistrée au serveur est la seule vérité, demande du 22/10).
 
   /**
    * Livreur sort de la file d'attente (sans être en pause stricto sensu).
