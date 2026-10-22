@@ -172,6 +172,7 @@ export function monterBase(donnees: { livreurs?: Ligne[]; courses?: Ligne[]; off
   const courses = donnees.courses ?? [];
   const offres = donnees.offres ?? [];
   const journal: Ligne[] = [];
+  const verrous: unknown[][] = [];
 
   const vueLivreur = (d: Ligne): Ligne => ({
     ...d,
@@ -247,9 +248,18 @@ export function monterBase(donnees: { livreurs?: Ligne[]; courses?: Ligne[]; off
         return ligne;
       }),
     },
+    // Verrous consultatifs notés ; transaction sans annulation (aucun test ici
+    // n'en a besoin, voir base-dispatch.simulee-spec.ts pour la version complète).
+    $executeRaw: jest.fn(async (_sql: TemplateStringsArray, ...valeurs: unknown[]) => {
+      verrous.push(valeurs);
+      return 1;
+    }),
+    $transaction: jest.fn(async (arg: unknown) =>
+      Array.isArray(arg) ? Promise.all(arg) : (arg as (tx: unknown) => Promise<unknown>)(prisma),
+    ),
   };
 
-  return { prisma, livreurs, courses, offres, journal };
+  return { prisma, livreurs, courses, offres, journal, verrous };
 }
 
 /** Faux bus d'événements : garde chaque émission. */

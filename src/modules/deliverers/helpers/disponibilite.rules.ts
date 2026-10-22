@@ -192,6 +192,74 @@ export function messagePauseAuto(autoPauseUntil: Date, maintenant: Date): string
   return `Pause automatique${jusqua(autoPauseUntil, maintenant)}.`;
 }
 
+// ============================================================
+// AFFICHAGE AU BACKOFFICE (liste des livreurs, carte, affectation forcée)
+// ============================================================
+
+/** État d'un livreur pour l'affichage : disponible, ou la raison du refus. */
+export type EtatAffichageLivreur = 'DISPONIBLE' | MotifRefusOffre;
+
+/** Ce que le serveur renvoie à côté de chaque livreur (champ `disponibilite`). */
+export interface DisponibiliteLivreur {
+  etat: EtatAffichageLivreur;
+  /** Texte à afficher tel quel : « En pause jusqu'à 14 h 32 », « Hors service »… */
+  libelle: string;
+  /** Peut recevoir une offre (et donc une affectation forcée) maintenant. */
+  peut_recevoir_offre: boolean;
+  /** Raison du refus d'une affectation forcée, telle que le serveur la renverrait (409). */
+  message_refus: string | null;
+  en_pause: boolean;
+  en_pause_auto: boolean;
+  pause_until: Date | null;
+  auto_pause_until: Date | null;
+  /** Dans la file (`last_available_at` non nul). */
+  en_service: boolean;
+  en_course: boolean;
+  offre_en_attente: boolean;
+  /** Course de l'offre en attente : l'affectation forcée sur CETTE course reste permise (renvoi). */
+  offre_course_id: string | null;
+}
+
+const LIBELLES: Record<EtatAffichageLivreur, string> = {
+  DISPONIBLE: 'Disponible',
+  INACTIF: 'Inactif',
+  EN_PAUSE: 'En pause',
+  PAUSE_AUTO: 'Pause automatique',
+  EN_COURSE: 'En course',
+  OFFRE_EN_ATTENTE: 'Offre en attente',
+  HORS_SERVICE: 'Hors service',
+};
+
+/**
+ * État d'un livreur à afficher au backoffice, calculé par la règle unique :
+ * l'écran montre exactement ce que le serveur refuserait.
+ */
+export function disponibiliteLivreur(
+  l: EtatLivreur,
+  maintenant: Date,
+  offreCourseId: string | null = null,
+): DisponibiliteLivreur {
+  const decision = peutRecevoirOffre(l, maintenant);
+  const etat: EtatAffichageLivreur = decision.ok ? 'DISPONIBLE' : decision.motif;
+  let libelle = LIBELLES[etat];
+  if (etat === 'EN_PAUSE') libelle += jusqua(l.pause_until, maintenant);
+  if (etat === 'PAUSE_AUTO') libelle += jusqua(l.auto_pause_until, maintenant);
+  return {
+    etat,
+    libelle,
+    peut_recevoir_offre: decision.ok,
+    message_refus: decision.ok ? null : messageRefusOffre(decision.motif, l, maintenant),
+    en_pause: estEnPause(l, maintenant),
+    en_pause_auto: estEnPauseAuto(l, maintenant),
+    pause_until: l.pause_until,
+    auto_pause_until: l.auto_pause_until,
+    en_service: estEnService(l),
+    en_course: l.en_course,
+    offre_en_attente: l.offre_en_attente,
+    offre_course_id: l.offre_en_attente ? offreCourseId : null,
+  };
+}
+
 /**
  * Raison, en français, pour laquelle un livreur ne peut pas recevoir d'offre
  * (refus de l'affectation forcée, affichage au backoffice).

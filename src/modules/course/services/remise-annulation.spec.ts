@@ -1,0 +1,416 @@
+/**
+ * Bouton de la caisse « Livreur a récupéré » raccordé à la course, et
+ * annulation automatique qui n'annule JAMAIS une commande de client.
+ *
+ * Avant : le bouton passait la commande PICKED_UP sans toucher la course,
+ * restée acceptée ou au restaurant ; au bout de 30 min, la tâche
+ * `autoCancelStuckCourses` l'annulait, commandes des clients comprises.
+ * Principe du projet : « une commande ne s'annule que manuellement ».
+ */
+import { ConflictException } from '@nestjs/common';
+import { CourseStatut, DeliveryStatut, OrderStatus, OrderType } from '@prisma/client';
+
+import { busSimule } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
+
+import { CourseHelper } from '../helpers/course.helper';
+import { RemiseCaisseListener } from '../listeners/remise-caisse.listener';
+import { CourseTask } from '../tasks/course.task';
+import { AnnulationAutoService } from './annulation-auto.service';
+import {
+  DonneesDispatch,
+  RESTO,
+  courseAvecCommandes,
+  livreur,
+  monterBaseDispatch,
+} from './base-dispatch.simulee-spec';
+import { CourseActionService } from './course-action.service';
+import { CourseEnLivraisonService } from './course-en-livraison.service';
+import { CourseOfferService } from './course-offer.service';
+import { DispatchJournalService } from './dispatch-journal.service';
+import { GardeOffresService } from './garde-offres.service';
+import { OffresClotureService } from './offres-cloture.service';
+
+const MAINTENANT = new Date('2026-10-22T14:00:00.000Z');
+const avant = (min: number) => new Date(MAINTENANT.getTime() - min * 60_000);
+
+function monter(donnees: DonneesDispatch) {
+  const base = monterBaseDispatch(donnees);
+  const { bus } = busSimule();
+  const journal = new DispatchJournalService(base.prisma);
+  const cloture = new OffresClotureService(base.prisma, bus as never, journal);
+  const garde = new GardeOffresService(base.prisma, cloture, journal);
+  const courseEvent = {
+    offerNew: jest.fn(async () => undefined),
+    courseStatutChanged: jest.fn(async () => undefined),
+    courseCancelled: jest.fn(async () => undefined),
+  };
+  const push = {
+    notifyPickupValidated: jest.fn(),
+    notifyCourseCancelled: jest.fn(),
+    notifyNewCourseOffer: jest.fn(),
+  };
+  const offres = new CourseOfferService(
+    base.prisma,
+    courseEvent as never,
+    new CourseHelper(),
+    { load: jest.fn(async () => ({ offerDurationSeconds: 120, maxRefusalCount: 5 })) } as never,
+    { pickBestCandidate: jest.fn(async () => null) } as never,
+    {} as never,
+    { load: jest.fn(async () => ({ scoringShadowMode: false })) } as never,
+    push as never,
+    {} as never,
+    {} as never,
+    garde,
+  );
+  const offerNext = jest.spyOn(offres, 'offerNextDeliverer');
+  const queryService = { findByActivePickupCode: jest.fn() };
+  const actions = new CourseActionService(
+    base.prisma,
+    courseEvent as never,
+    offres,
+    {} as never,
+    push as never,
+    { confirmerRetrait: jest.fn(async () => undefined) } as never,
+    {} as never,
+    queryService as never,
+    garde,
+  );
+  const estimation = jest.spyOn(actions, 'estimerDureeTournee').mockResolvedValue(undefined);
+  const enLivraison = new CourseEnLivraisonService(base.prisma, courseEvent as never, push as never, actions, journal);
+  const annulationAuto = new AnnulationAutoService(
+    base.prisma,
+    courseEvent as never,
+    push as never,
+    enLivraison,
+    offres,
+    journal,
+  );
+  const ecouteur = new RemiseCaisseListener(enLivraison);
+  return { ...base, courseEvent, push, offres, offerNext, actions, queryService, estimation, enLivraison, annulationAuto, ecouteur };
+}
+
+/** Ce que `PATCH /orders/:id/status` émet après avoir passé la commande PICKED_UP. */
+const commandeRemise = (o: Record<string, any>) =>
+  ({ order: { ...o, status: OrderStatus.PICKED_UP, type: OrderType.DELIVERY } }) as never;
+
+beforeEach(() => {
+  jest.useFakeTimers({ now: MAINTENANT, doNotFake: ['nextTick', 'setImmediate'] });
+});
+afterEach(() => {
+  jest.useRealTimers();
+  jest.restoreAllMocks();
+});
+
+// ============================================================
+// BOUTON « LIVREUR A RÉCUPÉRÉ »
+// ============================================================
+
+describe('bouton de la caisse « Livreur a récupéré » (PATCH /orders/:id/status → PICKED_UP)', () => {
+  it('course au restaurant : elle part en livraison comme par le code ; l’autre commande reste à remettre', async () => {
+    const d = livreur({ last_available_at: null });
+    const arrivee = avant(6);
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.AT_RESTAURANT, deliverer_id: d.id, assigned_at: avant(15), at_restaurant_at: arrivee },
+      [OrderStatus.READY, OrderStatus.READY],
+    );
+    const t = monter({ livreurs: [d], courses: [c], commandes, livraisons });
+    commandes[0].status = OrderStatus.PICKED_UP; // écrit par updateStatus avant l'événement
+
+    await t.ecouteur.onStatutCommande(commandeRemise(commandes[0]));
+
+    expect(c).toMatchObject({
+      statut: CourseStatut.IN_DELIVERY,
+      picked_up_at: MAINTENANT,
+      at_restaurant_at: arrivee,
+    });
+    expect(commandes[1].status).toBe(OrderStatus.READY);
+    expect(livraisons.map((l) => l.statut)).toEqual([DeliveryStatut.PENDING, DeliveryStatut.PENDING]);
+    expect(t.courseEvent.courseStatutChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ previous_statut: CourseStatut.AT_RESTAURANT, new_statut: CourseStatut.IN_DELIVERY }),
+    );
+    expect(t.push.notifyPickupValidated).toHaveBeenCalledWith({
+      delivererId: d.id,
+      courseReference: c.reference,
+      courseId: c.id,
+    });
+    expect(t.estimation).toHaveBeenCalledWith(c.id);
+    expect(t.journal).toEqual([
+      expect.objectContaining({
+        type: 'COURSE_EN_LIVRAISON_PAR_CAISSE',
+        source: 'caisse',
+        course_id: c.id,
+        order_id: commandes[0].id,
+        deliverer_id: d.id,
+        restaurant_id: RESTO,
+      }),
+    ]);
+
+    // Seconde commande remise par le même bouton : la course est déjà partie, rien de plus.
+    commandes[1].status = OrderStatus.PICKED_UP;
+    await t.ecouteur.onStatutCommande(commandeRemise(commandes[1]));
+    expect(t.courseEvent.courseStatutChanged).toHaveBeenCalledTimes(1);
+    expect(t.push.notifyPickupValidated).toHaveBeenCalledTimes(1);
+  });
+
+  it('course acceptée, livreur pas vu au restaurant par le GPS : arrivée tracée au retrait', async () => {
+    const d = livreur({ last_available_at: null });
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.ACCEPTED, deliverer_id: d.id, assigned_at: avant(10) },
+      [OrderStatus.READY],
+    );
+    const t = monter({ livreurs: [d], courses: [c], commandes, livraisons });
+
+    await t.ecouteur.onStatutCommande(commandeRemise(commandes[0]));
+
+    expect(c).toMatchObject({ statut: CourseStatut.IN_DELIVERY, at_restaurant_at: MAINTENANT, picked_up_at: MAINTENANT });
+  });
+
+  it('course confiée à Turbo, course sans livreur, commande à emporter : la course ne bouge pas', async () => {
+    const turbo = courseAvecCommandes(
+      { statut: CourseStatut.AT_RESTAURANT, turbo_escalated_at: avant(20) },
+      [OrderStatus.READY],
+    );
+    const sansLivreur = courseAvecCommandes({}, [OrderStatus.READY]);
+    const t = monter({
+      courses: [turbo.course, sansLivreur.course],
+      commandes: [...turbo.commandes, ...sansLivreur.commandes],
+      livraisons: [...turbo.livraisons, ...sansLivreur.livraisons],
+    });
+
+    await t.ecouteur.onStatutCommande(commandeRemise(turbo.commandes[0]));
+    await t.ecouteur.onStatutCommande(commandeRemise(sansLivreur.commandes[0]));
+    await t.ecouteur.onStatutCommande({
+      order: { ...sansLivreur.commandes[0], status: OrderStatus.PICKED_UP, type: OrderType.PICKUP },
+    } as never);
+
+    expect(turbo.course.statut).toBe(CourseStatut.AT_RESTAURANT);
+    expect(sansLivreur.course.statut).toBe(CourseStatut.PENDING_ASSIGNMENT);
+    expect(t.courseEvent.courseStatutChanged).not.toHaveBeenCalled();
+    // Course encore sans livreur : anomalie journalisée, une seule fois (la commande à emporter est ignorée).
+    expect(t.journal.map((l) => l.type)).toEqual(['REMISE_CAISSE_SANS_LIVREUR']);
+  });
+
+  it('code validé en même temps que le bouton : la course ne part qu’une fois, la caisse reçoit 409', async () => {
+    const d = livreur({ last_available_at: null });
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.AT_RESTAURANT, deliverer_id: d.id },
+      [OrderStatus.READY],
+    );
+    const t = monter({ livreurs: [d], courses: [c], commandes, livraisons });
+    // La caisse a lu la course « au restaurant »…
+    const lueParLaCaisse = { ...c, deliveries: [{ order: { ...commandes[0] } }] };
+    t.queryService.findByActivePickupCode.mockResolvedValue(lueParLaCaisse);
+    // … pendant que le bouton la faisait partir.
+    await t.ecouteur.onStatutCommande(commandeRemise(commandes[0]));
+
+    expect(await t.actions.validatePickupByCashier({ pickup_code: '421' } as never, undefined).catch((e) => e)).toEqual(
+      new ConflictException("Cette course vient d'être remise au livreur."),
+    );
+    expect(t.push.notifyPickupValidated).toHaveBeenCalledTimes(1);
+    expect(t.courseEvent.courseStatutChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('code validé entre la lecture et l’écriture du bouton : la course ne repart pas une seconde fois', async () => {
+    const d = livreur({ last_available_at: null });
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.AT_RESTAURANT, deliverer_id: d.id },
+      [OrderStatus.READY],
+    );
+    const t = monter({ livreurs: [d], courses: [c], commandes, livraisons });
+    const lire = t.prisma.course.findUnique.getMockImplementation();
+    t.prisma.course.findUnique.mockImplementationOnce(async (args: any) => {
+      const lue = await lire(args);
+      // La caisse valide le code juste après la lecture du bouton.
+      Object.assign(c, { statut: CourseStatut.IN_DELIVERY, picked_up_at: new Date('2026-10-22T13:59:00.000Z') });
+      return lue;
+    });
+
+    expect(await t.enLivraison.passerEnLivraison(c.id)).toEqual({ passee: false, detachees: [] });
+    expect(c.picked_up_at).toEqual(new Date('2026-10-22T13:59:00.000Z'));
+    expect(t.courseEvent.courseStatutChanged).not.toHaveBeenCalled();
+    expect(t.push.notifyPickupValidated).not.toHaveBeenCalled();
+  });
+
+  it('code validé d’abord : le bouton ne fait rien de plus', async () => {
+    const d = livreur({ last_available_at: null });
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.AT_RESTAURANT, deliverer_id: d.id },
+      [OrderStatus.READY],
+    );
+    const t = monter({ livreurs: [d], courses: [c], commandes, livraisons });
+    t.queryService.findByActivePickupCode.mockResolvedValue({ ...c, deliveries: [{ order: { ...commandes[0] } }] });
+
+    await t.actions.validatePickupByCashier({ pickup_code: '421' } as never, undefined);
+    await t.ecouteur.onStatutCommande(commandeRemise(commandes[0]));
+
+    expect(c.statut).toBe(CourseStatut.IN_DELIVERY);
+    expect(t.push.notifyPickupValidated).toHaveBeenCalledTimes(1);
+    expect(t.journal).toEqual([]);
+  });
+});
+
+// ============================================================
+// ANNULATION AUTOMATIQUE
+// ============================================================
+
+describe('annulation automatique d’une course bloquée (tâche de 5 min)', () => {
+  it('rien de remis : course annulée, commandes INTACTES et relancées dans une nouvelle course', async () => {
+    const d = livreur({ last_available_at: null });
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.AT_RESTAURANT, deliverer_id: d.id, total_delivery_fee: 2000 },
+      [OrderStatus.READY, OrderStatus.READY],
+    );
+    const t = monter({ livreurs: [d], courses: [c], commandes, livraisons });
+
+    const resultat = await t.annulationAuto.annulerAutomatiquement(c.id, 'Annulation automatique : test');
+
+    expect(c).toMatchObject({
+      statut: CourseStatut.CANCELLED,
+      cancelled_by: 'system',
+      cancelled_reason: 'Annulation automatique : test',
+    });
+    // Jamais une commande de client.
+    expect(commandes.map((o) => o.status)).toEqual([OrderStatus.READY, OrderStatus.READY]);
+    expect(commandes.every((o) => o.cancelled_at === null)).toBe(true);
+    // Relancées dans une NOUVELLE course, référence neuve, livraisons déplacées.
+    const nouvelle = t.courses.find((x) => x.id !== c.id)!;
+    expect(nouvelle).toMatchObject({ statut: CourseStatut.PENDING_ASSIGNMENT, total_delivery_fee: 2000 });
+    expect(nouvelle.reference).not.toBe(c.reference);
+    expect(livraisons.map((l) => [l.course_id, l.statut])).toEqual([
+      [nouvelle.id, DeliveryStatut.PENDING],
+      [nouvelle.id, DeliveryStatut.PENDING],
+    ]);
+    expect(t.offerNext).toHaveBeenCalledWith(nouvelle.id);
+    expect(c.total_delivery_fee).toBe(0);
+    // Livreur et écrans prévenus ; DispatchListener remettra le livreur dans la file.
+    expect(t.courseEvent.courseCancelled).toHaveBeenCalledWith(
+      expect.objectContaining({ cancelled_by: 'system', reason: 'Annulation automatique : test' }),
+    );
+    expect(t.push.notifyCourseCancelled).toHaveBeenCalledWith(
+      expect.objectContaining({ delivererId: d.id, cancelledBy: 'le système' }),
+    );
+    expect(resultat).toEqual({
+      issue: 'ANNULEE',
+      commandes_remises: [],
+      commandes_relancees: commandes.map((o) => o.reference),
+      nouvelle_course_id: nouvelle.id,
+    });
+    expect(t.journal).toEqual([
+      expect.objectContaining({ type: 'ANNULATION_AUTO_COMMANDES_GARDEES', motif: 'ANNULEE', course_id: c.id }),
+    ]);
+  });
+
+  it('une commande déjà remise : la course part en livraison avec elle, l’autre est relancée', async () => {
+    const d = livreur({ last_available_at: null });
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.AT_RESTAURANT, deliverer_id: d.id, total_delivery_fee: 2000 },
+      [OrderStatus.PICKED_UP, OrderStatus.READY],
+    );
+    const t = monter({ livreurs: [d], courses: [c], commandes, livraisons });
+
+    const resultat = await t.annulationAuto.annulerAutomatiquement(c.id, 'Annulation automatique : test');
+
+    expect(resultat?.issue).toBe('EN_LIVRAISON');
+    expect(c).toMatchObject({ statut: CourseStatut.IN_DELIVERY, cancelled_at: null, picked_up_at: MAINTENANT });
+    expect(commandes.map((o) => o.status)).toEqual([OrderStatus.PICKED_UP, OrderStatus.READY]);
+    expect(livraisons[0]).toMatchObject({ course_id: c.id, statut: DeliveryStatut.PENDING });
+    const nouvelle = t.courses.find((x) => x.id !== c.id)!;
+    expect(livraisons[1]).toMatchObject({ course_id: nouvelle.id, statut: DeliveryStatut.PENDING });
+    expect(nouvelle.total_delivery_fee).toBe(1000);
+    expect(c.total_delivery_fee).toBe(1000);
+    expect(t.courseEvent.courseCancelled).not.toHaveBeenCalled();
+    expect(t.push.notifyPickupValidated).toHaveBeenCalledTimes(1);
+    expect(t.journal.map((l) => [l.type, l.motif])).toEqual([['ANNULATION_AUTO_COMMANDES_GARDEES', 'EN_LIVRAISON']]);
+  });
+
+  it('tout est remis : la course part en livraison, rien à relancer', async () => {
+    const d = livreur({ last_available_at: null });
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.ACCEPTED, deliverer_id: d.id },
+      [OrderStatus.PICKED_UP, OrderStatus.PICKED_UP],
+    );
+    const t = monter({ livreurs: [d], courses: [c], commandes, livraisons });
+
+    await t.annulationAuto.annulerAutomatiquement(c.id, 'test');
+
+    expect(c.statut).toBe(CourseStatut.IN_DELIVERY);
+    expect(t.courses).toHaveLength(1);
+    expect(commandes.every((o) => o.status === OrderStatus.PICKED_UP)).toBe(true);
+  });
+
+  it('course remise par le code entre la lecture et l’écriture : rien n’est fait', async () => {
+    const d = livreur({ last_available_at: null });
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.AT_RESTAURANT, deliverer_id: d.id },
+      [OrderStatus.READY],
+    );
+    const t = monter({ livreurs: [d], courses: [c], commandes, livraisons });
+    const lire = t.prisma.course.findUnique.getMockImplementation();
+    t.prisma.course.findUnique.mockImplementationOnce(async (args: any) => {
+      const lue = await lire(args);
+      c.statut = CourseStatut.IN_DELIVERY; // la caisse valide le code juste après la lecture
+      return lue;
+    });
+
+    expect(await t.annulationAuto.annulerAutomatiquement(c.id, 'test')).toBeNull();
+    expect(c.statut).toBe(CourseStatut.IN_DELIVERY);
+    expect(t.courses).toHaveLength(1);
+    expect(t.journal).toEqual([]);
+  });
+
+  it('la tâche passe par l’annulation sans commandes (plus jamais cancelCourse « system »)', async () => {
+    const annulationAuto = { annulerAutomatiquement: jest.fn(async () => null) };
+    const prisma = {
+      course: {
+        findMany: jest.fn(async () => [{ id: 'c1', reference: 'CRS-1', statut: CourseStatut.AT_RESTAURANT }]),
+      },
+    };
+    const tache = new CourseTask(
+      prisma as never,
+      {} as never,
+      annulationAuto as never,
+      { load: jest.fn(async () => ({ autoCancelAcceptedAfterMin: 30, autoCancelAtRestaurantAfterMin: 30 })) } as never,
+      {} as never,
+    );
+
+    await tache.autoCancelStuckCourses();
+
+    expect(annulationAuto.annulerAutomatiquement).toHaveBeenCalledWith(
+      'c1',
+      "Annulation automatique : Caissière n'a pas validé la récupération depuis 30 min",
+    );
+  });
+});
+
+describe('cancelCourse : l’annulation manuelle garde son comportement, l’automatique jamais', () => {
+  it('« system » : livraisons annulées, aucune écriture sur les commandes ; « admin » : écriture inchangée', async () => {
+    const d = livreur({ last_available_at: null });
+    const auto = courseAvecCommandes({ statut: CourseStatut.ACCEPTED, deliverer_id: d.id }, [OrderStatus.READY]);
+    const manuelle = courseAvecCommandes({ statut: CourseStatut.ACCEPTED, deliverer_id: d.id }, [OrderStatus.READY]);
+    const t = monter({
+      livreurs: [d],
+      courses: [auto.course, manuelle.course],
+      commandes: [...auto.commandes, ...manuelle.commandes],
+      livraisons: [...auto.livraisons, ...manuelle.livraisons],
+    });
+
+    await t.actions.cancelCourse(auto.course.id, 'system', { reason: 'test' } as never);
+    expect(auto.livraisons[0].statut).toBe(DeliveryStatut.CANCELLED);
+    expect(auto.commandes[0].status).toBe(OrderStatus.READY);
+    expect(t.prisma.order.updateMany).not.toHaveBeenCalled();
+
+    // Annulation manuelle : la même écriture qu'avant sur les commandes.
+    await t.actions.cancelCourse(manuelle.course.id, 'admin', { reason: 'Client injoignable' } as never);
+    expect(t.prisma.order.updateMany).toHaveBeenCalledTimes(1);
+    expect(t.prisma.order.updateMany).toHaveBeenCalledWith({
+      where: {
+        delivery: {
+          course_id: manuelle.course.id,
+          statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
+        },
+        status: { notIn: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
+      },
+      data: expect.objectContaining({ status: OrderStatus.CANCELLED, cancelled_by: 'admin' }),
+    });
+  });
+});

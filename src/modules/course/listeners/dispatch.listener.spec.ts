@@ -29,6 +29,8 @@ function monter(donnees: Parameters<typeof monterBase>[0] = {}) {
   const offres = { offerNextDeliverer: jest.fn(async () => undefined) };
   const disponibilite = { mettreHorsServiceSiSansSignal: jest.fn(async () => false) };
   const gateway = { emitToDeliverer: jest.fn() };
+  const cloture = { clorePourCourse: jest.fn(async () => []) };
+  const queue = { remettreEnFile: jest.fn(async () => true) };
   const ecouteur = new DispatchListener(
     base.prisma,
     offres as never,
@@ -36,8 +38,10 @@ function monter(donnees: Parameters<typeof monterBase>[0] = {}) {
     journal,
     disponibilite as never,
     gateway as never,
+    cloture as never,
+    queue as never,
   );
-  return { ...base, ecouteur, offres, disponibilite, gateway, offreEnAttente };
+  return { ...base, ecouteur, offres, disponibilite, gateway, offreEnAttente, cloture, queue };
 }
 
 beforeEach(() => {
@@ -178,7 +182,15 @@ describe('expiration d’une offre (CourseOfferService)', () => {
   it("prévient l'appli et le journal : course:offer:expired, motif EXPIREE", async () => {
     const prisma = {
       courseOfferAttempt: {
-        findMany: jest.fn(async () => [{ id: 'o1', course_id: 'c1', deliverer_id: 'l1' }]),
+        findMany: jest.fn(async () => [
+          {
+            id: 'o1',
+            course_id: 'c1',
+            deliverer_id: 'l1',
+            course: { statut: CourseStatut.PENDING_ASSIGNMENT, turbo_escalated_at: null },
+            deliverer: { pause_until: null, auto_pause_until: null },
+          },
+        ]),
         updateMany: jest.fn(async () => ({ count: 1 })),
       },
       course: { update: jest.fn(async () => ({})) },
@@ -196,6 +208,7 @@ describe('expiration d’une offre (CourseOfferService)', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
     jest.spyOn(service, 'offerNextDeliverer').mockResolvedValue(undefined);
 
@@ -205,6 +218,7 @@ describe('expiration d’une offre (CourseOfferService)', () => {
       course_id: 'c1',
       deliverer_id: 'l1',
       motif: 'EXPIREE',
+      penalite: true,
     });
   });
 });

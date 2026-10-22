@@ -22,12 +22,22 @@ import { DelivererScoringSettingsHelper } from 'src/modules/deliverers/helpers/d
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer-queue.service';
 import { DelivererScoringService } from 'src/modules/deliverers/services/deliverer-scoring.service';
-import { filtreLivreursPouvantRecevoirOffre } from 'src/modules/deliverers/helpers/disponibilite.rules';
+import {
+  SELECT_ETAT_LIVREUR,
+  etatLivreurDepuis,
+  filtreLivreursPouvantRecevoirOffre,
+} from 'src/modules/deliverers/helpers/disponibilite.rules';
 
 import { CourseEvent } from '../events/course.event';
 import { CourseHelper } from '../helpers/course.helper';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
+import {
+  CLASSE_VERROU_OFFRE_LIVREUR,
+  decisionCreationOffre,
+  decisionExpiration,
+} from '../helpers/offres.rules';
+import { GardeOffresService } from './garde-offres.service';
 
 interface CreateCourseFromOrdersInput {
   restaurantId: string;
@@ -60,6 +70,8 @@ export class CourseOfferService {
     private readonly notificationsSender: NotificationsSenderService,
     // Flotte externe : sous-traitance quand la flotte interne est saturée.
     private readonly turboService: TurboService,
+    // Règle unique des offres (relances, clôture avant Turbo) : garde-offres.service.ts.
+    private readonly garde: GardeOffresService,
   ) {}
 
   /**
@@ -172,8 +184,8 @@ export class CourseOfferService {
   async offerNextDeliverer(courseId: string): Promise<void> {
     const course = await this.prisma.course.findUniqueOrThrow({ where: { id: courseId } });
 
-    if (course.statut !== CourseStatut.PENDING_ASSIGNMENT) {
-      return; // déjà assignée/annulée
+    if (course.statut !== CourseStatut.PENDING_ASSIGNMENT || course.turbo_escalated_at) {
+      return; // déjà assignée/annulée, ou confiée à Turbo (plus d'offre interne)
     }
 
     // A1 Fix : skip si une offer PENDING est déjà active sur cette course.
@@ -208,9 +220,11 @@ export class CourseOfferService {
       return;
     }
 
-    // Livreurs ayant déjà refusé/expiré cette course : on les exclut
+    // Livreurs ayant déjà refusé/expiré cette course : on les exclut. Une offre
+    // CLOSE par le serveur (pause, bascule Turbo échouée, affectation forcée…)
+    // n'est pas un refus : son livreur reste candidat.
     const previousAttempts = await this.prisma.courseOfferAttempt.findMany({
-      where: { course_id: courseId },
+      where: { course_id: courseId, status: { not: CourseOfferStatus.CANCELLED } },
       select: { deliverer_id: true },
     });
     const excludedIds = previousAttempts.map((a) => a.deliverer_id);
@@ -320,7 +334,7 @@ export class CourseOfferService {
     delivererId: string,
     isChainBonus = false,
     forceResend = false,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { offerDurationSeconds } = await this.settings.load();
     const expiresAt = new Date(Date.now() + offerDurationSeconds * 1000);
 
@@ -329,6 +343,31 @@ export class CourseOfferService {
 
     try {
       course = await this.prisma.$transaction(async (tx) => {
+        // Course acceptée, annulée ou confiée à Turbo entre-temps : pas d'offre.
+        const enRecherche = await tx.course.findFirst({
+          where: { id: courseId, statut: CourseStatut.PENDING_ASSIGNMENT, turbo_escalated_at: null },
+          select: { id: true },
+        });
+        if (!enRecherche) return null;
+
+        // JAMAIS DEUX OFFRES EN ATTENTE POUR UN LIVREUR, ni d'offre à un livreur
+        // en pause, même à deux serveurs : verrou du livreur tenu jusqu'à la fin
+        // de la transaction (la clôture des offres d'un livreur le prend aussi),
+        // puis règle unique relue (decisionCreationOffre).
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${CLASSE_VERROU_OFFRE_LIVREUR}::int, hashtext(${delivererId}))`;
+        const autreOffre = await tx.courseOfferAttempt.findFirst({
+          where: { deliverer_id: delivererId, status: CourseOfferStatus.PENDING, course_id: { not: courseId } },
+          select: { id: true },
+        });
+        const ligne = await tx.deliverer.findUnique({ where: { id: delivererId }, select: SELECT_ETAT_LIVREUR });
+        const decision = decisionCreationOffre(ligne && etatLivreurDepuis(ligne), !!autreOffre, new Date(), isChainBonus);
+        if (!decision.ok) {
+          this.logger.warn(
+            `offerToDeliverer SKIP : le livreur ${delivererId.slice(0, 8)} ne peut pas recevoir d'offre (${decision.motif})`,
+          );
+          return null;
+        }
+
         // Check intra-transaction : aucune offer PENDING pour ce couple.
         // Le partial unique index DB est la garantie ultime, mais ce check
         // évite l'exception P2002 dans le cas nominal.
@@ -383,12 +422,12 @@ export class CourseOfferService {
         this.logger.warn(
           `offerToDeliverer SKIP : violation partial unique index (course=${courseId.slice(0, 8)}, deliverer=${delivererId.slice(0, 8)})`,
         );
-        return;
+        return false;
       }
       throw err;
     }
 
-    if (!course) return; // doublon évité silencieusement
+    if (!course) return false; // doublon évité silencieusement
 
     await this.courseEvent.offerNew({
       course,
@@ -414,58 +453,80 @@ export class CourseOfferService {
     this.logger.log(
       `Course ${course.reference} proposée à ${delivererId}${isChainBonus ? ' [CHAIN]' : ''} (expire ${expiresAt.toISOString()})`,
     );
+    return true;
   }
 
   /**
    * Marque les offers PENDING échues comme EXPIRED et déclenche le retry.
    * Appelée par CourseTask (cron) toutes les 10s.
+   *
+   * Chaque offre est RÉSERVÉE atomiquement (deux serveurs : une pénalité
+   * jamais doublée). Pas de pénalité si la course ne cherche plus de livreur
+   * ou si le livreur s'est mis en pause entre-temps (`decisionExpiration`).
    */
   async expirePendingOffers(): Promise<number> {
     const now = new Date();
     const expired = await this.prisma.courseOfferAttempt.findMany({
       where: { status: CourseOfferStatus.PENDING, expires_at: { lte: now } },
-      select: { id: true, course_id: true, deliverer_id: true },
+      select: {
+        id: true,
+        course_id: true,
+        deliverer_id: true,
+        course: { select: { statut: true, turbo_escalated_at: true } },
+        deliverer: { select: { pause_until: true, auto_pause_until: true } },
+      },
     });
 
     if (expired.length === 0) return 0;
 
-    await this.prisma.courseOfferAttempt.updateMany({
-      where: { id: { in: expired.map((e) => e.id) } },
-      data: { status: CourseOfferStatus.EXPIRED, responded_at: now },
-    });
-
-    // P5 : pénalité queue pour chaque livreur qui a laissé l'offer expirer (ignore).
-    // Traité comme un refus silencieux. Les erreurs sur un livreur ne bloquent pas
-    // le traitement des autres.
+    let traitees = 0;
+    const aRelancer = new Set<string>();
     for (const e of expired) {
-      try {
-        await this.queueService.onOfferExpired(e.deliverer_id);
-      } catch (err) {
-        this.logger.warn(
-          `Pénalité queue échouée pour ${e.deliverer_id}: ${(err as Error).message}`,
-        );
+      const reservee = await this.prisma.courseOfferAttempt.updateMany({
+        where: { id: e.id, status: CourseOfferStatus.PENDING },
+        data: { status: CourseOfferStatus.EXPIRED, responded_at: now },
+      });
+      if (reservee.count !== 1) continue; // traitée par l'autre serveur, acceptée ou close
+      traitees++;
+
+      // P5 : pénalité queue (refus silencieux) + refus compté sur la course.
+      // Les erreurs sur un livreur ne bloquent pas le traitement des autres.
+      const decision = decisionExpiration(e.course, e.deliverer, now);
+      if (decision.penaliser) {
+        try {
+          await this.queueService.onOfferExpired(e.deliverer_id);
+        } catch (err) {
+          this.logger.warn(
+            `Pénalité queue échouée pour ${e.deliverer_id}: ${(err as Error).message}`,
+          );
+        }
+        await this.prisma.course.update({
+          where: { id: e.course_id },
+          data: { refusal_count: { increment: 1 } },
+        });
       }
-      // L'appli ferme l'offre affichée ; DispatchListener journalise et applique
-      // le filet « hors service sans signal ».
+      if (decision.penaliser || decision.raison === 'LIVREUR_EN_PAUSE') aRelancer.add(e.course_id);
+
+      // L'appli ferme l'offre affichée ; DispatchListener journalise et, si
+      // l'offre a coûté au livreur, applique le filet « hors service sans signal ».
       void this.courseEvent.offerExpired({
         course_id: e.course_id,
         deliverer_id: e.deliverer_id,
         motif: 'EXPIREE',
+        penalite: decision.penaliser,
+        ...(decision.penaliser ? {} : { sans_penalite: decision.raison }),
       });
     }
 
-    // Incrémenter refusal_count + retry pour chaque course
-    const courseIds = [...new Set(expired.map((e) => e.course_id))];
-    for (const cid of courseIds) {
-      await this.prisma.course.update({
-        where: { id: cid },
-        data: { refusal_count: { increment: 1 } },
-      });
-      await this.offerNextDeliverer(cid);
+    // Livreur suivant pour chaque course qui cherche encore.
+    for (const cid of aRelancer) {
+      await this.offerNextDeliverer(cid).catch((err) =>
+        this.logger.warn(`Relance après expiration échouée (${cid.slice(0, 8)}) : ${(err as Error).message}`),
+      );
     }
 
-    this.logger.log(`${expired.length} offer(s) expirée(s) traitée(s)`);
-    return expired.length;
+    if (traitees > 0) this.logger.log(`${traitees} offer(s) expirée(s) traitée(s)`);
+    return traitees;
   }
 
   /**
@@ -506,6 +567,10 @@ export class CourseOfferService {
       const ecoule = (now.getTime() - offer.offered_at.getTime()) / 1000;
       const dus = PALIERS.filter((p) => ecoule >= p).length;
       if (dus <= offer.reminders_sent) continue;
+
+      // L'offre vaut-elle encore ? Livreur passé en pause, hors service ou en
+      // course, course disparue : offre close sans pénalité, pas de relance.
+      if (!(await this.garde.relanceAutorisee(offer.id, now))) continue;
 
       // Claim atomique : un seul backend envoie la relance.
       const claim = await this.prisma.courseOfferAttempt.updateMany({
@@ -755,6 +820,9 @@ export class CourseOfferService {
       course.deliveries.length > 0 &&
       course.deliveries.every((d) => d.order.delivery_service === DeliveryService.TURBO);
     const ok = await this.escalateToTurbo(courseId, attente, { nativeTurbo: isTurboNative });
+    // Échec : l'offre en attente a été close avant l'envoi, la recherche
+    // interne reprend tout de suite (jamais pour une course Turbo d'origine).
+    if (!ok && !isTurboNative) await this.offerNextDeliverer(courseId).catch(() => undefined);
     return ok
       ? { ok: true, message: `Course ${course.reference} confiée à Turbo.` }
       : {
@@ -896,6 +964,11 @@ export class CourseOfferService {
       data: { turbo_escalated_at: new Date() },
     });
     if (claim.count !== 1) return false; // déjà traitée par l'autre instance
+
+    // Offres en attente closes AVANT l'envoi (le livreur sollicité la voit disparaître).
+    await this.garde
+      .cloreAvantTurbo(courseId)
+      .catch((e) => this.logger.warn(`Clôture des offres avant Turbo impossible : ${e?.message}`));
 
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },

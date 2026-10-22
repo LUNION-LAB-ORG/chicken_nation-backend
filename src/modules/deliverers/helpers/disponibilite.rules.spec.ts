@@ -19,6 +19,7 @@ import {
   FIN_PAUSE_INDEFINIE,
   SELECT_ETAT_LIVREUR,
   STATUTS_COURSE_EN_COURS,
+  disponibiliteLivreur,
   estEnPause,
   estEnPauseAuto,
   etatLivreurDepuis,
@@ -257,5 +258,52 @@ describe('textes', () => {
     ).map((m) => messageRefusOffre(m, etat, MAINTENANT));
     textes.push(messagePauseAuto(apres(5), MAINTENANT));
     for (const t of textes) expect(t).not.toMatch(/[—–]/);
+  });
+});
+
+describe('disponibiliteLivreur (affichage au backoffice)', () => {
+  it('l’état affiché est celui que le serveur appliquerait, avec un libellé prêt à afficher', () => {
+    const cas: [Partial<EtatLivreur>, string, string][] = [
+      [{}, 'DISPONIBLE', 'Disponible'],
+      [{ pause_until: new Date('2026-10-22T14:32:00.000Z'), last_available_at: null }, 'EN_PAUSE', "En pause jusqu'à 14 h 32"],
+      [{ pause_until: FIN_PAUSE_INDEFINIE, last_available_at: null }, 'EN_PAUSE', 'En pause'],
+      [{ auto_pause_until: new Date('2026-10-23T08:05:00.000Z') }, 'PAUSE_AUTO', "Pause automatique jusqu'au 23/10 à 8 h 05"],
+      [{ en_course: true, last_available_at: null }, 'EN_COURSE', 'En course'],
+      [{ offre_en_attente: true }, 'OFFRE_EN_ATTENTE', 'Offre en attente'],
+      [{ last_available_at: null }, 'HORS_SERVICE', 'Hors service'],
+      [{ status: DelivererStatus.SUSPENDED }, 'INACTIF', 'Inactif'],
+    ];
+    for (const [surcharge, etat, libelle] of cas) {
+      expect([etat, disponibiliteLivreur(libre(surcharge), MAINTENANT).libelle]).toEqual([etat, libelle]);
+      expect(disponibiliteLivreur(libre(surcharge), MAINTENANT).etat).toBe(etat);
+    }
+  });
+
+  it('champs bruts et raison du refus, comme le 409 de l’affectation forcée', () => {
+    const pause = new Date('2026-10-22T14:32:00.000Z');
+    expect(disponibiliteLivreur(libre({ pause_until: pause, last_available_at: null }), MAINTENANT)).toEqual({
+      etat: 'EN_PAUSE',
+      libelle: "En pause jusqu'à 14 h 32",
+      peut_recevoir_offre: false,
+      message_refus: "Ce livreur est en pause jusqu'à 14 h 32.",
+      en_pause: true,
+      en_pause_auto: false,
+      pause_until: pause,
+      auto_pause_until: null,
+      en_service: false,
+      en_course: false,
+      offre_en_attente: false,
+      offre_course_id: null,
+    });
+    expect(disponibiliteLivreur(libre({ offre_en_attente: true }), MAINTENANT, 'c1')).toMatchObject({
+      peut_recevoir_offre: false,
+      offre_course_id: 'c1',
+      message_refus: 'Ce livreur a déjà une offre en attente de réponse.',
+    });
+    expect(disponibiliteLivreur(libre(), MAINTENANT, 'c1')).toMatchObject({
+      peut_recevoir_offre: true,
+      message_refus: null,
+      offre_course_id: null,
+    });
   });
 });

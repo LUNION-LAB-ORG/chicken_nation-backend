@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  ConflictException,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 
@@ -13,6 +23,7 @@ import { QueryCoursesDto } from '../dto/query-courses.dto';
 import { CourseActionService } from '../services/course-action.service';
 import { CourseOfferService } from '../services/course-offer.service';
 import { CourseQueryService } from '../services/course-query.service';
+import { GardeOffresService } from '../services/garde-offres.service';
 import { ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
 
 /**
@@ -28,6 +39,7 @@ export class CourseAdminController {
     private readonly queryService: CourseQueryService,
     private readonly actionService: CourseActionService,
     private readonly offerService: CourseOfferService,
+    private readonly garde: GardeOffresService,
   ) {}
 
   @ApiOperation({ summary: 'Liste paginée des courses (toutes)' })
@@ -53,17 +65,36 @@ export class CourseAdminController {
     return this.queryService.findOne(id);
   }
 
-  @ApiOperation({ summary: 'Forcer l\'affectation à un livreur précis (override admin)' })
+  @ApiOperation({
+    summary: 'Forcer l\'affectation à un livreur précis (override admin)',
+    description:
+      'Même règle que la sélection automatique. 409 avec la raison en français si la course ne ' +
+      'cherche plus de livreur, ou si le livreur est en pause, en pause automatique, hors service, ' +
+      'en course ou a déjà une offre en attente (« Ce livreur est en pause jusqu\'à 14 h 32. »). ' +
+      'Les offres d\'autres livreurs sur cette course sont closes.',
+  })
   @ApiBody({ type: AssignDelivererDto })
   @Patch(':id/force-assign')
   async forceAssign(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: AssignDelivererDto,
   ) {
+    const { renvoi } = await this.garde.verifierAffectationForcee(id, dto.deliverer_id);
+    await this.garde.cloreAutresOffres(id, dto.deliverer_id);
     // forceResend=true : si le livreur a déjà une offer PENDING, on ré-émet le WS
     // plutôt que de silencer — l'admin veut s'assurer que la notif arrive.
-    await this.offerService.offerToDeliverer(id, dto.deliverer_id, false, true);
-    return { success: true, message: 'Offer envoyée au livreur' };
+    const envoyee = await this.offerService.offerToDeliverer(id, dto.deliverer_id, false, true);
+    if (!envoyee) {
+      // Les offres des autres livreurs viennent d'être closes : la recherche reprend.
+      await this.offerService.offerNextDeliverer(id).catch(() => undefined);
+      throw new ConflictException(
+        "L'offre n'a pas pu être envoyée : la course ou le livreur vient de changer. Réessayez.",
+      );
+    }
+    return {
+      success: true,
+      message: renvoi ? 'Offre renvoyée au livreur.' : 'Offre envoyée au livreur.',
+    };
   }
 
   @ApiOperation({ summary: 'Annuler une course (admin)' })

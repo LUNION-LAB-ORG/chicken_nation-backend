@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  CourseOfferStatus,
   CourseStatut,
   Deliverer,
   DelivererStatus,
@@ -21,7 +22,32 @@ import { UpdateDelivererLocationDto } from '../dto/update-location.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { DelivererEvent } from '../events/deliverer.event';
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
+import {
+  STATUTS_COURSE_EN_COURS,
+  disponibiliteLivreur,
+  etatLivreurDepuis,
+} from '../helpers/disponibilite.rules';
 import { DelivererPushService } from './deliverer-push.service';
+
+/**
+ * Lecture de quoi calculer l'état d'un livreur (`disponibilite`) dans une
+ * liste : courses en cours et offres en attente, comptées, plus la course de
+ * l'offre en attente (l'affectation forcée sur cette course reste permise).
+ */
+const INCLUDE_DISPONIBILITE = {
+  offer_attempts: {
+    where: { status: CourseOfferStatus.PENDING },
+    select: { course_id: true },
+    orderBy: { offered_at: 'desc' as const },
+    take: 1,
+  },
+  _count: {
+    select: {
+      courses: { where: { statut: { in: STATUTS_COURSE_EN_COURS } } },
+      offer_attempts: { where: { status: CourseOfferStatus.PENDING } },
+    },
+  },
+} satisfies Prisma.DelivererInclude;
 
 type SafeDeliverer = Omit<Deliverer, 'password' | 'refresh_token'>;
 
@@ -85,14 +111,24 @@ export class DeliverersService {
               longitude: true,
             },
           },
+          ...INCLUDE_DISPONIBILITE,
         },
         omit: { password: true, refresh_token: true },
       }),
       this.prisma.deliverer.count({ where }),
     ]);
 
+    // État de chaque livreur par la règle unique (fenêtre « Forcer l'affectation »).
+    const maintenant = new Date();
     return {
-      items,
+      items: items.map(({ offer_attempts, _count, ...livreur }) => ({
+        ...livreur,
+        disponibilite: disponibiliteLivreur(
+          etatLivreurDepuis({ ...livreur, _count }),
+          maintenant,
+          offer_attempts[0]?.course_id ?? null,
+        ),
+      })),
       total,
       page,
       limit,
@@ -575,6 +611,10 @@ export class DeliverersService {
         last_available_at: true,
         pause_until: true,
         auto_pause_until: true,
+        status: true,
+        is_operational: true,
+        entity_status: true,
+        ...INCLUDE_DISPONIBILITE,
         courses: {
           where: {
             statut: {
@@ -649,6 +689,12 @@ export class DeliverersService {
           queue_rank: rankMap.get(d.id) ?? null,
           pause_until: d.pause_until?.toISOString() ?? null,
           auto_pause_until: d.auto_pause_until?.toISOString() ?? null,
+          // État par la règle unique : « En pause » et « Hors service » visibles.
+          disponibilite: disponibiliteLivreur(
+            etatLivreurDepuis(d),
+            now,
+            d.offer_attempts[0]?.course_id ?? null,
+          ),
           active_course: activeCourse
             ? {
                 id: activeCourse.id,

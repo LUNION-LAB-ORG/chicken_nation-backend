@@ -6,6 +6,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 
 import { CourseChannels } from '../enums/course-channels';
 import { DispatchEvenements } from '../enums/dispatch-evenements';
+import { CLASSE_VERROU_OFFRE_LIVREUR } from '../helpers/offres.rules';
 import { DispatchJournalService, SourceDispatch } from './dispatch-journal.service';
 
 /** Pourquoi le serveur clôt une offre en attente. Jamais de pénalité pour le livreur. */
@@ -25,7 +26,9 @@ export type MotifClotureOffre =
   /** La course a été annulée. */
   | 'COURSE_ANNULEE'
   /** La course ne cherche plus de livreur (acceptée par un autre, expirée…). */
-  | 'COURSE_PLUS_EN_RECHERCHE';
+  | 'COURSE_PLUS_EN_RECHERCHE'
+  /** L'administrateur a forcé l'affectation de la course à un autre livreur. */
+  | 'AFFECTATION_FORCEE';
 
 export interface OptionsCloture {
   /**
@@ -54,6 +57,13 @@ export interface OffreExpireePayload {
   deliverer_id: string;
   /** `EXPIREE` pour une offre laissée sans réponse, sinon le motif de clôture. */
   motif?: MotifClotureOffre | 'EXPIREE';
+  /**
+   * Offre expirée seulement : faux quand l'expiration n'a rien coûté au livreur
+   * (course plus en recherche, livreur en pause). Ni pénalité ni filet alors.
+   */
+  penalite?: boolean;
+  /** Offre expirée sans pénalité : pourquoi (journal). */
+  sans_penalite?: string;
 }
 
 const SELECT_OFFRE = {
@@ -131,10 +141,22 @@ export class OffresClotureService {
     const maintenant = options.maintenant ?? new Date();
     const relancer = options.relancerRecherche ?? true;
 
-    const offres = await this.prisma.courseOfferAttempt.findMany({
-      where: { ...ou, status: CourseOfferStatus.PENDING },
-      select: SELECT_OFFRE,
-    });
+    const lire = (client: Pick<Prisma.TransactionClient, 'courseOfferAttempt'>) =>
+      client.courseOfferAttempt.findMany({
+        where: { ...ou, status: CourseOfferStatus.PENDING },
+        select: SELECT_OFFRE,
+      });
+    // Offres d'un livreur (pause, déconnexion, hors service) : lues sous le
+    // verrou que prend la création d'une offre (offerToDeliverer). Une offre
+    // écrite avant est vue ici ; une offre écrite après relit l'état du
+    // livreur (déjà en pause) et n'est pas créée. Rien ne passe entre les deux.
+    const livreurId = typeof ou.deliverer_id === 'string' ? ou.deliverer_id : null;
+    const offres = livreurId
+      ? await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(${CLASSE_VERROU_OFFRE_LIVREUR}::int, hashtext(${livreurId}))`;
+          return lire(tx);
+        })
+      : await lire(this.prisma);
 
     const closes: OffreClose[] = [];
     for (const offre of offres) {

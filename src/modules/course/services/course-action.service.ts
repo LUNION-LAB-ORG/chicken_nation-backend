@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -10,6 +11,7 @@ import {
   CourseStatut,
   DeliveryStatut,
   OrderStatus,
+  Prisma,
 } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -30,6 +32,7 @@ import { CourseEvent } from '../events/course.event';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { CourseOfferService } from './course-offer.service';
 import { CourseQueryService } from './course-query.service';
+import { GardeOffresService } from './garde-offres.service';
 
 /**
  * Service : transitions de statut d'une Course + actions sur les Delivery.
@@ -52,42 +55,23 @@ export class CourseActionService {
     private readonly maps: MapsService,
     // Recherche de la course par code de retrait : la même que l'aperçu caisse.
     private readonly queryService: CourseQueryService,
+    // Acceptation conditionnelle (règle unique des offres) : garde-offres.service.ts.
+    private readonly garde: GardeOffresService,
   ) {}
 
   // ============================================================
   // OFFER : accept / refuse
   // ============================================================
 
-  /** Le livreur accepte une offer → devient sa course active */
+  /**
+   * Le livreur accepte une offer → devient sa course active.
+   *
+   * Mise à jour CONDITIONNELLE (GardeOffresService) : course encore en
+   * recherche, pas confiée à Turbo, offre encore en attente pour ce livreur ;
+   * sinon 409 « Cette course n'est plus disponible. » et offre close.
+   */
   async acceptOffer(courseId: string, delivererId: string) {
-    const offer = await this.prisma.courseOfferAttempt.findFirst({
-      where: {
-        course_id: courseId,
-        deliverer_id: delivererId,
-        status: CourseOfferStatus.PENDING,
-        expires_at: { gt: new Date() },
-      },
-    });
-    if (!offer) {
-      throw new BadRequestException('Offer invalide, expirée ou déjà traitée');
-    }
-
-    const [, course] = await this.prisma.$transaction([
-      this.prisma.courseOfferAttempt.update({
-        where: { id: offer.id },
-        data: { status: CourseOfferStatus.ACCEPTED, responded_at: new Date() },
-      }),
-      this.prisma.course.update({
-        where: { id: courseId },
-        data: {
-          deliverer_id: delivererId,
-          statut: CourseStatut.ACCEPTED,
-          assigned_at: new Date(),
-          offer_expires_at: null,
-        },
-        include: COURSE_FULL_INCLUDE,
-      }),
-    ]);
+    const course = await this.garde.reserverAcceptation(courseId, delivererId);
 
     // P5 : sortie de la queue FIFO (le livreur est maintenant "en activité").
     await this.queueService.onAccept(delivererId);
@@ -213,6 +197,10 @@ export class CourseActionService {
     }
 
     const now = new Date();
+    // Une annulation AUTOMATIQUE n'annule jamais une commande de client (« une
+    // commande ne s'annule que manuellement ») : la tâche passe par
+    // AnnulationAutoService, ceci n'est qu'un garde-fou.
+    const annulerLesCommandes = cancelledBy !== 'system';
     const [updated] = await this.prisma.$transaction([
       this.prisma.course.update({
         where: { id: courseId },
@@ -233,21 +221,25 @@ export class CourseActionService {
         data: { statut: DeliveryStatut.CANCELLED },
       }),
       // Propage CANCELLED + traçabilité aux Orders dont la Delivery n'est pas terminale
-      this.prisma.order.updateMany({
-        where: {
-          delivery: {
-            course_id: courseId,
-            statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
-          },
-          status: { notIn: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
-        },
-        data: {
-          status: OrderStatus.CANCELLED,
-          cancelled_at: now,
-          cancelled_by: cancelledBy,
-          cancelled_reason: dto.reason ?? 'Course annulée',
-        },
-      }),
+      ...(annulerLesCommandes
+        ? [
+            this.prisma.order.updateMany({
+              where: {
+                delivery: {
+                  course_id: courseId,
+                  statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
+                },
+                status: { notIn: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
+              },
+              data: {
+                status: OrderStatus.CANCELLED,
+                cancelled_at: now,
+                cancelled_by: cancelledBy,
+                cancelled_reason: dto.reason ?? 'Course annulée',
+              },
+            }),
+          ]
+        : []),
     ]);
 
     await this.courseEvent.courseCancelled({ course: updated, cancelled_by: cancelledBy, reason: dto.reason });
@@ -308,9 +300,12 @@ export class CourseActionService {
 
     const now = new Date();
     const previousStatut = course.statut;
+    // Écriture CONDITIONNÉE au statut lu : le bouton de la caisse « Livreur a
+    // récupéré » (CourseEnLivraisonService) peut faire partir la course en même
+    // temps. Un seul des deux la remet, l'autre reçoit 409.
     const [updated] = await this.prisma.$transaction([
       this.prisma.course.update({
-        where: { id: course.id },
+        where: { id: course.id, statut: previousStatut },
         data: {
           statut: CourseStatut.IN_DELIVERY,
           // Si le livreur n'a pas encore déclenché at_restaurant (pas de GPS ou GPS tardif),
@@ -325,7 +320,12 @@ export class CourseActionService {
         where: { delivery: { course_id: course.id } },
         data: { status: OrderStatus.PICKED_UP, picked_up_at: now },
       }),
-    ]);
+    ]).catch((err) => {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+        throw new ConflictException("Cette course vient d'être remise au livreur.");
+      }
+      throw err;
+    });
 
     // Émet l'event WS pour que le mobile livreur et le backoffice se synchronisent
     await this.courseEvent.courseStatutChanged({
@@ -389,12 +389,14 @@ export class CourseActionService {
    * des retards. Silencieux en cas d'échec : une estimation manquante ne doit
    * jamais empêcher une course de partir.
    */
-  private async estimerDureeTournee(courseId: string): Promise<void> {
+  async estimerDureeTournee(courseId: string): Promise<void> {
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
       select: {
         restaurant: { select: { latitude: true, longitude: true } },
         deliveries: {
+          // Une livraison annulée (détachée, annulée par Turbo) ne fait pas partie de la tournée.
+          where: { statut: { not: DeliveryStatut.CANCELLED } },
           orderBy: { sequence_order: 'asc' },
           select: { order: { select: { address: true } } },
         },

@@ -7,7 +7,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
 
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
-import { CourseActionService } from '../services/course-action.service';
+import { AnnulationAutoService } from '../services/annulation-auto.service';
 import { CourseOfferService } from '../services/course-offer.service';
 
 /**
@@ -18,6 +18,8 @@ import { CourseOfferService } from '../services/course-offer.service';
  *     - `ACCEPTED` depuis > `auto_cancel_after_min` min → livreur n'est jamais arrivé au resto
  *     - `AT_RESTAURANT` depuis > `auto_cancel_after_min` min → caissière n'a jamais validé le pickup
  *   Protège contre les "courses zombies" qui immobilisent un livreur.
+ *   N'annule JAMAIS une commande de client (AnnulationAutoService) : les
+ *   commandes remises partent en livraison, les autres repartent en recherche.
  */
 @Injectable()
 export class CourseTask {
@@ -26,7 +28,7 @@ export class CourseTask {
   constructor(
     private readonly prisma: PrismaService,
     private readonly courseOfferService: CourseOfferService,
-    private readonly courseActionService: CourseActionService,
+    private readonly annulationAuto: AnnulationAutoService,
     private readonly settings: CourseSettingsHelper,
     // Alerte staff sur les livraisons qui dérapent.
     private readonly notificationsSender: NotificationsSenderService,
@@ -171,11 +173,11 @@ export class CourseTask {
             ACCEPTED: `Livreur non arrivé au restaurant depuis ${autoCancelAcceptedAfterMin} min`,
             AT_RESTAURANT: `Caissière n'a pas validé la récupération depuis ${autoCancelAtRestaurantAfterMin} min`,
           };
-          await this.courseActionService.cancelCourse(course.id, 'system', {
-            reason: `Annulation automatique : ${reasonByStatut[course.statut] ?? 'bloquée trop longtemps'}`,
-          });
-          this.logger.warn(
-            `Course ${course.reference} auto-annulée (bloquée en ${course.statut})`,
+          // Jamais les commandes des clients : « une commande ne s'annule que
+          // manuellement ». Journalisé par le service.
+          await this.annulationAuto.annulerAutomatiquement(
+            course.id,
+            `Annulation automatique : ${reasonByStatut[course.statut] ?? 'bloquée trop longtemps'}`,
           );
         } catch (err) {
           this.logger.error(`Échec auto-cancel ${course.reference}: ${(err as Error).message}`);

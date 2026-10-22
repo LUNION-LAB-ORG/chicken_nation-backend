@@ -5,7 +5,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 
 import { DelivererEvent } from '../events/deliverer.event';
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
-import { estEnPause, estEnPauseAuto } from '../helpers/disponibilite.rules';
+import { STATUTS_COURSE_EN_COURS, estEnPause, estEnPauseAuto } from '../helpers/disponibilite.rules';
 import { DelivererPushService } from './deliverer-push.service';
 
 /**
@@ -71,6 +71,35 @@ export class DelivererQueueService {
       data: { last_available_at: now },
     });
     this.logger.debug(`Deliverer ${delivererId.slice(0, 8)} completed → requeue`);
+  }
+
+  /**
+   * Le livreur a PERDU sa course sans l'avoir terminée (fusion avec une autre
+   * course, annulation) : il revient dans la file, à la place donnée, s'il n'y
+   * est pas déjà, s'il n'est ni en pause ni en pause automatique et s'il n'a
+   * pas d'autre course en cours. Sans cela il resterait hors service : la
+   * nouvelle appli n'appelle plus `/available` en fin de course.
+   *
+   * Écriture conditionnée (un seul `UPDATE ... WHERE`) : une pause posée entre-
+   * temps l'emporte. Vrai si le livreur a été remis dans la file.
+   */
+  async remettreEnFile(delivererId: string, place: Date, maintenant = new Date()): Promise<boolean> {
+    const { count } = await this.prisma.deliverer.updateMany({
+      where: {
+        id: delivererId,
+        last_available_at: null,
+        AND: [
+          { OR: [{ pause_until: null }, { pause_until: { lte: maintenant } }] },
+          { OR: [{ auto_pause_until: null }, { auto_pause_until: { lte: maintenant } }] },
+          { courses: { none: { statut: { in: STATUTS_COURSE_EN_COURS } } } },
+        ],
+      },
+      data: { last_available_at: place },
+    });
+    if (count === 1) {
+      this.logger.debug(`Deliverer ${delivererId.slice(0, 8)} remis en file (${place.toISOString()})`);
+    }
+    return count === 1;
   }
 
   /** Livreur refuse explicitement une offre. */

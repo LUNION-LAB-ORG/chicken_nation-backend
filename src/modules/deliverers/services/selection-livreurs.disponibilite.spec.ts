@@ -147,6 +147,7 @@ describe('mode comparatif (ancien algorithme, qui décide en mode observation)',
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
 
     const choisi = await (service as any).findBestDeliverer(libre.restaurant_id, []);

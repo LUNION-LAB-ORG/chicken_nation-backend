@@ -100,6 +100,7 @@ function monter(courses: Ligne[]) {
     turboService as never,
     maps as never,
     queryService,
+    {} as never,
   );
   const controleur = new CourseOperationsController(queryService, actionService);
   return { controleur, prisma, courseEvent, pushService, turboService };

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
   CourseBatchStatus,
+  CourseOfferStatus,
   CourseStatut,
   DeliveryStatut,
   EntityStatus,
@@ -11,12 +12,17 @@ import {
 } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
+import { estEnPause, estEnPauseAuto } from 'src/modules/deliverers/helpers/disponibilite.rules';
+import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer-queue.service';
 
 import { CourseEvent } from '../events/course.event';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
+import { recalculerFraisCourse } from '../helpers/frais-course';
 import { haversineMeters, nearestNeighborOrder, parseOrderLatLng, type ILatLng } from '../helpers/geo.helper';
 import { CourseOfferService } from './course-offer.service';
+import { DispatchJournalService } from './dispatch-journal.service';
+import { OffresClotureService } from './offres-cloture.service';
 
 /**
  * Service de regroupement intelligent — Phase P3.
@@ -41,6 +47,11 @@ export class CourseGroupingService {
     private readonly settings: CourseSettingsHelper,
     private readonly courseOfferService: CourseOfferService,
     private readonly courseEvent: CourseEvent,
+    // Lot 1 (pause des livreurs) : offre de la course absorbée close, son
+    // livreur remis en file, jamais d'ajout à la course d'un livreur en pause.
+    private readonly cloture: OffresClotureService,
+    private readonly queueService: DelivererQueueService,
+    private readonly journal: DispatchJournalService,
   ) {}
 
   // ============================================================
@@ -317,11 +328,21 @@ export class CourseGroupingService {
    * Pour chaque course modifiée et déjà acceptée par un livreur, on émet un event
    * `course:updated` pour que son mobile rafraîchisse la liste de deliveries.
    *
+   * Gardes du lot 1 (pause des livreurs) :
+   *  - jamais d'ajout à la course d'un livreur en pause ou en pause automatique ;
+   *  - course absorbée : ses offres en attente closes sans pénalité (l'appli
+   *    du livreur sollicité les ferme), son livreur remis dans la file à la
+   *    place de son acceptation ;
+   *  - frais de livraison (`total_delivery_fee`) recalculés sur chaque course
+   *    touchée, offre en attente renvoyée à jour au livreur sollicité, et
+   *    recherche relancée pour chaque course touchée encore sans livreur.
+   *
    * Appelé par `CourseBatchTask` toutes les `rebalance_interval_seconds`.
    */
   async rebalanceActiveCourses(): Promise<{ merged: number; transferred: number }> {
     const settings = await this.settings.load();
     if (!settings.rebalanceEnabled) return { merged: 0, transferred: 0 };
+    const maintenant = new Date();
 
     const ADJUSTABLE: CourseStatut[] = [
       CourseStatut.PENDING_ASSIGNMENT,
@@ -352,6 +373,7 @@ export class CourseGroupingService {
             },
           },
         },
+        deliverer: { select: { pause_until: true, auto_pause_until: true } },
       },
     });
 
@@ -379,7 +401,16 @@ export class CourseGroupingService {
 
       for (let i = 0; i < restaurantCourses.length - 1; i++) {
         const target = restaurantCourses[i];
+        // Course absorbée plus haut dans cette boucle : annulée, elle ne reçoit rien.
+        if (target.statut === CourseStatut.CANCELLED) continue;
         if (target.deliveries.length >= settings.maxOrdersPerCourse) continue;
+        // Jamais d'ajout à la course d'un livreur en pause (« pause après cette course »).
+        if (
+          target.deliverer &&
+          (estEnPause(target.deliverer, maintenant) || estEnPauseAuto(target.deliverer, maintenant))
+        ) {
+          continue;
+        }
 
         for (let j = i + 1; j < restaurantCourses.length; j++) {
           const source = restaurantCourses[j];
@@ -401,8 +432,9 @@ export class CourseGroupingService {
           }
 
           // Si source vide après transferts → fusion totale
-          if (source.deliveries.length === 0) {
-            await this.markCourseMerged(source.id, target.id);
+          if (source.deliveries.length === 0 && source.statut !== CourseStatut.CANCELLED) {
+            await this.markCourseMerged(source, target.id, maintenant);
+            source.statut = CourseStatut.CANCELLED;
             touchedCourseIds.add(source.id);
             totalMerged++;
           }
@@ -410,9 +442,20 @@ export class CourseGroupingService {
       }
     }
 
-    // Notifier les livreurs / backoffice des courses modifiées
+    // Frais recalculés, puis livreurs / backoffice prévenus des courses modifiées
     if (touchedCourseIds.size > 0) {
+      for (const id of touchedCourseIds) {
+        await recalculerFraisCourse(this.prisma, id).catch((err) =>
+          this.logger.warn(`Frais de la course ${id.slice(0, 8)} non recalculés : ${(err as Error).message}`),
+        );
+      }
       await this.emitUpdatedEvents([...touchedCourseIds]);
+      // Course touchée encore sans livreur ni offre : recherche relancée tout de
+      // suite (le livreur de la course absorbée vient de revenir dans la file).
+      for (const c of courses) {
+        if (!touchedCourseIds.has(c.id) || c.statut !== CourseStatut.PENDING_ASSIGNMENT) continue;
+        await this.courseOfferService.offerNextDeliverer(c.id).catch(() => undefined);
+      }
     }
 
     if (totalTransferred > 0 || totalMerged > 0) {
@@ -469,17 +512,50 @@ export class CourseGroupingService {
     });
   }
 
-  /** Marque une course CANCELLED avec raison "merged_into_X". */
-  private async markCourseMerged(sourceCourseId: string, targetCourseId: string): Promise<void> {
+  /**
+   * Marque une course CANCELLED avec raison "merged_into_X". Ses commandes ont
+   * toutes rejoint la cible : rien d'autre à annuler. Ses offres en attente
+   * sont closes sans pénalité et son livreur, s'il l'avait acceptée, revient
+   * dans la file à la place de son acceptation (il n'y est pour rien).
+   */
+  private async markCourseMerged(
+    source: { id: string; reference: string; restaurant_id: string; deliverer_id: string | null; assigned_at: Date | null },
+    targetCourseId: string,
+    maintenant: Date,
+  ): Promise<void> {
     await this.prisma.course.update({
-      where: { id: sourceCourseId },
+      where: { id: source.id },
       data: {
         statut: CourseStatut.CANCELLED,
-        cancelled_at: new Date(),
+        cancelled_at: maintenant,
         cancelled_by: 'system',
         cancelled_reason: `Fusionnée automatiquement avec course ${targetCourseId}`,
       },
     });
+
+    await this.cloture
+      .clorePourCourse(source.id, 'COURSE_FUSIONNEE', {
+        relancerRecherche: false,
+        details: { fusionnee_dans: targetCourseId },
+      })
+      .catch((err) => this.logger.warn(`Clôture des offres de ${source.reference} impossible : ${err?.message}`));
+
+    if (!source.deliverer_id) return;
+    const place = source.assigned_at ?? maintenant;
+    const remis = await this.queueService
+      .remettreEnFile(source.deliverer_id, place, maintenant)
+      .catch(() => false);
+    if (remis) {
+      await this.journal.ecrire({
+        type: 'REMIS_EN_FILE',
+        motif: 'COURSE_FUSIONNEE',
+        source: 'serveur',
+        restaurant_id: source.restaurant_id,
+        course_id: source.id,
+        deliverer_id: source.deliverer_id,
+        details: { course: source.reference, fusionnee_dans: targetCourseId, place: place.toISOString() },
+      });
+    }
   }
 
   /**
@@ -501,6 +577,25 @@ export class CourseGroupingService {
           previous_statut: course.statut,
           new_statut: course.statut,
         });
+        // Course encore en recherche avec une offre en attente : le livreur
+        // sollicité (pas encore affecté, donc pas prévenu ci-dessus) reçoit
+        // l'offre à jour, même échéance. L'appli remplace l'offre affichée.
+        if (course.statut === CourseStatut.PENDING_ASSIGNMENT) {
+          const offre = await this.prisma.courseOfferAttempt.findFirst({
+            where: { course_id: id, status: CourseOfferStatus.PENDING, expires_at: { gt: new Date() } },
+            select: { deliverer_id: true, expires_at: true },
+          });
+          if (offre) {
+            await this.courseEvent.offerNew({
+              course,
+              deliverer_id: offre.deliverer_id,
+              offer_id: course.id,
+              expires_at: offre.expires_at,
+              is_chain_bonus: false,
+              renvoi: true,
+            });
+          }
+        }
       } catch (err) {
         this.logger.warn(`Émission updated event échouée pour ${id}: ${(err as Error).message}`);
       }

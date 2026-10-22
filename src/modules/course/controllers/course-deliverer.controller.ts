@@ -63,7 +63,13 @@ export class CourseDelivererController {
   // OFFER : accepter / refuser
   // ============================================================
 
-  @ApiOperation({ summary: "Accepter une offer de course" })
+  @ApiOperation({
+    summary: 'Accepter une offer de course',
+    description:
+      "409 « Cette course n'est plus disponible. » si l'offre n'est plus en attente (close, échue) " +
+      "ou si la course ne cherche plus de livreur (acceptée, fusionnée, annulée, confiée à Turbo) ; " +
+      "409 avec la raison si le livreur est en pause ou déjà en course. L'offre est alors close.",
+  })
   @Post(':id/accept')
   async accept(
     @CurrentDeliverer() deliverer: Deliverer,

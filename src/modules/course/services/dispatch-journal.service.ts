@@ -30,9 +30,13 @@ export type TypeEvenementDispatch =
   | 'DECONNEXION'
   /** Offre ignorée sans aucun signal depuis le seuil réglé. */
   | 'HORS_SERVICE_SANS_SIGNAL'
+  /** Remis dans la file après la perte de sa course (fusion, annulation). */
+  | 'REMIS_EN_FILE'
   // Course
   /** Bouton de la caisse « Livreur a récupéré » : course passée IN_DELIVERY. */
   | 'COURSE_EN_LIVRAISON_PAR_CAISSE'
+  /** Même bouton sur une course encore SANS livreur : rien ne change, à surveiller. */
+  | 'REMISE_CAISSE_SANS_LIVREUR'
   /** Annulation automatique d'une course : les commandes des clients sont gardées. */
   | 'ANNULATION_AUTO_COMMANDES_GARDEES';
 
