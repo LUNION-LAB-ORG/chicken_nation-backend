@@ -7,7 +7,10 @@ import { DelivererPushService, heureCourteAbidjan } from './deliverer-push.servi
 
 function monter() {
   const envois: any[] = [];
-  const prisma = { deliverer: { findUnique: jest.fn(async () => ({ expo_push_token: 'ExponentPushToken[x]', first_name: 'Koffi' })) } };
+  // Nouvelle appli (protocole 3) : les événements de course sur le canal des offres.
+  const prisma = {
+    deliverer: { findUnique: jest.fn(async () => ({ expo_push_token: 'ExponentPushToken[x]', first_name: 'Koffi', protocole_appli: 3 })) },
+  };
   const expo = { sendPushNotifications: jest.fn(async (m: unknown) => void envois.push(m)) };
   const service = new DelivererPushService(prisma as never, expo as never);
   const attendre = () => new Promise((r) => setImmediate(r));

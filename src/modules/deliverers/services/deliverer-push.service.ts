@@ -31,12 +31,41 @@ export type DelivererPushType =
   | 'presence_check' // Question de présence du matin (8 h)
   | 'new_ticket_message'; // Réponse support
 
+/** Canal des offres : sonnerie dédiée (Android : canal ; iOS : son embarqué). */
+export const CANAL_OFFRES = 'offres_v1';
+/**
+ * Appli qui rend muettes, appli ouverte, les notifications des événements de
+ * course (TYPES_MUETS_APPLI_OUVERTE) et sait les faire vibrer elle-même.
+ */
+export const PROTOCOLE_APPLI_SIMPLE = 3;
+
+/**
+ * Canal et son d'une notification selon l'appli du livreur. L'ancienne appli
+ * joue le son de TOUTE notification reçue au premier plan : sur le canal des
+ * offres, la validation du retrait, une annulation ou un ajout sonnaient
+ * comme une nouvelle course alors qu'aucune offre ne s'affichait. Pour elle,
+ * seule l'offre (`new_course_offer`) garde la sonnerie des offres ; le reste
+ * repasse au son du système, comme avant.
+ */
+export function canalPourAppli(
+  input: Pick<NotifyInput, 'type' | 'channelId' | 'sound'>,
+  protocoleAppli: number | null | undefined,
+): { channelId: string; sound: string } {
+  const channelId = input.channelId ?? 'default';
+  const sound = input.sound ?? 'default';
+  const ancienneAppli = (protocoleAppli ?? 0) < PROTOCOLE_APPLI_SIMPLE;
+  if (ancienneAppli && channelId === CANAL_OFFRES && input.type !== 'new_course_offer') {
+    return { channelId: 'default', sound: 'default' };
+  }
+  return { channelId, sound };
+}
+
 /** « 14 h 32 » : heure d'Abidjan (UTC toute l'année), comme les autres textes du livreur. */
 export function heureCourteAbidjan(date: Date): string {
   return `${date.getUTCHours()} h ${String(date.getUTCMinutes()).padStart(2, '0')}`;
 }
 
-interface NotifyInput {
+export interface NotifyInput {
   delivererId: string;
   type: DelivererPushType;
   title: string;
@@ -95,7 +124,7 @@ export class DelivererPushService {
     try {
       const deliverer = await this.prisma.deliverer.findUnique({
         where: { id: input.delivererId },
-        select: { expo_push_token: true, first_name: true },
+        select: { expo_push_token: true, first_name: true, protocole_appli: true },
       });
 
       if (!deliverer?.expo_push_token) {
@@ -119,13 +148,14 @@ export class DelivererPushService {
         return;
       }
 
+      const canal = canalPourAppli(input, deliverer.protocole_appli);
       await this.expoPush.sendPushNotifications({
         tokens: [deliverer.expo_push_token],
         title: input.title,
         body: input.body.substring(0, 200),
-        sound: input.sound ?? 'default',
+        sound: canal.sound,
         priority: input.critical ? 'high' : 'normal',
-        channelId: input.channelId ?? 'default',
+        channelId: canal.channelId,
         categoryId: input.categoryId,
         data: {
           type: input.type,
