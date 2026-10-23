@@ -14,19 +14,26 @@ import { CourseSettingsHelper } from './helpers/course-settings.helper';
 import { CourseListenerService } from './listeners/course.listener.service';
 import { DispatchListener } from './listeners/dispatch.listener';
 import { OrderBridgeListenerService } from './listeners/order-bridge.listener.service';
+import { PlanificateurListener } from './listeners/planificateur.listener';
 import { RemiseCaisseListener } from './listeners/remise-caisse.listener';
 import { AnnulationAutoService } from './services/annulation-auto.service';
 import { CourseActionService } from './services/course-action.service';
 import { CourseEnLivraisonService } from './services/course-en-livraison.service';
 import { CourseGroupingService } from './services/course-grouping.service';
+import { ApplicationPlanService } from './services/application-plan.service';
 import { CourseOfferService } from './services/course-offer.service';
+import { CoursePlanificateurService } from './services/course-planificateur.service';
 import { CourseQueryService } from './services/course-query.service';
 import { DeliveryActionService } from './services/delivery-action.service';
 import { DeliveryTrackingService } from './services/delivery-tracking.service';
 import { DirectionService } from './services/direction.service';
+import { EstimationPreparationService } from './services/estimation-preparation.service';
 import { GardeOffresService } from './services/garde-offres.service';
+import { InstantanePlanificationService } from './services/instantane-planification.service';
+import { LotsV2Service } from './services/lots-v2.service';
 import { OffreEnAttenteService } from './services/offre-en-attente.service';
 import { CourseBatchTask } from './tasks/course-batch.task';
+import { CoursePlanificateurTask } from './tasks/course-planificateur.task';
 import { CourseTask } from './tasks/course.task';
 import { CourseWebSocketService } from './websockets/course-websocket.service';
 
@@ -51,6 +58,12 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     CourseEnLivraisonService, // Bouton caisse « Livreur a récupéré » : la course part en livraison
     AnnulationAutoService, // Annulation automatique sans jamais annuler une commande de client
     DirectionService, // « Même direction » : tracés et détours Google pour la règle de regroupement
+    // Planificateur v2 (regroupement par direction, retenue au comptoir, fusions, offres par urgence)
+    EstimationPreparationService, // Fin de préparation estimée (cuisine, statistique horaire, défauts)
+    InstantanePlanificationService, // Lecture de l'instantané d'un restaurant
+    ApplicationPlanService, // Application conditionnelle et journalisée des actions
+    CoursePlanificateurService, // Passages sous verrou par restaurant, regroupés (500 ms)
+    LotsV2Service, // Lots sous v2 : vidés pour la flotte interne, direction pour Turbo
     // Events + WS
     CourseEvent,
     CourseWebSocketService,
@@ -61,9 +74,11 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     // à la connexion. Le journal et la clôture eux-mêmes : DispatchCommunModule (global).
     DispatchListener,
     RemiseCaisseListener, // Commande passée PICKED_UP hors code → course en livraison
+    PlanificateurListener, // Événements qui demandent un passage du planificateur v2
     // Cron
     CourseTask,
     CourseBatchTask, // Phase P3 : flush des batches matures toutes les 10 s
+    CoursePlanificateurTask, // Planificateur v2 : passage de 10 s, statistique de préparation horaire
   ],
   exports: [
     CourseOfferService,

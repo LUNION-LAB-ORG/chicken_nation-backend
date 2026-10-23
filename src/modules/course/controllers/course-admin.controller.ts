@@ -20,6 +20,7 @@ import { AssignDelivererDto } from '../dto/assign-deliverer.dto';
 import { CancelCourseDto } from '../dto/cancel-course.dto';
 import { QueryCourseStatsDto } from '../dto/query-course-stats.dto';
 import { QueryCoursesDto } from '../dto/query-courses.dto';
+import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { CourseActionService } from '../services/course-action.service';
 import { CourseOfferService } from '../services/course-offer.service';
 import { CourseQueryService } from '../services/course-query.service';
@@ -57,7 +58,28 @@ export class CourseAdminController {
     private readonly offerService: CourseOfferService,
     private readonly garde: GardeOffresService,
     private readonly gateway: AppGateway,
+    private readonly settings: CourseSettingsHelper,
   ) {}
+
+  @ApiOperation({
+    summary: 'Planificateur v2 : réglages appliqués et valeurs refusées',
+    description:
+      'Méthode (`v1` ou `v2`), restaurants concernés (vide = tous), réglages réellement appliqués ' +
+      '(défaut si absent ou refusé), et `refusees` : `[{ cle, valeur }]`, chaque valeur saisie mais ' +
+      'refusée (hors bornes ou illisible), remplacée par son défaut. Le backoffice la signale.',
+  })
+  @Get('planificateur/reglages')
+  async reglagesPlanificateur() {
+    const lue = await this.settings.lirePlanification();
+    return {
+      version: lue.planificateur.version,
+      restaurants: lue.planificateur.restaurants,
+      reglages: lue.planification.reglages,
+      google: lue.planification.google,
+      preparation: lue.preparation.reglages,
+      refusees: lue.refusees,
+    };
+  }
 
   @ApiOperation({ summary: 'Liste paginée des courses (toutes)' })
   @Get()

@@ -891,11 +891,44 @@ describe('ajout après le retrait (3.8) et départ', () => {
     expect(actionsDe(plan, 'OFFRIR')[0].deliverer_id).toBe('d2');
   });
 
+  it('départ : une commande de la course d’origine pas encore remise (bouton de la caisse) reste dans la course', () => {
+    const now = h('12:34:10');
+    const k = crs('k', {
+      statut: CourseStatut.IN_DELIVERY,
+      deliverer_id: 'd1',
+      picked_up_at: h('12:30'),
+      livraisons: [
+        { id: 'l1', statut: DeliveryStatut.PENDING, sequence_order: 1, commande: cmd('o', { statut: OrderStatus.PICKED_UP }) },
+        { id: 'l2', statut: DeliveryStatut.PENDING, sequence_order: 2, commande: cmd('y', { ready_at: h('12:20') }) },
+      ],
+    });
+    const plan = planifier(instant(now, { courses: [k], livreurs: [d1(now)] }));
+    expect(types(plan)).toEqual(['MARQUER_PARTI']);
+  });
+
   it('course déjà partie : ni ajout ni nouvelle action', () => {
     const now = h('12:32');
     const partie = { ...recuperee(), parti_at: h('12:31') };
     const plan = planifier(instant(now, { commandes: [cmd('q', { est: 2300, ready_at: now })], courses: [partie], livreurs: [d1(now)] }));
     expect(types(plan)).toEqual(['CREER_COURSE']);
+  });
+
+  it('course partie par « Je pars » avec une commande ajoutée pas remise : détachée et reprise dans le même passage', () => {
+    const now = h('12:33');
+    const k = crs('k', {
+      statut: CourseStatut.IN_DELIVERY,
+      deliverer_id: 'd1',
+      picked_up_at: h('12:30'),
+      parti_at: h('12:32'),
+      livraisons: [
+        { id: 'l1', statut: DeliveryStatut.PENDING, sequence_order: 1, commande: cmd('o', { statut: OrderStatus.PICKED_UP }) },
+        { id: 'l2', statut: DeliveryStatut.PENDING, sequence_order: 2, ajoutee_apres_retrait: true, commande: cmd('c', { ready_at: h('12:31') }) },
+      ],
+    });
+    const plan = planifier(instant(now, { courses: [k], livreurs: [d1(now)] }));
+    expect(types(plan)).toEqual(['DETACHER', 'CREER_COURSE']);
+    expect(actionsDe(plan, 'DETACHER')[0]).toMatchObject({ course_id: 'k', order_id: 'c', motif: 'LIVREUR_PARTI' });
+    expect(actionsDe(plan, 'CREER_COURSE')[0].order_ids).toEqual(['c']);
   });
 });
 
@@ -1084,7 +1117,9 @@ describe('retour à v1 en pleine activité (5.5)', () => {
       picked_up_at: h('12:30'),
       livraisons: [
         { id: 'l1', statut: DeliveryStatut.PENDING, sequence_order: 1, commande: cmd('o', { statut: OrderStatus.PICKED_UP }) },
-        { id: 'l2', statut: DeliveryStatut.PENDING, sequence_order: 2, commande: cmd('x') },
+        { id: 'l2', statut: DeliveryStatut.PENDING, sequence_order: 2, ajoutee_apres_retrait: true, commande: cmd('x') },
+        // Commande de la course d'origine pas encore remise (bouton de la caisse) : gardée.
+        { id: 'l3', statut: DeliveryStatut.PENDING, sequence_order: 3, commande: cmd('y') },
       ],
     });
     const retenue = crs('k2', { statut: CourseStatut.AT_RESTAURANT, deliverer_id: 'd2', commandes: [cmd('a')], retenue_jusqua: h('12:34'), commandes_attendues: ['b'] });

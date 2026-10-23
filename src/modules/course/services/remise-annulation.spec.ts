@@ -53,7 +53,11 @@ function monter(donnees: DonneesDispatch) {
     base.prisma,
     courseEvent as never,
     new CourseHelper(),
-    { load: jest.fn(async () => ({ offerDurationSeconds: 120, maxRefusalCount: 5 })) } as never,
+    {
+      load: jest.fn(async () => ({ offerDurationSeconds: 120, maxRefusalCount: 5 })),
+      // Ancienne méthode (v1) : la recherche choisit elle-même le livreur.
+      versionPour: jest.fn(async () => 'v1'),
+    } as never,
     { pickBestCandidate: jest.fn(async () => null) } as never,
     {} as never,
     { load: jest.fn(async () => ({ scoringShadowMode: false })) } as never,

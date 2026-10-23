@@ -37,6 +37,7 @@ import {
   decisionCreationOffre,
   decisionExpiration,
 } from '../helpers/offres.rules';
+import { planificateurDuRestaurant } from '../helpers/planification.rules';
 import { GardeOffresService } from './garde-offres.service';
 
 interface CreateCourseFromOrdersInput {
@@ -186,6 +187,13 @@ export class CourseOfferService {
 
     if (course.statut !== CourseStatut.PENDING_ASSIGNMENT || course.turbo_escalated_at) {
       return; // déjà assignée/annulée, ou confiée à Turbo (plus d'offre interne)
+    }
+
+    // Planificateur v2 : c'est lui qui choisit (urgence, livreur au comptoir
+    // d'abord) et qui applique le seuil de refus. Ici, on lui demande un passage.
+    if ((await this.settings.versionPour(course.restaurant_id)) === 'v2') {
+      this.courseEvent.demanderPlanification({ restaurant_id: course.restaurant_id, raison: 'RECHERCHE' });
+      return;
     }
 
     // A1 Fix : skip si une offer PENDING est déjà active sur cette course.
@@ -544,8 +552,14 @@ export class CourseOfferService {
    */
   async remindPendingOffers(): Promise<number> {
     const now = new Date();
-    /** Secondes écoulées depuis l'envoi déclenchant une relance. */
-    const PALIERS = [30, 60];
+    /**
+     * Planificateur v2 : relances à 25 % et 50 % de la durée de l'offre
+     * (conception 4.3), soit 30 et 60 s pour l'offre de 120 s par défaut ;
+     * elles suivent la durée si elle est réglée plus courte. v1 : 30 et 60 s.
+     */
+    const planificateur = await this.settings.planificateurLu();
+    const paliers = (restaurantId: string, dureeS: number) =>
+      planificateurDuRestaurant(planificateur, restaurantId) === 'v2' ? [dureeS * 0.25, dureeS * 0.5] : [30, 60];
 
     const offers = await this.prisma.courseOfferAttempt.findMany({
       where: { status: CourseOfferStatus.PENDING, expires_at: { gt: now } },
@@ -556,7 +570,7 @@ export class CourseOfferService {
         expires_at: true,
         reminders_sent: true,
         course: {
-          select: { id: true, reference: true, restaurant: { select: { name: true } } },
+          select: { id: true, reference: true, restaurant_id: true, restaurant: { select: { name: true } } },
         },
       },
       take: 100, // garde-fou
@@ -565,7 +579,8 @@ export class CourseOfferService {
     let sent = 0;
     for (const offer of offers) {
       const ecoule = (now.getTime() - offer.offered_at.getTime()) / 1000;
-      const dus = PALIERS.filter((p) => ecoule >= p).length;
+      const dureeS = (offer.expires_at.getTime() - offer.offered_at.getTime()) / 1000;
+      const dus = paliers(offer.course.restaurant_id, dureeS).filter((p) => ecoule >= p).length;
       if (dus <= offer.reminders_sent) continue;
 
       // L'offre vaut-elle encore ? Livreur passé en pause, hors service ou en
@@ -615,6 +630,9 @@ export class CourseOfferService {
    */
   async retryUnassignedCourses(): Promise<number> {
     const settings = await this.settings.load();
+    // Planificateur v2 : Turbo (compté depuis la commande prête) et nouvelles
+    // offres sont décidés par lui ; ici restent l'alerte et l'expiration.
+    const planificateur = await this.settings.planificateurLu();
     const now = new Date();
 
     const waiting = await this.prisma.course.findMany({
@@ -711,10 +729,13 @@ export class CourseOfferService {
         continue; // jamais d'offres internes pour une course TURBO
       }
 
+      const v2 = planificateurDuRestaurant(planificateur, course.restaurant_id) === 'v2';
+
       // 2. SATURATION INTERNE → bascule sur la flotte externe Turbo.
       //    Se produit AVANT l'alerte staff : si Turbo prend la course, il n'y a
       //    plus rien à signaler. L'alerte reste le filet si Turbo échoue aussi.
       if (
+        !v2 &&
         settings.turboFallbackEnabled &&
         waitingMin >= settings.turboFallbackAfterMin
       ) {
@@ -748,6 +769,7 @@ export class CourseOfferService {
       }
 
       // 4. Nouvelle tentative d'affectation (best-effort, on n'interrompt pas la boucle).
+      if (v2) continue;
       try {
         await this.offerNextDeliverer(course.id);
         retried++;
@@ -935,6 +957,16 @@ export class CourseOfferService {
       ok: true,
       message: `Course ${ancienneReference} reprise en interne — le groupe Turbo a été annulé automatiquement.`,
     };
+  }
+
+  /**
+   * Planificateur v2 : dernier recours, la course sans livreur interne depuis
+   * `minutes` (comptées depuis sa plus ancienne commande prête) part chez
+   * Turbo. Même mécanique que la bascule automatique (offres closes avant,
+   * retour en recherche interne si Turbo refuse).
+   */
+  confierATurboParPlanificateur(courseId: string, minutes: number): Promise<boolean> {
+    return this.escalateToTurbo(courseId, minutes);
   }
 
   /**

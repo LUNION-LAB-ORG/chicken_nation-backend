@@ -69,6 +69,10 @@ function monter(donnees: DonneesDispatch, options: { turbo?: { sentOrderIds: str
       turboFallbackEnabled: false,
       turboFallbackAfterMin: 4,
     })),
+    // Ancienne méthode (v1) : la recherche choisit elle-même le livreur, comme au
+    // lot 1. Sous v2, c'est le planificateur (course-planificateur.service.spec.ts).
+    versionPour: jest.fn(async () => 'v1'),
+    planificateurLu: jest.fn(async () => ({ version: 'v1', restaurants: [], refusees: [] })),
   };
   // Sélection : la VRAIE règle (filtre Prisma), dans l'ordre de la file.
   const scoring = {
@@ -132,7 +136,7 @@ function monter(donnees: DonneesDispatch, options: { turbo?: { sentOrderIds: str
   );
   // Présence de l'appli du livreur (socket ouvert), lue par l'affectation forcée.
   const presence = { livreurConnecte: jest.fn(async (): Promise<boolean | null> => true) };
-  const admin = new CourseAdminController({} as never, actions, serviceOffres, garde, presence as never);
+  const admin = new CourseAdminController({} as never, actions, serviceOffres, garde, presence as never, settings as never);
   const types = () => base.journal.map((l) => l.type);
   const relances = () =>
     emis.filter((e) => e.canal === DispatchEvenements.RECHERCHE_A_RELANCER).map((e) => e.charge.course_id);

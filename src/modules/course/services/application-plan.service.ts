@@ -1,0 +1,788 @@
+import { Injectable, Logger } from '@nestjs/common';
+import {
+  CourseOfferStatus,
+  CourseStatut,
+  DeliveryService,
+  DeliveryStatut,
+  EntityStatus,
+  OrderStatus,
+  OrderType,
+  Prisma,
+} from '@prisma/client';
+
+import { PrismaService } from 'src/database/services/prisma.service';
+import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
+
+import { CourseEvent } from '../events/course.event';
+import {
+  commandesAttenduesAEcrire,
+  libelleRegroupement,
+  liberationAAnnoncer,
+  numeroterArrets,
+  RaisonPlanificateur,
+  RaisonsPlanificateur,
+  texteCommandeAjoutee,
+  texteCommandeRetiree,
+  texteRetenue,
+  texteToutEstPret,
+} from '../helpers/application-plan.rules';
+import { CourseHelper } from '../helpers/course.helper';
+import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
+import { recalculerFraisCourse } from '../helpers/frais-course';
+import {
+  ActionAjouter,
+  ActionConfierTurbo,
+  ActionCreerCourse,
+  ActionDetacher,
+  ActionFusionner,
+  ActionLiberer,
+  ActionMarquerParti,
+  ActionOffrir,
+  ActionOrdonner,
+  ActionPlanification,
+  ActionRetenir,
+  MotifLiberation,
+  PlanRestaurant,
+  TypeActionPlanification,
+} from '../helpers/planification.rules';
+import { STATUTS_LIVRAISON_TERMINEE } from '../helpers/remise-course.rules';
+import { CourseGroupingService } from './course-grouping.service';
+import { CourseOfferService } from './course-offer.service';
+import { DispatchJournalService } from './dispatch-journal.service';
+import { ContexteInstantane, InstantaneLu } from './instantane-planification.service';
+import { OffresClotureService } from './offres-cloture.service';
+
+/** La course ou la commande a changé entre la lecture et l'écriture : l'action est abandonnée. */
+export class ActionAbandonnee extends Error {
+  constructor(readonly motif: string) {
+    super(motif);
+  }
+}
+
+/**
+ * Turbo a refusé la course (ou était injoignable) : pas de nouvel essai avant
+ * 2 min. Le passage de 10 s ne relance pas Turbo (et sa cloche) à chaque fois.
+ */
+const PAUSE_APRES_ECHEC_TURBO_MS = 2 * 60 * 1000;
+const MOTIF_TURBO_PAS_AVANT = 'TURBO_PAS_AVANT';
+
+/** Statuts d'une course dont le livreur est affecté et pas parti. */
+const STATUTS_AVEC_LIVREUR: CourseStatut[] = [CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT, CourseStatut.IN_DELIVERY];
+
+export interface OptionsApplication {
+  /** `course.max_refusal_count` : au-delà, la course expire au lieu d'être proposée (comme aujourd'hui). */
+  maxRefus: number;
+  /** Retour à v1 : les commandes détachées repartent dans l'ancien regroupement par lots. */
+  repliV1?: boolean;
+}
+
+export interface ResultatApplication {
+  appliquees: TypeActionPlanification[];
+  abandonnees: { type: TypeActionPlanification; motif: string }[];
+  /** Courses créées : clé du plan (`nouvelle-N`) vers identifiant. */
+  creees: Map<string, string>;
+}
+
+/** État d'un passage : ce qui reste à annoncer une fois toutes les actions écrites. */
+interface Passage {
+  restaurantId: string;
+  maintenant: Date;
+  lu: InstantaneLu;
+  options: OptionsApplication;
+  cles: Map<string, string>;
+  /** Courses modifiées sans changement de statut : `course:statut:changed` avec cette raison. */
+  touchees: Map<string, RaisonPlanificateur>;
+  /** Commandes ajoutées par course (ajouts et fusions). */
+  ajouts: Map<string, { n: number; apresRetrait: boolean }>;
+  /** Commandes détachées au départ, par course. */
+  retirees: Map<string, string[]>;
+  /** Première retenue posée sur la course dans ce passage (le livreur est prévenu). */
+  retenues: Map<string, { jusqua: Date; attendues: string[] }>;
+  /** Retenues levées dans ce passage, avec leur motif. */
+  liberations: Map<string, MotifLiberation>;
+}
+
+/**
+ * APPLICATION DU PLAN du planificateur v2 (planification.rules.ts) : chaque
+ * action est écrite par une mise à jour CONDITIONNELLE (la course et la
+ * commande doivent être encore telles que lues) ; si la condition échoue,
+ * l'action est abandonnée et le passage suivant la recalcule. Chaque action
+ * a sa ligne au journal de la diffusion, avec son motif.
+ *
+ * Après les écritures : `course:statut:changed` (livreur, restaurant, siège)
+ * pour chaque course touchée, offre en attente renvoyée à jour (même
+ * échéance) au livreur sollicité, notifications au livreur affecté.
+ *
+ * Jamais d'affectation sans acceptation : OFFRIR passe par `offerToDeliverer`
+ * (règle unique relue sous le verrou du livreur) et le livreur accepte.
+ */
+@Injectable()
+export class ApplicationPlanService {
+  private readonly logger = new Logger('Dispatch');
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly offres: CourseOfferService,
+    private readonly helper: CourseHelper,
+    private readonly courseEvent: CourseEvent,
+    private readonly push: DelivererPushService,
+    private readonly journal: DispatchJournalService,
+    private readonly cloture: OffresClotureService,
+    private readonly regroupement: CourseGroupingService,
+  ) {}
+
+  async appliquer(plan: PlanRestaurant, lu: InstantaneLu, options: OptionsApplication): Promise<ResultatApplication> {
+    const passage: Passage = {
+      restaurantId: plan.restaurant_id,
+      maintenant: plan.maintenant,
+      lu,
+      options,
+      cles: new Map(),
+      touchees: new Map(),
+      ajouts: new Map(),
+      retirees: new Map(),
+      retenues: new Map(),
+      liberations: new Map(),
+    };
+    const resultat: ResultatApplication = { appliquees: [], abandonnees: [], creees: passage.cles };
+
+    for (const action of plan.actions) {
+      try {
+        await this.appliquerUne(action, passage);
+        resultat.appliquees.push(action.type);
+      } catch (err) {
+        const motif = err instanceof ActionAbandonnee ? err.motif : `ERREUR: ${(err as Error)?.message ?? err}`;
+        resultat.abandonnees.push({ type: action.type, motif });
+        if (!(err instanceof ActionAbandonnee)) {
+          this.logger.error(`Action ${action.type} en échec : ${(err as Error)?.message ?? err}`);
+        }
+        if (motif === MOTIF_TURBO_PAS_AVANT) continue; // attente normale, rien à journaliser
+        await this.journal.ecrire({
+          type: 'ACTION_ABANDONNEE',
+          motif: action.type,
+          source: 'serveur',
+          restaurant_id: passage.restaurantId,
+          course_id: 'course_id' in action ? action.course_id : 'cible_id' in action ? action.cible_id : null,
+          details: { raison: motif.slice(0, 200) },
+        });
+      }
+    }
+
+    await this.annoncer(passage);
+    return resultat;
+  }
+
+  private appliquerUne(a: ActionPlanification, p: Passage): Promise<void> {
+    switch (a.type) {
+      case 'MARQUER_PARTI':
+        return this.marquerParti(a, p);
+      case 'DETACHER':
+        return this.detacher(a, p);
+      case 'AJOUTER':
+        return this.ajouter(a, p);
+      case 'CREER_COURSE':
+        return this.creerCourse(a, p);
+      case 'FUSIONNER':
+        return this.fusionner(a, p);
+      case 'ORDONNER':
+        return this.ordonner(a, p);
+      case 'OFFRIR':
+        return this.offrir(a, p);
+      case 'RETENIR':
+        return this.retenir(a, p);
+      case 'LIBERER':
+        return this.liberer(a, p);
+      case 'CONFIER_TURBO':
+        return this.confierTurbo(a, p);
+    }
+  }
+
+  // ─── Départs ───────────────────────────────────────────────────────────────
+
+  private async marquerParti(a: ActionMarquerParti, p: Passage): Promise<void> {
+    const { count } = await this.prisma.course.updateMany({
+      where: { id: a.course_id, statut: CourseStatut.IN_DELIVERY, parti_at: null },
+      data: { parti_at: p.maintenant },
+    });
+    if (count !== 1) throw new ActionAbandonnee('COURSE_CHANGEE');
+    p.touchees.set(a.course_id, RaisonsPlanificateur.DEPART);
+    await this.journal.ecrire({
+      type: 'COURSE_PARTIE',
+      motif: a.motif,
+      source: 'serveur',
+      restaurant_id: p.restaurantId,
+      course_id: a.course_id,
+      deliverer_id: a.deliverer_id,
+      details: { libelle: a.libelle },
+    });
+  }
+
+  private async detacher(a: ActionDetacher, p: Passage): Promise<void> {
+    const { count } = await this.prisma.delivery.deleteMany({
+      where: {
+        course_id: a.course_id,
+        order_id: a.order_id,
+        statut: DeliveryStatut.PENDING,
+        ajoutee_apres_retrait: true,
+        order: { status: OrderStatus.READY },
+      },
+    });
+    if (count !== 1) throw new ActionAbandonnee('LIVRAISON_CHANGEE');
+    await recalculerFraisCourse(this.prisma, a.course_id).catch(() => undefined);
+    p.touchees.set(a.course_id, RaisonsPlanificateur.COMMANDE_DETACHEE);
+    p.retirees.set(a.course_id, [...(p.retirees.get(a.course_id) ?? []), a.reference]);
+    await this.journal.ecrire({
+      type: 'COMMANDE_DETACHEE',
+      motif: a.motif,
+      source: 'serveur',
+      restaurant_id: p.restaurantId,
+      course_id: a.course_id,
+      order_id: a.order_id,
+      details: { commande: a.reference, libelle: a.libelle },
+    });
+    // Retour à l'ancienne méthode : la commande repart dans un lot.
+    if (p.options.repliV1) {
+      await this.regroupement.tryGroupOrder(a.order_id).catch((err) =>
+        this.logger.warn(`Commande ${a.reference} détachée non regroupée : ${(err as Error)?.message}`),
+      );
+    }
+  }
+
+  // ─── Ajouts, créations, fusions ───────────────────────────────────────────
+
+  private async ajouter(a: ActionAjouter, p: Passage): Promise<void> {
+    const now = p.maintenant;
+    const motif = libelleRegroupement(a.motif);
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // La course est encore telle que lue : même statut, même livreur, pas
+        // chez Turbo, pas partie. Une acceptation au même instant l'emporte.
+        const course = await tx.course.updateMany({
+          where: {
+            id: a.course_id,
+            statut: a.statut_course,
+            deliverer_id: a.deliverer_id,
+            turbo_escalated_at: null,
+            ...(a.statut_course === CourseStatut.IN_DELIVERY ? { parti_at: null } : {}),
+          },
+          data: { updated_at: now, ...(motif ? { motif_regroupement: motif } : {}) },
+        });
+        if (course.count !== 1) throw new ActionAbandonnee('COURSE_CHANGEE');
+        const commande = await tx.order.findFirst({
+          where: {
+            id: a.order_id,
+            restaurant_id: p.restaurantId,
+            status: OrderStatus.READY,
+            delivery: null,
+            entity_status: { not: EntityStatus.DELETED },
+          },
+          select: { id: true, recovery_code: true },
+        });
+        if (!commande) throw new ActionAbandonnee('COMMANDE_CHANGEE');
+        const max = await tx.delivery.aggregate({ where: { course_id: a.course_id }, _max: { sequence_order: true } });
+        await tx.delivery.create({
+          data: {
+            course_id: a.course_id,
+            order_id: a.order_id,
+            sequence_order: (max._max.sequence_order ?? 0) + 1,
+            delivery_pin: commande.recovery_code ?? this.helper.generateDeliveryPin(),
+            statut: DeliveryStatut.PENDING,
+            ajoutee_at: now,
+            ajoutee_apres_retrait: a.apres_retrait,
+          },
+        });
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ActionAbandonnee('COMMANDE_DEJA_EN_COURSE');
+      }
+      throw err;
+    }
+    await this.reporterCodeClient(a.order_id);
+    await recalculerFraisCourse(this.prisma, a.course_id).catch(() => undefined);
+    this.noterAjout(p, a.course_id, 1, a.apres_retrait, RaisonsPlanificateur.COMMANDE_AJOUTEE);
+    await this.journal.ecrire({
+      type: 'COMMANDE_AJOUTEE',
+      motif: a.motif ?? 'SEULE',
+      source: 'serveur',
+      restaurant_id: p.restaurantId,
+      course_id: a.course_id,
+      deliverer_id: a.deliverer_id,
+      order_id: a.order_id,
+      details: {
+        commande: a.reference,
+        libelle: a.libelle,
+        detour_s: a.detour_s,
+        apres_retrait: a.apres_retrait,
+        attendue: a.attendue,
+        statut_course: a.statut_course,
+      },
+    });
+  }
+
+  private async creerCourse(a: ActionCreerCourse, p: Passage): Promise<void> {
+    const now = p.maintenant;
+    let creee: { id: string; reference: string; commandes: string[] } | null = null;
+    for (let essai = 0; essai < 3 && !creee; essai++) {
+      try {
+        creee = await this.prisma.$transaction(async (tx) => {
+          const commandes = await tx.order.findMany({
+            where: {
+              id: { in: a.order_ids },
+              restaurant_id: p.restaurantId,
+              type: OrderType.DELIVERY,
+              delivery_service: DeliveryService.CHICKEN_NATION,
+              status: OrderStatus.READY,
+              entity_status: { not: EntityStatus.DELETED },
+              delivery: null,
+            },
+            select: { id: true, delivery_fee: true, recovery_code: true },
+          });
+          if (commandes.length === 0) throw new ActionAbandonnee('COMMANDES_CHANGEES');
+          const parId = new Map(commandes.map((c) => [c.id, c]));
+          const ordre = [...a.sequence, ...a.order_ids].filter((id, i, t) => parId.has(id) && t.indexOf(id) === i);
+
+          // Code de retrait tiré sous le verrou du restaurant (unique dans la journée).
+          const code = await this.helper.genererCodeRetrait(tx, p.restaurantId, now);
+          const course = await tx.course.create({
+            data: {
+              reference: this.helper.generateReference(),
+              pickup_code: code,
+              restaurant_id: p.restaurantId,
+              statut: CourseStatut.PENDING_ASSIGNMENT,
+              total_delivery_fee: commandes.reduce((s, c) => s + (c.delivery_fee ?? 0), 0),
+              motif_regroupement: ordre.length > 1 ? libelleRegroupement(a.motif) : null,
+            },
+            select: { id: true, reference: true },
+          });
+          for (const [i, id] of ordre.entries()) {
+            const c = parId.get(id)!;
+            await tx.delivery.create({
+              data: {
+                course_id: course.id,
+                order_id: id,
+                sequence_order: i + 1,
+                // Le code du client vient de la commande (déjà sous ses yeux).
+                delivery_pin: c.recovery_code ?? this.helper.generateDeliveryPin(),
+                statut: DeliveryStatut.PENDING,
+              },
+            });
+          }
+          return { id: course.id, reference: course.reference, commandes: ordre };
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+          const cible = String((err.meta as { target?: unknown } | undefined)?.target ?? '');
+          if (cible.includes('reference')) continue;
+          throw new ActionAbandonnee('COMMANDE_DEJA_EN_COURSE');
+        }
+        throw err;
+      }
+    }
+    if (!creee) throw new ActionAbandonnee('REFERENCE_INDISPONIBLE');
+
+    for (const id of creee.commandes) await this.reporterCodeClient(id);
+    p.cles.set(a.cle, creee.id);
+    p.touchees.set(creee.id, RaisonsPlanificateur.COURSE_CREEE);
+    await this.journal.ecrire({
+      type: 'COURSE_CREEE',
+      motif: creee.commandes.length > 1 ? (a.motif ?? 'GROUPE') : 'SEULE',
+      source: 'serveur',
+      restaurant_id: p.restaurantId,
+      course_id: creee.id,
+      details: { course: creee.reference, commandes: creee.commandes.length, libelle: a.libelle },
+    });
+  }
+
+  private async fusionner(a: ActionFusionner, p: Passage): Promise<void> {
+    const now = p.maintenant;
+    const motif = libelleRegroupement(a.motif);
+    const refCible = p.lu.instantane.courses.find((k) => k.id === a.cible_id)?.reference ?? a.cible_id;
+    await this.prisma.$transaction(async (tx) => {
+      const cible = await tx.course.updateMany({
+        where: {
+          id: a.cible_id,
+          statut: a.statut_cible,
+          deliverer_id: a.deliverer_id,
+          turbo_escalated_at: null,
+          ...(a.statut_cible === CourseStatut.IN_DELIVERY ? { parti_at: null } : {}),
+        },
+        data: { updated_at: now, ...(motif ? { motif_regroupement: motif } : {}) },
+      });
+      if (cible.count !== 1) throw new ActionAbandonnee('CIBLE_CHANGEE');
+
+      // La course absorbée cherche encore un livreur, sans livreur, pas chez
+      // Turbo : une acceptation au même instant l'emporte (et la fusion est
+      // abandonnée), jamais l'inverse.
+      const absorbee = await tx.course.updateMany({
+        where: { id: a.absorbee_id, statut: CourseStatut.PENDING_ASSIGNMENT, deliverer_id: null, turbo_escalated_at: null },
+        data: {
+          statut: CourseStatut.CANCELLED,
+          cancelled_at: now,
+          cancelled_by: 'system',
+          cancelled_reason: `Fusionnée automatiquement avec course ${refCible}`,
+          offer_expires_at: null,
+        },
+      });
+      if (absorbee.count !== 1) throw new ActionAbandonnee('COURSE_ABSORBEE_CHANGEE');
+
+      const livraisons = await tx.delivery.findMany({
+        where: { course_id: a.absorbee_id, statut: { notIn: STATUTS_LIVRAISON_TERMINEE } },
+        select: { id: true, order_id: true, order: { select: { status: true } } },
+        orderBy: { sequence_order: 'asc' },
+      });
+      const actives = livraisons.filter((l) => l.order.status !== OrderStatus.CANCELLED);
+      const attendues = new Set(a.order_ids);
+      if (actives.length !== attendues.size || actives.some((l) => !attendues.has(l.order_id))) {
+        throw new ActionAbandonnee('COMMANDES_CHANGEES');
+      }
+      const max = await tx.delivery.aggregate({ where: { course_id: a.cible_id }, _max: { sequence_order: true } });
+      for (const [i, l] of actives.entries()) {
+        const deplacee = await tx.delivery.updateMany({
+          where: { id: l.id, course_id: a.absorbee_id },
+          data: {
+            course_id: a.cible_id,
+            sequence_order: (max._max.sequence_order ?? 0) + 1 + i,
+            ajoutee_at: now,
+            ajoutee_apres_retrait: a.apres_retrait,
+          },
+        });
+        if (deplacee.count !== 1) throw new ActionAbandonnee('LIVRAISON_CHANGEE');
+      }
+      // Livraisons restées sur la course absorbée (commande annulée) : closes avec elle.
+      await tx.delivery.updateMany({
+        where: { course_id: a.absorbee_id, statut: { notIn: STATUTS_LIVRAISON_TERMINEE } },
+        data: { statut: DeliveryStatut.CANCELLED },
+      });
+    });
+
+    // Offre de la course absorbée close sans pénalité (l'appli la ferme).
+    await this.cloture
+      .clorePourCourse(a.absorbee_id, 'COURSE_FUSIONNEE', {
+        relancerRecherche: false,
+        details: { fusionnee_dans: a.cible_id },
+        maintenant: now,
+      })
+      .catch((err) => this.logger.warn(`Offres de la course absorbée non closes : ${(err as Error)?.message}`));
+    await recalculerFraisCourse(this.prisma, a.cible_id).catch(() => undefined);
+    await recalculerFraisCourse(this.prisma, a.absorbee_id).catch(() => undefined);
+
+    this.noterAjout(p, a.cible_id, a.order_ids.length, a.apres_retrait, RaisonsPlanificateur.COURSES_FUSIONNEES);
+    await this.journal.ecrire({
+      type: 'COURSES_FUSIONNEES',
+      motif: a.motif ?? 'GROUPE',
+      source: 'serveur',
+      restaurant_id: p.restaurantId,
+      course_id: a.cible_id,
+      deliverer_id: a.deliverer_id,
+      details: {
+        cible: refCible,
+        absorbee_id: a.absorbee_id,
+        commandes: a.order_ids.length,
+        offres_closes: a.offres_a_clore.length,
+        libelle: a.libelle,
+        detour_s: a.detour_s,
+      },
+    });
+
+    // Course absorbée annulée : socket au siège et au restaurant.
+    const absorbee = await this.prisma.course.findUnique({ where: { id: a.absorbee_id }, include: COURSE_FULL_INCLUDE });
+    if (absorbee) {
+      await this.courseEvent.courseCancelled({
+        course: absorbee,
+        cancelled_by: 'system',
+        reason: absorbee.cancelled_reason ?? 'Fusionnée',
+      });
+    }
+  }
+
+  private noterAjout(p: Passage, courseId: string, n: number, apresRetrait: boolean, raison: RaisonPlanificateur): void {
+    const avant = p.ajouts.get(courseId);
+    p.ajouts.set(courseId, { n: (avant?.n ?? 0) + n, apresRetrait: (avant?.apresRetrait ?? false) || apresRetrait });
+    p.touchees.set(courseId, raison);
+  }
+
+  /** Commande antérieure au code client : le code tiré pour la livraison est recopié sur la commande. */
+  private async reporterCodeClient(orderId: string): Promise<void> {
+    const d = await this.prisma.delivery.findFirst({
+      where: { order_id: orderId, order: { recovery_code: null } },
+      select: { delivery_pin: true },
+    });
+    if (!d?.delivery_pin) return;
+    await this.prisma.order
+      .update({ where: { id: orderId }, data: { recovery_code: d.delivery_pin } })
+      .catch((e) => this.logger.error(`Report du code sur la commande ${orderId} échoué : ${e?.message}`));
+  }
+
+  // ─── Ordre des arrêts ─────────────────────────────────────────────────────
+
+  private async ordonner(a: ActionOrdonner, p: Passage): Promise<void> {
+    // Contrainte unique (course, rang) : on décale d'abord toutes les
+    // livraisons au-delà du plus grand rang, puis on pose les rangs voulus.
+    const change = await this.prisma.$transaction(async (tx) => {
+      const livraisons = await tx.delivery.findMany({
+        where: { course_id: a.course_id },
+        select: { id: true, order_id: true, statut: true, sequence_order: true },
+      });
+      const rangs = numeroterArrets(livraisons, a.sequence);
+      if (!rangs) return false;
+      const max = Math.max(...livraisons.map((l) => l.sequence_order));
+      await tx.delivery.updateMany({ where: { course_id: a.course_id }, data: { sequence_order: { increment: max } } });
+      for (const [id, rang] of rangs) {
+        await tx.delivery.updateMany({ where: { id, course_id: a.course_id }, data: { sequence_order: rang } });
+      }
+      return true;
+    });
+    if (!change) return;
+    if (!p.touchees.has(a.course_id)) p.touchees.set(a.course_id, RaisonsPlanificateur.COMMANDE_AJOUTEE);
+    await this.journal.ecrire({
+      type: 'ARRETS_ORDONNES',
+      source: 'serveur',
+      restaurant_id: p.restaurantId,
+      course_id: a.course_id,
+      details: { sequence: a.sequence },
+    });
+  }
+
+  // ─── Offres, retenues, Turbo ──────────────────────────────────────────────
+
+  private async offrir(a: ActionOffrir, p: Passage): Promise<void> {
+    const courseId = a.course_id ?? p.cles.get(a.course_cle) ?? null;
+    if (!courseId) throw new ActionAbandonnee('COURSE_NON_CREEE');
+
+    // Gardé d'aujourd'hui : trop de refus, la course expire au lieu d'être reproposée.
+    const refus = p.lu.contexte.refus.get(courseId) ?? 0;
+    if (refus >= p.options.maxRefus) {
+      const { count } = await this.prisma.course.updateMany({
+        where: { id: courseId, statut: CourseStatut.PENDING_ASSIGNMENT },
+        data: { statut: CourseStatut.EXPIRED, offer_expires_at: null },
+      });
+      if (count === 1) this.logger.warn(`Course ${courseId.slice(0, 8)} : seuil de refus atteint (${refus}), EXPIRED`);
+      throw new ActionAbandonnee('SEUIL_DE_REFUS');
+    }
+
+    const envoyee = await this.offres.offerToDeliverer(courseId, a.deliverer_id);
+    if (!envoyee) throw new ActionAbandonnee('OFFRE_NON_CREEE');
+    await this.journal.ecrire({
+      type: 'OFFRE_PLANIFIEE',
+      motif: a.cout.au_comptoir ? 'AU_COMPTOIR' : 'MINUTES',
+      source: 'serveur',
+      restaurant_id: p.restaurantId,
+      course_id: courseId,
+      deliverer_id: a.deliverer_id,
+      details: {
+        libelle: a.libelle,
+        marge_s: a.marge_s,
+        cout_min: Math.round(a.cout.cout_min * 10) / 10,
+        eta_s: Math.round(a.cout.eta_s),
+        source_eta: a.cout.source_eta,
+        rang_file: a.cout.rang_file,
+      },
+    });
+  }
+
+  private async retenir(a: ActionRetenir, p: Passage): Promise<void> {
+    const now = p.maintenant;
+    const avant = p.lu.instantane.courses.find((k) => k.id === a.course_id);
+    const { count } = await this.prisma.course.updateMany({
+      where: {
+        id: a.course_id,
+        statut: { in: STATUTS_AVEC_LIVREUR },
+        parti_at: null,
+        // Une retenue ne peut que diminuer ; terminée, elle ne revient jamais.
+        OR: [{ retenue_jusqua: null }, { retenue_jusqua: { gt: now, gte: a.jusqua } }],
+      },
+      data: { retenue_jusqua: a.jusqua, commandes_attendues: commandesAttenduesAEcrire(a.attendues) as unknown as Prisma.InputJsonValue },
+    });
+    if (count !== 1) throw new ActionAbandonnee('COURSE_CHANGEE');
+    p.touchees.set(a.course_id, RaisonsPlanificateur.RETENUE);
+    await this.journal.ecrire({
+      type: 'COURSE_RETENUE',
+      source: 'serveur',
+      restaurant_id: p.restaurantId,
+      course_id: a.course_id,
+      deliverer_id: a.deliverer_id,
+      details: {
+        jusqua: a.jusqua.toISOString(),
+        attendues: a.attendues.map((x) => `${x.reference}(${x.prete_vers.toISOString()})`),
+        libelle: a.libelle,
+      },
+    });
+    // Première retenue de la course : le livreur sera prévenu (vibration, notification).
+    if (!avant?.retenue_jusqua) {
+      p.retenues.set(a.course_id, { jusqua: a.jusqua, attendues: a.attendues.map((x) => x.reference) });
+    }
+  }
+
+  private async liberer(a: ActionLiberer, p: Passage): Promise<void> {
+    const { count } = await this.prisma.course.updateMany({
+      where: { id: a.course_id, retenue_jusqua: { not: null } },
+      data: { retenue_jusqua: a.jusqua, commandes_attendues: [] },
+    });
+    if (count !== 1) throw new ActionAbandonnee('COURSE_CHANGEE');
+    p.touchees.set(a.course_id, RaisonsPlanificateur.RETENUE_LEVEE);
+    await this.journal.ecrire({
+      type: 'RETENUE_LEVEE',
+      motif: a.motif,
+      source: 'serveur',
+      restaurant_id: p.restaurantId,
+      course_id: a.course_id,
+      deliverer_id: a.deliverer_id,
+      details: { libelle: a.libelle },
+    });
+    p.liberations.set(a.course_id, a.motif);
+  }
+
+  private async confierTurbo(a: ActionConfierTurbo, p: Passage): Promise<void> {
+    const echecRecent = await this.prisma.dispatchEvenement.findFirst({
+      where: {
+        type: 'TURBO_PLANIFIE',
+        motif: 'ECHEC',
+        course_id: a.course_id,
+        created_at: { gt: new Date(p.maintenant.getTime() - PAUSE_APRES_ECHEC_TURBO_MS) },
+      },
+      select: { id: true },
+    });
+    if (echecRecent) throw new ActionAbandonnee(MOTIF_TURBO_PAS_AVANT);
+    const confiee = await this.offres.confierATurboParPlanificateur(a.course_id, a.minutes);
+    await this.journal.ecrire({
+      type: 'TURBO_PLANIFIE',
+      motif: confiee ? 'CONFIEE' : 'ECHEC',
+      source: 'serveur',
+      restaurant_id: p.restaurantId,
+      course_id: a.course_id,
+      details: { minutes: a.minutes, libelle: a.libelle },
+    });
+    if (!confiee) throw new ActionAbandonnee('TURBO_INDISPONIBLE');
+  }
+
+  // ─── Annonces ─────────────────────────────────────────────────────────────
+
+  /**
+   * Une fois tout écrit : `course:statut:changed` pour chaque course touchée
+   * (livreur, restaurant, siège), offre en attente renvoyée à jour au livreur
+   * sollicité (même échéance), notifications au livreur affecté.
+   */
+  private async annoncer(p: Passage): Promise<void> {
+    for (const [courseId, raison] of p.touchees) {
+      try {
+        const course = await this.prisma.course.findUnique({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
+        if (!course) continue;
+        await this.courseEvent.courseStatutChanged({
+          course,
+          previous_statut: course.statut,
+          new_statut: course.statut,
+          reason: raison,
+        });
+
+        await this.annoncerAuLivreur(course, p);
+      } catch (err) {
+        this.logger.warn(`Annonce de la course ${courseId.slice(0, 8)} impossible : ${(err as Error)?.message}`);
+      }
+    }
+  }
+
+  /**
+   * Ce que le livreur doit sentir (vibration et notification sur le canal des
+   * offres) : UNE notification par course et par passage, la plus utile
+   *  1. commande retirée à son départ ;
+   *  2. tout est prêt (retenue levée, livreur pas parti) ;
+   *  3. attente posée (« Attends 3 min ») ;
+   *  4. commande(s) ajoutée(s).
+   * Course encore en recherche avec une offre en attente : l'offre à jour est
+   * renvoyée au livreur sollicité, même échéance (l'appli remplace l'offre).
+   */
+  private async annoncerAuLivreur(
+    course: Prisma.CourseGetPayload<{ include: typeof COURSE_FULL_INCLUDE }>,
+    p: Passage,
+  ): Promise<void> {
+    const ajout = p.ajouts.get(course.id);
+    const total = course.deliveries.filter((d) => !STATUTS_LIVRAISON_TERMINEE.includes(d.statut)).length;
+
+    if (course.statut === CourseStatut.PENDING_ASSIGNMENT) {
+      if (ajout) await this.renvoyerOffre(course, p);
+      return;
+    }
+    const livreur = course.deliverer_id;
+    if (!livreur || !STATUTS_AVEC_LIVREUR.includes(course.statut)) return;
+
+    const retirees = p.retirees.get(course.id);
+    if (retirees?.length) {
+      const texte = texteCommandeRetiree({ reference: retirees[0], restantes: total });
+      this.push.notifyCommandeRetiree({
+        delivererId: livreur,
+        courseId: course.id,
+        titre: texte.titre,
+        corps: texte.corps,
+        commande: retirees.join(', '),
+        restantes: total,
+      });
+      return;
+    }
+
+    const liberation = p.liberations.get(course.id);
+    const pasParti = course.statut !== CourseStatut.IN_DELIVERY || !course.parti_at;
+    if (liberation && liberationAAnnoncer(liberation) && pasParti) {
+      const texte = texteToutEstPret({ code: course.pickup_code, total });
+      this.push.notifyCourseToutPret({
+        delivererId: livreur,
+        courseId: course.id,
+        titre: texte.titre,
+        corps: texte.corps,
+        code: course.pickup_code,
+      });
+      return;
+    }
+
+    const retenue = p.retenues.get(course.id);
+    if (retenue) {
+      const texte = texteRetenue({ jusqua: retenue.jusqua, maintenant: p.maintenant });
+      this.push.notifyCourseAttente({
+        delivererId: livreur,
+        courseId: course.id,
+        titre: texte.titre,
+        corps: texte.corps,
+        jusqua: retenue.jusqua,
+        attendues: retenue.attendues,
+      });
+      return;
+    }
+
+    if (ajout) {
+      const texte = texteCommandeAjoutee({ ajoutees: ajout.n, total, apresRetrait: ajout.apresRetrait, code: course.pickup_code });
+      this.push.notifyCommandeAjoutee({
+        delivererId: livreur,
+        courseId: course.id,
+        courseReference: course.reference,
+        titre: texte.titre,
+        corps: texte.corps,
+        ajoutees: ajout.n,
+        total,
+        apresRetrait: ajout.apresRetrait,
+        code: course.pickup_code,
+      });
+    }
+  }
+
+  /** Course encore en recherche : le livreur sollicité reçoit l'offre à jour, même échéance. */
+  private async renvoyerOffre(course: Prisma.CourseGetPayload<{ include: typeof COURSE_FULL_INCLUDE }>, p: Passage): Promise<void> {
+    const offre = await this.prisma.courseOfferAttempt.findFirst({
+      where: { course_id: course.id, status: CourseOfferStatus.PENDING, expires_at: { gt: p.maintenant } },
+      select: { deliverer_id: true, expires_at: true },
+    });
+    if (!offre) return;
+    await this.courseEvent.offerNew({
+      course,
+      deliverer_id: offre.deliverer_id,
+      offer_id: course.id,
+      expires_at: offre.expires_at,
+      is_chain_bonus: false,
+      renvoi: true,
+    });
+  }
+
+  /** Contexte de lecture (pour les tests). */
+  static contexteVide(restaurantId: string): ContexteInstantane {
+    return { restaurant: { id: restaurantId, name: null, position: null }, codes: new Map(), refus: new Map() };
+  }
+}

@@ -7,7 +7,7 @@ import {
   EntityStatus,
   OrderStatus,
   type CourseBatch,
-  type DeliveryService,
+  DeliveryService,
   type Order,
 } from '@prisma/client';
 
@@ -23,6 +23,7 @@ import { haversineMeters, nearestNeighborOrder, parseOrderLatLng, type ILatLng }
 import { estCourseTurboDOrigine } from '../helpers/offres.rules';
 import { CourseOfferService } from './course-offer.service';
 import { DispatchJournalService } from './dispatch-journal.service';
+import { LotsV2Service } from './lots-v2.service';
 import { OffresClotureService } from './offres-cloture.service';
 
 /**
@@ -53,6 +54,9 @@ export class CourseGroupingService {
     private readonly cloture: OffresClotureService,
     private readonly queueService: DelivererQueueService,
     private readonly journal: DispatchJournalService,
+    // Planificateur v2 : les commandes Turbo d'origine gardent le lot, avec la
+    // règle « même direction » à la place du rayon (lots-v2.service.ts).
+    private readonly lotsV2?: LotsV2Service,
   ) {}
 
   // ============================================================
@@ -92,6 +96,15 @@ export class CourseGroupingService {
       return { batchId: order.batch_id, flushed: false };
     }
 
+    // Planificateur v2 : la flotte interne ne passe plus par les lots (le
+    // planificateur crée la course tout de suite) ; les commandes Turbo
+    // d'origine gardent le lot, regroupées par direction et non plus par rayon.
+    const v2 = (await this.settings.versionPour(order.restaurant_id)) === 'v2';
+    if (v2 && order.delivery_service !== DeliveryService.TURBO) {
+      this.courseEvent.demanderPlanification({ restaurant_id: order.restaurant_id, raison: 'COMMANDE_PRETE' });
+      return { batchId: '', flushed: false };
+    }
+
     // 1. Chercher un batch PENDING du même restaurant encore ouvert
     const candidate = await this.prisma.courseBatch.findFirst({
       where: {
@@ -107,7 +120,12 @@ export class CourseGroupingService {
     });
 
     // 2. Si batch compatible → attacher (flush géré par le cron, qui respectera le min_wait)
-    if (candidate && this.isCompatible(candidate.orders, order, settings)) {
+    const compatible =
+      !!candidate &&
+      (v2 && this.lotsV2
+        ? await this.lotsV2.compatibleParDirection(candidate.orders, order, settings)
+        : this.isCompatible(candidate.orders, order, settings));
+    if (candidate && compatible) {
       await this.prisma.order.update({
         where: { id: order.id },
         data: { batch_id: candidate.id },
@@ -123,12 +141,10 @@ export class CourseGroupingService {
     let ttlSeconds = settings.batchWindowSeconds; // par défaut TTL max (3 min)
 
     if (settings.lookaheadInProgress) {
-      const hasCandidateInProgress = await this.hasCompatibleOrderInProgress(
-        order.restaurant_id,
-        order.address,
-        order.id,
-        settings,
-      );
+      const hasCandidateInProgress =
+        v2 && this.lotsV2
+          ? await this.lotsV2.aCommandeEnPreparationMemeDirection(order)
+          : await this.hasCompatibleOrderInProgress(order.restaurant_id, order.address, order.id, settings);
       if (!hasCandidateInProgress) {
         // Aucune order en prépa compatible → on attend juste le min_wait,
         // pas la peine de bloquer cette commande 3 min pour rien.
@@ -340,7 +356,10 @@ export class CourseGroupingService {
    *
    * Appelé par `CourseBatchTask` toutes les `rebalance_interval_seconds`.
    */
-  async rebalanceActiveCourses(): Promise<{ merged: number; transferred: number }> {
+  async rebalanceActiveCourses(
+    /** Restaurants laissés au planificateur v2 (il fusionne lui-même, par direction). */
+    exclure: (restaurantId: string) => boolean = () => false,
+  ): Promise<{ merged: number; transferred: number }> {
     const settings = await this.settings.load();
     if (!settings.rebalanceEnabled) return { merged: 0, transferred: 0 };
     const maintenant = new Date();
@@ -383,6 +402,7 @@ export class CourseGroupingService {
     // Grouper par restaurant
     const byRestaurant = new Map<string, typeof courses>();
     for (const c of courses) {
+      if (exclure(c.restaurant_id)) continue;
       const arr = byRestaurant.get(c.restaurant_id) ?? [];
       arr.push(c);
       byRestaurant.set(c.restaurant_id, arr);

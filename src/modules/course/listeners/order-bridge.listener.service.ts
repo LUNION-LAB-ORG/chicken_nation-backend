@@ -5,6 +5,7 @@ import { DeliveryService, OrderStatus, OrderType } from '@prisma/client';
 import { OrderChannels } from 'src/modules/order/enums/order-channels';
 import type { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
 
+import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { CourseGroupingService } from '../services/course-grouping.service';
 
 /**
@@ -29,12 +30,23 @@ import { CourseGroupingService } from '../services/course-grouping.service';
  *  - La Course n'est créée qu'au **flush** du batch (early si plafond atteint,
  *    sinon via le cron `CourseBatchTask` toutes les 10 s).
  *  - Plus de « 1 order = 1 course immédiate » — on maximise le grouping.
+ *
+ * PLANIFICATEUR v2 (`course.planificateur`, v2 par défaut ;
+ * `course.planificateur_restaurants`, vide = tous) : une commande de la flotte
+ * interne ne passe plus par un lot. Le planificateur (écouteur
+ * `PlanificateurListener`, même événement) la fait rejoindre aussitôt une
+ * course ouverte de sa direction, ou crée sa course. Les commandes Turbo
+ * d'origine gardent le lot (règle de direction à la place du rayon). En v1,
+ * rien ne change.
  */
 @Injectable()
 export class OrderBridgeListenerService {
   private readonly logger = new Logger(OrderBridgeListenerService.name);
 
-  constructor(private readonly groupingService: CourseGroupingService) {}
+  constructor(
+    private readonly groupingService: CourseGroupingService,
+    private readonly settings: CourseSettingsHelper,
+  ) {}
 
   @OnEvent(OrderChannels.ORDER_STATUS_UPDATED)
   async onOrderStatusUpdated(payload: OrderCreatedEvent) {
@@ -47,6 +59,13 @@ export class OrderBridgeListenerService {
       order.delivery_service !== DeliveryService.TURBO
     ) {
       return;
+    }
+
+    if (
+      order.delivery_service === DeliveryService.CHICKEN_NATION &&
+      (await this.settings.versionPour(order.restaurant_id).catch(() => 'v2' as const)) === 'v2'
+    ) {
+      return; // planificateur v2 (PlanificateurListener)
     }
 
     this.logger.log(`Order ${order.reference} READY → tryGroupOrder`);

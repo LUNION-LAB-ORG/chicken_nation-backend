@@ -882,6 +882,16 @@ export function decisionTurboV2(
   return { basculer, minutes, depuis };
 }
 
+/**
+ * Commande ajoutée après le retrait et pas encore remise au livreur : la
+ * seule qu'un départ détache. Une commande de la course d'origine encore
+ * prête (bouton de la caisse « Livreur a récupéré » commande par commande)
+ * reste dans la course : la caissière la remet par le même bouton.
+ */
+function estAjoutNonRemis(l: LivraisonPlanif): boolean {
+  return l.ajoutee_apres_retrait === true && l.commande.statut === OrderStatus.READY && l.statut === DeliveryStatut.PENDING;
+}
+
 /** Livraisons qui comptent : ni annulées, ni échouées, ni livrées, commande non annulée. */
 function livraisonsActives(livraisons: readonly LivraisonPlanif[]): LivraisonPlanif[] {
   return [...livraisons]
@@ -1316,9 +1326,28 @@ export function planifier(
   // ── 1. Départs et détachements.
   const ouvertes: CourseTravail[] = [];
   const detachees: CommandePlanif[] = [];
+  const detacherNonRemises = (k: CoursePlanif) => {
+    for (const l of livraisonsActives(k.livraisons)) {
+      if (!estAjoutNonRemis(l)) continue;
+      actions.push({
+        type: 'DETACHER',
+        course_id: k.id,
+        order_id: l.commande.id,
+        reference: l.commande.reference,
+        motif: 'LIVREUR_PARTI',
+        libelle: `${l.commande.reference} pas remise : repart seule`,
+      });
+      detachees.push(l.commande);
+    }
+  };
   for (const k of instantane.courses) {
     if (k.statut === CourseStatut.IN_DELIVERY) {
-      if (k.parti_at) continue;
+      // Déjà partie (bouton « Je pars », passage précédent) : une commande
+      // ajoutée après le retrait et pas remise ne part pas avec le livreur.
+      if (k.parti_at) {
+        detacherNonRemises(k);
+        continue;
+      }
       const livreur = k.deliverer_id ? ctx.livreurs.get(k.deliverer_id) ?? null : null;
       const f = fenetreApresRetrait(k, livreur, ctx.restaurant, r, maintenant);
       if (!f.ouverte) {
@@ -1330,19 +1359,7 @@ export function planifier(
           motif: f.motif,
           libelle: `Parti : ${LIBELLES_DEPART[f.motif]}`,
         });
-        for (const l of livraisonsActives(k.livraisons)) {
-          if (l.commande.statut === OrderStatus.READY && l.statut === DeliveryStatut.PENDING) {
-            actions.push({
-              type: 'DETACHER',
-              course_id: k.id,
-              order_id: l.commande.id,
-              reference: l.commande.reference,
-              motif: 'LIVREUR_PARTI',
-              libelle: `${l.commande.reference} pas remise : repart seule`,
-            });
-            detachees.push(l.commande);
-          }
-        }
+        detacherNonRemises(k);
         continue;
       }
       ouvertes.push(courseTravail(ctx, k, f.ferme_a.getTime()));
@@ -1851,16 +1868,18 @@ export function actionsRepliV1(instantane: InstantanePlanification): ActionPlani
   const actions: ActionPlanification[] = [];
   const t = instantane.maintenant.getTime();
   for (const k of instantane.courses) {
-    if (k.statut === CourseStatut.IN_DELIVERY && !k.parti_at) {
-      actions.push({
-        type: 'MARQUER_PARTI',
-        course_id: k.id,
-        deliverer_id: k.deliverer_id,
-        motif: 'REPLI_V1',
-        libelle: `Parti : ${LIBELLES_DEPART.REPLI_V1}`,
-      });
+    if (k.statut === CourseStatut.IN_DELIVERY) {
+      if (!k.parti_at) {
+        actions.push({
+          type: 'MARQUER_PARTI',
+          course_id: k.id,
+          deliverer_id: k.deliverer_id,
+          motif: 'REPLI_V1',
+          libelle: `Parti : ${LIBELLES_DEPART.REPLI_V1}`,
+        });
+      }
       for (const l of livraisonsActives(k.livraisons)) {
-        if (l.commande.statut === OrderStatus.READY && l.statut === DeliveryStatut.PENDING) {
+        if (estAjoutNonRemis(l)) {
           actions.push({
             type: 'DETACHER',
             course_id: k.id,

@@ -12,7 +12,12 @@
  *  - `$transaction(fn)` ANNULE ses écritures, et seulement les siennes, si
  *    `fn` lève (les colonnes écrites retrouvent leur valeur, les créations
  *    disparaissent) ; la forme tableau attend simplement ses opérations ;
- *  - `$executeRaw` (verrous consultatifs) est noté dans `verrous`.
+ *  - `$executeRaw` (verrous consultatifs) est noté dans `verrous` ;
+ *  - `$queryRaw` répond à `pg_try_advisory_xact_lock` : le verrou est tenu
+ *    jusqu'à la fin de la transaction qui l'a pris (deux « serveurs » qui
+ *    partagent la base se l'arrachent comme en vrai), rendu tout de suite
+ *    hors transaction ;
+ *  - `deleteMany` est un DELETE ... WHERE.
  *
  * Fichier de test seulement. Son nom finit par « -spec.ts » : exclu de la
  * construction sans être lancé comme une suite par jest.
@@ -50,7 +55,12 @@ export function course(surcharge: Ligne = {}): Ligne {
     cancelled_reason: null,
     total_delivery_fee: 0,
     estimated_duration_min: null,
+    retenue_jusqua: null,
+    commandes_attendues: null,
+    parti_at: null,
+    motif_regroupement: null,
     created_at: new Date('2026-10-22T09:30:00.000Z'),
+    updated_at: new Date('2026-10-22T09:30:00.000Z'),
     ...surcharge,
   };
 }
@@ -69,6 +79,15 @@ export function commande(surcharge: Ligne = {}): Ligne {
     address: null,
     picked_up_at: null,
     cancelled_at: null,
+    recovery_code: null,
+    batch_id: null,
+    created_at: new Date('2026-10-22T09:30:00.000Z'),
+    updated_at: new Date('2026-10-22T09:30:00.000Z'),
+    prepared_at: null,
+    ready_at: null,
+    estimated_preparation_time: null,
+    date: null,
+    time: null,
     ...surcharge,
   };
 }
@@ -81,6 +100,8 @@ export function livraison(surcharge: Ligne = {}): Ligne {
     delivery_pin: '1234',
     in_route_at: null,
     arrived_at: null,
+    ajoutee_at: null,
+    ajoutee_apres_retrait: false,
     ...surcharge,
   };
 }
@@ -277,6 +298,15 @@ export function monterBaseDispatch(donnees: DonneesDispatch = {}) {
         });
         return projeter(vue(ligne), args);
       }),
+      deleteMany: jest.fn(async (args: Ligne = {}) => {
+        const cibles = lignes.filter((l) => evaluer(vue(l), args.where));
+        for (const l of cibles) {
+          const i = lignes.indexOf(l);
+          lignes.splice(i, 1);
+          annulation?.push(() => lignes.push(l));
+        }
+        return { count: cibles.length };
+      }),
       delete: jest.fn(async (args: Ligne) => {
         const i = lignes.findIndex((l) => evaluer(vue(l), args.where));
         if (i < 0) throw introuvable();
@@ -306,14 +336,32 @@ export function monterBaseDispatch(donnees: DonneesDispatch = {}) {
     courseOfferAttempt: table(offres, vueOffre, 'offre', annulation),
   });
 
+  /** Verrous consultatifs « essayés » (`pg_try_advisory_xact_lock`) tenus en ce moment. */
+  const verrousTenus = new Set<string>();
+  const essayerVerrou = (valeurs: unknown[], tenusParLaTransaction: string[] | null) => {
+    verrous.push(valeurs);
+    const cle = valeurs.map(String).join(':');
+    if (verrousTenus.has(cle)) return [{ pris: false }];
+    if (tenusParLaTransaction) {
+      verrousTenus.add(cle);
+      tenusParLaTransaction.push(cle);
+    }
+    return [{ pris: true }];
+  };
+
   const prisma: any = {
     ...tables(),
     restaurant: { findUnique: jest.fn(async () => restaurant) },
+    $queryRaw: jest.fn(async (_sql: TemplateStringsArray, ...valeurs: unknown[]) => essayerVerrou(valeurs, null)),
     dispatchEvenement: {
       create: jest.fn(async ({ data }: Ligne) => {
         const ligne = { id: ident('evenement'), created_at: new Date(), ...data };
         journal.push(ligne);
         return ligne;
+      }),
+      findFirst: jest.fn(async (args: Ligne = {}) => {
+        const ligne = journal.find((l) => evaluer(l, args.where));
+        return ligne ? projeter(ligne, args) : null;
       }),
     },
     $executeRaw: jest.fn(async (_sql: TemplateStringsArray, ...valeurs: unknown[]) => {
@@ -323,17 +371,24 @@ export function monterBaseDispatch(donnees: DonneesDispatch = {}) {
     $transaction: jest.fn(async (arg: unknown) => {
       if (Array.isArray(arg)) return Promise.all(arg);
       const annulation: Annulation = [];
-      const tx = { ...prisma, ...tables(annulation) };
+      const tenus: string[] = [];
+      const tx = {
+        ...prisma,
+        ...tables(annulation),
+        $queryRaw: jest.fn(async (_sql: TemplateStringsArray, ...valeurs: unknown[]) => essayerVerrou(valeurs, tenus)),
+      };
       try {
         return await (arg as (tx: unknown) => Promise<unknown>)(tx);
       } catch (err) {
         for (const annuler of annulation.reverse()) annuler();
         throw err;
+      } finally {
+        tenus.forEach((cle) => verrousTenus.delete(cle));
       }
     }),
   };
 
-  return { prisma, livreurs, courses, livraisons, commandes, offres, journal, verrous, restaurant };
+  return { prisma, livreurs, courses, livraisons, commandes, offres, journal, verrous, verrousTenus, restaurant };
 }
 
 /** Une course, ses commandes et ses livraisons, rangées dans les tableaux de la base. */
