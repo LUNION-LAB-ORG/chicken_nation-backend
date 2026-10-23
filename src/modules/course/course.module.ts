@@ -40,6 +40,7 @@ import { OffreEnAttenteService } from './services/offre-en-attente.service';
 import { CourseBatchTask } from './tasks/course-batch.task';
 import { CoursePlanificateurTask } from './tasks/course-planificateur.task';
 import { CourseTask } from './tasks/course.task';
+import { PurgeJournalDispatchTask } from './tasks/purge-journal-dispatch.task';
 import { CourseWebSocketService } from './websockets/course-websocket.service';
 
 @Module({
@@ -89,6 +90,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     CourseTask,
     CourseBatchTask, // Phase P3 : flush des batches matures toutes les 10 s
     CoursePlanificateurTask, // Planificateur v2 : passage de 10 s, statistique de préparation horaire
+    PurgeJournalDispatchTask, // Journal de la diffusion conservé 90 jours
   ],
   exports: [
     CourseOfferService,

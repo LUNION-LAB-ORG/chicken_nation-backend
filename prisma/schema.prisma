@@ -1713,6 +1713,9 @@ model Order {
   @@index([restaurant_id, created_at])
   @@index([customer_id, created_at])
   @@index([created_at])
+  // Planificateur v2 : commandes à livrer prêtes ou en cuisine (tâche de 10 s,
+  // instantané d'un restaurant, repli v1), filtrées sur le statut et la date.
+  @@index([status, updated_at])
 }
 
 model OtpToken {
