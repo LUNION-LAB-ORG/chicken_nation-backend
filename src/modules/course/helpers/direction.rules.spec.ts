@@ -399,6 +399,28 @@ describe('exemples d’Abidjan, restaurant Zone 4 (5.2860 / -3.9737)', () => {
     expect(ecartCap(capDepuis(R, MARCORY_NORD), capDepuis(R, BIETRY))).toBeGreaterThan(170);
   });
 
+  it('500 m de part et d’autre du restaurant, avec tracés : jamais « sur le trajet » (recette R9)', () => {
+    const est = decale(R, 0, 500);
+    const ouest = decale(R, 0, -500);
+    // P est dans le couloir du tracé de L (500 m du départ), mais derrière le restaurant.
+    const v = sansGoogle(R, client('est', est, [R, est], 620), client('ouest', ouest, [R, ouest], 640));
+    expect(v).toMatchObject({ compatible: false, motif: 'DIRECTION_DIFFERENTE', test: 7 });
+    // Même résultat avec un tracé Google qui commence sur la route, un peu à côté du restaurant.
+    const departRoute = decale(R, 40, 0);
+    const w = sansGoogle(R, client('est', est, [departRoute, est], 620), client('ouest', ouest, [departRoute, ouest], 640));
+    expect(w.compatible).toBe(false);
+  });
+
+  it('un client à 250 m en arrière du restaurant reste « sur le trajet » d’un client à 3 km (marge de 300 m)', () => {
+    const derriere = decale(R, 0, -250);
+    const loin = decale(R, 0, 3000);
+    const v = sansGoogle(R, client('derriere', derriere, [R, derriere], 300), client('loin', loin, [R, loin], 3300));
+    expect(v).toMatchObject({ compatible: true, motif: 'SUR_LE_TRAJET', test: 3, procheId: 'derriere' });
+    const plusLoin = decale(R, 0, -400);
+    const w = sansGoogle(R, client('derriere', plusLoin, [R, plusLoin], 480), client('loin', loin, [R, loin], 3300));
+    expect(w.compatible).toBe(false);
+  });
+
   it('plus loin de part et d’autre (1,5 et 2 km) : « sens opposés »', () => {
     const nord = decale(R, 1500, -300);
     const sud = decale(R, -2000, 400);
@@ -583,6 +605,18 @@ describe('estimerTrajets', () => {
     expect(e.metresCumules[0]).toBeCloseTo(2300, -1);
     expect(e.metresCumules[1]).toBeCloseTo(4600, -1);
     expect(e.secondesTotal).toBeCloseTo(4600 / (24 / 3.6), -1);
+  });
+
+  it('client avant le départ du tracé ou après sa fin : le bout du tracé n’est pas compté deux fois', () => {
+    // 250 m derrière le restaurant : R → P 250 m, P → R → L 250 + 4 000 m.
+    const derriere = estimerTrajets(R, [client('p', decale(R, -250, 0)), client('l', L, [R, L])], { mode: 'trajet', vitesseKmh: 24 });
+    expect(derriere.metresCumules[0]).toBeCloseTo(250, -1);
+    expect(derriere.metresCumules[1]).toBeCloseTo(4500, -1);
+    // 200 m après L sur l'axe (marge du test 3) : R → L 4 000 m, puis 200 m.
+    const lointain = client('l', L, [R, L]);
+    const apres = estimerTrajets(R, [lointain, client('p', decale(R, 4200, 0))], { mode: 'trajet', lointain, vitesseKmh: 24 });
+    expect(apres.metresCumules[0]).toBeCloseTo(4000, -1);
+    expect(apres.metresCumules[1]).toBeCloseTo(4200, -1);
   });
 
   it('sans tracé : la droite R → L redressée de 1,4', () => {

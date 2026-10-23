@@ -20,8 +20,9 @@
  *  1. A et B à moins de 150 m à vol d'oiseau            → compatibles, « même adresse »
  *  2. caps depuis R écartés de plus de 100°, les deux
  *     à plus de 1 200 m de R                            → incompatibles, « sens opposés »
- *  3. tracé R → L connu, P à moins du couloir du tracé
- *     et pas plus de 300 m au-delà de L                 → compatibles, « sur le trajet »
+ *  3. tracé R → L connu, P à moins du couloir du tracé,
+ *     ni plus de 300 m au-delà de L, ni plus de 300 m
+ *     en arrière du restaurant                          → compatibles, « sur le trajet »
  *  4. A et B à moins du rayon de zone, caps écartés
  *     de 60° au plus                                    → « même zone », à confirmer par le
  *                                                         test 5 quand Google répond
@@ -60,6 +61,13 @@ export const SENS_OPPOSES_ECART_DEG = 100;
 export const SENS_OPPOSES_DISTANCE_M = 1200;
 /** Test 3 : P peut dépasser L de cette longueur le long du tracé (imprécision des adresses). */
 export const MARGE_APRES_LOINTAIN_M = 300;
+/**
+ * Test 3 : P peut être en arrière du départ du tracé de cette longueur, pas
+ * plus. Au-delà, il est derrière le restaurant : le livreur ferait demi-tour
+ * (deux clients à 500 m de part et d'autre du restaurant ne sont pas « sur le
+ * trajet » l'un de l'autre, recette R9 avec tracés).
+ */
+export const MARGE_AVANT_DEPART_M = 300;
 /** Tests 4 et 5 : écart de cap maximal. */
 export const ECART_CAP_ZONE_DEG = 60;
 /** Test 5 : « négatif de peu » = P à moins de ce nombre de couloirs du tracé. */
@@ -327,11 +335,15 @@ function referenceVers(restaurant: ILatLng, lointain: ClientDirection): {
   return trace ? { trace, base: 'trace' } : { trace: [restaurant, lointain.position!], base: 'droite' };
 }
 
-/** P est-il dans le couloir de la référence, et pas au-delà de L de plus de la marge ? */
+/**
+ * P est-il dans le couloir de la référence, ni au-delà de L ni en arrière du
+ * restaurant de plus de la marge ?
+ */
 function dansLeCouloir(projection: ProjectionSurTrace | null, couloirM: number): boolean {
   return (
     projection !== null &&
     projection.distanceMetres <= couloirM &&
+    projection.positionMetres >= -MARGE_AVANT_DEPART_M &&
     projection.positionMetres <= projection.longueurMetres + MARGE_APRES_LOINTAIN_M
   );
 }
@@ -843,7 +855,9 @@ export function estimerTrajets(
     for (const c of places) {
       const p = projeterSurTrace(c.position!, reference.trace)!;
       const ecart = c === lointain ? 0 : p.distanceMetres;
-      const position = c === lointain ? p.longueurMetres : p.positionMetres;
+      // Un client avant le départ du tracé ou après sa fin s'y rattache par
+      // un bout : l'écart le compte déjà, la position est bornée au tracé.
+      const position = c === lointain ? p.longueurMetres : Math.min(p.longueurMetres, Math.max(0, p.positionMetres));
       total += (Math.abs(position - positionPrec) + ecartPrec + ecart) * facteur;
       cumules.push(total);
       positionPrec = position;
