@@ -54,7 +54,13 @@ const PREFIXE_LIVREURS_RESTAURANT = 'livreurs_restaurant_';
 
 export const salleClient = (customerId: string) => `customer_${customerId}`;
 export const salleUtilisateur = (userId: string) => `user_${userId}`;
-export const salleLivreur = (delivererId: string) => `deliverer_${delivererId}`;
+const PREFIXE_LIVREUR = 'deliverer_';
+export const salleLivreur = (delivererId: string) => `${PREFIXE_LIVREUR}${delivererId}`;
+/** Livreur dont `salle` est le canal privé, ou `null`. */
+export const livreurDeLaSalle = (salle: string): string | null =>
+  salle.startsWith(PREFIXE_LIVREUR) && salle.length > PREFIXE_LIVREUR.length
+    ? salle.slice(PREFIXE_LIVREUR.length)
+    : null;
 export const salleRestaurant = (restaurantId: string) => `restaurant_${restaurantId}`;
 export const salleLivreursRestaurant = (restaurantId: string) =>
   `${PREFIXE_LIVREURS_RESTAURANT}${restaurantId}`;

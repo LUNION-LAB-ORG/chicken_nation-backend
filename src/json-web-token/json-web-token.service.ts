@@ -1,7 +1,14 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
+import { JwtService, TokenExpiredError } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import type { StringValue } from 'ms';
+
+/**
+ * Message de l'erreur levée par `verifyToken` pour un jeton bien signé mais
+ * périmé. La passerelle temps réel le distingue d'un jeton refusé : l'appli
+ * n'a alors qu'à rafraîchir son jeton (motif `JETON_EXPIRE`).
+ */
+export const MESSAGE_JETON_EXPIRE = 'Token expiré';
 
 @Injectable()
 export class JsonWebTokenService {
@@ -177,8 +184,11 @@ export class JsonWebTokenService {
       return await this.jwtService.verifyAsync(token, {
         secret: secretMap[type],
       });
-    } catch {
-      throw new UnauthorizedException('Token invalide');
+    } catch (erreur) {
+      // La signature est contrôlée avant l'échéance : « périmé » veut dire authentique.
+      throw new UnauthorizedException(
+        erreur instanceof TokenExpiredError ? MESSAGE_JETON_EXPIRE : 'Token invalide',
+      );
     }
   }
 }

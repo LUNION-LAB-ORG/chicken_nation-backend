@@ -3,24 +3,30 @@ import {
   WebSocketServer,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
   ConnectedSocket,
   MessageBody,
 } from '@nestjs/websockets';
 
-import { Server, Socket } from 'socket.io';
+import type { ExtendedError, Namespace, Server, Socket } from 'socket.io';
 import { EntityStatus, PresenceCheckResponse } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { JsonWebTokenService } from 'src/json-web-token/json-web-token.service';
+import {
+  JsonWebTokenService,
+  MESSAGE_JETON_EXPIRE,
+} from 'src/json-web-token/json-web-token.service';
 import { ConnectedUser } from '../interfaces/app.gateway.interface';
 import { Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { sansSecretsRestaurant } from 'src/common/utils/restaurant-secrets.util';
+import { JournalLimite, suffixeTues } from 'src/common/utils/journal-limite.util';
 import {
   SALLE_BACKOFFICE,
   SALLE_CLIENTS,
   SALLE_PERSONNEL,
   SALLE_RELANCES,
+  livreurDeLaSalle,
   salleLivreur,
   salleLivreursRestaurant,
   sallePersonnelle,
@@ -30,6 +36,20 @@ import {
   salleUtilisateur,
 } from '../utils/salles.util';
 import { EVENEMENT_LIVREUR_CONNECTE } from '../utils/evenements-connexion.util';
+import {
+  ATTENTES_REPRISE_MS,
+  BUDGET_IDENTIFICATION_MS,
+  EVENEMENT_CONNEXION_ACCEPTEE,
+  LIBELLE_TYPE,
+  MotifRefusConnexion,
+  TypeConnexion,
+  codeErreur,
+  court,
+  erreurRefus,
+  estErreurPassagere,
+  lireIdentifiants,
+  sujetNonVerifie,
+} from '../utils/connexion-socket.util';
 
 // Interface pour le cache
 interface CachedUser {
@@ -37,12 +57,27 @@ interface CachedUser {
   expiresAt: number;
 }
 
+/** Ce que le contrôle d'entrée laisse sur le socket accepté. */
+interface DonneesSocket {
+  identite?: ConnectedUser;
+  /** Version annoncée par l'appli (`version` dans `auth` ou la requête), pour le journal. */
+  version?: string | null;
+}
+
+/** Issue de l'identification : compte trouvé, absent (`null`), ou base muette. */
+type IssueIdentification =
+  | { panne: false; identite: ConnectedUser | null }
+  | { panne: true; erreur: unknown };
+
+/** Au-delà, la présence d'un livreur est déclarée inconnue (Redis ou une autre instance trop lents). */
+const DELAI_PRESENCE_MS = 1500;
+
 @WebSocketGateway({
   cors: { origin: '*' },
   namespace: '/app', // Namespace global pour toute l'app
 })
-export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  // private readonly logger = new Logger(AppGateway.name);
+export class AppGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
+  private readonly logger = new Logger(AppGateway.name);
 
   @WebSocketServer()
   server: Server;
@@ -54,6 +89,15 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly CACHE_TTL_MS = 10000; // Le cache dure 10 secondes
   private readonly CACHE_MAX_SIZE = 2000;
 
+  /**
+   * Au plus une ligne par minute et par clé pour les refus, les pannes et les
+   * connexions des livreurs : une vague de reconnexions ne noie pas le journal.
+   */
+  private readonly journalLimite = new JournalLimite(60_000);
+
+  /** Attentes avant les nouveaux essais d'identification (remplacées dans les tests). */
+  protected attentesRepriseMs: readonly number[] = ATTENTES_REPRISE_MS;
+
   // Map pour tracker qui est en train d'écrire dans quelle conversation
   private typingUsers = new Map<string, Set<string>>(); // conversationId -> Set<userId>
   private typingTimeouts = new Map<string, NodeJS.Timeout>(); // userId -> timeout
@@ -64,79 +108,194 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private eventEmitter: EventEmitter2,
   ) { }
 
-  async handleConnection(client: Socket) {
+  /**
+   * Branche le contrôle d'entrée sur l'espace `/app` : chaque connexion est
+   * jugée AVANT que le client ne reçoive « connect » (contrat complet dans
+   * `connexion-socket.util.ts`).
+   */
+  afterInit(espace: Namespace) {
+    espace.use((socket, next) => {
+      void this.controlerEntree(socket, next);
+    });
+  }
+
+  /**
+   * Contrôle d'entrée d'une connexion. Trois issues, jamais muettes :
+   *  - acceptée : identité posée sur le socket, salles rejointes, puis `next()` ;
+   *  - refusée : `next(erreur)`, le client reçoit `connect_error` avec le motif ;
+   *  - panne passagère (base) : transport fermé, le client se reconnecte seul.
+   */
+  async controlerEntree(socket: Socket, next: (err?: ExtendedError) => void): Promise<void> {
+    let type: TypeConnexion | null = null;
+    let sujet: string | null = null;
     try {
-      // Récupérer le token depuis les headers
-      const token = (client.handshake.query.token as string) || '';
+      const identifiants = lireIdentifiants(socket.handshake);
+      type = identifiants.type;
+      const version = identifiants.version;
+      if (!identifiants.token) return this.refuser(next, 'JETON_ABSENT', type, null, version);
+      if (!type) return this.refuser(next, 'TYPE_INVALIDE', null, null, version);
 
-      // Récupérer le type d'utilisateur depuis les query params
-      const userType = client.handshake.query.type as 'user' | 'customer' | 'deliverer';
-
-      if (!token || !userType) {
-        // Warning retiré pour éviter de polluer les logs en cas de spam
-        client.disconnect();
-        return;
-      }
-
-      // Vérifier et décoder le token (Opération CPU rapide)
-      let decoded;
+      let decoded: { sub?: unknown };
       try {
-        decoded = await this.jwtService.verifyToken(token, userType);
-      } catch (e) {
-        client.disconnect();
-        return;
+        decoded = await this.jwtService.verifyToken(identifiants.token, type);
+      } catch (erreur) {
+        const expire = (erreur as Error)?.message === MESSAGE_JETON_EXPIRE;
+        return this.refuser(
+          next,
+          expire ? 'JETON_EXPIRE' : 'JETON_INVALIDE',
+          type,
+          expire ? sujetNonVerifie(identifiants.token) : null,
+          version,
+        );
       }
 
-      // Identifier le type d'utilisateur (AVEC PROTECTION CACHE)
-      const userInfo = await this.identifyUser(decoded, userType);
+      sujet = typeof decoded?.sub === 'string' ? decoded.sub : null;
+      if (!sujet) return this.refuser(next, 'COMPTE_INCONNU', type, null, version);
 
-      if (!userInfo) {
-        // this.logger.warn('Connexion refusée: utilisateur non trouvé ou inactif');
-        client.disconnect();
-        return;
-      }
+      const issue = await this.identifierAvecReprise(sujet, type);
+      if (issue.panne) return this.reporter(socket, next, type, sujet, issue.erreur);
+      if (!issue.identite) return this.refuser(next, 'COMPTE_INCONNU', type, sujet, version);
 
-      // Éviter les doublons de socket si la déconnexion précédente n'est pas encore finie
-      if (this.connectedUsers.has(client.id)) return;
-
-      // Stocker la connexion
-      this.connectedUsers.set(client.id, {
-        ...userInfo,
-        socketId: client.id,
-      });
-
-      // Rejoindre les rooms
-      await this.joinRooms(client, userInfo);
-
-      // Pour les livreurs : si un check de présence matinal est en attente de réponse
-      // aujourd'hui, le renvoyer immédiatement. Couvre le cas de reconnexion sur un
-      // autre appareil après que le cron (8h) ait déjà tourné sans que le livreur
-      // soit connecté.
-      if (userInfo.type === 'deliverer') {
-        void this.sendPendingPresenceCheck(client, userInfo.id);
-        // Offre en attente : renvoyée par le module course (DispatchListener).
-        this.eventEmitter.emit(EVENEMENT_LIVREUR_CONNECTE, { delivererId: userInfo.id });
-      }
-
-      // Pour les agents support (type='user') : émettre un event pour que le module
-      // support ré-enfile les tickets en attente sur ses catégories.
-      // Couvre le cas où la queue d'auto-assignation s'est épuisée avant que
-      // l'agent ne soit en ligne.
-      if (userInfo.type === 'user') {
-        this.eventEmitter.emit('user.online', { userId: userInfo.id });
-      }
-
-      // this.logger.log(`Connexion: ${userInfo.type} ${userInfo.id} connecté (Socket: ${client.id})`);
-    } catch (error) {
-      // this.logger.error(`Erreur de connexion socket: ${error.message}`);
-      client.disconnect();
+      // Salles rejointes AVANT « connect » : accepté veut dire joignable. Si le
+      // client est parti pendant l'attente, socket.io écarte ce socket et le
+      // retire de ses salles.
+      const donnees = socket.data as DonneesSocket;
+      donnees.identite = issue.identite;
+      donnees.version = version;
+      await socket.join(sallesAJoindre(issue.identite));
+      next();
+    } catch (erreur) {
+      // Imprévu : ni refus ni acceptation, le client réessaie seul.
+      this.reporter(socket, next, type, sujet, erreur);
     }
+  }
+
+  private refuser(
+    next: (err?: ExtendedError) => void,
+    motif: MotifRefusConnexion,
+    type: TypeConnexion | null,
+    sujet: string | null = null,
+    version: string | null = null,
+  ): void {
+    // Clients : une ligne par motif et par minute, pas une par appareil.
+    const cle = `refus:${motif}:${type ?? '-'}:${type === 'customer' ? '' : (sujet ?? '')}`;
+    const tues = this.journalLimite.autoriser(cle);
+    if (tues !== null) {
+      const qui = type ? `${LIBELLE_TYPE[type]}${sujet ? ` ${court(sujet)}` : ''}` : 'type inconnu';
+      this.logger.warn(
+        `Connexion refusée (${motif}) : ${qui}${version ? ` (appli ${version})` : ''}${suffixeTues(tues)}`,
+      );
+    }
+    next(erreurRefus(motif));
+  }
+
+  /**
+   * Panne passagère : ni refus ni acceptation. Le transport est fermé, le
+   * client voit « transport close » et socket.io se reconnecte seul, sur la
+   * même instance, écouteurs intacts (anciennes versions des applis
+   * comprises). `next` est appelé ensuite pour que socket.io oublie ce socket :
+   * le transport n'étant plus ouvert, il ne renvoie rien au client.
+   */
+  private reporter(
+    socket: Socket,
+    next: (err?: ExtendedError) => void,
+    type: TypeConnexion | null,
+    sujet: string | null,
+    erreur: unknown,
+  ): void {
+    const tues = this.journalLimite.autoriser(`panne:${type ?? '-'}`);
+    if (tues !== null) {
+      const qui = type ? `${LIBELLE_TYPE[type]} ${court(sujet)}` : 'inconnue';
+      this.logger.warn(
+        `Connexion ${qui} reportée (${codeErreur(erreur)}) : le client va se reconnecter seul${suffixeTues(tues)}`,
+      );
+    }
+    socket.conn.close();
+    next(new Error('SERVICE_INDISPONIBLE'));
+  }
+
+  /**
+   * Identité du compte, avec quelques nouveaux essais si la base ne répond
+   * pas. Une erreur définitive (requête mal formée) vaut « compte inconnu ».
+   */
+  private async identifierAvecReprise(sujet: string, type: TypeConnexion): Promise<IssueIdentification> {
+    const debut = Date.now();
+    for (let essai = 0; ; essai++) {
+      try {
+        return { panne: false, identite: await this.identifyUser({ sub: sujet }, type) };
+      } catch (erreur) {
+        if (!estErreurPassagere(erreur)) {
+          this.logger.warn(
+            `Identification ${LIBELLE_TYPE[type]} ${court(sujet)} impossible (${codeErreur(erreur)}) : compte tenu pour inconnu`,
+          );
+          return { panne: false, identite: null };
+        }
+        const attente = this.attentesRepriseMs[essai];
+        if (attente === undefined || Date.now() - debut + attente > BUDGET_IDENTIFICATION_MS) {
+          return { panne: true, erreur };
+        }
+        await new Promise((resoudre) => setTimeout(resoudre, attente));
+      }
+    }
+  }
+
+  /**
+   * Connexion acceptée par le contrôle d'entrée : le socket est déjà dans ses
+   * salles. Reste à le compter, à l'accuser au client et à prévenir les
+   * modules qui en dépendent.
+   */
+  handleConnection(client: Socket) {
+    const identite = (client.data as DonneesSocket | undefined)?.identite;
+    if (!identite) {
+      // Contrôle d'entrée absent : ne doit pas arriver. Refus visible plutôt
+      // qu'un socket sans salle qui n'entendrait rien.
+      this.logger.error(`Socket ${client.id} arrivé sans contrôle d'entrée : coupé`);
+      client.disconnect(true);
+      return;
+    }
+
+    this.connectedUsers.set(client.id, { ...identite, socketId: client.id });
+    client.emit(EVENEMENT_CONNEXION_ACCEPTEE, { type: identite.type, id: identite.id });
+
+    if (identite.type === 'deliverer') {
+      const depuis = Date.now();
+      const version = (client.data as DonneesSocket).version;
+      this.journaliserLivreur(
+        identite.id,
+        'connecte',
+        `connecté (socket ${client.id}${version ? `, appli ${version}` : ''})`,
+      );
+      client.once('disconnect', (raison: string) => {
+        this.journaliserLivreur(
+          identite.id,
+          'deconnecte',
+          `déconnecté (${raison}) après ${dureeLisible(Date.now() - depuis)}`,
+        );
+      });
+      // Check de présence matinal en attente aujourd'hui : renvoyé tout de
+      // suite (reconnexion sur un autre appareil après le cron de 8 h).
+      void this.sendPendingPresenceCheck(client, identite.id);
+      // Offre en attente : renvoyée par le module course (DispatchListener).
+      this.eventEmitter.emit(EVENEMENT_LIVREUR_CONNECTE, { delivererId: identite.id });
+    }
+
+    // Agents support (type='user') : le module support ré-enfile les tickets
+    // en attente sur leurs catégories (file épuisée avant leur arrivée).
+    if (identite.type === 'user') {
+      this.eventEmitter.emit('user.online', { userId: identite.id });
+    }
+  }
+
+  /** Connexion et déconnexion d'un livreur : une ligne par minute au plus pour chacune. */
+  private journaliserLivreur(delivererId: string, quoi: 'connecte' | 'deconnecte', texte: string): void {
+    const tues = this.journalLimite.autoriser(`livreur:${quoi}:${delivererId}`);
+    if (tues === null) return;
+    this.logger.log(`Livreur ${court(delivererId)} ${texte}${suffixeTues(tues)}`);
   }
 
   handleDisconnect(client: Socket) {
     const user = this.connectedUsers.get(client.id);
     if (user) {
-      // this.logger.log(`Déconnexion: ${user.type} ${user.id} déconnecté`);
       this.connectedUsers.delete(client.id);
 
       // Supprimer les typing indicators
@@ -158,8 +317,61 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return false;
   }
 
+  // ================================
+  // PRÉSENCE DES LIVREURS
+  // ================================
+
   /**
-   * Identifie l'utilisateur en utilisant un Cache pour protéger la DB
+   * Livreurs qui ont au moins un socket ouvert dans leur canal privé, toutes
+   * instances comprises (adaptateur Redis). `null` : présence inconnue (Redis
+   * ou une autre instance n'a pas répondu à temps), à ne pas confondre avec
+   * « pas connecté ».
+   *
+   * Aucun socket : l'appli ne recevra rien en temps réel, seulement les
+   * notifications. Un socket ouvert ne prouve pas que l'appli l'écoute, mais
+   * c'est tout ce que le serveur peut voir.
+   */
+  async livreursConnectes(delivererIds: readonly string[]): Promise<Set<string> | null> {
+    const connectes = new Set<string>();
+    if (delivererIds.length === 0) return connectes;
+    if (!this.server) return null;
+    const voulus = new Set(delivererIds);
+    let minuterie: NodeJS.Timeout | undefined;
+    try {
+      const delai = new Promise<null>((resoudre) => {
+        minuterie = setTimeout(() => resoudre(null), DELAI_PRESENCE_MS);
+      });
+      const sockets = await Promise.race([
+        this.server.in([...voulus].map(salleLivreur)).fetchSockets(),
+        delai,
+      ]);
+      if (!sockets) return null;
+      for (const socket of sockets) {
+        for (const salle of socket.rooms) {
+          const id = livreurDeLaSalle(salle);
+          if (id && voulus.has(id)) connectes.add(id);
+        }
+      }
+      return connectes;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(minuterie);
+    }
+  }
+
+  /** Un livreur a-t-il un socket ouvert ? `null` : on ne sait pas. */
+  async livreurConnecte(delivererId: string): Promise<boolean | null> {
+    const connectes = await this.livreursConnectes([delivererId]);
+    return connectes ? connectes.has(delivererId) : null;
+  }
+
+  /**
+   * Identifie l'utilisateur en utilisant un Cache pour protéger la DB.
+   *
+   * `null` : compte introuvable ou plus actif. Une erreur de base REMONTE :
+   * elle ne dit rien du compte, et la confondre avec « introuvable » coupait
+   * le socket du livreur pour de bon.
    */
   private async identifyUser(
     decoded: { sub: string },
@@ -184,59 +396,54 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // 2. Requête Base de données (uniquement si pas en cache)
     let result: ConnectedUser | null = null;
 
-    try {
-      if (type === 'customer') {
-        const customer = await this.prisma.customer.findUnique({
-          where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
-          select: { id: true } // Optimisation : on ne prend que l'ID
-        });
+    if (type === 'customer') {
+      const customer = await this.prisma.customer.findUnique({
+        where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
+        select: { id: true } // Optimisation : on ne prend que l'ID
+      });
 
-        if (customer) {
-          result = {
-            id: customer.id,
-            type: 'customer',
-            socketId: '',
-          };
-        }
-      } else if (type === 'user') {
-        const user = await this.prisma.user.findUnique({
-          where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
-          // Seuls le type, le rattachement et le rôle servent : inutile de
-          // charger la ligne du restaurant, et avec elle sa clé Turbo et son
-          // jeton HubRise. Le rôle décide de la salle des relances.
-          select: { id: true, type: true, restaurant_id: true, role: true },
-        });
-
-        if (user) {
-          result = {
-            id: user.id,
-            type: 'user',
-            userType: user.type,
-            restaurantId: user.restaurant_id ?? undefined,
-            role: user.role,
-            socketId: '',
-          };
-        }
-      } else if (type === 'deliverer') {
-        // Le livreur se connecte au WS même en PENDING_VALIDATION pour recevoir
-        // l'event deliverer.operational.changed dès qu'un admin le valide.
-        const deliverer = await this.prisma.deliverer.findUnique({
-          where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
-          select: { id: true, restaurant_id: true },
-        });
-
-        if (deliverer) {
-          result = {
-            id: deliverer.id,
-            type: 'deliverer',
-            restaurantId: deliverer.restaurant_id ?? undefined,
-            socketId: '',
-          };
-        }
+      if (customer) {
+        result = {
+          id: customer.id,
+          type: 'customer',
+          socketId: '',
+        };
       }
-    } catch (error) {
-      // this.logger.error(`Erreur DB dans identifyUser: ${error.message}`);
-      return null;
+    } else if (type === 'user') {
+      const user = await this.prisma.user.findUnique({
+        where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
+        // Seuls le type, le rattachement et le rôle servent : inutile de
+        // charger la ligne du restaurant, et avec elle sa clé Turbo et son
+        // jeton HubRise. Le rôle décide de la salle des relances.
+        select: { id: true, type: true, restaurant_id: true, role: true },
+      });
+
+      if (user) {
+        result = {
+          id: user.id,
+          type: 'user',
+          userType: user.type,
+          restaurantId: user.restaurant_id ?? undefined,
+          role: user.role,
+          socketId: '',
+        };
+      }
+    } else if (type === 'deliverer') {
+      // Le livreur se connecte au WS même en PENDING_VALIDATION pour recevoir
+      // l'event deliverer.operational.changed dès qu'un admin le valide.
+      const deliverer = await this.prisma.deliverer.findUnique({
+        where: { id: decoded.sub, entity_status: EntityStatus.ACTIVE },
+        select: { id: true, restaurant_id: true },
+      });
+
+      if (deliverer) {
+        result = {
+          id: deliverer.id,
+          type: 'deliverer',
+          restaurantId: deliverer.restaurant_id ?? undefined,
+          socketId: '',
+        };
+      }
     }
 
     // 3. Mise en cache du résultat
@@ -451,16 +658,22 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.emit(event, sansSecretsRestaurant(data));
   }
 
+  /**
+   * `pong` dans le canal privé, comme avant. Avec un accusé
+   * (`socket.timeout(5000).emitWithAck('ping')`), l'appli apprend aussi si le
+   * serveur connaît toujours ce socket : `{ connecte: true }`.
+   */
   @SubscribeMessage('ping')
   handlePing(@ConnectedSocket() client: Socket) {
     const user = this.connectedUsers.get(client.id);
-    if (!user) return;
+    if (!user) return { connecte: false };
     this.emitToUser(
       user.id,
       user.type,
       'pong',
       `pong from ${user.type} ${user.id}`,
     );
+    return { connecte: true };
   }
 
   @SubscribeMessage('user_typing_start')
@@ -617,4 +830,13 @@ export class AppGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     return stats;
   }
+}
+
+/** « 42 s », « 3 min », « 2 h 05 » : durée d'une connexion dans le journal. */
+function dureeLisible(ms: number): string {
+  const secondes = Math.max(0, Math.round(ms / 1000));
+  if (secondes < 120) return `${secondes} s`;
+  const minutes = Math.floor(secondes / 60);
+  if (minutes < 120) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')}`;
 }
