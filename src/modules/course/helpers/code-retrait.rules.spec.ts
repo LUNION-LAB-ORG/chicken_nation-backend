@@ -3,9 +3,10 @@
  * restaurants, la caisse tombait sur la course de l'autre).
  */
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { CourseStatut, OrderStatus, UserRole, UserType } from '@prisma/client';
+import { CourseStatut, DeliveryStatut, OrderStatus, UserRole, UserType } from '@prisma/client';
 
-import { correspond } from 'src/modules/order/relance/relance.base-simulee-spec';
+// Évaluation des `where` en mémoire, relations `some` et `notIn` comprises.
+import { evaluer as correspond } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
 
 import {
   CodeDuJour,
@@ -113,13 +114,40 @@ describe('whereCoursesARemettre (évalué sur des courses en mémoire)', () => {
     course('a-hier-encore-active', { created_at: hier }),
     course('a-autre-code', { pickup_code: '422' }),
     course('b-meme-code', { restaurant_id: RESTO_B, statut: CourseStatut.AT_RESTAURANT }),
+    // Retrait complémentaire (planificateur v2) : récupérée, livreur encore au
+    // restaurant, une commande prête à remettre.
+    course('a-recuperee-complement', {
+      statut: CourseStatut.IN_DELIVERY,
+      parti_at: null,
+      deliveries: [
+        { statut: DeliveryStatut.PENDING, order: { status: OrderStatus.PICKED_UP } },
+        { statut: DeliveryStatut.PENDING, order: { status: OrderStatus.READY } },
+      ],
+    }),
+    course('a-recuperee-partie', {
+      statut: CourseStatut.IN_DELIVERY,
+      parti_at: new Date('2026-10-22T12:50:00.000Z'),
+      deliveries: [{ statut: DeliveryStatut.PENDING, order: { status: OrderStatus.READY } }],
+    }),
+    course('a-recuperee-tout-remis', {
+      statut: CourseStatut.IN_DELIVERY,
+      parti_at: null,
+      deliveries: [{ statut: DeliveryStatut.PENDING, order: { status: OrderStatus.PICKED_UP } }],
+    }),
   ];
 
   const trouvees = (restaurantId?: string) =>
     courses.filter((c) => correspond(c, whereCoursesARemettre('421', restaurantId, journee))).map((c) => c.id);
 
   it('restaurant connu : ses seules courses à remettre de la journée', () => {
-    expect(trouvees(RESTO_A)).toEqual(['a-acceptee', 'a-au-restaurant', 'a-turbo-en-attente']);
+    expect(trouvees(RESTO_A)).toEqual(['a-acceptee', 'a-au-restaurant', 'a-turbo-en-attente', 'a-recuperee-complement']);
+  });
+
+  it('retrait complémentaire : récupérée seulement si le livreur est encore là et qu\'une commande est prête', () => {
+    expect(trouvees(RESTO_A)).toContain('a-recuperee-complement');
+    expect(trouvees(RESTO_A)).not.toContain('a-recuperee-partie');
+    expect(trouvees(RESTO_A)).not.toContain('a-recuperee-tout-remis');
+    expect(trouvees(RESTO_A)).not.toContain('a-en-livraison');
   });
 
   it('même code dans un autre restaurant : jamais vu depuis le premier', () => {
@@ -138,6 +166,7 @@ describe('whereCoursesARemettre (évalué sur des courses en mémoire)', () => {
       'a-au-restaurant',
       'a-turbo-en-attente',
       'b-meme-code',
+      'a-recuperee-complement',
     ]);
   });
 });

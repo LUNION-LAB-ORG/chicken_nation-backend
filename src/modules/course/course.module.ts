@@ -26,6 +26,7 @@ import { CoursePlanificateurService } from './services/course-planificateur.serv
 import { CourseQueryService } from './services/course-query.service';
 import { DeliveryActionService } from './services/delivery-action.service';
 import { DeliveryTrackingService } from './services/delivery-tracking.service';
+import { DepartCourseService } from './services/depart-course.service';
 import { DirectionService } from './services/direction.service';
 import { EstimationPreparationService } from './services/estimation-preparation.service';
 import { GardeOffresService } from './services/garde-offres.service';
@@ -64,6 +65,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     ApplicationPlanService, // Application conditionnelle et journalisée des actions
     CoursePlanificateurService, // Passages sous verrou par restaurant, regroupés (500 ms)
     LotsV2Service, // Lots sous v2 : vidés pour la flotte interne, direction pour Turbo
+    DepartCourseService, // Départ du restaurant, « Je pars », retrait complémentaire
     // Events + WS
     CourseEvent,
     CourseWebSocketService,

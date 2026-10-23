@@ -14,6 +14,7 @@ import { RefuseOfferDto } from '../dto/refuse-offer.dto';
 import { CourseActionService } from '../services/course-action.service';
 import { CourseQueryService } from '../services/course-query.service';
 import { DeliveryActionService } from '../services/delivery-action.service';
+import { DepartCourseService } from '../services/depart-course.service';
 import { OffreEnAttenteService } from '../services/offre-en-attente.service';
 
 /**
@@ -29,6 +30,7 @@ export class CourseDelivererController {
     private readonly deliveryService: DeliveryActionService,
     private readonly queryService: CourseQueryService,
     private readonly offreEnAttente: OffreEnAttenteService,
+    private readonly depart: DepartCourseService,
   ) {}
 
   // ============================================================
@@ -109,6 +111,21 @@ export class CourseDelivererController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.actionService.markPickedUp(id, deliverer.id);
+  }
+
+  @ApiOperation({
+    summary: 'Je pars : le livreur quitte le restaurant (course récupérée)',
+    description:
+      'Ferme la fenêtre d\'ajout après le retrait (`parti_at`). Idempotent. Une commande ajoutée ' +
+      'après le retrait et pas encore remise est retirée de la course (elle repart dans une autre). ' +
+      'Rend la course (même forme que `me/current`). 400 si la course n\'est pas encore récupérée.',
+  })
+  @Post(':id/depart')
+  async jePars(
+    @CurrentDeliverer() deliverer: Deliverer,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.depart.jePars(id, deliverer.id);
   }
 
   @ApiOperation({ summary: 'Annuler la course (cas exceptionnel)' })

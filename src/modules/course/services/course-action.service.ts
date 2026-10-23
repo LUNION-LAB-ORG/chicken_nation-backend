@@ -33,6 +33,7 @@ import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { WHERE_COURSE_ENCORE_A_REMETTRE, messageValidationImpossible } from '../helpers/remise-course.rules';
 import { CourseOfferService } from './course-offer.service';
 import { CourseQueryService } from './course-query.service';
+import { DepartCourseService } from './depart-course.service';
 import { GardeOffresService } from './garde-offres.service';
 
 /** Refus d'une offre déjà expirée, close ou traitée (texte montré au livreur). */
@@ -61,6 +62,8 @@ export class CourseActionService {
     private readonly queryService: CourseQueryService,
     // Acceptation conditionnelle (règle unique des offres) : garde-offres.service.ts.
     private readonly garde: GardeOffresService,
+    // Planificateur v2 : fenêtre d'ajout après le retrait, retrait complémentaire.
+    private readonly depart?: DepartCourseService,
   ) {}
 
   // ============================================================
@@ -182,6 +185,9 @@ export class CourseActionService {
       }),
     ]);
 
+    // Fenêtre d'ajout après le retrait fermée d'office si elle ne doit pas s'ouvrir.
+    await this.depart?.fermerFenetreALaValidation(courseId, now);
+
     await this.courseEvent.courseStatutChanged({
       course: updatedCourse,
       previous_statut: CourseStatut.AT_RESTAURANT,
@@ -301,6 +307,15 @@ export class CourseActionService {
       dto.restaurant_id,
     );
 
+    // Planificateur v2 : course déjà récupérée, livreur encore au restaurant,
+    // commande ajoutée après le retrait. Seules les commandes prêtes sont
+    // remises, avec le même code ; la course reste en livraison.
+    if (course.statut === CourseStatut.IN_DELIVERY && this.depart) {
+      const complete = await this.depart.remettreComplement(course);
+      void this.estimerDureeTournee(complete.id).catch(() => undefined);
+      return complete;
+    }
+
     // Toutes les commandes doivent être READY. Le refus nomme les commandes
     // et leur statut : la caissière sait laquelle attendre.
     const notReady = course.deliveries.filter((d) => d.order.status !== OrderStatus.READY);
@@ -327,9 +342,11 @@ export class CourseActionService {
         },
         include: COURSE_FULL_INCLUDE,
       }),
-      // Orders : READY → PICKED_UP + timestamp
+      // Orders : READY → PICKED_UP + timestamp. Seulement celles que la caisse
+      // a vues : une commande ajoutée à la course pendant la saisie (planificateur)
+      // n'a pas été remise ; elle reste à remettre avec le même code.
       this.prisma.order.updateMany({
-        where: { delivery: { course_id: course.id } },
+        where: { id: { in: course.deliveries.map((d) => d.order.id) }, delivery: { course_id: course.id } },
         data: { status: OrderStatus.PICKED_UP, picked_up_at: now },
       }),
     ]).catch(async (err) => {
@@ -341,6 +358,13 @@ export class CourseActionService {
       }
       throw err;
     });
+
+    // Commande ajoutée pendant la saisie : traitée comme un ajout après le
+    // retrait (remise avec le même code, ou retirée au départ du livreur).
+    await this.depart?.marquerAjoutsPendantLaRemise(course.id, course.deliveries.map((d) => d.order.id));
+    // Fenêtre d'ajout après le retrait fermée d'office si elle ne doit pas
+    // s'ouvrir (ancienne appli, Turbo, réglage coupé, restaurant en v1).
+    if (await this.depart?.fermerFenetreALaValidation(updated.id, now)) updated.parti_at = now;
 
     // Émet l'event WS pour que le mobile livreur et le backoffice se synchronisent
     await this.courseEvent.courseStatutChanged({

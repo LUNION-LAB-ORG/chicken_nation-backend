@@ -8,6 +8,7 @@ import { CourseEvent } from '../events/course.event';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { STATUTS_COURSE_AVANT_DEPART, STATUTS_LIVRAISON_TERMINEE } from '../helpers/remise-course.rules';
 import { CourseActionService } from './course-action.service';
+import { DepartCourseService } from './depart-course.service';
 import { DispatchJournalService, SourceDispatch } from './dispatch-journal.service';
 
 /** La course n'est plus acceptée ni au restaurant : un autre chemin l'a déjà fait partir. */
@@ -52,6 +53,8 @@ export class CourseEnLivraisonService {
     private readonly pushService: DelivererPushService,
     private readonly actions: CourseActionService,
     private readonly journal: DispatchJournalService,
+    // Planificateur v2 : fenêtre d'ajout après le retrait, retrait complémentaire.
+    private readonly depart?: DepartCourseService,
   ) {}
 
   /**
@@ -141,6 +144,8 @@ export class CourseEnLivraisonService {
       });
     }
     void this.actions.estimerDureeTournee(courseId).catch(() => undefined);
+    // Fenêtre d'ajout après le retrait fermée d'office si elle ne doit pas s'ouvrir.
+    await this.depart?.fermerFenetreALaValidation(courseId, maintenant).catch(() => false);
 
     return { passee: true, statut_avant: avant.statut, detachees };
   }
@@ -187,6 +192,12 @@ export class CourseEnLivraisonService {
         order_id: commande.id,
         details: { course: course.reference, commande: commande.reference ?? null },
       });
+      return false;
+    }
+    // Course récupérée, livreur encore au restaurant : commande ajoutée remise
+    // par le bouton (planificateur v2). Le livreur est prévenu quand tout est pris.
+    if (course.statut === CourseStatut.IN_DELIVERY) {
+      await this.depart?.surRemiseParCaisse(course.id, commande);
       return false;
     }
     if (!STATUTS_COURSE_AVANT_DEPART.includes(course.statut)) return false; // déjà partie ou terminée

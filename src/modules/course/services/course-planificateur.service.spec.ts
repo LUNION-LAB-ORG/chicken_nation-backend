@@ -19,14 +19,19 @@ import { DispatchEvenements } from '../enums/dispatch-evenements';
 import { CourseEvent } from '../events/course.event';
 import { CourseHelper } from '../helpers/course.helper';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
+import { whereCoursesARemettre } from '../helpers/code-retrait.rules';
+import { journeeDeService } from '../helpers/journee-service.rules';
 import { CLASSE_VERROU_PLANIFICATEUR } from '../helpers/planification.rules';
 import { OrderBridgeListenerService } from '../listeners/order-bridge.listener.service';
 import { CourseBatchTask } from '../tasks/course-batch.task';
 import { evaluer } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
 import { ApplicationPlanService } from './application-plan.service';
 import { commande, course, DonneesDispatch, livraison, livreur, monterBaseDispatch, offre, RESTO } from './base-dispatch.simulee-spec';
+import { CourseActionService } from './course-action.service';
 import { CourseOfferService } from './course-offer.service';
 import { CoursePlanificateurService } from './course-planificateur.service';
+import { CourseQueryService } from './course-query.service';
+import { DepartCourseService } from './depart-course.service';
 import { DirectionService } from './direction.service';
 import { DispatchJournalService } from './dispatch-journal.service';
 import { EstimationPreparationService } from './estimation-preparation.service';
@@ -137,6 +142,20 @@ function monter(donnees: DonneesDispatch, options: Options = {}) {
   );
   const nouveauPlanificateur = () => new CoursePlanificateurService(base.prisma, settings, instantanes, application);
   const planificateur = nouveauPlanificateur();
+  const depart = new DepartCourseService(base.prisma, settings, courseEvent, push as never, journal);
+  const requetes = new CourseQueryService(base.prisma);
+  const actions = new CourseActionService(
+    base.prisma,
+    courseEvent,
+    offres,
+    queue as never,
+    push as never,
+    turbo as never,
+    { getDirections: jest.fn(async () => null) } as never,
+    requetes,
+    garde,
+    depart,
+  );
   const horloge = () => new Date();
 
   const emisSur = (canal: string) => emis.filter((e) => e.canal === canal).map((e) => e.charge);
@@ -167,6 +186,9 @@ function monter(donnees: DonneesDispatch, options: Options = {}) {
     regroupement,
     planificateur,
     nouveauPlanificateur,
+    depart,
+    actions,
+    requetes,
     courseEvent,
     passer: (p = planificateur) => p.planifierRestaurant(RESTO, 'TEST', horloge),
   };
@@ -500,7 +522,7 @@ describe('ajout après le retrait, livreur encore au restaurant (3.8)', () => {
     };
   }
 
-  it('nouvelle appli (protocole 3) : C ajoutée à la course récupérée, à remettre avec le même code', async () => {
+  it('nouvelle appli (protocole 3) : C ajoutée, remise avec le même code, seule C passe récupérée', async () => {
     const s = recuperee(3);
     const t = monter(s.donnees);
 
@@ -509,10 +531,24 @@ describe('ajout après le retrait, livreur encore au restaurant (3.8)', () => {
     const ajoutee = t.livraisonsDe(s.k.id).find((l) => l.order_id === s.c.id);
     expect(ajoutee).toMatchObject({ ajoutee_apres_retrait: true, statut: DeliveryStatut.PENDING });
     expect(s.k.parti_at).toBeNull();
-    expect(s.c.status).toBe(OrderStatus.READY);
     expect(t.push.notifyCommandeAjoutee).toHaveBeenCalledWith(
       expect.objectContaining({ apresRetrait: true, corps: `Code ${s.k.pickup_code} au comptoir` }),
     );
+
+    // La caisse retrouve la course par le même code…
+    const where = whereCoursesARemettre(s.k.pickup_code, RESTO, journeeDeService(new Date()));
+    s.k.created_at = avant(400);
+    const trouvee = await t.base.prisma.course.findFirst({ where, include: { deliveries: { include: { order: true } } } });
+    expect(trouvee?.id).toBe(s.k.id);
+    // … et ne remet que C.
+    await t.depart.remettreComplement(trouvee as never);
+    expect(s.c.status).toBe(OrderStatus.PICKED_UP);
+    expect(s.a.status).toBe(OrderStatus.PICKED_UP);
+    expect(s.k.statut).toBe(CourseStatut.IN_DELIVERY);
+    expect(t.push.notifyCommandeRemise).toHaveBeenCalledWith(
+      expect.objectContaining({ delivererId: s.d1.id, titre: 'Tout est récupéré', corps: 'Tu peux partir' }),
+    );
+    expect(t.journalDe('RETRAIT_COMPLEMENTAIRE')).toHaveLength(1);
   });
 
   it('ancienne appli (sans protocole 3) : course réputée partie, C a sa propre course', async () => {
@@ -526,6 +562,80 @@ describe('ajout après le retrait, livreur encore au restaurant (3.8)', () => {
     expect(t.livraisonsDe(s.k.id).map((l) => l.order_id)).toEqual([s.a.id]);
     const autre = t.coursesOuvertes().find((c) => c.id !== s.k.id)!;
     expect(t.livraisonsDe(autre.id).map((l) => l.order_id)).toEqual([s.c.id]);
+  });
+
+  it('« Je pars » avec C pas remise : C retirée de la course et reprise ailleurs, le livreur prévenu', async () => {
+    const s = recuperee(3);
+    const t = monter(s.donnees);
+    await t.passer(); // C ajoutée après le retrait
+
+    await t.depart.jePars(s.k.id, s.d1.id);
+    expect(s.k.parti_at).toEqual(MAINTENANT);
+    expect(t.emis.some((e) => e.canal === DispatchEvenements.PLANIFIER_RESTAURANT)).toBe(true);
+
+    await t.passer();
+    expect(t.livraisonsDe(s.k.id).map((l) => l.order_id)).toEqual([s.a.id]);
+    expect(t.journalDe('COMMANDE_DETACHEE')).toHaveLength(1);
+    const autre = t.coursesOuvertes().find((c) => c.id !== s.k.id)!;
+    expect(t.livraisonsDe(autre.id).map((l) => l.order_id)).toEqual([s.c.id]);
+    expect(t.push.notifyCommandeRetiree).toHaveBeenCalledWith(
+      expect.objectContaining({ delivererId: s.d1.id, titre: 'Commande retirée', corps: '1 commande à livrer' }),
+    );
+  });
+
+  it('commande ajoutée pendant la saisie du code : pas marquée remise, retirée au départ et reprise ailleurs', async () => {
+    const d1 = livreur({ ...AU_COMPTOIR, last_available_at: null, protocole_appli: 2 });
+    const a = prete();
+    const k = course({
+      statut: CourseStatut.AT_RESTAURANT,
+      deliverer_id: d1.id,
+      assigned_at: avant(400),
+      at_restaurant_at: avant(100),
+      created_at: avant(500),
+    });
+    const b = prete({ address: B });
+    const t = monter({
+      commandes: [a, b],
+      courses: [k],
+      livraisons: [livraison({ course_id: k.id, order_id: a.id })],
+      livreurs: [d1],
+    });
+    // La caisse lit la course (A seule), le planificateur ajoute B juste avant l'écriture.
+    const lire = t.requetes.findByActivePickupCode.bind(t.requetes);
+    jest.spyOn(t.requetes, 'findByActivePickupCode').mockImplementationOnce(async (...args) => {
+      const lue = await lire(...args);
+      t.base.livraisons.push(livraison({ course_id: k.id, order_id: b.id, sequence_order: 2, ajoutee_at: new Date() }));
+      return lue;
+    });
+
+    await t.actions.validatePickupByCashier({ pickup_code: k.pickup_code, restaurant_id: RESTO } as never, undefined);
+
+    expect(a.status).toBe(OrderStatus.PICKED_UP);
+    expect(b.status).toBe(OrderStatus.READY);
+    expect(t.livraisonsDe(k.id)[1].ajoutee_apres_retrait).toBe(true);
+    expect(k.parti_at).toEqual(MAINTENANT); // ancienne appli : fenêtre fermée à la validation
+
+    await t.passer();
+    expect(t.livraisonsDe(k.id).map((l) => l.order_id)).toEqual([a.id]);
+    const autre = t.coursesOuvertes().find((c) => c.id !== k.id)!;
+    expect(t.livraisonsDe(autre.id).map((l) => l.order_id)).toEqual([b.id]);
+  });
+
+  it('fenêtre fermée à la validation : ancienne appli et restaurant en v1 ; ouverte pour la nouvelle appli en v2', async () => {
+    const ancienne = recuperee(null);
+    ancienne.k.picked_up_at = new Date();
+    const t1 = monter(ancienne.donnees);
+    expect(await t1.depart.fermerFenetreALaValidation(ancienne.k.id)).toBe(true);
+    expect(ancienne.k.parti_at).toEqual(MAINTENANT);
+
+    const nouvelle = recuperee(3);
+    const t2 = monter(nouvelle.donnees);
+    expect(await t2.depart.fermerFenetreALaValidation(nouvelle.k.id)).toBe(false);
+    expect(nouvelle.k.parti_at).toBeNull();
+
+    const enV1 = recuperee(3);
+    const t3 = monter(enV1.donnees, { reglages: { 'course.planificateur': 'v1' } });
+    expect(await t3.depart.fermerFenetreALaValidation(enV1.k.id)).toBe(true);
   });
 });
 

@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { CourseStatut, OrderStatus, Prisma } from '@prisma/client';
+import { CourseStatut, DeliveryStatut, OrderStatus, Prisma } from '@prisma/client';
 
 import {
   ComptePersonnel,
@@ -97,6 +97,10 @@ export function choisirCodeRetrait(
  *  - confiées à Turbo et encore PENDING_ASSIGNMENT : leur livreur peut se
  *    présenter avant que leurs webhooks n'aient fait avancer la course, la
  *    caisse ne doit pas être bloquée par un webhook en retard ;
+ *  - RETRAIT COMPLÉMENTAIRE (planificateur v2, conception 3.8) : récupérées
+ *    (IN_DELIVERY) mais livreur encore au restaurant (`parti_at` nul), avec au
+ *    moins une commande prête à remettre (ajoutée après le retrait) : elle
+ *    est remise avec le même code ;
  * du restaurant concerné (tous si `restaurantId` est absent), créées pendant
  * la journée de service. Une course d'hier restée active est ignorée.
  */
@@ -112,6 +116,16 @@ export function whereCoursesARemettre(
     OR: [
       { statut: { in: [CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT] } },
       { statut: CourseStatut.PENDING_ASSIGNMENT, turbo_escalated_at: { not: null } },
+      {
+        statut: CourseStatut.IN_DELIVERY,
+        parti_at: null,
+        deliveries: {
+          some: {
+            statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
+            order: { status: OrderStatus.READY },
+          },
+        },
+      },
     ],
   };
 }
