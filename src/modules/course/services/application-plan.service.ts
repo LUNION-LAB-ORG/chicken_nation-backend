@@ -67,6 +67,13 @@ export class ActionAbandonnee extends Error {
  */
 const PAUSE_APRES_ECHEC_TURBO_MS = 2 * 60 * 1000;
 const MOTIF_TURBO_PAS_AVANT = 'TURBO_PAS_AVANT';
+/**
+ * Turbo injoignable : le passage n'attend pas sa réponse plus de 15 s (le
+ * restaurant suivant attend son tour, le verrou est tenu). L'envoi continue
+ * en arrière-plan et son issue est journalisée quand elle arrive ; la
+ * réservation `turbo_escalated_at` empêche tout second envoi.
+ */
+export const DELAI_ENVOI_TURBO_MS = 15_000;
 
 /** Statuts d'une course dont le livreur est affecté et pas parti. */
 const STATUTS_AVEC_LIVREUR: CourseStatut[] = [CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT, CourseStatut.IN_DELIVERY];
@@ -76,6 +83,13 @@ export interface OptionsApplication {
   maxRefus: number;
   /** Retour à v1 : les commandes détachées repartent dans l'ancien regroupement par lots. */
   repliV1?: boolean;
+  /**
+   * Heure (ms) au-delà de laquelle plus aucune action n'est commencée : le
+   * verrou du restaurant est tenu par une transaction bornée, rien ne doit
+   * s'écrire après qu'il a été rendu. Les actions restantes sont abandonnées
+   * (le passage suivant les recalcule).
+   */
+  echeanceMs?: number;
 }
 
 export interface ResultatApplication {
@@ -154,6 +168,10 @@ export class ApplicationPlanService {
     const resultat: ResultatApplication = { appliquees: [], abandonnees: [], creees: passage.cles };
 
     for (const action of plan.actions) {
+      if (options.echeanceMs !== undefined && Date.now() > options.echeanceMs) {
+        resultat.abandonnees.push({ type: action.type, motif: 'PASSAGE_TROP_LONG' });
+        continue;
+      }
       try {
         await this.appliquerUne(action, passage);
         resultat.appliquees.push(action.type);
@@ -676,16 +694,32 @@ export class ApplicationPlanService {
       select: { id: true },
     });
     if (echecRecent) throw new ActionAbandonnee(MOTIF_TURBO_PAS_AVANT);
-    const confiee = await this.offres.confierATurboParPlanificateur(a.course_id, a.minutes);
-    await this.journal.ecrire({
-      type: 'TURBO_PLANIFIE',
-      motif: confiee ? 'CONFIEE' : 'ECHEC',
-      source: 'serveur',
-      restaurant_id: p.restaurantId,
-      course_id: a.course_id,
-      details: { minutes: a.minutes, libelle: a.libelle },
+    const journaliser = (confiee: boolean, details: Record<string, unknown> = {}) =>
+      this.journal.ecrire({
+        type: 'TURBO_PLANIFIE',
+        motif: confiee ? 'CONFIEE' : 'ECHEC',
+        source: 'serveur',
+        restaurant_id: p.restaurantId,
+        course_id: a.course_id,
+        details: { minutes: a.minutes, libelle: a.libelle, ...details },
+      });
+    const envoi = this.offres.confierATurboParPlanificateur(a.course_id, a.minutes).catch((err) => {
+      this.logger.warn(`Envoi à Turbo en échec (${a.course_id.slice(0, 8)}) : ${(err as Error)?.message ?? err}`);
+      return false;
     });
-    if (!confiee) throw new ActionAbandonnee('TURBO_INDISPONIBLE');
+    let minuteur: NodeJS.Timeout | undefined;
+    const delai = new Promise<'DELAI'>((resoudre) => {
+      minuteur = setTimeout(() => resoudre('DELAI'), DELAI_ENVOI_TURBO_MS);
+      minuteur.unref?.();
+    });
+    const issue = await Promise.race([envoi, delai]).finally(() => clearTimeout(minuteur));
+    if (issue === 'DELAI') {
+      // Le passage n'attend plus : l'issue sera journalisée à son arrivée.
+      void envoi.then((confiee) => journaliser(confiee, { reponse_tardive: true })).catch(() => undefined);
+      throw new ActionAbandonnee('TURBO_SANS_REPONSE');
+    }
+    await journaliser(issue);
+    if (!issue) throw new ActionAbandonnee('TURBO_INDISPONIBLE');
   }
 
   // ─── Annonces ─────────────────────────────────────────────────────────────
@@ -814,6 +848,27 @@ export class ApplicationPlanService {
       is_chain_bonus: false,
       renvoi: true,
     });
+  }
+
+  /**
+   * Repli v1 : commandes prêtes laissées sans lot ni course par v2 (passage
+   * en échec, prêtes pendant le basculement) rendues à l'ancien regroupement
+   * par lots, qui crée leur course à la fin de sa fenêtre.
+   *
+   * @returns le nombre de commandes mises dans un lot.
+   */
+  async rendreAuxLots(orderIds: readonly string[]): Promise<number> {
+    let n = 0;
+    for (const id of orderIds) {
+      try {
+        const { batchId } = await this.regroupement.tryGroupOrder(id);
+        if (batchId) n++;
+      } catch (err) {
+        this.logger.warn(`Commande ${id.slice(0, 8)} non rendue aux lots : ${(err as Error)?.message}`);
+      }
+    }
+    if (n > 0) this.logger.log(`Retour à l'ancienne méthode : ${n} commande(s) prête(s) sans course rendue(s) aux lots.`);
+    return n;
   }
 
   /** Contexte de lecture (pour les tests). */

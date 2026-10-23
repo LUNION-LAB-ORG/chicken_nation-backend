@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { CourseStatut, DeliveryService, DeliveryStatut, EntityStatus, OrderStatus, OrderType } from '@prisma/client';
+import { CourseStatut, DeliveryService, DeliveryStatut, EntityStatus, OrderStatus, OrderType, Prisma } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 
@@ -20,8 +20,26 @@ import { FRAICHEUR_COURSE_EN_LIVRAISON_MS, InstantanePlanificationService } from
 export const DELAI_REGROUPEMENT_MS = 500;
 /** Passage plus long que ça : le verrou est rendu (la transaction qui le tient est close). */
 const DUREE_MAX_PASSAGE_MS = 60_000;
+/**
+ * Plus aucune action commencée après 40 s de passage : la plus longue (Turbo,
+ * 15 s au plus) finit avant que la transaction du verrou ne soit close.
+ */
+const ECHEANCE_ACTIONS_MS = 40_000;
 /** Une commande sans course plus vieille que ça n'est plus du service en cours. */
 const FRAICHEUR_COMMANDE_MS = 6 * 60 * 60 * 1000;
+/**
+ * Repli v1 : une commande prête de la flotte interne sans lot ni course
+ * depuis plus d'une minute a été laissée par v2 (passage en échec, ou prête
+ * pendant le basculement) ; le pont des commandes de v1 l'aurait mise dans un
+ * lot à l'instant où elle est devenue prête.
+ */
+export const DELAI_COMMANDE_SANS_LOT_MS = 60_000;
+/**
+ * Verrou du restaurant tenu par un autre serveur : la demande est refaite une
+ * seconde plus tard (au plus 10 fois de suite ; la tâche de 10 s reste le filet).
+ */
+export const DELAI_NOUVELLE_DEMANDE_MS = 1000;
+const NOUVELLES_DEMANDES_MAX = 10;
 
 export interface ResultatPassage {
   restaurant_id: string;
@@ -32,6 +50,8 @@ export interface ResultatPassage {
   abandonnees: { type: TypeActionPlanification; motif: string }[];
   /** Courses créées : clé du plan (`nouvelle-N`) vers identifiant. */
   creees: Map<string, string>;
+  /** Repli v1 : commandes prêtes laissées sans lot par v2, rendues à l'ancien regroupement. */
+  rendues_aux_lots?: number;
 }
 
 /**
@@ -56,8 +76,13 @@ export interface ResultatPassage {
  * regroupement par lots) et `course.planificateur_restaurants` (vide = tous).
  * Un restaurant en v1 ne voit que le REPLI : ses courses récupérées encore
  * « au restaurant » sont marquées parties, les commandes ajoutées après le
- * retrait et pas remises sont rendues à l'ancien regroupement, les retenues
- * levées. Le reste de v1 est exactement le comportement d'avant.
+ * retrait et pas remises, et les commandes prêtes laissées sans lot ni course
+ * depuis plus d'une minute, sont rendues à l'ancien regroupement, les
+ * retenues levées. Le reste de v1 est exactement le comportement d'avant.
+ *
+ * Verrou pris par un autre serveur : la demande est refaite une seconde plus
+ * tard. Aucune action n'est commencée après 40 s de passage (le verrou est
+ * tenu par une transaction de 60 s au plus).
  *
  * Sans état propre : tout est relu à chaque passage, deux serveurs peuvent
  * tourner (le verrou les fait passer l'un après l'autre, les écritures sont
@@ -73,6 +98,9 @@ export class CoursePlanificateurService implements OnModuleDestroy {
   private readonly enFile = new Map<string, Set<string>>();
   private file: Promise<unknown> = Promise.resolve();
   private arrete = false;
+  /** Verrou pris ailleurs : demandes refaites de suite, par restaurant. */
+  private readonly verrouPrisAilleurs = new Map<string, number>();
+  private readonly minuteursNouvelleDemande = new Set<NodeJS.Timeout>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -85,6 +113,8 @@ export class CoursePlanificateurService implements OnModuleDestroy {
     this.arrete = true;
     for (const { minuteur } of this.demandes.values()) clearTimeout(minuteur);
     this.demandes.clear();
+    for (const m of this.minuteursNouvelleDemande) clearTimeout(m);
+    this.minuteursNouvelleDemande.clear();
   }
 
   /**
@@ -155,6 +185,7 @@ export class CoursePlanificateurService implements OnModuleDestroy {
 
     const resultat = await this.sousVerrou(restaurantId, async (): Promise<ResultatPassage> => {
       const maintenant = horloge();
+      const echeanceMs = Date.now() + ECHEANCE_ACTIONS_MS;
       const { reglages, google } = lue.planification;
       const lu = await this.instantanes.lire(restaurantId, maintenant, reglages, google, lue.preparation.reglages);
 
@@ -178,12 +209,17 @@ export class CoursePlanificateurService implements OnModuleDestroy {
         abandonnees: [],
         creees: new Map(),
       };
+      // Repli v1 : les commandes prêtes laissées sans lot ni course par v2
+      // repartent dans l'ancien regroupement.
+      const rendues = version === 'v1' ? await this.application.rendreAuxLots(await this.commandesSansLot(restaurantId, maintenant)) : 0;
+      if (rendues > 0) vide.rendues_aux_lots = rendues;
       if (plan.actions.length === 0) return vide;
 
       const { maxRefusalCount } = await this.settings.load();
       const applique = await this.application.appliquer(plan, lu, {
         maxRefus: maxRefusalCount,
         repliV1: version === 'v1',
+        echeanceMs,
       });
       this.logger.log(
         JSON.stringify({
@@ -197,16 +233,63 @@ export class CoursePlanificateurService implements OnModuleDestroy {
       return { ...vide, appliquees: applique.appliquees, abandonnees: applique.abandonnees, creees: applique.creees };
     });
 
-    return (
-      resultat ?? {
-        restaurant_id: restaurantId,
-        version,
-        verrou: false,
-        appliquees: [],
-        abandonnees: [],
-        creees: new Map(),
-      }
-    );
+    if (resultat) {
+      this.verrouPrisAilleurs.delete(restaurantId);
+      return resultat;
+    }
+    this.redemanderPlusTard(restaurantId);
+    return {
+      restaurant_id: restaurantId,
+      version,
+      verrou: false,
+      appliquees: [],
+      abandonnees: [],
+      creees: new Map(),
+    };
+  }
+
+  /**
+   * Un autre serveur planifie ce restaurant : il a lu son instantané avant
+   * l'événement qui nous a réveillés et ne l'a peut-être pas vu. La demande
+   * est refaite une seconde plus tard au lieu d'attendre la tâche de 10 s.
+   */
+  private redemanderPlusTard(restaurantId: string): void {
+    if (this.arrete) return;
+    const n = (this.verrouPrisAilleurs.get(restaurantId) ?? 0) + 1;
+    this.verrouPrisAilleurs.set(restaurantId, n);
+    if (n > NOUVELLES_DEMANDES_MAX) return;
+    const minuteur = setTimeout(() => {
+      this.minuteursNouvelleDemande.delete(minuteur);
+      this.demander(restaurantId, 'VERROU_PRIS');
+    }, DELAI_NOUVELLE_DEMANDE_MS);
+    minuteur.unref?.();
+    this.minuteursNouvelleDemande.add(minuteur);
+  }
+
+  /** Repli v1 : commandes prêtes de la flotte interne sans lot ni course depuis plus d'une minute. */
+  private whereCommandesSansLot(restaurantId: string, maintenant: Date): Prisma.OrderWhereInput {
+    const avant = new Date(maintenant.getTime() - DELAI_COMMANDE_SANS_LOT_MS);
+    return {
+      restaurant_id: restaurantId,
+      type: OrderType.DELIVERY,
+      delivery_service: DeliveryService.CHICKEN_NATION,
+      status: OrderStatus.READY,
+      entity_status: { not: EntityStatus.DELETED },
+      delivery: null,
+      batch_id: null,
+      updated_at: { gte: new Date(maintenant.getTime() - FRAICHEUR_COMMANDE_MS) },
+      OR: [{ ready_at: { lte: avant } }, { ready_at: null, updated_at: { lte: avant } }],
+    };
+  }
+
+  private async commandesSansLot(restaurantId: string, maintenant: Date): Promise<string[]> {
+    const lignes = await this.prisma.order.findMany({
+      where: this.whereCommandesSansLot(restaurantId, maintenant),
+      select: { id: true },
+      orderBy: { ready_at: 'asc' },
+      take: 50,
+    });
+    return lignes.map((l) => l.id);
   }
 
   /**
@@ -228,11 +311,14 @@ export class CoursePlanificateurService implements OnModuleDestroy {
 
   /**
    * Restaurant en v1 : reste-t-il quelque chose de v2 (retour en arrière en
-   * pleine activité) ? Course récupérée par un livreur interne pas encore
-   * marquée partie, retenue en cours, commande ajoutée après le retrait pas
-   * remise alors que le livreur est parti.
+   * pleine activité) ? Commande prête sans lot ni course depuis plus d'une
+   * minute, course récupérée par un livreur interne pas encore marquée
+   * partie, retenue en cours, commande ajoutée après le retrait pas remise
+   * alors que le livreur est parti.
    */
   private async aDesRestesV2(restaurantId: string, maintenant: Date): Promise<boolean> {
+    const sansLot = await this.prisma.order.count({ where: this.whereCommandesSansLot(restaurantId, maintenant) });
+    if (sansLot > 0) return true;
     const n = await this.prisma.course.count({
       where: {
         restaurant_id: restaurantId,

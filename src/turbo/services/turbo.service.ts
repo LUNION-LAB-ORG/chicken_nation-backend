@@ -6,6 +6,32 @@ import { IFraisLivraison, IFraisLivraisonResponsePaginate } from "../dto/frais-l
 import { CommandeResponse, PaiementMethode } from "../interfaces/turbo.interfaces";
 import { NotificationsSenderService } from "src/modules/notifications/services/notifications-sender.service";
 
+/**
+ * Au-delà, un appel de CRÉATION chez Turbo est interrompu : sans délai, `fetch`
+ * attend jusqu'à 5 min les en-têtes, et le planificateur qui l'attend tient
+ * le verrou du restaurant et la file des passages. Une coupure est une issue
+ * INCERTAINE (le groupe existe peut-être) : déjà gérée, jamais de repli interne.
+ */
+export const DELAI_APPEL_TURBO_MS = 10_000;
+
+/** Appel à Turbo borné dans le temps, réponse lue comprise (corps illisible : `null`). */
+export async function appelTurboBorne(
+  url: string,
+  init: RequestInit,
+  delaiMs = DELAI_APPEL_TURBO_MS,
+): Promise<{ response: Response; data: any }> {
+  const controleur = new AbortController();
+  const minuteur = setTimeout(() => controleur.abort(new Error(`Turbo sans réponse après ${delaiMs / 1000} s`)), delaiMs);
+  minuteur.unref?.();
+  try {
+    const response = await fetch(url, { ...init, signal: controleur.signal });
+    const data = await response.json().catch(() => null);
+    return { response, data };
+  } finally {
+    clearTimeout(minuteur);
+  }
+}
+
 @Injectable()
 export class TurboService {
   private readonly logger = new Logger(TurboService.name);
@@ -62,7 +88,7 @@ export class TurboService {
       }
 
       try {
-        const response = await fetch(`${TURBO_API.CREATION_COURSE}`, {
+        const { response, data } = await appelTurboBorne(`${TURBO_API.CREATION_COURSE}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -70,8 +96,6 @@ export class TurboService {
           },
           body: JSON.stringify(formData),
         });
-
-        const data = await response.json().catch(() => null);
 
         // Échec Turbo : soit HTTP non-2xx, soit un corps d'erreur ({ statut, message }).
         const isError =
@@ -219,12 +243,11 @@ export class TurboService {
     };
 
     try {
-      const response = await fetch(`${TURBO_API.CREATION_COURSE}`, {
+      const { response, data } = await appelTurboBorne(`${TURBO_API.CREATION_COURSE}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-API-KEY': apikey },
         body: JSON.stringify(formData),
       });
-      const data = await response.json().catch(() => null);
 
       const isError =
         !response.ok || (data && typeof data === 'object' && 'statut' in data);
