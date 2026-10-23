@@ -9,8 +9,8 @@
  *    (`parti_at` nul) : fin de la fenêtre d'ajout après le retrait
  *    (`picked_up_at` + `course.ajout_apres_retrait_max_s`). Le planificateur
  *    pose `parti_at` à cette échéance au plus tard (passage de 10 s), sauf
- *    quand la course attend encore son sac : une commande ajoutée après le
- *    retrait reste à remettre et le livreur est encore au comptoir. La fin
+ *    quand la course attend encore son sac : une commande de la course reste
+ *    à remettre et le livreur est encore au comptoir. La fin
  *    donnée est alors celle de cette prolongation (2 min au plus, même règle
  *    que le planificateur, `attendSonSac`) : l'écran ne passe pas la course
  *    « partie » avant le serveur.
@@ -34,7 +34,7 @@ export interface CourseLue {
 
 /** Ce que la prolongation de la fenêtre lit en plus (liste des commandes, réglages). */
 export interface ContexteFenetre {
-  /** Courses dont une commande ajoutée après le retrait reste à remettre. */
+  /** Courses dont une commande reste à remettre (ajoutée après le retrait ou d'origine). */
   sacsAttendus?: ReadonlySet<string>;
   /** Restaurant de la commande lue (coordonnées). */
   restaurant?: { lat: number; lng: number } | null;
@@ -105,15 +105,17 @@ const livraisonDe = (c: object): LivraisonLue | null => {
 };
 
 /**
- * Courses dont une commande ajoutée après le retrait est prête et pas encore
- * remise (livraison en attente) : elles attendent leur sac.
+ * Courses dont une commande est prête et pas encore remise (livraison en
+ * attente), ajoutée après le retrait ou d'origine (remise une par une au
+ * bouton de la caisse) : elles attendent leur sac (même règle que le
+ * planificateur, `estSacAuComptoir`).
  */
 export function coursesQuiAttendentUnSac(commandes: readonly object[]): Set<string> {
   const res = new Set<string>();
   for (const c of commandes) {
     const l = livraisonDe(c);
     const courseId = l?.course_id ?? l?.course?.id ?? null;
-    if (!courseId || l?.ajoutee_apres_retrait !== true || l.statut !== 'PENDING') continue;
+    if (!courseId || l?.statut !== 'PENDING') continue;
     if ((c as { status?: unknown }).status === 'READY') res.add(courseId);
   }
   return res;

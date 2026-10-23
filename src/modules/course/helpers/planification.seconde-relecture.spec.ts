@@ -234,7 +234,7 @@ describe('« attend son sac » : livreur immobile au comptoir, l’appli n’env
     expect(actionsDe(plan, 'MARQUER_PARTI')[0].motif).toBe('POSITION');
   });
 
-  it('au plus 2 min de plus, et jamais sur une position de plus de 15 min', () => {
+  it('au plus 2 min de plus ; une position ancienne au comptoir suffit, jamais sans position ni hors du rayon', () => {
     const base = {
       fermeAMs: h('12:35').getTime(),
       sacAttendu: true,
@@ -244,7 +244,33 @@ describe('« attend son sac » : livreur immobile au comptoir, l’appli n’env
     };
     expect(attendSonSac({ ...base, maintenant: h('12:36'), position_at: h('12:29') })).toBe(true);
     expect(attendSonSac({ ...base, maintenant: h('12:37'), position_at: h('12:29') })).toBe(false);
-    expect(attendSonSac({ ...base, maintenant: h('12:36'), position_at: h('12:20') })).toBe(false);
+    // Téléphone sans la permission « Toujours », appli en arrière-plan : plus rien depuis 12:10
+    // (seconde passe, demande de l'appli). Aucune position hors du rayon depuis le retrait.
+    expect(attendSonSac({ ...base, maintenant: h('12:36'), position_at: h('12:10') })).toBe(true);
+    expect(attendSonSac({ ...base, maintenant: h('12:36'), position: null, position_at: null })).toBe(false);
+    expect(attendSonSac({ ...base, maintenant: h('12:36'), position_at: h('12:29'), sacAttendu: false })).toBe(false);
+  });
+
+  it('commande d’origine remise une par une à la caisse, la seconde encore au comptoir : la course l’attend aussi', () => {
+    const B = cmd('b', { est: 2100, created_at: h('12:16'), ready_at: h('12:30') });
+    const origine = () =>
+      crs('k1', {
+        statut: CourseStatut.IN_DELIVERY,
+        deliverer_id: 'd1',
+        picked_up_at: h('12:31:00'),
+        livraisons: [
+          { id: 'la', statut: DeliveryStatut.PENDING, sequence_order: 1, commande: A },
+          { id: 'lb', statut: DeliveryStatut.PENDING, sequence_order: 2, commande: B },
+        ],
+      });
+    const auComptoir = (t: Date) => livr('d1', t, { auComptoir: true, position_at: h('12:30:00'), etat: { en_course: true } });
+    // Fenêtre échue à 12:35:00 : prolongée tant que b n'est pas remise, livreur au comptoir.
+    expect(types(planifier(instant(h('12:35:05'), { courses: [origine()], livreurs: [auComptoir(h('12:35:05'))] })))).toEqual([]);
+    // Au plus 2 min : ensuite la course est réputée partie (et b signalée au restaurant).
+    const tard = planifier(instant(h('12:37:01'), { courses: [origine()], livreurs: [auComptoir(h('12:37:01'))] }));
+    expect(actionsDe(tard, 'MARQUER_PARTI')).toEqual([expect.objectContaining({ course_id: 'k1', motif: 'FENETRE_ECHUE' })]);
+    // b n'est pas un ajout : elle reste dans la course, jamais détachée.
+    expect(actionsDe(tard, 'DETACHER')).toEqual([]);
   });
 });
 

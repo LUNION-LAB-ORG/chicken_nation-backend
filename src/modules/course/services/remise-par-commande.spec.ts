@@ -77,12 +77,18 @@ describe('remise commande par commande au bouton de la caisse', () => {
     expect(t.livraisonsDe(k.id).find((l) => l.order_id === b.id)!.statut).toBe(DeliveryStatut.PENDING);
   });
 
-  it('fenêtre écoulée, livreur sans position récente : partie au passage, la commande pas remise est signalée', async () => {
+  it('fenêtre écoulée : la course attend le sac 2 min de plus au comptoir, puis partie au passage, la commande pas remise est signalée', async () => {
     const { a, b, k, t, d1 } = auRestaurant(3);
     await t.remiseCaisse.onStatutCommande(boutonCaisse(a));
     jest.setSystemTime(apres(245));
+    // Dernière position au comptoir, ancienne (appli en arrière-plan sans la permission « Toujours ») :
+    // il attend son sac (seconde passe), rien ne part.
     d1.last_location_at = avant(16 * 60);
+    await t.passer();
+    expect(k.parti_at).toBeNull();
+    expect(t.cloche.sendCommandePasRemiseBell).not.toHaveBeenCalled();
 
+    jest.setSystemTime(apres(366));
     await t.passer();
 
     expect(k.parti_at).toBeTruthy();
@@ -91,7 +97,8 @@ describe('remise commande par commande au bouton de la caisse', () => {
   });
 
   it('commande ajoutée après le retrait, pas remise, au départ : détachée et replanifiée, jamais signalée', async () => {
-    const d1 = livreur({ ...AU_COMPTOIR, last_location_at: avant(16 * 60), last_available_at: null, protocole_appli: 3 });
+    // Aucune position connue : rien ne dit qu'il attend au comptoir, la fenêtre échue le fait partir.
+    const d1 = livreur({ ...AU_COMPTOIR, last_location: null, last_location_at: null, last_available_at: null, protocole_appli: 3 });
     const a = prete({ status: OrderStatus.PICKED_UP, picked_up_at: avant(241) });
     const c = prete({ address: B, ready_at: avant(100) });
     const k = course({ statut: CourseStatut.IN_DELIVERY, deliverer_id: d1.id, assigned_at: avant(600), at_restaurant_at: avant(400), picked_up_at: avant(241) });

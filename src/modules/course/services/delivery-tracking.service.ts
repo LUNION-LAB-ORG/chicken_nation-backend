@@ -57,8 +57,26 @@ export class DeliveryTrackingService {
    */
   private readonly etaCache = new Map<
     string,
-    { calculeA: number; parCommande: Map<string, number> }
+    {
+      calculeA: number;
+      parCommande: Map<string, number>;
+      /** Commandes de la tournée au moment du calcul : un ajout ou un retrait le périme. */
+      signature: string;
+      /** Google n'a rien donné (muet, lent, refus) : nouvel essai après `ETA_ECHEC_TTL_MS`. */
+      echec: boolean;
+    }
   >();
+
+  /**
+   * Échec de Google retenu 1 min. L'appli livreur envoie une position toutes
+   * les 14 s même à l'arrêt (et plus souvent en roulant) : sans cela, chaque
+   * position d'une tournée relançait Google tant qu'il échouait, avec son
+   * délai de 2,5 s.
+   */
+  private static readonly ETA_ECHEC_TTL_MS = 60_000;
+
+  /** Au-delà, les calculs périmés (courses terminées) sont oubliés. */
+  private static readonly ETA_CACHE_TAILLE = 200;
 
   /**
    * Fraîcheur de l'ETA : 5 minutes. Le client n'a pas besoin d'un compte à
@@ -162,8 +180,10 @@ export class DeliveryTrackingService {
     });
     if (!course || course.deliveries.length === 0) return new Map();
 
+    const signature = course.deliveries.map((d) => d.order.id).join(',');
     const frais = this.etaCache.get(course.id);
-    if (frais && Date.now() - frais.calculeA < DeliveryTrackingService.ETA_TTL_MS) {
+    const ttl = frais?.echec ? DeliveryTrackingService.ETA_ECHEC_TTL_MS : DeliveryTrackingService.ETA_TTL_MS;
+    if (frais && frais.signature === signature && Date.now() - frais.calculeA < ttl) {
       return frais.parCommande;
     }
 
@@ -185,14 +205,19 @@ export class DeliveryTrackingService {
     if (etapes.length === 0) return new Map();
 
     const derniere = etapes[etapes.length - 1].coord;
-    const directions = await this.maps.getDirections({
-      originLat: position.latitude,
-      originLng: position.longitude,
-      destLat: derniere.latitude,
-      destLng: derniere.longitude,
-      waypoints: etapes.slice(0, -1).map((e) => e.coord),
-    });
-    if (!directions || directions.legs.length === 0) return new Map();
+    const directions = await this.maps
+      .getDirections({
+        originLat: position.latitude,
+        originLng: position.longitude,
+        destLat: derniere.latitude,
+        destLng: derniere.longitude,
+        waypoints: etapes.slice(0, -1).map((e) => e.coord),
+      })
+      .catch(() => null);
+    if (!directions || directions.legs.length === 0) {
+      this.retenirEtas(course.id, { calculeA: Date.now(), parCommande: new Map(), signature, echec: true });
+      return new Map();
+    }
 
     const parCommande = new Map<string, number>();
     // Temps d'arrêt appliqué AVANT chaque client, déduit du calcul backend
@@ -207,8 +232,21 @@ export class DeliveryTrackingService {
       parCommande.set(etape.orderId, Math.round(cumul + i * arretUnitaire));
     });
 
-    this.etaCache.set(course.id, { calculeA: Date.now(), parCommande });
+    this.retenirEtas(course.id, { calculeA: Date.now(), parCommande, signature, echec: false });
     return parCommande;
+  }
+
+  /** Garde un calcul ; au-delà de `ETA_CACHE_TAILLE` courses, les calculs périmés sont oubliés. */
+  private retenirEtas(
+    courseId: string,
+    calcul: { calculeA: number; parCommande: Map<string, number>; signature: string; echec: boolean },
+  ): void {
+    this.etaCache.set(courseId, calcul);
+    if (this.etaCache.size <= DeliveryTrackingService.ETA_CACHE_TAILLE) return;
+    const limite = Date.now() - DeliveryTrackingService.ETA_TTL_MS;
+    for (const [id, c] of this.etaCache) {
+      if (c.calculeA < limite) this.etaCache.delete(id);
+    }
   }
 
   /**

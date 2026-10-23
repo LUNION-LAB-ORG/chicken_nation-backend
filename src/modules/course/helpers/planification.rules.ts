@@ -995,17 +995,17 @@ const STATUTS_LIVRAISON_TERMINEE: DeliveryStatut[] = [
  *    démarre qu'au départ) ;
  *  - aucune position, reçue après le retrait, à plus du rayon de départ ;
  *  - retrait il y a moins de la fenêtre (240 s) ; au-delà, la course reste
- *    au comptoir au plus 2 min de plus si une commande ajoutée n'est pas
- *    encore remise et que le livreur y est encore (dernière position dans le
- *    rayon de départ, de moins de 15 min) : sinon elle lui serait retirée
- *    sous les yeux pendant qu'il attend son sac.
+ *    au comptoir au plus 2 min de plus si un sac de la course n'est pas
+ *    encore remis (commande ajoutée, ou commande d'origine remise une par
+ *    une au bouton de la caisse) et que le livreur y est encore (dernière
+ *    position dans le rayon de départ) : sinon elle lui serait retirée sous
+ *    les yeux pendant qu'il attend son sac.
  */
 export function fenetreApresRetrait(
   course: Pick<CoursePlanif, 'statut' | 'parti_at' | 'picked_up_at' | 'livraisons'>,
   livreur: Pick<LivreurPlanif, 'protocole_appli' | 'position' | 'position_at'> | null,
   restaurant: ILatLng | null,
-  r: Pick<ReglagesPlanification, 'ajoutApresRetrait' | 'ajoutApresRetraitMaxS' | 'departRayonM'> &
-    Partial<Pick<ReglagesPlanification, 'auRestaurantFraicheurMin'>>,
+  r: Pick<ReglagesPlanification, 'ajoutApresRetrait' | 'ajoutApresRetraitMaxS' | 'departRayonM'>,
   maintenant: Date,
 ): FenetreApresRetrait {
   if (course.statut !== CourseStatut.IN_DELIVERY || course.parti_at) return { ouverte: false, motif: 'DEJA_PARTI' };
@@ -1030,12 +1030,11 @@ export function fenetreApresRetrait(
     const prolongee = attendSonSac({
       fermeAMs: fermeA,
       maintenant,
-      sacAttendu: course.livraisons.some(estAjoutNonRemis),
+      sacAttendu: course.livraisons.some(estSacAuComptoir),
       position: livreur.position,
       position_at: livreur.position_at,
       restaurant,
       departRayonM: r.departRayonM,
-      fraicheurMin: r.auRestaurantFraicheurMin,
     });
     return prolongee ? { ouverte: true, ferme_a: new Date(fermeA), prolongee: true } : { ouverte: false, motif: 'FENETRE_ECHUE' };
   }
@@ -1044,13 +1043,14 @@ export function fenetreApresRetrait(
 
 /**
  * Fenêtre d'ajout échue (`fermeAMs`), mais la course attend encore son sac :
- * une commande ajoutée après le retrait reste à remettre et le livreur est
- * encore au comptoir : sa DERNIÈRE position est dans le rayon de départ (une
- * position plus loin reçue après le retrait aurait déjà fait partir la
- * course), et elle a moins de `fraicheurMin` (15 min par défaut). Le suivi
- * de l'appli n'envoie rien tant que le livreur ne bouge pas de 25 m : exiger
- * une position de moins d'une minute retirait la commande au livreur
- * immobile qui l'attendait. Elle reste au comptoir au plus
+ * une commande de la course reste à remettre (`estSacAuComptoir`) et le
+ * livreur est encore au comptoir : sa DERNIÈRE position connue est dans le
+ * rayon de départ. Son âge ne compte pas : une position plus loin reçue
+ * après le retrait aurait déjà fait partir la course, et le livreur était au
+ * comptoir au retrait, il y a 6 min au plus. Un téléphone sans la permission
+ * « Toujours », appli en arrière-plan, n'envoie plus rien : exiger une
+ * position récente retirait la commande au livreur qui attendait son sac
+ * (seconde passe du 23/10). Elle reste au comptoir au plus
  * `PROLONGATION_REMISE_S` de plus. Règle partagée avec l'écran Opérations
  * (`fenetre_ajout_ferme_a`).
  */
@@ -1062,14 +1062,10 @@ export function attendSonSac(p: {
   position_at: Date | null;
   restaurant: ILatLng | null;
   departRayonM: number;
-  /** Âge maximal de la position (minutes) ; défaut : `deliverer.au_restaurant_fraicheur_min`. */
-  fraicheurMin?: number;
 }): boolean {
   const t = p.maintenant.getTime();
   if (!p.sacAttendu || t < p.fermeAMs || t >= p.fermeAMs + PROLONGATION_REMISE_S * 1000) return false;
   if (!p.restaurant || !p.position || !p.position_at) return false;
-  const fraicheurMin = p.fraicheurMin ?? REGLAGES_PLANIFICATION_DEFAUT.auRestaurantFraicheurMin;
-  if (t - p.position_at.getTime() > fraicheurMin * 60_000) return false;
   return haversineMeters(p.position, p.restaurant) <= p.departRayonM;
 }
 
@@ -1116,6 +1112,15 @@ export function decisionTurboV2(
  */
 function estAjoutNonRemis(l: LivraisonPlanif): boolean {
   return l.ajoutee_apres_retrait === true && l.commande.statut === OrderStatus.READY && l.statut === DeliveryStatut.PENDING;
+}
+
+/**
+ * Sac encore au comptoir : commande de la course prête et pas remise, ajoutée
+ * après le retrait ou d'origine (remise une par une au bouton de la caisse).
+ * Le livreur qui l'attend garde sa course au comptoir (`attendSonSac`).
+ */
+function estSacAuComptoir(l: LivraisonPlanif): boolean {
+  return l.commande.statut === OrderStatus.READY && l.statut === DeliveryStatut.PENDING;
 }
 
 /** Livraisons qui comptent : ni annulées, ni échouées, ni livrées, commande non annulée. */

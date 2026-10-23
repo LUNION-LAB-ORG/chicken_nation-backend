@@ -883,12 +883,12 @@ describe('ajout après le retrait (3.8) et départ', () => {
           },
         ],
       });
-    // Fenêtre échue, dernière position vieille de plus de 15 min (on ne le sait pas au comptoir) : parti.
+    // Fenêtre échue, aucune position connue (on ne sait pas qu'il est au comptoir) : parti.
     const now = h('12:34:10');
     const plan = planifier(
       instant(now, {
         courses: [avecAjoutNonRemis()],
-        livreurs: [d1(now, { position_at: h('12:19') }), livr('d2', now, { auComptoir: true })],
+        livreurs: [d1(now, { position: null, position_at: null }), livr('d2', now, { auComptoir: true })],
       }),
     );
     expect(types(plan)).toEqual(['MARQUER_PARTI', 'DETACHER', 'CREER_COURSE', 'OFFRIR']);
@@ -905,6 +905,12 @@ describe('ajout après le retrait (3.8) et départ', () => {
       instant(now, { courses: [avecAjoutNonRemis()], livreurs: [d1(now, { position_at: h('12:29:30') }), livr('d2', now, { auComptoir: true })] }),
     );
     expect(types(immobile)).toEqual([]);
+    // Plus rien depuis 12:19 (téléphone sans la permission « Toujours », appli en arrière-plan),
+    // dernière position au comptoir : il attend aussi son sac (seconde passe).
+    const muet = planifier(
+      instant(now, { courses: [avecAjoutNonRemis()], livreurs: [d1(now, { position_at: h('12:19') }), livr('d2', now, { auComptoir: true })] }),
+    );
+    expect(types(muet)).toEqual([]);
     const tard = h('12:36:01');
     const apres = planifier(instant(tard, { courses: [avecAjoutNonRemis()], livreurs: [d1(tard), livr('d2', tard, { auComptoir: true })] }));
     expect(types(apres)).toEqual(['MARQUER_PARTI', 'DETACHER', 'CREER_COURSE', 'OFFRIR']);
@@ -971,7 +977,6 @@ describe('ajout après le retrait (3.8) et départ', () => {
   });
 
   it('départ : une commande de la course d’origine pas encore remise (bouton de la caisse) reste dans la course', () => {
-    const now = h('12:34:10');
     const k = crs('k', {
       statut: CourseStatut.IN_DELIVERY,
       deliverer_id: 'd1',
@@ -981,6 +986,10 @@ describe('ajout après le retrait (3.8) et départ', () => {
         { id: 'l2', statut: DeliveryStatut.PENDING, sequence_order: 2, commande: cmd('y', { ready_at: h('12:20') }) },
       ],
     });
+    // Livreur au comptoir : il attend ce sac, au plus 2 min après la fenêtre (seconde passe).
+    const attend = h('12:34:10');
+    expect(types(planifier(instant(attend, { courses: [k], livreurs: [d1(attend)] })))).toEqual([]);
+    const now = h('12:36:01');
     const plan = planifier(instant(now, { courses: [k], livreurs: [d1(now)] }));
     expect(types(plan)).toEqual(['MARQUER_PARTI']);
   });

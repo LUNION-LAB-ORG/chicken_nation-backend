@@ -265,10 +265,11 @@ describe('R11 : livreur parti, plus aucun ajout', () => {
   it('fenêtre écoulée (4 min après le retrait) : partie au passage, première livraison démarrée par le serveur', async () => {
     const s = avecAjoutNonRemis();
     s.k.picked_up_at = avant(241);
-    // Dernière position vieille de 16 min : rien ne dit qu'il attend au comptoir.
-    // (Une position de quelques minutes au comptoir prolonge la fenêtre : il
-    // attend son sac sans bouger, l'appli n'envoie plus rien à l'arrêt.)
-    s.d1.last_location_at = avant(16 * 60);
+    // Aucune position connue : rien ne dit qu'il attend au comptoir. (Une
+    // dernière position au comptoir, même ancienne, prolonge la fenêtre de
+    // 2 min : il attend son sac, seconde passe.)
+    s.d1.last_location = null;
+    s.d1.last_location_at = null;
     const t = monter(s.donnees);
 
     await t.passer();

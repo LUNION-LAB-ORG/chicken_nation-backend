@@ -83,14 +83,16 @@ describe('écran Opérations : fenêtre prolongée tant que la course attend son
     expect(fin(liste(course()))).toBe('2026-10-23T12:32:00.000Z');
   });
 
-  it('sac remis, livreur sans position fraîche ou sorti du rayon : fin d’origine (le serveur la marque partie)', () => {
+  it('sac remis, livreur sans position ou sorti du rayon : fin d’origine (le serveur la marque partie)', () => {
     expect(fin(liste(course(), true))).toBe('2026-10-23T12:30:00.000Z');
-    // Dernière position de plus de 15 min : rien ne dit qu'il est au comptoir.
-    expect(fin(liste(course({ last_location: { lat: 5.286, lng: -3.9737 }, last_location_at: '2026-10-23T12:14:30.000Z' })))).toBe(
-      '2026-10-23T12:30:00.000Z',
-    );
+    expect(fin(liste(course({ last_location: null, last_location_at: null })))).toBe('2026-10-23T12:30:00.000Z');
     expect(fin(liste(course({ last_location: { lat: 5.29, lng: -3.9737 }, last_location_at: '2026-10-23T12:29:50.000Z' })))).toBe(
       '2026-10-23T12:30:00.000Z',
+    );
+    // Dernière position de 15 min, au comptoir : téléphone sans la permission « Toujours », appli en
+    // arrière-plan ; aucune position hors du rayon depuis le retrait (sinon la course serait partie).
+    expect(fin(liste(course({ last_location: { lat: 5.286, lng: -3.9737 }, last_location_at: '2026-10-23T12:14:30.000Z' })))).toBe(
+      '2026-10-23T12:32:00.000Z',
     );
     // Immobile au comptoir (position de 3 min, l'appli n'envoie rien à l'arrêt) : il attend son sac (seconde relecture).
     expect(fin(liste(course({ last_location: { lat: 5.286, lng: -3.9737 }, last_location_at: '2026-10-23T12:27:00.000Z' })))).toBe(
@@ -99,5 +101,17 @@ describe('écran Opérations : fenêtre prolongée tant que la course attend son
     // Fenêtre pas encore échue : rien ne change.
     const tot = enrichirCommandesOperations(liste(course()), { maintenant: new Date('2026-10-23T12:29:00.000Z'), fenetreMaxS: 240, departRayonM: 250 });
     expect((tot[0] as any).delivery.course.fenetre_ajout_ferme_a).toBe('2026-10-23T12:30:00.000Z');
+  });
+
+  it('commande d’origine remise une par une au bouton de la caisse, la seconde encore au comptoir : il attend aussi son sac', () => {
+    const k = course();
+    const origine = [
+      { id: 'a', status: 'PICKED_UP', restaurant: RESTO, delivery: { course_id: 'k', statut: 'PENDING', ajoutee_apres_retrait: false, course: k } },
+      { id: 'b', status: 'READY', restaurant: RESTO, delivery: { course_id: 'k', statut: 'PENDING', ajoutee_apres_retrait: false, course: k } },
+    ];
+    expect(coursesQuiAttendentUnSac(origine)).toEqual(new Set(['k']));
+    expect(fin(origine)).toBe('2026-10-23T12:32:00.000Z');
+    // Les deux remises : plus rien n'attend.
+    expect(coursesQuiAttendentUnSac([origine[0], { ...origine[1], status: 'PICKED_UP' }])).toEqual(new Set());
   });
 });

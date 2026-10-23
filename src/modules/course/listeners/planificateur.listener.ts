@@ -43,8 +43,8 @@ const STATUTS_COMMANDE_UTILES: OrderStatus[] = [OrderStatus.READY, OrderStatus.I
  *    terminée (le livreur se libère : zéro temps mort) ;
  *  - livreur disponible, en pause, reprise (file d'attente), appli connectée ;
  *  - livraison démarrée ou arrivée (départ du restaurant) ;
- *  - position d'un livreur dont la course récupérée n'est pas encore partie
- *    (sortie du rayon de départ : départ enregistré aussitôt).
+ *  - position d'un livreur dont la course récupérée n'est pas encore partie,
+ *    seulement quand elle la fait partir (sortie du rayon de départ).
  *
  * Les `course:statut:changed` émis par le planificateur lui-même (raisons
  * `RaisonsPlanificateur`) sont ignorés : un passage n'en déclenche pas un
@@ -155,15 +155,18 @@ export class PlanificateurListener {
   /**
    * Position d'un livreur : utile seulement si sa course récupérée n'est pas
    * encore partie. Reçue hors du rayon de départ après le retrait : départ
-   * enregistré tout de suite (le livreur n'a rien à toucher). Sinon le
-   * passage décide (fenêtre écoulée).
+   * enregistré tout de suite (le livreur n'a rien à toucher) et passage
+   * demandé (commandes retirées à replanifier). Encore au comptoir : rien,
+   * la tâche de 10 s décide (fenêtre écoulée) ; l'appli envoie une position
+   * toutes les 14 s même à l'arrêt, un passage à chacune doublerait la
+   * charge (et les appels Google des temps de trajet) sans rien changer.
    */
   @OnEvent(DelivererChannels.DELIVERER_LOCATION_UPDATED)
   async onPosition(payload: DelivererLocationUpdatedPayload) {
     if (!payload?.delivererId) return;
     try {
       const course = await this.depart.surPosition(payload);
-      if (course) this.planificateur.demander(course.restaurant_id, course.parti ? 'DEPART_POSITION' : 'POSITION');
+      if (course?.parti) this.planificateur.demander(course.restaurant_id, 'DEPART_POSITION');
     } catch (err) {
       this.logger.warn(`Position du livreur : passage non demandé (${(err as Error)?.message})`);
     }
