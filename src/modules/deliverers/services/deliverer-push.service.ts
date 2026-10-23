@@ -28,8 +28,13 @@ export type DelivererPushType =
   | 'account_suspended' // Admin a suspendu le compte
   | 'account_reactivated' // Admin a réactivé le compte suspendu
   | 'plan_sent' // Nouveau planning à valider
-  | 'presence_check' // Check-in matinal 8h
+  | 'presence_check' // Question de présence du matin (8 h)
   | 'new_ticket_message'; // Réponse support
+
+/** « 14 h 32 » : heure d'Abidjan (UTC toute l'année), comme les autres textes du livreur. */
+export function heureCourteAbidjan(date: Date): string {
+  return `${date.getUTCHours()} h ${String(date.getUTCMinutes()).padStart(2, '0')}`;
+}
 
 interface NotifyInput {
   delivererId: string;
@@ -194,8 +199,9 @@ export class DelivererPushService {
     this.fireAndForget({
       delivererId: input.delivererId,
       type: 'new_course_offer',
-      title: `⏳ Course en attente — ${input.secondsLeft}s`,
-      body: `${input.restaurantName} : réponds vite, la course va partir !`,
+      // Livreurs qui lisent peu : un chiffre et deux mots (demande du 23/10).
+      title: `Offre : ${input.secondsLeft} s`,
+      body: 'Réponds vite',
       data: { courseId: input.courseId, reference: input.courseReference },
       critical: true,
       // Mêmes boutons Accepter/Refuser sur l'écran verrouillé, et même sonnerie
@@ -229,9 +235,14 @@ export class DelivererPushService {
     this.fireAndForget({
       delivererId: input.delivererId,
       type: 'course_pickup_validated',
-      title: 'Colis prêts',
+      title: 'Sacs remis',
       body: 'Tu peux partir',
       data: { courseId: input.courseId },
+      // Canal qui sonne et vibre : le livreur doit sentir la remise, appli en
+      // arrière-plan comprise (demande du 23/10).
+      critical: true,
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
     });
   }
 
@@ -354,8 +365,8 @@ export class DelivererPushService {
     this.fireAndForget({
       delivererId: input.delivererId,
       type: 'course_completed',
-      title: 'Course terminée',
-      body: `${input.courseReference} terminée — bravo !`,
+      title: 'Course finie',
+      body: 'Bravo !',
       data: { courseId: input.courseId },
     });
   }
@@ -370,9 +381,11 @@ export class DelivererPushService {
       delivererId: input.delivererId,
       type: 'course_cancelled',
       title: 'Course annulée',
-      body: `${input.courseReference} annulée par ${input.cancelledBy}`,
-      data: { courseId: input.courseId },
+      body: input.courseReference,
+      data: { courseId: input.courseId, annulee_par: input.cancelledBy },
       critical: true,
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
     });
   }
 
@@ -381,14 +394,19 @@ export class DelivererPushService {
     refusalCount: number;
     windowMinutes: number;
     durationMinutes: number;
+    /** Fin de la pause automatique (sinon maintenant + durée). */
+    jusqua?: Date;
   }): void {
+    const fin = input.jusqua ?? new Date(Date.now() + input.durationMinutes * 60_000);
     this.fireAndForget({
       delivererId: input.delivererId,
       type: 'auto_paused',
-      title: 'Auto-pause activée',
-      body: `${input.refusalCount} refus en ${input.windowMinutes} min — pause ${input.durationMinutes} min`,
-      data: {},
+      title: 'Pause automatique',
+      body: `Jusqu'à ${heureCourteAbidjan(fin)}`,
+      data: { jusqua: fin.toISOString(), refus: input.refusalCount, minutes: input.durationMinutes },
       critical: true,
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
     });
   }
 
@@ -451,8 +469,8 @@ export class DelivererPushService {
     this.fireAndForget({
       delivererId: input.delivererId,
       type: 'presence_check',
-      title: 'Check-in matinal',
-      body: "Tu es opérationnel aujourd'hui ?",
+      title: 'Présence',
+      body: "Tu travailles aujourd'hui ?",
       data: {},
     });
   }

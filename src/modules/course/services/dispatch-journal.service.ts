@@ -65,7 +65,11 @@ export type TypeEvenementDispatch =
   /** Action abandonnée : la course ou la commande a changé entre la lecture et l'écriture. */
   | 'ACTION_ABANDONNEE'
   /** Fin de préparation estimée comparée à la réelle (commande prête). */
-  | 'PREPARATION_MESUREE';
+  | 'PREPARATION_MESUREE'
+  /** Arrivée au restaurant déduite d'une position (appli en arrière-plan). */
+  | 'ARRIVEE_RESTAURANT_AUTO'
+  /** Arrivée chez le client déduite d'une position (appli en arrière-plan). */
+  | 'ARRIVEE_CLIENT_AUTO';
 
 /** Qui a déclenché la décision. */
 export type SourceDispatch = 'appli' | 'serveur' | 'admin' | 'caisse' | 'restaurant';

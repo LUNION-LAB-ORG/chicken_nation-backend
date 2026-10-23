@@ -101,6 +101,8 @@ interface Passage {
   retenues: Map<string, { jusqua: Date; attendues: string[] }>;
   /** Retenues levées dans ce passage, avec leur motif. */
   liberations: Map<string, MotifLiberation>;
+  /** Références des courses absorbées, par course cible (fusions). */
+  absorbees: Map<string, string[]>;
 }
 
 /**
@@ -146,6 +148,7 @@ export class ApplicationPlanService {
       retirees: new Map(),
       retenues: new Map(),
       liberations: new Map(),
+      absorbees: new Map(),
     };
     const resultat: ResultatApplication = { appliquees: [], abandonnees: [], creees: passage.cles };
 
@@ -472,6 +475,8 @@ export class ApplicationPlanService {
     await recalculerFraisCourse(this.prisma, a.absorbee_id).catch(() => undefined);
 
     this.noterAjout(p, a.cible_id, a.order_ids.length, a.apres_retrait, RaisonsPlanificateur.COURSES_FUSIONNEES);
+    const refAbsorbee = p.lu.instantane.courses.find((k) => k.id === a.absorbee_id)?.reference ?? null;
+    if (refAbsorbee) p.absorbees.set(a.cible_id, [...(p.absorbees.get(a.cible_id) ?? []), refAbsorbee]);
     await this.journal.ecrire({
       type: 'COURSES_FUSIONNEES',
       motif: a.motif ?? 'GROUPE',
@@ -672,11 +677,14 @@ export class ApplicationPlanService {
       try {
         const course = await this.prisma.course.findUnique({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
         if (!course) continue;
+        const absorbees = p.absorbees.get(courseId);
         await this.courseEvent.courseStatutChanged({
           course,
           previous_statut: course.statut,
           new_statut: course.statut,
           reason: raison,
+          // Fusion : l'écran Opérations nomme les courses absorbées.
+          ...(absorbees?.length ? { fusion: { absorbees } } : {}),
         });
 
         await this.annoncerAuLivreur(course, p);

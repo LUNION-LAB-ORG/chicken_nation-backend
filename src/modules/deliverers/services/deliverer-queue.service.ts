@@ -194,6 +194,7 @@ export class DelivererQueueService {
         refusalCount: updatedRefusals.length,
         windowMinutes: settings.autoPauseRefusalsWindowMin,
         durationMinutes: settings.autoPauseDurationMin,
+        jusqua: autoPauseUntil,
       });
     } else {
       this.logger.log(

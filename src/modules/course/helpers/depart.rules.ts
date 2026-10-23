@@ -14,6 +14,7 @@
  */
 import { DeliveryStatut, OrderStatus } from '@prisma/client';
 
+import { positionAssezPrecise } from './arrivee-auto.rules';
 import { haversineMeters, ILatLng } from './geo.helper';
 import {
   PROTOCOLE_AJOUT_APRES_RETRAIT,
@@ -36,8 +37,11 @@ export function sortiDuRestaurant(p: {
   restaurant: ILatLng | null;
   picked_up_at: Date | null;
   departRayonM: number;
+  /** Précision annoncée par le GPS (mètres) : au-delà de 80 m, la position ne décide rien. */
+  precision_m?: number | null;
 }): boolean {
   if (!p.position || !p.position_at || !p.restaurant || !p.picked_up_at) return false;
+  if (!positionAssezPrecise(p.precision_m)) return false;
   if (p.position_at.getTime() <= p.picked_up_at.getTime()) return false;
   return haversineMeters(p.position, p.restaurant) > p.departRayonM;
 }

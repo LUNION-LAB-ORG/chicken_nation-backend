@@ -111,7 +111,11 @@ export class DepartCourseService {
    *
    * @returns vrai si `parti_at` a été posé.
    */
-  async fermerFenetreALaValidation(courseId: string, maintenant = new Date()): Promise<boolean> {
+  async fermerFenetreALaValidation(
+    courseId: string,
+    maintenant = new Date(),
+    options: { annoncer?: boolean } = {},
+  ): Promise<boolean> {
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
       select: {
@@ -153,7 +157,14 @@ export class DepartCourseService {
     }
     // Nouvelle appli dont la fenêtre est fermée (réglage coupé, v1) : partie
     // tout de suite, sa première livraison démarre comme à tout départ.
-    if (count === 1) await this.demarrerPremiereLivraison(courseId, maintenant).catch(() => null);
+    if (count === 1) {
+      await this.demarrerPremiereLivraison(courseId, maintenant).catch(() => null);
+      // L'événement de la validation est parti AVANT ce départ (bouton de la
+      // caisse, route du livreur) : l'appli resterait sur l'écran du comptoir
+      // jusqu'à sa relecture. Elle reçoit la course partie, première livraison
+      // démarrée. La validation par le code annonce elle-même la course relue.
+      if (options.annoncer !== false) await this.annoncerDepart(courseId);
+    }
     return count === 1;
   }
 
@@ -329,7 +340,7 @@ export class DepartCourseService {
    *   livreur n'a pas de course récupérée encore au restaurant.
    */
   async surPosition(
-    payload: Pick<DelivererLocationUpdatedPayload, 'delivererId' | 'lat' | 'lng' | 'ts'>,
+    payload: Pick<DelivererLocationUpdatedPayload, 'delivererId' | 'lat' | 'lng' | 'ts' | 'accuracyM'>,
   ): Promise<{ restaurant_id: string; parti: boolean } | null> {
     const course = await this.prisma.course.findFirst({
       where: { deliverer_id: payload.delivererId, statut: CourseStatut.IN_DELIVERY, parti_at: null },
@@ -355,6 +366,7 @@ export class DepartCourseService {
       restaurant,
       picked_up_at: course.picked_up_at,
       departRayonM: lue.planification.reglages.departRayonM,
+      precision_m: payload.accuracyM ?? null,
     });
     if (!sorti || !restaurant) return { restaurant_id: course.restaurant_id, parti: false };
 
@@ -561,6 +573,18 @@ export class DepartCourseService {
       (d) => !STATUTS_LIVRAISON_TERMINEE.includes(d.statut) && d.order.status === OrderStatus.READY,
     );
     if (!resteAPrendre) await this.annoncerToutRecupere(course.id);
+  }
+
+  /** `course:statut:changed` raison DEPART (livreur, restaurant, siège). */
+  private async annoncerDepart(courseId: string): Promise<void> {
+    const detaillee = await this.prisma.course.findUnique({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
+    if (!detaillee) return;
+    await this.courseEvent.courseStatutChanged({
+      course: detaillee,
+      previous_statut: CourseStatut.IN_DELIVERY,
+      new_statut: CourseStatut.IN_DELIVERY,
+      reason: RaisonsPlanificateur.DEPART,
+    });
   }
 
   /** `course:statut:changed` (livreur, restaurant, siège) et « Tout est récupéré » au livreur. */

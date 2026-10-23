@@ -38,4 +38,15 @@ export class UpdateDelivererLocationDto {
   @Min(0)
   @Max(360)
   heading?: number;
+
+  @ApiPropertyOptional({
+    description:
+      "Précision annoncée par le GPS, en mètres. Une position moins précise que 80 m est gardée " +
+      "pour la carte mais ne décide rien seule (arrivée, départ).",
+    example: 12,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  accuracy?: number;
 }

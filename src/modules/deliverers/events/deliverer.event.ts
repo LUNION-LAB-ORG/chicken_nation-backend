@@ -47,6 +47,11 @@ export interface DelivererLocationUpdatedPayload {
   /** Timestamp ISO de la remontée. */
   ts: string;
   /**
+   * Précision annoncée par le GPS (mètres), `null` ou absente si l'appli ne
+   * l'envoie pas. Au-delà de 80 m, la position ne décide rien seule.
+   */
+  accuracyM?: number | null;
+  /**
    * Restaurant de rattachement du livreur (null si non affecté). Permet au
    * relais staff (`deliverer:location:live`) de cibler la room `restaurant_{id}`
    * sans re-requêter la BDD à chaque ping GPS (haute fréquence).

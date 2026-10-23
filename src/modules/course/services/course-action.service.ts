@@ -150,6 +150,11 @@ export class CourseActionService {
 
   /** Livreur arrivé au restaurant (ACCEPTED → AT_RESTAURANT) */
   async markAtRestaurant(courseId: string, delivererId: string) {
+    // Arrivée déjà déclarée par le serveur d'après la position : réponse normale.
+    const deja = await this.prisma.course.findUnique({ where: { id: courseId }, select: { statut: true, deliverer_id: true } });
+    if (deja?.deliverer_id === delivererId && deja.statut === CourseStatut.AT_RESTAURANT) {
+      return this.prisma.course.findUniqueOrThrow({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
+    }
     const course = await this.assertOwnedCourse(courseId, delivererId, CourseStatut.ACCEPTED);
     const updated = await this.prisma.course.update({
       where: { id: courseId },
@@ -172,7 +177,7 @@ export class CourseActionService {
     const course = await this.assertOwnedCourse(courseId, delivererId, CourseStatut.AT_RESTAURANT);
 
     const now = new Date();
-    const [updatedCourse] = await this.prisma.$transaction([
+    let [updatedCourse] = await this.prisma.$transaction([
       this.prisma.course.update({
         where: { id: courseId },
         data: { statut: CourseStatut.IN_DELIVERY, picked_up_at: now },
@@ -185,8 +190,12 @@ export class CourseActionService {
       }),
     ]);
 
-    // Fenêtre d'ajout après le retrait fermée d'office si elle ne doit pas s'ouvrir.
-    await this.depart?.fermerFenetreALaValidation(courseId, now);
+    // Fenêtre d'ajout après le retrait fermée d'office si elle ne doit pas
+    // s'ouvrir ; l'événement qui suit porte alors la course relue (partie).
+    if (await this.depart?.fermerFenetreALaValidation(courseId, now, { annoncer: false })) {
+      updatedCourse =
+        (await this.prisma.course.findUnique({ where: { id: courseId }, include: COURSE_FULL_INCLUDE })) ?? updatedCourse;
+    }
 
     await this.courseEvent.courseStatutChanged({
       course: updatedCourse,
@@ -330,7 +339,7 @@ export class CourseActionService {
     // faire partir en même temps : un seul des deux la remet, l'autre reçoit
     // 409. Le GPS ou un webhook Turbo qui la fait avancer (« au restaurant »)
     // ne bloque pas la validation.
-    const [updated] = await this.prisma.$transaction([
+    let [updated] = await this.prisma.$transaction([
       this.prisma.course.update({
         where: { id: course.id, AND: [WHERE_COURSE_ENCORE_A_REMETTRE] },
         data: {
@@ -364,7 +373,12 @@ export class CourseActionService {
     await this.depart?.marquerAjoutsPendantLaRemise(course.id, course.deliveries.map((d) => d.order.id));
     // Fenêtre d'ajout après le retrait fermée d'office si elle ne doit pas
     // s'ouvrir (ancienne appli, Turbo, réglage coupé, restaurant en v1).
-    if (await this.depart?.fermerFenetreALaValidation(updated.id, now)) updated.parti_at = now;
+    // L'événement qui suit porte la course relue (partie, première livraison démarrée).
+    if (await this.depart?.fermerFenetreALaValidation(updated.id, now, { annoncer: false })) {
+      updated =
+        (await this.prisma.course.findUnique({ where: { id: updated.id }, include: COURSE_FULL_INCLUDE })) ??
+        { ...updated, parti_at: now };
+    }
 
     // Émet l'event WS pour que le mobile livreur et le backoffice se synchronisent
     await this.courseEvent.courseStatutChanged({

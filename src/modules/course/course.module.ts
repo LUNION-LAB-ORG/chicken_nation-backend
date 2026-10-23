@@ -26,6 +26,8 @@ import { CoursePlanificateurService } from './services/course-planificateur.serv
 import { CourseQueryService } from './services/course-query.service';
 import { DeliveryActionService } from './services/delivery-action.service';
 import { DeliveryTrackingService } from './services/delivery-tracking.service';
+import { ArriveeAutoService } from './services/arrivee-auto.service';
+import { LivraisonVersLivreurListener } from './listeners/livraison-vers-livreur.listener';
 import { DepartCourseService } from './services/depart-course.service';
 import { DirectionService } from './services/direction.service';
 import { EstimationPreparationService } from './services/estimation-preparation.service';
@@ -66,6 +68,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     CoursePlanificateurService, // Passages sous verrou par restaurant, regroupés (500 ms)
     LotsV2Service, // Lots sous v2 : vidés pour la flotte interne, direction pour Turbo
     DepartCourseService, // Départ du restaurant, « Je pars », retrait complémentaire
+    ArriveeAutoService, // Arrivées au restaurant et chez le client déduites des positions
     // Events + WS
     CourseEvent,
     CourseWebSocketService,
@@ -77,6 +80,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     DispatchListener,
     RemiseCaisseListener, // Commande passée PICKED_UP hors code → course en livraison
     PlanificateurListener, // Événements qui demandent un passage du planificateur v2
+    LivraisonVersLivreurListener, // Livraison changée : `course:statut:changed` au livreur
     // Cron
     CourseTask,
     CourseBatchTask, // Phase P3 : flush des batches matures toutes les 10 s

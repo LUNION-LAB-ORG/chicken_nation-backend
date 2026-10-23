@@ -90,7 +90,12 @@ export class DeliveryActionService {
 
   /** Livreur arrivé à l'adresse client (IN_ROUTE → ARRIVED) */
   async markArrived(deliveryId: string, delivererId: string) {
-    const delivery = await this.assertOwned(deliveryId, delivererId, DeliveryStatut.IN_ROUTE);
+    const delivery = await this.assertOwned(deliveryId, delivererId, [DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED]);
+    // Arrivée déjà déclarée (par le serveur d'après la position, ou deux
+    // touchers) : réponse normale, rien ne change.
+    if (delivery.statut === DeliveryStatut.ARRIVED) {
+      return this.prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId }, omit: { delivery_pin: true } });
+    }
 
     const updated = await this.prisma.delivery.update({
       where: { id: deliveryId },

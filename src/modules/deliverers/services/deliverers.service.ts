@@ -561,6 +561,7 @@ export class DeliverersService {
       heading: dto.heading ?? null,
       speedKmh: validatedSpeed,
       ts: now.toISOString(),
+      accuracyM: typeof dto.accuracy === 'number' && Number.isFinite(dto.accuracy) ? dto.accuracy : null,
       restaurantId: updated.restaurant_id ?? null,
     });
 

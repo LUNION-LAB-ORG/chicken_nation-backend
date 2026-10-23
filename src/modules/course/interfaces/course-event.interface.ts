@@ -42,6 +42,8 @@ export interface CourseStatutChangedPayload {
   previous_statut: CourseStatut;
   new_statut: CourseStatut;
   reason?: string;
+  /** Raison `COURSES_FUSIONNEES` : références des courses absorbées par celle-ci. */
+  fusion?: { absorbees: string[] };
 }
 
 export interface DeliveryStatutChangedPayload {
