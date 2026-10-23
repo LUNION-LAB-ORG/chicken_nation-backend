@@ -40,7 +40,8 @@
  *     détour), sinon regroupement glouton des restantes et CRÉATION de course.
  *     Jamais vers une course que tous les livreurs libres ont déjà refusée
  *     (la commande seule leur est proposée), ni vers une course récupérée à
- *     moins de 90 s de la fin de sa fenêtre. Personne de libre : le départ
+ *     moins de 90 s (ou d'une demi-fenêtre si elle est plus courte que
+ *     3 min) de la fin de sa fenêtre. Personne de libre : le départ
  *     est le premier retour estimé d'un livreur en course (le retard toléré
  *     joue), et regrouper n'avance pas la bascule vers Turbo d'une commande.
  *  3. FUSIONS (demande 4) : une course sans livreur rejoint une course ouverte
@@ -135,6 +136,15 @@ export const HEURES_DE_POINTE: readonly [number, number][] = [
  * ajoutée et le livreur aurait attendu pour rien.
  */
 export const MARGE_REMISE_APRES_RETRAIT_S = 90;
+
+/**
+ * Marge de remise appliquée : 90 s, ou la moitié de la fenêtre réglée quand
+ * elle est plus courte que 3 min. Une fenêtre réglée sous 90 s ne coupe plus
+ * en silence tout ajout après le retrait (banc du 23/10 : 60 s, aucun ajout).
+ */
+export function margeRemiseApresRetraitMs(r: Pick<ReglagesPlanification, 'ajoutApresRetraitMaxS'>): number {
+  return Math.min(MARGE_REMISE_APRES_RETRAIT_S, Math.max(0, r.ajoutApresRetraitMaxS) / 2) * 1000;
+}
 /**
  * Fin de la fenêtre repoussée d'au plus 2 min tant qu'une commande ajoutée
  * reste à remettre et que le livreur est encore au comptoir (position de
@@ -1450,9 +1460,9 @@ function refuseeParLesLibres(ctx: Contexte, k: CourseTravail, enPlus: readonly s
   return attendUnLivreur(ctx, k, enPlus) && departLibreMs(ctx, enPlus) !== null;
 }
 
-/** Course récupérée (catégorie 0) à moins de 90 s de la fin de sa fenêtre : elle ne grossit plus. */
+/** Course récupérée (catégorie 0) à moins de 90 s (ou d'une demi-fenêtre) de la fin de sa fenêtre : elle ne grossit plus. */
 function finDeFenetreProche(ctx: Contexte, k: CourseTravail): boolean {
-  return k.categorie === 0 && (k.fenetreFermeMs === null || k.fenetreFermeMs - ctx.t < MARGE_REMISE_APRES_RETRAIT_S * 1000);
+  return k.categorie === 0 && (k.fenetreFermeMs === null || k.fenetreFermeMs - ctx.t < margeRemiseApresRetraitMs(ctx.r));
 }
 
 const departOuDefaut = (ctx: Contexte, d: number | null) => d ?? ctx.t + ctx.r.etaParDefautMin * 60_000;
@@ -1903,7 +1913,7 @@ export function planifier(
     const dPossible = departOuDefaut(ctx, departCourse(ctx, k));
     let limite = Math.min(...k.arrets.map((a) => (a.readyMs ?? t) + r.attenteMaxCommandePreteS * 1000));
     // Après le retrait : la commande attendue doit pouvoir être ajoutée, puis remise.
-    if (k.fenetreFermeMs !== null) limite = Math.min(limite, k.fenetreFermeMs - MARGE_REMISE_APRES_RETRAIT_S * 1000);
+    if (k.fenetreFermeMs !== null) limite = Math.min(limite, k.fenetreFermeMs - margeRemiseApresRetraitMs(r));
     if (T !== null) limite = Math.min(limite, T);
     if (k.arrets.length === 0 || limite <= t || dPossible >= limite) continue;
 

@@ -45,6 +45,7 @@ import {
   heureProgrammee,
   lirePlanificateur,
   lireReglagesPlanification,
+  margeRemiseApresRetraitMs,
   pairesAEvaluer,
   planificateurDuRestaurant,
   planifier,
@@ -928,6 +929,39 @@ describe('ajout après le retrait (3.8) et départ', () => {
       instant(t0, { commandes: [enPrep('b', h('12:32:40'), { est: 2300 })], courses: [recuperee()], livreurs: [d1(t0)] }),
     );
     expect(actionsDe(tropTard, 'RETENIR')).toEqual([]);
+  });
+
+  it('fenêtre réglée sous 3 min : la marge de remise est la moitié de la fenêtre, les ajouts restent possibles (banc du 23/10)', () => {
+    const courte = avec({ ajoutApresRetraitMaxS: 60 });
+    // Retrait à 12:30, fenêtre de 60 s jusqu'à 12:31, marge 30 s : ajout possible jusqu'à 12:30:30.
+    const tot = h('12:30:20');
+    const ok = planifier(
+      instant(tot, { commandes: [cmd('q', { est: 2300, ready_at: tot })], courses: [recuperee()], livreurs: [d1(tot)] }),
+      courte,
+    );
+    expect(actionsDe(ok, 'AJOUTER')[0]).toMatchObject({ course_id: 'k', apres_retrait: true });
+    const tard = h('12:30:35');
+    const non = planifier(
+      instant(tard, { commandes: [cmd('q', { est: 2300, ready_at: tard })], courses: [recuperee()], livreurs: [d1(tard)] }),
+      courte,
+    );
+    expect(refusDe(non, 'q', 'k')).toEqual(['FIN_DE_FENETRE']);
+    expect(actionsDe(non, 'CREER_COURSE')[0].order_ids).toEqual(['q']);
+    // Retenue bornée à la fin de la fenêtre moins 30 s (12:30:30).
+    const t0 = h('12:30:05');
+    const retenue = planifier(
+      instant(t0, { commandes: [enPrep('b', h('12:30:25'), { est: 2300 })], courses: [recuperee()], livreurs: [d1(t0)] }),
+      courte,
+    );
+    expect(actionsDe(retenue, 'RETENIR')[0]).toMatchObject({ course_id: 'k', jusqua: h('12:30:25') });
+    const tropTard = planifier(
+      instant(t0, { commandes: [enPrep('b', h('12:30:40'), { est: 2300 })], courses: [recuperee()], livreurs: [d1(t0)] }),
+      courte,
+    );
+    expect(actionsDe(tropTard, 'RETENIR')).toEqual([]);
+    // Fenêtre par défaut (240 s) : marge inchangée de 90 s.
+    expect(margeRemiseApresRetraitMs(REG)).toBe(90_000);
+    expect(margeRemiseApresRetraitMs(avec({ ajoutApresRetraitMaxS: 0 }))).toBe(0);
   });
 
   it('départ : une commande de la course d’origine pas encore remise (bouton de la caisse) reste dans la course', () => {
