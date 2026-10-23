@@ -96,6 +96,7 @@ export function monter(donnees: DonneesDispatch, options: Options = {}) {
     sendCourseTurboFallbackBell: jest.fn(async () => undefined),
     sendTurboPickupSyncFailedBell: jest.fn(async () => undefined),
     sendCourseNoDelivererBell: jest.fn(async () => undefined),
+    sendCommandePasRemiseBell: jest.fn(async () => undefined),
   };
   const turbo = {
     creerCourseGroupe: jest.fn(async () => options.turbo ?? { sentOrderIds: base.commandes.map((o) => o.id) }),
@@ -129,7 +130,15 @@ export function monter(donnees: DonneesDispatch, options: Options = {}) {
     { load: jest.fn(async () => ({ travelTimeRanking: false })) } as never,
   );
   const regroupement = { tryGroupOrder: jest.fn(async () => ({ batchId: 'lot', flushed: false })) };
-  const depart = new DepartCourseService(base.prisma, settings, courseEvent, push as never, journal, regroupement as never);
+  const depart = new DepartCourseService(
+    base.prisma,
+    settings,
+    courseEvent,
+    push as never,
+    journal,
+    regroupement as never,
+    cloche as never,
+  );
   const application = new ApplicationPlanService(
     base.prisma,
     offres,
@@ -194,6 +203,7 @@ export function monter(donnees: DonneesDispatch, options: Options = {}) {
     queue,
     scoring,
     turbo,
+    cloche,
     offres,
     garde,
     cloture,

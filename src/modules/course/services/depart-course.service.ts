@@ -11,6 +11,7 @@ import { CourseStatut, Delivery, DeliveryStatut, OrderStatus, Prisma } from '@pr
 import { PrismaService } from 'src/database/services/prisma.service';
 import type { DelivererLocationUpdatedPayload } from 'src/modules/deliverers/events/deliverer.event';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
+import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
 
 import { CourseEvent } from '../events/course.event';
 import {
@@ -103,6 +104,8 @@ export class DepartCourseService {
     private readonly journal: DispatchJournalService,
     // Restaurant en v1 : une commande retirée au départ repart dans un lot.
     private readonly regroupement?: CourseGroupingService,
+    // Cloche du restaurant et du siège : départ avec une commande pas remise.
+    private readonly cloche?: NotificationsSenderService,
   ) {}
 
   /**
@@ -298,6 +301,7 @@ export class DepartCourseService {
     }
 
     const demarree = p.demarrer === false ? null : await this.demarrerPremiereLivraison(courseId, maintenant).catch(() => null);
+    await this.signalerCommandesPasRemises(courseId, p.motif, p.source).catch(() => []);
 
     const detaillee = await this.prisma.course.findUnique({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
     if (detaillee) {
@@ -468,6 +472,55 @@ export class DepartCourseService {
       });
     }
     return id;
+  }
+
+  /**
+   * Après un départ réel (position, livraison démarrée, « Je pars », fenêtre
+   * écoulée) : une commande de la course d'origine encore prête au comptoir
+   * (remise commande par commande au bouton de la caisse, la suivante jamais
+   * remise) part sans son sac. Rien ne la retire de la course (la caissière
+   * l'a peut-être donnée sans toucher le bouton) : le journal la note et le
+   * restaurant et le siège sont prévenus par la cloche, au lieu du silence.
+   * Les commandes ajoutées après le retrait, elles, sont déjà détachées.
+   *
+   * @returns les références signalées.
+   */
+  async signalerCommandesPasRemises(courseId: string, motif: string, source: SourceDispatch = 'serveur'): Promise<string[]> {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: {
+        id: true,
+        reference: true,
+        restaurant_id: true,
+        deliverer_id: true,
+        deliveries: {
+          // Une commande ajoutée après le retrait et pas remise est détachée au départ (repart seule) : rien à signaler.
+          where: { statut: { notIn: STATUTS_LIVRAISON_TERMINEE }, ajoutee_apres_retrait: false, order: { status: OrderStatus.READY } },
+          select: { order: { select: { id: true, reference: true } } },
+        },
+      },
+    });
+    if (!course || course.deliveries.length === 0) return [];
+    const references = course.deliveries.map((d) => d.order.reference);
+    await this.journal.ecrire({
+      type: 'DEPART_SANS_COMMANDE',
+      motif,
+      source,
+      restaurant_id: course.restaurant_id,
+      course_id: course.id,
+      deliverer_id: course.deliverer_id,
+      details: { course: course.reference, commandes: references },
+    });
+    this.logger.warn(`Course ${course.reference} partie sans ${references.join(', ')} (encore au comptoir).`);
+    void this.cloche
+      ?.sendCommandePasRemiseBell({
+        courseId: course.id,
+        reference: course.reference,
+        restaurantId: course.restaurant_id,
+        commandes: references,
+      })
+      .catch(() => undefined);
+    return references;
   }
 
   /** Commandes retirées au départ : planificateur (v2) ou lots (v1). */

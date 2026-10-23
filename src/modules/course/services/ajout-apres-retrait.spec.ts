@@ -265,7 +265,10 @@ describe('R11 : livreur parti, plus aucun ajout', () => {
   it('fenêtre écoulée (4 min après le retrait) : partie au passage, première livraison démarrée par le serveur', async () => {
     const s = avecAjoutNonRemis();
     s.k.picked_up_at = avant(241);
-    s.d1.last_location_at = avant(90); // plus de position fraîche : rien ne dit qu'il attend au comptoir
+    // Dernière position vieille de 16 min : rien ne dit qu'il attend au comptoir.
+    // (Une position de quelques minutes au comptoir prolonge la fenêtre : il
+    // attend son sac sans bouger, l'appli n'envoie plus rien à l'arrêt.)
+    s.d1.last_location_at = avant(16 * 60);
     const t = monter(s.donnees);
 
     await t.passer();
@@ -376,7 +379,8 @@ describe('R13 : bouton de la caisse « Livreur a récupéré » sur une commande
     expect(k.picked_up_at).toEqual(MAINTENANT);
     expect(k.parti_at).toBeNull(); // nouvelle appli : encore au restaurant
     expect(b.status).toBe(OrderStatus.READY);
-    expect(t.push.notifyPickupValidated).toHaveBeenCalledWith(expect.objectContaining({ delivererId: d1.id }));
+    // Un sac reste au comptoir : pas de « Sacs remis, tu peux partir » (seconde relecture).
+    expect(t.push.notifyPickupValidated).not.toHaveBeenCalled();
 
     // La tâche d'annulation des courses bloquées au restaurant ne la touche plus.
     jest.setSystemTime(apres(31 * 60));
@@ -384,9 +388,11 @@ describe('R13 : bouton de la caisse « Livreur a récupéré » sur une commande
     expect(k.statut).toBe(CourseStatut.IN_DELIVERY);
     expect([a.status, b.status]).toEqual([OrderStatus.PICKED_UP, OrderStatus.READY]);
 
-    // Seconde commande remise par le même bouton : le livreur peut partir.
+    // Seconde commande remise par le même bouton : le livreur peut partir (une seule fois).
     await t.remiseCaisse.onStatutCommande(boutonCaisse(b));
+    expect(t.push.notifyCommandeRemise).toHaveBeenCalledTimes(1);
     expect(t.push.notifyCommandeRemise).toHaveBeenCalledWith(expect.objectContaining({ delivererId: d1.id, corps: 'Tu peux partir' }));
+    expect(t.push.notifyPickupValidated).not.toHaveBeenCalled();
     expect(t.livraisonsDe(k.id).map((l) => l.order_id)).toEqual([a.id, b.id]);
   });
 });

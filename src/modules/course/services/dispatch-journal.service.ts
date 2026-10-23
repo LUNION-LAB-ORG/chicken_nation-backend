@@ -58,6 +58,8 @@ export type TypeEvenementDispatch =
   | 'COURSE_PARTIE'
   /** Commande ajoutée après le retrait, pas remise : retirée de la course au départ. */
   | 'COMMANDE_DETACHEE'
+  /** Course partie alors qu'une commande d'origine est encore prête au comptoir ; cloche au restaurant et au siège. */
+  | 'DEPART_SANS_COMMANDE'
   /** Commande remise avec le même code après le retrait (livreur encore au restaurant). */
   | 'RETRAIT_COMPLEMENTAIRE'
   /** Course confiée à Turbo par le planificateur (dernier recours). */

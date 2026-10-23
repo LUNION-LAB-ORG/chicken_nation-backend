@@ -42,6 +42,7 @@ import {
   ActionPlanification,
   ActionReprendreOffre,
   ActionRetenir,
+  MotifDepart,
   MotifLiberation,
   PlanRestaurant,
   TypeActionPlanification,
@@ -74,6 +75,9 @@ const MOTIF_TURBO_PAS_AVANT = 'TURBO_PAS_AVANT';
  * réservation `turbo_escalated_at` empêche tout second envoi.
  */
 export const DELAI_ENVOI_TURBO_MS = 15_000;
+
+/** Départs du planificateur où le livreur a vraiment quitté le comptoir (ou n'y attend plus rien). */
+const MOTIFS_DEPART_REEL: MotifDepart[] = ['POSITION', 'LIVRAISON_DEMARREE', 'FENETRE_ECHUE'];
 
 /** Statuts d'une course dont le livreur est affecté et pas parti. */
 const STATUTS_AVEC_LIVREUR: CourseStatut[] = [CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT, CourseStatut.IN_DELIVERY];
@@ -243,6 +247,11 @@ export class ApplicationPlanService {
       details: { libelle: a.libelle },
     });
     await this.depart?.demarrerPremiereLivraison(a.course_id, p.maintenant).catch(() => null);
+    // Départ réel (pas une fenêtre qui n'aurait jamais dû s'ouvrir) : une
+    // commande d'origine pas remise est signalée au restaurant et au siège.
+    if (MOTIFS_DEPART_REEL.includes(a.motif)) {
+      await this.depart?.signalerCommandesPasRemises(a.course_id, a.motif).catch(() => []);
+    }
   }
 
   private async detacher(a: ActionDetacher, p: Passage): Promise<void> {

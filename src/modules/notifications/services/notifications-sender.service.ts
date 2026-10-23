@@ -562,6 +562,69 @@ export class NotificationsSenderService {
     }
 
     /**
+     * Alerte cloche : une course interne est partie du restaurant (départ
+     * déduit de la position, première livraison démarrée, « Je pars », fin de
+     * la fenêtre d'ajout) alors qu'une de ses commandes n'a jamais été remise
+     * au livreur (remise commande par commande à la caisse). Rien ne la
+     * replanifie seule : la caissière l'a peut-être donnée sans toucher le
+     * bouton, ou le livreur est parti sans elle. Un humain vérifie.
+     */
+    async sendCommandePasRemiseBell(params: {
+        courseId: string;
+        reference: string;
+        restaurantId: string;
+        commandes: string[];
+    }) {
+        try {
+            const { courseId, reference, restaurantId, commandes } = params;
+            if (commandes.length === 0) return;
+
+            const [restoUsers, backofficeUsers] = await Promise.all([
+                this.notificationRecipientService.getAllUsersByRestaurantAndRole(
+                    restaurantId,
+                    [UserRole.CAISSIER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER],
+                ),
+                this.siegeQuiVoitLesCommandes(),
+            ]);
+
+            const byId = new Map<string, NotificationRecipient>();
+            for (const r of [...restoUsers, ...backofficeUsers]) byId.set(r.id, r);
+            const recipients = [...byId.values()].filter(
+                (r) => r.in_app_notifications_enabled !== false,
+            );
+            if (recipients.length === 0) return;
+
+            const liste = commandes.join(', ');
+            const pluriel = commandes.length > 1;
+            const template: NotificationTemplate<any> = {
+                title: () => (pluriel ? '⚠️ Commandes pas remises' : '⚠️ Commande pas remise'),
+                message: () =>
+                    `Le livreur de la course ${reference} est parti, mais ${pluriel ? 'les commandes' : 'la commande'} ${liste} ` +
+                    `${pluriel ? 'sont encore notées' : 'est encore notée'} au comptoir. Si le sac a bien été donné, ` +
+                    `touchez « Livreur a récupéré » ; sinon appelez le livreur.`,
+                icon: () => notificationIcons.delivery.url,
+                iconBgColor: () => notificationIcons.delivery.color,
+            };
+
+            const notifications = await this.notificationsService.sendNotificationToMultiple(
+                template,
+                {
+                    actor: recipients[0],
+                    recipients,
+                    data: { reference, commandes },
+                    meta: { kind: 'course', course_id: courseId, reference, commande_pas_remise: true },
+                },
+                NotificationType.SYSTEM,
+            );
+            notifications.forEach((notif, i) => {
+                this.notificationsWebSocketService.emitNotification(notif, recipients[i]);
+            });
+        } catch (e) {
+            this.logger.warn(`Alerte « commande pas remise » non envoyée : ${(e as Error)?.message}`);
+        }
+    }
+
+    /**
      * 🚫 TURBO A ANNULÉ UNE COURSE — les commandes restent VIVANTES (découplage).
      * Le staff doit trancher : relancer une livraison ou annuler la commande
      * manuellement. La raison transmise par Turbo est affichée telle quelle.

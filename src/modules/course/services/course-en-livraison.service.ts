@@ -14,6 +14,11 @@ import { DispatchJournalService, SourceDispatch } from './dispatch-journal.servi
 /** La course n'est plus acceptée ni au restaurant : un autre chemin l'a déjà fait partir. */
 class CourseDejaPartie extends Error {}
 
+/** Une commande de la course est encore prête au comptoir (pas remise au livreur). */
+function resteARemettre(livraisons: readonly { statut: DeliveryStatut; order: { status: OrderStatus } }[]): boolean {
+  return livraisons.some((d) => !STATUTS_LIVRAISON_TERMINEE.includes(d.statut) && d.order.status === OrderStatus.READY);
+}
+
 export interface ResultatPassageEnLivraison {
   /** Vrai si CET appel a fait partir la course (un seul gagnant, même à deux serveurs). */
   passee: boolean;
@@ -137,15 +142,24 @@ export class CourseEnLivraisonService {
         previous_statut: avant.statut,
         new_statut: CourseStatut.IN_DELIVERY,
       });
+    }
+    void this.actions.estimerDureeTournee(courseId).catch(() => undefined);
+    // Fenêtre d'ajout après le retrait fermée d'office si elle ne doit pas s'ouvrir.
+    const fermee = this.depart
+      ? await this.depart.fermerFenetreALaValidation(courseId, maintenant).catch(() => false)
+      : true;
+    // « Sacs remis, tu peux partir » : pas tant qu'une autre commande de la
+    // course reste à remettre (bouton de la caisse commande par commande) et
+    // que le livreur peut encore attendre au comptoir (fenêtre ouverte) ; la
+    // dernière remise l'annonce (`surRemiseParCaisse`, « Tout est récupéré »).
+    // Fenêtre fermée d'office (ancienne appli, v1) : comme avant.
+    if (course && (fermee || !resteARemettre(course.deliveries))) {
       this.pushService.notifyPickupValidated({
         delivererId: avant.deliverer_id,
         courseReference: course.reference,
         courseId,
       });
     }
-    void this.actions.estimerDureeTournee(courseId).catch(() => undefined);
-    // Fenêtre d'ajout après le retrait fermée d'office si elle ne doit pas s'ouvrir.
-    await this.depart?.fermerFenetreALaValidation(courseId, maintenant).catch(() => false);
 
     return { passee: true, statut_avant: avant.statut, detachees };
   }
