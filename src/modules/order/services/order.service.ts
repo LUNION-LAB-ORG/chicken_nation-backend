@@ -47,7 +47,7 @@ import { OrderV2Helper } from '../helpers/orderv2.helper';
 import { DeliveryFeeHelper } from '../helpers/delivery-fee.helper';
 import { DeliveryOfferService } from 'src/modules/delivery-offer/services/delivery-offer.service';
 import { MapsService } from 'src/modules/maps/maps.service';
-import { PromoCodeUsageStatus, RewardType, RewardStatus, OrderChannel } from '@prisma/client';
+import { CourseOfferStatus, PromoCodeUsageStatus, RewardType, RewardStatus, OrderChannel } from '@prisma/client';
 import { OrderCreateDto, OrderItemDto } from '../dto/order-create.dto';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { PromoCodeService } from 'src/modules/promo-code/promo-code.service';
@@ -1825,7 +1825,8 @@ export class OrderService {
         customer: {
           select: { id: true, first_name: true, last_name: true, phone: true, email: true, image: true },
         },
-        restaurant: { select: { id: true, name: true, image: true, address: true } },
+        // Coordonnées : « arrivée vers 12 h 38 » du livreur (écran Opérations).
+        restaurant: { select: { id: true, name: true, image: true, address: true, latitude: true, longitude: true } },
         // `cooking_time` : alimente le minuteur « En préparation » du back office.
         order_items: { include: { dish: { select: { id: true, name: true, image: true, price: true, cooking_time: true } } } },
         paiements: true,
@@ -1833,7 +1834,19 @@ export class OrderService {
           include: {
             course: {
               include: {
-                deliverer: { select: { id: true, reference: true, first_name: true, last_name: true, phone: true, image: true } },
+                deliverer: {
+                  select: {
+                    id: true, reference: true, first_name: true, last_name: true, phone: true, image: true,
+                    last_location: true, last_location_at: true,
+                  },
+                },
+                // Offre en attente : « Proposée à Koffi » (SuiviOperationsService).
+                offer_attempts: {
+                  where: { status: CourseOfferStatus.PENDING },
+                  orderBy: { offered_at: 'desc' },
+                  take: 1,
+                  select: { expires_at: true, deliverer: { select: { first_name: true } } },
+                },
               },
             },
           },

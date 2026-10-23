@@ -14,7 +14,7 @@ import {
   Req,
   Res,
   UseGuards,
-  UseInterceptors, NotFoundException, ForbiddenException } from '@nestjs/common';
+  UseInterceptors, NotFoundException, ForbiddenException, Optional } from '@nestjs/common';
 import {
   assertCanAccessRestaurant,
   resolveRestaurantScope,
@@ -41,6 +41,7 @@ import { CreateOrderDto } from 'src/modules/order/dto/create-order.dto';
 import { MarkPaidCashDto } from 'src/modules/order/dto/mark-paid-cash.dto';
 import { QueryOrderCustomerDto, QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
 import { OrderUpdatedDto, UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
+import { SuiviOperationsService } from '../services/suivi-operations.service';
 import { OrderService } from 'src/modules/order/services/order.service';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 import { ReceiptsService } from '../services/receipts.service';
@@ -83,6 +84,8 @@ export class OrderController {
     private readonly receiptsService: ReceiptsService,
     private readonly orderWebSocketService: OrderWebSocketService,
     private readonly kkiapayOrderListenerService: KkiapayOrderListenerService,
+    // Écran Opérations : offre en attente nommée, fin de la fenêtre d'ajout après le retrait.
+    @Optional() private readonly suiviOperations?: SuiviOperationsService,
   ) { }
 
   /**
@@ -271,14 +274,15 @@ export class OrderController {
     summary: 'Liste des commandes actives pour la page Opérations',
     description: 'ACCEPTED, IN_PROGRESS, READY, PICKED_UP, COLLECTED — avec Delivery/Course si applicable.',
   })
-  operationsActive(
+  async operationsActive(
     @Req() req: Request,
     @Query('restaurantId') restaurantId?: string,
   ) {
     // Cloisonnement : un user RESTAURANT est forcé à SON restaurant (le param
     // est ignoré) ; un user BACKOFFICE filtre librement via l'onglet.
     const scope = resolveRestaurantScope(req.user as User, restaurantId);
-    return this.orderService.findActiveForOperations(scope);
+    const commandes = await this.orderService.findActiveForOperations(scope);
+    return this.suiviOperations ? this.suiviOperations.enrichir(commandes) : commandes;
   }
 
   @Get('/customer')
