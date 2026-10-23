@@ -7,15 +7,19 @@ import { ClientRedisCompteur, REDIS_COMPTEUR_GOOGLE } from './redis-compteur-goo
 /**
  * Fonctions de Google comptées, une clé par fonction et par jour.
  *
- * Plafonnées (`FONCTIONS_PLAFONNEES`) : celles qui ont un repli sans Google
- * et dont la coupure ne bloque rien (distance routière et tracé, détour,
- * temps de trajet des livreurs). Les autres sont comptées mais JAMAIS
- * coupées : la saisie d'une adresse ou le trajet affiché au livreur n'ont
- * pas de repli, les couper bloquerait une commande ou une livraison.
+ * Plafonnées (`FONCTIONS_PLAFONNEES`) : celles du REGROUPEMENT, qui ont un
+ * repli sans Google et dont la coupure ne bloque rien (tracés de la règle de
+ * direction, détour, temps de trajet des livreurs). Les autres sont comptées
+ * mais JAMAIS coupées : la distance routière des frais de livraison et de
+ * l'acheminement (couper ramènerait le vol d'oiseau au travers de la lagune
+ * et des frais différents pour une même adresse, relecture du 23/10), la
+ * saisie d'une adresse ou le trajet affiché au livreur.
  */
 export type FonctionGoogle =
-  /** `itineraireRoutier` : distance routière et tracé, sans trafic (frais, acheminement, direction). */
+  /** `itineraireRoutier` pour les frais de livraison et l'acheminement (`distanceRoutiereMetres`). */
   | 'itineraire'
+  /** `itineraireRoutier` pour la règle « même direction » du planificateur (tracés). */
+  | 'trace_direction'
   /** `detourSansTrafic` : trajet restaurant → client proche → client lointain. */
   | 'detour'
   /** `getTravelTimes` : temps de trajet des livreurs jusqu'au restaurant. */
@@ -29,6 +33,7 @@ export type FonctionGoogle =
 
 export const FONCTIONS_GOOGLE: readonly FonctionGoogle[] = [
   'itineraire',
+  'trace_direction',
   'detour',
   'temps_trajet',
   'trajet_trafic',
@@ -39,7 +44,7 @@ export const FONCTIONS_GOOGLE: readonly FonctionGoogle[] = [
 ];
 
 export const FONCTIONS_PLAFONNEES: ReadonlySet<FonctionGoogle> = new Set<FonctionGoogle>([
-  'itineraire',
+  'trace_direction',
   'detour',
   'temps_trajet',
 ]);

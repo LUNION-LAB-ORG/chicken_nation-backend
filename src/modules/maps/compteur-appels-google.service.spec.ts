@@ -105,10 +105,10 @@ describe('jourCompteur', () => {
 describe('CompteurAppelsGoogleService', () => {
   it('compte chaque appel plafonné par fonction et au total, avec une durée de vie', async () => {
     const { compteur, redis } = monter('10');
-    await expect(compteur.reserver('itineraire', MIDI)).resolves.toBe(true);
+    await expect(compteur.reserver('trace_direction', MIDI)).resolves.toBe(true);
     await expect(compteur.reserver('detour', MIDI)).resolves.toBe(true);
-    await expect(compteur.reserver('itineraire', MIDI)).resolves.toBe(true);
-    expect(redis.valeur(cleCompteur(JOUR, 'itineraire'))).toBe(2);
+    await expect(compteur.reserver('trace_direction', MIDI)).resolves.toBe(true);
+    expect(redis.valeur(cleCompteur(JOUR, 'trace_direction'))).toBe(2);
     expect(redis.valeur(cleCompteur(JOUR, 'detour'))).toBe(1);
     expect(redis.valeur(cleCompteur(JOUR, 'plafonnes'))).toBe(3);
     expect(redis.expiration(cleCompteur(JOUR, 'plafonnes'))).toBe(8 * 24 * 60 * 60);
@@ -116,7 +116,7 @@ describe('CompteurAppelsGoogleService', () => {
 
   it('au-delà du plafond : refusé (repli), rien n’est pris, le refus est compté', async () => {
     const { compteur, redis } = monter('3');
-    for (let i = 0; i < 3; i++) await expect(compteur.reserver('itineraire', MIDI)).resolves.toBe(true);
+    for (let i = 0; i < 3; i++) await expect(compteur.reserver('trace_direction', MIDI)).resolves.toBe(true);
     await expect(compteur.reserver('detour', MIDI)).resolves.toBe(false);
     await expect(compteur.reserver('temps_trajet', MIDI)).resolves.toBe(false);
     expect(redis.valeur(cleCompteur(JOUR, 'plafonnes'))).toBe(3);
@@ -126,9 +126,22 @@ describe('CompteurAppelsGoogleService', () => {
 
   it('le lendemain, le compteur repart de zéro', async () => {
     const { compteur } = monter('1');
+    await expect(compteur.reserver('trace_direction', MIDI)).resolves.toBe(true);
+    await expect(compteur.reserver('trace_direction', MIDI)).resolves.toBe(false);
+    await expect(compteur.reserver('trace_direction', new Date('2026-10-24T00:00:01.000Z'))).resolves.toBe(true);
+  });
+
+  it('distance routière des frais et de l’acheminement (`itineraire`) : comptée, jamais coupée par le plafond du regroupement (relecture)', async () => {
+    const { compteur, redis } = monter('2');
+    await expect(compteur.reserver('trace_direction', MIDI)).resolves.toBe(true);
+    await expect(compteur.reserver('detour', MIDI)).resolves.toBe(true);
+    await expect(compteur.reserver('trace_direction', MIDI)).resolves.toBe(false); // plafond du regroupement atteint
     await expect(compteur.reserver('itineraire', MIDI)).resolves.toBe(true);
-    await expect(compteur.reserver('itineraire', MIDI)).resolves.toBe(false);
-    await expect(compteur.reserver('itineraire', new Date('2026-10-24T00:00:01.000Z'))).resolves.toBe(true);
+    await new Promise((fin) => setImmediate(fin));
+    expect(redis.valeur(cleCompteur(JOUR, 'itineraire'))).toBe(1);
+    expect(redis.valeur(cleCompteur(JOUR, 'plafonnes'))).toBe(2);
+    // Plafond à 0 (« aucun appel » pour le regroupement) : les frais gardent la route.
+    await expect(monter('0').compteur.reserver('itineraire', MIDI)).resolves.toBe(true);
   });
 
   it('les fonctions sans repli (trajet affiché, saisie d’adresse) sont comptées mais jamais coupées', async () => {
@@ -145,7 +158,7 @@ describe('CompteurAppelsGoogleService', () => {
 
   it('plafond à 0 : aucun appel plafonné', async () => {
     const { compteur, redis } = monter('0');
-    await expect(compteur.reserver('itineraire', MIDI)).resolves.toBe(false);
+    await expect(compteur.reserver('trace_direction', MIDI)).resolves.toBe(false);
     await new Promise((fin) => setImmediate(fin));
     expect(redis.valeur(cleCompteur(JOUR, 'plafonnes'))).toBe(0);
     expect(redis.valeur(cleCompteur(JOUR, 'refuses'))).toBe(1);
@@ -153,31 +166,31 @@ describe('CompteurAppelsGoogleService', () => {
 
   it('réglage refusé ou base muette : plafond par défaut (2 000)', async () => {
     const refuse = monter('-4');
-    await expect(refuse.compteur.reserver('itineraire', MIDI)).resolves.toBe(true);
+    await expect(refuse.compteur.reserver('trace_direction', MIDI)).resolves.toBe(true);
     const muette = monter(() => {
       throw new Error('P1001');
     });
-    await expect(muette.compteur.reserver('itineraire', MIDI)).resolves.toBe(true);
+    await expect(muette.compteur.reserver('trace_direction', MIDI)).resolves.toBe(true);
     await expect(muette.compteur.compteursDuJour(MIDI)).resolves.toMatchObject({ plafond: 2000 });
   });
 
   it('Redis en panne : Google reste utilisé (pas de coupure faute de compteur), jamais d’exception', async () => {
     const { compteur, redis } = monter('3');
     redis.panne(true);
-    await expect(compteur.reserver('itineraire', MIDI)).resolves.toBe(true);
+    await expect(compteur.reserver('trace_direction', MIDI)).resolves.toBe(true);
     expect(() => compteur.compter('vignette', MIDI)).not.toThrow();
     await expect(compteur.compteursDuJour(MIDI)).resolves.toMatchObject({ plafonnes: 0 });
   });
 
   it('compteursDuJour : par fonction, total, refus et plafond', async () => {
     const { compteur } = monter('2');
-    await compteur.reserver('itineraire', MIDI);
+    await compteur.reserver('trace_direction', MIDI);
     await compteur.reserver('detour', MIDI);
     await compteur.reserver('detour', MIDI);
     await compteur.reserver('trajet_trafic', MIDI);
     await new Promise((fin) => setImmediate(fin));
     const etat = await compteur.compteursDuJour(MIDI);
     expect(etat).toMatchObject({ jour: JOUR, plafonnes: 2, refuses: 1, plafond: 2 });
-    expect(etat.parFonction).toMatchObject({ itineraire: 1, detour: 1, trajet_trafic: 1, vignette: 0 });
+    expect(etat.parFonction).toMatchObject({ trace_direction: 1, detour: 1, trajet_trafic: 1, vignette: 0 });
   });
 });

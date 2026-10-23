@@ -19,9 +19,11 @@ import { redisCompteurGoogleProvider } from './redis-compteur-google.provider';
  * La clé Google Maps est lue depuis `process.env.GOOGLE_MAPS_API_KEY`.
  *
  * Chaque appel réellement envoyé à Google est compté par fonction et par jour
- * (`CompteurAppelsGoogleService`) ; ceux qui ont un repli sans Google
- * (itinéraire routier, détour, temps de trajet) s'arrêtent au plafond
- * quotidien `maps.plafond_appels_jour`.
+ * (`CompteurAppelsGoogleService`) ; ceux du regroupement, qui ont un repli
+ * sans Google (tracés de la règle de direction, détour, temps de trajet des
+ * livreurs), s'arrêtent au plafond quotidien `maps.plafond_appels_jour`. La
+ * distance routière des frais de livraison et de l'acheminement n'y est
+ * jamais coupée.
  */
 @Module({
   controllers: [MapsController, MapsAssetsController],

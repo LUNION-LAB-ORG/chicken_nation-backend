@@ -42,12 +42,16 @@ describe('DirectionService.client', () => {
     expect(c.position).toEqual({ lat: LOIN.lat, lng: LOIN.lng });
     expect(c.routeMetres).toBeGreaterThan(0);
     expect(c.trace).toHaveLength(2);
-    expect(maps.itineraireRoutier).toHaveBeenCalledWith({
-      originLat: ZONE_4.lat,
-      originLng: ZONE_4.lng,
-      destLat: LOIN.lat,
-      destLng: LOIN.lng,
-    });
+    // Budget du regroupement (plafonné), jamais celui des frais de livraison.
+    expect(maps.itineraireRoutier).toHaveBeenCalledWith(
+      {
+        originLat: ZONE_4.lat,
+        originLng: ZONE_4.lng,
+        destLat: LOIN.lat,
+        destLng: LOIN.lng,
+      },
+      { pour: 'direction' },
+    );
   });
 
   it('Google coupé par réglage, restaurant ou client sans coordonnées : aucun appel', async () => {

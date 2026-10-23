@@ -77,12 +77,16 @@ export class DirectionService {
     if (!restaurant || !position || !google) return sansRoute;
 
     try {
-      const itineraire = await this.maps.itineraireRoutier({
-        originLat: restaurant.lat,
-        originLng: restaurant.lng,
-        destLat: position.lat,
-        destLng: position.lng,
-      });
+      const itineraire = await this.maps.itineraireRoutier(
+        {
+          originLat: restaurant.lat,
+          originLng: restaurant.lng,
+          destLat: position.lat,
+          destLng: position.lng,
+        },
+        // Budget du regroupement (plafonné), jamais celui des frais de livraison.
+        { pour: 'direction' },
+      );
       if (!itineraire) return sansRoute;
       const trace = decoderPolyligne(itineraire.polyligne);
       return {
