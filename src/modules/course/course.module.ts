@@ -23,6 +23,7 @@ import { CourseOfferService } from './services/course-offer.service';
 import { CourseQueryService } from './services/course-query.service';
 import { DeliveryActionService } from './services/delivery-action.service';
 import { DeliveryTrackingService } from './services/delivery-tracking.service';
+import { DirectionService } from './services/direction.service';
 import { GardeOffresService } from './services/garde-offres.service';
 import { OffreEnAttenteService } from './services/offre-en-attente.service';
 import { CourseBatchTask } from './tasks/course-batch.task';
@@ -49,6 +50,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     GardeOffresService, // Règle unique des offres : affectation forcée, relances, acceptation
     CourseEnLivraisonService, // Bouton caisse « Livreur a récupéré » : la course part en livraison
     AnnulationAutoService, // Annulation automatique sans jamais annuler une commande de client
+    DirectionService, // « Même direction » : tracés et détours Google pour la règle de regroupement
     // Events + WS
     CourseEvent,
     CourseWebSocketService,
@@ -68,6 +70,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     CourseActionService,
     CourseQueryService,
     CourseGroupingService,
+    DirectionService,
   ],
 })
 export class CourseModule {}
