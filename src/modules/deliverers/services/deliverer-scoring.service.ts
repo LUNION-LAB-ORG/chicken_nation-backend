@@ -125,17 +125,25 @@ export class DelivererScoringService {
     const tete = ranked.slice(0, topN);
     const reste = ranked.slice(topN);
 
-    // Positions connues uniquement : sans GPS frais, aucun temps calculable.
+    // Positions FRAÎCHES uniquement : une position plus vieille que
+    // `gps_expiration_minutes` (5 min) ne dit plus où est le livreur, et un
+    // temps de trajet calculé dessus le classerait à tort. Même règle que la
+    // note de distance.
     const positions = await this.prisma.deliverer.findMany({
       where: { id: { in: tete.map((c) => c.delivererId) } },
-      select: { id: true, last_location: true },
+      select: { id: true, last_location: true, last_location_at: true },
     });
-    const parId = new Map(positions.map((p) => [p.id, p.last_location]));
+    const limiteFraicheur = Date.now() - settings.gpsExpirationMinutes * 60_000;
+    const parId = new Map(
+      positions
+        .filter((p) => p.last_location_at && p.last_location_at.getTime() >= limiteFraicheur)
+        .map((p) => [p.id, p.last_location]),
+    );
 
     const origines: { latitude: number; longitude: number }[] = [];
     const idsAlignes: string[] = [];
     for (const c of tete) {
-      const loc = parId.get(c.delivererId) as { lat?: number; lng?: number } | null;
+      const loc = (parId.get(c.delivererId) ?? null) as { lat?: number; lng?: number } | null;
       if (typeof loc?.lat !== 'number' || typeof loc?.lng !== 'number') continue;
       origines.push({ latitude: loc.lat, longitude: loc.lng });
       idsAlignes.push(c.delivererId);

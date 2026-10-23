@@ -3,6 +3,8 @@ import { racinePublique, urlApi } from 'src/common/utils/url-publique.util';
 import { Inject, Injectable, Logger, BadGatewayException } from '@nestjs/common';
 import type { Cache } from 'cache-manager';
 
+import { CompteurAppelsGoogleService } from './compteur-appels-google.service';
+
 // ─── Types partagés ──────────────────────────────────────────────────────────
 
 export interface ILatLng {
@@ -31,6 +33,25 @@ export interface IDirectionsResult {
   /** Part des arrêts dans la durée ci-dessus. */
   stopsSeconds: number;
   legs: IDirectionsLeg[];
+}
+
+/**
+ * Itinéraire routier SANS trafic entre deux points fixes : distance, durée et
+ * tracé, tirés d'UNE réponse Directions et gardés ensemble 30 jours.
+ */
+export interface IItineraireRoutier {
+  /** Mètres par la route. */
+  metres: number;
+  /** Secondes de conduite sans trafic (0 si Google ne les a pas données). */
+  secondes: number;
+  /** Tracé au format « Encoded Polyline » de Google (`overview_polyline`), vide s'il manque. */
+  polyligne: string;
+}
+
+/** Durées sans trafic du trajet direct R → L et du même trajet avec l'étape P. */
+export interface IMesureDetour {
+  secondesDirect: number;
+  secondesAvecEtape: number;
 }
 
 export interface IReverseGeocodeResult {
@@ -115,6 +136,18 @@ const STOP_SECONDS_PER_DELIVERY = Number(process.env.MAPS_STOP_SECONDS ?? 180);
  */
 const ROAD_DISTANCE_TIMEOUT_MS = Number(process.env.MAPS_ROAD_DISTANCE_TIMEOUT_MS ?? 2500);
 
+/**
+ * Plafond d'attente des autres appels du dispatch et des trajets affichés
+ * (`getDirections`, `getTravelTimes`, détour) : 2,5 s. Sans lui, un Google
+ * muet bloquait le choix d'un livreur jusqu'aux délais par défaut de Node,
+ * soit plusieurs minutes. Ajustable via `MAPS_GOOGLE_TIMEOUT_MS`.
+ */
+function delaiGoogleMs(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.MAPS_GOOGLE_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 2500;
+}
+const GOOGLE_TIMEOUT_MS = delaiGoogleMs();
+
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -124,6 +157,9 @@ export class MapsService {
 
   constructor(
     @Inject(CACHE_MANAGER) private readonly cache: Cache,
+    // Compteur par fonction et par jour, et plafond quotidien des appels qui
+    // ont un repli sans Google (maps.plafond_appels_jour).
+    private readonly compteur: CompteurAppelsGoogleService,
   ) {
     this.apiKey = process.env.GOOGLE_MAPS_API_KEY ?? '';
     if (!this.apiKey) {
@@ -234,6 +270,8 @@ export class MapsService {
     url.searchParams.set('traffic_model', 'best_guess');
     url.searchParams.set('key', this.apiKey);
 
+    // Compté, jamais plafonné : c'est le trajet affiché au livreur et au client.
+    this.compteur.compter('trajet_trafic');
     try {
       const data = await this.googleFetch<{
         status: string;
@@ -248,7 +286,7 @@ export class MapsService {
             end_location: { lat: number; lng: number };
           }[];
         }[];
-      }>(url.toString());
+      }>(url.toString(), GOOGLE_TIMEOUT_MS);
 
       if (data.status !== 'OK' || !data.routes?.[0]) {
         this.logger.warn(`[Maps] Directions status=${data.status}`);
@@ -295,7 +333,122 @@ export class MapsService {
     }
   }
 
-  // ── Distance routière (facturation) ──────────────────────────────────────
+  // ── Distance routière et tracé (facturation, acheminement, direction) ──
+
+  /** Clé de cache d'un trajet entre deux points arrondis à 4 décimales (≈ 11 m). */
+  private cleTrajet(prefixe: string, ...points: { lat: number; lng: number }[]): string {
+    return this.key(prefixe, ...points.flatMap((p) => [p.lat.toFixed(4), p.lng.toFixed(4)]));
+  }
+
+  /** Lecture du cache qui ne lève jamais (Redis coupé = absent). */
+  private async lireCache<T>(cle: string): Promise<T | undefined> {
+    try {
+      return (await this.cache.get<T>(cle)) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async ecrireCache(cle: string, valeur: unknown, ttl: number): Promise<void> {
+    try {
+      await this.cache.set(cle, valeur, ttl);
+    } catch (err) {
+      this.logger.warn(`[Maps] Cache indisponible : ${(err as Error).message}`);
+    }
+  }
+
+  /** Itinéraire routier déjà en cache, sans jamais appeler Google. */
+  private async itineraireEnCache(cle: string): Promise<IItineraireRoutier | null> {
+    let brut: unknown = await this.lireCache<unknown>(cle);
+    if (typeof brut === 'string') {
+      try {
+        brut = JSON.parse(brut);
+      } catch {
+        return null;
+      }
+    }
+    const v = brut as Partial<IItineraireRoutier> | null | undefined;
+    const metres = Number(v?.metres);
+    if (!v || !Number.isFinite(metres) || metres <= 0) return null;
+    const secondes = Number(v.secondes);
+    return {
+      metres,
+      secondes: Number.isFinite(secondes) && secondes > 0 ? secondes : 0,
+      polyligne: typeof v.polyligne === 'string' ? v.polyligne : '',
+    };
+  }
+
+  /**
+   * Itinéraire PAR LA ROUTE entre deux points fixes, SANS trafic : mètres,
+   * secondes de conduite et tracé (`overview_polyline`), tirés d'une seule
+   * réponse Directions et gardés ensemble 30 jours.
+   *
+   * C'est l'appel déjà payé pour les frais de livraison, dont le tracé était
+   * jeté : il sert désormais aussi à la règle « même direction » (un client
+   * est-il sur la route d'un autre ?) sans aucun appel de plus.
+   *
+   * Pas de `departure_time` (tarif de base) : la distance et le tracé ne
+   * dépendent pas du trafic. Ne lève jamais : `null` si la clé manque, si
+   * Google n'a pas répondu dans les 2,5 s, s'il n'y a pas d'itinéraire, ou
+   * si le plafond quotidien d'appels est atteint (repli sans Google).
+   */
+  async itineraireRoutier(params: {
+    originLat: number;
+    originLng: number;
+    destLat: number;
+    destLng: number;
+  }): Promise<IItineraireRoutier | null> {
+    const origine = { lat: params.originLat, lng: params.originLng };
+    const destination = { lat: params.destLat, lng: params.destLng };
+    if (![origine.lat, origine.lng, destination.lat, destination.lng].every(Number.isFinite)) return null;
+
+    const cacheKey = this.cleTrajet('road-route', origine, destination);
+    const enCache = await this.itineraireEnCache(cacheKey);
+    if (enCache) return enCache;
+
+    if (!this.apiKey) return null;
+    if (!(await this.compteur.reserver('itineraire'))) return null;
+
+    const url = new URL(`${BASE_URL}/directions/json`);
+    url.searchParams.set('origin', `${params.originLat},${params.originLng}`);
+    url.searchParams.set('destination', `${params.destLat},${params.destLng}`);
+    url.searchParams.set('mode', 'driving');
+    url.searchParams.set('key', this.apiKey);
+
+    try {
+      const data = await this.googleFetch<{
+        status: string;
+        routes?: {
+          overview_polyline?: { points?: string };
+          legs: { distance?: { value: number }; duration?: { value: number } }[];
+        }[];
+      }>(url.toString(), ROAD_DISTANCE_TIMEOUT_MS);
+
+      if (data.status !== 'OK' || !data.routes?.[0]?.legs?.length) {
+        this.logger.warn(`[Maps] Distance routière indisponible (status=${data.status})`);
+        return null;
+      }
+
+      const route = data.routes[0];
+      const metres = route.legs.reduce((somme, l) => somme + (l.distance?.value ?? 0), 0);
+      if (!Number.isFinite(metres) || metres <= 0) {
+        this.logger.warn('[Maps] Distance routière renvoyée nulle ou invalide.');
+        return null;
+      }
+      const secondes = route.legs.reduce((somme, l) => somme + (l.duration?.value ?? 0), 0);
+
+      const itineraire: IItineraireRoutier = {
+        metres,
+        secondes: Number.isFinite(secondes) && secondes > 0 ? secondes : 0,
+        polyligne: route.overview_polyline?.points ?? '',
+      };
+      await this.ecrireCache(cacheKey, itineraire, TTL.ROAD_DISTANCE);
+      return itineraire;
+    } catch (err) {
+      this.logger.warn(`[Maps] Distance routière en échec : ${(err as Error).message}`);
+      return null;
+    }
+  }
 
   /**
    * Distance PAR LA ROUTE entre deux points, en mètres. Destinée au CALCUL DES
@@ -310,10 +463,15 @@ export class MapsService {
    * donc payée à Google qu'une fois par mois, quel que soit le nombre de
    * commandes qu'elle reçoit.
    *
+   * S'appuie sur `itineraireRoutier` (mêmes mètres, tracé gardé en plus).
+   * L'ancienne entrée de cache (mètres seuls) est encore lue pendant ses
+   * 30 jours : une adresse déjà payée ne l'est pas une seconde fois pour les
+   * frais ; son tracé sera demandé au premier besoin de la règle de direction.
+   *
    * Ne lève jamais : renvoie `null` si la clé manque, si Google n'a pas
-   * répondu dans le délai imparti, ou s'il n'existe pas d'itinéraire. Cet
-   * appel est sur le chemin de création d'une commande — il doit pouvoir
-   * échouer sans la faire échouer.
+   * répondu dans le délai imparti, s'il n'existe pas d'itinéraire, ou si le
+   * plafond quotidien est atteint. Cet appel est sur le chemin de création
+   * d'une commande : il doit pouvoir échouer sans la faire échouer.
    */
   async distanceRoutiereMetres(params: {
     originLat: number;
@@ -321,54 +479,83 @@ export class MapsService {
     destLat: number;
     destLng: number;
   }): Promise<number | null> {
-    if (!this.apiKey) return null;
+    const origine = { lat: params.originLat, lng: params.originLng };
+    const destination = { lat: params.destLat, lng: params.destLng };
+    if (![origine.lat, origine.lng, destination.lat, destination.lng].every(Number.isFinite)) return null;
 
-    // 4 décimales ≈ 11 m. Assez fin pour ne pas confondre deux adresses
-    // voisines, assez grossier pour que deux commandes à la même adresse
-    // partagent la même entrée de cache.
-    const cacheKey = this.key(
-      'road-distance',
-      params.originLat.toFixed(4),
-      params.originLng.toFixed(4),
-      params.destLat.toFixed(4),
-      params.destLng.toFixed(4),
-    );
+    const enCache = await this.itineraireEnCache(this.cleTrajet('road-route', origine, destination));
+    if (enCache) return enCache.metres;
 
     // `Number(...)` et non un test de type : selon le store, un nombre peut
     // revenir sérialisé en chaîne. Une valeur absente donne NaN ou 0 et
     // retombe naturellement sur l'appel.
-    const cached = Number(await this.cache.get<number>(cacheKey));
-    if (Number.isFinite(cached) && cached > 0) {
-      return cached;
+    const ancienne = Number(await this.lireCache<number>(this.cleTrajet('road-distance', origine, destination)));
+    if (Number.isFinite(ancienne) && ancienne > 0) return ancienne;
+
+    return (await this.itineraireRoutier(params))?.metres ?? null;
+  }
+
+  /**
+   * Détour réel imposé par une étape, SANS trafic : durée du trajet direct
+   * restaurant → client lointain, et du même trajet en passant par le client
+   * proche. Sert au test 5 de la règle « même direction ».
+   *
+   * Les deux durées viennent de Google sans trafic (le trajet direct est celui
+   * d'`itineraireRoutier`, presque toujours en cache) : jamais de mélange avec
+   * une estimation. Cache 30 jours (points arrondis à 4 décimales), délai
+   * 2,5 s, plafond quotidien. Ne lève jamais : `null` = repli sans carte.
+   */
+  async detourSansTrafic(params: {
+    restaurant: ILatLng;
+    proche: ILatLng;
+    lointain: ILatLng;
+  }): Promise<IMesureDetour | null> {
+    const r = { lat: params.restaurant.latitude, lng: params.restaurant.longitude };
+    const p = { lat: params.proche.latitude, lng: params.proche.longitude };
+    const l = { lat: params.lointain.latitude, lng: params.lointain.longitude };
+    if (![r, p, l].every((x) => Number.isFinite(x.lat) && Number.isFinite(x.lng))) return null;
+
+    const direct = await this.itineraireRoutier({
+      originLat: r.lat,
+      originLng: r.lng,
+      destLat: l.lat,
+      destLng: l.lng,
+    });
+    if (!direct || direct.secondes <= 0) return null;
+
+    const cacheKey = this.cleTrajet('detour', r, p, l);
+    const enCache = Number(await this.lireCache<number>(cacheKey));
+    if (Number.isFinite(enCache) && enCache > 0) {
+      return { secondesDirect: direct.secondes, secondesAvecEtape: enCache };
     }
 
+    if (!this.apiKey) return null;
+    if (!(await this.compteur.reserver('detour'))) return null;
+
     const url = new URL(`${BASE_URL}/directions/json`);
-    url.searchParams.set('origin', `${params.originLat},${params.originLng}`);
-    url.searchParams.set('destination', `${params.destLat},${params.destLng}`);
+    url.searchParams.set('origin', `${r.lat},${r.lng}`);
+    url.searchParams.set('destination', `${l.lat},${l.lng}`);
+    url.searchParams.set('waypoints', `${p.lat},${p.lng}`);
     url.searchParams.set('mode', 'driving');
     url.searchParams.set('key', this.apiKey);
 
     try {
       const data = await this.googleFetch<{
         status: string;
-        routes?: { legs: { distance: { value: number } }[] }[];
-      }>(url.toString(), ROAD_DISTANCE_TIMEOUT_MS);
+        routes?: { legs: { duration?: { value: number } }[] }[];
+      }>(url.toString(), GOOGLE_TIMEOUT_MS);
 
       if (data.status !== 'OK' || !data.routes?.[0]?.legs?.length) {
-        this.logger.warn(`[Maps] Distance routière indisponible (status=${data.status})`);
+        this.logger.warn(`[Maps] Détour indisponible (status=${data.status})`);
         return null;
       }
+      const avecEtape = data.routes[0].legs.reduce((somme, leg) => somme + (leg.duration?.value ?? 0), 0);
+      if (!Number.isFinite(avecEtape) || avecEtape <= 0) return null;
 
-      const metres = data.routes[0].legs.reduce((somme, l) => somme + (l.distance?.value ?? 0), 0);
-      if (!Number.isFinite(metres) || metres <= 0) {
-        this.logger.warn('[Maps] Distance routière renvoyée nulle ou invalide.');
-        return null;
-      }
-
-      await this.cache.set(cacheKey, metres, TTL.ROAD_DISTANCE);
-      return metres;
+      await this.ecrireCache(cacheKey, avecEtape, TTL.ROAD_DISTANCE);
+      return { secondesDirect: direct.secondes, secondesAvecEtape: avecEtape };
     } catch (err) {
-      this.logger.warn(`[Maps] Distance routière en échec : ${(err as Error).message}`);
+      this.logger.warn(`[Maps] Détour en échec : ${(err as Error).message}`);
       return null;
     }
   }
@@ -385,7 +572,9 @@ export class MapsService {
    *
    * Renvoie un tableau aligné sur `origins` ; `null` pour une origine dont
    * Google n'a pas su calculer l'itinéraire. Renvoie `null` global en cas
-   * d'échec, pour que l'appelant retombe sur son classement habituel.
+   * d'échec, de délai dépassé (2,5 s) ou de plafond quotidien atteint, pour
+   * que l'appelant retombe sur son classement habituel. Les positions
+   * périmées sont écartées par l'appelant (`DelivererScoringService`).
    */
   async getTravelTimes(
     origins: ILatLng[],
@@ -399,6 +588,9 @@ export class MapsService {
 
     const cached = await this.cache.get<(number | null)[]>(cacheKey);
     if (cached) return cached;
+
+    if (!this.apiKey) return null;
+    if (!(await this.compteur.reserver('temps_trajet'))) return null;
 
     const url = new URL(`${BASE_URL}/distancematrix/json`);
     url.searchParams.set('origins', originsStr);
@@ -418,7 +610,7 @@ export class MapsService {
             duration_in_traffic?: { value: number };
           }[];
         }[];
-      }>(url.toString());
+      }>(url.toString(), GOOGLE_TIMEOUT_MS);
 
       if (data.status !== 'OK' || !data.rows) {
         this.logger.warn(`[Maps] DistanceMatrix status=${data.status}`);
@@ -455,6 +647,7 @@ export class MapsService {
     url.searchParams.set('language', 'fr');
     url.searchParams.set('key', this.apiKey);
 
+    this.compteur.compter('geocodage_inverse');
     try {
       const data = await this.googleFetch<{
         status: string;
@@ -511,6 +704,7 @@ export class MapsService {
     if (params.components) url.searchParams.set('components', params.components);
     if (params.sessionToken) url.searchParams.set('sessiontoken', params.sessionToken);
 
+    this.compteur.compter('saisie_adresse');
     try {
       const data = await this.googleFetch<{
         status: string;
@@ -749,6 +943,7 @@ export class MapsService {
 
     /** Télécharge et rapporte l'avertissement que Google glisse en en-tête. */
     const telecharger = async (url: string) => {
+      this.compteur.compter('vignette');
       const reponse = await fetch(url);
       if (!reponse.ok) {
         this.logger.warn(`[Maps] StaticRoute HTTP ${reponse.status}`);
@@ -815,6 +1010,7 @@ export class MapsService {
     url.searchParams.set('key', this.apiKey);
     if (sessionToken) url.searchParams.set('sessiontoken', sessionToken);
 
+    this.compteur.compter('details_lieu');
     try {
       const data = await this.googleFetch<{
         status: string;
