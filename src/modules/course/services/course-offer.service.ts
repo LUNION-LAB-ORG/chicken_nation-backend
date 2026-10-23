@@ -632,7 +632,8 @@ export class CourseOfferService {
     const settings = await this.settings.load();
     // Planificateur v2 : Turbo (compté depuis la commande prête) et nouvelles
     // offres sont décidés par lui ; ici restent l'alerte et l'expiration.
-    const planificateur = await this.settings.planificateurLu();
+    const lue = await this.settings.lirePlanification();
+    const planificateur = lue.planificateur;
     const now = new Date();
 
     const waiting = await this.prisma.course.findMany({
@@ -746,9 +747,16 @@ export class CourseOfferService {
 
       // 3. Alerte staff — UNE SEULE FOIS, y compris avec 2 backends : le claim
       //    atomique (`no_deliverer_alerted_at: null`) désigne un seul gagnant.
+      //    Sous v2, Turbo passe 6 min après la commande prête : la cloche
+      //    attend qu'il ait eu sa chance (une minute de plus), comme sous v1
+      //    où Turbo (4 min) passait avant elle (5 min). Turbo refuse : elle sonne.
+      const seuilAlerteMin =
+        v2 && lue.planification.reglages.turboActif
+          ? Math.max(settings.noDelivererAlertAfterMin, lue.planification.reglages.turboApresMinV2 + 1)
+          : settings.noDelivererAlertAfterMin;
       if (
         !course.no_deliverer_alerted_at &&
-        waitingMin >= settings.noDelivererAlertAfterMin
+        waitingMin >= seuilAlerteMin
       ) {
         const alertClaim = await this.prisma.course.updateMany({
           where: { id: course.id, no_deliverer_alerted_at: null },

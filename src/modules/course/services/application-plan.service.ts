@@ -755,8 +755,8 @@ export class ApplicationPlanService {
    * Ce que le livreur doit sentir (vibration et notification sur le canal des
    * offres) : UNE notification par course et par passage, la plus utile
    *  1. commande retirée à son départ ;
-   *  2. tout est prêt (retenue levée, livreur pas parti) ;
-   *  3. attente posée (« Attends 3 min ») ;
+   *  2. tout est prêt (retenue levée, livreur au comptoir, pas parti) ;
+   *  3. attente posée (« Attends 3 min », livreur au comptoir) ;
    *  4. commande(s) ajoutée(s).
    * Course encore en recherche avec une offre en attente : l'offre à jour est
    * renvoyée au livreur sollicité, même échéance (l'appli remplace l'offre).
@@ -789,9 +789,15 @@ export class ApplicationPlanService {
       return;
     }
 
+    // Course acceptée, livreur encore en route : ni « Attends 4 min » (il
+    // croirait devoir attendre avant de rouler) ni « Tout est prêt » (la
+    // retenue ne lui a jamais été annoncée). La retenue en cours lui est
+    // annoncée à son arrivée au comptoir (RetenueALArriveeListener), minutes
+    // comptées de là ; une commande ajoutée lui est toujours annoncée.
+    const enRoute = course.statut === CourseStatut.ACCEPTED;
     const liberation = p.liberations.get(course.id);
     const pasParti = course.statut !== CourseStatut.IN_DELIVERY || !course.parti_at;
-    if (liberation && liberationAAnnoncer(liberation) && pasParti) {
+    if (liberation && liberationAAnnoncer(liberation) && pasParti && !enRoute) {
       const texte = texteToutEstPret({ code: course.pickup_code, total });
       this.push.notifyCourseToutPret({
         delivererId: livreur,
@@ -803,7 +809,7 @@ export class ApplicationPlanService {
       return;
     }
 
-    const retenue = p.retenues.get(course.id);
+    const retenue = enRoute ? undefined : p.retenues.get(course.id);
     if (retenue) {
       const texte = texteRetenue({ jusqua: retenue.jusqua, maintenant: p.maintenant });
       this.push.notifyCourseAttente({

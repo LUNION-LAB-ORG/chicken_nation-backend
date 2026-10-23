@@ -16,6 +16,7 @@ import { DispatchListener } from './listeners/dispatch.listener';
 import { OrderBridgeListenerService } from './listeners/order-bridge.listener.service';
 import { PlanificateurListener } from './listeners/planificateur.listener';
 import { RemiseCaisseListener } from './listeners/remise-caisse.listener';
+import { RetenueALArriveeListener } from './listeners/retenue-a-l-arrivee.listener';
 import { AnnulationAutoService } from './services/annulation-auto.service';
 import { CourseActionService } from './services/course-action.service';
 import { CourseEnLivraisonService } from './services/course-en-livraison.service';
@@ -81,6 +82,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     RemiseCaisseListener, // Commande passée PICKED_UP hors code → course en livraison
     PlanificateurListener, // Événements qui demandent un passage du planificateur v2
     LivraisonVersLivreurListener, // Livraison changée : `course:statut:changed` au livreur
+    RetenueALArriveeListener, // Retenue d'une course acceptée annoncée à l'arrivée au comptoir
     // Cron
     CourseTask,
     CourseBatchTask, // Phase P3 : flush des batches matures toutes les 10 s

@@ -8,6 +8,7 @@ import type { DelivererLocationUpdatedPayload } from 'src/modules/deliverers/eve
 
 import { CourseEvent } from '../events/course.event';
 import { estArrive, RAYON_ARRIVEE_CLIENT_M, RAYON_ARRIVEE_RESTAURANT_M } from '../helpers/arrivee-auto.rules';
+import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { parseOrderLatLng } from '../helpers/geo.helper';
 import { DispatchJournalService } from './dispatch-journal.service';
@@ -28,6 +29,10 @@ import { DispatchJournalService } from './dispatch-journal.service';
  * au même instant, un seul des deux passe, l'autre ne fait rien (et les
  * routes du livreur répondent sans erreur à une arrivée déjà enregistrée).
  *
+ * Planificateur v2 seulement : un restaurant repassé en v1
+ * (`course.planificateur`) retrouve exactement le comportement d'avant, où
+ * seule l'appli déclare ces arrivées.
+ *
  * N'échoue jamais : le flux des positions ne doit pas être gêné.
  */
 @Injectable()
@@ -38,7 +43,13 @@ export class ArriveeAutoService {
     private readonly prisma: PrismaService,
     private readonly courseEvent: CourseEvent,
     private readonly journal: DispatchJournalService,
+    private readonly settings: CourseSettingsHelper,
   ) {}
+
+  /** Restaurant en v2 ? Lu seulement quand une arrivée est sur le point d'être déclarée. */
+  private async enV2(restaurantId: string): Promise<boolean> {
+    return (await this.settings.versionPour(restaurantId).catch(() => 'v2' as const)) === 'v2';
+  }
 
   @OnEvent(DelivererChannels.DELIVERER_LOCATION_UPDATED)
   async onPosition(payload: DelivererLocationUpdatedPayload): Promise<void> {
@@ -83,6 +94,7 @@ export class ArriveeAutoService {
       if (!estArrive({ position, precisionM: payload.accuracyM, cible: restaurant, rayonM: RAYON_ARRIVEE_RESTAURANT_M })) {
         return null;
       }
+      if (!(await this.enV2(course.restaurant_id))) return null;
       const { count } = await this.prisma.course.updateMany({
         where: { id: course.id, deliverer_id: payload.delivererId, statut: CourseStatut.ACCEPTED },
         data: { statut: CourseStatut.AT_RESTAURANT, at_restaurant_at: maintenant },
@@ -113,6 +125,7 @@ export class ArriveeAutoService {
     if (!estArrive({ position, precisionM: payload.accuracyM, cible: client, rayonM: RAYON_ARRIVEE_CLIENT_M })) {
       return null;
     }
+    if (!(await this.enV2(course.restaurant_id))) return null;
     const { count } = await this.prisma.delivery.updateMany({
       where: {
         id: livraison.id,

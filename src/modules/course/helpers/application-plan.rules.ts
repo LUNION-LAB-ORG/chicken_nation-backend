@@ -98,6 +98,14 @@ export function lireCommandesAttendues(valeur: unknown): string[] {
     .filter((id): id is string => typeof id === 'string' && id.length > 0);
 }
 
+/** Références des commandes attendues, depuis la colonne JSON (pour la notification du livreur). */
+export function referencesAttendues(valeur: unknown): string[] {
+  if (!Array.isArray(valeur)) return [];
+  return valeur
+    .map((v) => (v && typeof v === 'object' ? (v as { reference?: unknown }).reference : null))
+    .filter((r): r is string => typeof r === 'string' && r.length > 0);
+}
+
 // ─── Textes vus par le livreur (courts, tutoiement, chiffres) ───────────────
 
 /** « 12 h 34 » (heure d'Abidjan = UTC). */

@@ -35,7 +35,7 @@ afterEach(() => {
 const aLEst = (metres: number) => ({ lat: RESTAURANT.lat, lng: RESTAURANT.lng + (metres / 1000) * KM_LNG });
 
 function arrivees(t: ReturnType<typeof monter>) {
-  return new ArriveeAutoService(t.base.prisma, t.courseEvent, new DispatchJournalService(t.base.prisma));
+  return new ArriveeAutoService(t.base.prisma, t.courseEvent, new DispatchJournalService(t.base.prisma), t.settings);
 }
 
 describe('règles pures', () => {
@@ -101,6 +101,25 @@ describe('arrivée au restaurant déduite de la position', () => {
     const { d1, k, t } = enRoute();
     expect(await arrivees(t).surPosition({ delivererId: d1.id, ...aLEst(50), accuracyM: 300 })).toBeNull();
     expect(k.statut).toBe(CourseStatut.ACCEPTED);
+  });
+
+  it('restaurant repassé en v1 : aucune arrivée déduite des positions, comme avant (relecture)', async () => {
+    const d1 = livreur({ ...LOIN, last_available_at: null, protocole_appli: 3 });
+    const a = prete({ status: OrderStatus.PICKED_UP, picked_up_at: avant(600) });
+    const k = course({ statut: CourseStatut.ACCEPTED, deliverer_id: d1.id, assigned_at: avant(300), created_at: avant(400) });
+    const la = livraison({ course_id: k.id, order_id: a.id });
+    const t = monter({ commandes: [a], courses: [k], livraisons: [la], livreurs: [d1] }, { reglages: { 'course.planificateur': 'v1' } });
+
+    expect(await arrivees(t).surPosition({ delivererId: d1.id, ...aLEst(50), accuracyM: 10 })).toBeNull();
+    expect(k.statut).toBe(CourseStatut.ACCEPTED);
+
+    // En livraison, à 50 m du client : rien non plus.
+    k.statut = CourseStatut.IN_DELIVERY;
+    la.statut = DeliveryStatut.IN_ROUTE;
+    expect(await arrivees(t).surPosition({ delivererId: d1.id, ...aLEst(1950), accuracyM: 10 })).toBeNull();
+    expect(la.statut).toBe(DeliveryStatut.IN_ROUTE);
+    expect(t.journalDe('ARRIVEE_RESTAURANT_AUTO')).toHaveLength(0);
+    expect(t.journalDe('ARRIVEE_CLIENT_AUTO')).toHaveLength(0);
   });
 
   it('l’appli déclare l’arrivée au même instant : un seul passage, pas d’erreur', async () => {

@@ -1175,6 +1175,11 @@ export class OrderService {
     this.orderHelper.validateStatusTransition(order.type, order.status, status, {
       allowCancelFromAnyStatus: isAdmin,
     });
+    // Déjà remise au livreur (code de retrait, autre caisse) : rien à refaire,
+    // ni second événement, ni seconde annonce au livreur (relecture du 23/10).
+    if (status === OrderStatus.PICKED_UP && order.status === OrderStatus.PICKED_UP) {
+      throw new ConflictException('Cette commande est déjà remise au livreur.');
+    }
 
     /**
      * On ne lance pas la préparation des heures avant l'heure convenue.
@@ -1277,6 +1282,16 @@ export class OrderService {
      * client), elle aussi conditionnée au statut lu : si la commande a
      * changé de statut entre-temps, 409, le client relit et recommence.
      */
+    /**
+     * REMISE AU LIVREUR (bouton « Livreur a récupéré ») écrite seulement si la
+     * commande est encore dans l'état lu (relecture du 23/10) : la caisse qui
+     * saisit le code de retrait au même instant l'emporte, ce bouton reçoit
+     * 409 et rien n'est annoncé deux fois (ni journal, ni « Tout est récupéré »).
+     */
+    const conditionRemise: Prisma.OrderWhereInput | undefined =
+      status === OrderStatus.PICKED_UP && options.parLeClient !== true ? { status: order.status } : undefined;
+    const conditions = [options.conditionEcriture, conditionRemise].filter((c): c is Prisma.OrderWhereInput => !!c);
+
     let updatedOrder: Prisma.OrderGetPayload<{ include: typeof includeStatut }> | null = null;
     if (annulationDuPanierParLeClient) {
       const { count } = await this.prisma.order.updateMany({
@@ -1305,7 +1320,7 @@ export class OrderService {
           where: {
             id: order.id,
             ...(options.parLeClient === true && { status: order.status }),
-            ...(options.conditionEcriture && { AND: [options.conditionEcriture] }),
+            ...(conditions.length > 0 && { AND: conditions }),
           },
           data: donnees,
           include: includeStatut,
@@ -1317,7 +1332,7 @@ export class OrderService {
               'Cette commande vient de changer : actualisez-la avant de l\'annuler.',
             );
           }
-          if (options.conditionEcriture) {
+          if (conditions.length > 0) {
             throw new ConflictException('Cette commande vient de changer\u00a0: actualisez la liste.');
           }
         }
