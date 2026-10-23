@@ -324,6 +324,9 @@ describe('retenue au comptoir puis ajout dès que la commande est prête (3.5, 3
       expect.objectContaining({ titre: 'Tout est prêt', corps: `2 commandes · code ${k.pickup_code}` }),
     );
     expect(t.push.notifyCommandeAjoutee).not.toHaveBeenCalled();
+    // L'événement du passage annonce l'ajout (raison la plus utile), pas la levée de la retenue.
+    const evenements = t.emisSur(CourseChannels.COURSE_STATUT_CHANGED).filter((e) => e.course.id === k.id);
+    expect(evenements[evenements.length - 1]).toMatchObject({ reason: 'COMMANDE_AJOUTEE' });
   });
 });
 

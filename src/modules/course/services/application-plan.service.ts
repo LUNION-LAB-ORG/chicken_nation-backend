@@ -604,7 +604,8 @@ export class ApplicationPlanService {
       data: { retenue_jusqua: a.jusqua, commandes_attendues: commandesAttenduesAEcrire(a.attendues) as unknown as Prisma.InputJsonValue },
     });
     if (count !== 1) throw new ActionAbandonnee('COURSE_CHANGEE');
-    p.touchees.set(a.course_id, RaisonsPlanificateur.RETENUE);
+    // Raison secondaire : un ajout ou une fusion du même passage reste la raison annoncée.
+    if (!p.touchees.has(a.course_id)) p.touchees.set(a.course_id, RaisonsPlanificateur.RETENUE);
     await this.journal.ecrire({
       type: 'COURSE_RETENUE',
       source: 'serveur',
@@ -629,7 +630,9 @@ export class ApplicationPlanService {
       data: { retenue_jusqua: a.jusqua, commandes_attendues: [] },
     });
     if (count !== 1) throw new ActionAbandonnee('COURSE_CHANGEE');
-    p.touchees.set(a.course_id, RaisonsPlanificateur.RETENUE_LEVEE);
+    // Raison secondaire : la commande attendue ajoutée dans le même passage
+    // reste la raison annoncée (l'écran Opérations en fait son avis « ajoutée »).
+    if (!p.touchees.has(a.course_id)) p.touchees.set(a.course_id, RaisonsPlanificateur.RETENUE_LEVEE);
     await this.journal.ecrire({
       type: 'RETENUE_LEVEE',
       motif: a.motif,
