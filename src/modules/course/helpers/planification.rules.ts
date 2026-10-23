@@ -38,6 +38,11 @@
  *     d'abord ; puis livreur encore au restaurant après le retrait, au
  *     comptoir, en route, puis course sans livreur ; à égalité le plus petit
  *     détour), sinon regroupement glouton des restantes et CRÉATION de course.
+ *     Jamais vers une course que tous les livreurs libres ont déjà refusée
+ *     (la commande seule leur est proposée), ni vers une course récupérée à
+ *     moins de 90 s de la fin de sa fenêtre. Personne de libre : le départ
+ *     est le premier retour estimé d'un livreur en course (le retard toléré
+ *     joue), et regrouper n'avance pas la bascule vers Turbo d'une commande.
  *  3. FUSIONS (demande 4) : une course sans livreur rejoint une course ouverte
  *     avec livreur, ou une autre course sans livreur, de la même direction et
  *     dans les limites ; l'offre en attente de la course absorbée est close
@@ -45,7 +50,9 @@
  *  4. ORDRE des arrêts de chaque course modifiée.
  *  5. OFFRES : les courses sans livreur et sans offre sont proposées par
  *     urgence croissante, chacune au meilleur livreur libre (au comptoir
- *     d'abord, puis en minutes, 4.2).
+ *     d'abord, puis en minutes, 4.2). Une offre en attente qui vise un
+ *     livreur à plus de 5 min de plus qu'un livreur libre est reprise sans
+ *     pénalité et proposée à ce dernier (zéro temps mort).
  *  6. RETENUES au comptoir (3.5) : posées, réduites ou levées. Une retenue ne
  *     peut que diminuer ; levée, elle ne revient jamais sur la même course.
  *  7. TURBO (3.11) : dernier recours, compté depuis la plus ancienne commande
@@ -121,6 +128,30 @@ export const HEURES_DE_POINTE: readonly [number, number][] = [
   [11 * 60 + 30, 14 * 60 + 30],
   [18 * 60 + 30, 22 * 60],
 ];
+/**
+ * Ajout après le retrait : jamais à moins de 90 s de la fin de la fenêtre
+ * (le temps que la caisse remette le sac). Une retenue au comptoir finit
+ * aussi 90 s avant : au-delà, la commande attendue ne pourrait plus être
+ * ajoutée et le livreur aurait attendu pour rien.
+ */
+export const MARGE_REMISE_APRES_RETRAIT_S = 90;
+/**
+ * Fin de la fenêtre repoussée d'au plus 2 min tant qu'une commande ajoutée
+ * reste à remettre et que le livreur est encore au comptoir (position de
+ * moins d'une minute dans le rayon de départ) : il attend son sac.
+ */
+export const PROLONGATION_REMISE_S = 120;
+export const FRAICHEUR_POSITION_COMPTOIR_S = 60;
+/**
+ * Turbo (3.11) : regrouper des commandes qui attendent un livreur n'avance
+ * pas de plus d'une minute la bascule vers Turbo d'aucune d'elles.
+ */
+export const TOLERANCE_AVANCE_TURBO_S = 60;
+/**
+ * Offre en attente reprise sans pénalité et reproposée quand un livreur libre
+ * serait au restaurant plus de 5 min plus tôt que le livreur sollicité.
+ */
+export const ECART_REPRISE_OFFRE_S = 300;
 
 // ─── Réglages ────────────────────────────────────────────────────────────────
 
@@ -465,7 +496,13 @@ export type MotifRefusPlanification =
   | 'ATTENTE_COMMANDE_PRETE'
   | 'HORIZON'
   | 'LIMITE_RETENUE'
-  | 'AUTRE_LIVREUR_LIBRE';
+  | 'AUTRE_LIVREUR_LIBRE'
+  /** Course récupérée : moins de 90 s avant la fin de sa fenêtre d'ajout. */
+  | 'FIN_DE_FENETRE'
+  /** Course sans livreur que tous les livreurs libres ont déjà refusée ou laissée expirer. */
+  | 'DEJA_REFUSEE'
+  /** Regrouper avancerait la bascule vers Turbo d'une commande. */
+  | 'AVANCE_TURBO';
 
 export interface ActionMarquerParti {
   type: 'MARQUER_PARTI';
@@ -564,6 +601,22 @@ export interface ActionOffrir {
   libelle: string;
 }
 
+/**
+ * Offre en attente reprise sans pénalité (zéro temps mort, demande 4) : un
+ * livreur libre serait au restaurant bien plus tôt que le livreur sollicité.
+ * Suivie, dans le même plan, de l'OFFRIR au livreur libre. Si le livreur
+ * sollicité accepte au même instant, son acceptation l'emporte : la reprise
+ * et la nouvelle offre sont abandonnées.
+ */
+export interface ActionReprendreOffre {
+  type: 'REPRENDRE_OFFRE';
+  course_id: string;
+  offre: OffrePlanif;
+  /** Livreur libre qui reçoit la course à la place. */
+  pour_deliverer_id: string;
+  libelle: string;
+}
+
 export interface CommandeAttendue {
   order_id: string;
   reference: string;
@@ -609,6 +662,7 @@ export type ActionPlanification =
   | ActionFusionner
   | ActionOrdonner
   | ActionOffrir
+  | ActionReprendreOffre
   | ActionRetenir
   | ActionLiberer
   | ActionConfierTurbo;
@@ -798,7 +852,14 @@ function ordreFile(a: LivreurPlanif, b: LivreurPlanif): number {
   return ta - tb || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
-export type FenetreApresRetrait = { ouverte: true; ferme_a: Date } | { ouverte: false; motif: MotifDepart };
+/**
+ * `prolongee` : la fenêtre est échue mais une commande ajoutée reste à
+ * remettre au livreur, encore au comptoir ; la course attend son sac (plus
+ * aucun ajout ni retenue).
+ */
+export type FenetreApresRetrait =
+  | { ouverte: true; ferme_a: Date; prolongee?: boolean }
+  | { ouverte: false; motif: MotifDepart };
 
 const STATUTS_LIVRAISON_TERMINEE: DeliveryStatut[] = [
   DeliveryStatut.DELIVERED,
@@ -816,7 +877,11 @@ const STATUTS_LIVRAISON_TERMINEE: DeliveryStatut[] = [
  *  - aucune livraison commencée (avec la nouvelle appli, la première ne
  *    démarre qu'au départ) ;
  *  - aucune position, reçue après le retrait, à plus du rayon de départ ;
- *  - retrait il y a moins de la fenêtre (240 s).
+ *  - retrait il y a moins de la fenêtre (240 s) ; au-delà, la course reste
+ *    au comptoir au plus 2 min de plus si une commande ajoutée n'est pas
+ *    encore remise et que le livreur y est encore (position de moins d'une
+ *    minute dans le rayon de départ) : sinon elle lui serait retirée sous
+ *    les yeux pendant qu'il attend son sac.
  */
 export function fenetreApresRetrait(
   course: Pick<CoursePlanif, 'statut' | 'parti_at' | 'picked_up_at' | 'livraisons'>,
@@ -843,8 +908,42 @@ export function fenetreApresRetrait(
     return { ouverte: false, motif: 'POSITION' };
   }
   const fermeA = course.picked_up_at.getTime() + r.ajoutApresRetraitMaxS * 1000;
-  if (fermeA <= maintenant.getTime()) return { ouverte: false, motif: 'FENETRE_ECHUE' };
+  if (fermeA <= maintenant.getTime()) {
+    const prolongee = attendSonSac({
+      fermeAMs: fermeA,
+      maintenant,
+      sacAttendu: course.livraisons.some(estAjoutNonRemis),
+      position: livreur.position,
+      position_at: livreur.position_at,
+      restaurant,
+      departRayonM: r.departRayonM,
+    });
+    return prolongee ? { ouverte: true, ferme_a: new Date(fermeA), prolongee: true } : { ouverte: false, motif: 'FENETRE_ECHUE' };
+  }
   return { ouverte: true, ferme_a: new Date(fermeA) };
+}
+
+/**
+ * Fenêtre d'ajout échue (`fermeAMs`), mais la course attend encore son sac :
+ * une commande ajoutée après le retrait reste à remettre et le livreur est
+ * encore au comptoir (position de moins d'une minute, dans le rayon de
+ * départ). Elle reste au comptoir au plus `PROLONGATION_REMISE_S` de plus.
+ * Règle partagée avec l'écran Opérations (`fenetre_ajout_ferme_a`).
+ */
+export function attendSonSac(p: {
+  fermeAMs: number;
+  maintenant: Date;
+  sacAttendu: boolean;
+  position: ILatLng | null;
+  position_at: Date | null;
+  restaurant: ILatLng | null;
+  departRayonM: number;
+}): boolean {
+  const t = p.maintenant.getTime();
+  if (!p.sacAttendu || t < p.fermeAMs || t >= p.fermeAMs + PROLONGATION_REMISE_S * 1000) return false;
+  if (!p.restaurant || !p.position || !p.position_at) return false;
+  if (t - p.position_at.getTime() > FRAICHEUR_POSITION_COMPTOIR_S * 1000) return false;
+  return haversineMeters(p.position, p.restaurant) <= p.departRayonM;
 }
 
 export interface DecisionTurbo {
@@ -1023,6 +1122,8 @@ interface Contexte {
   clients: Map<string, ClientDirection>;
   verdicts: Map<string, VerdictPaire>;
   verdictDe: (a: ClientDirection, b: ClientDirection) => VerdictPaire;
+  /** Premier retour estimé d'un livreur en course (calculé une fois par passage). */
+  retour?: number | null;
 }
 
 function creerContexte(inst: InstantanePlanification, r: ReglagesPlanification, options: OptionsPlanification): Contexte {
@@ -1145,18 +1246,36 @@ function evaluerAjout(
     departSeulMs: number | null;
     attente: { premierePreteMs: number } | null;
     /**
-     * Le départ de la course est connu (livreur affecté, offre en attente ou
-     * livreur libre). Faux : personne ne peut la prendre, le départ n'est
-     * qu'une supposition ; toutes ses commandes attendent un livreur et la
-     * regrouper ne fait que mieux employer le premier qui se libère. Le
+     * Le départ de la course est connu (livreur affecté, offre en attente,
+     * livreur libre) ou estimé (premier retour d'un livreur en course). Faux :
+     * personne ne peut la prendre et aucun retour n'est estimable, le départ
+     * n'est qu'une supposition ; toutes ses commandes attendent un livreur et
+     * la regrouper ne fait que mieux employer le premier qui se libère. Le
      * détour maximal joue toujours, le retard des commandes déjà prévues non.
      */
     departConnu: boolean;
+    /**
+     * Le groupe attendra un livreur (personne de libre ne peut le prendre) :
+     * le regrouper ne doit pas avancer la bascule vers Turbo (3.11) d'une
+     * partie du groupe de plus d'une minute, sauf si le premier livreur
+     * attendu (`retourMs`) revient avant cette bascule. Turbo dégroupe (une
+     * course par commande) : le regroupement n'y gagne rien.
+     */
+    attendLivreur?: { retourMs: number | null } | null;
   },
 ): ResultatAjout {
   const r = ctx.r;
   const tous = [...p.existants, ...p.nouveaux];
   if (tous.length > r.maxCommandesParCourse) return { ok: false, refus: 'TAILLE', libelle: 'course pleine' };
+  if (p.attendLivreur && r.turboActif && p.existants.length > 0 && p.nouveaux.length > 0) {
+    const bascule = (arrets: readonly Arret[]) => plusAnciennePrete(ctx, arrets) + r.turboApresMinV2 * 60_000;
+    const [bE, bN] = [bascule(p.existants), bascule(p.nouveaux)];
+    const groupe = Math.min(bE, bN);
+    const retour = p.attendLivreur.retourMs;
+    if (Math.max(bE, bN) - groupe > TOLERANCE_AVANCE_TURBO_S * 1000 && (retour === null || retour > groupe)) {
+      return { ok: false, refus: 'AVANCE_TURBO', libelle: 'partirait plus tôt chez Turbo' };
+    }
+  }
   if (
     p.attente &&
     p.departSeulMs !== null &&
@@ -1251,19 +1370,89 @@ function etaMs(ctx: Contexte, delivererId: string | null): number {
   return (eta?.secondes ?? ctx.r.etaParDefautMin * 60) * 1000;
 }
 
-/** Départ au plus tôt avec un livreur libre (le plus proche), ou `null` sans livreur libre. */
-function departLibreMs(ctx: Contexte, enPlus: readonly string[] = []): number | null {
-  const ids = new Set([...ctx.libres, ...enPlus]);
-  if (ids.size === 0) return null;
-  return ctx.t + Math.min(...[...ids].map((id) => etaMs(ctx, id)));
+/**
+ * Départ au plus tôt avec un livreur libre (le plus proche), ou `null` sans
+ * livreur libre. `exclus` : livreurs qui ont déjà refusé ou laissé expirer
+ * la course (ils ne la recevront plus).
+ */
+function departLibreMs(ctx: Contexte, enPlus: readonly string[] = [], exclus: ReadonlySet<string> = new Set()): number | null {
+  const ids = [...new Set([...ctx.libres, ...enPlus])].filter((id) => !exclus.has(id));
+  if (ids.length === 0) return null;
+  return ctx.t + Math.min(...ids.map((id) => etaMs(ctx, id)));
 }
 
-/** Départ estimé d'une course ; `null` = sans livreur et aucun livreur libre. */
-function departCourse(ctx: Contexte, k: CourseTravail): number | null {
+/**
+ * Personne de libre : retour au restaurant le plus proche d'un livreur en
+ * course (ni en pause, ni hors service), estimé sans Google
+ * (`retourAuRestaurantMs`). `null` si aucun retour n'est estimable.
+ */
+function retourEstimeMs(ctx: Contexte): number | null {
+  if (ctx.retour !== undefined) return ctx.retour;
+  let premier: number | null = null;
+  for (const l of ctx.instantane.livreurs) {
+    if (ctx.libres.has(l.id)) continue;
+    if (estEnPause(l.etat, ctx.maintenant) || estEnPauseAuto(l.etat, ctx.maintenant)) continue;
+    const sa = ctx.instantane.courses.find(
+      (c) =>
+        c.deliverer_id === l.id &&
+        (c.statut === CourseStatut.ACCEPTED || c.statut === CourseStatut.AT_RESTAURANT || c.statut === CourseStatut.IN_DELIVERY),
+    );
+    if (!sa) continue;
+    const retour = retourAuRestaurantMs(sa, l, ctx.restaurant, ctx.r, ctx.maintenant, etaMs(ctx, l.id));
+    if (retour !== null && (premier === null || retour < premier)) premier = retour;
+  }
+  ctx.retour = premier;
+  return premier;
+}
+
+/**
+ * Premier retour estimé d'un livreur en course, s'il arrive avant que ces
+ * commandes ne partent chez Turbo (plus ancienne prête + 6 min) ; sinon
+ * `null` : Turbo les prendra (une course par commande), leur départ interne
+ * n'est qu'une supposition.
+ */
+function retourAvantTurbo(ctx: Contexte, arrets: readonly Arret[]): number | null {
+  const retour = retourEstimeMs(ctx);
+  if (retour === null || arrets.length === 0) return retour;
+  if (ctx.r.turboActif && retour > plusAnciennePrete(ctx, arrets) + ctx.r.turboApresMinV2 * 60_000) return null;
+  return retour;
+}
+
+/**
+ * Départ estimé d'une course. Sans livreur ni offre : le livreur libre le
+ * plus proche qui ne l'a pas déjà refusée ; personne de libre : le premier
+ * retour estimé d'un livreur en course, s'il précède la bascule vers Turbo
+ * (le retard toléré joue alors aussi, 3.6). `null` = personne ne peut la
+ * prendre avant Turbo, ou aucun retour n'est estimable.
+ */
+function departCourse(ctx: Contexte, k: CourseTravail, enPlus: readonly string[] = []): number | null {
   if (k.statut === CourseStatut.IN_DELIVERY || k.statut === CourseStatut.AT_RESTAURANT) return ctx.t;
   if (k.statut === CourseStatut.ACCEPTED) return ctx.t + etaMs(ctx, k.delivererId);
   if (k.offre) return ctx.t + etaMs(ctx, k.offre.deliverer_id);
-  return departLibreMs(ctx);
+  return departLibreMs(ctx, enPlus, k.dejaSollicites) ?? retourAvantTurbo(ctx, k.arrets);
+}
+
+/**
+ * Course sans livreur ni offre qui attend un livreur : aucun livreur libre
+ * (hors ceux qui l'ont déjà refusée) ne peut la prendre maintenant.
+ */
+function attendUnLivreur(ctx: Contexte, k: CourseTravail, enPlus: readonly string[] = []): boolean {
+  return k.categorie === 3 && !k.offre && departLibreMs(ctx, enPlus, k.dejaSollicites) === null;
+}
+
+/**
+ * Course sans livreur ni offre que tous les livreurs libres ont déjà refusée
+ * ou laissée expirer : elle ne sera proposée à aucun d'eux. Elle n'est la
+ * cible d'aucun ajout ni d'aucune fusion (la commande ou la course neuve, elle,
+ * peut leur être proposée tout de suite).
+ */
+function refuseeParLesLibres(ctx: Contexte, k: CourseTravail, enPlus: readonly string[] = []): boolean {
+  return attendUnLivreur(ctx, k, enPlus) && departLibreMs(ctx, enPlus) !== null;
+}
+
+/** Course récupérée (catégorie 0) à moins de 90 s de la fin de sa fenêtre : elle ne grossit plus. */
+function finDeFenetreProche(ctx: Contexte, k: CourseTravail): boolean {
+  return k.categorie === 0 && (k.fenetreFermeMs === null || k.fenetreFermeMs - ctx.t < MARGE_REMISE_APRES_RETRAIT_S * 1000);
 }
 
 const departOuDefaut = (ctx: Contexte, d: number | null) => d ?? ctx.t + ctx.r.etaParDefautMin * 60_000;
@@ -1387,10 +1576,18 @@ export function planifier(
 
   const restantes: Arret[] = [];
   for (const q of pretes) {
-    const departSeul = departLibreMs(ctx);
+    const departSeul = departLibreMs(ctx) ?? retourAvantTurbo(ctx, [q]);
     let meilleur: { k: CourseTravail; res: Extract<ResultatAjout, { ok: true }>; cle: number[]; attendue: boolean } | null = null;
     for (const k of ouvertes) {
       if (k.categorie === null || k.absorbee) continue;
+      if (finDeFenetreProche(ctx, k)) {
+        refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: 'FIN_DE_FENETRE', libelle: 'fenêtre d’ajout presque finie' });
+        continue;
+      }
+      if (refuseeParLesLibres(ctx, k)) {
+        refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: 'DEJA_REFUSEE', libelle: 'déjà refusée par les livreurs libres' });
+        continue;
+      }
       const attendue = !!k.source?.commandes_attendues.includes(q.id);
       const dk = departCourse(ctx, k);
       const depart = departOuDefaut(ctx, dk);
@@ -1402,6 +1599,7 @@ export function planifier(
         departSeulMs: departSeul,
         attente: { premierePreteMs: q.readyMs ?? t },
         departConnu: dk !== null,
+        attendLivreur: attendUnLivreur(ctx, k) ? { retourMs: retourAvantTurbo(ctx, k.arrets) } : null,
       });
       if (!res.ok) {
         refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: res.refus, libelle: res.libelle });
@@ -1439,7 +1637,9 @@ export function planifier(
     const graine = restantes.shift()!;
     const cle = `nouvelle-${nouvelles.length + 1}`;
     const departLibre = departLibreMs(ctx);
-    const depart = departOuDefaut(ctx, departLibre);
+    const retour = departLibre === null ? retourAvantTurbo(ctx, [graine]) : null;
+    const departEstime = departLibre ?? retour;
+    const depart = departOuDefaut(ctx, departEstime);
     let arrets: Arret[] = [graine];
     let derniere: Extract<ResultatAjout, { ok: true }> | null = null;
     for (let i = 0; i < restantes.length && arrets.length < r.maxCommandesParCourse; ) {
@@ -1448,9 +1648,10 @@ export function planifier(
         nouveaux: [restantes[i]],
         departAvantMs: depart,
         departApresMs: depart,
-        departSeulMs: departLibre === null ? null : depart,
+        departSeulMs: departEstime === null ? null : depart,
         attente: null,
-        departConnu: departLibre !== null,
+        departConnu: departEstime !== null,
+        attendLivreur: departLibre === null ? { retourMs: retour } : null,
       });
       if (res.ok) {
         arrets = reordonner([...arrets, restantes[i]], res.estimation.ordre);
@@ -1532,6 +1733,10 @@ export function planifier(
       let meilleureA: { k: CourseTravail; res: Extract<ResultatAjout, { ok: true }>; cle: number[] } | null = null;
       for (const k of ouvertes) {
         if (k === u || k.absorbee || k.categorie === null || k.categorie === 3) continue;
+        if (finDeFenetreProche(ctx, k)) {
+          refus.push({ essai: 'FUSION', order_id: null, source_id: u.cle, course_cle: k.cle, refus: 'FIN_DE_FENETRE', libelle: 'fenêtre d’ajout presque finie' });
+          continue;
+        }
         const depart = departOuDefaut(ctx, departCourse(ctx, k));
         const res = evaluerAjout(ctx, {
           existants: k.arrets,
@@ -1564,9 +1769,13 @@ export function planifier(
           [u, v],
           [v, u],
         ] as const) {
-          const departCible = cible.offre
-            ? ctx.t + etaMs(ctx, cible.offre.deliverer_id)
-            : departLibreMs(ctx, absorbee.offre ? [absorbee.offre.deliverer_id] : []);
+          // Le livreur sollicité par la course absorbée sera libre pour la cible.
+          const enPlus = absorbee.offre ? [absorbee.offre.deliverer_id] : [];
+          if (refuseeParLesLibres(ctx, cible, enPlus)) {
+            refus.push({ essai: 'FUSION', order_id: null, source_id: absorbee.cle, course_cle: cible.cle, refus: 'DEJA_REFUSEE', libelle: 'déjà refusée par les livreurs libres' });
+            continue;
+          }
+          const departCible = departCourse(ctx, cible, enPlus);
           const departAvant = departOuDefaut(ctx, departCourse(ctx, cible));
           const res = evaluerAjout(ctx, {
             existants: cible.arrets,
@@ -1576,6 +1785,7 @@ export function planifier(
             departSeulMs: departCourse(ctx, absorbee),
             attente: { premierePreteMs: plusAnciennePrete(ctx, absorbee.arrets) },
             departConnu: departCible !== null,
+            attendLivreur: attendUnLivreur(ctx, cible, enPlus) ? { retourMs: retourAvantTurbo(ctx, cible.arrets) } : null,
           });
           if (!res.ok) {
             refus.push({ essai: 'FUSION', order_id: null, source_id: absorbee.cle, course_cle: cible.cle, refus: res.refus, libelle: res.libelle });
@@ -1629,6 +1839,47 @@ export function planifier(
     });
   }
 
+  // ── 5 bis. Zéro temps mort : une offre en attente vise un livreur loin du
+  // restaurant alors qu'un livreur libre y serait plus de 5 min plus tôt.
+  // L'offre est reprise sans pénalité et la course proposée au livreur libre.
+  for (const k of ouvertes) {
+    if (k.categorie !== 3 || k.absorbee || !k.offre || !k.offre.id || k.arrets.length === 0) continue; // offre de ce passage : id vide
+    const vise = k.offre;
+    // Offre échue pas encore traitée : son expiration (avec sa pénalité)
+    // passe d'abord, puis la course est proposée au suivant.
+    if (vise.expires_at.getTime() <= t) continue;
+    // Position du livreur sollicité inconnue ou périmée : on ne sait pas qu'il est loin.
+    const etaVise = ctx.etas.get(vise.deliverer_id);
+    if (!etaVise || etaVise.source === 'DEFAUT') continue;
+    const candidats = [...ctx.libres]
+      .filter((id) => id !== vise.deliverer_id && !k.dejaSollicites.has(id))
+      .map((id) => ctx.livreurs.get(id)!);
+    if (candidats.length === 0) continue;
+    const [premier] = classerLivreurs(candidats, instantane.livreurs, ctx.etas, maintenant);
+    const gainMs = etaMs(ctx, vise.deliverer_id) - premier.eta_s * 1000;
+    if (gainMs <= ECART_REPRISE_OFFRE_S * 1000) continue;
+    ctx.libres.delete(premier.deliverer_id);
+    actions.push({
+      type: 'REPRENDRE_OFFRE',
+      course_id: k.id!,
+      offre: vise,
+      pour_deliverer_id: premier.deliverer_id,
+      libelle: `Reprise : un livreur arrive ${minutesTexte(gainMs)} plus tôt`,
+    });
+    k.offre = { id: '', deliverer_id: premier.deliverer_id, expires_at: maintenant };
+    actions.push({
+      type: 'OFFRIR',
+      course_cle: k.cle,
+      course_id: k.id,
+      deliverer_id: premier.deliverer_id,
+      marge_s: Math.round(margeMs(ctx, k.arrets) / 1000),
+      cout: premier,
+      libelle: premier.au_comptoir
+        ? 'Proposée au livreur au comptoir'
+        : `Proposée au livreur à ${minutesTexte(premier.eta_s * 1000)}`,
+    });
+  }
+
   // ── 6. Retenues au comptoir.
   const retenues = new Set<string>();
   const reservees = new Set<string>();
@@ -1651,7 +1902,8 @@ export function planifier(
     if (T !== null && T <= t) continue; // terminée : jamais reposée
     const dPossible = departOuDefaut(ctx, departCourse(ctx, k));
     let limite = Math.min(...k.arrets.map((a) => (a.readyMs ?? t) + r.attenteMaxCommandePreteS * 1000));
-    if (k.fenetreFermeMs !== null) limite = Math.min(limite, k.fenetreFermeMs);
+    // Après le retrait : la commande attendue doit pouvoir être ajoutée, puis remise.
+    if (k.fenetreFermeMs !== null) limite = Math.min(limite, k.fenetreFermeMs - MARGE_REMISE_APRES_RETRAIT_S * 1000);
     if (T !== null) limite = Math.min(limite, T);
     if (k.arrets.length === 0 || limite <= t || dPossible >= limite) continue;
 

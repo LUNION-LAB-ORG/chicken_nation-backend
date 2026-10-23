@@ -265,6 +265,7 @@ describe('R11 : livreur parti, plus aucun ajout', () => {
   it('fenêtre écoulée (4 min après le retrait) : partie au passage, première livraison démarrée par le serveur', async () => {
     const s = avecAjoutNonRemis();
     s.k.picked_up_at = avant(241);
+    s.d1.last_location_at = avant(90); // plus de position fraîche : rien ne dit qu'il attend au comptoir
     const t = monter(s.donnees);
 
     await t.passer();
@@ -275,6 +276,33 @@ describe('R11 : livreur parti, plus aucun ajout', () => {
     expect(t.livraisonsDe(s.k.id)).toEqual([expect.objectContaining({ order_id: s.a.id, statut: DeliveryStatut.IN_ROUTE })]);
     const autre = t.coursesOuvertes().find((k) => k.id !== s.k.id)!;
     expect(t.livraisonsDe(autre.id).map((l) => l.order_id)).toEqual([s.c.id]);
+  });
+
+  it('fenêtre écoulée, livreur toujours au comptoir avec un sac à prendre : la course l’attend 2 min de plus, la caisse remet le sac (relecture)', async () => {
+    const s = avecAjoutNonRemis();
+    s.k.picked_up_at = avant(241);
+    s.d1.last_location_at = avant(20); // position fraîche, au comptoir
+    const t = monter(s.donnees);
+
+    await t.passer();
+    expect(s.k.parti_at).toBeNull();
+    expect(t.livraisonsDe(s.k.id).map((l) => l.order_id)).toEqual([s.a.id, s.c.id]);
+    expect(t.push.notifyCommandeRetiree).not.toHaveBeenCalled();
+
+    // La caisse remet C avec le même code pendant la prolongation.
+    jest.setSystemTime(apres(60));
+    s.d1.last_location_at = new Date();
+    await saisirCode(t, s.k.pickup_code);
+    expect(s.c.status).toBe(OrderStatus.PICKED_UP);
+
+    // Sans remise, au-delà de 2 min de prolongation : parti, C retirée.
+    const s2 = avecAjoutNonRemis();
+    s2.k.picked_up_at = avant(241 + 120);
+    s2.d1.last_location_at = avant(5);
+    const t2 = monter(s2.donnees);
+    await t2.passer();
+    expect(t2.journalDe('COURSE_PARTIE')[0]).toMatchObject({ motif: 'FENETRE_ECHUE' });
+    expect(t2.livraisonsDe(s2.k.id).map((l) => l.order_id)).toEqual([s2.a.id]);
   });
 
   it('une commande ajoutée pas encore remise ne se démarre pas (409) ; « Je pars » la retire tout de suite', async () => {

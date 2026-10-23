@@ -28,7 +28,13 @@ export type MotifClotureOffre =
   /** La course ne cherche plus de livreur (acceptée par un autre, expirée…). */
   | 'COURSE_PLUS_EN_RECHERCHE'
   /** L'administrateur a forcé l'affectation de la course à un autre livreur. */
-  | 'AFFECTATION_FORCEE';
+  | 'AFFECTATION_FORCEE'
+  /**
+   * Planificateur : course reprise pour un livreur libre qui serait au
+   * restaurant bien plus tôt (zéro temps mort). Préfixe `COURSE_` : l'appli
+   * du livreur (déjà installée) vibre et affiche « Course retirée ».
+   */
+  | 'COURSE_REPRISE';
 
 export interface OptionsCloture {
   /**

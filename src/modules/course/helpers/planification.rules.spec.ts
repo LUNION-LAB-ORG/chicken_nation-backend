@@ -866,29 +866,68 @@ describe('ajout après le retrait (3.8) et départ', () => {
   });
 
   it('départ : la commande ajoutée pas encore remise est détachée et repart aussitôt', () => {
+    const avecAjoutNonRemis = () =>
+      crs('k', {
+        statut: CourseStatut.IN_DELIVERY,
+        deliverer_id: 'd1',
+        picked_up_at: h('12:30'),
+        livraisons: [
+          { id: 'l1', statut: DeliveryStatut.PENDING, sequence_order: 1, commande: cmd('o', { statut: OrderStatus.PICKED_UP }) },
+          {
+            id: 'l2',
+            statut: DeliveryStatut.PENDING,
+            sequence_order: 2,
+            ajoutee_apres_retrait: true,
+            commande: cmd('x', { est: 2300, ready_at: h('12:33') }),
+          },
+        ],
+      });
+    // Fenêtre échue, livreur sans position fraîche (on ne le sait pas au comptoir) : parti.
     const now = h('12:34:10');
-    const k = crs('k', {
-      statut: CourseStatut.IN_DELIVERY,
-      deliverer_id: 'd1',
-      picked_up_at: h('12:30'),
-      livraisons: [
-        { id: 'l1', statut: DeliveryStatut.PENDING, sequence_order: 1, commande: cmd('o', { statut: OrderStatus.PICKED_UP }) },
-        {
-          id: 'l2',
-          statut: DeliveryStatut.PENDING,
-          sequence_order: 2,
-          ajoutee_apres_retrait: true,
-          commande: cmd('x', { est: 2300, ready_at: h('12:33') }),
-        },
-      ],
-    });
     const plan = planifier(
-      instant(now, { courses: [k], livreurs: [d1(now), livr('d2', now, { auComptoir: true })] }),
+      instant(now, {
+        courses: [avecAjoutNonRemis()],
+        livreurs: [d1(now, { position_at: h('12:32') }), livr('d2', now, { auComptoir: true })],
+      }),
     );
     expect(types(plan)).toEqual(['MARQUER_PARTI', 'DETACHER', 'CREER_COURSE', 'OFFRIR']);
     expect(actionsDe(plan, 'DETACHER')[0]).toMatchObject({ course_id: 'k', order_id: 'x', motif: 'LIVREUR_PARTI' });
     expect(actionsDe(plan, 'CREER_COURSE')[0].order_ids).toEqual(['x']);
     expect(actionsDe(plan, 'OFFRIR')[0].deliverer_id).toBe('d2');
+
+    // Livreur encore au comptoir (position de 30 s) : il attend son sac, au plus 2 min de plus.
+    const attend = planifier(instant(now, { courses: [avecAjoutNonRemis()], livreurs: [d1(now), livr('d2', now, { auComptoir: true })] }));
+    expect(types(attend)).toEqual([]);
+    const tard = h('12:36:01');
+    const apres = planifier(instant(tard, { courses: [avecAjoutNonRemis()], livreurs: [d1(tard), livr('d2', tard, { auComptoir: true })] }));
+    expect(types(apres)).toEqual(['MARQUER_PARTI', 'DETACHER', 'CREER_COURSE', 'OFFRIR']);
+    expect(actionsDe(apres, 'MARQUER_PARTI')[0].motif).toBe('FENETRE_ECHUE');
+  });
+
+  it('fin de fenêtre : plus d’ajout ni de retenue à moins de 90 s, le sac a le temps d’être remis (relecture)', () => {
+    // Retrait à 12:30, fenêtre jusqu'à 12:34. À 12:32:35 (85 s avant) : la commande prête part seule.
+    const tard = h('12:32:35');
+    const plan = planifier(
+      instant(tard, { commandes: [cmd('q', { est: 2300, ready_at: tard })], courses: [recuperee()], livreurs: [d1(tard)] }),
+    );
+    expect(actionsDe(plan, 'AJOUTER')).toEqual([]);
+    expect(refusDe(plan, 'q', 'k')).toEqual(['FIN_DE_FENETRE']);
+    expect(actionsDe(plan, 'CREER_COURSE')[0].order_ids).toEqual(['q']);
+    // À 12:32:25 (95 s avant) : encore ajoutée.
+    const avant = h('12:32:25');
+    const ok = planifier(instant(avant, { commandes: [cmd('q', { est: 2300, ready_at: avant })], courses: [recuperee()], livreurs: [d1(avant)] }));
+    expect(actionsDe(ok, 'AJOUTER')[0]).toMatchObject({ course_id: 'k', apres_retrait: true });
+
+    // Retenue : jamais au-delà de la fin de la fenêtre moins 90 s (12:32:30).
+    const t0 = h('12:31');
+    const retenue = planifier(
+      instant(t0, { commandes: [enPrep('b', h('12:32:20'), { est: 2300 })], courses: [recuperee()], livreurs: [d1(t0)] }),
+    );
+    expect(actionsDe(retenue, 'RETENIR')[0]).toMatchObject({ course_id: 'k', jusqua: h('12:32:20') });
+    const tropTard = planifier(
+      instant(t0, { commandes: [enPrep('b', h('12:32:40'), { est: 2300 })], courses: [recuperee()], livreurs: [d1(t0)] }),
+    );
+    expect(actionsDe(tropTard, 'RETENIR')).toEqual([]);
   });
 
   it('départ : une commande de la course d’origine pas encore remise (bouton de la caisse) reste dans la course', () => {
@@ -1151,5 +1190,99 @@ describe('paires dont le service mesure la direction', () => {
     expect(cles).toEqual(
       ['a|b', 'a|d', 'b|d', 'a|e', 'a|f', 'b|e', 'b|f', 'd|e', 'd|f', 'e|f', 'a|g', 'b|g', 'd|g'].sort(),
     );
+  });
+});
+
+// ─── Relecture du 23/10 : constats corrigés ─────────────────────────────────
+
+describe('relecture du 23/10 : refus, Turbo, retard sans livreur libre, offre lointaine', () => {
+  const occupe = (id: string, t: Date) => livr(id, t, { etat: { en_course: true, last_available_at: null } });
+
+  it('commande prête jamais collée à une course que le seul livreur libre a refusée : elle lui est proposée seule', () => {
+    const t = h('12:36');
+    const k = crs('k', { commandes: [cmd('a', { ready_at: h('12:31'), est: 2000 })], created_at: h('12:31'), deja_sollicites: ['d1'] });
+    const plan = planifier(
+      instant(t, { commandes: [cmd('b', { ready_at: t, est: 2600 })], courses: [k], livreurs: [livr('d1', t, { auComptoir: true }), occupe('d2', t)] }),
+    );
+    expect(actionsDe(plan, 'AJOUTER')).toEqual([]);
+    expect(refusDe(plan, 'b', 'k')).toEqual(['DEJA_REFUSEE']);
+    expect(actionsDe(plan, 'CREER_COURSE')[0].order_ids).toEqual(['b']);
+    expect(actionsDe(plan, 'OFFRIR')).toEqual([expect.objectContaining({ course_cle: 'nouvelle-1', deliverer_id: 'd1' })]);
+  });
+
+  it('fusion (demande 4) : la course neuve devient la cible quand la plus ancienne a été refusée par le livreur libre', () => {
+    const t = h('12:33');
+    const u = crs('u', { commandes: [cmd('a', { ready_at: h('12:30'), est: 2000 })], created_at: h('12:30'), deja_sollicites: ['d1'] });
+    const v = crs('v', { commandes: [cmd('b', { ready_at: h('12:32:50'), est: 2500 })], created_at: h('12:32:50') });
+    const plan = planifier(instant(t, { courses: [u, v], livreurs: [livr('d1', t, { auComptoir: true }), occupe('d2', t)] }));
+    expect(actionsDe(plan, 'FUSIONNER')).toEqual([expect.objectContaining({ cible_id: 'v', absorbee_id: 'u' })]);
+    expect(actionsDe(plan, 'OFFRIR')).toEqual([expect.objectContaining({ course_id: 'v', deliverer_id: 'd1' })]);
+  });
+
+  it('Turbo : une commande prête n’est pas collée à une course sans livreur qui partira chez Turbo bien avant elle', () => {
+    const t = h('12:35');
+    const u = () => crs('u', { commandes: [cmd('a', { ready_at: h('12:30'), created_at: h('12:20'), est: 2000 })], created_at: h('12:30') });
+    const b = cmd('b', { ready_at: t, created_at: h('12:25'), est: 2500 });
+    const plan = planifier(instant(t, { commandes: [b], courses: [u()], livreurs: [occupe('d1', t), occupe('d2', t)] }));
+    expect(actionsDe(plan, 'AJOUTER')).toEqual([]);
+    expect(refusDe(plan, 'b', 'u')).toEqual(['AVANCE_TURBO']);
+    expect(actionsDe(plan, 'CREER_COURSE')[0].order_ids).toEqual(['b']);
+    // Turbo désactivé : le regroupement reprend.
+    const sansTurbo = planifier(instant(t, { commandes: [b], courses: [u()], livreurs: [occupe('d1', t), occupe('d2', t)] }), avec({ turboActif: false }));
+    expect(actionsDe(sansTurbo, 'AJOUTER')).toEqual([expect.objectContaining({ course_id: 'u', order_id: 'b' })]);
+  });
+
+  it('Turbo : regroupement permis quand le premier livreur revient avant la bascule', () => {
+    const t = h('12:35');
+    // D1 revient à vide, à 700 m : de retour vers 12:38:40 ; A part chez Turbo à 12:39 au plus tôt.
+    const k1 = crs('k1', {
+      statut: CourseStatut.IN_DELIVERY,
+      deliverer_id: 'd1',
+      picked_up_at: h('12:10'),
+      parti_at: h('12:11'),
+      livraisons: [{ id: 'l1', statut: DeliveryStatut.DELIVERED, sequence_order: 1, commande: cmd('x', { statut: OrderStatus.PICKED_UP, est: -1500 }) }],
+    });
+    const d1 = livr('d1', t, { aEst: -700, etat: { en_course: true, last_available_at: null } });
+    const u = crs('u', { commandes: [cmd('a', { ready_at: h('12:33'), created_at: h('12:20'), est: 2000 })], created_at: h('12:33') });
+    const plan = planifier(instant(t, { commandes: [cmd('b', { ready_at: t, created_at: h('12:25'), est: 2500 })], courses: [u, k1], livreurs: [d1] }));
+    expect(actionsDe(plan, 'AJOUTER')).toEqual([expect.objectContaining({ course_id: 'u', order_id: 'b' })]);
+  });
+
+  it('retard toléré : avec deux livreurs sur le retour, une fusion qui met un client en retard est refusée comme avec un livreur libre', () => {
+    const t = h('12:31');
+    const u = crs('u', { commandes: [cmd('a', { ready_at: h('12:30'), created_at: h('12:20'), est: 3000 })], created_at: h('12:30') });
+    const v = crs('v', { commandes: [cmd('b', { ready_at: h('12:31'), created_at: h('12:12'), est: 3800 })], created_at: h('12:31') });
+    const k1 = crs('k1', {
+      statut: CourseStatut.IN_DELIVERY,
+      deliverer_id: 'd1',
+      picked_up_at: h('12:10'),
+      parti_at: h('12:11'),
+      livraisons: [{ id: 'l1', statut: DeliveryStatut.DELIVERED, sequence_order: 1, commande: cmd('x', { statut: OrderStatus.PICKED_UP, est: -1500 }) }],
+    });
+    const enRetour = (id: string, est: number) => livr(id, t, { aEst: est, etat: { en_course: true, last_available_at: null } });
+    const plan = planifier(instant(t, { courses: [u, v, k1], livreurs: [enRetour('d1', -700), enRetour('d2', -900)] }));
+    expect(actionsDe(plan, 'FUSIONNER')).toEqual([]);
+    expect(plan.refus.some((x) => x.essai === 'FUSION' && x.refus === 'RETARD_CLIENT')).toBe(true);
+  });
+
+  it('zéro temps mort : l’offre d’un livreur loin est reprise pour le livreur au comptoir ; pas pour un écart de moins de 5 min', () => {
+    const t = h('12:31');
+    const offre = { id: 'o1', deliverer_id: 'd1', expires_at: h('12:32') };
+    const u = () => crs('u', { commandes: [cmd('a', { ready_at: h('12:30'), est: 2000 })], offre });
+    const loin = livr('d1', t, { aEst: -6000, etat: { offre_en_attente: true } });
+    const plan = planifier(instant(t, { courses: [u()], livreurs: [loin, livr('d2', t, { auComptoir: true })] }));
+    expect(types(plan)).toEqual(['REPRENDRE_OFFRE', 'OFFRIR']);
+    expect(actionsDe(plan, 'REPRENDRE_OFFRE')[0]).toMatchObject({ course_id: 'u', offre, pour_deliverer_id: 'd2' });
+    expect(actionsDe(plan, 'OFFRIR')[0]).toMatchObject({ course_id: 'u', deliverer_id: 'd2' });
+
+    // À 1 km (moins de 5 min de plus) : l'offre reste au livreur sollicité.
+    const proche = livr('d1', t, { aEst: -1000, etat: { offre_en_attente: true } });
+    expect(types(planifier(instant(t, { courses: [u()], livreurs: [proche, livr('d2', t, { auComptoir: true })] })))).toEqual([]);
+    // Livreur libre qui a déjà refusé la course : rien.
+    const refusee = { ...u(), deja_sollicites: ['d2'] };
+    expect(types(planifier(instant(t, { courses: [refusee], livreurs: [loin, livr('d2', t, { auComptoir: true })] })))).toEqual([]);
+    // Offre déjà échue (pas encore traitée) : son expiration passe d'abord, avec sa pénalité.
+    const echue = crs('u', { commandes: [cmd('a', { ready_at: h('12:30'), est: 2000 })], offre: { ...offre, expires_at: t } });
+    expect(types(planifier(instant(t, { courses: [echue], livreurs: [loin, livr('d2', t, { auComptoir: true })] })))).toEqual([]);
   });
 });

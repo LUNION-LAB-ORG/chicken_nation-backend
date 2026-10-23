@@ -40,6 +40,7 @@ import {
   ActionOffrir,
   ActionOrdonner,
   ActionPlanification,
+  ActionReprendreOffre,
   ActionRetenir,
   MotifLiberation,
   PlanRestaurant,
@@ -194,6 +195,8 @@ export class ApplicationPlanService {
         return this.ordonner(a, p);
       case 'OFFRIR':
         return this.offrir(a, p);
+      case 'REPRENDRE_OFFRE':
+        return this.reprendreOffre(a, p);
       case 'RETENIR':
         return this.retenir(a, p);
       case 'LIBERER':
@@ -588,6 +591,23 @@ export class ApplicationPlanService {
         rang_file: a.cout.rang_file,
       },
     });
+  }
+
+  /**
+   * Offre en attente reprise sans pénalité : un livreur libre serait au
+   * restaurant bien plus tôt. Réservation atomique de la clôture (offre
+   * encore en attente) : si le livreur sollicité vient d'accepter, son
+   * acceptation l'emporte, la reprise est abandonnée et l'offre qui suit
+   * aussi (la course n'est plus en recherche).
+   */
+  private async reprendreOffre(a: ActionReprendreOffre, p: Passage): Promise<void> {
+    if (!a.offre.id) throw new ActionAbandonnee('OFFRE_INCONNUE');
+    const closes = await this.cloture.cloreOffre(a.offre.id, 'COURSE_REPRISE', {
+      relancerRecherche: false,
+      maintenant: p.maintenant,
+      details: { pour: a.pour_deliverer_id, libelle: a.libelle },
+    });
+    if (closes.length !== 1) throw new ActionAbandonnee('OFFRE_CHANGEE');
   }
 
   private async retenir(a: ActionRetenir, p: Passage): Promise<void> {
