@@ -288,6 +288,19 @@ describe('offre laissée expirer : le livreur redevient candidat dès qu’il do
     expect(actionsDe(plan, 'OFFRIR')).toEqual([expect.objectContaining({ course_id: 'k1', deliverer_id: 'd1' })]);
   });
 
+  it('une seule seconde chance : laissée expirer deux fois, la course ne lui revient plus (chaque expiration compte un refus)', () => {
+    const t = h('12:05:10');
+    const deuxFois = crs('k1', {
+      commandes: [A],
+      created_at: h('12:00'),
+      expirees: [
+        { deliverer_id: 'd1', a: h('12:02') },
+        { deliverer_id: 'd1', a: h('12:05') },
+      ],
+    });
+    expect(types(planifier(instant(t, { courses: [deuxFois, kz()], livreurs: [d1(t, h('12:05:05')), d2(t)] })))).toEqual([]);
+  });
+
   it('une position reçue après l’expiration vaut signe de vie ; un REFUS reste définitif', () => {
     const t = h('12:03:10');
     const bouge = livr('d1', t, { auComptoir: true, position_at: h('12:03'), dernier_signal_at: null });

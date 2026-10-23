@@ -58,7 +58,8 @@
  *  5. OFFRES : les courses sans livreur et sans offre sont proposées par
  *     urgence croissante, chacune au meilleur livreur libre (au comptoir
  *     d'abord, puis en minutes, 4.2). Un livreur qui a laissé expirer l'offre
- *     d'une course redevient candidat dès qu'il donne signe de vie. Une offre
+ *     d'une course redevient candidat dès qu'il donne signe de vie (une seule
+ *     fois par course). Une offre
  *     en attente qui vise un livreur à plus de 5 min de plus qu'un livreur
  *     libre (2 min s'il est au comptoir) est reprise sans pénalité et proposée
  *     à ce dernier (zéro temps mort), sauf une offre forcée.
@@ -1532,16 +1533,29 @@ function courseTravail(ctx: Contexte, k: CoursePlanif, fenetreFermeMs: number | 
  * vie depuis (position ou requête de l'appli postérieure à l'expiration). Un
  * livreur qui avait le téléphone en poche et rouvre l'appli au comptoir
  * redevient candidat : sinon, à deux livreurs, la course partait chez Turbo
- * alors qu'il attendait au comptoir. Sa pénalité de file reste due.
+ * alors qu'il attendait au comptoir. Sa pénalité de file reste due. Une
+ * seule seconde chance par course : deux expirations l'en excluent.
  */
 function exclusDeLaCourse(ctx: Contexte, k: Pick<CoursePlanif, 'deja_sollicites' | 'expirees'>): Set<string> {
   const exclus = new Set(k.deja_sollicites);
-  for (const e of k.expirees ?? []) {
-    if (exclus.has(e.deliverer_id)) continue;
-    if (!signeDeVieApres(ctx.livreurs.get(e.deliverer_id), e.a)) exclus.add(e.deliverer_id);
+  const parLivreur = new Map<string, Date[]>();
+  for (const e of k.expirees ?? []) parLivreur.set(e.deliverer_id, [...(parLivreur.get(e.deliverer_id) ?? []), e.a]);
+  for (const [id, expirations] of parLivreur) {
+    if (exclus.has(id)) continue;
+    // Une seule seconde chance : laissée expirer deux fois, la course ne lui
+    // revient plus (chaque expiration compte un refus sur la course).
+    if (expirations.length >= EXPIRATIONS_MAX_PAR_LIVREUR) {
+      exclus.add(id);
+      continue;
+    }
+    const derniere = new Date(Math.max(...expirations.map((a) => a.getTime())));
+    if (!signeDeVieApres(ctx.livreurs.get(id), derniere)) exclus.add(id);
   }
   return exclus;
 }
+
+/** Expirations d'une même course au-delà desquelles le livreur n'en reçoit plus l'offre. */
+export const EXPIRATIONS_MAX_PAR_LIVREUR = 2;
 
 /** Le livreur a-t-il donné signe de vie (position, requête de l'appli) après cet instant ? */
 export function signeDeVieApres(l: Pick<LivreurPlanif, 'position_at' | 'dernier_signal_at'> | undefined, a: Date): boolean {

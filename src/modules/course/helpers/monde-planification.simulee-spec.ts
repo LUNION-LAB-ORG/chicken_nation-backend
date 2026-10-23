@@ -44,6 +44,7 @@ import {
   ActionPlanification,
   CommandePlanif,
   CoursePlanif,
+  EXPIRATIONS_MAX_PAR_LIVREUR,
   InstantanePlanification,
   LivraisonPlanif,
   LivreurPlanif,
@@ -829,7 +830,10 @@ export class Monde {
   /** Le livreur ne recevra plus cette course : refus, ou expiration sans signe de vie depuis (règle du planificateur). */
   private exclu(k: CourseMonde, l: LivreurMonde): boolean {
     if (k.deja_sollicites.includes(l.id)) return true;
-    return k.expirees.some((e) => e.deliverer_id === l.id && !(l.position_at && l.position_at.getTime() > e.a.getTime()));
+    const siennes = k.expirees.filter((e) => e.deliverer_id === l.id);
+    if (siennes.length === 0) return false;
+    if (siennes.length >= EXPIRATIONS_MAX_PAR_LIVREUR) return true;
+    return !(l.position_at && l.position_at.getTime() > siennes[0].a.getTime());
   }
 
   /**
