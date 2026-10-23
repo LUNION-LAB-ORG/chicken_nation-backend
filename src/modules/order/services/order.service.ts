@@ -90,6 +90,7 @@ import {
   memesArticles,
   reprendreCadeaux,
 } from '../helpers/cadeaux-reactivation.helper';
+import { referenceCommandeLibre } from '../helpers/reference-commande';
 import {
   libelleReservation,
   messagePlatsReserves,
@@ -201,6 +202,13 @@ export class OrderService {
     private readonly orderCoupon: OrderCouponService,
     private readonly orderRelance: OrderRelanceService,
   ) { }
+
+  /** Référence `ORD-AAMMJJ-NNNNN` pas encore prise (tirage au hasard, doublons possibles dans la journée). */
+  private referenceLibre(generer: () => string): Promise<string> {
+    return referenceCommandeLibre(generer, async (reference) =>
+      !!(await this.prisma.order.findUnique({ where: { reference }, select: { id: true } })),
+    );
+  }
 
   /**
    * `canal` : APP pour l'application, WEB pour le site. Il ne vient que d'un
@@ -352,7 +360,7 @@ export class OrderService {
     const tax = await this.orderHelperV2.calculateTax(netAmount);
     const totalAmount = totalAfterDiscount + tax + finalDeliveryFee;
 
-    const orderNumber = this.orderHelperV2.generateOrderReference();
+    const orderNumber = await this.referenceLibre(() => this.orderHelperV2.generateOrderReference());
 
     const next_status = this.orderHelperV2.getOrderStatus(payment_method ?? PaymentMethod.OFFLINE, type);
     // 6. Sauvegarde en Base de données
@@ -926,7 +934,7 @@ export class OrderService {
     */
     await this.orderHelperV2.validateRestaurantChoice(restaurant.id, items.map((item) => item.dish_id));
     // Générer un numéro de commande unique
-    const orderNumber = this.generateDataService.generateOrderReference();
+    const orderNumber = await this.referenceLibre(() => this.generateDataService.generateOrderReference());
 
     // Transaction pour garantir l'intégrité des données
     const { createdOrder: order, consommation } = await this.prisma.$transaction(async (prisma) => {
