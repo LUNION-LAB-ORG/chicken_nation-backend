@@ -23,10 +23,10 @@ import {
   clePaire,
   CommandePlanif,
   CoursePlanif,
-  estAuRestaurant,
   heureProgrammee,
   InstantanePlanification,
   LivreurPlanif,
+  livreursAMesurer,
   pairesAEvaluer,
   ReglagesPlanification,
 } from '../helpers/planification.rules';
@@ -164,7 +164,7 @@ export class InstantanePlanificationService {
           },
           offer_attempts: {
             where: { status: { in: [CourseOfferStatus.PENDING, CourseOfferStatus.REFUSED, CourseOfferStatus.EXPIRED] } },
-            select: { id: true, deliverer_id: true, status: true, expires_at: true },
+            select: { id: true, deliverer_id: true, status: true, expires_at: true, responded_at: true, forcee: true },
           },
         },
         orderBy: { created_at: 'asc' },
@@ -175,6 +175,7 @@ export class InstantanePlanificationService {
           ...SELECT_ETAT_LIVREUR,
           last_location: true,
           last_location_at: true,
+          dernier_signal_at: true,
           protocole_appli: true,
           queue_penalty_until: true,
           queue_penalty_positions: true,
@@ -255,10 +256,16 @@ export class InstantanePlanificationService {
         parti_at: k.parti_at,
         retenue_jusqua: k.retenue_jusqua,
         commandes_attendues: lireCommandesAttendues(k.commandes_attendues),
-        offre: offre ? { id: offre.id, deliverer_id: offre.deliverer_id, expires_at: offre.expires_at } : null,
+        offre: offre
+          ? { id: offre.id, deliverer_id: offre.deliverer_id, expires_at: offre.expires_at, forcee: offre.forcee }
+          : null,
+        // Refus : définitifs. Expirations : à part, levées par un signe de vie postérieur (règle).
         deja_sollicites: [
-          ...new Set(k.offer_attempts.filter((o) => o.status !== CourseOfferStatus.PENDING).map((o) => o.deliverer_id)),
+          ...new Set(k.offer_attempts.filter((o) => o.status === CourseOfferStatus.REFUSED).map((o) => o.deliverer_id)),
         ],
+        expirees: k.offer_attempts
+          .filter((o) => o.status === CourseOfferStatus.EXPIRED)
+          .map((o) => ({ deliverer_id: o.deliverer_id, a: o.responded_at ?? o.expires_at })),
         livraisons: k.deliveries.map((d) => ({
           id: d.id,
           statut: d.statut,
@@ -279,6 +286,7 @@ export class InstantanePlanificationService {
         position: positionLivreur,
         position_at: l.last_location_at,
         protocole_appli: l.protocole_appli,
+        dernier_signal_at: l.dernier_signal_at,
         queue_penalty_until: l.queue_penalty_until,
         queue_penalty_positions: l.queue_penalty_positions,
         courses_du_jour: coursesDuJour.get(l.id) ?? 0,
@@ -317,49 +325,46 @@ export class InstantanePlanificationService {
   }
 
   /**
-   * Temps Google jusqu'au restaurant des livreurs libres à position fraîche
-   * (hors comptoir), si `deliverer.travel_time_ranking` = 1 et au moins deux
-   * candidats : un seul appel. Sinon rien (vol d'oiseau pour tous, jamais de
-   * mélange : `etasLivreurs`).
+   * Temps Google jusqu'au restaurant, si `deliverer.travel_time_ranking` = 1
+   * et qu'au moins deux livreurs LIBRES à position fraîche (hors comptoir)
+   * sont à départager : un seul appel pour TOUS les livreurs dont le temps se
+   * mesure (`livreursAMesurer` : libres, en course, offre en attente). La règle
+   * n'emploie les temps Google que s'ils sont connus pour tous ceux-là (jamais
+   * de mélange avec le vol d'oiseau) : demander les seuls libres payait un
+   * appel jeté dès qu'un livreur en course envoyait sa position. Sinon rien.
    *
    * Appelé seulement quand le plan propose une course (le passage de 10 s ne
    * paie pas un appel Google pour rien) ; le plan est alors recalculé.
    *
-   * @returns vrai si des temps ont été ajoutés à l'instantané.
+   * @returns vrai si des temps ont été ajoutés pour tous les livreurs mesurés.
    */
   async completerTempsGoogle(instantane: InstantanePlanification, r: ReglagesPlanification): Promise<boolean> {
     const { livreurs, maintenant } = instantane;
     const restaurant = instantane.restaurant.position;
     if (!restaurant) return false;
-    let ajoutes = false;
     try {
       const reglages = await this.reglagesLivreurs.load();
       if (!reglages.travelTimeRanking) return false;
-      const candidats = livreurs.filter(
-        (l) =>
-          peutRecevoirOffre(l.etat, maintenant).ok &&
-          l.position &&
-          l.position_at &&
-          maintenant.getTime() - l.position_at.getTime() <= r.positionExpirationMin * 60_000 &&
-          !estAuRestaurant(l, restaurant, r, maintenant) &&
-          haversineMeters(l.position, restaurant) > 0,
+      const aMesurer = livreursAMesurer(livreurs, restaurant, r, maintenant);
+      const libres = aMesurer.filter(
+        (l) => peutRecevoirOffre(l.etat, maintenant).ok && haversineMeters(l.position!, restaurant) > 0,
       );
-      if (candidats.length < 2) return false;
+      if (libres.length < 2) return false;
       const temps = await this.maps.getTravelTimes(
-        candidats.map((l) => ({ latitude: l.position!.lat, longitude: l.position!.lng })),
+        aMesurer.map((l) => ({ latitude: l.position!.lat, longitude: l.position!.lng })),
         { latitude: restaurant.lat, longitude: restaurant.lng },
       );
       if (!temps) return false;
-      candidats.forEach((l, i) => {
-        const s = temps[i];
-        if (typeof s === 'number') {
-          l.secondes_google = s;
-          ajoutes = true;
-        }
+      const valides = aMesurer.map((_, i) => temps[i]);
+      // Un temps manquant : rien n'est retenu (la règle repasserait tout le monde au vol d'oiseau).
+      if (!valides.every((s) => typeof s === 'number' && Number.isFinite(s) && s >= 0)) return false;
+      aMesurer.forEach((l, i) => {
+        l.secondes_google = valides[i] as number;
       });
+      return true;
     } catch (err) {
       this.logger.warn(`Temps de trajet des livreurs indisponibles : ${(err as Error)?.message}`);
     }
-    return ajoutes;
+    return false;
   }
 }

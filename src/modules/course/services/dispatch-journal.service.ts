@@ -39,6 +39,8 @@ export type TypeEvenementDispatch =
   | 'REMISE_CAISSE_SANS_LIVREUR'
   /** Annulation automatique d'une course : les commandes des clients sont gardées. */
   | 'ANNULATION_AUTO_COMMANDES_GARDEES'
+  /** Course sans livreur dont toutes les commandes ont été annulées : annulée par le planificateur. */
+  | 'COURSE_VIDE_ANNULEE'
   // Planificateur v2 (une ligne par action, `motif` = raison de la décision)
   /** Course créée par le planificateur ; `motif` = direction (SUR_LE_TRAJET, MEME_ZONE…) ou SEULE. */
   | 'COURSE_CREEE'

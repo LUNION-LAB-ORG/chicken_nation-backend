@@ -24,6 +24,16 @@
  * de fusion vers une course Turbo ou d'un livreur en pause, jamais plus de 3
  * commandes, retenue jamais repoussée ni au-delà de la limite, zéro temps
  * mort (un livreur libre et une course qui attend sans offre).
+ *
+ * Temps morts plus fins, COMPTÉS en secondes (`tempsMort`) plutôt que
+ * refusés : un livreur libre AU COMPTOIR pendant qu'une commande prête
+ * (1) est dans la course acceptée d'un livreur qui n'est pas au comptoir,
+ * (2) est dans une course proposée à un livreur à plus de 2 min, ou (3) est
+ * dans une course qu'il a seulement laissée expirer.
+ *
+ * `positionsCommeLAppli` : les positions arrivent comme l'appli les envoie
+ * aujourd'hui (rien hors course appli fermée, donc rien au retour de
+ * tournée ; une position à l'ouverture de l'appli et pendant une course).
  */
 import { CourseStatut, DelivererStatus, DeliveryService, DeliveryStatut, EntityStatus, OrderStatus } from '@prisma/client';
 
@@ -224,7 +234,10 @@ interface CourseMonde {
   retenue_jusqua: Date | null;
   commandes_attendues: string[];
   offre: { id: string; deliverer_id: string; offered_at: Date; expires_at: Date } | null;
+  /** Refus (définitifs). */
   deja_sollicites: string[];
+  /** Offres laissées expirer (levées par un signe de vie postérieur). */
+  expirees: { deliverer_id: string; a: Date }[];
   livraisons: LivraisonMonde[];
   arrivee_resto_ms: number | null;
   /** Arrivée au comptoir : la caisse remet au plus tôt `DELAI_REMISE_S` après (le livreur présente son code). */
@@ -235,8 +248,11 @@ interface CourseMonde {
 
 interface LivreurMonde {
   id: string;
+  /** Position connue du serveur (envoyée par l'appli). */
   position: ILatLng | null;
   position_at: Date | null;
+  /** Où il est vraiment (temps morts comptés sur la réalité, pas sur ce que voit le serveur). */
+  reel: ILatLng | null;
   pause_until: Date | null;
   auto_pause_until: Date | null;
   last_available_at: Date | null;
@@ -275,6 +291,9 @@ export class Monde {
   readonly violations: string[] = [];
   /** Toutes les retenues vues : course, valeur, limite d'attente de ses commandes. */
   readonly retenuesVues: { course: string; t: Date; jusqua: Date; limite: Date }[] = [];
+  /** Temps morts plus fins, en secondes (voir l'en-tête). */
+  readonly tempsMort = { courseDUnAutreLivreur: 0, offreLointaine: 0, expireeSeulement: 0 };
+  private pasCourantS = 10;
   private evenements: Evenement[] = [];
   private numeroCourse = 0;
   private numeroOffre = 0;
@@ -282,6 +301,7 @@ export class Monde {
   constructor(
     debut: Date,
     readonly reglages: ReglagesPlanification = REGLAGES_PLANIFICATION_DEFAUT,
+    readonly options: { positionsCommeLAppli?: boolean } = {},
   ) {
     this.t = debut;
   }
@@ -294,6 +314,7 @@ export class Monde {
       id,
       position: o.position === undefined ? R : o.position,
       position_at: this.t,
+      reel: o.position === undefined ? R : o.position,
       pause_until: o.pause_until ?? null,
       auto_pause_until: null,
       last_available_at: libre,
@@ -363,6 +384,7 @@ export class Monde {
     l.last_available_at = this.t;
     l.position = R;
     l.position_at = this.t;
+    l.reel = R;
   }
 
   /**
@@ -442,6 +464,7 @@ export class Monde {
         commandes_attendues: [...k.commandes_attendues],
         offre: k.offre ? { id: k.offre.id, deliverer_id: k.offre.deliverer_id, expires_at: k.offre.expires_at } : null,
         deja_sollicites: [...k.deja_sollicites],
+        expirees: k.expirees.map((e) => ({ ...e })),
         livraisons: k.livraisons.map((l) => ({
           id: l.id,
           statut: l.statut,
@@ -485,6 +508,7 @@ export class Monde {
 
   /** Avance jusqu'à `fin` par pas de `pasS` secondes ; à chaque pas : événements, monde, planificateur. */
   jusqua(fin: Date, pasS = 10): this {
+    this.pasCourantS = pasS;
     while (this.t.getTime() < fin.getTime()) {
       this.t = plus(this.t, pasS);
       this.pas();
@@ -528,7 +552,10 @@ export class Monde {
             k.deliverer_id = l.id;
             k.assigned_at = this.t;
             l.last_available_at = null;
-            const distance = l.position ? haversineMeters(l.position, R) : 3000;
+            // En course, l'appli envoie sa position (suivi de la course) : le serveur le voit où il est.
+            l.position = l.reel;
+            l.position_at = this.t;
+            const distance = l.reel ? haversineMeters(l.reel, R) : 3000;
             if (distance <= 200) {
               k.statut = CourseStatut.AT_RESTAURANT;
               k.au_restaurant_ms = t;
@@ -537,7 +564,7 @@ export class Monde {
             }
           }
         } else if (t >= k.offre.expires_at.getTime()) {
-          k.deja_sollicites.push(k.offre.deliverer_id);
+          k.expirees.push({ deliverer_id: k.offre.deliverer_id, a: this.t });
           k.offre = null;
         }
       }
@@ -547,6 +574,7 @@ export class Monde {
         const l = this.livreurs.get(k.deliverer_id!)!;
         l.position = R;
         l.position_at = this.t;
+        l.reel = R;
       }
       const retenue = k.retenue_jusqua !== null && k.retenue_jusqua.getTime() > t;
       const actives = k.livraisons.filter((x) => x.statut !== DeliveryStatut.CANCELLED);
@@ -586,8 +614,13 @@ export class Monde {
       }
       if (k.statut === CourseStatut.COMPLETED && k.retour_ms !== null && k.retour_ms <= t && k.deliverer_id) {
         const l = this.livreurs.get(k.deliverer_id)!;
-        l.position = R;
-        l.position_at = this.t;
+        // Hors course, appli fermée, l'appli d'aujourd'hui n'envoie rien : le
+        // planificateur ne le voit pas revenir.
+        l.reel = R;
+        if (!this.options.positionsCommeLAppli) {
+          l.position = R;
+          l.position_at = this.t;
+        }
         l.last_available_at = this.t;
         l.courses_du_jour++;
         k.retour_ms = null;
@@ -620,6 +653,7 @@ export class Monde {
     if (l) {
       l.position = decale(R, 0, 400);
       l.position_at = this.t;
+      l.reel = l.position;
     }
   }
 
@@ -639,6 +673,7 @@ export class Monde {
       commandes_attendues: [],
       offre: null,
       deja_sollicites: [],
+      expirees: [],
       livraisons: orderIds.map((oid, i) => ({
         id: `liv-${oid}`,
         order_id: oid,
@@ -752,7 +787,7 @@ export class Monde {
           const d = peutRecevoirOffre(this.etat(l), this.t);
           if (!d.ok) this.violation(`offre à ${l.id} qui ne peut pas la recevoir (${d.motif})`);
           if (k.offre) this.violation(`deuxième offre sur ${k.id}`);
-          if (k.deja_sollicites.includes(l.id)) this.violation(`offre à ${l.id} déjà sollicité pour ${k.id}`);
+          if (this.exclu(k, l)) this.violation(`offre à ${l.id} déjà sollicité pour ${k.id}`);
           k.offre = { id: `offre-${++this.numeroOffre}`, deliverer_id: l.id, offered_at: this.t, expires_at: plus(this.t, 120) };
           break;
         }
@@ -791,16 +826,53 @@ export class Monde {
     if (n > this.reglages.maxCommandesParCourse) this.violation(`${k.id} a ${n} commandes`);
   }
 
-  /** Zéro temps mort : jamais un livreur libre ET une course sans livreur ni offre qu'il pourrait prendre. */
+  /** Le livreur ne recevra plus cette course : refus, ou expiration sans signe de vie depuis (règle du planificateur). */
+  private exclu(k: CourseMonde, l: LivreurMonde): boolean {
+    if (k.deja_sollicites.includes(l.id)) return true;
+    return k.expirees.some((e) => e.deliverer_id === l.id && !(l.position_at && l.position_at.getTime() > e.a.getTime()));
+  }
+
+  /**
+   * Zéro temps mort : jamais un livreur libre ET une course sans livreur ni
+   * offre qu'il pourrait prendre. Les temps morts plus fins (voir l'en-tête)
+   * sont comptés en secondes.
+   */
   private controlerTempsMort(): void {
     const enAttente = [...this.courses.values()].filter(
       (k) => k.statut === CourseStatut.PENDING_ASSIGNMENT && !k.deliverer_id && !k.turbo_escalated_at && !k.offre && k.livraisons.length > 0,
     );
+    const auComptoir = (l: LivreurMonde) => !!l.reel && haversineMeters(l.reel, R) <= 200;
+    const pretes = (k: CourseMonde) => k.livraisons.some((x) => this.commandes.get(x.order_id)?.statut === OrderStatus.READY);
+    const fins = { courseDUnAutreLivreur: false, offreLointaine: false, expireeSeulement: false };
     for (const l of this.livreurs.values()) {
       if (!peutRecevoirOffre(this.etat(l), this.t).ok) continue;
-      const k = enAttente.find((c) => !c.deja_sollicites.includes(l.id));
+      const k = enAttente.find((c) => !this.exclu(c, l));
       if (k) this.violation(`temps mort : ${l.id} libre et ${k.id} attend sans offre`);
+      if (!auComptoir(l)) continue;
+      for (const c of this.courses.values()) {
+        if (!pretes(c)) continue;
+        if (c.statut === CourseStatut.ACCEPTED && c.deliverer_id && c.deliverer_id !== l.id) {
+          const autre = this.livreurs.get(c.deliverer_id)!;
+          if (!auComptoir(autre)) fins.courseDUnAutreLivreur = true;
+        }
+        if (c.statut === CourseStatut.PENDING_ASSIGNMENT && c.offre && c.offre.deliverer_id !== l.id) {
+          const autre = this.livreurs.get(c.offre.deliverer_id)!;
+          const loin = autre.reel ? (haversineMeters(autre.reel, R) * 1.3) / (VITESSE_MONDE_KMH / 3.6) > 120 : true;
+          if (loin) fins.offreLointaine = true;
+        }
+        if (
+          c.statut === CourseStatut.PENDING_ASSIGNMENT &&
+          !c.offre &&
+          !c.turbo_escalated_at &&
+          !c.deja_sollicites.includes(l.id) &&
+          c.expirees.some((e) => e.deliverer_id === l.id) &&
+          this.exclu(c, l)
+        ) {
+          fins.expireeSeulement = true;
+        }
+      }
     }
+    for (const cle of Object.keys(fins) as (keyof typeof fins)[]) if (fins[cle]) this.tempsMort[cle] += this.pasCourantS;
   }
 
   // ── Lecture pour les tests ──

@@ -763,6 +763,10 @@ model CourseOfferAttempt {
   /// distrait à cet instant, la course lui échappe alors qu'il était libre.
   /// Le compteur rend les relances idempotentes (claim atomique, 2 backends).
   reminders_sent Int               @default(0)
+  /// Offre posée par l'affectation forcée de l'administrateur (`PATCH
+  /// /courses/:id/force-assign`) : le planificateur ne la reprend jamais pour
+  /// un autre livreur et ne clôt jamais sa course par une fusion.
+  forcee         Boolean           @default(false)
 
   created_at DateTime @default(now()) @db.Timestamp(6)
 

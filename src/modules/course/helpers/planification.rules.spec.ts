@@ -883,12 +883,12 @@ describe('ajout après le retrait (3.8) et départ', () => {
           },
         ],
       });
-    // Fenêtre échue, livreur sans position fraîche (on ne le sait pas au comptoir) : parti.
+    // Fenêtre échue, dernière position vieille de plus de 15 min (on ne le sait pas au comptoir) : parti.
     const now = h('12:34:10');
     const plan = planifier(
       instant(now, {
         courses: [avecAjoutNonRemis()],
-        livreurs: [d1(now, { position_at: h('12:32') }), livr('d2', now, { auComptoir: true })],
+        livreurs: [d1(now, { position_at: h('12:19') }), livr('d2', now, { auComptoir: true })],
       }),
     );
     expect(types(plan)).toEqual(['MARQUER_PARTI', 'DETACHER', 'CREER_COURSE', 'OFFRIR']);
@@ -899,6 +899,12 @@ describe('ajout après le retrait (3.8) et départ', () => {
     // Livreur encore au comptoir (position de 30 s) : il attend son sac, au plus 2 min de plus.
     const attend = planifier(instant(now, { courses: [avecAjoutNonRemis()], livreurs: [d1(now), livr('d2', now, { auComptoir: true })] }));
     expect(types(attend)).toEqual([]);
+    // Immobile au comptoir depuis son arrivée (dernière position avant le retrait, l'appli
+    // n'envoie rien à l'arrêt) : il attend aussi son sac (seconde relecture).
+    const immobile = planifier(
+      instant(now, { courses: [avecAjoutNonRemis()], livreurs: [d1(now, { position_at: h('12:29:30') }), livr('d2', now, { auComptoir: true })] }),
+    );
+    expect(types(immobile)).toEqual([]);
     const tard = h('12:36:01');
     const apres = planifier(instant(tard, { courses: [avecAjoutNonRemis()], livreurs: [d1(tard), livr('d2', tard, { auComptoir: true })] }));
     expect(types(apres)).toEqual(['MARQUER_PARTI', 'DETACHER', 'CREER_COURSE', 'OFFRIR']);
@@ -1244,12 +1250,14 @@ describe('relecture du 23/10 : refus, Turbo, retard sans livreur libre, offre lo
     expect(actionsDe(plan, 'OFFRIR')).toEqual([expect.objectContaining({ course_cle: 'nouvelle-1', deliverer_id: 'd1' })]);
   });
 
-  it('fusion (demande 4) : la course neuve devient la cible quand la plus ancienne a été refusée par le livreur libre', () => {
+  it('fusion (demande 4) : une course refusée par le livreur libre ne se fond dans aucune autre ; la course neuve lui est proposée seule', () => {
+    // Seconde relecture : fondre la course refusée dans la neuve lui reproposait la commande qu'il venait de refuser.
     const t = h('12:33');
     const u = crs('u', { commandes: [cmd('a', { ready_at: h('12:30'), est: 2000 })], created_at: h('12:30'), deja_sollicites: ['d1'] });
     const v = crs('v', { commandes: [cmd('b', { ready_at: h('12:32:50'), est: 2500 })], created_at: h('12:32:50') });
     const plan = planifier(instant(t, { courses: [u, v], livreurs: [livr('d1', t, { auComptoir: true }), occupe('d2', t)] }));
-    expect(actionsDe(plan, 'FUSIONNER')).toEqual([expect.objectContaining({ cible_id: 'v', absorbee_id: 'u' })]);
+    expect(actionsDe(plan, 'FUSIONNER')).toEqual([]);
+    expect(new Set([...refusDe(plan, 'u', 'v'), ...refusDe(plan, 'v', 'u')])).toEqual(new Set(['DEJA_REFUSEE']));
     expect(actionsDe(plan, 'OFFRIR')).toEqual([expect.objectContaining({ course_id: 'v', deliverer_id: 'd1' })]);
   });
 
@@ -1299,7 +1307,7 @@ describe('relecture du 23/10 : refus, Turbo, retard sans livreur libre, offre lo
     expect(plan.refus.some((x) => x.essai === 'FUSION' && x.refus === 'RETARD_CLIENT')).toBe(true);
   });
 
-  it('zéro temps mort : l’offre d’un livreur loin est reprise pour le livreur au comptoir ; pas pour un écart de moins de 5 min', () => {
+  it('zéro temps mort : l’offre d’un livreur loin est reprise pour le livreur au comptoir ; pas pour un écart de moins de 2 min', () => {
     const t = h('12:31');
     const offre = { id: 'o1', deliverer_id: 'd1', expires_at: h('12:32') };
     const u = () => crs('u', { commandes: [cmd('a', { ready_at: h('12:30'), est: 2000 })], offre });
@@ -1309,9 +1317,12 @@ describe('relecture du 23/10 : refus, Turbo, retard sans livreur libre, offre lo
     expect(actionsDe(plan, 'REPRENDRE_OFFRE')[0]).toMatchObject({ course_id: 'u', offre, pour_deliverer_id: 'd2' });
     expect(actionsDe(plan, 'OFFRIR')[0]).toMatchObject({ course_id: 'u', deliverer_id: 'd2' });
 
-    // À 1 km (moins de 5 min de plus) : l'offre reste au livreur sollicité.
-    const proche = livr('d1', t, { aEst: -1000, etat: { offre_en_attente: true } });
+    // À 400 m (moins de 2 min de plus que le livreur au comptoir) : l'offre reste au livreur sollicité.
+    const proche = livr('d1', t, { aEst: -400, etat: { offre_en_attente: true } });
     expect(types(planifier(instant(t, { courses: [u()], livreurs: [proche, livr('d2', t, { auComptoir: true })] })))).toEqual([]);
+    // Livreur libre hors du comptoir : il faut 5 min d'écart (1 km contre 400 m : rien).
+    const d1Km = livr('d1', t, { aEst: -1000, etat: { offre_en_attente: true } });
+    expect(types(planifier(instant(t, { courses: [u()], livreurs: [d1Km, livr('d2', t, { aEst: 400 })] })))).toEqual([]);
     // Livreur libre qui a déjà refusé la course : rien.
     const refusee = { ...u(), deja_sollicites: ['d2'] };
     expect(types(planifier(instant(t, { courses: [refusee], livreurs: [loin, livr('d2', t, { auComptoir: true })] })))).toEqual([]);

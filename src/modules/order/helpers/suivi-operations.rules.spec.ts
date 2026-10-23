@@ -85,11 +85,16 @@ describe('écran Opérations : fenêtre prolongée tant que la course attend son
 
   it('sac remis, livreur sans position fraîche ou sorti du rayon : fin d’origine (le serveur la marque partie)', () => {
     expect(fin(liste(course(), true))).toBe('2026-10-23T12:30:00.000Z');
-    expect(fin(liste(course({ last_location: { lat: 5.286, lng: -3.9737 }, last_location_at: '2026-10-23T12:28:30.000Z' })))).toBe(
+    // Dernière position de plus de 15 min : rien ne dit qu'il est au comptoir.
+    expect(fin(liste(course({ last_location: { lat: 5.286, lng: -3.9737 }, last_location_at: '2026-10-23T12:14:30.000Z' })))).toBe(
       '2026-10-23T12:30:00.000Z',
     );
     expect(fin(liste(course({ last_location: { lat: 5.29, lng: -3.9737 }, last_location_at: '2026-10-23T12:29:50.000Z' })))).toBe(
       '2026-10-23T12:30:00.000Z',
+    );
+    // Immobile au comptoir (position de 3 min, l'appli n'envoie rien à l'arrêt) : il attend son sac (seconde relecture).
+    expect(fin(liste(course({ last_location: { lat: 5.286, lng: -3.9737 }, last_location_at: '2026-10-23T12:27:00.000Z' })))).toBe(
+      '2026-10-23T12:32:00.000Z',
     );
     // Fenêtre pas encore échue : rien ne change.
     const tot = enrichirCommandesOperations(liste(course()), { maintenant: new Date('2026-10-23T12:29:00.000Z'), fenetreMaxS: 240, departRayonM: 250 });

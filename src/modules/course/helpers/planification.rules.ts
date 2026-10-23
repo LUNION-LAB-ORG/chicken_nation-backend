@@ -29,6 +29,9 @@
  *
  * Un passage, dans l'ordre (les actions sortent dans cet ordre, qui est
  * aussi l'ordre d'application) :
+ *  0. COURSE VIDE : une course sans livreur dont toutes les commandes ont été
+ *     annulées est annulée (commandes intouchées, offre close sans pénalité) ;
+ *     elle n'est jamais la cible d'un ajout.
  *  1. DÉPARTS : une course récupérée dont le livreur est parti (position,
  *     première livraison commencée, fenêtre écoulée, ancienne appli) est
  *     marquée partie ; une commande ajoutée après le retrait mais pas encore
@@ -38,8 +41,8 @@
  *     d'abord ; puis livreur encore au restaurant après le retrait, au
  *     comptoir, en route, puis course sans livreur ; à égalité le plus petit
  *     détour), sinon regroupement glouton des restantes et CRÉATION de course.
- *     Jamais vers une course que tous les livreurs libres ont déjà refusée
- *     (la commande seule leur est proposée), ni vers une course récupérée à
+ *     Jamais vers une course sans livreur qu'un livreur libre a refusée (la
+ *     commande seule lui est proposée), ni vers une course récupérée à
  *     moins de 90 s (ou d'une demi-fenêtre si elle est plus courte que
  *     3 min) de la fin de sa fenêtre. Personne de libre : le départ
  *     est le premier retour estimé d'un livreur en course (le retard toléré
@@ -47,17 +50,24 @@
  *  3. FUSIONS (demande 4) : une course sans livreur rejoint une course ouverte
  *     avec livreur, ou une autre course sans livreur, de la même direction et
  *     dans les limites ; l'offre en attente de la course absorbée est close
- *     sans pénalité.
+ *     sans pénalité. Jamais si un livreur qui pourrait prendre la course
+ *     fusionnée (ou le livreur de la cible) en a refusé une, jamais une
+ *     course dont l'offre a été forcée par l'administrateur, et jamais une
+ *     course dont l'offre en attente partirait plus tôt que la cible.
  *  4. ORDRE des arrêts de chaque course modifiée.
  *  5. OFFRES : les courses sans livreur et sans offre sont proposées par
  *     urgence croissante, chacune au meilleur livreur libre (au comptoir
- *     d'abord, puis en minutes, 4.2). Une offre en attente qui vise un
- *     livreur à plus de 5 min de plus qu'un livreur libre est reprise sans
- *     pénalité et proposée à ce dernier (zéro temps mort).
+ *     d'abord, puis en minutes, 4.2). Un livreur qui a laissé expirer l'offre
+ *     d'une course redevient candidat dès qu'il donne signe de vie. Une offre
+ *     en attente qui vise un livreur à plus de 5 min de plus qu'un livreur
+ *     libre (2 min s'il est au comptoir) est reprise sans pénalité et proposée
+ *     à ce dernier (zéro temps mort), sauf une offre forcée.
  *  6. RETENUES au comptoir (3.5) : posées, réduites ou levées. Une retenue ne
  *     peut que diminuer ; levée, elle ne revient jamais sur la même course.
  *  7. TURBO (3.11) : dernier recours, compté depuis la plus ancienne commande
- *     prête de la course (6 min sous v2), jamais pendant une offre en attente.
+ *     prête de la course (6 min sous v2), jamais pendant une offre en attente ;
+ *     différé d'au plus 4 min quand un livreur interne revient au restaurant
+ *     dans ce délai et que les promesses tiennent avec lui.
  *
  * Jamais d'ajout ni de fusion avec une course confiée à Turbo (ou Turbo
  * d'origine) ni avec la course d'un livreur en pause ; jamais d'offre à un
@@ -147,11 +157,14 @@ export function margeRemiseApresRetraitMs(r: Pick<ReglagesPlanification, 'ajoutA
 }
 /**
  * Fin de la fenêtre repoussée d'au plus 2 min tant qu'une commande ajoutée
- * reste à remettre et que le livreur est encore au comptoir (position de
- * moins d'une minute dans le rayon de départ) : il attend son sac.
+ * reste à remettre et que le livreur est encore au comptoir : sa dernière
+ * position est dans le rayon de départ, et il n'a rien envoyé de plus loin
+ * depuis (le suivi de l'appli n'envoie rien tant qu'il ne bouge pas de
+ * 25 m : un livreur immobile qui attend son sac n'envoie plus de position).
+ * La position doit avoir moins de `deliverer.au_restaurant_fraicheur_min`
+ * (15 min), comme pour « au comptoir » (4.2).
  */
 export const PROLONGATION_REMISE_S = 120;
-export const FRAICHEUR_POSITION_COMPTOIR_S = 60;
 /**
  * Turbo (3.11) : regrouper des commandes qui attendent un livreur n'avance
  * pas de plus d'une minute la bascule vers Turbo d'aucune d'elles.
@@ -159,9 +172,12 @@ export const FRAICHEUR_POSITION_COMPTOIR_S = 60;
 export const TOLERANCE_AVANCE_TURBO_S = 60;
 /**
  * Offre en attente reprise sans pénalité et reproposée quand un livreur libre
- * serait au restaurant plus de 5 min plus tôt que le livreur sollicité.
+ * serait au restaurant plus de 5 min plus tôt que le livreur sollicité ; 2 min
+ * quand le livreur libre est AU COMPTOIR (son temps vaut 0 et il est sûr :
+ * le seuil de 5 min ne sert qu'à éviter le va-et-vient entre deux estimations).
  */
 export const ECART_REPRISE_OFFRE_S = 300;
+export const ECART_REPRISE_OFFRE_COMPTOIR_S = 120;
 
 // ─── Réglages ────────────────────────────────────────────────────────────────
 
@@ -195,6 +211,18 @@ export interface ReglagesPlanification {
   turboActif: boolean;
   /** `course.turbo_fallback_after_min_v2` : depuis la plus ancienne commande prête de la course. */
   turboApresMinV2: number;
+  /**
+   * `course.turbo_attente_retour_max_min` : Turbo attend au plus ce délai de
+   * plus quand un livreur interne revient au restaurant dans ce délai et que
+   * les promesses tiennent avec lui (0 = jamais d'attente, Turbo à l'heure).
+   */
+  turboAttenteRetourMaxMin: number;
+  /**
+   * `course.trajet_sans_coordonnees_min` : durée supposée d'un trajet vers un
+   * client sans coordonnées (aller, ou retour depuis lui). Une durée, jamais
+   * une distance : rien n'est mêlé au vol d'oiseau.
+   */
+  trajetSansCoordonneesMin: number;
   /** `deliverer.au_restaurant_rayon_m` et `deliverer.au_restaurant_fraicheur_min`. */
   auRestaurantRayonM: number;
   auRestaurantFraicheurMin: number;
@@ -224,6 +252,8 @@ export const REGLAGES_PLANIFICATION_DEFAUT: Readonly<ReglagesPlanification> = Ob
   vitessePointeKmh: 16,
   turboActif: true,
   turboApresMinV2: 6,
+  turboAttenteRetourMaxMin: 4,
+  trajetSansCoordonneesMin: 12,
   auRestaurantRayonM: 200,
   auRestaurantFraicheurMin: 15,
   etaParDefautMin: 8,
@@ -252,6 +282,8 @@ const BORNES: Record<CleNombre, { cle: string; min: number; max: number; zero: b
   vitesseMoyenneKmh: { cle: 'course.vitesse_moyenne_kmh', min: 1, max: 120, zero: false },
   vitessePointeKmh: { cle: 'course.vitesse_pointe_kmh', min: 1, max: 120, zero: false },
   turboApresMinV2: { cle: 'course.turbo_fallback_after_min_v2', min: 0, max: 240, zero: true },
+  turboAttenteRetourMaxMin: { cle: 'course.turbo_attente_retour_max_min', min: 0, max: 30, zero: true },
+  trajetSansCoordonneesMin: { cle: 'course.trajet_sans_coordonnees_min', min: 1, max: 120, zero: false },
   auRestaurantRayonM: { cle: 'deliverer.au_restaurant_rayon_m', min: 1, max: 5000, zero: false },
   auRestaurantFraicheurMin: { cle: 'deliverer.au_restaurant_fraicheur_min', min: 1, max: 240, zero: false },
   etaParDefautMin: { cle: 'deliverer.eta_par_defaut_min', min: 1, max: 120, zero: false },
@@ -409,6 +441,18 @@ export interface OffrePlanif {
   id: string;
   deliverer_id: string;
   expires_at: Date;
+  /**
+   * Offre posée par l'affectation forcée de l'administrateur : jamais
+   * reprise pour un autre livreur, jamais close par une fusion.
+   */
+  forcee?: boolean;
+}
+
+/** Offre de la course laissée expirer par un livreur (sans réponse). */
+export interface ExpirationPlanif {
+  deliverer_id: string;
+  /** Heure de l'expiration (`responded_at`, sinon `expires_at`). */
+  a: Date;
 }
 
 export interface LivraisonPlanif {
@@ -438,8 +482,18 @@ export interface CoursePlanif {
   commandes_attendues: string[];
   /** Offre en attente (PENDING), s'il y en a une. */
   offre: OffrePlanif | null;
-  /** Livreurs ayant refusé ou laissé expirer une offre de CETTE course (pas les offres closes sans pénalité). */
+  /**
+   * Livreurs qui ne recevront plus CETTE course : refus (définitif, 4.4). Les
+   * offres closes sans pénalité n'y sont jamais. L'instantané y met les refus
+   * et donne les expirations à part (`expirees`).
+   */
   deja_sollicites: string[];
+  /**
+   * Offres de cette course laissées expirer : le livreur est exclu jusqu'à
+   * un signe de vie POSTÉRIEUR (position, requête de l'appli), puis la course
+   * peut lui être reproposée (il avait le téléphone en poche).
+   */
+  expirees?: ExpirationPlanif[];
   livraisons: LivraisonPlanif[];
 }
 
@@ -458,6 +512,8 @@ export interface LivreurPlanif {
   courses_du_jour: number;
   /** Temps jusqu'au restaurant donné par Google (secondes), position fraîche seulement ; sinon absent. */
   secondes_google?: number | null;
+  /** Dernier signe de vie de l'appli (requête authentifiée ou position), écrit au plus une fois par minute. */
+  dernier_signal_at?: Date | null;
 }
 
 export interface InstantanePlanification {
@@ -509,10 +565,19 @@ export type MotifRefusPlanification =
   | 'AUTRE_LIVREUR_LIBRE'
   /** Course récupérée : moins de 90 s avant la fin de sa fenêtre d'ajout. */
   | 'FIN_DE_FENETRE'
-  /** Course sans livreur que tous les livreurs libres ont déjà refusée ou laissée expirer. */
+  /**
+   * Refusée par un livreur qui pourrait la prendre maintenant (libre, ou
+   * sollicité par l'une des deux courses d'une fusion), ou par le livreur de
+   * la course cible : ses commandes ne lui reviennent pas par un ajout ou une
+   * fusion, et une commande neuve ne s'y colle pas (elle lui est proposée seule).
+   */
   | 'DEJA_REFUSEE'
   /** Regrouper avancerait la bascule vers Turbo d'une commande. */
-  | 'AVANCE_TURBO';
+  | 'AVANCE_TURBO'
+  /** La course absorbée a une offre en attente et partirait plus tôt seule : l'offre n'est pas reprise. */
+  | 'OFFRE_EN_COURS'
+  /** Turbo différé : un livreur interne revient au restaurant très bientôt (essai `TURBO`). */
+  | 'RETOUR_ATTENDU';
 
 export interface ActionMarquerParti {
   type: 'MARQUER_PARTI';
@@ -664,7 +729,21 @@ export interface ActionConfierTurbo {
   libelle: string;
 }
 
+/**
+ * Course sans livreur dont toutes les commandes ont été annulées : annulée
+ * par le système (les commandes ne sont pas touchées), son offre en attente
+ * close sans pénalité. Elle n'est plus jamais la cible d'un ajout.
+ */
+export interface ActionAnnulerCourseVide {
+  type: 'ANNULER_COURSE_VIDE';
+  course_id: string;
+  /** Offre en attente à clore sans pénalité, s'il y en a une. */
+  offre: OffrePlanif | null;
+  libelle: string;
+}
+
 export type ActionPlanification =
+  | ActionAnnulerCourseVide
   | ActionMarquerParti
   | ActionDetacher
   | ActionAjouter
@@ -681,7 +760,8 @@ export type TypeActionPlanification = ActionPlanification['type'];
 
 /** Un essai refusé (journal, tests une limite à la fois). */
 export interface RefusPlanification {
-  essai: 'AJOUT' | 'CREATION' | 'FUSION' | 'RETENUE';
+  /** `TURBO` : bascule différée (retour d'un livreur interne attendu). */
+  essai: 'AJOUT' | 'CREATION' | 'FUSION' | 'RETENUE' | 'TURBO';
   /** Commande essayée (ajout, création, retenue). */
   order_id: string | null;
   /** Course absorbée essayée (fusion). */
@@ -763,6 +843,36 @@ export interface EtaLivreur {
   au_comptoir: boolean;
 }
 
+/** Position connue de moins de `positionExpirationMin` (et restaurant situé). */
+function positionFraiche(
+  l: Pick<LivreurPlanif, 'position' | 'position_at'>,
+  restaurant: ILatLng | null,
+  r: Pick<ReglagesPlanification, 'positionExpirationMin'>,
+  maintenant: Date,
+): boolean {
+  return (
+    !!restaurant &&
+    !!l.position &&
+    !!l.position_at &&
+    maintenant.getTime() - l.position_at.getTime() <= r.positionExpirationMin * 60_000
+  );
+}
+
+/**
+ * Livreurs dont le temps jusqu'au comptoir se mesure (position fraîche, hors
+ * du comptoir), libres ou non : `etasLivreurs` exige un temps Google pour
+ * TOUS ceux-là, sinon tout le monde est au vol d'oiseau. Le service demande
+ * donc les temps Google de toute cette liste en un seul appel.
+ */
+export function livreursAMesurer<T extends LivreurPlanif>(
+  livreurs: readonly T[],
+  restaurant: ILatLng | null,
+  r: ReglagesPlanification,
+  maintenant: Date,
+): T[] {
+  return livreurs.filter((l) => !estAuRestaurant(l, restaurant, r, maintenant) && positionFraiche(l, restaurant, r, maintenant));
+}
+
 /**
  * Temps jusqu'au comptoir de chaque livreur (4.2) :
  *  - 0 s'il est au restaurant ;
@@ -778,12 +888,8 @@ export function etasLivreurs(
   maintenant: Date,
 ): Map<string, EtaLivreur> {
   const res = new Map<string, EtaLivreur>();
-  const fraiche = (l: LivreurPlanif) =>
-    !!restaurant &&
-    !!l.position &&
-    !!l.position_at &&
-    maintenant.getTime() - l.position_at.getTime() <= r.positionExpirationMin * 60_000;
-  const aMesurer = livreurs.filter((l) => !estAuRestaurant(l, restaurant, r, maintenant) && fraiche(l));
+  const fraiche = (l: LivreurPlanif) => positionFraiche(l, restaurant, r, maintenant);
+  const aMesurer = livreursAMesurer(livreurs, restaurant, r, maintenant);
   const googlePourTous =
     aMesurer.length > 0 &&
     aMesurer.every((l) => typeof l.secondes_google === 'number' && Number.isFinite(l.secondes_google) && l.secondes_google >= 0);
@@ -889,15 +995,16 @@ const STATUTS_LIVRAISON_TERMINEE: DeliveryStatut[] = [
  *  - aucune position, reçue après le retrait, à plus du rayon de départ ;
  *  - retrait il y a moins de la fenêtre (240 s) ; au-delà, la course reste
  *    au comptoir au plus 2 min de plus si une commande ajoutée n'est pas
- *    encore remise et que le livreur y est encore (position de moins d'une
- *    minute dans le rayon de départ) : sinon elle lui serait retirée sous
- *    les yeux pendant qu'il attend son sac.
+ *    encore remise et que le livreur y est encore (dernière position dans le
+ *    rayon de départ, de moins de 15 min) : sinon elle lui serait retirée
+ *    sous les yeux pendant qu'il attend son sac.
  */
 export function fenetreApresRetrait(
   course: Pick<CoursePlanif, 'statut' | 'parti_at' | 'picked_up_at' | 'livraisons'>,
   livreur: Pick<LivreurPlanif, 'protocole_appli' | 'position' | 'position_at'> | null,
   restaurant: ILatLng | null,
-  r: Pick<ReglagesPlanification, 'ajoutApresRetrait' | 'ajoutApresRetraitMaxS' | 'departRayonM'>,
+  r: Pick<ReglagesPlanification, 'ajoutApresRetrait' | 'ajoutApresRetraitMaxS' | 'departRayonM'> &
+    Partial<Pick<ReglagesPlanification, 'auRestaurantFraicheurMin'>>,
   maintenant: Date,
 ): FenetreApresRetrait {
   if (course.statut !== CourseStatut.IN_DELIVERY || course.parti_at) return { ouverte: false, motif: 'DEJA_PARTI' };
@@ -927,6 +1034,7 @@ export function fenetreApresRetrait(
       position_at: livreur.position_at,
       restaurant,
       departRayonM: r.departRayonM,
+      fraicheurMin: r.auRestaurantFraicheurMin,
     });
     return prolongee ? { ouverte: true, ferme_a: new Date(fermeA), prolongee: true } : { ouverte: false, motif: 'FENETRE_ECHUE' };
   }
@@ -936,9 +1044,14 @@ export function fenetreApresRetrait(
 /**
  * Fenêtre d'ajout échue (`fermeAMs`), mais la course attend encore son sac :
  * une commande ajoutée après le retrait reste à remettre et le livreur est
- * encore au comptoir (position de moins d'une minute, dans le rayon de
- * départ). Elle reste au comptoir au plus `PROLONGATION_REMISE_S` de plus.
- * Règle partagée avec l'écran Opérations (`fenetre_ajout_ferme_a`).
+ * encore au comptoir : sa DERNIÈRE position est dans le rayon de départ (une
+ * position plus loin reçue après le retrait aurait déjà fait partir la
+ * course), et elle a moins de `fraicheurMin` (15 min par défaut). Le suivi
+ * de l'appli n'envoie rien tant que le livreur ne bouge pas de 25 m : exiger
+ * une position de moins d'une minute retirait la commande au livreur
+ * immobile qui l'attendait. Elle reste au comptoir au plus
+ * `PROLONGATION_REMISE_S` de plus. Règle partagée avec l'écran Opérations
+ * (`fenetre_ajout_ferme_a`).
  */
 export function attendSonSac(p: {
   fermeAMs: number;
@@ -948,11 +1061,14 @@ export function attendSonSac(p: {
   position_at: Date | null;
   restaurant: ILatLng | null;
   departRayonM: number;
+  /** Âge maximal de la position (minutes) ; défaut : `deliverer.au_restaurant_fraicheur_min`. */
+  fraicheurMin?: number;
 }): boolean {
   const t = p.maintenant.getTime();
   if (!p.sacAttendu || t < p.fermeAMs || t >= p.fermeAMs + PROLONGATION_REMISE_S * 1000) return false;
   if (!p.restaurant || !p.position || !p.position_at) return false;
-  if (t - p.position_at.getTime() > FRAICHEUR_POSITION_COMPTOIR_S * 1000) return false;
+  const fraicheurMin = p.fraicheurMin ?? REGLAGES_PLANIFICATION_DEFAUT.auRestaurantFraicheurMin;
+  if (t - p.position_at.getTime() > fraicheurMin * 60_000) return false;
   return haversineMeters(p.position, p.restaurant) <= p.departRayonM;
 }
 
@@ -1006,6 +1122,25 @@ function livraisonsActives(livraisons: readonly LivraisonPlanif[]): LivraisonPla
   return [...livraisons]
     .filter((l) => !STATUTS_LIVRAISON_TERMINEE.includes(l.statut) && l.commande.statut !== OrderStatus.CANCELLED)
     .sort((a, b) => a.sequence_order - b.sequence_order);
+}
+
+/**
+ * Course qui cherche un livreur (sans livreur, pas chez Turbo) dont toutes
+ * les commandes ont été annulées ou les livraisons closes : elle n'a plus
+ * rien à livrer. Il faut au moins une livraison : une course en train de
+ * naître (création suivie du déplacement des livraisons) n'est jamais vue
+ * comme vide.
+ */
+export function estCourseVideSansLivreur(
+  k: Pick<CoursePlanif, 'statut' | 'deliverer_id' | 'turbo_escalated_at' | 'livraisons'>,
+): boolean {
+  return (
+    k.statut === CourseStatut.PENDING_ASSIGNMENT &&
+    !k.deliverer_id &&
+    !k.turbo_escalated_at &&
+    k.livraisons.length > 0 &&
+    livraisonsActives(k.livraisons).length === 0
+  );
 }
 
 /**
@@ -1132,8 +1267,14 @@ interface Contexte {
   clients: Map<string, ClientDirection>;
   verdicts: Map<string, VerdictPaire>;
   verdictDe: (a: ClientDirection, b: ClientDirection) => VerdictPaire;
-  /** Premier retour estimé d'un livreur en course (calculé une fois par passage). */
-  retour?: number | null;
+  /** Retours estimés des livreurs en course, du plus proche au plus lointain (calculés une fois par passage). */
+  retours?: RetourLivreur[];
+}
+
+/** Retour estimé au restaurant d'un livreur en course. */
+interface RetourLivreur {
+  id: string;
+  ms: number;
 }
 
 function creerContexte(inst: InstantanePlanification, r: ReglagesPlanification, options: OptionsPlanification): Contexte {
@@ -1198,8 +1339,12 @@ function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, volO
   if (arrets.length === 0) return { valide: true, verdict: null, ordre: [], base: 'vol_oiseau', arriveesMs, dureeS: 0 };
   const R = ctx.restaurant;
   const clients = arrets.map((a) => (volOiseau ? sansCarte(a.client) : a.client));
+  // Client sans coordonnées (ou restaurant sans coordonnées) : trajet supposé
+  // (`trajetSansCoordonneesMin`), jamais « arrivé au départ ». Sinon une telle
+  // commande paraissait la moins urgente de toutes.
+  const sansPositionMs = departMs + ctx.r.trajetSansCoordonneesMin * 60_000;
   if (!R) {
-    for (const a of arrets) arriveesMs.set(a.id, departMs);
+    for (const a of arrets) arriveesMs.set(a.id, sansPositionMs);
     return { valide: arrets.length === 1, verdict: null, ordre: arrets.map((a) => a.id), base: 'vol_oiseau', arriveesMs, dureeS: 0 };
   }
   const verdict = evaluerGroupe(R, clients, ctx.verdictDe);
@@ -1211,7 +1356,7 @@ function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, volO
   const est = estimerTrajets(R, ordonnes, { mode, lointain, vitesseKmh: vitesseKmh(new Date(departMs), ctx.r) });
   const places = ordonnes.filter((c) => c.position);
   places.forEach((c, i) => arriveesMs.set(c.id, departMs + (est.secondesCumulees[i] + i * ARRET_CLIENT_S) * 1000));
-  for (const c of ordonnes) if (!arriveesMs.has(c.id)) arriveesMs.set(c.id, departMs);
+  for (const c of ordonnes) if (!arriveesMs.has(c.id)) arriveesMs.set(c.id, sansPositionMs);
   const dureeS = places.length ? est.secondesCumulees[places.length - 1] + (places.length - 1) * ARRET_CLIENT_S : 0;
   return { valide: verdict.valide, verdict, ordre, base: est.base, arriveesMs, dureeS };
 }
@@ -1282,7 +1427,10 @@ function evaluerAjout(
     const [bE, bN] = [bascule(p.existants), bascule(p.nouveaux)];
     const groupe = Math.min(bE, bN);
     const retour = p.attendLivreur.retourMs;
-    if (Math.max(bE, bN) - groupe > TOLERANCE_AVANCE_TURBO_S * 1000 && (retour === null || retour > groupe)) {
+    if (
+      Math.max(bE, bN) - groupe > TOLERANCE_AVANCE_TURBO_S * 1000 &&
+      (retour === null || retour > groupe + attenteRetourMs(ctx))
+    ) {
       return { ok: false, refus: 'AVANCE_TURBO', libelle: 'partirait plus tôt chez Turbo' };
     }
   }
@@ -1349,7 +1497,10 @@ function courseTravail(ctx: Contexte, k: CoursePlanif, fenetreFermeMs: number | 
   const enPause = !!livreur && (estEnPause(livreur.etat, ctx.maintenant) || estEnPauseAuto(livreur.etat, ctx.maintenant));
 
   let categorie: CategorieCible | null = null;
-  if (!turbo) {
+  // Course vide (toutes ses commandes annulées) : jamais une cible. Sinon la
+  // commande prête suivante s'y collait et héritait de son âge (expiration,
+  // cloche déjà sonnée) et de ses refus.
+  if (!turbo && actives.length > 0) {
     if (k.statut === CourseStatut.PENDING_ASSIGNMENT && !k.deliverer_id) categorie = 3;
     else if (k.deliverer_id && !enPause) {
       if (k.statut === CourseStatut.ACCEPTED) categorie = 2;
@@ -1371,8 +1522,32 @@ function courseTravail(ctx: Contexte, k: CoursePlanif, fenetreFermeMs: number | 
     modifiee: false,
     absorbee: false,
     nouvelle: false,
-    dejaSollicites: new Set(k.deja_sollicites),
+    dejaSollicites: exclusDeLaCourse(ctx, k),
   };
+}
+
+/**
+ * Livreurs à qui la course n'est plus proposée : ceux qui l'ont refusée
+ * (définitif, 4.4), et ceux qui ont laissé expirer son offre SANS signe de
+ * vie depuis (position ou requête de l'appli postérieure à l'expiration). Un
+ * livreur qui avait le téléphone en poche et rouvre l'appli au comptoir
+ * redevient candidat : sinon, à deux livreurs, la course partait chez Turbo
+ * alors qu'il attendait au comptoir. Sa pénalité de file reste due.
+ */
+function exclusDeLaCourse(ctx: Contexte, k: Pick<CoursePlanif, 'deja_sollicites' | 'expirees'>): Set<string> {
+  const exclus = new Set(k.deja_sollicites);
+  for (const e of k.expirees ?? []) {
+    if (exclus.has(e.deliverer_id)) continue;
+    if (!signeDeVieApres(ctx.livreurs.get(e.deliverer_id), e.a)) exclus.add(e.deliverer_id);
+  }
+  return exclus;
+}
+
+/** Le livreur a-t-il donné signe de vie (position, requête de l'appli) après cet instant ? */
+export function signeDeVieApres(l: Pick<LivreurPlanif, 'position_at' | 'dernier_signal_at'> | undefined, a: Date): boolean {
+  if (!l) return false;
+  const t = a.getTime();
+  return (!!l.position_at && l.position_at.getTime() > t) || (!!l.dernier_signal_at && l.dernier_signal_at.getTime() > t);
 }
 
 function etaMs(ctx: Contexte, delivererId: string | null): number {
@@ -1397,8 +1572,13 @@ function departLibreMs(ctx: Contexte, enPlus: readonly string[] = [], exclus: Re
  * (`retourAuRestaurantMs`). `null` si aucun retour n'est estimable.
  */
 function retourEstimeMs(ctx: Contexte): number | null {
-  if (ctx.retour !== undefined) return ctx.retour;
-  let premier: number | null = null;
+  return retoursEstimes(ctx)[0]?.ms ?? null;
+}
+
+/** Tous les retours estimés des livreurs en course (ni en pause, ni hors service), du plus proche au plus lointain. */
+function retoursEstimes(ctx: Contexte): RetourLivreur[] {
+  if (ctx.retours) return ctx.retours;
+  const retours: RetourLivreur[] = [];
   for (const l of ctx.instantane.livreurs) {
     if (ctx.libres.has(l.id)) continue;
     if (estEnPause(l.etat, ctx.maintenant) || estEnPauseAuto(l.etat, ctx.maintenant)) continue;
@@ -1409,23 +1589,54 @@ function retourEstimeMs(ctx: Contexte): number | null {
     );
     if (!sa) continue;
     const retour = retourAuRestaurantMs(sa, l, ctx.restaurant, ctx.r, ctx.maintenant, etaMs(ctx, l.id));
-    if (retour !== null && (premier === null || retour < premier)) premier = retour;
+    if (retour !== null) retours.push({ id: l.id, ms: retour });
   }
-  ctx.retour = premier;
-  return premier;
+  retours.sort((a, b) => a.ms - b.ms || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  ctx.retours = retours;
+  return retours;
 }
+
+/** Délai dont Turbo peut attendre le retour d'un livreur interne (`course.turbo_attente_retour_max_min`). */
+const attenteRetourMs = (ctx: Contexte) => (ctx.r.turboActif ? ctx.r.turboAttenteRetourMaxMin * 60_000 : 0);
 
 /**
  * Premier retour estimé d'un livreur en course, s'il arrive avant que ces
- * commandes ne partent chez Turbo (plus ancienne prête + 6 min) ; sinon
- * `null` : Turbo les prendra (une course par commande), leur départ interne
- * n'est qu'une supposition.
+ * commandes ne partent chez Turbo (plus ancienne prête + 6 min, plus
+ * l'attente d'un retour : Turbo attend un livreur qui revient dans ce délai) ;
+ * sinon `null` : Turbo les prendra (une course par commande), leur départ
+ * interne n'est qu'une supposition.
  */
 function retourAvantTurbo(ctx: Contexte, arrets: readonly Arret[]): number | null {
   const retour = retourEstimeMs(ctx);
   if (retour === null || arrets.length === 0) return retour;
-  if (ctx.r.turboActif && retour > plusAnciennePrete(ctx, arrets) + ctx.r.turboApresMinV2 * 60_000) return null;
+  if (ctx.r.turboActif && retour > plusAnciennePrete(ctx, arrets) + ctx.r.turboApresMinV2 * 60_000 + attenteRetourMs(ctx)) return null;
   return retour;
+}
+
+/**
+ * Turbo (3.11) : la course attend-elle le retour d'un livreur interne au lieu
+ * de partir chez Turbo ? Oui si un livreur en course (pas encore retenu pour
+ * une autre course, ne l'ayant pas refusée) revient au restaurant dans
+ * `course.turbo_attente_retour_max_min`, que chaque commande arrive encore
+ * avant sa promesse + le retard toléré en partant avec lui, et sans dépasser
+ * la bascule + ce délai : au pire, Turbo est appelé ce délai plus tard.
+ */
+function retourAttenduAvantTurbo(
+  ctx: Contexte,
+  k: CourseTravail,
+  d: DecisionTurbo,
+  pris: ReadonlySet<string>,
+): RetourLivreur | null {
+  const attenteMin = ctx.r.turboAttenteRetourMaxMin;
+  if (attenteMin <= 0 || d.minutes >= ctx.r.turboApresMinV2 + attenteMin) return null;
+  for (const retour of retoursEstimes(ctx)) {
+    if (pris.has(retour.id) || k.dejaSollicites.has(retour.id)) continue;
+    if (retour.ms > ctx.t + attenteMin * 60_000) return null; // les suivants reviennent plus tard encore
+    const est = estimer(ctx, k.arrets, retour.ms);
+    const tiennent = k.arrets.every((a) => (est.arriveesMs.get(a.id) ?? retour.ms) <= a.limiteMs);
+    return tiennent ? retour : null;
+  }
+  return null;
 }
 
 /**
@@ -1451,13 +1662,18 @@ function attendUnLivreur(ctx: Contexte, k: CourseTravail, enPlus: readonly strin
 }
 
 /**
- * Course sans livreur ni offre que tous les livreurs libres ont déjà refusée
- * ou laissée expirer : elle ne sera proposée à aucun d'eux. Elle n'est la
- * cible d'aucun ajout ni d'aucune fusion (la commande ou la course neuve, elle,
- * peut leur être proposée tout de suite).
+ * Course (ou paire de courses d'une fusion) refusée, ou laissée expirer sans
+ * signe de vie, par un livreur qui pourrait la prendre MAINTENANT : un
+ * livreur libre, ou un livreur `enPlus` (sollicité par l'une des courses de
+ * la fusion, qui recevrait la course fusionnée). Elle n'est la cible d'aucun
+ * ajout ni d'aucune fusion : la commande ou la course neuve, elle, peut lui
+ * être proposée tout de suite. Sinon la commande collée héritait des refus de
+ * la course et n'était jamais proposée à ce livreur, qui l'attendait au
+ * comptoir sans jamais l'avoir refusée ; Turbo la prenait.
  */
-function refuseeParLesLibres(ctx: Contexte, k: CourseTravail, enPlus: readonly string[] = []): boolean {
-  return attendUnLivreur(ctx, k, enPlus) && departLibreMs(ctx, enPlus) !== null;
+function refuseeParUnDisponible(ctx: Contexte, exclus: ReadonlySet<string>, enPlus: readonly string[] = []): boolean {
+  for (const id of exclus) if (ctx.libres.has(id) || enPlus.includes(id)) return true;
+  return false;
 }
 
 /** Course récupérée (catégorie 0) à moins de 90 s (ou d'une demi-fenêtre) de la fin de sa fenêtre : elle ne grossit plus. */
@@ -1540,6 +1756,17 @@ export function planifier(
     }
   };
   for (const k of instantane.courses) {
+    if (estCourseVideSansLivreur(k)) {
+      actions.push({
+        type: 'ANNULER_COURSE_VIDE',
+        course_id: k.id,
+        offre: k.offre,
+        libelle: 'Plus aucune commande à livrer',
+      });
+      // Son livreur sollicité est libéré : une autre course peut lui être proposée dans ce passage.
+      libererOffre(ctx, k.offre);
+      continue;
+    }
     if (k.statut === CourseStatut.IN_DELIVERY) {
       // Déjà partie (bouton « Je pars », passage précédent) : une commande
       // ajoutée après le retrait et pas remise ne part pas avec le livreur.
@@ -1594,8 +1821,8 @@ export function planifier(
         refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: 'FIN_DE_FENETRE', libelle: 'fenêtre d’ajout presque finie' });
         continue;
       }
-      if (refuseeParLesLibres(ctx, k)) {
-        refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: 'DEJA_REFUSEE', libelle: 'déjà refusée par les livreurs libres' });
+      if (k.categorie === 3 && refuseeParUnDisponible(ctx, k.dejaSollicites)) {
+        refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: 'DEJA_REFUSEE', libelle: 'refusée par un livreur libre' });
         continue;
       }
       const attendue = !!k.source?.commandes_attendues.includes(q.id);
@@ -1739,15 +1966,28 @@ export function planifier(
       const departU = departCourse(ctx, u);
       const premiere = plusAnciennePrete(ctx, u.arrets);
 
-      // (a) Vers une course qui a déjà son livreur.
+      // (a) Vers une course qui a déjà son livreur. Jamais une course dont
+      // l'offre a été forcée par l'administrateur (son geste n'est pas défait).
       let meilleureA: { k: CourseTravail; res: Extract<ResultatAjout, { ok: true }>; cle: number[] } | null = null;
-      for (const k of ouvertes) {
+      for (const k of u.offre?.forcee ? [] : ouvertes) {
         if (k === u || k.absorbee || k.categorie === null || k.categorie === 3) continue;
         if (finDeFenetreProche(ctx, k)) {
           refus.push({ essai: 'FUSION', order_id: null, source_id: u.cle, course_cle: k.cle, refus: 'FIN_DE_FENETRE', libelle: 'fenêtre d’ajout presque finie' });
           continue;
         }
+        // Son livreur a refusé cette course : ses commandes ne lui reviennent pas par une fusion.
+        if (k.delivererId && u.dejaSollicites.has(k.delivererId)) {
+          refus.push({ essai: 'FUSION', order_id: null, source_id: u.cle, course_cle: k.cle, refus: 'DEJA_REFUSEE', libelle: 'refusée par le livreur de la course' });
+          continue;
+        }
         const depart = departOuDefaut(ctx, departCourse(ctx, k));
+        // Offre en attente sur la course absorbée (livreur au comptoir, par
+        // exemple) : elle n'est pas reprise pour attendre un livreur qui
+        // partira plus tard. Seules les fusions qui ne retardent rien restent.
+        if (u.offre && departU !== null && depart > departU) {
+          refus.push({ essai: 'FUSION', order_id: null, source_id: u.cle, course_cle: k.cle, refus: 'OFFRE_EN_COURS', libelle: 'partirait plus tôt avec le livreur sollicité' });
+          continue;
+        }
         const res = evaluerAjout(ctx, {
           existants: k.arrets,
           nouveaux: u.arrets,
@@ -1779,10 +2019,17 @@ export function planifier(
           [u, v],
           [v, u],
         ] as const) {
+          // Offre forcée par l'administrateur : la course n'est jamais absorbée.
+          if (absorbee.offre?.forcee) continue;
           // Le livreur sollicité par la course absorbée sera libre pour la cible.
           const enPlus = absorbee.offre ? [absorbee.offre.deliverer_id] : [];
-          if (refuseeParLesLibres(ctx, cible, enPlus)) {
-            refus.push({ essai: 'FUSION', order_id: null, source_id: absorbee.cle, course_cle: cible.cle, refus: 'DEJA_REFUSEE', libelle: 'déjà refusée par les livreurs libres' });
+          // Refusée (l'une ou l'autre) par un livreur qui pourrait prendre la
+          // course fusionnée maintenant : pas de fusion, ses commandes ne lui
+          // reviennent pas et l'autre course lui reste proposable seule.
+          const refusants = new Set([...cible.dejaSollicites, ...absorbee.dejaSollicites]);
+          const preneurs = [...enPlus, ...(cible.offre ? [cible.offre.deliverer_id] : [])];
+          if (refuseeParUnDisponible(ctx, refusants, preneurs)) {
+            refus.push({ essai: 'FUSION', order_id: null, source_id: absorbee.cle, course_cle: cible.cle, refus: 'DEJA_REFUSEE', libelle: 'refusée par un livreur libre' });
             continue;
           }
           const departCible = departCourse(ctx, cible, enPlus);
@@ -1850,10 +2097,12 @@ export function planifier(
   }
 
   // ── 5 bis. Zéro temps mort : une offre en attente vise un livreur loin du
-  // restaurant alors qu'un livreur libre y serait plus de 5 min plus tôt.
-  // L'offre est reprise sans pénalité et la course proposée au livreur libre.
+  // restaurant alors qu'un livreur libre y serait plus de 5 min plus tôt (2 min
+  // s'il est au comptoir). L'offre est reprise sans pénalité et la course
+  // proposée au livreur libre. Jamais une offre forcée par l'administrateur.
   for (const k of ouvertes) {
     if (k.categorie !== 3 || k.absorbee || !k.offre || !k.offre.id || k.arrets.length === 0) continue; // offre de ce passage : id vide
+    if (k.offre.forcee) continue;
     const vise = k.offre;
     // Offre échue pas encore traitée : son expiration (avec sa pénalité)
     // passe d'abord, puis la course est proposée au suivant.
@@ -1867,7 +2116,8 @@ export function planifier(
     if (candidats.length === 0) continue;
     const [premier] = classerLivreurs(candidats, instantane.livreurs, ctx.etas, maintenant);
     const gainMs = etaMs(ctx, vise.deliverer_id) - premier.eta_s * 1000;
-    if (gainMs <= ECART_REPRISE_OFFRE_S * 1000) continue;
+    const seuilS = premier.au_comptoir ? ECART_REPRISE_OFFRE_COMPTOIR_S : ECART_REPRISE_OFFRE_S;
+    if (gainMs <= seuilS * 1000) continue;
     ctx.libres.delete(premier.deliverer_id);
     actions.push({
       type: 'REPRENDRE_OFFRE',
@@ -2015,11 +2265,30 @@ export function planifier(
     });
   }
 
-  // ── 7. Turbo, dernier recours.
-  for (const k of ouvertes) {
-    if (k.categorie !== 3 || k.absorbee || k.nouvelle || k.offre || !k.source) continue;
-    const d = decisionTurboV2({ ...k.source, offre: null }, r, maintenant);
-    if (!d.basculer) continue;
+  // ── 7. Turbo, dernier recours : la plus urgente d'abord ; une course attend
+  // le retour d'un livreur interne s'il revient très bientôt (un livreur par
+  // course).
+  const aConfier = ouvertes
+    .filter((k) => k.categorie === 3 && !k.absorbee && !k.nouvelle && !k.offre && !!k.source)
+    .map((k) => ({ k, d: decisionTurboV2({ ...k.source!, offre: null }, r, maintenant) }))
+    .filter(({ d }) => d.basculer)
+    .map((x) => ({ ...x, marge: margeMs(ctx, x.k.arrets) }))
+    .sort((a, b) => a.marge - b.marge || (a.k.cle < b.k.cle ? -1 : a.k.cle > b.k.cle ? 1 : 0));
+  const retoursPris = new Set<string>();
+  for (const { k, d } of aConfier) {
+    const retour = retourAttenduAvantTurbo(ctx, k, d, retoursPris);
+    if (retour) {
+      retoursPris.add(retour.id);
+      refus.push({
+        essai: 'TURBO',
+        order_id: null,
+        source_id: null,
+        course_cle: k.cle,
+        refus: 'RETOUR_ATTENDU',
+        libelle: `livreur de retour à ${heureLisible(new Date(retour.ms), maintenant)}`,
+      });
+      continue;
+    }
     actions.push({
       type: 'CONFIER_TURBO',
       course_id: k.id!,
@@ -2078,7 +2347,10 @@ function autreLivreurATemps(ctx: Contexte, k: CourseTravail, finMs: number): boo
  * Retour estimé d'un livreur en course au restaurant, sans Google : arrêts
  * restants à vol d'oiseau × 1,4, 3 min par arrêt, puis le retour. Depuis sa
  * position fraîche s'il est parti, sinon depuis le restaurant à son départ
- * (au plus tôt, ou à son arrivée s'il est en route). `null` sans coordonnées.
+ * (au plus tôt, ou à son arrivée s'il est en route). Un trajet vers ou
+ * depuis un client sans coordonnées dure `trajetSansCoordonneesMin` : le
+ * livreur qui le livre n'est jamais réputé déjà revenu. `null` sans
+ * coordonnées du restaurant.
  */
 export function retourAuRestaurantMs(
   course: CoursePlanif,
@@ -2090,14 +2362,15 @@ export function retourAuRestaurantMs(
 ): number | null {
   if (!restaurant) return null;
   const t = maintenant.getTime();
-  const restants = livraisonsActives(course.livraisons).filter((l) => l.commande.client.position);
+  const restants = livraisonsActives(course.livraisons);
   const parti =
     course.statut === CourseStatut.IN_DELIVERY &&
     (!!course.parti_at || course.livraisons.some((l) => l.statut !== DeliveryStatut.PENDING && l.statut !== DeliveryStatut.CANCELLED));
   const fraiche =
     !!livreur.position && !!livreur.position_at && t - livreur.position_at.getTime() <= r.positionExpirationMin * 60_000;
 
-  let point: ILatLng;
+  // `null` : dernier point inconnu (client sans coordonnées).
+  let point: ILatLng | null;
   let debut: number;
   if (parti && fraiche) {
     point = livreur.position!;
@@ -2110,13 +2383,16 @@ export function retourAuRestaurantMs(
     debut = course.statut === CourseStatut.ACCEPTED ? t + etaVersRestaurantMs : t;
   }
   const mps = vitesseKmh(new Date(debut), r) / 3.6;
+  const trajetInconnuS = r.trajetSansCoordonneesMin * 60;
+  const trajetS = (a: ILatLng | null, b: ILatLng | null) =>
+    a && b ? (haversineMeters(a, b) * FACTEUR_ROUTE_VOL_OISEAU) / mps : trajetInconnuS;
   let duree = 0;
   for (const l of restants) {
-    const p = l.commande.client.position!;
-    duree += (haversineMeters(point, p) * FACTEUR_ROUTE_VOL_OISEAU) / mps + ARRET_CLIENT_S;
+    const p = l.commande.client.position;
+    duree += trajetS(point, p) + ARRET_CLIENT_S;
     point = p;
   }
-  duree += (haversineMeters(point, restaurant) * FACTEUR_ROUTE_VOL_OISEAU) / mps;
+  duree += trajetS(point, restaurant);
   return Math.max(t, debut + duree * 1000);
 }
 

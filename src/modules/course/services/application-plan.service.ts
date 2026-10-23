@@ -31,6 +31,7 @@ import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { recalculerFraisCourse } from '../helpers/frais-course';
 import {
   ActionAjouter,
+  ActionAnnulerCourseVide,
   ActionConfierTurbo,
   ActionCreerCourse,
   ActionDetacher,
@@ -203,6 +204,8 @@ export class ApplicationPlanService {
 
   private appliquerUne(a: ActionPlanification, p: Passage): Promise<void> {
     switch (a.type) {
+      case 'ANNULER_COURSE_VIDE':
+        return this.annulerCourseVide(a, p);
       case 'MARQUER_PARTI':
         return this.marquerParti(a, p);
       case 'DETACHER':
@@ -225,6 +228,63 @@ export class ApplicationPlanService {
         return this.liberer(a, p);
       case 'CONFIER_TURBO':
         return this.confierTurbo(a, p);
+    }
+  }
+
+  // ─── Course vide ───────────────────────────────────────────────────────────
+
+  /**
+   * Course sans livreur dont toutes les commandes ont été annulées : annulée
+   * par le système, sous condition (toujours sans livreur, pas chez Turbo,
+   * au moins une livraison et aucune encore à livrer). Une acceptation ou une
+   * commande rattachée au même instant l'emporte : l'action est abandonnée.
+   * Les commandes ne sont pas touchées ; l'offre en attente est close sans
+   * pénalité ; siège et restaurant sont prévenus (`course:cancelled`).
+   */
+  private async annulerCourseVide(a: ActionAnnulerCourseVide, p: Passage): Promise<void> {
+    const now = p.maintenant;
+    const { count } = await this.prisma.course.updateMany({
+      where: {
+        id: a.course_id,
+        statut: CourseStatut.PENDING_ASSIGNMENT,
+        deliverer_id: null,
+        turbo_escalated_at: null,
+        deliveries: {
+          some: {},
+          none: { statut: { notIn: STATUTS_LIVRAISON_TERMINEE }, order: { status: { not: OrderStatus.CANCELLED } } },
+        },
+      },
+      data: {
+        statut: CourseStatut.CANCELLED,
+        cancelled_at: now,
+        cancelled_by: 'system',
+        cancelled_reason: 'Plus aucune commande à livrer : toutes ses commandes ont été annulées',
+        offer_expires_at: null,
+      },
+    });
+    if (count !== 1) throw new ActionAbandonnee('COURSE_CHANGEE');
+    await this.prisma.delivery.updateMany({
+      where: { course_id: a.course_id, statut: { notIn: STATUTS_LIVRAISON_TERMINEE } },
+      data: { statut: DeliveryStatut.CANCELLED },
+    });
+    await this.cloture
+      .clorePourCourse(a.course_id, 'COURSE_ANNULEE', { relancerRecherche: false, maintenant: now })
+      .catch((err) => this.logger.warn(`Offres de la course vide non closes : ${(err as Error)?.message}`));
+    await recalculerFraisCourse(this.prisma, a.course_id).catch(() => undefined);
+    await this.journal.ecrire({
+      type: 'COURSE_VIDE_ANNULEE',
+      source: 'serveur',
+      restaurant_id: p.restaurantId,
+      course_id: a.course_id,
+      details: { libelle: a.libelle, offre_close: !!a.offre },
+    });
+    const course = await this.prisma.course.findUnique({ where: { id: a.course_id }, include: COURSE_FULL_INCLUDE });
+    if (course) {
+      await this.courseEvent.courseCancelled({
+        course,
+        cancelled_by: 'system',
+        reason: course.cancelled_reason ?? a.libelle,
+      });
     }
   }
 

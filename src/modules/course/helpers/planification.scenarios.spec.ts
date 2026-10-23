@@ -16,7 +16,7 @@ import { CourseStatut, OrderStatus } from '@prisma/client';
 
 import { FIN_PAUSE_INDEFINIE } from 'src/modules/deliverers/helpers/disponibilite.rules';
 
-import { h, hms, Monde } from './monde-planification.simulee-spec';
+import { h, hms, Monde, R } from './monde-planification.simulee-spec';
 import { REGLAGES_PLANIFICATION_DEFAUT, ReglagesPlanification } from './planification.rules';
 
 const SANS_TURBO: ReglagesPlanification = { ...REGLAGES_PLANIFICATION_DEFAUT, turboActif: false };
@@ -266,6 +266,53 @@ describe('rush : 2 livreurs pour 6 commandes', () => {
   });
 });
 
+describe('rush avec les positions telles que l’appli les envoie aujourd’hui (seconde relecture)', () => {
+  it('rien hors course appli fermée : tout est livré, aucune violation, aucun temps mort plus fin', () => {
+    const m = new Monde(h('11:59:50'), SANS_TURBO, { positionsCommeLAppli: true })
+      .livreur('d1', { libreDepuis: h('11:50'), delaiDepartS: 60 })
+      .livreur('d2', { libreDepuis: h('11:55'), delaiDepartS: 60 })
+      .commande('o1', { est: 2000, creee: h('11:55'), enPreparation: h('11:58'), prete: h('12:08') })
+      .commande('o2', { est: 2600, nord: 300, creee: h('11:57'), enPreparation: h('12:00'), prete: h('12:08:40') })
+      .commande('o5', { est: 1500, creee: h('12:02'), enPreparation: h('12:05'), prete: h('12:14'), finCuisine: h('12:14') })
+      .commande('o3', { nord: 2200, est: 0, creee: h('11:58'), enPreparation: h('12:01'), prete: h('12:09') })
+      .commande('o4', { nord: 2600, est: 300, creee: h('12:00'), enPreparation: h('12:03'), prete: h('12:13') })
+      .commande('o6', { nord: 1800, est: 0, creee: h('12:04'), enPreparation: h('12:07'), prete: h('12:20') });
+    m.jusqua(h('13:30'));
+
+    for (const id of ['o1', 'o2', 'o3', 'o4', 'o5', 'o6']) expect(m.commandes.get(id)!.statut).toBe(OrderStatus.COMPLETED);
+    expect(m.violations).toEqual([]);
+    expect(m.tempsMort).toEqual({ courseDUnAutreLivreur: 0, offreLointaine: 0, expireeSeulement: 0 });
+  });
+});
+
+describe('offre laissée expirer, téléphone en poche, puis appli rouverte au comptoir (seconde relecture)', () => {
+  it('la course lui revient dès qu’il rouvre l’appli, Turbo n’est pas appelé', () => {
+    // D1 au comptoir ne voit pas l'offre (il accepterait au bout de 10 min) ; D2 loin en tournée.
+    const m = new Monde(h('11:59:50'))
+      .livreur('d1', { libreDepuis: h('11:30'), delaiAcceptationS: 600 })
+      .livreur('d2', { libreDepuis: h('11:00') })
+      .commande('z', { est: 6000, creee: h('11:30'), enPreparation: h('11:35'), prete: h('11:50') })
+      .courseEnTournee('d2', ['z'], h('11:55'))
+      .commande('a', { est: 2000, creee: h('11:45'), enPreparation: h('11:48'), prete: h('12:00') });
+    // 12:03 : il rouvre l'appli (position envoyée), et répond vite cette fois.
+    m.prevoir(h('12:03'), () => {
+      m.livreurs.get('d1')!.delaiAcceptationS = 10;
+      m.reprendre('d1');
+    });
+    m.jusqua(h('12:30'));
+
+    expect(m.toutes('OFFRIR').map((x) => [hms(x.t), x.action.deliverer_id])).toEqual([
+      ['12:00:00', 'd1'],
+      ['12:03:00', 'd1'],
+    ]);
+    expect(m.toutes('CONFIER_TURBO')).toEqual([]);
+    expect(m.courseDe('a')!.deliverer_id).toBe('d1');
+    // Entre l'expiration (12:02) et la réouverture (12:03), la course n'a été « laissée expirer » que par lui : compté.
+    expect(m.tempsMort.expireeSeulement).toBe(60);
+    expect(m.violations).toEqual([]);
+  });
+});
+
 describe('le banc lui-même : le monde détecte bien les fautes', () => {
   it('offre à un livreur en pause, temps mort, retenue repoussée', () => {
     const m = new Monde(h('12:29:50'))
@@ -293,5 +340,33 @@ describe('le banc lui-même : le monde détecte bien les fautes', () => {
     k.retenue_jusqua = h('12:33');
     banc.appliquer({ actions: [{ type: 'RETENIR', course_id: k.id, deliverer_id: null, jusqua: h('12:34'), attendues: [], libelle: '' }] });
     expect(m.violations[2]).toContain('repoussée');
+  });
+
+  it('temps morts plus fins, comptés en secondes : course d’un autre livreur en route, offre lointaine, offre seulement expirée', () => {
+    const m = new Monde(h('12:29:50'))
+      .livreur('d1', { libreDepuis: h('12:00') })
+      .livreur('d2', { libreDepuis: h('12:00'), position: { lat: R.lat + 0.03, lng: R.lng } })
+      .commande('a', { est: 2000, creee: h('12:20'), enPreparation: h('12:22'), prete: h('12:30') });
+    const banc = m as unknown as { appliquer(plan: { actions: unknown[] }): void; controlerTempsMort(): void };
+    m.t = h('12:30');
+    m.commandes.get('a')!.statut = OrderStatus.READY;
+    banc.appliquer({ actions: [{ type: 'CREER_COURSE', cle: 'n', order_ids: ['a'], sequence: ['a'], motif: null, libelle: '' }] });
+    const k = m.courseDe('a')!;
+
+    // (2) Offre à D2, à plus de 2 min, pendant que D1 attend au comptoir.
+    k.offre = { id: 'o', deliverer_id: 'd2', offered_at: m.t, expires_at: h('12:32') };
+    banc.controlerTempsMort();
+    // (1) Course acceptée par D2, encore en route.
+    k.offre = null;
+    k.statut = CourseStatut.ACCEPTED;
+    k.deliverer_id = 'd2';
+    banc.controlerTempsMort();
+    // (3) Course seulement laissée expirer par D1, sans signe de vie depuis.
+    k.statut = CourseStatut.PENDING_ASSIGNMENT;
+    k.deliverer_id = null;
+    k.expirees.push({ deliverer_id: 'd1', a: h('12:31') });
+    banc.controlerTempsMort();
+
+    expect(m.tempsMort).toEqual({ courseDUnAutreLivreur: 10, offreLointaine: 10, expireeSeulement: 10 });
   });
 });

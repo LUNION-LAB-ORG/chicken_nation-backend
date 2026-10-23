@@ -336,6 +336,8 @@ export class CourseOfferService {
    * @param forceResend `true` (admin force-assign) : si une offer PENDING existe déjà
    * pour ce couple course+livreur, on ré-émet quand même le WS au lieu de silencer.
    * Permet à l'admin de "relancer" la notification si le livreur n'a pas vu la première.
+   * L'offre est alors marquée FORCÉE (`forcee`) : le planificateur ne la reprend
+   * jamais pour un autre livreur et ne la clôt jamais par une fusion.
    */
   async offerToDeliverer(
     courseId: string,
@@ -400,6 +402,7 @@ export class CourseOfferService {
             `offerToDeliverer RESEND (force) : offer PENDING existante re-notifiée (course=${courseId.slice(0, 8)}, deliverer=${delivererId.slice(0, 8)})`,
           );
           wasExisting = true;
+          await tx.courseOfferAttempt.update({ where: { id: existing.id }, data: { forcee: true } });
           // Retourner le course complet pour ré-émettre l'event
           return tx.course.findUnique({
             where: { id: courseId },
@@ -413,6 +416,7 @@ export class CourseOfferService {
             deliverer_id: delivererId,
             status: CourseOfferStatus.PENDING,
             expires_at: expiresAt,
+            forcee: forceResend,
           },
         });
 
