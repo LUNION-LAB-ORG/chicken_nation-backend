@@ -230,7 +230,7 @@ export class DelivererPushService {
       delivererId: input.delivererId,
       type: 'course_pickup_validated',
       title: 'Colis prêts',
-      body: `La caissière a validé ${input.courseReference} — tu peux partir`,
+      body: 'Tu peux partir',
       data: { courseId: input.courseId },
     });
   }

@@ -11,6 +11,7 @@ import {
   DeliveryStatut,
   OrderStatus,
   PaiementStatus,
+  Prisma,
 } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -27,6 +28,7 @@ import { FailDeliveryDto } from '../dto/fail-delivery.dto';
 import { RateCustomerDto } from '../dto/rate-customer.dto';
 import { CourseEvent } from '../events/course.event';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
+import { DepartCourseService } from './depart-course.service';
 
 /**
  * Service : transitions de statut sur les Delivery individuelles.
@@ -44,23 +46,46 @@ export class DeliveryActionService {
     private readonly pushService: DelivererPushService,
     // Cloche staff « encaissement à confirmer » (livraison non payée)
     private readonly notificationsSender: NotificationsSenderService,
+    // Planificateur v2 : démarrer une livraison, c'est quitter le restaurant.
+    private readonly depart?: DepartCourseService,
   ) {}
 
-  /** Le livreur démarre une livraison vers ce client (PENDING → IN_ROUTE) */
+  /**
+   * Le livreur démarre une livraison vers ce client (PENDING → IN_ROUTE).
+   * Déjà en route (démarrée par le serveur au départ du restaurant, ou appel
+   * répété) : rendue telle quelle, sans erreur. Commande ajoutée après le
+   * retrait et pas encore remise : 409. Course pas encore partie : le départ
+   * est enregistré d'abord (DepartCourseService).
+   */
   async startDelivery(deliveryId: string, delivererId: string) {
-    const delivery = await this.assertOwned(deliveryId, delivererId, DeliveryStatut.PENDING);
+    const delivery = await this.assertOwned(deliveryId, delivererId, [DeliveryStatut.PENDING, DeliveryStatut.IN_ROUTE]);
+    if (delivery.statut === DeliveryStatut.IN_ROUTE) return this.lireSansCode(deliveryId);
 
-    const updated = await this.prisma.delivery.update({
-      where: { id: deliveryId },
-      // Le livreur ne doit JAMAIS lire le code : c'est le client qui le lui
-      // dicte, et c'est ce qui prouve la remise. Sans cette omission, la
-      // reponse de la route lui donnait de quoi valider sans voir personne.
-      omit: { delivery_pin: true },
-      data: { statut: DeliveryStatut.IN_ROUTE, in_route_at: new Date() },
-    });
+    await this.depart?.avantDemarrageLivraison(delivery);
+
+    const updated = await this.prisma.delivery
+      .update({
+        // Conditionnée : le serveur a pu la démarrer au même instant (départ).
+        where: { id: deliveryId, statut: DeliveryStatut.PENDING },
+        // Le livreur ne doit JAMAIS lire le code : c'est le client qui le lui
+        // dicte, et c'est ce qui prouve la remise. Sans cette omission, la
+        // reponse de la route lui donnait de quoi valider sans voir personne.
+        omit: { delivery_pin: true },
+        data: { statut: DeliveryStatut.IN_ROUTE, in_route_at: new Date() },
+      })
+      .catch((err) => {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') return null;
+        throw err;
+      });
+    if (!updated) return this.lireSansCode(deliveryId);
 
     await this.emitDeliveryStatut(updated, delivery.statut);
     return updated;
+  }
+
+  /** Livraison relue sans le code du client. */
+  private lireSansCode(deliveryId: string) {
+    return this.prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId }, omit: { delivery_pin: true } });
   }
 
   /** Livreur arrivé à l'adresse client (IN_ROUTE → ARRIVED) */
@@ -324,7 +349,7 @@ export class DeliveryActionService {
    * pour que `confirmDelivery` puisse décider si la commande passe `COMPLETED`
    * ou reste `COLLECTED` en attendant l'encaissement caissière.
    */
-  private async assertOwned(deliveryId: string, delivererId: string, expected: DeliveryStatut) {
+  private async assertOwned(deliveryId: string, delivererId: string, expected: DeliveryStatut | DeliveryStatut[]) {
     const delivery = await this.prisma.delivery.findUnique({
       where: { id: deliveryId },
       include: {
@@ -336,6 +361,8 @@ export class DeliveryActionService {
             payment_method: true,
             // Encaissement à la livraison (commande non payée)
             reference: true,
+            // Commande ajoutée après le retrait : pas encore remise tant qu'elle est prête.
+            status: true,
             amount: true,
             restaurant_id: true,
             customer_id: true,
@@ -350,8 +377,9 @@ export class DeliveryActionService {
     if (delivery.course.statut !== CourseStatut.IN_DELIVERY) {
       throw new BadRequestException('La course doit être en phase IN_DELIVERY');
     }
-    if (delivery.statut !== expected) {
-      throw new BadRequestException(`Statut delivery attendu ${expected}, actuel ${delivery.statut}`);
+    const attendus = Array.isArray(expected) ? expected : [expected];
+    if (!attendus.includes(delivery.statut)) {
+      throw new BadRequestException(`Statut delivery attendu ${attendus.join(' ou ')}, actuel ${delivery.statut}`);
     }
     return delivery;
   }

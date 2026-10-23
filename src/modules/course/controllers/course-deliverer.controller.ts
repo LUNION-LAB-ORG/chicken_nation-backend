@@ -114,10 +114,13 @@ export class CourseDelivererController {
   }
 
   @ApiOperation({
-    summary: 'Je pars : le livreur quitte le restaurant (course récupérée)',
+    summary: 'Je pars : le livreur quitte le restaurant (course récupérée), facultatif',
     description:
-      'Ferme la fenêtre d\'ajout après le retrait (`parti_at`). Idempotent. Une commande ajoutée ' +
-      'après le retrait et pas encore remise est retirée de la course (elle repart dans une autre). ' +
+      'Ferme la fenêtre d\'ajout après le retrait (`parti_at`). Facultatif : le serveur déduit aussi ' +
+      'le départ d\'une position à plus de `course.depart_rayon_m` du restaurant, du démarrage d\'une ' +
+      'livraison ou de la fin de la fenêtre. Idempotent. Une commande ajoutée après le retrait et pas ' +
+      'encore remise est retirée de la course tout de suite (elle repart dans une autre). Appli au ' +
+      'protocole 3 : la première livraison dont la commande est remise est démarrée par le serveur. ' +
       'Rend la course (même forme que `me/current`). 400 si la course n\'est pas encore récupérée.',
   })
   @Post(':id/depart')
@@ -143,7 +146,13 @@ export class CourseDelivererController {
   // DELIVERY : par livraison individuelle
   // ============================================================
 
-  @ApiOperation({ summary: 'Démarrer une livraison (PENDING → IN_ROUTE)' })
+  @ApiOperation({
+    summary: 'Démarrer une livraison (PENDING → IN_ROUTE)',
+    description:
+      'Déjà en route (démarrée par le serveur au départ) : rendue telle quelle, sans erreur. Course ' +
+      'récupérée pas encore partie : le départ est enregistré d\'abord (plus aucun ajout). 409 « Commande ' +
+      'pas encore remise. » pour une commande ajoutée après le retrait que la caisse n\'a pas remise.',
+  })
   @Patch('deliveries/:deliveryId/start')
   async startDelivery(
     @CurrentDeliverer() deliverer: Deliverer,

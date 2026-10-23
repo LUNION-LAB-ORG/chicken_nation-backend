@@ -198,6 +198,7 @@ export class CourseEnLivraisonService {
     // par le bouton (planificateur v2). Le livreur est prévenu quand tout est pris.
     if (course.statut === CourseStatut.IN_DELIVERY) {
       await this.depart?.surRemiseParCaisse(course.id, commande);
+      void this.actions.estimerDureeTournee(course.id).catch(() => undefined);
       return false;
     }
     if (!STATUTS_COURSE_AVANT_DEPART.includes(course.statut)) return false; // déjà partie ou terminée

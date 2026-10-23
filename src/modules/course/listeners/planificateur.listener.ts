@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { CourseStatut, DeliveryService, OrderStatus, OrderType } from '@prisma/client';
+import { DeliveryService, OrderStatus, OrderType } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 import { DelivererChannels } from 'src/modules/deliverers/enums/deliverer-channels';
@@ -24,6 +24,7 @@ import type {
   DeliveryStatutChangedPayload,
 } from '../interfaces/course-event.interface';
 import { CoursePlanificateurService } from '../services/course-planificateur.service';
+import { DepartCourseService } from '../services/depart-course.service';
 import { EstimationPreparationService } from '../services/estimation-preparation.service';
 import type { OffreExpireePayload } from '../services/offres-cloture.service';
 
@@ -43,7 +44,7 @@ const STATUTS_COMMANDE_UTILES: OrderStatus[] = [OrderStatus.READY, OrderStatus.I
  *  - livreur disponible, en pause, reprise (file d'attente), appli connectée ;
  *  - livraison démarrée ou arrivée (départ du restaurant) ;
  *  - position d'un livreur dont la course récupérée n'est pas encore partie
- *    (sortie du rayon de départ).
+ *    (sortie du rayon de départ : départ enregistré aussitôt).
  *
  * Les `course:statut:changed` émis par le planificateur lui-même (raisons
  * `RaisonsPlanificateur`) sont ignorés : un passage n'en déclenche pas un
@@ -59,6 +60,7 @@ export class PlanificateurListener {
     private readonly planificateur: CoursePlanificateurService,
     private readonly settings: CourseSettingsHelper,
     private readonly preparation: EstimationPreparationService,
+    private readonly depart: DepartCourseService,
   ) {}
 
   @OnEvent(DispatchEvenements.PLANIFIER_RESTAURANT)
@@ -152,17 +154,16 @@ export class PlanificateurListener {
 
   /**
    * Position d'un livreur : utile seulement si sa course récupérée n'est pas
-   * encore partie (le passage décide s'il est sorti du rayon de départ).
+   * encore partie. Reçue hors du rayon de départ après le retrait : départ
+   * enregistré tout de suite (le livreur n'a rien à toucher). Sinon le
+   * passage décide (fenêtre écoulée).
    */
   @OnEvent(DelivererChannels.DELIVERER_LOCATION_UPDATED)
   async onPosition(payload: DelivererLocationUpdatedPayload) {
     if (!payload?.delivererId) return;
     try {
-      const course = await this.prisma.course.findFirst({
-        where: { deliverer_id: payload.delivererId, statut: CourseStatut.IN_DELIVERY, parti_at: null },
-        select: { restaurant_id: true },
-      });
-      if (course) this.planificateur.demander(course.restaurant_id, 'POSITION');
+      const course = await this.depart.surPosition(payload);
+      if (course) this.planificateur.demander(course.restaurant_id, course.parti ? 'DEPART_POSITION' : 'POSITION');
     } catch (err) {
       this.logger.warn(`Position du livreur : passage non demandé (${(err as Error)?.message})`);
     }

@@ -48,6 +48,7 @@ import {
 import { STATUTS_LIVRAISON_TERMINEE } from '../helpers/remise-course.rules';
 import { CourseGroupingService } from './course-grouping.service';
 import { CourseOfferService } from './course-offer.service';
+import { DepartCourseService } from './depart-course.service';
 import { DispatchJournalService } from './dispatch-journal.service';
 import { ContexteInstantane, InstantaneLu } from './instantane-planification.service';
 import { OffresClotureService } from './offres-cloture.service';
@@ -129,6 +130,8 @@ export class ApplicationPlanService {
     private readonly journal: DispatchJournalService,
     private readonly cloture: OffresClotureService,
     private readonly regroupement: CourseGroupingService,
+    // Au départ, la première livraison de la nouvelle appli est démarrée par le serveur.
+    private readonly depart?: DepartCourseService,
   ) {}
 
   async appliquer(plan: PlanRestaurant, lu: InstantaneLu, options: OptionsApplication): Promise<ResultatApplication> {
@@ -215,6 +218,7 @@ export class ApplicationPlanService {
       deliverer_id: a.deliverer_id,
       details: { libelle: a.libelle },
     });
+    await this.depart?.demarrerPremiereLivraison(a.course_id, p.maintenant).catch(() => null);
   }
 
   private async detacher(a: ActionDetacher, p: Passage): Promise<void> {
