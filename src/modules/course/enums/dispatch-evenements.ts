@@ -10,4 +10,20 @@ export const DispatchEvenements = {
    * modules, ne dépende pas de `CourseOfferService`.
    */
   RECHERCHE_A_RELANCER: 'dispatch.recherche.relancer',
+
+  /**
+   * Planificateur v2 : un passage est demandé pour un restaurant (commande
+   * prête, livreur libre, offre refusée…). Les demandes sont regroupées par
+   * restaurant (500 ms) par `CoursePlanificateurService`. Passe par le bus pour
+   * que les services qui le demandent (offres, regroupement) ne dépendent pas
+   * du planificateur, qui dépend d'eux. Charge : `DemandePlanification`.
+   */
+  PLANIFIER_RESTAURANT: 'dispatch.planificateur.restaurant',
 } as const;
+
+/** Charge de `DispatchEvenements.PLANIFIER_RESTAURANT`. */
+export interface DemandePlanification {
+  restaurant_id: string;
+  /** Pourquoi (journal) : COMMANDE_PRETE, LIVREUR_DISPONIBLE, OFFRE_REFUSEE… */
+  raison: string;
+}

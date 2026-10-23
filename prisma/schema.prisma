@@ -636,6 +636,20 @@ model Course {
   total_delivery_fee     Float
   estimated_duration_min Int?
 
+  // === Planificateur v2 (regroupement par direction, retenue au comptoir) ===
+  /// Départ retenu au comptoir jusqu'à cette heure, pour une commande de la même
+  /// direction encore en préparation. Ne peut que diminuer ; passée, la retenue
+  /// est terminée et ne revient jamais sur la course.
+  retenue_jusqua      DateTime? @db.Timestamp(6)
+  /// Commandes attendues par la retenue : [{ order_id, reference, prete_vers, prete_au_plus_tard }].
+  commandes_attendues Json?
+  /// Départ réel du restaurant (bouton « Je pars », position, première livraison,
+  /// fenêtre d'ajout écoulée). Null après le retrait : le livreur est encore au
+  /// restaurant et peut recevoir une commande de plus (nouvelle appli seulement).
+  parti_at            DateTime? @db.Timestamp(6)
+  /// Pourquoi ces commandes vont ensemble : « sur le trajet », « même zone »… (affichage).
+  motif_regroupement  String?   @db.VarChar(40)
+
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
 
@@ -710,6 +724,13 @@ model Delivery {
   /// commande : seule la livraison/course est annulée et la raison est montrée
   /// au staff, qui décide (relancer ou annuler la commande manuellement).
   turbo_cancelled_reason    String?   @db.VarChar(500)
+
+  // === Planificateur v2 ===
+  /// Livraison ajoutée à une course déjà créée (ajout ou fusion) : quand.
+  ajoutee_at            DateTime? @db.Timestamp(6)
+  /// Ajoutée après la validation du retrait, livreur encore au restaurant : la
+  /// commande est remise avec le même code, ou détachée si le livreur part sans elle.
+  ajoutee_apres_retrait Boolean   @default(false)
 
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)

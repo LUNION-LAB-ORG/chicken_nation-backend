@@ -38,7 +38,34 @@ export type TypeEvenementDispatch =
   /** Même bouton sur une course encore SANS livreur : rien ne change, à surveiller. */
   | 'REMISE_CAISSE_SANS_LIVREUR'
   /** Annulation automatique d'une course : les commandes des clients sont gardées. */
-  | 'ANNULATION_AUTO_COMMANDES_GARDEES';
+  | 'ANNULATION_AUTO_COMMANDES_GARDEES'
+  // Planificateur v2 (une ligne par action, `motif` = raison de la décision)
+  /** Course créée par le planificateur ; `motif` = direction (SUR_LE_TRAJET, MEME_ZONE…) ou SEULE. */
+  | 'COURSE_CREEE'
+  /** Commande ajoutée à une course ouverte ; `details.apres_retrait`, `details.attendue`. */
+  | 'COMMANDE_AJOUTEE'
+  /** Course sans livreur absorbée par une autre ; son offre close sans pénalité. */
+  | 'COURSES_FUSIONNEES'
+  /** Ordre des arrêts recalculé. */
+  | 'ARRETS_ORDONNES'
+  /** Course proposée par le planificateur ; `motif` = AU_COMPTOIR ou MINUTES. */
+  | 'OFFRE_PLANIFIEE'
+  /** Départ retenu au comptoir pour une commande en préparation. */
+  | 'COURSE_RETENUE'
+  /** Retenue levée ; `motif` = TOUT_PRET, ECHEANCE, PLUS_RIEN_A_ATTENDRE, PARTI, REPLI_V1. */
+  | 'RETENUE_LEVEE'
+  /** Course réputée partie du restaurant ; `motif` = POSITION, BOUTON, FENETRE_ECHUE… */
+  | 'COURSE_PARTIE'
+  /** Commande ajoutée après le retrait, pas remise : retirée de la course au départ. */
+  | 'COMMANDE_DETACHEE'
+  /** Commande remise avec le même code après le retrait (livreur encore au restaurant). */
+  | 'RETRAIT_COMPLEMENTAIRE'
+  /** Course confiée à Turbo par le planificateur (dernier recours). */
+  | 'TURBO_PLANIFIE'
+  /** Action abandonnée : la course ou la commande a changé entre la lecture et l'écriture. */
+  | 'ACTION_ABANDONNEE'
+  /** Fin de préparation estimée comparée à la réelle (commande prête). */
+  | 'PREPARATION_MESUREE';
 
 /** Qui a déclenché la décision. */
 export type SourceDispatch = 'appli' | 'serveur' | 'admin' | 'caisse' | 'restaurant';

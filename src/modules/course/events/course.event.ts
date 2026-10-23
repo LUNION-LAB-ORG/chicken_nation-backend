@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import { CourseChannels } from '../enums/course-channels';
+import { DemandePlanification, DispatchEvenements } from '../enums/dispatch-evenements';
 import type {
   CourseAssignedPayload,
   CourseCancelledPayload,
@@ -51,6 +52,16 @@ export class CourseEvent {
 
   async courseCancelled(payload: CourseCancelledPayload) {
     this.eventEmitter.emit(CourseChannels.COURSE_CANCELLED, payload);
+  }
+
+  /**
+   * Demande un passage du planificateur v2 pour ce restaurant (regroupé par
+   * restaurant, 500 ms). Sans effet sous v1 hormis le retour à l'ancienne
+   * méthode (courses encore au restaurant marquées parties).
+   */
+  demanderPlanification(payload: DemandePlanification) {
+    if (!payload.restaurant_id) return;
+    this.eventEmitter.emit(DispatchEvenements.PLANIFIER_RESTAURANT, payload);
   }
 
   async refresh() {

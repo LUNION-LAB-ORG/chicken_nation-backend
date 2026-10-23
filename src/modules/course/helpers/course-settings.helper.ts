@@ -2,6 +2,31 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { SettingsService } from 'src/modules/settings/settings.service';
 
+import {
+  CLE_PLANIFICATEUR,
+  CLE_PLANIFICATEUR_RESTAURANTS,
+  CLES_REGLAGES_PLANIFICATION,
+  lirePlanificateur,
+  lireReglagesPlanification,
+  planificateurDuRestaurant,
+  PlanificateurLu,
+  ReglagesPlanificationLus,
+  VersionPlanificateur,
+} from './planification.rules';
+import { CLES_REGLAGES_PREPARATION, lireReglagesPreparation, ReglagesPreparationLus } from './preparation.rules';
+
+/** Réglages du planificateur v2, lus d'un seul tenant (planification.rules.ts, preparation.rules.ts). */
+export interface PlanificationLue {
+  planificateur: PlanificateurLu;
+  planification: ReglagesPlanificationLus;
+  preparation: ReglagesPreparationLus;
+  /** Toutes les valeurs refusées (remplacées par leur défaut), à signaler. */
+  refusees: { cle: string; valeur: string }[];
+}
+
+/** Un même avertissement de réglage refusé au plus une fois par minute. */
+const INTERVALLE_SIGNALEMENT_MS = 60 * 1000;
+
 /**
  * Valeurs par défaut du module course.
  * Utilisées si la clé Settings n'est pas définie en base.
@@ -74,8 +99,49 @@ export interface ICourseSettings {
 @Injectable()
 export class CourseSettingsHelper {
   private readonly logger = new Logger(CourseSettingsHelper.name);
+  private readonly derniersSignalements = new Map<string, number>();
 
   constructor(private readonly settingsService: SettingsService) {}
+
+  /**
+   * PLANIFICATEUR v2 : version (`course.planificateur`, v2 par défaut),
+   * restaurants concernés (`course.planificateur_restaurants`, vide = tous),
+   * réglages du regroupement et de la préparation. Relus à chaque appel, en
+   * une requête. Contrairement à `toNumber`, 0 est accepté là où il a un
+   * sens ; une valeur refusée est remplacée par son défaut et SIGNALÉE (journal
+   * au plus une fois par minute, et `refusees` pour le backoffice).
+   */
+  async lirePlanification(): Promise<PlanificationLue> {
+    const valeurs = await this.settingsService.getMany([
+      CLE_PLANIFICATEUR,
+      CLE_PLANIFICATEUR_RESTAURANTS,
+      ...CLES_REGLAGES_PLANIFICATION,
+      ...Object.values(CLES_REGLAGES_PREPARATION),
+    ]);
+    const planificateur = lirePlanificateur(valeurs);
+    const planification = lireReglagesPlanification(valeurs);
+    const preparation = lireReglagesPreparation(valeurs);
+    const refusees = [...planificateur.refusees, ...planification.refusees, ...preparation.refusees];
+    const maintenant = Date.now();
+    for (const { cle, valeur } of refusees) {
+      if (maintenant - (this.derniersSignalements.get(cle) ?? 0) < INTERVALLE_SIGNALEMENT_MS) continue;
+      this.derniersSignalements.set(cle, maintenant);
+      this.logger.warn(`Réglage refusé ${cle} = « ${valeur} » : valeur par défaut appliquée.`);
+    }
+    return { planificateur, planification, preparation, refusees };
+  }
+
+  /** Planificateur d'un restaurant : `v2` (défaut) ou `v1` (ancien regroupement par lots). */
+  async versionPour(restaurantId: string): Promise<VersionPlanificateur> {
+    const valeurs = await this.settingsService.getMany([CLE_PLANIFICATEUR, CLE_PLANIFICATEUR_RESTAURANTS]);
+    return planificateurDuRestaurant(lirePlanificateur(valeurs), restaurantId);
+  }
+
+  /** Lecture unique pour plusieurs restaurants (tâches qui parcourent tout le réseau). */
+  async planificateurLu(): Promise<PlanificateurLu> {
+    const valeurs = await this.settingsService.getMany([CLE_PLANIFICATEUR, CLE_PLANIFICATEUR_RESTAURANTS]);
+    return lirePlanificateur(valeurs);
+  }
 
   /** Charge toutes les clés d'un coup (optimal — 1 query DB). */
   async load(): Promise<ICourseSettings> {

@@ -13,6 +13,11 @@ export type DelivererPushType =
   | 'new_course_offer' // Nouvelle offre de course (CRITIQUE)
   | 'course_assigned' // Confirmation d'acceptation
   | 'course_pickup_validated' // Caissière a validé → tu peux partir
+  | 'commande_ajoutee' // Planificateur : commande(s) ajoutée(s) à ta course (avant ou après le retrait)
+  | 'commande_retiree' // Planificateur : commande ajoutée pas remise, retirée à ton départ
+  | 'course_attente' // Planificateur : départ retenu, attends une commande encore en cuisine
+  | 'course_tout_pret' // Planificateur : plus rien à attendre, présente ton code
+  | 'commande_remise' // Commande ajoutée remise avec le même code : tu peux partir
   | 'course_completed' // Course terminée
   | 'course_cancelled' // Course annulée
   | 'auto_paused' // Auto-pause déclenchée
@@ -227,6 +232,117 @@ export class DelivererPushService {
       title: 'Colis prêts',
       body: `La caissière a validé ${input.courseReference} — tu peux partir`,
       data: { courseId: input.courseId },
+    });
+  }
+
+  // ── Planificateur v2 : ce qui change dans la course du livreur ─────────
+  // Livreurs souvent peu à l'aise avec l'écrit : titres et corps de 1 à 4
+  // mots, des chiffres (commandes, code, heure, minutes), tutoiement. Même
+  // canal que les offres (`offres_v1`, sonnerie et vibration) : chaque
+  // événement doit se sentir, appli en arrière-plan comprise. Un type inconnu
+  // de l'ancienne appli ouvre l'accueil : sans risque.
+
+  /**
+   * Commande(s) ajoutée(s) à la course. `data` : `courseId`, `reference`,
+   * `ajoutees`, `total`, `apresRetrait`, `code` (code de retrait, même code).
+   */
+  notifyCommandeAjoutee(input: {
+    delivererId: string;
+    courseId: string;
+    courseReference: string;
+    titre: string;
+    corps: string;
+    ajoutees: number;
+    total: number;
+    apresRetrait: boolean;
+    code: string;
+  }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'commande_ajoutee',
+      title: input.titre,
+      body: input.corps,
+      data: {
+        courseId: input.courseId,
+        reference: input.courseReference,
+        ajoutees: input.ajoutees,
+        total: input.total,
+        apresRetrait: input.apresRetrait,
+        code: input.code,
+      },
+      critical: true,
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
+    });
+  }
+
+  /** Commande ajoutée après le retrait, pas remise : retirée au départ. `data.restantes`. */
+  notifyCommandeRetiree(input: {
+    delivererId: string;
+    courseId: string;
+    titre: string;
+    corps: string;
+    commande: string;
+    restantes: number;
+  }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'commande_retiree',
+      title: input.titre,
+      body: input.corps,
+      data: { courseId: input.courseId, commande: input.commande, restantes: input.restantes },
+      critical: true,
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
+    });
+  }
+
+  /** Départ retenu au comptoir. `data.jusqua` (ISO), `data.attendues` (références). */
+  notifyCourseAttente(input: {
+    delivererId: string;
+    courseId: string;
+    titre: string;
+    corps: string;
+    jusqua: Date;
+    attendues: string[];
+  }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'course_attente',
+      title: input.titre,
+      body: input.corps,
+      data: { courseId: input.courseId, jusqua: input.jusqua.toISOString(), attendues: input.attendues },
+      critical: true,
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
+    });
+  }
+
+  /** Plus rien à attendre : présente ton code. `data.code`. */
+  notifyCourseToutPret(input: { delivererId: string; courseId: string; titre: string; corps: string; code: string }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'course_tout_pret',
+      title: input.titre,
+      body: input.corps,
+      data: { courseId: input.courseId, code: input.code },
+      critical: true,
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
+    });
+  }
+
+  /** Commande ajoutée remise avec le même code : tu peux partir. */
+  notifyCommandeRemise(input: { delivererId: string; courseId: string; titre: string; corps: string }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'commande_remise',
+      title: input.titre,
+      body: input.corps,
+      data: { courseId: input.courseId },
+      critical: true,
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
     });
   }
 
