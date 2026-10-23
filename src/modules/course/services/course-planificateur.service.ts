@@ -40,6 +40,13 @@ export const DELAI_COMMANDE_SANS_LOT_MS = 60_000;
  */
 export const DELAI_NOUVELLE_DEMANDE_MS = 1000;
 const NOUVELLES_DEMANDES_MAX = 10;
+/**
+ * Réveil à l'échéance d'une retenue : un passage 300 ms après
+ * `retenue_jusqua` au lieu d'attendre la tâche de 10 s (banc du 23/10 : la
+ * retenue échue était levée 2,5 à 5 s après, jusqu'à 10 s ; le livreur au
+ * comptoir attendait d'autant son « Tu peux partir »).
+ */
+export const MARGE_REVEIL_RETENUE_MS = 300;
 
 export interface ResultatPassage {
   restaurant_id: string;
@@ -69,8 +76,9 @@ export interface ResultatPassage {
  *    partie, annulée, terminée ; livreur disponible, en pause, reprise,
  *    appli connectée), regroupés par restaurant pendant 500 ms
  *    (`demander`, `PlanificateurListener`) ;
- *  - par la tâche de 10 s (échéances : retenues, fenêtre après retrait,
- *    Turbo ; commandes prêtes sans événement).
+ *  - par la tâche de 10 s (échéances : fenêtre après retrait, Turbo ;
+ *    commandes prêtes sans événement) ;
+ *  - à l'échéance d'une retenue (réveil programmé après chaque passage).
  *
  * Aiguillage : `course.planificateur` (`v2` par défaut, `v1` = l'ancien
  * regroupement par lots) et `course.planificateur_restaurants` (vide = tous).
@@ -101,6 +109,8 @@ export class CoursePlanificateurService implements OnModuleDestroy {
   /** Verrou pris ailleurs : demandes refaites de suite, par restaurant. */
   private readonly verrouPrisAilleurs = new Map<string, number>();
   private readonly minuteursNouvelleDemande = new Set<NodeJS.Timeout>();
+  /** Réveil programmé à la prochaine échéance de retenue, par restaurant (ce serveur). */
+  private readonly reveils = new Map<string, { a: number; minuteur: NodeJS.Timeout }>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -115,6 +125,8 @@ export class CoursePlanificateurService implements OnModuleDestroy {
     this.demandes.clear();
     for (const m of this.minuteursNouvelleDemande) clearTimeout(m);
     this.minuteursNouvelleDemande.clear();
+    for (const { minuteur } of this.reveils.values()) clearTimeout(minuteur);
+    this.reveils.clear();
   }
 
   /**
@@ -235,6 +247,11 @@ export class CoursePlanificateurService implements OnModuleDestroy {
 
     if (resultat) {
       this.verrouPrisAilleurs.delete(restaurantId);
+      if (version === 'v2') {
+        await this.programmerReveil(restaurantId).catch((err) =>
+          this.logger.warn(`Réveil à l'échéance de la retenue non programmé : ${(err as Error)?.message ?? err}`),
+        );
+      }
       return resultat;
     }
     this.redemanderPlusTard(restaurantId);
@@ -264,6 +281,39 @@ export class CoursePlanificateurService implements OnModuleDestroy {
     }, DELAI_NOUVELLE_DEMANDE_MS);
     minuteur.unref?.();
     this.minuteursNouvelleDemande.add(minuteur);
+  }
+
+  /**
+   * Prochaine échéance de retenue du restaurant : un passage est programmé
+   * juste après (`MARGE_REVEIL_RETENUE_MS`). Un réveil plus tôt déjà prévu est
+   * gardé ; un plus tard est remplacé. État de ce serveur seulement : un
+   * réveil perdu (redémarrage) laisse la tâche de 10 s faire le travail, et
+   * deux serveurs réveillés passent l'un après l'autre (verrou), le second
+   * sans rien à faire.
+   */
+  private async programmerReveil(restaurantId: string): Promise<void> {
+    if (this.arrete) return;
+    const maintenant = Date.now();
+    const prochaine = await this.prisma.course.findFirst({
+      where: {
+        restaurant_id: restaurantId,
+        statut: { in: [CourseStatut.PENDING_ASSIGNMENT, CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT, CourseStatut.IN_DELIVERY] },
+        retenue_jusqua: { gt: new Date(maintenant) },
+      },
+      orderBy: { retenue_jusqua: 'asc' },
+      select: { retenue_jusqua: true },
+    });
+    const a = prochaine?.retenue_jusqua?.getTime();
+    if (!a) return;
+    const deja = this.reveils.get(restaurantId);
+    if (deja && deja.a <= a) return;
+    if (deja) clearTimeout(deja.minuteur);
+    const minuteur = setTimeout(() => {
+      this.reveils.delete(restaurantId);
+      void this.enfiler(restaurantId, ['ECHEANCE_RETENUE']);
+    }, a - maintenant + MARGE_REVEIL_RETENUE_MS);
+    minuteur.unref?.();
+    this.reveils.set(restaurantId, { a, minuteur });
   }
 
   /** Repli v1 : commandes prêtes de la flotte interne sans lot ni course depuis plus d'une minute. */

@@ -23,6 +23,7 @@ import { OrderBridgeListenerService } from '../listeners/order-bridge.listener.s
 import { CourseBatchTask } from '../tasks/course-batch.task';
 import { commande, course, DonneesDispatch, livraison, livreur, monterBaseDispatch, offre, RESTO } from './base-dispatch.simulee-spec';
 import { A, apres, AU_COMPTOIR, avant, B, LOIN, MAINTENANT, monter, O, prete } from './banc-planificateur.simulee-spec';
+import { MARGE_REVEIL_RETENUE_MS } from './course-planificateur.service';
 import { LotsV2Service } from './lots-v2.service';
 
 beforeEach(() => {
@@ -327,6 +328,50 @@ describe('retenue au comptoir puis ajout dès que la commande est prête (3.5, 3
     // L'événement du passage annonce l'ajout (raison la plus utile), pas la levée de la retenue.
     const evenements = t.emisSur(CourseChannels.COURSE_STATUT_CHANGED).filter((e) => e.course.id === k.id);
     expect(evenements[evenements.length - 1]).toMatchObject({ reason: 'COMMANDE_AJOUTEE' });
+  });
+});
+
+describe('échéance de la retenue : réveil programmé, sans attendre la tâche de 10 s (banc du 23/10)', () => {
+  it('B toujours en cuisine à l’échéance : la retenue est levée 300 ms après, le livreur prévenu', async () => {
+    const d1 = livreur({ ...AU_COMPTOIR, last_available_at: null });
+    const a = prete({ ready_at: avant(10) });
+    const b = commande({
+      status: OrderStatus.IN_PROGRESS,
+      address: B,
+      created_at: avant(10 * 60),
+      updated_at: avant(8 * 60),
+      prepared_at: avant(8 * 60),
+      estimated_preparation_time: apres(120),
+    });
+    const k = course({ statut: CourseStatut.AT_RESTAURANT, deliverer_id: d1.id, assigned_at: avant(200), at_restaurant_at: avant(100) });
+    const t = monter({
+      commandes: [a, b],
+      courses: [k],
+      livraisons: [livraison({ course_id: k.id, order_id: a.id })],
+      livreurs: [d1],
+    });
+
+    await t.passer();
+    expect(k.retenue_jusqua).toEqual(apres(120));
+    const passage = jest.spyOn(t.planificateur, 'planifierRestaurant');
+
+    // Juste avant l'échéance : rien.
+    await jest.advanceTimersByTimeAsync(120_000);
+    expect(passage).not.toHaveBeenCalled();
+    // 300 ms après : un passage, la retenue est levée (B pas prête : A part seule).
+    await jest.advanceTimersByTimeAsync(MARGE_REVEIL_RETENUE_MS);
+    await (t.planificateur as unknown as { file: Promise<unknown> }).file;
+    expect(passage).toHaveBeenCalledWith(RESTO, 'ECHEANCE_RETENUE');
+    expect(t.journalDe('RETENUE_LEVEE')).toEqual([expect.objectContaining({ course_id: k.id, motif: 'ECHEANCE' })]);
+    expect(k.retenue_jusqua!.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(t.livraisonsDe(k.id).map((l) => l.order_id)).toEqual([a.id]);
+    expect(t.push.notifyCourseToutPret).toHaveBeenCalledWith(expect.objectContaining({ delivererId: d1.id, courseId: k.id }));
+  });
+
+  it('aucune retenue : aucun réveil programmé', async () => {
+    const t = monter({ commandes: [prete()], livreurs: [livreur(AU_COMPTOIR)] });
+    await t.passer();
+    expect((t.planificateur as unknown as { reveils: Map<string, unknown> }).reveils.size).toBe(0);
   });
 });
 
