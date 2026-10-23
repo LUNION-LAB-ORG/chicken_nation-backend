@@ -423,6 +423,7 @@ export class DepartCourseService {
       select: {
         id: true,
         reference: true,
+        restaurant_id: true,
         statut: true,
         parti_at: true,
         deliverer: { select: { protocole_appli: true } },
@@ -461,6 +462,7 @@ export class DepartCourseService {
         delivery: livraison as unknown as Delivery,
         course_id: courseId,
         course_reference: course.reference,
+        restaurant_id: course.restaurant_id,
         previous_statut: DeliveryStatut.PENDING,
         new_statut: DeliveryStatut.IN_ROUTE,
       });

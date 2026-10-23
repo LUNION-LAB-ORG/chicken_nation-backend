@@ -449,12 +449,13 @@ export class DeliveryActionService {
   private async emitDeliveryStatut(delivery: any, previous: DeliveryStatut) {
     const course = await this.prisma.course.findUnique({
       where: { id: delivery.course_id },
-      select: { reference: true },
+      select: { reference: true, restaurant_id: true },
     });
     await this.courseEvent.deliveryStatutChanged({
       delivery,
       course_id: delivery.course_id,
       course_reference: course?.reference ?? '',
+      restaurant_id: course?.restaurant_id ?? null,
       previous_statut: previous,
       new_statut: delivery.statut,
     });

@@ -17,6 +17,7 @@ import { OrderBridgeListenerService } from './listeners/order-bridge.listener.se
 import { PlanificateurListener } from './listeners/planificateur.listener';
 import { RemiseCaisseListener } from './listeners/remise-caisse.listener';
 import { RetenueALArriveeListener } from './listeners/retenue-a-l-arrivee.listener';
+import { SuiviOffresListener } from './listeners/suivi-offres.listener';
 import { AnnulationAutoService } from './services/annulation-auto.service';
 import { CourseActionService } from './services/course-action.service';
 import { CourseEnLivraisonService } from './services/course-en-livraison.service';
@@ -83,6 +84,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     PlanificateurListener, // Événements qui demandent un passage du planificateur v2
     LivraisonVersLivreurListener, // Livraison changée : `course:statut:changed` au livreur
     RetenueALArriveeListener, // Retenue d'une course acceptée annoncée à l'arrivée au comptoir
+    SuiviOffresListener, // Offre proposée, refusée, expirée, close : écran Opérations et caisse à jour
     // Cron
     CourseTask,
     CourseBatchTask, // Phase P3 : flush des batches matures toutes les 10 s

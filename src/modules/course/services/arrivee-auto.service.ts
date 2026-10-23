@@ -151,6 +151,7 @@ export class ArriveeAutoService {
         delivery: arrivee as unknown as Delivery,
         course_id: course.id,
         course_reference: course.reference,
+        restaurant_id: course.restaurant_id,
         previous_statut: DeliveryStatut.IN_ROUTE,
         new_statut: DeliveryStatut.ARRIVED,
       });

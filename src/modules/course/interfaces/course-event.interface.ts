@@ -44,12 +44,20 @@ export interface CourseStatutChangedPayload {
   reason?: string;
   /** Raison `COURSES_FUSIONNEES` : références des courses absorbées par celle-ci. */
   fusion?: { absorbees: string[] };
+  /**
+   * Raisons `OFFRE_PROPOSEE`, `OFFRE_REFUSEE`, `OFFRE_EXPIREE`, `OFFRE_CLOSE`
+   * (siège et restaurant seulement) : le livreur sollicité, l'échéance de
+   * l'offre proposée, le motif d'une offre close.
+   */
+  offre?: { deliverer_id: string; expires_at?: Date | null; motif?: string | null };
 }
 
 export interface DeliveryStatutChangedPayload {
   delivery: Delivery;
   course_id: string;
   course_reference: string;
+  /** Restaurant de la course : l'événement part aussi à sa salle (écran Opérations du restaurant). */
+  restaurant_id?: string | null;
   previous_statut: DeliveryStatut;
   new_statut: DeliveryStatut;
 }

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { Delivery } from '@prisma/client';
 
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
@@ -63,9 +64,26 @@ export class CourseWebSocketService {
     this.appGateway.emitToRestaurant(course.restaurant_id, CourseChannels.COURSE_STATUT_CHANGED, payload);
   }
 
+  /**
+   * Suivi d'une offre (proposée, refusée, expirée, close) : écran Opérations
+   * du siège et caisse du restaurant mis à jour en direct. `course:statut:changed`
+   * (qu'ils écoutent déjà) avec la raison de l'offre, au siège et au
+   * restaurant SEULEMENT : le livreur a ses propres événements d'offre.
+   */
+  emitSuiviOffre(payload: CourseStatutChangedPayload) {
+    this.appGateway.emitToBackoffice(CourseChannels.COURSE_STATUT_CHANGED, payload);
+    this.appGateway.emitToRestaurant(payload.course.restaurant_id, CourseChannels.COURSE_STATUT_CHANGED, payload);
+  }
+
   emitDeliveryStatutChanged(payload: DeliveryStatutChangedPayload) {
     // Destinataires : backoffice + restaurant (le livreur s'en sert déjà via son action)
     this.appGateway.emitToBackoffice(CourseChannels.DELIVERY_STATUT_CHANGED, payload);
+    // Salle du restaurant (écran Opérations d'un compte restaurant) : jamais
+    // le code du client, comme les courses diffusées au restaurant.
+    if (payload.restaurant_id) {
+      const { delivery_pin: _code, ...delivery } = (payload.delivery ?? {}) as Delivery;
+      this.appGateway.emitToRestaurant(payload.restaurant_id, CourseChannels.DELIVERY_STATUT_CHANGED, { ...payload, delivery });
+    }
   }
 
   emitCompleted(payload: CourseCompletedPayload) {

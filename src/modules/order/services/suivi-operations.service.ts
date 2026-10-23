@@ -11,7 +11,8 @@ import { enrichirCommandesOperations } from '../helpers/suivi-operations.rules';
 
 /**
  * Écran Opérations : offre en attente nommée et fin de la fenêtre d'ajout
- * après le retrait, ajoutées à chaque course (`suivi-operations.rules.ts`).
+ * après le retrait (prolongée tant que la course attend son sac), ajoutées à
+ * chaque course (`suivi-operations.rules.ts`).
  * Le réglage est relu à chaque appel, comme partout ailleurs ; s'il est
  * illisible, la valeur par défaut s'applique.
  */
@@ -23,12 +24,14 @@ export class SuiviOperationsService {
 
   async enrichir<C extends object>(commandes: C[], maintenant = new Date()): Promise<C[]> {
     let fenetreMaxS = REGLAGES_PLANIFICATION_DEFAUT.ajoutApresRetraitMaxS;
+    let departRayonM = REGLAGES_PLANIFICATION_DEFAUT.departRayonM;
     try {
       const { reglages } = lireReglagesPlanification(await this.settings.getMany([...CLES_REGLAGES_PLANIFICATION]));
       fenetreMaxS = reglages.ajoutApresRetrait ? reglages.ajoutApresRetraitMaxS : 0;
+      departRayonM = reglages.departRayonM;
     } catch (err) {
       this.logger.warn(`Réglages du planificateur illisibles : ${(err as Error)?.message ?? err}`);
     }
-    return enrichirCommandesOperations(commandes, { maintenant, fenetreMaxS });
+    return enrichirCommandesOperations(commandes, { maintenant, fenetreMaxS, departRayonM });
   }
 }

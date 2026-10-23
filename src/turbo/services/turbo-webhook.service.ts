@@ -158,7 +158,7 @@ export class TurboWebhookService {
     ];
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
-      select: { id: true, statut: true },
+      select: { id: true, statut: true, restaurant_id: true },
     });
     if (!course) return;
 
@@ -176,11 +176,11 @@ export class TurboWebhookService {
         ...(next === CourseStatut.COMPLETED && { completed_at: now }),
       },
     });
-    this.appGateway.emitToBackoffice(CourseChannels.COURSE_STATUT_CHANGED, {
-      course_id: courseId,
-      statut: next,
-      source: 'turbo',
-    });
+    const charge = { course_id: courseId, statut: next, source: 'turbo' };
+    this.appGateway.emitToBackoffice(CourseChannels.COURSE_STATUT_CHANGED, charge);
+    // Caisse et écran Opérations du restaurant : relus aussi (sans le restaurant,
+    // ils ne voyaient la course Turbo avancer qu'au rechargement suivant).
+    if (course.restaurant_id) this.appGateway.emitToRestaurant(course.restaurant_id, CourseChannels.COURSE_STATUT_CHANGED, charge);
   }
 
   /** Met à jour l'étape fine de la livraison CN (miroir du suivi interne). */
@@ -725,12 +725,14 @@ export class TurboWebhookService {
       },
     });
     if (claim.count === 1) {
-      this.appGateway.emitToBackoffice(CourseChannels.COURSE_STATUT_CHANGED, {
-        course_id: courseId,
-        statut: CourseStatut.CANCELLED,
-        source: 'turbo',
-        raison,
-      });
+      const charge = { course_id: courseId, statut: CourseStatut.CANCELLED, source: 'turbo', raison };
+      this.appGateway.emitToBackoffice(CourseChannels.COURSE_STATUT_CHANGED, charge);
+      const course = await this.prisma.course
+        .findUnique({ where: { id: courseId }, select: { restaurant_id: true } })
+        .catch(() => null);
+      if (course?.restaurant_id) {
+        this.appGateway.emitToRestaurant(course.restaurant_id, CourseChannels.COURSE_STATUT_CHANGED, charge);
+      }
     }
   }
 
