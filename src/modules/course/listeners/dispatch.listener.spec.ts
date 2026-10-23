@@ -28,7 +28,10 @@ function monter(donnees: Parameters<typeof monterBase>[0] = {}) {
   const offreEnAttente = new OffreEnAttenteService(base.prisma);
   const offres = { offerNextDeliverer: jest.fn(async () => undefined) };
   const disponibilite = { mettreHorsServiceSiSansSignal: jest.fn(async () => false) };
-  const gateway = { emitToDeliverer: jest.fn() };
+  const gateway = {
+    emitToDeliverer: jest.fn(),
+    livreurConnecte: jest.fn(async (): Promise<boolean | null> => true),
+  };
   const cloture = { clorePourCourse: jest.fn(async () => []) };
   const queue = { remettreEnFile: jest.fn(async () => true) };
   const ecouteur = new DispatchListener(
@@ -69,8 +72,44 @@ describe('journal des offres', () => {
       course_id: c.id,
       deliverer_id: 'livreur-1',
       restaurant_id: c.restaurant_id,
-      details: { course: c.reference, expire: apres(120).toISOString(), livraisons: 2 },
+      details: { course: c.reference, expire: apres(120).toISOString(), livraisons: 2, appli_connectee: true },
     });
+  });
+
+  it('offre envoyée à un livreur sans socket : présence notée, avertissement (renvoi compris)', async () => {
+    const c = course();
+    const t = monter({ courses: [c] });
+    t.gateway.livreurConnecte.mockResolvedValue(false);
+    const avertir = jest
+      .spyOn((t.ecouteur as unknown as { logger: { warn: (m: string) => void } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+    const charge = {
+      course: { ...c, deliveries: [{}] } as never,
+      deliverer_id: 'livreur-123456789',
+      offer_id: c.id,
+      expires_at: apres(120),
+    };
+
+    await t.ecouteur.onOffreProposee(charge);
+    await t.ecouteur.onOffreProposee({ ...charge, renvoi: true });
+
+    expect(t.journal).toHaveLength(1);
+    expect(t.journal[0].details).toMatchObject({ appli_connectee: false });
+    expect(avertir.mock.calls.map(([m]) => m)).toEqual([
+      `Offre ${c.reference} envoyée au livreur livreur- sans appli connectée en temps réel : notification seulement`,
+      `Offre ${c.reference} renvoyée au livreur livreur- sans appli connectée en temps réel : notification seulement`,
+    ]);
+  });
+
+  it('présence illisible : journal écrit quand même, `appli_connectee` à null, sans avertissement', async () => {
+    const c = course();
+    const t = monter({ courses: [c] });
+    t.gateway.livreurConnecte.mockRejectedValue(new Error('Redis'));
+    const charge = { course: c as never, deliverer_id: 'livreur-1', offer_id: c.id, expires_at: apres(120) };
+
+    await t.ecouteur.onOffreProposee(charge);
+
+    expect(t.journal[0].details).toMatchObject({ appli_connectee: null });
   });
 
   it('offre acceptée et refusée', async () => {

@@ -35,14 +35,21 @@ function monter() {
     courses: [c, course({ statut: CourseStatut.IN_DELIVERY, deliverer_id: enCourse.id })],
     offres: [offre({ course_id: c.id, deliverer_id: sollicite.id })],
   });
+  // Présence : seule Awa a l'appli ouverte (socket dans son canal privé).
+  const presence = {
+    livreursConnectes: jest.fn(async (ids: string[]): Promise<Set<string> | null> =>
+      new Set(ids.filter((id) => id === disponible.id)),
+    ),
+  };
   const service = new DeliverersService(
     base.prisma,
     {} as never,
     {} as never,
     { load: jest.fn(async () => ({ gpsExpirationMinutes: 5 })) } as never,
     {} as never,
+    presence as never,
   );
-  return { base, service, c, disponible, enPause, horsService, enCourse, sollicite };
+  return { base, service, presence, c, disponible, enPause, horsService, enCourse, sollicite };
 }
 
 describe('GET /deliverers : état de chaque livreur', () => {
@@ -68,6 +75,36 @@ describe('GET /deliverers : état de chaque livreur', () => {
     });
     // Les champs de calcul ne sortent pas.
     expect(items.every((l: any) => !('_count' in l) && !('offer_attempts' in l))).toBe(true);
+  });
+});
+
+describe('« Appli non connectée » : présence du socket de chaque livreur', () => {
+  it('GET /deliverers : `appli_connectee` vrai seulement pour celui qui a un socket, en une seule question', async () => {
+    const t = monter();
+
+    const { items } = await t.service.findAll({ limit: 50 } as never);
+    const parPrenom = Object.fromEntries(items.map((l: any) => [l.first_name, l.appli_connectee]));
+
+    expect(parPrenom).toEqual({ Awa: true, Koffi: false, Yao: false, Ama: false, 'Kouamé': false });
+    expect(t.presence.livreursConnectes).toHaveBeenCalledTimes(1);
+  });
+
+  it('présence illisible (Redis) : `appli_connectee` à null, la liste répond quand même', async () => {
+    const t = monter();
+    t.presence.livreursConnectes.mockResolvedValue(null);
+
+    const { items } = await t.service.findAll({ limit: 50 } as never);
+    expect(items.map((l: any) => l.appli_connectee)).toEqual(items.map(() => null));
+    const carte = await t.service.getLiveLocations({ includeOffline: true });
+    expect(carte.every((l) => l.appli_connectee === null)).toBe(true);
+  });
+
+  it('carte (live-locations) : même champ', async () => {
+    const t = monter();
+    const carte = await t.service.getLiveLocations({ includeOffline: true });
+    const parId = Object.fromEntries(carte.map((l) => [l.id, l.appli_connectee]));
+    expect(parId[t.disponible.id]).toBe(true);
+    expect(parId[t.enPause.id]).toBe(false);
   });
 });
 

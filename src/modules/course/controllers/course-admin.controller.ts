@@ -25,6 +25,22 @@ import { CourseOfferService } from '../services/course-offer.service';
 import { CourseQueryService } from '../services/course-query.service';
 import { GardeOffresService } from '../services/garde-offres.service';
 import { ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
+import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+
+/**
+ * Réponse de l'affectation forcée. L'offre part dans tous les cas (temps réel
+ * et notification) ; sans appli connectée, l'admin le sait tout de suite au
+ * lieu de croire que le livreur l'a sous les yeux.
+ */
+export function messageAffectationForcee(renvoi: boolean, appliConnectee: boolean | null): string {
+  if (appliConnectee === false) {
+    return (
+      `Offre ${renvoi ? 'renvoyée' : 'envoyée'} par notification seulement : l'appli du livreur ` +
+      "n'est pas connectée en temps réel. Demandez-lui de rouvrir l'appli."
+    );
+  }
+  return renvoi ? 'Offre renvoyée au livreur.' : 'Offre envoyée au livreur.';
+}
 
 /**
  * Endpoints admin pour le module course.
@@ -40,6 +56,7 @@ export class CourseAdminController {
     private readonly actionService: CourseActionService,
     private readonly offerService: CourseOfferService,
     private readonly garde: GardeOffresService,
+    private readonly gateway: AppGateway,
   ) {}
 
   @ApiOperation({ summary: 'Liste paginée des courses (toutes)' })
@@ -71,7 +88,8 @@ export class CourseAdminController {
       'Même règle que la sélection automatique. 409 avec la raison en français si la course ne ' +
       'cherche plus de livreur, ou si le livreur est en pause, en pause automatique, hors service, ' +
       'en course ou a déjà une offre en attente (« Ce livreur est en pause jusqu\'à 14 h 32. »). ' +
-      'Les offres d\'autres livreurs sur cette course sont closes.',
+      'Les offres d\'autres livreurs sur cette course sont closes. `appli_connectee` : le livreur ' +
+      'a-t-il un socket ouvert (false : l\'offre ne lui arrive que par la notification ; null : inconnu).',
   })
   @ApiBody({ type: AssignDelivererDto })
   @Patch(':id/force-assign')
@@ -91,9 +109,11 @@ export class CourseAdminController {
         "L'offre n'a pas pu être envoyée : la course ou le livreur vient de changer. Réessayez.",
       );
     }
+    const appliConnectee = await this.gateway.livreurConnecte(dto.deliverer_id);
     return {
       success: true,
-      message: renvoi ? 'Offre renvoyée au livreur.' : 'Offre envoyée au livreur.',
+      message: messageAffectationForcee(renvoi, appliConnectee),
+      appli_connectee: appliConnectee,
     };
   }
 

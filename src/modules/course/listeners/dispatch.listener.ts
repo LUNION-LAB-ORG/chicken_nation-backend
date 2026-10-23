@@ -54,8 +54,21 @@ export class DispatchListener {
     private readonly queue: DelivererQueueService,
   ) {}
 
+  /**
+   * Offre proposée : une ligne de journal, avec la présence de l'appli du
+   * livreur au moment de l'envoi (`appli_connectee`, null si inconnue). Sans
+   * socket, l'offre ne lui arrive que par la notification : une ligne
+   * d'avertissement, renvoi compris, pour la retrouver dans le journal.
+   */
   @OnEvent(CourseChannels.COURSE_OFFER_NEW)
   async onOffreProposee(payload: CourseOfferNewPayload) {
+    const appliConnectee = await this.gateway.livreurConnecte(payload.deliverer_id).catch(() => null);
+    if (appliConnectee === false) {
+      this.logger.warn(
+        `Offre ${payload.course.reference} ${payload.renvoi ? 'renvoyée' : 'envoyée'} au livreur ` +
+          `${payload.deliverer_id.slice(0, 8)} sans appli connectée en temps réel : notification seulement`,
+      );
+    }
     // Nouvel envoi d'une offre déjà en attente (affectation forcée répétée) : déjà comptée.
     if (payload.renvoi) return;
     await this.journal.ecrire({
@@ -68,6 +81,7 @@ export class DispatchListener {
         course: payload.course.reference,
         expire: new Date(payload.expires_at).toISOString(),
         livraisons: payload.course.deliveries?.length ?? null,
+        appli_connectee: appliConnectee,
       },
     });
   }

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 import { ExpoPushService } from 'src/expo-push/expo-push.service';
+import { JournalLimite, suffixeTues } from 'src/common/utils/journal-limite.util';
 
 /**
  * Types de push notifications envoyés au livreur.
@@ -69,6 +70,7 @@ interface NotifyInput {
 @Injectable()
 export class DelivererPushService {
   private readonly logger = new Logger(DelivererPushService.name);
+  private readonly sansJetonLimite = new JournalLimite(10 * 60_000);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -87,9 +89,23 @@ export class DelivererPushService {
       });
 
       if (!deliverer?.expo_push_token) {
-        this.logger.debug(
-          `[Push] skip ${input.type} → livreur ${input.delivererId.slice(0, 8)} sans token`,
-        );
+        // Offre sans notification possible : si son appli n'est pas connectée en
+        // temps réel, le livreur ne la verra pas du tout. Visible en production,
+        // une ligne par livreur toutes les 10 min au plus.
+        const tues =
+          input.type === 'new_course_offer'
+            ? this.sansJetonLimite.autoriser(input.delivererId)
+            : null;
+        if (tues !== null) {
+          this.logger.warn(
+            `[Push] ${input.type} → livreur ${input.delivererId.slice(0, 8)} sans jeton de notification : ` +
+              `rien envoyé${suffixeTues(tues)}`,
+          );
+        } else {
+          this.logger.debug(
+            `[Push] skip ${input.type} → livreur ${input.delivererId.slice(0, 8)} sans token`,
+          );
+        }
         return;
       }
 

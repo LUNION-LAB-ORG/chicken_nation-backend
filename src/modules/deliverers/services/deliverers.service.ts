@@ -15,6 +15,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { S3Service } from 'src/s3/s3.service';
+import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
 import { AssignRestaurantDto } from '../dto/assign-restaurant.dto';
 import { QueryDeliverersDto } from '../dto/query-deliverers.dto';
@@ -52,6 +53,16 @@ const INCLUDE_DISPONIBILITE = {
 type SafeDeliverer = Omit<Deliverer, 'password' | 'refresh_token'>;
 
 /**
+ * `appli_connectee` d'un livreur dans les listes : l'appli a-t-elle un socket
+ * ouvert ? `null` si la présence n'a pas pu être lue (Redis trop lent).
+ * « Disponible » et un GPS récent viennent du HTTP : sans socket, il ne
+ * recevra pourtant les offres que par notification.
+ */
+function presence(connectes: Set<string> | null, delivererId: string): boolean | null {
+  return connectes ? connectes.has(delivererId) : null;
+}
+
+/**
  * Logique métier pour le CRUD livreur (côté admin) et le self-service (côté livreur).
  *
  * Règle métier centrale : `is_operational = (status == ACTIVE && restaurant_id != null)`.
@@ -68,6 +79,8 @@ export class DeliverersService {
     private readonly scoringSettings: DelivererScoringSettingsHelper,
     // P-push livreur : push "Compte validé !" à l'activation
     private readonly pushService: DelivererPushService,
+    // Présence de l'appli (socket ouvert) dans les listes du backoffice
+    private readonly gateway: AppGateway,
   ) {}
 
   // ============================================================
@@ -120,6 +133,7 @@ export class DeliverersService {
 
     // État de chaque livreur par la règle unique (fenêtre « Forcer l'affectation »).
     const maintenant = new Date();
+    const connectes = await this.gateway.livreursConnectes(items.map((l) => l.id));
     return {
       items: items.map(({ offer_attempts, _count, ...livreur }) => ({
         ...livreur,
@@ -128,6 +142,7 @@ export class DeliverersService {
           maintenant,
           offer_attempts[0]?.course_id ?? null,
         ),
+        appli_connectee: presence(connectes, livreur.id),
       })),
       total,
       page,
@@ -656,6 +671,7 @@ export class DeliverersService {
     const rankMap = new Map<string, number>();
     inQueue.forEach((d, i) => rankMap.set(d.id, i + 1));
 
+    const connectes = await this.gateway.livreursConnectes(deliverers.map((d) => d.id));
     const result = deliverers
       .map((d) => {
         const locationAt = d.last_location_at;
@@ -695,6 +711,7 @@ export class DeliverersService {
             now,
             d.offer_attempts[0]?.course_id ?? null,
           ),
+          appli_connectee: presence(connectes, d.id),
           active_course: activeCourse
             ? {
                 id: activeCourse.id,

@@ -130,7 +130,9 @@ function monter(donnees: DonneesDispatch, options: { turbo?: { sentOrderIds: str
     {} as never,
     garde,
   );
-  const admin = new CourseAdminController({} as never, actions, serviceOffres, garde);
+  // Présence de l'appli du livreur (socket ouvert), lue par l'affectation forcée.
+  const presence = { livreurConnecte: jest.fn(async (): Promise<boolean | null> => true) };
+  const admin = new CourseAdminController({} as never, actions, serviceOffres, garde, presence as never);
   const types = () => base.journal.map((l) => l.type);
   const relances = () =>
     emis.filter((e) => e.canal === DispatchEvenements.RECHERCHE_A_RELANCER).map((e) => e.charge.course_id);
@@ -143,6 +145,7 @@ function monter(donnees: DonneesDispatch, options: { turbo?: { sentOrderIds: str
     serviceOffres,
     actions,
     admin,
+    presence,
     courseEvent,
     queue,
     push,
@@ -381,7 +384,11 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
     const offreAutre = offre({ course_id: c.id, deliverer_id: autre.id, expires_at: apres(30) });
     const t = monter({ livreurs: [choisi, autre], courses: [c], offres: [offreAutre] });
 
-    expect(await forcer(t, c.id, choisi.id)).toEqual({ success: true, message: 'Offre envoyée au livreur.' });
+    expect(await forcer(t, c.id, choisi.id)).toEqual({
+      success: true,
+      message: 'Offre envoyée au livreur.',
+      appli_connectee: true,
+    });
 
     expect(offreAutre.status).toBe(CourseOfferStatus.CANCELLED);
     expect(t.fermetures()).toEqual([{ course_id: c.id, deliverer_id: autre.id, motif: 'AFFECTATION_FORCEE' }]);
@@ -403,11 +410,46 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
       offres: [offre({ course_id: c.id, deliverer_id: d.id, expires_at: apres(40) })],
     });
 
-    expect(await forcer(t, c.id, d.id)).toEqual({ success: true, message: 'Offre renvoyée au livreur.' });
+    expect(await forcer(t, c.id, d.id)).toEqual({
+      success: true,
+      message: 'Offre renvoyée au livreur.',
+      appli_connectee: true,
+    });
     expect(t.offres).toHaveLength(1);
     expect(t.courseEvent.offerNew).toHaveBeenCalledWith(
       expect.objectContaining({ deliverer_id: d.id, renvoi: true, expires_at: apres(40) }),
     );
+  });
+
+  it('appli du livreur sans socket : l’offre part quand même, l’admin sait qu’elle n’arrivera que par notification', async () => {
+    const d = livreur();
+    const c = course();
+    const t = monter({ livreurs: [d], courses: [c] });
+    t.presence.livreurConnecte.mockResolvedValue(false);
+
+    expect(await forcer(t, c.id, d.id)).toEqual({
+      success: true,
+      message:
+        "Offre envoyée par notification seulement : l'appli du livreur n'est pas connectée en temps réel. " +
+        "Demandez-lui de rouvrir l'appli.",
+      appli_connectee: false,
+    });
+    expect(t.presence.livreurConnecte).toHaveBeenCalledWith(d.id);
+    expect(t.offres.filter((o) => o.deliverer_id === d.id)).toHaveLength(1);
+    expect(t.push.notifyNewCourseOffer).toHaveBeenCalledWith(expect.objectContaining({ delivererId: d.id }));
+  });
+
+  it('présence inconnue (Redis trop lent) : message habituel, `appli_connectee` à null', async () => {
+    const d = livreur();
+    const c = course();
+    const t = monter({ livreurs: [d], courses: [c] });
+    t.presence.livreurConnecte.mockResolvedValue(null);
+
+    expect(await forcer(t, c.id, d.id)).toEqual({
+      success: true,
+      message: 'Offre envoyée au livreur.',
+      appli_connectee: null,
+    });
   });
 });
 
