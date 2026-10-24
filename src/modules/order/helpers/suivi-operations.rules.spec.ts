@@ -103,6 +103,18 @@ describe('écran Opérations : fenêtre prolongée tant que la course attend son
     expect((tot[0] as any).delivery.course.fenetre_ajout_ferme_a).toBe('2026-10-23T12:30:00.000Z');
   });
 
+  it('relevé imprécis (150 m) à 450 m : la dernière position précise, au comptoir, décide, comme au serveur (relecture du 24/10)', () => {
+    const imprecis = {
+      last_location: { lat: 5.29, lng: -3.9737, precision_m: 150, sure: { lat: 5.286, lng: -3.9737, at: '2026-10-23T12:27:00.000Z' } },
+      last_location_at: '2026-10-23T12:29:50.000Z',
+    };
+    expect(fin(liste(course(imprecis)))).toBe('2026-10-23T12:32:00.000Z');
+    // Aucune position précise connue : rien ne la prolonge.
+    expect(fin(liste(course({ ...imprecis, last_location: { lat: 5.286, lng: -3.9737, precision_m: 150, sure: null } })))).toBe(
+      '2026-10-23T12:30:00.000Z',
+    );
+  });
+
   it('commande d’origine remise une par une au bouton de la caisse, la seconde encore au comptoir : il attend aussi son sac', () => {
     const k = course();
     const origine = [

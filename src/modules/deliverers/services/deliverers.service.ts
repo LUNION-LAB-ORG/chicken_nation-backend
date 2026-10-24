@@ -23,6 +23,7 @@ import { UpdateDelivererLocationDto } from '../dto/update-location.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { DelivererEvent } from '../events/deliverer.event';
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
+import { positionAEnregistrer, releveAssezPrecis } from '../helpers/position-livreur.rules';
 import {
   STATUTS_COURSE_EN_COURS,
   disponibiliteLivreur,
@@ -528,10 +529,22 @@ export class DeliverersService {
     }
 
     const now = new Date();
+    // Relevé imprécis (plus de 80 m) : la dernière position précise est
+    // gardée à côté, seule à décider départ, comptoir et sac attendu.
+    const precision = typeof dto.accuracy === 'number' && Number.isFinite(dto.accuracy) ? dto.accuracy : null;
+    const precedente = releveAssezPrecis(precision)
+      ? null
+      : await this.prisma.deliverer.findUnique({
+          where: { id: delivererId },
+          select: { last_location: true, last_location_at: true },
+        });
     const updated = await this.prisma.deliverer.update({
       where: { id: delivererId },
       data: {
-        last_location: { lat: dto.lat, lng: dto.lng } as Prisma.InputJsonValue,
+        last_location: positionAEnregistrer(
+          { lat: dto.lat, lng: dto.lng, precision_m: precision },
+          precedente,
+        ) as unknown as Prisma.InputJsonValue,
         last_location_at: now,
         last_speed_kmh: validatedSpeed,
         last_heading_deg: dto.heading ?? null,

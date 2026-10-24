@@ -574,19 +574,22 @@ describe('limites dures d’un ajout (3.6)', () => {
   });
 
   it('retard : une commande déjà prévue n’est jamais poussée au-delà de sa promesse + 5 min', () => {
-    // o promise 12:36, limite 12:41 ; seule elle arrive à 12:40:30 ; avec q avant elle, 12:43:30
+    // o promise 12:36, limite 12:41 ; seule elle arrive à 12:40:30 ; avec q avant elle, 12:43:30.
+    // q aussi pressée (créée à 12:01) : la livrer après o la mettrait en retard à son tour,
+    // aucun ordre ne sauve les deux (l'ordre selon les promesses est testé à part).
     const k = auComptoir([cmd('o', { est: 2000, created_at: h('12:01') })]);
-    const plan = essai(k, cmd('q', { est: 1000 }));
+    const q = cmd('q', { est: 1000, created_at: h('12:01') });
+    const plan = essai(k, q);
     expect(actionsDe(plan, 'AJOUTER')).toEqual([]);
     expect(refusDe(plan, 'q', 'k')).toEqual(['RETARD_CLIENT']);
     // retard toléré plus large : accepté
-    expect(actionsDe(essai(k, cmd('q', { est: 1000 }), avec({ retardMaxClientMin: 8 })), 'AJOUTER')).toHaveLength(1);
+    expect(actionsDe(essai(k, q, avec({ retardMaxClientMin: 8 })), 'AJOUTER')).toHaveLength(1);
   });
 
   it('personne pour partir : le retard supposé d’une commande prévue ne bloque pas le regroupement (le détour, si)', () => {
     // Même géométrie que ci-dessus, mais course sans livreur et aucun livreur libre : le départ n'est qu'une supposition.
     const attend = crs('k', { commandes: [cmd('o', { est: 2000, created_at: h('12:01') })] });
-    const q = cmd('q', { est: 1000 });
+    const q = cmd('q', { est: 1000, created_at: h('12:01') });
     expect(actionsDe(planifier(instant(M, { commandes: [q], courses: [attend] })), 'AJOUTER')).toHaveLength(1);
     expect(refusDe(planifier(instant(M, { commandes: [q], courses: [attend] }), avec({ detourMaxAjoutMin: 2 })), 'q', 'k')).toEqual([
       'DETOUR_AJOUT',

@@ -16,6 +16,7 @@
  *    « partie » avant le serveur.
  */
 import { attendSonSac, PROLONGATION_REMISE_S } from 'src/modules/course/helpers/planification.rules';
+import { lirePositionLivreur } from 'src/modules/deliverers/helpers/position-livreur.rules';
 
 export interface OffreLue {
   expires_at: Date | string;
@@ -48,11 +49,6 @@ const date = (v: Date | string | null | undefined): Date | null => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 
-const point = (v: unknown): { lat: number; lng: number } | null => {
-  const p = v as { lat?: unknown; lng?: unknown } | null | undefined;
-  return p && typeof p.lat === 'number' && typeof p.lng === 'number' ? { lat: p.lat, lng: p.lng } : null;
-};
-
 export function enrichirCourseOperations<T extends CourseLue>(
   course: T,
   p: { maintenant: Date; fenetreMaxS: number } & ContexteFenetre,
@@ -74,14 +70,16 @@ export function enrichirCourseOperations<T extends CourseLue>(
   const retrait = date(course.picked_up_at);
   if (course.statut === 'IN_DELIVERY' && retrait && !course.parti_at && p.fenetreMaxS > 0) {
     const fermeA = retrait.getTime() + p.fenetreMaxS * 1000;
+    // Dernière position PRÉCISE seulement, comme le planificateur.
+    const sure = lirePositionLivreur(course.deliverer?.last_location, course.deliverer?.last_location_at ?? null).sure;
     const prolongee =
       p.departRayonM !== undefined &&
       attendSonSac({
         fermeAMs: fermeA,
         maintenant: p.maintenant,
         sacAttendu: !!course.id && !!p.sacsAttendus?.has(course.id),
-        position: point(course.deliverer?.last_location),
-        position_at: date(course.deliverer?.last_location_at),
+        position: sure?.position ?? null,
+        position_at: sure?.position_at ?? null,
         restaurant: p.restaurant ?? null,
         departRayonM: p.departRayonM,
       });

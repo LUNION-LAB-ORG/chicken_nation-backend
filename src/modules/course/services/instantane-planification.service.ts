@@ -13,6 +13,7 @@ import {
 import { PrismaService } from 'src/database/services/prisma.service';
 import { SELECT_ETAT_LIVREUR, etatLivreurDepuis, peutRecevoirOffre } from 'src/modules/deliverers/helpers/disponibilite.rules';
 import { DelivererScoringSettingsHelper } from 'src/modules/deliverers/helpers/deliverer-scoring-settings.helper';
+import { lirePositionLivreur } from 'src/modules/deliverers/helpers/position-livreur.rules';
 import { MapsService } from 'src/modules/maps/maps.service';
 
 import { lireCommandesAttendues } from '../helpers/application-plan.rules';
@@ -277,14 +278,15 @@ export class InstantanePlanificationService {
     });
 
     const livreurs: LivreurPlanif[] = lignesLivreurs.map((l) => {
-      const loc = l.last_location as { lat?: unknown; lng?: unknown } | null;
-      const positionLivreur =
-        loc && typeof loc.lat === 'number' && typeof loc.lng === 'number' ? { lat: loc.lat, lng: loc.lng } : null;
+      // Dernière position (temps de trajet) et dernière position précise
+      // (seule à décider départ, comptoir et sac attendu).
+      const lue = lirePositionLivreur(l.last_location, l.last_location_at);
       return {
         id: l.id,
         etat: etatLivreurDepuis(l),
-        position: positionLivreur,
+        position: lue.position,
         position_at: l.last_location_at,
+        position_sure: lue.sure,
         protocole_appli: l.protocole_appli,
         dernier_signal_at: l.dernier_signal_at,
         queue_penalty_until: l.queue_penalty_until,
