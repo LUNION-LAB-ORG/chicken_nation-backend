@@ -149,12 +149,12 @@ export class CourseAdminController {
       );
     }
     const appliConnectee = await this.gateway.livreurConnecte(dto.deliverer_id);
-    const regleAppli = (await this.appliLivreur.seuilS().catch(() => 0)) > 0;
+    const regleAppli = await this.appliLivreur.regleActivePour(dto.deliverer_id).catch(() => false);
     return {
       success: true,
       message: messageAffectationForcee(renvoi, appliConnectee, regleAppli),
       appli_connectee: appliConnectee,
-      // Règle coupée (réglage à 0) : l'appli est peut-être fermée, état inconnu.
+      // Règle coupée (réglage à 0) ou appli d'avant le protocole 4 : l'appli est peut-être fermée, état inconnu.
       appli_active: regleAppli ? true : null,
     };
   }

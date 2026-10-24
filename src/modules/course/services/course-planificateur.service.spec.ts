@@ -753,9 +753,10 @@ describe('appli fermée (24/10) : le planificateur ne la choisit jamais, la repr
       last_location: RESTAURANT_POS,
       last_location_at: avant(400),
       dernier_signal_at: avant(400),
+      protocole_appli: 4,
       last_available_at: avant(3600),
     });
-    const actif = livreur({ ...LOIN, dernier_signal_at: avant(60), last_available_at: avant(60) });
+    const actif = livreur({ protocole_appli: 4, ...LOIN, dernier_signal_at: avant(60), last_available_at: avant(60) });
     const t = monter({ commandes: [prete()], livreurs: [ferme, actif] }, { appli: { connectes: [] } });
 
     await t.passer();
@@ -767,7 +768,7 @@ describe('appli fermée (24/10) : le planificateur ne la choisit jamais, la repr
   });
 
   it('seule une appli fermée : la course attend ; il rouvre l’appli, l’offre lui part au passage suivant', async () => {
-    const l = livreur({ ...AU_COMPTOIR, dernier_signal_at: avant(400) });
+    const l = livreur({ protocole_appli: 4, ...AU_COMPTOIR, dernier_signal_at: avant(400) });
     const t = monter({ commandes: [prete()], livreurs: [l] }, { appli: { connectes: [] } });
 
     await t.passer();
@@ -783,8 +784,8 @@ describe('appli fermée (24/10) : le planificateur ne la choisit jamais, la repr
   it('offre en attente d’une appli qui se ferme : close par la tâche des relances, le planificateur la propose à un autre', async () => {
     const a = prete();
     const k = course({ created_at: avant(30) });
-    const ferme = livreur({ ...AU_COMPTOIR, dernier_signal_at: avant(400), last_available_at: avant(3600) });
-    const autre = livreur({ ...LOIN, dernier_signal_at: avant(20), last_available_at: avant(60) });
+    const ferme = livreur({ protocole_appli: 4, ...AU_COMPTOIR, dernier_signal_at: avant(400), last_available_at: avant(3600) });
+    const autre = livreur({ protocole_appli: 4, ...LOIN, dernier_signal_at: avant(20), last_available_at: avant(60) });
     const o = offre({ course_id: k.id, deliverer_id: ferme.id, offered_at: avant(20), expires_at: apres(100) });
     const t = monter(
       {

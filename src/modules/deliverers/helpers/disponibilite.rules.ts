@@ -30,7 +30,9 @@ import {
  *    `deliverer.appli_fermee_apres_s` secondes (défaut 180, 0 = règle
  *    coupée). En arrière-plan, l'appli envoie ses positions et reste active ;
  *    glissée hors de la liste des applis, elle se tait et le livreur ne
- *    reçoit plus rien jusqu'à sa réouverture, sans pause ni pénalité.
+ *    reçoit plus rien jusqu'à sa réouverture, sans pause ni pénalité. Seule
+ *    l'appli au protocole 4 au moins est visée : celle d'avant se tait en
+ *    arrière-plan et garde ses offres par notification.
  *
  * Le chaînage (offre pendant la dernière livraison) est suspendu : il aura sa
  * propre règle s'il revient (lot 9 de la conception).
@@ -108,6 +110,20 @@ export function estEnService(l: Pick<EtatLivreur, 'last_available_at'>): boolean
 export const APPLI_FERMEE_APRES_S_DEFAUT = 180;
 
 /**
+ * Protocole de l'appli qui garde son suivi en arrière-plan (en-tête
+ * `x-deli-protocole`, 4 depuis l'OTA du 24/10). L'appli d'avant (3 ou moins,
+ * ou jamais vue) se tait en arrière-plan : la règle de l'appli fermée ne la
+ * vise pas, elle garde ses offres par notification, et son état est inconnu
+ * à l'écran.
+ */
+export const PROTOCOLE_APPLI_FERMEE = 4;
+
+/** La règle de l'appli fermée vise-t-elle ce livreur ? Réglage au-dessus de 0 et appli récente. */
+export function regleAppliPour(protocoleAppli: number | null | undefined, appliFermeeApresS: number): boolean {
+  return appliFermeeApresS > 0 && (protocoleAppli ?? 0) >= PROTOCOLE_APPLI_FERMEE;
+}
+
+/**
  * Ce qu'il faut savoir, en plus de la ligne du livreur, pour juger son appli.
  *
  * `connectes` : livreurs dont un socket est ouvert, parmi ceux dont la
@@ -145,12 +161,17 @@ export function estAppliActive(
   );
 }
 
-/** Appli active d'une ligne lue en base (`id`, `dernier_signal_at`) dans ce contexte. */
+/**
+ * Appli active d'une ligne lue en base (`id`, `dernier_signal_at`,
+ * `protocole_appli`) dans ce contexte. Appli d'avant le protocole 4 :
+ * toujours active (la règle ne la vise pas).
+ */
 export function appliActiveDepuis(
-  ligne: { id: string; dernier_signal_at: Date | null },
+  ligne: { id: string; dernier_signal_at: Date | null; protocole_appli: number | null },
   appli: ContexteAppli,
   maintenant: Date,
 ): boolean {
+  if (!regleAppliPour(ligne.protocole_appli, appli.appliFermeeApresS)) return true;
   return estAppliActive(
     {
       socket_connecte: appli.connectes ? appli.connectes.has(ligne.id) : null,
@@ -205,6 +226,9 @@ export function filtreLivreursPouvantRecevoirOffre(
     const connectes = [...(appli.connectes ?? [])];
     conditions.push({
       OR: [
+        // Appli d'avant le protocole 4 : la règle ne la vise pas.
+        { protocole_appli: null },
+        { protocole_appli: { lt: PROTOCOLE_APPLI_FERMEE } },
         { dernier_signal_at: { gt: new Date(maintenant.getTime() - appli.appliFermeeApresS * 1000) } },
         ...(connectes.length > 0 ? [{ id: { in: connectes } }] : []),
       ],
@@ -234,6 +258,7 @@ export const SELECT_ETAT_LIVREUR = {
   auto_pause_until: true,
   last_available_at: true,
   dernier_signal_at: true,
+  protocole_appli: true,
   _count: {
     select: {
       courses: { where: { statut: { in: STATUTS_COURSE_EN_COURS } } },

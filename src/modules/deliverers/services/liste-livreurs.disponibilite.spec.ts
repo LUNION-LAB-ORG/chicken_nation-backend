@@ -60,9 +60,9 @@ function monter() {
  */
 function monterAppli(appliFermeeApresS = 180) {
   const vue = (s: number) => new Date(MAINTENANT.getTime() - s * 1000);
-  const awa = livreur({ first_name: 'Awa', dernier_signal_at: vue(400) });
-  const fanta = livreur({ first_name: 'Fanta', dernier_signal_at: vue(600) });
-  const moussa = livreur({ first_name: 'Moussa', dernier_signal_at: vue(30) });
+  const awa = livreur({ protocole_appli: 4, first_name: 'Awa', dernier_signal_at: vue(400) });
+  const fanta = livreur({ protocole_appli: 4, first_name: 'Fanta', dernier_signal_at: vue(600) });
+  const moussa = livreur({ protocole_appli: 4, first_name: 'Moussa', dernier_signal_at: vue(30) });
   const base = monterBaseDispatch({ livreurs: [awa, fanta, moussa] });
   const presence = {
     livreursConnectes: jest.fn(async (ids: string[]): Promise<Set<string> | null> =>
@@ -198,6 +198,20 @@ describe('appli active ou fermée (24/10) : `appli_active` et `appli_vue_a`', ()
     });
     expect(parId[t.moussa.id]).toMatchObject({ appli_connectee: false, appli_active: true });
     expect(parId[t.awa.id]).toMatchObject({ appli_connectee: true, appli_active: true });
+  });
+
+  it('appli d’avant le protocole 4 : disponible malgré son silence, état de l’appli inconnu (null) dans la liste et sur la carte', async () => {
+    const t = monterAppli();
+    t.fanta.protocole_appli = 3;
+
+    const { items } = await t.service.findAll({ limit: 50 } as never);
+    const fanta = items.find((l: any) => l.first_name === 'Fanta') as any;
+    expect(fanta).toMatchObject({ appli_active: null, disponibilite: { etat: 'DISPONIBLE', appli_active: null } });
+    const moussa = items.find((l: any) => l.first_name === 'Moussa') as any;
+    expect(moussa.appli_active).toBe(true);
+
+    const carte = await t.service.getLiveLocations({ includeOffline: true });
+    expect(carte.find((l) => l.id === t.fanta.id)).toMatchObject({ appli_active: null, disponibilite: { etat: 'DISPONIBLE' } });
   });
 
   it('réglage à 0 : règle coupée, toute appli peut recevoir une offre, mais son état est inconnu (null, jamais « En arrière-plan »)', async () => {

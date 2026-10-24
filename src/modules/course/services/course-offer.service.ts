@@ -501,7 +501,7 @@ export class CourseOfferService {
         deliverer_id: true,
         offered_at: true,
         course: { select: { statut: true, turbo_escalated_at: true } },
-        deliverer: { select: { pause_until: true, auto_pause_until: true, dernier_signal_at: true } },
+        deliverer: { select: { pause_until: true, auto_pause_until: true, dernier_signal_at: true, protocole_appli: true } },
       },
     });
 
@@ -512,6 +512,7 @@ export class CourseOfferService {
     const presence = (e: (typeof expired)[number]) => ({
       id: e.deliverer_id,
       dernier_signal_at: signalPendantOffre(e.deliverer?.dernier_signal_at ?? null, e.offered_at),
+      protocole_appli: e.deliverer?.protocole_appli ?? null,
     });
     const appli = await this.appliLivreur.contexte(expired.map(presence), now);
 
@@ -614,7 +615,7 @@ export class CourseOfferService {
         course: {
           select: { id: true, reference: true, restaurant_id: true, restaurant: { select: { name: true } } },
         },
-        deliverer: { select: { dernier_signal_at: true } },
+        deliverer: { select: { dernier_signal_at: true, protocole_appli: true } },
       },
       take: 100, // garde-fou
     });
@@ -624,6 +625,7 @@ export class CourseOfferService {
     const presence = (o: (typeof offers)[number]) => ({
       id: o.deliverer_id,
       dernier_signal_at: o.deliverer?.dernier_signal_at ?? null,
+      protocole_appli: o.deliverer?.protocole_appli ?? null,
     });
     const appli = await this.appliLivreur.contexte(offers.map(presence), now);
 

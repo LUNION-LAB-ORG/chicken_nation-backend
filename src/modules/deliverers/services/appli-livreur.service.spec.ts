@@ -9,7 +9,7 @@
  */
 import { CourseStatut, DelivererStatus } from '@prisma/client';
 
-import { course, livreur, monterBaseDispatch } from 'src/modules/course/services/base-dispatch.simulee-spec';
+import { course, livreur as livreurBase, monterBaseDispatch } from 'src/modules/course/services/base-dispatch.simulee-spec';
 
 import { appliLivreurSimulee } from './base-livreurs.simulee-spec';
 import {
@@ -19,6 +19,9 @@ import {
   idsSansSignalSuffisant,
   passageAEcrire,
 } from './appli-livreur.service';
+
+/** Livreur avec la nouvelle appli (protocole 4) : la règle de l'appli fermée le vise. */
+const livreur = (surcharge: Parameters<typeof livreurBase>[0] = {}) => livreurBase({ protocole_appli: 4, ...surcharge });
 
 const MAINTENANT = new Date('2026-10-24T12:00:00.000Z');
 const avantS = (s: number, depuis = MAINTENANT) => new Date(depuis.getTime() - s * 1000);
@@ -56,24 +59,33 @@ describe('idsSansSignalSuffisant (présence à demander)', () => {
   it('signe de vie absent, trop vieux ou qui le sera dans les 10 s : présence demandée', () => {
     expect(MARGE_PRESENCE_MS).toBe(10_000);
     const lignes = [
-      { id: 'frais', dernier_signal_at: avantS(30) },
-      { id: 'limite-marge', dernier_signal_at: avantS(169) },
-      { id: 'dans-la-marge', dernier_signal_at: avantS(170) },
-      { id: 'vieux', dernier_signal_at: avantS(600) },
-      { id: 'jamais', dernier_signal_at: null },
+      { id: 'frais', dernier_signal_at: avantS(30), protocole_appli: 4 },
+      { id: 'limite-marge', dernier_signal_at: avantS(169), protocole_appli: 4 },
+      { id: 'dans-la-marge', dernier_signal_at: avantS(170), protocole_appli: 4 },
+      { id: 'vieux', dernier_signal_at: avantS(600), protocole_appli: 4 },
+      { id: 'jamais', dernier_signal_at: null, protocole_appli: 4 },
     ];
     expect(idsSansSignalSuffisant(lignes, MAINTENANT, 180)).toEqual(['dans-la-marge', 'vieux', 'jamais']);
   });
 
   it('seuil plus court que la marge : présence demandée pour tous', () => {
-    expect(idsSansSignalSuffisant([{ id: 'a', dernier_signal_at: MAINTENANT }], MAINTENANT, 5)).toEqual(['a']);
+    expect(idsSansSignalSuffisant([{ id: 'a', dernier_signal_at: MAINTENANT, protocole_appli: 4 }], MAINTENANT, 5)).toEqual(['a']);
+  });
+
+  it('appli d’avant le protocole 4 : la règle ne la vise pas, rien à demander', () => {
+    const lignes = [
+      { id: 'ancienne', dernier_signal_at: avantS(600), protocole_appli: 3 },
+      { id: 'jamais-vue', dernier_signal_at: null, protocole_appli: null },
+      { id: 'nouvelle', dernier_signal_at: avantS(600), protocole_appli: 4 },
+    ];
+    expect(idsSansSignalSuffisant(lignes, MAINTENANT, 180)).toEqual(['nouvelle']);
   });
 });
 
 describe('contexte de la règle unique', () => {
   it('règle coupée (0) : aucune présence demandée, `connectes` inconnu', async () => {
     const t = monter({}, { seuilS: 0 });
-    expect(await t.service.contexte([{ id: 'l', dernier_signal_at: null }], MAINTENANT)).toEqual({
+    expect(await t.service.contexte([{ id: 'l', dernier_signal_at: null, protocole_appli: 4 }], MAINTENANT)).toEqual({
       appliFermeeApresS: 0,
       connectes: null,
     });
@@ -82,7 +94,7 @@ describe('contexte de la règle unique', () => {
 
   it('signes de vie récents : aucune question au serveur temps réel', async () => {
     const t = monter({});
-    const contexte = await t.service.contexte([{ id: 'l', dernier_signal_at: avantS(20) }], MAINTENANT);
+    const contexte = await t.service.contexte([{ id: 'l', dernier_signal_at: avantS(20), protocole_appli: 4 }], MAINTENANT);
     expect(contexte.appliFermeeApresS).toBe(180);
     expect([...(contexte.connectes ?? [])]).toEqual([]);
     expect(t.gateway.livreursConnectes).not.toHaveBeenCalled();
@@ -92,8 +104,8 @@ describe('contexte de la règle unique', () => {
     const t = monter({}, { connectes: ['vieux'] });
     const contexte = await t.service.contexte(
       [
-        { id: 'frais', dernier_signal_at: avantS(20) },
-        { id: 'vieux', dernier_signal_at: avantS(900) },
+        { id: 'frais', dernier_signal_at: avantS(20), protocole_appli: 4 },
+        { id: 'vieux', dernier_signal_at: avantS(900), protocole_appli: 4 },
       ],
       MAINTENANT,
     );
@@ -101,7 +113,7 @@ describe('contexte de la règle unique', () => {
     expect([...(contexte.connectes ?? [])]).toEqual(['vieux']);
 
     t.gateway.livreursConnectes.mockRejectedValueOnce(new Error('Redis'));
-    expect((await t.service.contexte([{ id: 'vieux', dernier_signal_at: null }], MAINTENANT)).connectes).toBeNull();
+    expect((await t.service.contexte([{ id: 'vieux', dernier_signal_at: null, protocole_appli: 4 }], MAINTENANT)).connectes).toBeNull();
   });
 
   it('estActive : signe de vie récent, socket, ou règle coupée', async () => {

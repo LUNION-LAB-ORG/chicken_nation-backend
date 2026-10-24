@@ -12,6 +12,8 @@ import {
   appliActiveDepuis,
   estEnPause,
   estEnPauseAuto,
+  PROTOCOLE_APPLI_FERMEE,
+  regleAppliPour,
 } from '../helpers/disponibilite.rules';
 
 /**
@@ -39,6 +41,8 @@ export type PassageAppli = 'APPLI_FERMEE' | 'APPLI_ACTIVE';
 export interface LignePresence {
   id: string;
   dernier_signal_at: Date | null;
+  /** Appli d'avant le protocole 4 : la règle ne la vise pas, rien à demander. */
+  protocole_appli: number | null;
 }
 
 /**
@@ -59,6 +63,7 @@ export function idsSansSignalSuffisant(
 ): string[] {
   const limite = maintenant.getTime() - Math.max(0, appliFermeeApresS * 1000 - MARGE_PRESENCE_MS);
   return lignes
+    .filter((l) => regleAppliPour(l.protocole_appli, appliFermeeApresS))
     .filter((l) => l.dernier_signal_at === null || l.dernier_signal_at.getTime() <= limite)
     .map((l) => l.id);
 }
@@ -109,9 +114,23 @@ export class AppliLivreurService {
     if (ids.length === 0) return { appliFermeeApresS, connectes: new Set() };
     const lignes = await this.prisma.deliverer.findMany({
       where: { id: { in: [...ids] } },
-      select: { id: true, dernier_signal_at: true },
+      select: { id: true, dernier_signal_at: true, protocole_appli: true },
     });
     return this.contexteAvec(appliFermeeApresS, lignes, maintenant);
+  }
+
+  /**
+   * La règle de l'appli fermée vise-t-elle ce livreur ? Réglage au-dessus de 0
+   * et appli au protocole 4 au moins. Sinon l'état de son appli est inconnu.
+   */
+  async regleActivePour(delivererId: string): Promise<boolean> {
+    const appliFermeeApresS = await this.seuilS();
+    if (!(appliFermeeApresS > 0)) return false;
+    const ligne = await this.prisma.deliverer.findUnique({
+      where: { id: delivererId },
+      select: { protocole_appli: true },
+    });
+    return regleAppliPour(ligne?.protocole_appli ?? null, appliFermeeApresS);
   }
 
   /** L'appli de ce livreur est-elle active ? Livreur introuvable : oui (rien à juger). */
@@ -120,7 +139,7 @@ export class AppliLivreurService {
     if (!(appliFermeeApresS > 0)) return true;
     const ligne = await this.prisma.deliverer.findUnique({
       where: { id: delivererId },
-      select: { id: true, dernier_signal_at: true },
+      select: { id: true, dernier_signal_at: true, protocole_appli: true },
     });
     if (!ligne) return true;
     const appli = await this.contexteAvec(appliFermeeApresS, [ligne], maintenant);
@@ -143,6 +162,7 @@ export class AppliLivreurService {
         is_operational: true,
         entity_status: EntityStatus.ACTIVE,
         last_available_at: { not: null },
+        protocole_appli: { gte: PROTOCOLE_APPLI_FERMEE },
         OR: [{ dernier_signal_at: null }, { dernier_signal_at: { lte: limite } }],
       },
       select: { id: true },
@@ -209,6 +229,7 @@ export class AppliLivreurService {
         id: true,
         restaurant_id: true,
         dernier_signal_at: true,
+        protocole_appli: true,
         last_available_at: true,
         pause_until: true,
         auto_pause_until: true,

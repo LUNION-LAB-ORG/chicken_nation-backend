@@ -31,7 +31,7 @@ import {
   DonneesDispatch,
   course,
   courseAvecCommandes,
-  livreur,
+  livreur as livreurBase,
   monterBaseDispatch,
   offre,
 } from './base-dispatch.simulee-spec';
@@ -40,6 +40,9 @@ import { CourseOfferService } from './course-offer.service';
 import { DispatchJournalService } from './dispatch-journal.service';
 import { GardeOffresService } from './garde-offres.service';
 import { OffresClotureService } from './offres-cloture.service';
+
+/** Livreur avec la nouvelle appli (protocole 4) : la règle de l'appli fermée le vise. */
+const livreur = (surcharge: Parameters<typeof livreurBase>[0] = {}) => livreurBase({ protocole_appli: 4, ...surcharge });
 
 const MAINTENANT = new Date('2026-10-22T14:00:00.000Z');
 const avant = (s: number) => new Date(MAINTENANT.getTime() - s * 1000);
@@ -448,7 +451,7 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
   });
 
   it('appli en arrière-plan (sans socket, positions récentes) : l’offre part par notification, rien à demander au livreur', async () => {
-    const d = livreur({ dernier_signal_at: avant(30) });
+    const d = livreur({ protocole_appli: 4, dernier_signal_at: avant(30) });
     const c = course();
     const t = monter({ livreurs: [d], courses: [c] }, { appli: { connectes: [] } });
     t.presence.livreurConnecte.mockResolvedValue(false);
@@ -495,8 +498,24 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
     });
   });
 
+  it('appli d’avant le protocole 4, muette depuis 10 min : offre envoyée par notification, état de l’appli inconnu', async () => {
+    const d = livreur({ protocole_appli: 3, dernier_signal_at: avant(600) });
+    const c = course();
+    const t = monter({ livreurs: [d], courses: [c] }, { appli: { connectes: [] } });
+    t.presence.livreurConnecte.mockResolvedValue(false);
+
+    expect(await forcer(t, c.id, d.id)).toMatchObject({
+      success: true,
+      message:
+        "Offre envoyée par notification seulement : l'appli du livreur n'est pas connectée en temps réel. " +
+        "Demandez-lui de rouvrir l'appli.",
+      appli_connectee: false,
+      appli_active: null,
+    });
+  });
+
   it('appli FERMÉE (24/10) : 409 « L’appli de ce livreur est fermée. », journal avec le dernier signe de vie, aucune offre', async () => {
-    const d = livreur({ dernier_signal_at: avant(600) });
+    const d = livreur({ protocole_appli: 4, dernier_signal_at: avant(600) });
     const autre = livreur();
     const c = course({ offer_expires_at: apres(30) });
     const offreAutre = offre({ course_id: c.id, deliverer_id: autre.id, expires_at: apres(30) });
@@ -522,7 +541,7 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
   });
 
   it('renvoi de l’offre de CETTE course à une appli fermée : 409 aussi', async () => {
-    const d = livreur({ dernier_signal_at: null });
+    const d = livreur({ protocole_appli: 4, dernier_signal_at: null });
     const c = course({ offer_expires_at: apres(40) });
     const t = monter(
       { livreurs: [d], courses: [c], offres: [offre({ course_id: c.id, deliverer_id: d.id, expires_at: apres(40) })] },
@@ -533,7 +552,7 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
   });
 
   it('appli fermée entre le contrôle et l’écriture de l’offre : rien n’est écrit, 409 « Réessayez »', async () => {
-    const d = livreur({ dernier_signal_at: avant(30) });
+    const d = livreur({ protocole_appli: 4, dernier_signal_at: avant(30) });
     const c = course();
     const t = monter({ livreurs: [d], courses: [c] }, { appli: { connectes: [] } });
     // Le contrôle voit l'appli active ; juste après, elle se tait depuis 10 min.
@@ -875,8 +894,8 @@ describe('bascule manuelle vers Turbo (PATCH /courses/:id/turbo)', () => {
  * pénalité ; en arrière-plan (positions récentes) elle reste servie.
  */
 describe('appli fermée (24/10) : plus rien ne passe, sans pause ni pénalité', () => {
-  const FERMEE = { dernier_signal_at: avant(600) };
-  const ARRIERE_PLAN = { dernier_signal_at: avant(30) };
+  const FERMEE = { dernier_signal_at: avant(600), protocole_appli: 4 };
+  const ARRIERE_PLAN = { dernier_signal_at: avant(30), protocole_appli: 4 };
 
   it('tâche des relances : l’offre d’une appli fermée est close tout de suite (APPLI_FERMEE), la recherche repart', async () => {
     const d = livreur(FERMEE);
@@ -901,7 +920,7 @@ describe('appli fermée (24/10) : plus rien ne passe, sans pause ni pénalité',
 
   it('tâche des relances : appli en arrière-plan (positions récentes, sans socket) ou socket ouvert : offre gardée et relancée', async () => {
     const arrierePlan = livreur(ARRIERE_PLAN);
-    const socket = livreur({ dernier_signal_at: avant(900) });
+    const socket = livreur({ protocole_appli: 4, dernier_signal_at: avant(900) });
     const c1 = course();
     const c2 = course();
     const o1 = offre({ course_id: c1.id, deliverer_id: arrierePlan.id, offered_at: avant(35), expires_at: apres(85) });
@@ -921,6 +940,25 @@ describe('appli fermée (24/10) : plus rien ne passe, sans pause ni pénalité',
     const demandes = t.appli.gateway.livreursConnectes.mock.calls.map((a) => [...a[0]]);
     expect(demandes.length).toBeGreaterThan(0);
     expect(demandes.every((ids) => ids.length === 1 && ids[0] === socket.id)).toBe(true);
+  });
+
+  it('appli d’avant le protocole 4 (OTA pas installée), muette depuis 10 min : la règle ne la vise pas, offre gardée et relancée, pénalisée à l’échéance comme avant', async () => {
+    const d = livreur({ dernier_signal_at: avant(600), protocole_appli: 3 });
+    const c = course();
+    const o = offre({ course_id: c.id, deliverer_id: d.id, offered_at: avant(35), expires_at: apres(85) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [o] }, { appli: { connectes: [] } });
+
+    expect(await t.serviceOffres.remindPendingOffers()).toBe(1);
+    expect(o.status).toBe(CourseOfferStatus.PENDING);
+    expect(t.fermetures()).toEqual([]);
+    expect(t.appli.gateway.livreursConnectes).not.toHaveBeenCalled();
+
+    o.expires_at = avant(1);
+    c.offer_expires_at = avant(1);
+    expect(await t.serviceOffres.expirePendingOffers()).toBe(1);
+    expect(o.status).toBe(CourseOfferStatus.EXPIRED);
+    expect(t.queue.onOfferExpired).toHaveBeenCalled();
+    expect(t.fermetures()).toEqual([]);
   });
 
   it('échéance d’une offre d’appli fermée : close (pas expirée), ni pénalité, ni refus, ni filet ; il reste candidat à sa réouverture', async () => {
@@ -949,7 +987,7 @@ describe('appli fermée (24/10) : plus rien ne passe, sans pause ni pénalité',
   it('échéance d’une offre envoyée juste après la fermeture (dernier signe de vie AVANT l’offre, moins de 180 s) : close, sans pénalité', async () => {
     // Appli glissée hors de la liste à -136 s ; l'offre part à -121 s (l'appli
     // paraît encore active) ; à l'échéance, son signe de vie a moins de 180 s.
-    const d = livreur({ dernier_signal_at: avant(136) });
+    const d = livreur({ protocole_appli: 4, dernier_signal_at: avant(136) });
     const c = course({ offer_expires_at: avant(1) });
     const o = offre({ course_id: c.id, deliverer_id: d.id, offered_at: avant(121), expires_at: avant(1) });
     const t = monter({ livreurs: [d], courses: [c], offres: [o] }, { appli: { connectes: [] } });
@@ -964,8 +1002,8 @@ describe('appli fermée (24/10) : plus rien ne passe, sans pause ni pénalité',
   });
 
   it('échéance : signe de vie pendant l’offre, ou socket ouvert, l’offre est expirée et pénalisée', async () => {
-    const position = livreur({ dernier_signal_at: avant(60) });
-    const socket = livreur({ dernier_signal_at: avant(136) });
+    const position = livreur({ protocole_appli: 4, dernier_signal_at: avant(60) });
+    const socket = livreur({ protocole_appli: 4, dernier_signal_at: avant(136) });
     const c1 = course();
     const c2 = course();
     const o1 = offre({ course_id: c1.id, deliverer_id: position.id, offered_at: avant(121), expires_at: avant(1) });

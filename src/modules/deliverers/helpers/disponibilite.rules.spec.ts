@@ -184,11 +184,18 @@ describe('appli active ou fermée (demande du 24/10)', () => {
 
   it('réglage à 0 (règle coupée) : toujours active', () => {
     expect(estAppliActive({ socket_connecte: false, dernier_signal_at: null }, MAINTENANT, 0)).toBe(true);
-    expect(appliActiveDepuis({ id: 'l', dernier_signal_at: null }, SANS_REGLE_APPLI, MAINTENANT)).toBe(true);
+    expect(appliActiveDepuis({ id: 'l', dernier_signal_at: null, protocole_appli: 4 }, SANS_REGLE_APPLI, MAINTENANT)).toBe(true);
+  });
+
+  it('appli d’avant le protocole 4 (ou jamais vue) : la règle ne la vise pas, toujours active', () => {
+    const contexte = { appliFermeeApresS: S, connectes: new Set<string>() };
+    expect(appliActiveDepuis({ id: 'l', dernier_signal_at: avantS(4000), protocole_appli: 3 }, contexte, MAINTENANT)).toBe(true);
+    expect(appliActiveDepuis({ id: 'l', dernier_signal_at: null, protocole_appli: null }, contexte, MAINTENANT)).toBe(true);
+    expect(appliActiveDepuis({ id: 'l', dernier_signal_at: avantS(4000), protocole_appli: 4 }, contexte, MAINTENANT)).toBe(false);
   });
 
   it('appliActiveDepuis : le socket se lit dans `connectes`, null = inconnu', () => {
-    const vieux = { id: 'l', dernier_signal_at: avantS(400) };
+    const vieux = { id: 'l', dernier_signal_at: avantS(400), protocole_appli: 4 };
     expect(appliActiveDepuis(vieux, { appliFermeeApresS: S, connectes: new Set(['l']) }, MAINTENANT)).toBe(true);
     expect(appliActiveDepuis(vieux, { appliFermeeApresS: S, connectes: new Set(['autre']) }, MAINTENANT)).toBe(false);
     expect(appliActiveDepuis(vieux, { appliFermeeApresS: S, connectes: null }, MAINTENANT)).toBe(false);
@@ -205,6 +212,7 @@ describe('appli active ou fermée (demande du 24/10)', () => {
       auto_pause_until: null,
       last_available_at: avant(30),
       dernier_signal_at: avantS(200),
+      protocole_appli: 4,
       _count: { courses: 0, offer_attempts: 0 },
     };
     const ferme = etatLivreurDepuis(ligne, { appliFermeeApresS: S, connectes: new Set() }, MAINTENANT);
@@ -321,6 +329,7 @@ describe('équivalence avec le filtre Prisma de la sélection', () => {
           for (const auto_pause_until of [null, apres(5)])
             for (const last_available_at of [null, avant(30)])
               for (const dernier_signal_at of signaux)
+                for (const protocole_appli of [null, 3, 4, 5])
                 for (const statuts of [[], [CourseStatut.ACCEPTED], [CourseStatut.COMPLETED]])
                   for (const offres of [listesOffres[0], listesOffres[1], listesOffres[3]]) {
                     const ligne = {
@@ -331,6 +340,7 @@ describe('équivalence avec le filtre Prisma de la sélection', () => {
                       auto_pause_until,
                       last_available_at,
                       dernier_signal_at,
+                      protocole_appli,
                       courses: statuts.map((statut) => ({ statut })),
                       offer_attempts: offres,
                     };
@@ -341,7 +351,7 @@ describe('équivalence avec le filtre Prisma de la sélection', () => {
                   }
     }
 
-    expect(essais).toBe(6 * 3 * 4 * 2 * 2 * 5 * 3 * 3);
+    expect(essais).toBe(6 * 3 * 4 * 2 * 2 * 5 * 4 * 3 * 3);
     // Garde-fou : acceptés, refusés, et refusés pour l'appli fermée.
     expect(acceptes).toBeGreaterThan(0);
     expect(acceptes).toBeLessThan(essais);

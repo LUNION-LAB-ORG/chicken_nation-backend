@@ -440,7 +440,7 @@ describe('POST /auth/deliverer/logout', () => {
 
 describe('filet : offre ignorée sans aucun signal', () => {
   it('sans signal depuis 25 min : hors service, pause, notification, offres closes, journal', async () => {
-    const l = livreur({ dernier_signal_at: avant(25) });
+    const l = livreur({ protocole_appli: 4, dernier_signal_at: avant(25) });
     const c = course();
     const autre = offre({ course_id: c.id, deliverer_id: l.id });
     const t = monter({ livreurs: [l], courses: [c], offres: [autre] });
@@ -462,13 +462,13 @@ describe('filet : offre ignorée sans aucun signal', () => {
   });
 
   it('aucun signal connu : hors service', async () => {
-    const l = livreur({ dernier_signal_at: null });
+    const l = livreur({ protocole_appli: 4, dernier_signal_at: null });
     const t = monter({ livreurs: [l] });
     expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(true);
   });
 
   it('signal jamais noté (juste après le déploiement) mais position il y a 5 min : rien', async () => {
-    const l = livreur({ dernier_signal_at: null, last_location_at: avant(5) });
+    const l = livreur({ protocole_appli: 4, dernier_signal_at: null, last_location_at: avant(5) });
     const t = monter({ livreurs: [l] });
     expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(false);
     expect(l.last_available_at).not.toBeNull();
@@ -477,7 +477,7 @@ describe('filet : offre ignorée sans aucun signal', () => {
   });
 
   it('signal jamais noté et dernière position il y a 30 min : hors service', async () => {
-    const l = livreur({ dernier_signal_at: null, last_location_at: avant(30) });
+    const l = livreur({ protocole_appli: 4, dernier_signal_at: null, last_location_at: avant(30) });
     const t = monter({ livreurs: [l] });
     expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(true);
   });
@@ -485,13 +485,13 @@ describe('filet : offre ignorée sans aucun signal', () => {
   it('signal ancien : une position récente notée avant le champ ne compte plus', async () => {
     // dernier_signal_at est tenu à jour par chaque position depuis le 22/10 :
     // s'il est ancien, c'est lui qui fait foi.
-    const l = livreur({ dernier_signal_at: avant(25), last_location_at: avant(25) });
+    const l = livreur({ protocole_appli: 4, dernier_signal_at: avant(25), last_location_at: avant(25) });
     const t = monter({ livreurs: [l] });
     expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(true);
   });
 
   it('signal il y a 5 min : rien (il a simplement laissé passer l’offre)', async () => {
-    const l = livreur({ dernier_signal_at: avant(5) });
+    const l = livreur({ protocole_appli: 4, dernier_signal_at: avant(5) });
     const t = monter({ livreurs: [l] });
     expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(false);
     expect(l.last_available_at).not.toBeNull();
@@ -499,14 +499,14 @@ describe('filet : offre ignorée sans aucun signal', () => {
   });
 
   it('réglage à 0 : filet coupé', async () => {
-    const l = livreur({ dernier_signal_at: avant(600) });
+    const l = livreur({ protocole_appli: 4, dernier_signal_at: avant(600) });
     const t = monter({ livreurs: [l] }, { horsServiceSansSignalMin: 0 });
     expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(false);
     expect(l.pause_until).toBeNull();
   });
 
   it('déjà en pause : rien', async () => {
-    const l = livreur({ dernier_signal_at: avant(600), pause_until: apres(10) });
+    const l = livreur({ protocole_appli: 4, dernier_signal_at: avant(600), pause_until: apres(10) });
     const t = monter({ livreurs: [l] });
     expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(false);
     expect(l.pause_until).toEqual(apres(10));
@@ -514,7 +514,7 @@ describe('filet : offre ignorée sans aucun signal', () => {
   });
 
   it('appli simplement FERMÉE (24/10) : jamais hors service, ni pause, ni message, ni journal', async () => {
-    const l = livreur({ dernier_signal_at: avant(25) });
+    const l = livreur({ protocole_appli: 4, dernier_signal_at: avant(25) });
     const c = course();
     const o = offre({ course_id: c.id, deliverer_id: l.id });
     const t = monter({ livreurs: [l], courses: [c], offres: [o] }, { appli: { seuilS: 180, connectes: [] } });
@@ -529,14 +529,14 @@ describe('filet : offre ignorée sans aucun signal', () => {
   });
 
   it('présence inconnue et signe de vie vieux : appli réputée fermée, le filet l’épargne aussi', async () => {
-    const l = livreur({ dernier_signal_at: avant(25) });
+    const l = livreur({ protocole_appli: 4, dernier_signal_at: avant(25) });
     const t = monter({ livreurs: [l] }, { appli: { seuilS: 180, connectes: null } });
     expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(false);
     expect(l.pause_until).toBeNull();
   });
 
   it('règle de l’appli coupée (réglage à 0) : le filet joue comme avant', async () => {
-    const l = livreur({ dernier_signal_at: avant(25) });
+    const l = livreur({ protocole_appli: 4, dernier_signal_at: avant(25) });
     const t = monter({ livreurs: [l] }, { appli: { seuilS: 0, connectes: [] } });
     expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(true);
     expect(l.pause_until).toEqual(FIN_PAUSE_INDEFINIE);

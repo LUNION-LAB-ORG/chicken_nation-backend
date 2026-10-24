@@ -29,6 +29,7 @@ import {
   STATUTS_COURSE_EN_COURS,
   disponibiliteLivreur,
   etatLivreurDepuis,
+  regleAppliPour,
 } from '../helpers/disponibilite.rules';
 import { DelivererPushService } from './deliverer-push.service';
 
@@ -162,7 +163,7 @@ export class DeliverersService {
           etatLivreurDepuis({ ...livreur, _count }, appli, maintenant),
           maintenant,
           offer_attempts[0]?.course_id ?? null,
-          appli.appliFermeeApresS > 0,
+          regleAppliPour(livreur.protocole_appli, appli.appliFermeeApresS),
         );
         return {
           ...livreur,
@@ -650,6 +651,7 @@ export class DeliverersService {
         pause_until: true,
         auto_pause_until: true,
         dernier_signal_at: true,
+        protocole_appli: true,
         status: true,
         is_operational: true,
         entity_status: true,
@@ -719,7 +721,7 @@ export class DeliverersService {
           etatLivreurDepuis(d, appli, now),
           now,
           d.offer_attempts[0]?.course_id ?? null,
-          appli.appliFermeeApresS > 0,
+          regleAppliPour(d.protocole_appli, appli.appliFermeeApresS),
         );
 
         return {

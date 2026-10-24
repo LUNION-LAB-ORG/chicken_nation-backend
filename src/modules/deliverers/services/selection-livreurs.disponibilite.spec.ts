@@ -147,10 +147,10 @@ describe('appli fermée (demande du 24/10) : la sélection ne propose qu’aux a
   }
 
   it('signe de vie récent (appli en arrière-plan) ou socket ouvert : candidat ; ni l’un ni l’autre : écarté', async () => {
-    const arrierePlan = livreur({ last_available_at: avant(30), dernier_signal_at: avantS(40) });
-    const socketSeul = livreur({ last_available_at: avant(20), dernier_signal_at: avantS(900) });
-    const ferme = livreur({ last_available_at: avant(40), dernier_signal_at: avantS(S) });
-    const jamaisVu = livreur({ last_available_at: avant(50), dernier_signal_at: null });
+    const arrierePlan = livreur({ protocole_appli: 4, last_available_at: avant(30), dernier_signal_at: avantS(40) });
+    const socketSeul = livreur({ protocole_appli: 4, last_available_at: avant(20), dernier_signal_at: avantS(900) });
+    const ferme = livreur({ protocole_appli: 4, last_available_at: avant(40), dernier_signal_at: avantS(S) });
+    const jamaisVu = livreur({ protocole_appli: 4, last_available_at: avant(50), dernier_signal_at: null });
     const t = monterSelection([arrierePlan, socketSeul, ferme, jamaisVu], { seuilS: S, connectes: [socketSeul.id] });
 
     const classes = await t.scoring.rankCandidates({ restaurantId: arrierePlan.restaurant_id });
@@ -163,9 +163,21 @@ describe('appli fermée (demande du 24/10) : la sélection ne propose qu’aux a
     );
   });
 
+  it('appli d’avant le protocole 4 (OTA pas installée) : candidat malgré un signe de vie vieux, sans question au serveur temps réel', async () => {
+    const ancienne = livreur({ protocole_appli: 3, dernier_signal_at: avantS(900) });
+    const jamaisVue = livreur({ protocole_appli: null, dernier_signal_at: null });
+    const nouvelle = livreur({ protocole_appli: 4, dernier_signal_at: avantS(900) });
+    const t = monterSelection([ancienne, jamaisVue, nouvelle], { seuilS: S, connectes: [] });
+
+    const classes = await t.scoring.rankCandidates({ restaurantId: ancienne.restaurant_id });
+
+    expect(classes.map((c) => c.delivererId).sort()).toEqual([ancienne.id, jamaisVue.id].sort());
+    expect(t.appli.gateway.livreursConnectes.mock.calls.map((a) => [...a[0]])).toEqual([[nouvelle.id]]);
+  });
+
   it('tous les signes de vie récents : aucune question au serveur temps réel', async () => {
-    const a = livreur({ dernier_signal_at: avantS(5) });
-    const b = livreur({ dernier_signal_at: avantS(100) });
+    const a = livreur({ protocole_appli: 4, dernier_signal_at: avantS(5) });
+    const b = livreur({ protocole_appli: 4, dernier_signal_at: avantS(100) });
     const t = monterSelection([a, b], { seuilS: S, connectes: [] });
 
     expect((await t.scoring.rankCandidates({ restaurantId: a.restaurant_id })).map((c) => c.delivererId).sort()).toEqual(
@@ -175,8 +187,8 @@ describe('appli fermée (demande du 24/10) : la sélection ne propose qu’aux a
   });
 
   it('présence inconnue (Redis muet) : jugé sur le seul signe de vie', async () => {
-    const recent = livreur({ dernier_signal_at: avantS(30) });
-    const vieux = livreur({ dernier_signal_at: avantS(600) });
+    const recent = livreur({ protocole_appli: 4, dernier_signal_at: avantS(30) });
+    const vieux = livreur({ protocole_appli: 4, dernier_signal_at: avantS(600) });
     const t = monterSelection([recent, vieux], { seuilS: S, connectes: null });
 
     expect((await t.scoring.rankCandidates({ restaurantId: recent.restaurant_id })).map((c) => c.delivererId)).toEqual([
@@ -185,7 +197,7 @@ describe('appli fermée (demande du 24/10) : la sélection ne propose qu’aux a
   });
 
   it('réglage à 0 : règle coupée, comme avant', async () => {
-    const vieux = livreur({ dernier_signal_at: avantS(6000) });
+    const vieux = livreur({ protocole_appli: 4, dernier_signal_at: avantS(6000) });
     const t = monterSelection([vieux], { seuilS: 0, connectes: [] });
 
     expect((await t.scoring.pickBestCandidate({ restaurantId: vieux.restaurant_id }))?.delivererId).toBe(vieux.id);
@@ -193,8 +205,8 @@ describe('appli fermée (demande du 24/10) : la sélection ne propose qu’aux a
   });
 
   it('mode comparatif (ancien algorithme) : même règle, l’appli fermée est écartée', async () => {
-    const ferme = livreur({ last_login_at: new Date('2026-10-22T13:59:00.000Z'), dernier_signal_at: avantS(400) });
-    const actif = livreur({ last_login_at: new Date('2026-10-22T08:00:00.000Z'), dernier_signal_at: avantS(20) });
+    const ferme = livreur({ protocole_appli: 4, last_login_at: new Date('2026-10-22T13:59:00.000Z'), dernier_signal_at: avantS(400) });
+    const actif = livreur({ protocole_appli: 4, last_login_at: new Date('2026-10-22T08:00:00.000Z'), dernier_signal_at: avantS(20) });
     const base = monterBase({ livreurs: [ferme, actif] });
     const service = new CourseOfferService(
       base.prisma,
