@@ -21,7 +21,12 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 
-import { lireMembresDuPlanning, SOURCES_REPOS_DU_PLANNING } from '../helpers/membres-planning';
+import {
+  lireMembresDuPlanning,
+  lireReposDuPlanning,
+  planningQuiCouvre,
+  plansEnCoursQuiChevauchent,
+} from '../helpers/membres-planning';
 import {
   actionAuJournal,
   type GestePlanning,
@@ -32,6 +37,8 @@ import {
   MESSAGE_PAS_SUR_LE_PLANNING,
   MESSAGE_PLANNING_CHANGE,
   MESSAGE_PLANNING_INTROUVABLE,
+  messageJourDuPlanningEnCours,
+  NOM_ETAT,
   type NotificationPlanning,
   notificationDates,
   notificationJour,
@@ -59,14 +66,6 @@ const WEEKDAY_NAMES: WeekDay[] = [
 ];
 
 const WEEKEND = new Set<WeekDay>(['saturday', 'sunday']);
-
-/** Nom d'un état dans les refus montrés à l'écran (section 3.3). */
-const NOM_ETAT: Record<SchedulePlanStatus, string> = {
-  [SchedulePlanStatus.DRAFT]: 'Brouillon',
-  [SchedulePlanStatus.SENT]: 'Envoyé',
-  [SchedulePlanStatus.CONFIRMED]: 'Confirmé',
-  [SchedulePlanStatus.ARCHIVED]: 'Archivé',
-};
 
 /** Ordre naturel des jours (lundi d'abord) — pour trouver le 1er jour de repos autorisé. */
 const ALL_WEEKDAYS: WeekDay[] = [
@@ -344,7 +343,8 @@ export class SchedulePlanningService {
    * livreur à ses shifts (hors ses jours de repos, calculés indépendamment).
    *
    * Permis dans les quatre états (24/10). Envoyé ou confirmé : le livreur
-   * reçoit « Nouveau planning ». Archivé : ligne au journal.
+   * reçoit « Nouveau planning ». Archivé : ligne au journal, et aucun repos
+   * posé sur les jours d'un planning en cours du restaurant (ils sont à lui).
    */
   async addDelivererToPlan(
     planId: string,
@@ -390,11 +390,14 @@ export class SchedulePlanningService {
         deliverer_id: delivererId,
         status: ShiftAssignmentStatus.ASSIGNED,
       }));
-    const restDays = [...restSet].map((key) => ({
-      deliverer_id: delivererId,
-      date: this.parseKey(key),
-      source: RestDaySource.AUTO,
-    }));
+    const enCours = await plansEnCoursQuiChevauchent(this.prisma, plan);
+    const restDays = [...restSet]
+      .map((key) => ({
+        deliverer_id: delivererId,
+        date: this.parseKey(key),
+        source: RestDaySource.AUTO,
+      }))
+      .filter((r) => !planningQuiCouvre(enCours, r.date));
 
     await this.prisma.$transaction(async (tx) => {
       if (assignments.length > 0) {
@@ -425,7 +428,10 @@ export class SchedulePlanningService {
   /**
    * Retire un livreur d'un planning, dans les quatre états (24/10) : ses
    * affectations du planning et ses repos `AUTO` et `MANUAL_ADMIN` de la
-   * période sont effacés. Les repos qu'il a posés lui-même restent.
+   * période sont effacés. Les repos qu'il a posés lui-même restent, comme
+   * ceux qu'un autre planning garde (`GardeDesRepos`, cas `'en_cours'`) :
+   * planning de son nouveau restaurant, planning en cours quand on retire
+   * d'un archivé.
    *
    * Envoyé ou confirmé : il est prévenu. Archivé : ligne au journal.
    */
@@ -443,17 +449,13 @@ export class SchedulePlanningService {
       select: SELECT_LIVREUR_NOMME,
     });
 
+    const { libres } = await lireReposDuPlanning(this.prisma, plan, { deliverer_id: delivererId }, 'en_cours');
+
     const [affectations, repos] = await this.prisma.$transaction([
       this.prisma.shiftAssignment.deleteMany({
         where: { deliverer_id: delivererId, shift: { plan_id: planId } },
       }),
-      this.prisma.restDay.deleteMany({
-        where: {
-          deliverer_id: delivererId,
-          date: { gte: plan.period_start, lte: plan.period_end },
-          source: { in: SOURCES_REPOS_DU_PLANNING },
-        },
-      }),
+      this.prisma.restDay.deleteMany({ where: { id: { in: libres.map((r) => r.id) } } }),
     ]);
     // Une autre requête l'a retiré entre-temps : rien à annoncer une seconde fois.
     if (affectations.count === 0 && repos.count === 0) {
@@ -628,7 +630,9 @@ export class SchedulePlanningService {
    *   en ASSIGNED : le livreur confirme, même sur un planning confirmé.
    *
    * Permis dans les quatre états (24/10). Si le jour change vraiment : envoyé
-   * ou confirmé, le livreur est prévenu ; archivé, ligne au journal.
+   * ou confirmé, le livreur est prévenu ; archivé, ligne au journal. Sur un
+   * archivé, refus pour un jour qu'un planning en cours du restaurant couvre
+   * aussi : le repos de ce jour est le sien.
    */
   async setDelivererDayMode(
     planId: string,
@@ -654,6 +658,9 @@ export class SchedulePlanningService {
       select: SELECT_LIVREUR_NOMME,
     });
     if (!deliverer) throw new BadRequestException(MESSAGE_LIVREUR_PAS_ACTIF);
+
+    const enCours = planningQuiCouvre(await plansEnCoursQuiChevauchent(this.prisma, plan), day);
+    if (enCours) throw new BadRequestException(messageJourDuPlanningEnCours(enCours));
 
     let change: boolean;
     if (mode === 'REST') {
@@ -814,29 +821,14 @@ export class SchedulePlanningService {
 
   /**
    * Repos `AUTO` et `MANUAL_ADMIN` des livreurs d'un planning, dans sa période,
-   * hors des jours couverts par un AUTRE planning du restaurant (ceux-là
-   * appartiennent aussi à l'autre planning).
+   * hors des jours qu'un autre planning garde (`GardeDesRepos`, cas `'tous'`) :
+   * tout autre planning du restaurant, et le planning d'un autre restaurant
+   * qui est celui du livreur ou qui l'a dans ses affectations.
    */
   private async reposDuPlanningAEffacer(plan: PlanningAvantGeste, membres: string[]) {
     if (membres.length === 0) return [];
-    const autres = await this.prisma.schedulePlan.findMany({
-      where: {
-        id: { not: plan.id },
-        restaurant_id: plan.restaurant_id,
-        period_start: { lte: plan.period_end },
-        period_end: { gte: plan.period_start },
-      },
-      select: { period_start: true, period_end: true },
-    });
-    return this.prisma.restDay.findMany({
-      where: {
-        deliverer_id: { in: membres },
-        date: { gte: plan.period_start, lte: plan.period_end },
-        source: { in: SOURCES_REPOS_DU_PLANNING },
-        NOT: autres.map((a) => ({ date: { gte: a.period_start, lte: a.period_end } })),
-      },
-      select: { id: true, deliverer_id: true, date: true, source: true, reason: true },
-    });
+    const { libres } = await lireReposDuPlanning(this.prisma, plan, { deliverer_id: { in: membres } }, 'tous');
+    return libres;
   }
 
   /** Une notification par livreur, seulement sur un planning envoyé ou confirmé. */

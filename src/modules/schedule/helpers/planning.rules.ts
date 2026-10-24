@@ -22,6 +22,29 @@ export const MESSAGE_LIVREUR_PAS_ACTIF = "Ce livreur n'est pas actif dans ce res
 export const MESSAGE_JOUR_HORS_PLANNING = "Ce jour n'est pas dans le planning.";
 export const MESSAGE_JOUR_SANS_REPOS = 'Pas de repos ce jour-là.';
 
+/** Nom d'un état dans les refus montrés à l'écran (section 3.3). */
+export const NOM_ETAT: Record<SchedulePlanStatus, string> = {
+  [SchedulePlanStatus.DRAFT]: 'Brouillon',
+  [SchedulePlanStatus.SENT]: 'Envoyé',
+  [SchedulePlanStatus.CONFIRMED]: 'Confirmé',
+  [SchedulePlanStatus.ARCHIVED]: 'Archivé',
+};
+
+/**
+ * Refus d'un geste sur un planning archivé, un jour qu'un planning en cours
+ * du restaurant couvre aussi : le repos de ce jour est le sien.
+ */
+export function messageJourDuPlanningEnCours(autre: {
+  status: SchedulePlanStatus;
+  period_start: Date;
+  period_end: Date;
+}): string {
+  return (
+    `Ce jour est dans le planning du ${periode(autre.period_start, autre.period_end)} ` +
+    `(${NOM_ETAT[autre.status]}). Changez-le depuis ce planning.`
+  );
+}
+
 /**
  * Cloisonnement : un compte de restaurant (manager, assistant) ne touche
  * qu'aux plannings de SON restaurant. Même règle que
