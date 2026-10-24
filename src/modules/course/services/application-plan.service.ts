@@ -713,6 +713,8 @@ export class ApplicationPlanService {
     if (!p.touchees.has(a.course_id)) p.touchees.set(a.course_id, RaisonsPlanificateur.RETENUE);
     await this.journal.ecrire({
       type: 'COURSE_RETENUE',
+      // Attente courte, ou trajet long (le livreur reviendrait trop tard pour la commande attendue).
+      motif: a.motif,
       source: 'serveur',
       restaurant_id: p.restaurantId,
       course_id: a.course_id,
@@ -720,6 +722,7 @@ export class ApplicationPlanService {
       details: {
         jusqua: a.jusqua.toISOString(),
         attendues: a.attendues.map((x) => `${x.reference}(${x.prete_vers.toISOString()})`),
+        aller_retour_s: a.aller_retour_s,
         libelle: a.libelle,
       },
     });

@@ -34,6 +34,7 @@ import {
 } from './monde-planification.simulee-spec';
 import {
   actionsRepliV1,
+  allerRetourCourseMs,
   ARRET_CLIENT_S,
   classerLivreurs,
   clePaire,
@@ -58,6 +59,8 @@ import {
 const M = h('12:30');
 const REG = REGLAGES_PLANIFICATION_DEFAUT;
 const avec = (r: Partial<ReglagesPlanification>): ReglagesPlanification => ({ ...REG, ...r });
+/** Attente courte seule, comme avant le 24/10 : cas du trajet long coupé. */
+const COURT = avec({ attenteMaxTrajetLongS: 0 });
 
 /** Refus noté pour une commande (ou une course absorbée) face à une course. */
 function refusDe(plan: ReturnType<typeof planifier>, quoi: string, cle: string) {
@@ -74,6 +77,8 @@ describe('réglages du planificateur', () => {
     expect(reglages).toMatchObject({
       attenteMaxCommandePreteS: 300,
       horizonPreparationS: 420,
+      petitRetardRetourMin: 5,
+      attenteMaxTrajetLongS: 1200,
       maxCommandesParCourse: 3,
       dureeTourneeMaxMin: 25,
       promesseClientMin: 35,
@@ -93,6 +98,8 @@ describe('réglages du planificateur', () => {
     const { reglages, refusees } = lireReglagesPlanification({
       'course.attente_max_commande_prete_s': '0',
       'course.horizon_preparation_s': '0',
+      'course.petit_retard_retour_min': '0',
+      'course.attente_max_trajet_long_s': '0',
       'course.ajout_apres_retrait_max_s': '0',
       'course.retard_max_client_min': '0',
       'course.detour_max_ajout_min': '0',
@@ -103,6 +110,8 @@ describe('réglages du planificateur', () => {
     expect(reglages).toMatchObject({
       attenteMaxCommandePreteS: 0,
       horizonPreparationS: 0,
+      petitRetardRetourMin: 0,
+      attenteMaxTrajetLongS: 0,
       ajoutApresRetraitMaxS: 0,
       retardMaxClientMin: 0,
       detourMaxAjoutMin: 0,
@@ -119,7 +128,11 @@ describe('réglages du planificateur', () => {
       'course.depart_rayon_m': 'loin',
       'course.ajout_apres_retrait': 'peut-être',
       'course.planificateur_tache_s': '2.5',
+      'course.petit_retard_retour_min': '-1',
+      'course.attente_max_trajet_long_s': 'vingt minutes',
     });
+    expect(reglages.petitRetardRetourMin).toBe(5);
+    expect(reglages.attenteMaxTrajetLongS).toBe(1200);
     expect(reglages.maxCommandesParCourse).toBe(3);
     expect(reglages.dureeTourneeMaxMin).toBe(25);
     expect(reglages.vitesseMoyenneKmh).toBe(22);
@@ -134,6 +147,8 @@ describe('réglages du planificateur', () => {
         'course.max_route_duration_min',
         'course.planificateur_tache_s',
         'course.vitesse_moyenne_kmh',
+        'course.petit_retard_retour_min',
+        'course.attente_max_trajet_long_s',
       ].sort(),
     );
   });
@@ -702,22 +717,34 @@ describe('retenue au comptoir : une commande prête attend une commande en prép
     expect(actionsDe(plan, 'RETENIR')[0]).toMatchObject({
       course_id: 'k',
       jusqua: h('12:33'),
-      attendues: [{ order_id: 'b', reference: 'CMD-B', prete_vers: h('12:33'), prete_au_plus_tard: h('12:33') }],
+      attendues: [
+        { order_id: 'b', reference: 'CMD-B', prete_vers: h('12:33'), prete_au_plus_tard: h('12:33'), motif: 'ATTENTE_COURTE' },
+      ],
+      motif: 'ATTENTE_COURTE',
       libelle: 'Attendre CMD-B (prête vers 12 h 33), départ au plus tard 12 h 33',
     });
   });
 
-  it('horizon : pas d’attente d’une commande prête dans plus de 7 min', () => {
-    const plan = base({ finB: h('12:38') });
+  it('horizon : pas d’attente courte d’une commande prête dans plus de 7 min', () => {
+    const plan = base({ finB: h('12:38'), reglages: COURT });
     expect(actionsDe(plan, 'RETENIR')).toEqual([]);
     expect(refusDe(plan, 'b', 'k')).toEqual(['HORIZON']);
+    // Avec le trajet long (défaut) : A à 2,5 km, aller-retour de 29 min, bien
+    // plus que 8 min + 5 : B est attendue au-delà de l'horizon.
+    expect(actionsDe(base({ finB: h('12:38') }), 'RETENIR')).toEqual([
+      expect.objectContaining({ jusqua: h('12:38'), motif: 'TRAJET_LONG' }),
+    ]);
   });
 
-  it('limite : jamais au-delà de ready_at + 5 min de la commande prête', () => {
-    const plan = base({ readyA: h('12:27') }); // limite 12:32 < fin de B 12:33
+  it('limite : jamais d’attente courte au-delà de ready_at + 5 min de la commande prête', () => {
+    const plan = base({ readyA: h('12:27'), reglages: COURT }); // limite 12:32 < fin de B 12:33
     expect(actionsDe(plan, 'RETENIR')).toEqual([]);
     expect(refusDe(plan, 'b', 'k')).toEqual(['LIMITE_RETENUE']);
-    expect(actionsDe(base({ reglages: avec({ attenteMaxCommandePreteS: 0 }) }), 'RETENIR')).toEqual([]);
+    expect(actionsDe(base({ reglages: avec({ attenteMaxCommandePreteS: 0, attenteMaxTrajetLongS: 0 }) }), 'RETENIR')).toEqual([]);
+    // Avec le trajet long (défaut) : A attend jusqu'à 12 h 33, 6 min, permis jusqu'à 20 min.
+    expect(actionsDe(base({ readyA: h('12:27') }), 'RETENIR')).toEqual([
+      expect.objectContaining({ jusqua: h('12:33'), motif: 'TRAJET_LONG' }),
+    ]);
   });
 
   it('jamais repoussée : une commande arrivée ensuite, prête plus tard, ne l’allonge pas', () => {
@@ -815,6 +842,238 @@ describe('retenue au comptoir : une commande prête attend une commande en prép
     const d2 = livr('d2', T0, { auComptoir: true, etat: { en_course: true, last_available_at: null } });
     const plan = base({ coursesEnPlus: [k2], autres: [d2] });
     expect(actionsDe(plan, 'RETENIR')).toHaveLength(1);
+  });
+});
+
+// ─── Retenue au comptoir : trajet long (demande du 24/10) ────────────────────
+
+describe('retenue au comptoir : trajet long (le livreur reviendrait trop tard)', () => {
+  /**
+   * 15 h 30, hors heure de pointe (22 km/h). D1 au comptoir avec A, prête à
+   * 15 h 28, créée à 15 h 20 (promesse 15 h 55, limite 16 h 00). A à 5 km à
+   * vol d'oiseau à l'est = 7 km de route = 19 min 05 s : aller-retour de la
+   * course (aller, remise 3 min, retour) de 41 min 11 s. B en préparation,
+   * même direction, un peu plus loin (5,5 km), créée à 15 h 25.
+   */
+  const T0 = h('15:30:10');
+  const VITESSE_MPS = 22 / 3.6;
+  const scene = (o: {
+    maintenant?: Date;
+    estA?: number;
+    creeeA?: Date;
+    readyA?: Date;
+    estB?: number;
+    creeeB?: Date;
+    finB?: Date;
+    statut?: CourseStatut;
+    picked_up_at?: Date | null;
+    retenue?: Date | null;
+    attendues?: string[];
+    enPlus?: ReturnType<typeof cmd>[];
+    autres?: ReturnType<typeof livr>[];
+    coursesEnPlus?: ReturnType<typeof crs>[];
+    reglages?: ReglagesPlanification;
+  } = {}) => {
+    const maintenant = o.maintenant ?? T0;
+    const a = cmd('a', { est: o.estA ?? 5000, created_at: o.creeeA ?? h('15:20'), ready_at: o.readyA ?? h('15:28') });
+    const k = crs('k', {
+      statut: o.statut ?? CourseStatut.AT_RESTAURANT,
+      deliverer_id: 'd1',
+      picked_up_at: o.picked_up_at ?? null,
+      commandes: [a],
+      retenue_jusqua: o.retenue ?? null,
+      commandes_attendues: o.attendues ?? [],
+    });
+    const b = enPrep('b', o.finB ?? h('15:40'), { est: o.estB ?? 5500, created_at: o.creeeB ?? h('15:25') });
+    const inst = instant(maintenant, {
+      commandes: [b, ...(o.enPlus ?? [])],
+      courses: [k, ...(o.coursesEnPlus ?? [])],
+      livreurs: [
+        livr('d1', maintenant, { auComptoir: true, etat: { en_course: true, last_available_at: null } }),
+        ...(o.autres ?? []),
+      ],
+    });
+    const r = o.reglages ?? REG;
+    return { plan: planifier(inst, r), allerRetourMs: allerRetourCourseMs(inst, k, maintenant, r) };
+  };
+
+  it('aller-retour de la course : aller, remise au client, retour, à la vitesse du moment', () => {
+    // 2 × 7 000 m à 22 km/h + 3 min.
+    expect(scene().allerRetourMs / 1000).toBeCloseTo((2 * 7000) / VITESSE_MPS + ARRET_CLIENT_S, 0);
+    expect(scene().allerRetourMs / 60_000).toBeCloseTo(41.2, 1);
+  });
+
+  it('trajet long : la course attend B toute sa préparation, au-delà de l’horizon et des 5 min', () => {
+    // B prête à 15 h 40 : dans 9 min 50 s (horizon 7 min), A aura attendu 12 min (5 min en attente courte).
+    // Partir sans B : retour vers 16 h 11, 31 min après que B est prête.
+    const { plan, allerRetourMs } = scene();
+    expect(types(plan)).toEqual(['RETENIR']);
+    expect(actionsDe(plan, 'RETENIR')[0]).toMatchObject({
+      course_id: 'k',
+      jusqua: h('15:40'),
+      motif: 'TRAJET_LONG',
+      aller_retour_s: Math.round(allerRetourMs / 1000),
+      attendues: [{ order_id: 'b', reference: 'CMD-B', prete_vers: h('15:40'), prete_au_plus_tard: h('15:40'), motif: 'TRAJET_LONG' }],
+      libelle: 'Trajet long : attendre CMD-B (prête vers 15 h 40), départ au plus tard 15 h 40',
+    });
+    // Attente courte seule (trajet long coupé) : B est au-delà de l'horizon, A part.
+    expect(actionsDe(scene({ reglages: COURT }).plan, 'RETENIR')).toEqual([]);
+    expect(refusDe(scene({ reglages: COURT }).plan, 'b', 'k')).toEqual(['HORIZON']);
+  });
+
+  it('trajet long borné par la promesse : jamais une commande de la course après promesse + 5 min', () => {
+    // B prête à 15 h 42 : A arriverait à 16 h 01 min 05 s, après sa limite de 16 h 00.
+    const plan = scene({ finB: h('15:42') }).plan;
+    expect(actionsDe(plan, 'RETENIR')).toEqual([]);
+    expect(refusDe(plan, 'b', 'k')).toEqual(['RETARD_CLIENT']);
+  });
+
+  it('trajet long borné par l’attente maximale d’une commande prête (course.attente_max_trajet_long_s)', () => {
+    // A prête à 15 h 28 : 10 min au plus = 15 h 38, avant B.
+    const plan = scene({ reglages: avec({ attenteMaxTrajetLongS: 600 }) }).plan;
+    expect(actionsDe(plan, 'RETENIR')).toEqual([]);
+    expect(refusDe(plan, 'b', 'k')).toEqual(['LIMITE_RETENUE']);
+    expect(plan.refus.find((x) => x.order_id === 'b')!.libelle).toBe('CMD-B prête trop tard, même pour un trajet long');
+    // 12 min au plus = 15 h 40 : juste à temps.
+    expect(actionsDe(scene({ reglages: avec({ attenteMaxTrajetLongS: 720 }) }).plan, 'RETENIR')).toEqual([
+      expect.objectContaining({ jusqua: h('15:40'), motif: 'TRAJET_LONG' }),
+    ]);
+  });
+
+  it('trajet long : pas de retenue si un autre livreur peut prendre B seule à temps (sauf réglage contraire)', () => {
+    const d2 = livr('d2', T0, { auComptoir: true });
+    expect(refusDe(scene({ autres: [d2] }).plan, 'b', 'k')).toEqual(['AUTRE_LIVREUR_LIBRE']);
+    expect(actionsDe(scene({ autres: [d2], reglages: avec({ retenueMemeSiLivreurLibre: true }) }).plan, 'RETENIR')).toEqual([
+      expect.objectContaining({ jusqua: h('15:40'), motif: 'TRAJET_LONG' }),
+    ]);
+    // Livreur en tournée : de retour avant 15 h 43 (fin de B + 3 min), pas de retenue ; bien plus tard, retenue.
+    const tournee = (est: number) =>
+      crs('k2', {
+        statut: CourseStatut.IN_DELIVERY,
+        deliverer_id: 'd2',
+        picked_up_at: h('15:20'),
+        parti_at: h('15:20'),
+        commandes: [cmd('z', { est, statut: OrderStatus.PICKED_UP })],
+      });
+    const occupe = livr('d2', T0, { etat: { en_course: true, last_available_at: null } });
+    expect(refusDe(scene({ autres: [occupe], coursesEnPlus: [tournee(1000)] }).plan, 'b', 'k')).toEqual(['AUTRE_LIVREUR_LIBRE']);
+    expect(actionsDe(scene({ autres: [occupe], coursesEnPlus: [tournee(6000)] }).plan, 'RETENIR')).toHaveLength(1);
+  });
+
+  it('trajet court (A à 1,5 km de route) : la règle d’avant, inchangée, avec les réglages par défaut', () => {
+    // Aller-retour de 11 min 10 s : parti tout de suite, le livreur revient à temps pour B.
+    const court = { estA: 1070 };
+    expect(scene(court).allerRetourMs / 60_000).toBeCloseTo(11.2, 1);
+    for (const finB of ['15:31', '15:32', '15:33', '15:37', '15:38', '15:40', '15:45']) {
+      const defaut = scene({ ...court, finB: h(finB) }).plan;
+      expect(defaut).toEqual(scene({ ...court, finB: h(finB), reglages: COURT }).plan);
+    }
+    // 15 h 33 : attente courte, comme avant ; 15 h 40 : au-delà de l'horizon, A part.
+    expect(actionsDe(scene({ ...court, finB: h('15:33') }).plan, 'RETENIR')).toEqual([
+      expect.objectContaining({
+        jusqua: h('15:33'),
+        motif: 'ATTENTE_COURTE',
+        aller_retour_s: null,
+        libelle: 'Attendre CMD-B (prête vers 15 h 33), départ au plus tard 15 h 33',
+      }),
+    ]);
+    expect(refusDe(scene({ ...court, finB: h('15:40') }).plan, 'b', 'k')).toEqual(['HORIZON']);
+  });
+
+  it('frontière exacte : aller-retour = préparation restante + petit retard, trajet court ; une seconde de plus, trajet long', () => {
+    const court = { estA: 1070 };
+    const ar = scene(court).allerRetourMs;
+    // Retour à fin de B + 5 min pile : il revient avec un petit retard, la règle d'avant (B après 15 h 33 : refusée).
+    const pile = new Date(T0.getTime() + ar - 5 * 60_000);
+    const aPile = scene({ ...court, finB: pile }).plan;
+    expect(actionsDe(aPile, 'RETENIR')).toEqual([]);
+    expect(refusDe(aPile, 'b', 'k')).toEqual(['LIMITE_RETENUE']);
+    // B prête une seconde plus tôt : il reviendrait 5 min 01 s après elle, trajet long, la course l'attend.
+    const avant = new Date(pile.getTime() - 1000);
+    expect(actionsDe(scene({ ...court, finB: avant }).plan, 'RETENIR')).toEqual([
+      expect.objectContaining({ jusqua: avant, motif: 'TRAJET_LONG' }),
+    ]);
+    // Petit retard réglé à 0 : la frontière est l'aller-retour lui-même.
+    const zero = avec({ petitRetardRetourMin: 0 });
+    const egal = new Date(T0.getTime() + ar);
+    expect(actionsDe(scene({ ...court, finB: egal, reglages: zero }).plan, 'RETENIR')).toEqual([]);
+    expect(actionsDe(scene({ ...court, finB: new Date(egal.getTime() - 1000), reglages: zero }).plan, 'RETENIR')).toEqual([
+      expect.objectContaining({ motif: 'TRAJET_LONG' }),
+    ]);
+  });
+
+  it('réglages à 0 : attente d’un trajet long 0 = coupé ; petit retard 0 = toute attente plus longue que l’aller-retour', () => {
+    expect(scene({ reglages: avec({ attenteMaxTrajetLongS: 0 }) }).plan.actions).toEqual([]);
+    // A à 1,5 km (aller-retour 11 min 10 s), B prête dans 8 min : 11 min 10 s ≤ 8 + 5, trajet court, B au-delà de l'horizon.
+    const finB = plus(T0, 8 * 60);
+    expect(refusDe(scene({ estA: 1070, finB }).plan, 'b', 'k')).toEqual(['HORIZON']);
+    // Petit retard 0 : 11 min 10 s > 8 min, trajet long, la course attend B.
+    expect(actionsDe(scene({ estA: 1070, finB, reglages: avec({ petitRetardRetourMin: 0 }) }).plan, 'RETENIR')).toEqual([
+      expect.objectContaining({ jusqua: finB, motif: 'TRAJET_LONG' }),
+    ]);
+  });
+
+  it('jamais prolongée quand l’estimation de la cuisine recule : la course part à l’échéance', () => {
+    const posee = { retenue: h('15:40'), attendues: ['b'], maintenant: h('15:35') };
+    // B annoncée maintenant à 15 h 44 : la retenue garde 15 h 40, rien ne change.
+    expect(scene({ ...posee, finB: h('15:44') }).plan.actions).toEqual([]);
+    // Une commande arrivée ensuite, prête plus tard, ne l'allonge pas non plus.
+    const c = enPrep('c', h('15:45'), { est: 5200, created_at: h('15:26') });
+    const avecC = scene({ ...posee, enPlus: [c] }).plan;
+    expect(avecC.actions).toEqual([]);
+    expect(refusDe(avecC, 'c', 'k')).toEqual(['LIMITE_RETENUE']);
+    // À l'échéance, B toujours en cuisine : levée, la course part sans elle.
+    expect(scene({ ...posee, finB: h('15:44'), maintenant: h('15:40:05') }).plan.actions).toEqual([
+      expect.objectContaining({ type: 'LIBERER', motif: 'ECHEANCE', jusqua: h('15:40') }),
+    ]);
+    // L'estimation avance : la retenue descend.
+    expect(actionsDe(scene({ ...posee, finB: h('15:38') }).plan, 'RETENIR')).toEqual([
+      expect.objectContaining({ jusqua: h('15:38'), motif: 'TRAJET_LONG' }),
+    ]);
+    // L'estimation recule tant que le livreur reviendrait à temps (B prête à 16 h 20) : plus rien à attendre, il part.
+    expect(scene({ ...posee, finB: h('16:20') }).plan.actions).toEqual([
+      expect.objectContaining({ type: 'LIBERER', motif: 'PLUS_RIEN_A_ATTENDRE' }),
+    ]);
+  });
+
+  it('après le retrait : jamais au-delà de la fenêtre d’ajout, même pour un trajet long', () => {
+    // Retrait à 15 h 30 : fenêtre jusqu'à 15 h 34, marge de remise 90 s : 15 h 32 min 30 s au plus.
+    const plan = scene({ statut: CourseStatut.IN_DELIVERY, picked_up_at: h('15:30') }).plan;
+    expect(actionsDe(plan, 'RETENIR')).toEqual([]);
+    expect(refusDe(plan, 'b', 'k')).toEqual(['LIMITE_RETENUE']);
+  });
+
+  it('heure de pointe : la vitesse de pointe allonge l’aller-retour (même trajet, court à 15 h 30, long à 12 h 30)', () => {
+    // A à 1,5 km de route, B à 2,8 km (même direction), prête dans 8 min.
+    const a15 = { estA: 1070, estB: 2000, finB: plus(T0, 8 * 60) };
+    const T12 = h('12:30:10');
+    const a12 = {
+      ...a15,
+      maintenant: T12,
+      creeeA: h('12:20'),
+      readyA: h('12:28'),
+      creeeB: h('12:25'),
+      finB: plus(T12, 8 * 60),
+    };
+    // 22 km/h : 11 min 10 s ; 16 km/h : 14 min 14 s.
+    expect(scene(a15).allerRetourMs / 1000).toBeCloseTo((2 * 1498) / VITESSE_MPS + ARRET_CLIENT_S, -1);
+    expect(scene(a12).allerRetourMs / 1000).toBeCloseTo((2 * 1498) / (16 / 3.6) + ARRET_CLIENT_S, -1);
+    expect(refusDe(scene(a15).plan, 'b', 'k')).toEqual(['HORIZON']);
+    expect(actionsDe(scene(a12).plan, 'RETENIR')).toEqual([expect.objectContaining({ jusqua: a12.finB, motif: 'TRAJET_LONG' })]);
+  });
+
+  it('jamais de mélange route / vol d’oiseau dans l’aller-retour', () => {
+    const route = (id: string, est: number, routeMetres: number | null) => {
+      const c = cmd(id, { est });
+      return { ...c, client: { ...c.client, routeMetres } };
+    };
+    const course = (commandes: ReturnType<typeof cmd>[]) => crs('k', { statut: CourseStatut.AT_RESTAURANT, deliverer_id: 'd1', commandes });
+    const mesure = (commandes: ReturnType<typeof cmd>[]) => allerRetourCourseMs(instant(T0, { courses: [course(commandes)] }), course(commandes), T0);
+    // Distance routière connue (9 km) : aller et retour par la route.
+    expect(mesure([route('a', 5000, 9000)]) / 1000).toBeCloseTo((2 * 9000) / VITESSE_MPS + ARRET_CLIENT_S, 0);
+    // Tournée au vol d'oiseau (l'autre client n'a pas de distance routière) : le retour aussi, jamais les 9 km de route.
+    const volOiseau = ((4000 + 1000) * 1.4 + 5000 * 1.4) / VITESSE_MPS + 2 * ARRET_CLIENT_S;
+    expect(mesure([route('c', 4000, null), route('a', 5000, 9000)]) / 1000).toBeCloseTo(volOiseau, 0);
   });
 });
 
@@ -1228,7 +1487,8 @@ describe('paires dont le service mesure la direction', () => {
       commandes: [
         cmd('a'),
         enPrep('b', h('12:35')),
-        enPrep('c', h('12:45')), // au-delà de l'horizon
+        enPrep('c', h('12:45')), // au-delà de l'horizon, mais dans l'attente d'un trajet long (20 min)
+        enPrep('p', h('12:51')), // au-delà des deux
         cmd('n', { sansCoordonnees: true }),
       ],
       courses: [
@@ -1239,7 +1499,12 @@ describe('paires dont le service mesure la direction', () => {
       ],
     });
     const cles = pairesAEvaluer(inst).map(([x, y]) => clePaire(x.id, y.id)).sort();
+    const avecC = ['a|c', 'b|c', 'c|d', 'c|e', 'c|f', 'c|g'];
     expect(cles).toEqual(
+      ['a|b', 'a|d', 'b|d', 'a|e', 'a|f', 'b|e', 'b|f', 'd|e', 'd|f', 'e|f', 'a|g', 'b|g', 'd|g', ...avecC].sort(),
+    );
+    // Trajet long coupé : l'horizon seul, comme avant.
+    expect(pairesAEvaluer(inst, COURT).map(([x, y]) => clePaire(x.id, y.id)).sort()).toEqual(
       ['a|b', 'a|d', 'b|d', 'a|e', 'a|f', 'b|e', 'b|f', 'd|e', 'd|f', 'e|f', 'a|g', 'b|g', 'd|g'].sort(),
     );
   });

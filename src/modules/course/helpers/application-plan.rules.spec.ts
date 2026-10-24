@@ -12,6 +12,7 @@ import {
   libelleRegroupement,
   lireCommandesAttendues,
   numeroterArrets,
+  referencesAttendues,
   texteCommandeAjoutee,
   texteCommandeRemise,
   texteCommandeRetiree,
@@ -49,19 +50,41 @@ describe('numeroterArrets', () => {
 });
 
 describe('commandes attendues (colonne JSON)', () => {
-  it('écrites avec les heures en ISO, relues en identifiants, formes inattendues ignorées', () => {
+  it('écrites avec les heures en ISO et le motif, relues en identifiants, formes inattendues ignorées', () => {
     const ecrites = commandesAttenduesAEcrire([
       {
         order_id: 'b',
         reference: 'CMD-B',
         prete_vers: new Date('2026-10-22T12:41:00Z'),
         prete_au_plus_tard: new Date('2026-10-22T12:44:00Z'),
+        motif: 'TRAJET_LONG',
+      },
+      {
+        order_id: 'c',
+        reference: 'CMD-C',
+        prete_vers: new Date('2026-10-22T12:33:00Z'),
+        prete_au_plus_tard: new Date('2026-10-22T12:35:00Z'),
+        motif: 'ATTENTE_COURTE',
       },
     ]);
     expect(ecrites).toEqual([
-      { order_id: 'b', reference: 'CMD-B', prete_vers: '2026-10-22T12:41:00.000Z', prete_au_plus_tard: '2026-10-22T12:44:00.000Z' },
+      {
+        order_id: 'b',
+        reference: 'CMD-B',
+        prete_vers: '2026-10-22T12:41:00.000Z',
+        prete_au_plus_tard: '2026-10-22T12:44:00.000Z',
+        motif: 'TRAJET_LONG',
+      },
+      {
+        order_id: 'c',
+        reference: 'CMD-C',
+        prete_vers: '2026-10-22T12:33:00.000Z',
+        prete_au_plus_tard: '2026-10-22T12:35:00.000Z',
+        motif: 'ATTENTE_COURTE',
+      },
     ]);
-    expect(lireCommandesAttendues(ecrites)).toEqual(['b']);
+    expect(lireCommandesAttendues(ecrites)).toEqual(['b', 'c']);
+    expect(referencesAttendues(ecrites)).toEqual(['CMD-B', 'CMD-C']);
     expect(lireCommandesAttendues(null)).toEqual([]);
     expect(lireCommandesAttendues([{ x: 1 }, 'c', 3])).toEqual(['c']);
   });
