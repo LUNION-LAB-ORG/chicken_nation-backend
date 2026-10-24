@@ -114,8 +114,21 @@ export function whereCoursesARemettre(
   restaurantId: string | undefined,
   journee: JourneeDeService,
 ): Prisma.CourseWhereInput {
+  return { pickup_code: code, ...whereARemettre(restaurantId, journee) };
+}
+
+/**
+ * Récupération confirmée depuis le groupe de la course (conception du 24/10,
+ * 11.1) : la même règle, la course désignée par son identifiant au lieu du
+ * code. Le restaurant est vérifié à part (`assertCourseDuRestaurant`).
+ */
+export function whereCourseARemettreParId(courseId: string, journee: JourneeDeService): Prisma.CourseWhereInput {
+  return { id: courseId, ...whereARemettre(undefined, journee) };
+}
+
+/** Une course à remettre, code mis à part (voir `whereCoursesARemettre`). */
+function whereARemettre(restaurantId: string | undefined, journee: JourneeDeService): Prisma.CourseWhereInput {
   return {
-    pickup_code: code,
     ...(restaurantId ? { restaurant_id: restaurantId } : {}),
     created_at: { gte: journee.debut, lt: journee.fin },
     OR: [

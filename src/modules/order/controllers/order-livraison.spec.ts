@@ -21,8 +21,20 @@ const RESTAURANT_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 const SUIVI: SuiviLivraison = {
   service: 'CHICKEN_NATION',
-  course: { id: 'crs-1', reference: 'CRS-261024-00001', code_retrait: '614', nombre_commandes: 1, rang_arret: 1, statut: 'ACCEPTED' },
+  course: {
+    id: 'crs-1',
+    reference: 'CRS-261024-00001',
+    code_retrait: '614',
+    nombre_commandes: 1,
+    rang_arret: 1,
+    statut: 'ACCEPTED',
+    fin_prevue: null,
+    en_retard: false,
+    retard_min: null,
+  },
   livreur: { id: 'liv-koffi', nom: 'Koffi Kouassi', telephone: '+2250701020304', etat: 'vers_restaurant' },
+  tournee: [{ reference: 'ORD-261024-00001', rang: 1, etat: 'a_livrer', heure: null, cette_commande: true }],
+  echec: null,
   etapes: [{ cle: 'acceptee', heure: '2026-10-24T12:02:00.000Z', prevue: null }],
   durees: { vers_restaurant_s: null, attente_comptoir_s: null, vers_client_s: null, pret_a_livre_s: null },
 };

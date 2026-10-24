@@ -43,12 +43,39 @@
  * de livreur ») en attendant la suivante. Commande annulée, ou livraison en
  * échec : état `annulee`, avec ce qui s'était passé jusque là.
  *
+ * Ajouts du 24/10 (conception, 11.3) :
+ *  - `course.fin_prevue`, `course.en_retard`, `course.retard_min` : règle
+ *    commune du retard (`retard-tournee.rules.ts`), comme les groupes « Hors
+ *    restaurant » de l'écran Opérations ;
+ *  - `tournee` : un arrêt par livraison non annulée de la course, dans
+ *    l'ordre, avec la référence de sa commande, son état et l'heure de cet
+ *    état. Aucune coordonnée ni aucun nom des autres clients ;
+ *  - `echec` : motif et note du livreur quand la livraison de CETTE commande a
+ *    échoué ;
+ *  - `livreur.appli_active`, `appli_vue_a`, `appli_connectee` : appli du
+ *    livreur Chicken Nation, comme la liste des livreurs (absents pour Turbo
+ *    et sans livreur).
+ *
  * Aucun appel Google, aucune lecture : tout vient de la commande lue par le
  * service (`SuiviLivraisonService`).
  */
-import { departEstReel, finTourneePrevue } from 'src/modules/course/helpers/retard-tournee.rules';
+import { DeliveryFailureReason } from '@prisma/client';
 
-import { CourseLue, enrichirCourseOperations } from './suivi-operations.rules';
+import {
+  departEstReel,
+  enRetard,
+  finTourneePrevue,
+  retardMin,
+} from 'src/modules/course/helpers/retard-tournee.rules';
+
+import {
+  AppliOperations,
+  ContexteTournee,
+  CourseLue,
+  FACTEUR_RETARD_DEFAUT,
+  appliOperations,
+  enrichirCourseOperations,
+} from './suivi-operations.rules';
 
 // ─── Réponse ─────────────────────────────────────────────────────────────────
 
@@ -64,6 +91,21 @@ export type EtatLivreur =
   | 'vers_client'
   | 'livree'
   | 'annulee';
+
+/** État d'un arrêt de la tournée, clé simple traduite par l'écran. */
+export type EtatArret = 'a_livrer' | 'en_route' | 'chez_le_client' | 'livree' | 'echec';
+
+export interface ArretTournee {
+  /** Référence de la commande de cet arrêt. */
+  reference: string;
+  /** Rang dans la tournée (1 = premier client), livraisons annulées exclues. */
+  rang: number;
+  etat: EtatArret;
+  /** Heure de cet état (ISO) : départ vers le client, arrivée, livraison ou échec ; `null` à livrer. */
+  heure: string | null;
+  /** L'arrêt de la commande ouverte. */
+  cette_commande: boolean;
+}
 
 export interface EtapeLivraison {
   cle: CleEtape;
@@ -85,13 +127,26 @@ export interface SuiviLivraison {
     rang_arret: number | null;
     /** `Course.statut` (enum `CourseStatut`), pour information. */
     statut: string;
+    /** Fin prévue de la tournée (ISO), `null` tant que le livreur n'est pas parti ou sans durée estimée. */
+    fin_prevue: string | null;
+    en_retard: boolean;
+    /** Minutes pleines au-delà de la fin prévue ; `null` : pas en retard, ou en retard sans fin prévue. */
+    retard_min: number | null;
   } | null;
-  livreur: {
+  /**
+   * Livreur ; `appli_active`, `appli_vue_a`, `appli_connectee` pour un livreur
+   * Chicken Nation seulement (comme la liste des livreurs).
+   */
+  livreur: ({
     id: string | null;
     nom: string | null;
     telephone: string | null;
     etat: EtatLivreur;
-  } | null;
+  } & Partial<AppliOperations>) | null;
+  /** Arrêts de la course (livraisons non annulées), vide sans course. */
+  tournee: ArretTournee[];
+  /** Échec de la livraison de CETTE commande : motif et note du livreur. */
+  echec: { motif: DeliveryFailureReason | null; note: string | null } | null;
   etapes: EtapeLivraison[];
   durees: {
     vers_restaurant_s: number | null;
@@ -122,12 +177,32 @@ export interface CourseLivraisonLue {
   parti_at?: DateLue;
   motif_depart?: string | null;
   estimated_duration_min?: number | null;
+  delay_alerted_at?: DateLue;
   retenue_jusqua?: DateLue;
-  deliverer?: (PersonneLue & { phone?: string | null; last_location?: unknown; last_location_at?: DateLue }) | null;
+  deliverer?:
+    | (PersonneLue & {
+        phone?: string | null;
+        last_location?: unknown;
+        last_location_at?: DateLue;
+        dernier_signal_at?: DateLue;
+        protocole_appli?: number | null;
+      })
+    | null;
   /** Offre en attente la plus récente (`status` PENDING). */
   offer_attempts?: { expires_at: DateLue; deliverer?: PersonneLue | null }[] | null;
-  /** Toutes les livraisons de la course, avec le statut de leur commande. */
-  deliveries?: { id: string; statut: string; sequence_order: number; order?: { status?: string | null } | null }[] | null;
+  /** Toutes les livraisons de la course, avec la référence et le statut de leur commande. */
+  deliveries?:
+    | {
+        id: string;
+        statut: string;
+        sequence_order: number;
+        in_route_at?: DateLue;
+        arrived_at?: DateLue;
+        delivered_at?: DateLue;
+        failed_at?: DateLue;
+        order?: { reference?: string | null; status?: string | null } | null;
+      }[]
+    | null;
 }
 
 export interface CommandeLivraisonLue {
@@ -143,6 +218,8 @@ export interface CommandeLivraisonLue {
     statut: string;
     arrived_at?: DateLue;
     delivered_at?: DateLue;
+    failure_reason?: DeliveryFailureReason | null;
+    failure_note?: string | null;
     turbo_courier_id?: string | null;
     turbo_courier_name?: string | null;
     turbo_courier_phone?: string | null;
@@ -150,7 +227,7 @@ export interface CommandeLivraisonLue {
   } | null;
 }
 
-export interface ContexteSuiviLivraison {
+export interface ContexteSuiviLivraison extends ContexteTournee {
   maintenant: Date;
   /** `course.ajout_apres_retrait_max_s` (0 : fenêtre coupée). */
   fenetreMaxS?: number;
@@ -213,9 +290,53 @@ const vide = (service: ServiceLivraison | null): SuiviLivraison => ({
   service,
   course: null,
   livreur: null,
+  tournee: [],
+  echec: null,
   etapes: [],
   durees: { ...SANS_DUREE },
 });
+
+/** État d'un arrêt d'après le statut de sa livraison. */
+const ETAT_ARRET: Record<string, EtatArret> = {
+  PENDING: 'a_livrer',
+  IN_ROUTE: 'en_route',
+  ARRIVED: 'chez_le_client',
+  DELIVERED: 'livree',
+  FAILED: 'echec',
+};
+
+/**
+ * Arrêts de la tournée : livraisons non annulées, dans l'ordre. Seulement la
+ * référence et l'état de chaque commande : rien des autres clients.
+ */
+export function arretsTournee(
+  livraisons: NonNullable<CourseLivraisonLue['deliveries']>,
+  livraisonId: string,
+): ArretTournee[] {
+  return livraisons
+    .filter((l) => l.statut !== 'CANCELLED')
+    .sort((a, b) => a.sequence_order - b.sequence_order)
+    .map((l, i) => {
+      const etat = ETAT_ARRET[l.statut] ?? 'a_livrer';
+      const heure =
+        etat === 'livree'
+          ? l.delivered_at
+          : etat === 'echec'
+            ? l.failed_at
+            : etat === 'chez_le_client'
+              ? l.arrived_at
+              : etat === 'en_route'
+                ? l.in_route_at
+                : null;
+      return {
+        reference: texte(l.order?.reference) ?? '',
+        rang: i + 1,
+        etat,
+        heure: iso(date(heure)),
+        cette_commande: l.id === livraisonId,
+      };
+    });
+}
 
 /**
  * Étapes dans l'ordre : heure notée, sinon étape à venir (avec son heure
@@ -286,6 +407,8 @@ function suiviTurboDirect(c: CommandeLivraisonLue): SuiviLivraison {
     service: 'TURBO',
     course: null,
     livreur: { id: null, nom: null, telephone: null, etat: etatDe(avancement, annulee, false) },
+    tournee: [],
+    echec: null,
     etapes: construireEtapes({ heures, prevues: {}, avancement, annulee, departDonne: false }),
     durees: durees(heures, date(c.ready_at)),
   };
@@ -399,6 +522,17 @@ export function suiviLivraison(c: CommandeLivraisonLue, ctx: ContexteSuiviLivrai
       nom: nomComplet(course.deliverer),
       telephone: texte(course.deliverer.phone),
       etat,
+      ...(ctx.appli
+        ? appliOperations(
+            {
+              id: course.deliverer.id,
+              dernier_signal_at: course.deliverer.dernier_signal_at,
+              protocole_appli: course.deliverer.protocole_appli,
+            },
+            ctx.maintenant,
+            ctx.appli,
+          )
+        : {}),
     };
   } else if (offre && etat === 'proposee') {
     // Sollicité, pas encore engagé : son nom, pas son téléphone.
@@ -406,6 +540,12 @@ export function suiviLivraison(c: CommandeLivraisonLue, ctx: ContexteSuiviLivrai
   } else {
     livreur = { id: null, nom: null, telephone: null, etat };
   }
+
+  const facteur = ctx.facteurRetard ?? FACTEUR_RETARD_DEFAUT;
+  const echec =
+    livraison.statut === 'FAILED'
+      ? { motif: livraison.failure_reason ?? null, note: texte(livraison.failure_note) }
+      : null;
 
   return {
     service,
@@ -416,8 +556,13 @@ export function suiviLivraison(c: CommandeLivraisonLue, ctx: ContexteSuiviLivrai
       nombre_commandes: actives.length,
       rang_arret: rangArret,
       statut: course.statut,
+      fin_prevue: iso(finTournee),
+      en_retard: enRetard(course, ctx.maintenant, facteur),
+      retard_min: retardMin(course, ctx.maintenant, facteur),
     },
     livreur,
+    tournee: arretsTournee(course.deliveries ?? [], livraison.id),
+    echec,
     etapes: construireEtapes({ heures, prevues, avancement, annulee, departDonne }),
     durees: durees(heures, date(c.ready_at)),
   };

@@ -1829,6 +1829,12 @@ export class OrderService {
    * Retourne (sans pagination, non tri sortBy) toutes les commandes d'un resto
    * dont le statut est en cours (ACCEPTED → IN_DELIVERY), avec la Course
    * et le Delivery associé si présents (pour grouper par course côté UI).
+   *
+   * 🔒 Ni `Order.recovery_code` ni `Delivery.delivery_pin` (le code que LE
+   * CLIENT donne au livreur à la remise, même valeur) : cette liste part à
+   * tous les écrans du restaurant, et aucun écran du back office ni de la
+   * caisse ne s'en sert (conception du 24/10, 11.2). Le code du client reste
+   * lisible par l'ADMIN dans le détail d'une course.
    */
   async findActiveForOperations(restaurantId?: string): Promise<Order[]> {
     const activeStatuses: OrderStatus[] = [
@@ -1844,6 +1850,7 @@ export class OrderService {
         entity_status: { not: EntityStatus.DELETED },
         ...(restaurantId && { restaurant_id: restaurantId }),
       },
+      omit: { recovery_code: true },
       include: {
         customer: {
           select: { id: true, first_name: true, last_name: true, phone: true, email: true, image: true },
@@ -1854,6 +1861,7 @@ export class OrderService {
         order_items: { include: { dish: { select: { id: true, name: true, image: true, price: true, cooking_time: true } } } },
         paiements: true,
         delivery: {
+          omit: { delivery_pin: true },
           include: {
             course: {
               include: {
@@ -1861,8 +1869,12 @@ export class OrderService {
                   select: {
                     id: true, reference: true, first_name: true, last_name: true, phone: true, image: true,
                     last_location: true, last_location_at: true,
+                    // Appli du livreur (SuiviOperationsService), retirés de la réponse.
+                    dernier_signal_at: true, protocole_appli: true,
                   },
                 },
+                // Tournée « 1 sur 3 livrée » (SuiviOperationsService), retirée de la réponse.
+                deliveries: { select: { statut: true } },
                 // Offre en attente : « Proposée à Koffi » (SuiviOperationsService).
                 offer_attempts: {
                   where: { status: CourseOfferStatus.PENDING },

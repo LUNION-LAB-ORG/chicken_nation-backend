@@ -81,7 +81,15 @@ describe('suivi de livraison : course interne terminée', () => {
             parti_at: d('12:11', '20'),
             motif_depart: 'POSITION',
             deliverer: KOFFI,
-            deliveries: [{ id: 'liv-a', statut: 'DELIVERED', sequence_order: 1, order: { status: 'COMPLETED' } }],
+            deliveries: [
+              {
+                id: 'liv-a',
+                statut: 'DELIVERED',
+                sequence_order: 1,
+                delivered_at: d('12:27'),
+                order: { reference: 'ORD-261024-00001', status: 'COMPLETED' },
+              },
+            ],
           }),
         },
       ),
@@ -97,8 +105,13 @@ describe('suivi de livraison : course interne terminée', () => {
         nombre_commandes: 1,
         rang_arret: 1,
         statut: 'COMPLETED',
+        fin_prevue: null,
+        en_retard: false,
+        retard_min: null,
       },
       livreur: { id: 'liv-koffi', nom: 'Koffi Kouassi', telephone: '+2250701020304', etat: 'livree' },
+      tournee: [{ reference: 'ORD-261024-00001', rang: 1, etat: 'livree', heure: t('12:27'), cette_commande: true }],
+      echec: null,
       etapes: [
         { cle: 'acceptee', heure: t('12:02'), prevue: null },
         { cle: 'arrivee_restaurant', heure: t('12:08'), prevue: null },
@@ -386,6 +399,8 @@ describe('suivi de livraison : sans course', () => {
       service: 'CHICKEN_NATION',
       course: null,
       livreur: null,
+      tournee: [],
+      echec: null,
       etapes: [],
       durees: { vers_restaurant_s: null, attente_comptoir_s: null, vers_client_s: null, pret_a_livre_s: null },
     });
@@ -565,5 +580,183 @@ describe('suivi de livraison : durées jamais négatives ni inventées', () => {
       ctx,
     );
     expect(r.durees.pret_a_livre_s).toBeNull();
+  });
+});
+
+// ─── Ajouts du 24/10 (conception, 11.3) ──────────────────────────────────────
+
+/** Course de trois commandes partie à 12:10 (départ réel), tournée estimée à 20 min. */
+function tourneeDeTrois(champs: Partial<CourseLivraisonLue> = {}): CourseLivraisonLue {
+  return course({
+    statut: 'IN_DELIVERY',
+    assigned_at: d('11:50'),
+    at_restaurant_at: d('11:58'),
+    picked_up_at: d('12:05'),
+    parti_at: d('12:10'),
+    motif_depart: 'POSITION',
+    estimated_duration_min: 20,
+    deliverer: KOFFI,
+    deliveries: [
+      {
+        id: 'liv-1',
+        statut: 'DELIVERED',
+        sequence_order: 1,
+        in_route_at: d('12:10'),
+        arrived_at: d('12:16'),
+        delivered_at: d('12:18'),
+        order: { reference: 'ORD-4818', status: 'COMPLETED' },
+      },
+      // Détachée (annulée) : hors de la tournée, les rangs ne comptent pas son trou.
+      { id: 'liv-x', statut: 'CANCELLED', sequence_order: 2, order: { reference: 'ORD-4899', status: 'READY' } },
+      { id: 'liv-a', statut: 'IN_ROUTE', sequence_order: 3, in_route_at: d('12:18'), order: { reference: 'ORD-4819', status: 'PICKED_UP' } },
+      { id: 'liv-3', statut: 'PENDING', sequence_order: 4, order: { reference: 'ORD-4820', status: 'PICKED_UP' } },
+    ],
+    ...champs,
+  });
+}
+
+const enRoute = (c: CourseLivraisonLue) =>
+  commande({ status: 'PICKED_UP', picked_up_at: d('12:05') }, { id: 'liv-a', statut: 'IN_ROUTE', course: c });
+
+describe('suivi de livraison : tournée (24/10)', () => {
+  it('un arrêt par livraison non annulée, dans l’ordre : référence, état, heure de cet état, cette commande marquée', () => {
+    const r = suiviLivraison(enRoute(tourneeDeTrois()), ctx);
+    expect(r.tournee).toEqual([
+      { reference: 'ORD-4818', rang: 1, etat: 'livree', heure: t('12:18'), cette_commande: false },
+      { reference: 'ORD-4819', rang: 2, etat: 'en_route', heure: t('12:18'), cette_commande: true },
+      { reference: 'ORD-4820', rang: 3, etat: 'a_livrer', heure: null, cette_commande: false },
+    ]);
+    expect(r.course).toMatchObject({ nombre_commandes: 3, rang_arret: 2 });
+  });
+
+  it('chez le client, échec : leur heure ; rien des autres clients (ni nom, ni adresse, ni téléphone)', () => {
+    const c = tourneeDeTrois({
+      deliveries: [
+        { id: 'liv-1', statut: 'FAILED', sequence_order: 1, failed_at: d('12:17'), order: { reference: 'ORD-4818', status: 'CANCELLED' } },
+        { id: 'liv-a', statut: 'ARRIVED', sequence_order: 2, arrived_at: d('12:19'), order: { reference: 'ORD-4819', status: 'PICKED_UP' } },
+      ],
+    });
+    const r = suiviLivraison(enRoute(c), ctx);
+    expect(r.tournee).toEqual([
+      { reference: 'ORD-4818', rang: 1, etat: 'echec', heure: t('12:17'), cette_commande: false },
+      { reference: 'ORD-4819', rang: 2, etat: 'chez_le_client', heure: t('12:19'), cette_commande: true },
+    ]);
+    for (const arret of r.tournee) expect(Object.keys(arret).sort()).toEqual(['cette_commande', 'etat', 'heure', 'rang', 'reference']);
+  });
+
+  it('sans course, ou Turbo sans course chez nous : tournée vide, aucun échec', () => {
+    expect(suiviLivraison(commande({}, null), ctx)).toMatchObject({ tournee: [], echec: null });
+    expect(
+      suiviLivraison(commande({ delivery_service: 'TURBO', status: 'PICKED_UP', picked_up_at: d('12:10') }, null), ctx),
+    ).toMatchObject({ tournee: [], echec: null });
+  });
+});
+
+describe('suivi de livraison : fin prévue et retard (règle commune, 24/10)', () => {
+  it('partie à 12:10, 20 min estimées : fin vers 12:30, pas en retard à 12:20', () => {
+    const r = suiviLivraison(enRoute(tourneeDeTrois()), ctx);
+    expect(r.course).toMatchObject({ fin_prevue: t('12:30'), en_retard: false, retard_min: null });
+  });
+
+  it('à 12:47 (retrait 12:05, 20 min × 1,5 = 30 min dépassées) : en retard de 17 min', () => {
+    const r = suiviLivraison(enRoute(tourneeDeTrois()), { ...ctx, maintenant: d('12:47') });
+    expect(r.course).toMatchObject({ fin_prevue: t('12:30'), en_retard: true, retard_min: 17 });
+  });
+
+  it('facteur réglé à 2 : pas encore en retard à 12:40', () => {
+    const r = suiviLivraison(enRoute(tourneeDeTrois()), { ...ctx, maintenant: d('12:40'), facteurRetard: 2 });
+    expect(r.course).toMatchObject({ en_retard: false, retard_min: null });
+  });
+
+  it('alerte du cron déjà donnée : en retard, même avant le seuil', () => {
+    const r = suiviLivraison(enRoute(tourneeDeTrois({ delay_alerted_at: d('12:19') })), ctx);
+    expect(r.course).toMatchObject({ en_retard: true, retard_min: null });
+  });
+
+  it('livreur pas encore parti (fenêtre d’ajout) : pas de fin prévue', () => {
+    const r = suiviLivraison(enRoute(tourneeDeTrois({ parti_at: null, motif_depart: null })), ctx);
+    expect(r.course).toMatchObject({ fin_prevue: null, en_retard: false, retard_min: null });
+  });
+});
+
+describe('suivi de livraison : échec (24/10)', () => {
+  it('livraison de cette commande en échec : motif et note du livreur', () => {
+    const r = suiviLivraison(
+      commande(
+        { status: 'CANCELLED', picked_up_at: d('12:05') },
+        {
+          statut: 'FAILED',
+          failure_reason: 'CLIENT_ABSENT',
+          failure_note: '  Personne au portail  ',
+          course: tourneeDeTrois(),
+        },
+      ),
+      ctx,
+    );
+    expect(r.echec).toEqual({ motif: 'CLIENT_ABSENT', note: 'Personne au portail' });
+    expect(r.livreur?.etat).toBe('annulee');
+  });
+
+  it('livraison pas en échec : rien, même si une autre de la tournée a échoué', () => {
+    const c = tourneeDeTrois({
+      deliveries: [
+        { id: 'liv-1', statut: 'FAILED', sequence_order: 1, failed_at: d('12:17'), order: { reference: 'ORD-4818', status: 'CANCELLED' } },
+        { id: 'liv-a', statut: 'IN_ROUTE', sequence_order: 2, order: { reference: 'ORD-4819', status: 'PICKED_UP' } },
+      ],
+    });
+    expect(suiviLivraison(enRoute(c), ctx).echec).toBeNull();
+  });
+
+  it('échec sans motif ni note : les deux à null', () => {
+    const r = suiviLivraison(commande({ status: 'CANCELLED' }, { statut: 'FAILED', course: tourneeDeTrois() }), ctx);
+    expect(r.echec).toEqual({ motif: null, note: null });
+  });
+});
+
+describe('suivi de livraison : appli du livreur (24/10)', () => {
+  const appli = (connectes: string[] | null, appliFermeeApresS = 180) => ({
+    appliFermeeApresS,
+    connectes: connectes ? new Set(connectes) : null,
+  });
+  const avec = (livreur: Record<string, unknown>) => enRoute(tourneeDeTrois({ deliverer: { ...KOFFI, ...livreur } }));
+
+  it('appli récente sans socket, vue il y a 6 min : appli fermée, heure du dernier signe de vie', () => {
+    const r = suiviLivraison(avec({ protocole_appli: 4, dernier_signal_at: d('12:14') }), { ...ctx, appli: appli([]) });
+    expect(r.livreur).toMatchObject({ appli_active: false, appli_vue_a: t('12:14'), appli_connectee: false });
+  });
+
+  it('signe de vie récent sans socket : en arrière-plan (active, pas connectée)', () => {
+    const r = suiviLivraison(avec({ protocole_appli: 4, dernier_signal_at: d('12:19') }), { ...ctx, appli: appli([]) });
+    expect(r.livreur).toMatchObject({ appli_active: true, appli_connectee: false });
+  });
+
+  it('socket ouvert : active et connectée', () => {
+    const r = suiviLivraison(avec({ protocole_appli: 4, dernier_signal_at: d('11:00') }), { ...ctx, appli: appli(['liv-koffi']) });
+    expect(r.livreur).toMatchObject({ appli_active: true, appli_connectee: true });
+  });
+
+  it('ancienne appli, ou règle coupée (réglage à 0) : état inconnu (null) ; présence inconnue : null', () => {
+    expect(
+      suiviLivraison(avec({ protocole_appli: 3, dernier_signal_at: d('11:00') }), { ...ctx, appli: appli([]) }).livreur,
+    ).toMatchObject({ appli_active: null, appli_connectee: false });
+    expect(
+      suiviLivraison(avec({ protocole_appli: 4, dernier_signal_at: d('11:00') }), { ...ctx, appli: appli(null, 0) }).livreur,
+    ).toMatchObject({ appli_active: null, appli_connectee: null });
+  });
+
+  it('Turbo, livreur sollicité ou sans contexte : aucun champ d’appli ; jamais le signe de vie ni le protocole tels quels', () => {
+    const sans = suiviLivraison(avec({ protocole_appli: 4, dernier_signal_at: d('12:14') }), ctx);
+    expect(Object.keys(sans.livreur!).sort()).toEqual(['etat', 'id', 'nom', 'telephone']);
+    const turbo = suiviLivraison(
+      commande(
+        { delivery_service: 'TURBO', status: 'PICKED_UP', picked_up_at: d('12:05') },
+        { course: course({ statut: 'IN_DELIVERY' }) },
+      ),
+      { ...ctx, appli: appli([]) },
+    );
+    expect(Object.keys(turbo.livreur!).sort()).toEqual(['etat', 'id', 'nom', 'telephone']);
+    const r = suiviLivraison(avec({ protocole_appli: 4, dernier_signal_at: d('12:14') }), { ...ctx, appli: appli([]) });
+    expect(r.livreur).not.toHaveProperty('dernier_signal_at');
+    expect(r.livreur).not.toHaveProperty('protocole_appli');
   });
 });
