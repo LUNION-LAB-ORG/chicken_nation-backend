@@ -18,6 +18,7 @@ export type DelivererPushType =
   | 'course_attente' // Planificateur : départ retenu, attends une commande encore en cuisine
   | 'course_tout_pret' // Planificateur : plus rien à attendre, présente ton code
   | 'commande_remise' // Commande ajoutée remise avec le même code : tu peux partir
+  | 'sac_oublie' // Parti du restaurant alors qu'un sac de la course y est encore noté
   | 'course_completed' // Course terminée
   | 'course_cancelled' // Course annulée
   | 'auto_paused' // Auto-pause déclenchée
@@ -332,6 +333,25 @@ export class DelivererPushService {
       title: input.titre,
       body: input.corps,
       data: { courseId: input.courseId, commande: input.commande, restantes: input.restantes },
+      critical: true,
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
+    });
+  }
+
+  /**
+   * Parti du restaurant alors qu'une commande de la course d'origine y est
+   * encore notée « prête » (remise commande par commande à la caisse) : le
+   * livreur le sait tout de suite, en même temps que la cloche du restaurant
+   * et du siège. `data.commandes` (références), `data.sacs` (nombre).
+   */
+  notifySacOublie(input: { delivererId: string; courseId: string; titre: string; corps: string; commandes: string[] }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'sac_oublie',
+      title: input.titre,
+      body: input.corps,
+      data: { courseId: input.courseId, commandes: input.commandes, sacs: input.commandes.length },
       critical: true,
       channelId: 'offres_v1',
       sound: 'offre_course.wav',

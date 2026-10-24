@@ -16,6 +16,7 @@ import {
   texteCommandeRemise,
   texteCommandeRetiree,
   texteRetenue,
+  texteSacOublie,
   texteToutEstPret,
 } from './application-plan.rules';
 import { motifFermetureALaValidation } from './depart.rules';
@@ -74,6 +75,8 @@ describe('textes vus par le livreur : courts, chiffres, tutoiement, sans tiret c
     texteRetenue({ jusqua: new Date('2026-10-22T12:34:00Z'), maintenant: new Date('2026-10-22T12:31:20Z') }),
     texteToutEstPret({ code: '421', total: 2 }),
     texteCommandeRemise(),
+    texteSacOublie({ sacs: 1 }),
+    texteSacOublie({ sacs: 2 }),
   ];
 
   it('valeurs exactes', () => {
@@ -84,6 +87,8 @@ describe('textes vus par le livreur : courts, chiffres, tutoiement, sans tiret c
       { titre: 'Attends 3 min', corps: 'Départ 12 h 34' },
       { titre: 'Tout est prêt', corps: '2 commandes · code 421' },
       { titre: 'Tout est récupéré', corps: 'Tu peux partir' },
+      { titre: 'Sac oublié', corps: '1 sac au restaurant' },
+      { titre: 'Sac oublié', corps: '2 sacs au restaurant' },
     ]);
   });
 

@@ -85,6 +85,7 @@ export function monter(donnees: DonneesDispatch, options: Options = {}) {
     notifyCourseToutPret: jest.fn(),
     notifyCommandeRemise: jest.fn(),
     notifyPickupValidated: jest.fn(),
+    notifySacOublie: jest.fn(),
   };
   const queue = {
     onOfferExpired: jest.fn(async () => ({ autoPaused: false })),

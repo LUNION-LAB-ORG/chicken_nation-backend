@@ -152,6 +152,15 @@ export function texteCommandeRemise(): TexteNotification {
   return { titre: 'Tout est récupéré', corps: 'Tu peux partir' };
 }
 
+/**
+ * Parti du restaurant alors qu'un sac de la course y est encore noté (remise
+ * commande par commande à la caisse) : « Sac oublié », le nombre de sacs.
+ */
+export function texteSacOublie(p: { sacs: number }): TexteNotification {
+  const n = Math.max(1, p.sacs);
+  return { titre: 'Sac oublié', corps: `${n} sac${n > 1 ? 's' : ''} au restaurant` };
+}
+
 /** Une levée de retenue qui mérite d'être dite au livreur (encore au comptoir, pas parti). */
 export function liberationAAnnoncer(motif: MotifLiberation): boolean {
   return motif === 'TOUT_PRET' || motif === 'ECHEANCE' || motif === 'PLUS_RIEN_A_ATTENDRE';

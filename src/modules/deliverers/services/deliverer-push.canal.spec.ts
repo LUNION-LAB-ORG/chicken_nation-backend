@@ -34,6 +34,19 @@ describe('DelivererPushService : canal selon l’appli du livreur', () => {
     expect(t.envoye()).toMatchObject({ channelId: 'offres_v1', sound: 'offre_course.wav' });
   });
 
+  it('« Sac oublié » : canal des offres pour la nouvelle appli, type `sac_oublie`, références et nombre de sacs', async () => {
+    const t = monter(3);
+    t.service.notifySacOublie({ delivererId: 'd1', courseId: 'k1', titre: 'Sac oublié', corps: '1 sac au restaurant', commandes: ['CMD-B'] });
+    await new Promise((r) => setImmediate(r));
+    expect(t.envoye()).toMatchObject({
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
+      title: 'Sac oublié',
+      body: '1 sac au restaurant',
+      data: expect.objectContaining({ type: 'sac_oublie', courseId: 'k1', commandes: ['CMD-B'], sacs: 1 }),
+    });
+  });
+
   it('l’offre garde la sonnerie des offres pour toutes les applis', () => {
     const offre = { type: 'new_course_offer' as const, channelId: 'offres_v1', sound: 'offre_course.wav' };
     expect(canalPourAppli(offre, null)).toEqual({ channelId: 'offres_v1', sound: 'offre_course.wav' });

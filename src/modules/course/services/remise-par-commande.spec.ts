@@ -8,9 +8,10 @@
  *    (nouvelle appli) ; la dernière remise l'annonce (« Tout est récupéré ») ;
  *    l'ancienne appli garde l'annonce à la première remise, comme avant ;
  *  - départ réel (« Je pars », position, fenêtre écoulée) alors qu'une
- *    commande d'origine est encore au comptoir : journal et cloche du
- *    restaurant et du siège, au lieu du silence. Une commande ajoutée après
- *    le retrait, elle, est détachée et replanifiée sans alerte.
+ *    commande d'origine est encore au comptoir : journal, cloche du
+ *    restaurant et du siège, et « Sac oublié » au livreur (relecture du
+ *    24/10), au lieu du silence. Une commande ajoutée après le retrait, elle,
+ *    est détachée et replanifiée sans alerte.
  */
 import { CourseStatut, DeliveryStatut, OrderStatus, OrderType } from '@prisma/client';
 
@@ -72,6 +73,15 @@ describe('remise commande par commande au bouton de la caisse', () => {
     expect(t.cloche.sendCommandePasRemiseBell).toHaveBeenCalledWith(
       expect.objectContaining({ courseId: k.id, reference: k.reference, commandes: [b.reference] }),
     );
+    // Le livreur le sait tout de suite : « Sac oublié », un sac au restaurant.
+    expect(t.push.notifySacOublie).toHaveBeenCalledTimes(1);
+    expect(t.push.notifySacOublie).toHaveBeenCalledWith({
+      delivererId: d1.id,
+      courseId: k.id,
+      titre: 'Sac oublié',
+      corps: '1 sac au restaurant',
+      commandes: [b.reference],
+    });
     // Rien ne la retire de la course (la caissière l'a peut-être donnée sans toucher le bouton).
     expect(t.livraisonsDe(k.id).map((l) => l.order_id)).toEqual([a.id, b.id]);
     expect(t.livraisonsDe(k.id).find((l) => l.order_id === b.id)!.statut).toBe(DeliveryStatut.PENDING);
@@ -94,6 +104,7 @@ describe('remise commande par commande au bouton de la caisse', () => {
     expect(k.parti_at).toBeTruthy();
     expect(t.journalDe('DEPART_SANS_COMMANDE')).toEqual([expect.objectContaining({ motif: 'FENETRE_ECHUE' })]);
     expect(t.cloche.sendCommandePasRemiseBell).toHaveBeenCalledWith(expect.objectContaining({ commandes: [b.reference] }));
+    expect(t.push.notifySacOublie).toHaveBeenCalledWith(expect.objectContaining({ delivererId: d1.id, commandes: [b.reference] }));
   });
 
   it('commande ajoutée après le retrait, pas remise, au départ : détachée et replanifiée, jamais signalée', async () => {
@@ -118,6 +129,7 @@ describe('remise commande par commande au bouton de la caisse', () => {
     expect(t.livraisonsDe(k.id).map((l) => l.order_id)).toEqual([a.id]);
     expect(t.journalDe('DEPART_SANS_COMMANDE')).toEqual([]);
     expect(t.cloche.sendCommandePasRemiseBell).not.toHaveBeenCalled();
+    expect(t.push.notifySacOublie).not.toHaveBeenCalled();
   });
 
   it('tout remis puis départ : aucune cloche', async () => {
@@ -127,5 +139,6 @@ describe('remise commande par commande au bouton de la caisse', () => {
     await t.depart.jePars(k.id, d1.id);
     expect(t.journalDe('DEPART_SANS_COMMANDE')).toEqual([]);
     expect(t.cloche.sendCommandePasRemiseBell).not.toHaveBeenCalled();
+    expect(t.push.notifySacOublie).not.toHaveBeenCalled();
   });
 });

@@ -18,6 +18,7 @@ import {
   RaisonsPlanificateur,
   texteCommandeRemise,
   texteCommandeRetiree,
+  texteSacOublie,
 } from '../helpers/application-plan.rules';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
@@ -479,8 +480,9 @@ export class DepartCourseService {
    * écoulée) : une commande de la course d'origine encore prête au comptoir
    * (remise commande par commande au bouton de la caisse, la suivante jamais
    * remise) part sans son sac. Rien ne la retire de la course (la caissière
-   * l'a peut-être donnée sans toucher le bouton) : le journal la note et le
-   * restaurant et le siège sont prévenus par la cloche, au lieu du silence.
+   * l'a peut-être donnée sans toucher le bouton) : le journal la note, le
+   * restaurant et le siège sont prévenus par la cloche, et le livreur par
+   * « Sac oublié » (notification `sac_oublie`), au lieu du silence.
    * Les commandes ajoutées après le retrait, elles, sont déjà détachées.
    *
    * @returns les références signalées.
@@ -520,6 +522,18 @@ export class DepartCourseService {
         commandes: references,
       })
       .catch(() => undefined);
+    // Le livreur aussi, tout de suite : sinon il roulait sans savoir qu'un sac
+    // manquait, puis restait bloqué sur cette commande (relecture du 24/10).
+    if (course.deliverer_id) {
+      const texte = texteSacOublie({ sacs: references.length });
+      this.push.notifySacOublie({
+        delivererId: course.deliverer_id,
+        courseId: course.id,
+        titre: texte.titre,
+        corps: texte.corps,
+        commandes: references,
+      });
+    }
     return references;
   }
 
