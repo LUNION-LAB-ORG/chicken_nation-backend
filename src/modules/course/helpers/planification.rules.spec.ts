@@ -873,6 +873,8 @@ describe('retenue au comptoir : trajet long (le livreur reviendrait trop tard)',
     autres?: ReturnType<typeof livr>[];
     coursesEnPlus?: ReturnType<typeof crs>[];
     reglages?: ReglagesPlanification;
+    /** D1 autrement qu'au comptoir (en route, par exemple). */
+    d1?: ReturnType<typeof livr>;
   } = {}) => {
     const maintenant = o.maintenant ?? T0;
     const a = cmd('a', { est: o.estA ?? 5000, created_at: o.creeeA ?? h('15:20'), ready_at: o.readyA ?? h('15:28') });
@@ -889,7 +891,7 @@ describe('retenue au comptoir : trajet long (le livreur reviendrait trop tard)',
       commandes: [b, ...(o.enPlus ?? [])],
       courses: [k, ...(o.coursesEnPlus ?? [])],
       livreurs: [
-        livr('d1', maintenant, { auComptoir: true, etat: { en_course: true, last_available_at: null } }),
+        o.d1 ?? livr('d1', maintenant, { auComptoir: true, etat: { en_course: true, last_available_at: null } }),
         ...(o.autres ?? []),
       ],
     });
@@ -1074,6 +1076,137 @@ describe('retenue au comptoir : trajet long (le livreur reviendrait trop tard)',
     // Tournée au vol d'oiseau (l'autre client n'a pas de distance routière) : le retour aussi, jamais les 9 km de route.
     const volOiseau = ((4000 + 1000) * 1.4 + 5000 * 1.4) / VITESSE_MPS + 2 * ARRET_CLIENT_S;
     expect(mesure([route('c', 4000, null), route('a', 5000, 9000)]) / 1000).toBeCloseTo(volOiseau, 0);
+  });
+
+  // ── Relecture adverse du 24/10 ──
+
+  /** D2 en tournée depuis 15 h 20 chez un client à 3 km : de retour vers 15 h 45 min 54 s. */
+  const d2EnTournee = (maintenant: Date) => ({
+    autres: [livr('d2', maintenant, { etat: { en_course: true, last_available_at: null } })],
+    coursesEnPlus: [
+      crs('k2', {
+        statut: CourseStatut.IN_DELIVERY,
+        deliverer_id: 'd2',
+        picked_up_at: h('15:20'),
+        parti_at: h('15:20'),
+        commandes: [cmd('z', { est: 3000, statut: OrderStatus.PICKED_UP })],
+      }),
+    ],
+  });
+
+  it('estimation qui recule : un autre livreur prendra B seule à sa nouvelle heure, la course n’attend pas pour rien', () => {
+    const posee = { retenue: h('15:40'), attendues: ['b'], maintenant: h('15:35'), ...d2EnTournee(h('15:35')) };
+    // B annoncée pour 15 h 46 : D2, de retour vers 15 h 45 min 54 s, la prendra
+    // seule. Garder A jusqu'à 15 h 40 ne servirait à rien : levée, A part.
+    const plan = scene({ ...posee, finB: h('15:46') }).plan;
+    expect(plan.actions).toEqual([expect.objectContaining({ type: 'LIBERER', motif: 'PLUS_RIEN_A_ATTENDRE' })]);
+    expect(refusDe(plan, 'b', 'k')).toEqual(['AUTRE_LIVREUR_LIBRE']);
+    // B annoncée pour 15 h 42 : D2 revient après 15 h 45, la retenue garde son échéance.
+    expect(scene({ ...posee, finB: h('15:42') }).plan.actions).toEqual([]);
+  });
+
+  it('livreur retenu ailleurs : son retour compte depuis l’échéance de sa retenue, pas depuis maintenant', () => {
+    // D3 au comptoir avec A1 (1 km au nord), retenu jusqu'à 15 h 33 pour Q1 :
+    // de retour vers 15 h 43 min 38 s (15 h 40 min 48 s s'il partait maintenant).
+    // D1 au comptoir avec A (7 km de route à l'est), B prête à 15 h 40 : trajet long.
+    const monde = (retenueD3: boolean) => {
+      const a = cmd('a', { est: 5000, created_at: h('15:20'), ready_at: h('15:28') });
+      const a1 = cmd('a1', { nord: 1000, est: 0, created_at: h('15:20'), ready_at: h('15:28') });
+      const q1 = enPrep('q1', h('15:33'), { nord: 1200, est: 0, created_at: h('15:22') });
+      const b = enPrep('b', h('15:40'), { est: 5500, created_at: h('15:25') });
+      const enCourse = { auComptoir: true, etat: { en_course: true, last_available_at: null } };
+      return planifier(
+        instant(T0, {
+          commandes: retenueD3 ? [b, q1] : [b],
+          courses: [
+            crs('k', { statut: CourseStatut.AT_RESTAURANT, deliverer_id: 'd1', commandes: [a] }),
+            crs('k1', {
+              statut: CourseStatut.AT_RESTAURANT,
+              deliverer_id: 'd3',
+              commandes: [a1],
+              retenue_jusqua: retenueD3 ? h('15:33') : null,
+              commandes_attendues: retenueD3 ? ['q1'] : [],
+            }),
+          ],
+          livreurs: [livr('d1', T0, enCourse), livr('d3', T0, enCourse)],
+        }),
+      );
+    };
+    // D3 retenu : il ne sera pas là avant 15 h 43 (fin de B + 3 min), la course de D1 attend B.
+    expect(actionsDe(monde(true), 'RETENIR')).toEqual([
+      expect.objectContaining({ course_id: 'k', jusqua: h('15:40'), motif: 'TRAJET_LONG' }),
+    ]);
+    // D3 libre de partir : il revient à temps pour B, la course de D1 ne l'attend pas.
+    expect(actionsDe(monde(false), 'RETENIR')).toEqual([]);
+    expect(refusDe(monde(false), 'b', 'k')).toEqual(['AUTRE_LIVREUR_LIBRE']);
+  });
+
+  it('deuxième commande attendue : le retour se compte depuis le départ avec la première', () => {
+    // A à 1,5 km de route ; C (1,2 km) prête à 15 h 33, attente courte. Partie
+    // à 15 h 33 avec A et C, D1 reviendrait vers 15 h 48 min 10 s.
+    const c = (finB: Date) =>
+      scene({ estA: 1070, estB: 2000, finB, enPlus: [enPrep('c', h('15:33'), { est: 1200, created_at: h('15:24') })] }).plan;
+    // B prête à 15 h 41 min 30 s : il reviendrait 6 min 40 s après elle, trajet long, A et C l'attendent.
+    expect(actionsDe(c(h('15:41:30')), 'RETENIR')).toEqual([
+      expect.objectContaining({
+        jusqua: h('15:41:30'),
+        motif: 'TRAJET_LONG',
+        attendues: [
+          expect.objectContaining({ order_id: 'c', motif: 'ATTENTE_COURTE' }),
+          expect.objectContaining({ order_id: 'b', motif: 'TRAJET_LONG' }),
+        ],
+      }),
+    ]);
+    // B prête à 15 h 43 min 30 s : il reviendrait moins de 5 min après elle, trajet court, B au-delà de l'horizon.
+    const court = c(h('15:43:30'));
+    expect(actionsDe(court, 'RETENIR')).toEqual([
+      expect.objectContaining({ jusqua: h('15:33'), motif: 'ATTENTE_COURTE', attendues: [expect.objectContaining({ order_id: 'c' })] }),
+    ]);
+    expect(refusDe(court, 'b', 'k')).toEqual(['HORIZON']);
+  });
+
+  it('livreur en route : le retour se compte depuis son arrivée au restaurant', () => {
+    // D1 sans position : arrivée supposée dans 8 min (15 h 38 min 10 s). A à
+    // 1,5 km de route (aller-retour 11 min 10 s) : retour vers 15 h 49 min 20 s.
+    const enRoute = livr('d1', T0, { etat: { en_course: true, last_available_at: null } });
+    const plan = scene({ estA: 1070, finB: plus(T0, 10 * 60), statut: CourseStatut.ACCEPTED, d1: enRoute }).plan;
+    // B prête à 15 h 40 min 10 s : il reviendrait 9 min après elle, trajet long, il l'attend 2 min au comptoir.
+    expect(actionsDe(plan, 'RETENIR')).toEqual([expect.objectContaining({ jusqua: plus(T0, 10 * 60), motif: 'TRAJET_LONG' })]);
+    // Au comptoir, le même trajet est court : il part, B est au-delà de l'horizon.
+    expect(refusDe(scene({ estA: 1070, finB: plus(T0, 10 * 60) }).plan, 'b', 'k')).toEqual(['HORIZON']);
+  });
+
+  it('horizon réglé sous l’attente courte : trajet court, refus horizon ; trajet long, retenue « trajet long »', () => {
+    const r = avec({ horizonPreparationS: 120 });
+    // B prête à 15 h 33, dans 2 min 50 s, au-delà de l'horizon de 2 min.
+    // A à 700 m de route (aller-retour 6 min 49 s, au plus 7 min 50 s) : trajet court, A part.
+    const court = scene({ estA: 500, finB: h('15:33'), reglages: r }).plan;
+    expect(actionsDe(court, 'RETENIR')).toEqual([]);
+    expect(refusDe(court, 'b', 'k')).toEqual(['HORIZON']);
+    // A à 7 km de route : trajet long, la course attend B.
+    expect(actionsDe(scene({ finB: h('15:33'), reglages: r }).plan, 'RETENIR')).toEqual([
+      expect.objectContaining({ jusqua: h('15:33'), motif: 'TRAJET_LONG' }),
+    ]);
+  });
+
+  it('estimation qui recule après le retrait : la retenue descend à la fenêtre, attente courte (motif jamais plus long que la retenue)', () => {
+    // Retenue jusqu'à 15 h 33 pour B ; retrait validé à 15 h 30 (fenêtre 15 h 34,
+    // marge 90 s : 15 h 32 min 30 s au plus) ; B annoncée maintenant pour 15 h 36.
+    const plan = scene({
+      statut: CourseStatut.IN_DELIVERY,
+      picked_up_at: h('15:30'),
+      maintenant: h('15:31:30'),
+      retenue: h('15:33'),
+      attendues: ['b'],
+      finB: h('15:36'),
+    }).plan;
+    expect(actionsDe(plan, 'RETENIR')).toEqual([
+      expect.objectContaining({
+        jusqua: h('15:32:30'),
+        motif: 'ATTENTE_COURTE',
+        attendues: [expect.objectContaining({ order_id: 'b', motif: 'ATTENTE_COURTE' })],
+      }),
+    ]);
   });
 });
 

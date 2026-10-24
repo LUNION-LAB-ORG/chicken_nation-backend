@@ -2476,7 +2476,10 @@ export function planifier(
       return mesure.retour.ms;
     };
     for (const c of candidates) {
-      let fin = c.preparation!.finDecision.getTime();
+      // Fin estimée de la commande (8e décile). `fin` peut ensuite être ramenée
+      // à l'échéance d'une retenue déjà posée ; elle, jamais.
+      const finEstimee = c.preparation!.finDecision.getTime();
+      let fin = finEstimee;
       const noter = (motif: MotifRefusPlanification, libelle: string) =>
         refus.push({ essai: 'RETENUE', order_id: c.id, source_id: null, course_cle: k.cle, refus: motif, libelle });
       const courte = (f: number) => f - t <= r.horizonPreparationS * 1000 && f <= limiteCourte;
@@ -2509,7 +2512,11 @@ export function planifier(
         motif = courte(fin) ? 'ATTENTE_COURTE' : 'TRAJET_LONG';
       }
       if (fin <= dPossible) continue; // prête avant le départ possible : rien à attendre
-      if (!r.retenueMemeSiLivreurLibre && autreLivreurATemps(ctx, k, fin)) {
+      // Un autre livreur la prendrait seule à temps : jugé à sa fin estimée,
+      // jamais à l'échéance d'une retenue qu'elle dépasse (relecture du 24/10 :
+      // annoncée plus tard, elle partait avec un livreur revenu entre-temps et
+      // la course l'avait attendue pour rien).
+      if (!r.retenueMemeSiLivreurLibre && autreLivreurATemps(ctx, k, finEstimee)) {
         noter('AUTRE_LIVREUR_LIBRE', `un autre livreur peut prendre ${c.reference}`);
         continue;
       }
@@ -2671,7 +2678,8 @@ function autreLivreurATemps(ctx: Contexte, k: CourseTravail, finMs: number): boo
  * Retour estimé d'un livreur en course au restaurant, sans Google : arrêts
  * restants à vol d'oiseau × 1,4, 3 min par arrêt, puis le retour. Depuis sa
  * position fraîche s'il est parti, sinon depuis le restaurant à son départ
- * (au plus tôt, ou à son arrivée s'il est en route). Un trajet vers ou
+ * (au plus tôt, ou à son arrivée s'il est en route, jamais avant l'échéance
+ * de sa retenue au comptoir). Un trajet vers ou
  * depuis un client sans coordonnées dure `trajetSansCoordonneesMin` : le
  * livreur qui le livre n'est jamais réputé déjà revenu. `null` sans
  * coordonnées du restaurant.
@@ -2705,6 +2713,12 @@ export function retourAuRestaurantMs(
   } else {
     point = restaurant;
     debut = course.statut === CourseStatut.ACCEPTED ? t + etaVersRestaurantMs : t;
+    // Course retenue au comptoir : le livreur part à l'échéance de la retenue.
+    // Jusqu'à 20 min pour un trajet long (relecture du 24/10) : compté depuis
+    // maintenant, son retour paraissait bien plus proche, au point de refuser
+    // une retenue à une autre course pour un livreur qui ne serait pas là.
+    const retenue = course.retenue_jusqua?.getTime() ?? null;
+    if (retenue !== null && retenue > debut) debut = retenue;
   }
   const mps = vitesseKmh(new Date(debut), r) / 3.6;
   const trajetInconnuS = r.trajetSansCoordonneesMin * 60;
