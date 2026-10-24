@@ -2,7 +2,8 @@
  * Liste des livreurs (`GET /deliverers`, fenêtre « Forcer l'affectation » du
  * backoffice) et carte (`GET /deliverers/live-locations`) : chaque livreur
  * porte `disponibilite`, calculée par la règle unique. Le backoffice montre
- * exactement ce que le serveur refuserait.
+ * exactement ce que le serveur refuserait. Depuis le 24/10 : `appli_active`
+ * et `appli_vue_a` (« Appli fermée », « En arrière-plan »).
  */
 import { CourseStatut } from '@prisma/client';
 
@@ -45,11 +46,38 @@ function monter() {
     base.prisma,
     {} as never,
     {} as never,
-    { load: jest.fn(async () => ({ gpsExpirationMinutes: 5 })) } as never,
+    { load: jest.fn(async () => ({ gpsExpirationMinutes: 5, appliFermeeApresS: 180 })) } as never,
     {} as never,
     presence as never,
   );
   return { base, service, presence, c, disponible, enPause, horsService, enCourse, sollicite };
+}
+
+/**
+ * Appli active ou fermée (24/10) : Fanta est en service mais son appli se tait
+ * depuis 10 min (glissée hors de la liste des applis) ; Moussa a l'appli en
+ * arrière-plan (positions toutes les 30 s, pas de socket) ; Awa a le socket.
+ */
+function monterAppli(appliFermeeApresS = 180) {
+  const vue = (s: number) => new Date(MAINTENANT.getTime() - s * 1000);
+  const awa = livreur({ first_name: 'Awa', dernier_signal_at: vue(400) });
+  const fanta = livreur({ first_name: 'Fanta', dernier_signal_at: vue(600) });
+  const moussa = livreur({ first_name: 'Moussa', dernier_signal_at: vue(30) });
+  const base = monterBaseDispatch({ livreurs: [awa, fanta, moussa] });
+  const presence = {
+    livreursConnectes: jest.fn(async (ids: string[]): Promise<Set<string> | null> =>
+      new Set(ids.filter((id) => id === awa.id)),
+    ),
+  };
+  const service = new DeliverersService(
+    base.prisma,
+    {} as never,
+    {} as never,
+    { load: jest.fn(async () => ({ gpsExpirationMinutes: 5, appliFermeeApresS })) } as never,
+    {} as never,
+    presence as never,
+  );
+  return { service, vue, awa, fanta, moussa };
 }
 
 describe('GET /deliverers : état de chaque livreur', () => {
@@ -120,5 +148,61 @@ describe('GET /deliverers/live-locations : « En pause » et « Hors service » 
     expect(parId[t.horsService.id].libelle).toBe('En pause');
     expect(parId[t.disponible.id].etat).toBe('DISPONIBLE');
     expect(parId[t.sollicite.id].etat).toBe('OFFRE_EN_ATTENTE');
+  });
+});
+
+describe('appli active ou fermée (24/10) : `appli_active` et `appli_vue_a`', () => {
+  it('GET /deliverers : « Appli fermée » pour l’appli qui se tait, en arrière-plan reste disponible', async () => {
+    const t = monterAppli();
+
+    const { items } = await t.service.findAll({ limit: 50 } as never);
+    const parPrenom = Object.fromEntries(items.map((l: any) => [l.first_name, l]));
+
+    expect(parPrenom.Fanta).toMatchObject({
+      appli_connectee: false,
+      appli_active: false,
+      appli_vue_a: t.vue(600).toISOString(),
+      disponibilite: {
+        etat: 'APPLI_FERMEE',
+        libelle: 'Appli fermée',
+        peut_recevoir_offre: false,
+        message_refus: "L'appli de ce livreur est fermée.",
+        appli_active: false,
+        appli_vue_a: t.vue(600),
+      },
+    });
+    // En arrière-plan : pas de socket, mais l'appli envoie ses positions.
+    expect(parPrenom.Moussa).toMatchObject({
+      appli_connectee: false,
+      appli_active: true,
+      appli_vue_a: t.vue(30).toISOString(),
+      disponibilite: { etat: 'DISPONIBLE', peut_recevoir_offre: true },
+    });
+    // Socket ouvert : active, même sans signe de vie récent.
+    expect(parPrenom.Awa).toMatchObject({
+      appli_connectee: true,
+      appli_active: true,
+      disponibilite: { etat: 'DISPONIBLE' },
+    });
+  });
+
+  it('carte (live-locations) : mêmes champs', async () => {
+    const t = monterAppli();
+    const carte = await t.service.getLiveLocations({ includeOffline: true });
+    const parId = Object.fromEntries(carte.map((l) => [l.id, l]));
+
+    expect(parId[t.fanta.id]).toMatchObject({
+      appli_active: false,
+      appli_vue_a: t.vue(600).toISOString(),
+      disponibilite: { etat: 'APPLI_FERMEE', libelle: 'Appli fermée' },
+    });
+    expect(parId[t.moussa.id]).toMatchObject({ appli_connectee: false, appli_active: true });
+    expect(parId[t.awa.id]).toMatchObject({ appli_connectee: true, appli_active: true });
+  });
+
+  it('réglage à 0 : règle coupée, toute appli est active', async () => {
+    const t = monterAppli(0);
+    const { items } = await t.service.findAll({ limit: 50 } as never);
+    expect(items.every((l: any) => l.appli_active === true && l.disponibilite.etat === 'DISPONIBLE')).toBe(true);
   });
 });

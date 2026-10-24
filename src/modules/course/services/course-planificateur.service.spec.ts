@@ -744,3 +744,69 @@ describe('lots sous v2 (5.5)', () => {
     expect(await service.libererLotsV2({ version: 'v1', restaurants: [], refusees: [] })).toEqual([]);
   });
 });
+
+describe('appli fermée (24/10) : le planificateur ne la choisit jamais, la reprend dès sa réouverture', () => {
+  const RESTAURANT_POS = { lat: 5.286, lng: -3.9737 };
+
+  it('livreur au comptoir mais appli fermée : l’offre part au livreur dont l’appli est active', async () => {
+    const ferme = livreur({
+      last_location: RESTAURANT_POS,
+      last_location_at: avant(400),
+      dernier_signal_at: avant(400),
+      last_available_at: avant(3600),
+    });
+    const actif = livreur({ ...LOIN, dernier_signal_at: avant(60), last_available_at: avant(60) });
+    const t = monter({ commandes: [prete()], livreurs: [ferme, actif] }, { appli: { connectes: [] } });
+
+    await t.passer();
+
+    expect(t.base.offres).toEqual([expect.objectContaining({ deliverer_id: actif.id, status: CourseOfferStatus.PENDING })]);
+    // Aucune pause, aucune sortie de la file pour l'appli fermée.
+    expect(ferme.pause_until).toBeNull();
+    expect(ferme.last_available_at).toEqual(avant(3600));
+  });
+
+  it('seule une appli fermée : la course attend ; il rouvre l’appli, l’offre lui part au passage suivant', async () => {
+    const l = livreur({ ...AU_COMPTOIR, dernier_signal_at: avant(400) });
+    const t = monter({ commandes: [prete()], livreurs: [l] }, { appli: { connectes: [] } });
+
+    await t.passer();
+    expect(t.coursesOuvertes()).toHaveLength(1);
+    expect(t.base.offres).toHaveLength(0);
+
+    // Réouverture : le socket se connecte (aucune requête encore).
+    t.appli.etat.connectes = [l.id];
+    await t.passer();
+    expect(t.base.offres).toEqual([expect.objectContaining({ deliverer_id: l.id, status: CourseOfferStatus.PENDING })]);
+  });
+
+  it('offre en attente d’une appli qui se ferme : close par la tâche des relances, le planificateur la propose à un autre', async () => {
+    const a = prete();
+    const k = course({ created_at: avant(30) });
+    const ferme = livreur({ ...AU_COMPTOIR, dernier_signal_at: avant(400), last_available_at: avant(3600) });
+    const autre = livreur({ ...LOIN, dernier_signal_at: avant(20), last_available_at: avant(60) });
+    const o = offre({ course_id: k.id, deliverer_id: ferme.id, offered_at: avant(20), expires_at: apres(100) });
+    const t = monter(
+      {
+        commandes: [a],
+        courses: [k],
+        livraisons: [livraison({ course_id: k.id, order_id: a.id, sequence_order: 1 })],
+        livreurs: [ferme, autre],
+        offres: [o],
+      },
+      { appli: { connectes: [] } },
+    );
+
+    await t.offres.remindPendingOffers();
+    expect(o.status).toBe(CourseOfferStatus.CANCELLED);
+    expect(t.journalDe('OFFRE_CLOSE')[0]).toMatchObject({ motif: 'APPLI_FERMEE', deliverer_id: ferme.id });
+    expect(t.emisSur(DispatchEvenements.RECHERCHE_A_RELANCER)).toEqual([{ course_id: k.id }]);
+
+    await t.passer();
+    expect(t.base.offres.filter((x) => x.status === CourseOfferStatus.PENDING)).toEqual([
+      expect.objectContaining({ course_id: k.id, deliverer_id: autre.id }),
+    ]);
+    expect(ferme.pause_until).toBeNull();
+    expect(t.queue.onOfferExpired).not.toHaveBeenCalled();
+  });
+});

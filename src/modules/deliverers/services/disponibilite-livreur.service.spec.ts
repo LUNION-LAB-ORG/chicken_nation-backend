@@ -20,7 +20,7 @@ import { DeliverersSelfController } from '../controllers/deliverers-self.control
 import { DelivererChannels } from '../enums/deliverer-channels';
 import { FIN_PAUSE_INDEFINIE } from '../helpers/disponibilite.rules';
 import { DisponibiliteListener } from '../listeners/disponibilite.listener';
-import { busSimule, course, livreur, monterBase, offre } from './base-livreurs.simulee-spec';
+import { appliLivreurSimulee, busSimule, course, livreur, monterBase, offre } from './base-livreurs.simulee-spec';
 import { DisponibiliteLivreurService } from './disponibilite-livreur.service';
 
 const MAINTENANT = new Date('2026-10-22T14:00:00.000Z');
@@ -29,8 +29,13 @@ const apres = (min: number) => new Date(MAINTENANT.getTime() + min * 60_000);
 
 type Donnees = Parameters<typeof monterBase>[0];
 
-function monter(donnees: Donnees, reglages: { horsServiceSansSignalMin?: number } = {}) {
+function monter(
+  donnees: Donnees,
+  reglages: { horsServiceSansSignalMin?: number; appli?: Parameters<typeof appliLivreurSimulee>[1] } = {},
+) {
   const base = monterBase(donnees);
+  // Par défaut, appli active (socket ouvert) : le filet vise un téléphone oublié appli ouverte.
+  const appli = appliLivreurSimulee(base.prisma, reglages.appli);
   const { bus, emis } = busSimule();
   const journal = new DispatchJournalService(base.prisma);
   const cloture = new OffresClotureService(base.prisma, bus as never, journal);
@@ -46,6 +51,7 @@ function monter(donnees: Donnees, reglages: { horsServiceSansSignalMin?: number 
     settings as never,
     cloture,
     journal,
+    appli.service,
   );
   const controleur = new DeliverersSelfController(
     {} as never,
@@ -54,7 +60,7 @@ function monter(donnees: Donnees, reglages: { horsServiceSansSignalMin?: number 
     disponibilite,
   );
   const types = () => base.journal.map((l) => l.type);
-  return { ...base, emis, bus, push, delivererEvent, disponibilite, controleur, cloture, types };
+  return { ...base, emis, bus, push, delivererEvent, disponibilite, controleur, cloture, types, appli };
 }
 
 /** Le livreur connecté, tel que le décorateur `CurrentDeliverer` le passe. */
@@ -405,6 +411,35 @@ describe('filet : offre ignorée sans aucun signal', () => {
     expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(false);
     expect(l.pause_until).toEqual(apres(10));
     expect(t.push.notifyMisEnPause).not.toHaveBeenCalled();
+  });
+
+  it('appli simplement FERMÉE (24/10) : jamais hors service, ni pause, ni message, ni journal', async () => {
+    const l = livreur({ dernier_signal_at: avant(25) });
+    const c = course();
+    const o = offre({ course_id: c.id, deliverer_id: l.id });
+    const t = monter({ livreurs: [l], courses: [c], offres: [o] }, { appli: { seuilS: 180, connectes: [] } });
+
+    expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(false);
+
+    expect(l.last_available_at).not.toBeNull();
+    expect(l.pause_until).toBeNull();
+    expect(o.status).toBe(CourseOfferStatus.PENDING);
+    expect(t.push.notifyMisEnPause).not.toHaveBeenCalled();
+    expect(t.journal).toEqual([]);
+  });
+
+  it('présence inconnue et signe de vie vieux : appli réputée fermée, le filet l’épargne aussi', async () => {
+    const l = livreur({ dernier_signal_at: avant(25) });
+    const t = monter({ livreurs: [l] }, { appli: { seuilS: 180, connectes: null } });
+    expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(false);
+    expect(l.pause_until).toBeNull();
+  });
+
+  it('règle de l’appli coupée (réglage à 0) : le filet joue comme avant', async () => {
+    const l = livreur({ dernier_signal_at: avant(25) });
+    const t = monter({ livreurs: [l] }, { appli: { seuilS: 0, connectes: [] } });
+    expect(await t.disponibilite.mettreHorsServiceSiSansSignal(l.id)).toBe(true);
+    expect(l.pause_until).toEqual(FIN_PAUSE_INDEFINIE);
   });
 });
 

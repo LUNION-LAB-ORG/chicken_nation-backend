@@ -23,7 +23,14 @@ import {
  *  - sans autre offre en attente : l'appli n'en affiche qu'une, et ferme
  *    l'offre affichée à la clôture de N'IMPORTE laquelle ;
  *  - en service : `last_available_at` non nul (il a touché « Reprendre » ou
- *    ouvert l'appli, et ne s'est ni mis en pause ni déconnecté depuis).
+ *    ouvert l'appli, et ne s'est ni mis en pause ni déconnecté depuis) ;
+ *  - appli active (demande du 24/10 : « c'est lorsqu'il ferme la fenêtre que
+ *    ça ne doit pas passer ») : au moins un socket ouvert, OU un signe de vie
+ *    (position ou requête authentifiée, `dernier_signal_at`) de moins de
+ *    `deliverer.appli_fermee_apres_s` secondes (défaut 180, 0 = règle
+ *    coupée). En arrière-plan, l'appli envoie ses positions et reste active ;
+ *    glissée hors de la liste des applis, elle se tait et le livreur ne
+ *    reçoit plus rien jusqu'à sa réouverture, sans pause ni pénalité.
  *
  * Le chaînage (offre pendant la dernière livraison) est suspendu : il aura sa
  * propre règle s'il revient (lot 9 de la conception).
@@ -36,7 +43,8 @@ export type MotifRefusOffre =
   | 'PAUSE_AUTO'
   | 'EN_COURSE'
   | 'OFFRE_EN_ATTENTE'
-  | 'HORS_SERVICE';
+  | 'HORS_SERVICE'
+  | 'APPLI_FERMEE';
 
 export type DecisionOffre = { ok: true } | { ok: false; motif: MotifRefusOffre };
 
@@ -52,6 +60,13 @@ export interface EtatLivreur {
   en_course: boolean;
   /** Au moins une offre PENDING, échue ou non : tant que la tâche ne l'a pas traitée, elle compte. */
   offre_en_attente: boolean;
+  /**
+   * Appli active : socket ouvert ou signe de vie récent (`estAppliActive`).
+   * Toujours vrai quand la règle est coupée (`deliverer.appli_fermee_apres_s` à 0).
+   */
+  appli_active: boolean;
+  /** Dernier signe de vie de l'appli (`dernier_signal_at`), pour l'affichage. */
+  appli_vue_a?: Date | null;
 }
 
 /** Une course dont le livreur est occupé : ni offre, ni chaînage. */
@@ -85,6 +100,67 @@ export function estEnService(l: Pick<EtatLivreur, 'last_available_at'>): boolean
   return l.last_available_at !== null;
 }
 
+// ============================================================
+// APPLI ACTIVE OU FERMÉE
+// ============================================================
+
+/** Défaut de `deliverer.appli_fermee_apres_s` : trois minutes sans socket ni signe de vie. */
+export const APPLI_FERMEE_APRES_S_DEFAUT = 180;
+
+/**
+ * Ce qu'il faut savoir, en plus de la ligne du livreur, pour juger son appli.
+ *
+ * `connectes` : livreurs dont un socket est ouvert, parmi ceux dont la
+ * présence a été demandée au serveur temps réel (ceux dont le signe de vie
+ * ne suffit pas). `null` : présence inconnue (Redis muet), l'appli est alors
+ * jugée sur son seul signe de vie.
+ */
+export interface ContexteAppli {
+  /** Réglage `deliverer.appli_fermee_apres_s` ; 0 ou moins : règle coupée. */
+  appliFermeeApresS: number;
+  connectes: ReadonlySet<string> | null;
+}
+
+/**
+ * Règle de l'appli coupée : réglage à 0, ou livreur qui répond à l'instant
+ * (acceptation d'une offre : son appli est forcément ouverte).
+ */
+export const SANS_REGLE_APPLI: ContexteAppli = { appliFermeeApresS: 0, connectes: null };
+
+/**
+ * L'appli du livreur est-elle active ? Oui avec un socket ouvert, ou avec un
+ * signe de vie de MOINS de `appliFermeeApresS` secondes (borne exclue). Règle
+ * coupée (0) : toujours oui.
+ */
+export function estAppliActive(
+  p: { socket_connecte: boolean | null; dernier_signal_at: Date | null },
+  maintenant: Date,
+  appliFermeeApresS: number,
+): boolean {
+  if (!(appliFermeeApresS > 0)) return true;
+  if (p.socket_connecte === true) return true;
+  return (
+    p.dernier_signal_at !== null &&
+    maintenant.getTime() - p.dernier_signal_at.getTime() < appliFermeeApresS * 1000
+  );
+}
+
+/** Appli active d'une ligne lue en base (`id`, `dernier_signal_at`) dans ce contexte. */
+export function appliActiveDepuis(
+  ligne: { id: string; dernier_signal_at: Date | null },
+  appli: ContexteAppli,
+  maintenant: Date,
+): boolean {
+  return estAppliActive(
+    {
+      socket_connecte: appli.connectes ? appli.connectes.has(ligne.id) : null,
+      dernier_signal_at: ligne.dernier_signal_at,
+    },
+    maintenant,
+    appli.appliFermeeApresS,
+  );
+}
+
 export function peutRecevoirOffre(l: EtatLivreur, maintenant: Date): DecisionOffre {
   if (
     l.status !== DelivererStatus.ACTIVE ||
@@ -98,6 +174,7 @@ export function peutRecevoirOffre(l: EtatLivreur, maintenant: Date): DecisionOff
   if (l.en_course) return { ok: false, motif: 'EN_COURSE' };
   if (l.offre_en_attente) return { ok: false, motif: 'OFFRE_EN_ATTENTE' };
   if (!estEnService(l)) return { ok: false, motif: 'HORS_SERVICE' };
+  if (!l.appli_active) return { ok: false, motif: 'APPLI_FERMEE' };
   return { ok: true };
 }
 
@@ -107,27 +184,45 @@ export function peutRecevoirOffre(l: EtatLivreur, maintenant: Date): DecisionOff
  * d'équivalence (disponibilite.rules.spec.ts) casse sinon.
  *
  * Bornes : la pause est active quand sa fin est STRICTEMENT future, donc le
- * livreur redevient candidat dès `pause_until <= maintenant` (`lte`).
+ * livreur redevient candidat dès `pause_until <= maintenant` (`lte`) ; l'appli
+ * est active avec un signe de vie de MOINS de N secondes, donc postérieur à
+ * `maintenant - N` (`gt`).
+ *
+ * @param appli  Réglage et sockets ouverts (`AppliLivreurService`) : les
+ *   livreurs au signe de vie trop vieux ne passent que par leur socket.
  */
-export function filtreLivreursPouvantRecevoirOffre(maintenant: Date): Prisma.DelivererWhereInput {
+export function filtreLivreursPouvantRecevoirOffre(
+  maintenant: Date,
+  appli: ContexteAppli,
+): Prisma.DelivererWhereInput {
+  const conditions: Prisma.DelivererWhereInput[] = [
+    { OR: [{ pause_until: null }, { pause_until: { lte: maintenant } }] },
+    { OR: [{ auto_pause_until: null }, { auto_pause_until: { lte: maintenant } }] },
+    { courses: { none: { statut: { in: STATUTS_COURSE_EN_COURS } } } },
+    { offer_attempts: { none: { status: CourseOfferStatus.PENDING } } },
+  ];
+  if (appli.appliFermeeApresS > 0) {
+    const connectes = [...(appli.connectes ?? [])];
+    conditions.push({
+      OR: [
+        { dernier_signal_at: { gt: new Date(maintenant.getTime() - appli.appliFermeeApresS * 1000) } },
+        ...(connectes.length > 0 ? [{ id: { in: connectes } }] : []),
+      ],
+    });
+  }
   return {
     status: DelivererStatus.ACTIVE,
     is_operational: true,
     entity_status: EntityStatus.ACTIVE,
     last_available_at: { not: null },
-    AND: [
-      { OR: [{ pause_until: null }, { pause_until: { lte: maintenant } }] },
-      { OR: [{ auto_pause_until: null }, { auto_pause_until: { lte: maintenant } }] },
-      { courses: { none: { statut: { in: STATUTS_COURSE_EN_COURS } } } },
-      { offer_attempts: { none: { status: CourseOfferStatus.PENDING } } },
-    ],
+    AND: conditions,
   };
 }
 
 /**
  * Lecture de l'état d'UN livreur (affectation forcée, acceptation, relances) :
  * `prisma.deliverer.findUnique({ where: { id }, select: SELECT_ETAT_LIVREUR })`
- * puis `etatLivreurDepuis(ligne)`.
+ * puis `etatLivreurDepuis(ligne, appli, maintenant)`.
  */
 export const SELECT_ETAT_LIVREUR = {
   id: true,
@@ -138,6 +233,7 @@ export const SELECT_ETAT_LIVREUR = {
   pause_until: true,
   auto_pause_until: true,
   last_available_at: true,
+  dernier_signal_at: true,
   _count: {
     select: {
       courses: { where: { statut: { in: STATUTS_COURSE_EN_COURS } } },
@@ -148,7 +244,11 @@ export const SELECT_ETAT_LIVREUR = {
 
 export type LigneEtatLivreur = Prisma.DelivererGetPayload<{ select: typeof SELECT_ETAT_LIVREUR }>;
 
-export function etatLivreurDepuis(ligne: LigneEtatLivreur): EtatLivreur {
+export function etatLivreurDepuis(
+  ligne: LigneEtatLivreur,
+  appli: ContexteAppli,
+  maintenant: Date,
+): EtatLivreur {
   return {
     status: ligne.status,
     is_operational: ligne.is_operational,
@@ -158,6 +258,8 @@ export function etatLivreurDepuis(ligne: LigneEtatLivreur): EtatLivreur {
     last_available_at: ligne.last_available_at,
     en_course: ligne._count.courses > 0,
     offre_en_attente: ligne._count.offer_attempts > 0,
+    appli_active: appliActiveDepuis(ligne, appli, maintenant),
+    appli_vue_a: ligne.dernier_signal_at,
   };
 }
 
@@ -218,6 +320,13 @@ export interface DisponibiliteLivreur {
   offre_en_attente: boolean;
   /** Course de l'offre en attente : l'affectation forcée sur CETTE course reste permise (renvoi). */
   offre_course_id: string | null;
+  /**
+   * Appli active : socket ouvert ou signe de vie récent. Faux : « Appli
+   * fermée », plus aucune offre jusqu'à sa réouverture.
+   */
+  appli_active: boolean;
+  /** Dernier signe de vie de l'appli (position ou requête), null si jamais vu. */
+  appli_vue_a: Date | null;
 }
 
 const LIBELLES: Record<EtatAffichageLivreur, string> = {
@@ -228,6 +337,7 @@ const LIBELLES: Record<EtatAffichageLivreur, string> = {
   EN_COURSE: 'En course',
   OFFRE_EN_ATTENTE: 'Offre en attente',
   HORS_SERVICE: 'Hors service',
+  APPLI_FERMEE: 'Appli fermée',
 };
 
 /**
@@ -257,6 +367,8 @@ export function disponibiliteLivreur(
     en_course: l.en_course,
     offre_en_attente: l.offre_en_attente,
     offre_course_id: l.offre_en_attente ? offreCourseId : null,
+    appli_active: l.appli_active,
+    appli_vue_a: l.appli_vue_a ?? null,
   };
 }
 
@@ -282,5 +394,7 @@ export function messageRefusOffre(
       return 'Ce livreur a déjà une offre en attente de réponse.';
     case 'HORS_SERVICE':
       return "Ce livreur est hors service : il n'a pas repris le travail dans l'appli.";
+    case 'APPLI_FERMEE':
+      return "L'appli de ce livreur est fermée.";
   }
 }

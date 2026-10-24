@@ -19,6 +19,12 @@ export type MotifClotureOffre =
   | 'LIVREUR_HORS_SERVICE'
   /** Le livreur ne peut plus recevoir d'offre (règle `peutRecevoirOffre`), vu à une relance. */
   | 'LIVREUR_INDISPONIBLE'
+  /**
+   * L'appli du livreur est fermée (ni socket ni signe de vie depuis
+   * `deliverer.appli_fermee_apres_s`) : offre close par la tâche des
+   * relances, ou à son échéance, sans pénalité ni exclusion de la course.
+   */
+  | 'APPLI_FERMEE'
   /** La course a été fusionnée dans une autre. */
   | 'COURSE_FUSIONNEE'
   /** La course a été confiée à Turbo. */
@@ -66,6 +72,7 @@ export interface OffreExpireePayload {
   /**
    * Offre expirée seulement : faux quand l'expiration n'a rien coûté au livreur
    * (course plus en recherche, livreur en pause). Ni pénalité ni filet alors.
+   * Appli fermée : l'offre n'expire pas, elle est close (`APPLI_FERMEE`).
    */
   penalite?: boolean;
   /** Offre expirée sans pénalité : pourquoi (journal). */

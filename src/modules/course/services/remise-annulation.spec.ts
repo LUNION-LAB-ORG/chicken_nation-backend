@@ -10,7 +10,7 @@
 import { ConflictException } from '@nestjs/common';
 import { CourseStatut, DeliveryStatut, OrderStatus, OrderType } from '@prisma/client';
 
-import { busSimule } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
+import { appliLivreurSimulee, busSimule } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
 
 import { CourseHelper } from '../helpers/course.helper';
 import { RemiseCaisseListener } from '../listeners/remise-caisse.listener';
@@ -38,7 +38,8 @@ function monter(donnees: DonneesDispatch) {
   const { bus } = busSimule();
   const journal = new DispatchJournalService(base.prisma);
   const cloture = new OffresClotureService(base.prisma, bus as never, journal);
-  const garde = new GardeOffresService(base.prisma, cloture, journal);
+  const appli = appliLivreurSimulee(base.prisma);
+  const garde = new GardeOffresService(base.prisma, cloture, journal, appli.service);
   const courseEvent = {
     offerNew: jest.fn(async () => undefined),
     courseStatutChanged: jest.fn(async () => undefined),
@@ -65,6 +66,7 @@ function monter(donnees: DonneesDispatch) {
     {} as never,
     {} as never,
     garde,
+    appli.service,
   );
   const offerNext = jest.spyOn(offres, 'offerNextDeliverer');
   const queryService = { findByActivePickupCode: jest.fn() };

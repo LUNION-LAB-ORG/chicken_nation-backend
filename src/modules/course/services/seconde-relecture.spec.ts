@@ -202,7 +202,14 @@ describe('temps Google des livreurs : un seul appel pour tous ceux dont le temps
       }),
     };
     const reglagesLivreurs = { load: async () => ({ travelTimeRanking: true }) };
-    const s = new InstantanePlanificationService({} as never, {} as never, {} as never, maps as never, reglagesLivreurs as never);
+    const s = new InstantanePlanificationService(
+      {} as never,
+      {} as never,
+      {} as never,
+      maps as never,
+      reglagesLivreurs as never,
+      {} as never,
+    );
     return { s, appels };
   }
   const t = h('12:31');

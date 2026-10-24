@@ -29,7 +29,14 @@ export class DeliverersAdminController {
     private readonly delivererInfoService: DelivererInfoService,
   ) {}
 
-  @ApiOperation({ summary: 'Liste paginée des livreurs avec filtres' })
+  @ApiOperation({
+    summary: 'Liste paginée des livreurs avec filtres',
+    description:
+      'Chaque livreur porte `disponibilite` (état par la règle unique des offres, dont ' +
+      '`APPLI_FERMEE` « Appli fermée »), `appli_connectee` (socket ouvert ; null : inconnu), ' +
+      '`appli_active` (socket ouvert ou signe de vie de moins de `deliverer.appli_fermee_apres_s` ' +
+      'secondes ; vrai sans socket : appli en arrière-plan) et `appli_vue_a` (dernier signe de vie, ISO).',
+  })
   @Get()
   @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async findAll(@Query() query: QueryDeliverersDto) {
@@ -41,7 +48,8 @@ export class DeliverersAdminController {
     description:
       'Retourne les livreurs ACTIVE operationnels avec GPS récent + statut ' +
       'availability + course active éventuelle. Les livreurs sans GPS récent ' +
-      '(> `deliverer.gps_expiration_minutes`) sont exclus par défaut.',
+      '(> `deliverer.gps_expiration_minutes`) sont exclus par défaut. Mêmes champs ' +
+      '`disponibilite`, `appli_connectee`, `appli_active` et `appli_vue_a` que la liste.',
   })
   @Get('live-locations')
   @UserRoles(...ROLES_SUIVI_LIVRAISON)

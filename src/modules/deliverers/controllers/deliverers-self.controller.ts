@@ -146,7 +146,10 @@ export class DeliverersSelfController {
     summary: 'Remonte la position GPS + vitesse + cap du livreur',
     description:
       "Appelé par l'app mobile toutes les `deliverer.gps_update_interval_seconds` " +
-      '(default 60s) quand le livreur est en ligne. Validation de vitesse côté backend.',
+      '(default 60s) quand le livreur est en ligne. Validation de vitesse côté backend. ' +
+      "Chaque position est un signe de vie (`dernier_signal_at`) : envoyée par la tâche " +
+      "d'arrière-plan, elle garde l'appli active (offres reçues) tant qu'elle arrive moins de " +
+      '`deliverer.appli_fermee_apres_s` secondes après la précédente.',
   })
   @ApiBody({ type: UpdateDelivererLocationDto })
   @Post('location')

@@ -12,6 +12,7 @@ import { DelivererScoringSettingsHelper } from './helpers/deliverer-scoring-sett
 import { DelivererListenerService } from './listeners/deliverer.listener.service';
 import { ExpoPushModule } from 'src/expo-push/expo-push.module';
 
+import { AppliLivreurService } from './services/appli-livreur.service';
 import { DelivererAdminNotificationService } from './services/deliverer-admin-notification.service';
 import { DelivererInfoService } from './services/deliverer-info.service';
 import { DelivererPushService } from './services/deliverer-push.service';
@@ -50,6 +51,8 @@ import { DeliverersWebSocketService } from './websockets/deliverers-websocket.se
     // Pause, reprise, file, déconnexion, mise hors service (demande du 22/10).
     DisponibiliteLivreurService,
     DisponibiliteListener,
+    // Appli active ou fermée (demande du 24/10) : contexte de la règle unique, passages au journal.
+    AppliLivreurService,
   ],
   exports: [
     DeliverersService,
@@ -67,6 +70,8 @@ import { DeliverersWebSocketService } from './websockets/deliverers-websocket.se
     DelivererAdminNotificationService,
     // Filet « hors service sans signal », appelé par le module course à l'expiration d'une offre.
     DisponibiliteLivreurService,
+    // Appli fermée : sélection, offres, planificateur et affectation forcée du module course.
+    AppliLivreurService,
   ],
 })
 export class DeliverersModule {}

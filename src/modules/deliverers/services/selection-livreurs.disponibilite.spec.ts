@@ -10,7 +10,7 @@ import { CourseStatut, DeliveryStatut } from '@prisma/client';
 import { CourseOfferService } from 'src/modules/course/services/course-offer.service';
 
 import { FIN_PAUSE_INDEFINIE } from '../helpers/disponibilite.rules';
-import { course, livreur, monterBase, offre } from './base-livreurs.simulee-spec';
+import { appliLivreurSimulee, course, livreur, monterBase, offre } from './base-livreurs.simulee-spec';
 import { DelivererQueueService } from './deliverer-queue.service';
 import { DelivererScoringService } from './deliverer-scoring.service';
 
@@ -67,6 +67,7 @@ describe('sélection automatique des livreurs', () => {
       base.prisma,
       { load: jest.fn(async () => REGLAGES) } as never,
       {} as never,
+      appliLivreurSimulee(base.prisma).service,
     );
 
     const classes = await scoring.rankCandidates({ restaurantId: libre.restaurant_id });
@@ -84,6 +85,7 @@ describe('sélection automatique des livreurs', () => {
       base.prisma,
       { load: jest.fn(async () => REGLAGES) } as never,
       {} as never,
+      appliLivreurSimulee(base.prisma).service,
     );
 
     const meilleur = await scoring.pickBestCandidate({
@@ -116,11 +118,100 @@ describe('sélection automatique des livreurs', () => {
       base.prisma,
       { load: jest.fn(async () => REGLAGES) } as never,
       {} as never,
+      appliLivreurSimulee(base.prisma).service,
     );
 
     expect(await scoring.rankCandidates({ restaurantId: enFinDeCourse.restaurant_id })).toEqual([]);
-    // Une seule lecture : celle des candidats ordinaires, jamais celle du chaînage.
-    expect(base.prisma.deliverer.findMany).toHaveBeenCalledTimes(1);
+    // Deux lectures : les livreurs dont l'appli est à vérifier, puis les
+    // candidats ordinaires ; jamais celle du chaînage (course en livraison).
+    expect(base.prisma.deliverer.findMany).toHaveBeenCalledTimes(2);
+    const lectures = base.prisma.deliverer.findMany.mock.calls.map((a: any[]) => JSON.stringify(a[0].where));
+    expect(lectures.some((w: string) => w.includes('"some"'))).toBe(false);
+  });
+});
+
+describe('appli fermée (demande du 24/10) : la sélection ne propose qu’aux applis actives', () => {
+  const S = 180;
+  const avantS = (s: number) => new Date(MAINTENANT.getTime() - s * 1000);
+
+  function monterSelection(livreurs: Record<string, any>[], options: Parameters<typeof appliLivreurSimulee>[1]) {
+    const base = monterBase({ livreurs });
+    const appli = appliLivreurSimulee(base.prisma, options);
+    const scoring = new DelivererScoringService(
+      base.prisma,
+      { load: jest.fn(async () => REGLAGES) } as never,
+      {} as never,
+      appli.service,
+    );
+    return { base, appli, scoring };
+  }
+
+  it('signe de vie récent (appli en arrière-plan) ou socket ouvert : candidat ; ni l’un ni l’autre : écarté', async () => {
+    const arrierePlan = livreur({ last_available_at: avant(30), dernier_signal_at: avantS(40) });
+    const socketSeul = livreur({ last_available_at: avant(20), dernier_signal_at: avantS(900) });
+    const ferme = livreur({ last_available_at: avant(40), dernier_signal_at: avantS(S) });
+    const jamaisVu = livreur({ last_available_at: avant(50), dernier_signal_at: null });
+    const t = monterSelection([arrierePlan, socketSeul, ferme, jamaisVu], { seuilS: S, connectes: [socketSeul.id] });
+
+    const classes = await t.scoring.rankCandidates({ restaurantId: arrierePlan.restaurant_id });
+
+    expect(classes.map((c) => c.delivererId)).toEqual([arrierePlan.id, socketSeul.id]);
+    // Présence demandée seulement pour ceux dont le signe de vie ne suffit pas.
+    expect(t.appli.gateway.livreursConnectes).toHaveBeenCalledTimes(1);
+    expect([...t.appli.gateway.livreursConnectes.mock.calls[0][0]].sort()).toEqual(
+      [socketSeul.id, ferme.id, jamaisVu.id].sort(),
+    );
+  });
+
+  it('tous les signes de vie récents : aucune question au serveur temps réel', async () => {
+    const a = livreur({ dernier_signal_at: avantS(5) });
+    const b = livreur({ dernier_signal_at: avantS(100) });
+    const t = monterSelection([a, b], { seuilS: S, connectes: [] });
+
+    expect((await t.scoring.rankCandidates({ restaurantId: a.restaurant_id })).map((c) => c.delivererId).sort()).toEqual(
+      [a.id, b.id].sort(),
+    );
+    expect(t.appli.gateway.livreursConnectes).not.toHaveBeenCalled();
+  });
+
+  it('présence inconnue (Redis muet) : jugé sur le seul signe de vie', async () => {
+    const recent = livreur({ dernier_signal_at: avantS(30) });
+    const vieux = livreur({ dernier_signal_at: avantS(600) });
+    const t = monterSelection([recent, vieux], { seuilS: S, connectes: null });
+
+    expect((await t.scoring.rankCandidates({ restaurantId: recent.restaurant_id })).map((c) => c.delivererId)).toEqual([
+      recent.id,
+    ]);
+  });
+
+  it('réglage à 0 : règle coupée, comme avant', async () => {
+    const vieux = livreur({ dernier_signal_at: avantS(6000) });
+    const t = monterSelection([vieux], { seuilS: 0, connectes: [] });
+
+    expect((await t.scoring.pickBestCandidate({ restaurantId: vieux.restaurant_id }))?.delivererId).toBe(vieux.id);
+    expect(t.appli.gateway.livreursConnectes).not.toHaveBeenCalled();
+  });
+
+  it('mode comparatif (ancien algorithme) : même règle, l’appli fermée est écartée', async () => {
+    const ferme = livreur({ last_login_at: new Date('2026-10-22T13:59:00.000Z'), dernier_signal_at: avantS(400) });
+    const actif = livreur({ last_login_at: new Date('2026-10-22T08:00:00.000Z'), dernier_signal_at: avantS(20) });
+    const base = monterBase({ livreurs: [ferme, actif] });
+    const service = new CourseOfferService(
+      base.prisma,
+      {} as never,
+      {} as never,
+      {} as never,
+      { pickBestCandidate: jest.fn(async () => null) } as never,
+      {} as never,
+      { load: jest.fn(async () => ({ scoringShadowMode: true })) } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      appliLivreurSimulee(base.prisma, { seuilS: S, connectes: [] }).service,
+    );
+
+    expect(await (service as any).findBestDeliverer(actif.restaurant_id, [])).toEqual({ id: actif.id, isChainBonus: false });
   });
 });
 
@@ -148,6 +239,7 @@ describe('mode comparatif (ancien algorithme, qui décide en mode observation)',
       {} as never,
       {} as never,
       {} as never,
+      appliLivreurSimulee(base.prisma).service,
     );
 
     const choisi = await (service as any).findBestDeliverer(libre.restaurant_id, []);

@@ -119,6 +119,8 @@ function monterService(existantes: Ligne[], prismaEnPlus: Ligne = {}) {
     {} as never,
     {} as never,
     {} as never,
+    // Appli du livreur : sans objet ici (création de course, code de retrait).
+    {} as never,
   );
   jest.spyOn(service, 'offerNextDeliverer').mockResolvedValue(undefined);
   return { service, helper, prisma, ...base };

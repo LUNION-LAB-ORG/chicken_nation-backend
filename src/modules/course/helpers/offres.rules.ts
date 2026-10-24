@@ -87,7 +87,7 @@ export function decisionCreationOffre(
 // ============================================================
 
 /** Pourquoi une offre expirée ne coûte rien au livreur. */
-export type RaisonExpirationSansPenalite = 'COURSE_PLUS_EN_RECHERCHE' | 'LIVREUR_EN_PAUSE';
+export type RaisonExpirationSansPenalite = 'COURSE_PLUS_EN_RECHERCHE' | 'LIVREUR_EN_PAUSE' | 'APPLI_FERMEE';
 
 export type DecisionExpiration =
   | { penaliser: true }
@@ -99,11 +99,14 @@ export type DecisionExpiration =
  *  - si la course ne cherche plus de livreur (acceptée par un autre,
  *    fusionnée, annulée, confiée à Turbo) : l'offre avait disparu ;
  *  - si le livreur s'est mis en pause entre-temps (pause manuelle ou
- *    automatique) : sa pause aurait dû clore l'offre.
+ *    automatique) : sa pause aurait dû clore l'offre ;
+ *  - si l'appli du livreur est fermée (demande du 24/10) : il n'a pas pu la
+ *    voir. L'offre est alors close (`APPLI_FERMEE`), pas expirée : elle ne
+ *    l'exclut pas non plus de la course.
  */
 export function decisionExpiration(
   course: EtatCourse | null | undefined,
-  livreur: Pick<EtatLivreur, 'pause_until' | 'auto_pause_until'> | null | undefined,
+  livreur: Pick<EtatLivreur, 'pause_until' | 'auto_pause_until' | 'appli_active'> | null | undefined,
   maintenant: Date,
 ): DecisionExpiration {
   if (!courseChercheLivreur(course)) return { penaliser: false, raison: 'COURSE_PLUS_EN_RECHERCHE' };
@@ -112,6 +115,7 @@ export function decisionExpiration(
     ((livreur.pause_until !== null && livreur.pause_until.getTime() > maintenant.getTime()) ||
       (livreur.auto_pause_until !== null && livreur.auto_pause_until.getTime() > maintenant.getTime()));
   if (enPause) return { penaliser: false, raison: 'LIVREUR_EN_PAUSE' };
+  if (livreur && !livreur.appli_active) return { penaliser: false, raison: 'APPLI_FERMEE' };
   return { penaliser: true };
 }
 
@@ -124,8 +128,8 @@ export type DecisionRelance =
   | {
       relancer: false;
       /** Motif de clôture de l'offre (OffresClotureService). */
-      motif: 'COURSE_PLUS_EN_RECHERCHE' | 'LIVREUR_INDISPONIBLE';
-      /** Pour `LIVREUR_INDISPONIBLE` : ce que dit la règle du livreur. */
+      motif: 'COURSE_PLUS_EN_RECHERCHE' | 'LIVREUR_INDISPONIBLE' | 'APPLI_FERMEE';
+      /** Pour `LIVREUR_INDISPONIBLE` et `APPLI_FERMEE` : ce que dit la règle du livreur. */
       motif_livreur?: MotifRefusOffre;
     };
 
@@ -135,7 +139,8 @@ export type DecisionRelance =
  * (sans pénalité) et la recherche repart.
  *
  * L'offre relancée est elle-même « en attente » : elle ne compte pas contre
- * son livreur (`offre_en_attente` ignoré).
+ * son livreur (`offre_en_attente` ignoré). Appli fermée : motif de clôture
+ * `APPLI_FERMEE`.
  */
 export function decisionRelance(
   course: EtatCourse | null | undefined,
@@ -145,7 +150,13 @@ export function decisionRelance(
   if (!courseChercheLivreur(course)) return { relancer: false, motif: 'COURSE_PLUS_EN_RECHERCHE' };
   if (!livreur) return { relancer: false, motif: 'LIVREUR_INDISPONIBLE', motif_livreur: 'INACTIF' };
   const d = peutRecevoirOffre({ ...livreur, offre_en_attente: false }, maintenant);
-  if (!d.ok) return { relancer: false, motif: 'LIVREUR_INDISPONIBLE', motif_livreur: d.motif };
+  if (!d.ok) {
+    return {
+      relancer: false,
+      motif: d.motif === 'APPLI_FERMEE' ? 'APPLI_FERMEE' : 'LIVREUR_INDISPONIBLE',
+      motif_livreur: d.motif,
+    };
+  }
   return { relancer: true };
 }
 
@@ -191,7 +202,8 @@ export type DecisionAcceptation =
 /**
  * Le livreur peut-il prendre la course qu'il accepte ? La règle unique, sauf :
  *  - l'offre acceptée ne compte pas contre lui ;
- *  - « hors service » est toléré : il est là, il vient de répondre.
+ *  - « hors service » et « appli fermée » sont tolérés : il est là, son
+ *    appli vient de répondre.
  * Message au livreur (tutoiement, comme l'appli).
  */
 export function decisionAcceptation(livreur: EtatLivreur, maintenant: Date): DecisionAcceptation {
@@ -200,6 +212,7 @@ export function decisionAcceptation(livreur: EtatLivreur, maintenant: Date): Dec
       ...livreur,
       offre_en_attente: false,
       last_available_at: livreur.last_available_at ?? maintenant,
+      appli_active: true,
     },
     maintenant,
   );

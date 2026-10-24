@@ -24,9 +24,11 @@ import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer
 import { DelivererScoringService } from 'src/modules/deliverers/services/deliverer-scoring.service';
 import {
   SELECT_ETAT_LIVREUR,
+  appliActiveDepuis,
   etatLivreurDepuis,
   filtreLivreursPouvantRecevoirOffre,
 } from 'src/modules/deliverers/helpers/disponibilite.rules';
+import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 
 import { CourseEvent } from '../events/course.event';
 import { CourseHelper } from '../helpers/course.helper';
@@ -73,6 +75,8 @@ export class CourseOfferService {
     private readonly turboService: TurboService,
     // Règle unique des offres (relances, clôture avant Turbo) : garde-offres.service.ts.
     private readonly garde: GardeOffresService,
+    // Appli active ou fermée (demande du 24/10) : contexte de la règle unique.
+    private readonly appliLivreur: AppliLivreurService,
   ) {}
 
   /**
@@ -309,9 +313,11 @@ export class CourseOfferService {
    * Même règle que la sélection : `peutRecevoirOffre` (disponibilite.rules.ts).
    */
   private async findBestDelivererLegacy(restaurantId: string, excludedIds: string[]) {
+    const maintenant = new Date();
+    const appli = await this.appliLivreur.contexteSelection(restaurantId, maintenant);
     return this.prisma.deliverer.findFirst({
       where: {
-        ...filtreLivreursPouvantRecevoirOffre(new Date()),
+        ...filtreLivreursPouvantRecevoirOffre(maintenant, appli),
         restaurant_id: restaurantId,
         id: { notIn: excludedIds },
       },
@@ -347,6 +353,9 @@ export class CourseOfferService {
   ): Promise<boolean> {
     const { offerDurationSeconds } = await this.settings.load();
     const expiresAt = new Date(Date.now() + offerDurationSeconds * 1000);
+    // Appli du livreur (socket, signe de vie) : lue avant la transaction, la
+    // présence ne se demande pas sous le verrou.
+    const appli = await this.appliLivreur.contextePour([delivererId]);
 
     let course;
     let wasExisting = false;
@@ -370,7 +379,8 @@ export class CourseOfferService {
           select: { id: true },
         });
         const ligne = await tx.deliverer.findUnique({ where: { id: delivererId }, select: SELECT_ETAT_LIVREUR });
-        const decision = decisionCreationOffre(ligne && etatLivreurDepuis(ligne), !!autreOffre, new Date(), isChainBonus);
+        const lu = new Date();
+        const decision = decisionCreationOffre(ligne && etatLivreurDepuis(ligne, appli, lu), !!autreOffre, lu, isChainBonus);
         if (!decision.ok) {
           this.logger.warn(
             `offerToDeliverer SKIP : le livreur ${delivererId.slice(0, 8)} ne peut pas recevoir d'offre (${decision.motif})`,
@@ -475,6 +485,9 @@ export class CourseOfferService {
    * Chaque offre est RÉSERVÉE atomiquement (deux serveurs : une pénalité
    * jamais doublée). Pas de pénalité si la course ne cherche plus de livreur
    * ou si le livreur s'est mis en pause entre-temps (`decisionExpiration`).
+   * Appli du livreur fermée : l'offre n'expire pas, elle est close
+   * (`APPLI_FERMEE`) : ni pénalité, ni exclusion de la course, ni filet hors
+   * service, et la recherche repart.
    */
   async expirePendingOffers(): Promise<number> {
     const now = new Date();
@@ -485,15 +498,32 @@ export class CourseOfferService {
         course_id: true,
         deliverer_id: true,
         course: { select: { statut: true, turbo_escalated_at: true } },
-        deliverer: { select: { pause_until: true, auto_pause_until: true } },
+        deliverer: { select: { pause_until: true, auto_pause_until: true, dernier_signal_at: true } },
       },
     });
 
     if (expired.length === 0) return 0;
 
+    const presence = (e: (typeof expired)[number]) => ({
+      id: e.deliverer_id,
+      dernier_signal_at: e.deliverer?.dernier_signal_at ?? null,
+    });
+    const appli = await this.appliLivreur.contexte(expired.map(presence), now);
+
     let traitees = 0;
     const aRelancer = new Set<string>();
     for (const e of expired) {
+      const decision = decisionExpiration(
+        e.course,
+        e.deliverer && { ...e.deliverer, appli_active: appliActiveDepuis(presence(e), appli, now) },
+        now,
+      );
+      if (!decision.penaliser && decision.raison === 'APPLI_FERMEE') {
+        // Close, pas expirée : l'appli était fermée, il n'a pas pu la voir.
+        if (await this.garde.cloreOffreAppliFermee(e.id, now, { echue: true })) traitees++;
+        continue;
+      }
+
       const reservee = await this.prisma.courseOfferAttempt.updateMany({
         where: { id: e.id, status: CourseOfferStatus.PENDING },
         data: { status: CourseOfferStatus.EXPIRED, responded_at: now },
@@ -503,7 +533,6 @@ export class CourseOfferService {
 
       // P5 : pénalité queue (refus silencieux) + refus compté sur la course.
       // Les erreurs sur un livreur ne bloquent pas le traitement des autres.
-      const decision = decisionExpiration(e.course, e.deliverer, now);
       if (decision.penaliser) {
         try {
           await this.queueService.onOfferExpired(e.deliverer_id);
@@ -553,6 +582,10 @@ export class CourseOfferService {
    * Idempotent et sûr à deux backends : le compteur `reminders_sent` est
    * incrémenté par un claim atomique (conditionné sur sa valeur précédente),
    * donc une relance ne part JAMAIS deux fois.
+   *
+   * À chaque passage, l'offre d'un livreur dont l'appli est fermée (demande
+   * du 24/10) est close sans pénalité et la recherche repart, sans attendre
+   * l'échéance de l'offre.
    */
   async remindPendingOffers(): Promise<number> {
     const now = new Date();
@@ -576,12 +609,25 @@ export class CourseOfferService {
         course: {
           select: { id: true, reference: true, restaurant_id: true, restaurant: { select: { name: true } } },
         },
+        deliverer: { select: { dernier_signal_at: true } },
       },
       take: 100, // garde-fou
     });
+    if (offers.length === 0) return 0;
+
+    // Appli fermée : l'offre est close, la course repart vers un autre livreur.
+    const presence = (o: (typeof offers)[number]) => ({
+      id: o.deliverer_id,
+      dernier_signal_at: o.deliverer?.dernier_signal_at ?? null,
+    });
+    const appli = await this.appliLivreur.contexte(offers.map(presence), now);
 
     let sent = 0;
     for (const offer of offers) {
+      if (!appliActiveDepuis(presence(offer), appli, now)) {
+        await this.garde.cloreOffreAppliFermee(offer.id, now);
+        continue;
+      }
       const ecoule = (now.getTime() - offer.offered_at.getTime()) / 1000;
       const dureeS = (offer.expires_at.getTime() - offer.offered_at.getTime()) / 1000;
       const dus = paliers(offer.course.restaurant_id, dureeS).filter((p) => ecoule >= p).length;

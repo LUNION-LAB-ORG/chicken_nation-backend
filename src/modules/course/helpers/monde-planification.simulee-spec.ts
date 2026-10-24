@@ -165,6 +165,7 @@ export function livr(id: string, maintenant: Date, o: OptionsLivreur = {}): Livr
       last_available_at: plus(maintenant, -600),
       en_course: false,
       offre_en_attente: false,
+      appli_active: true,
       ...etat,
     },
     position,
@@ -502,6 +503,8 @@ export class Monde {
       last_available_at: l.last_available_at,
       en_course: enCourse,
       offre_en_attente: [...this.courses.values()].some((k) => k.offre?.deliverer_id === l.id),
+      // Le monde simulé ne ferme jamais l'appli d'un livreur.
+      appli_active: true,
     };
   }
 

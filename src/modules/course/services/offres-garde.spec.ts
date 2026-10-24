@@ -16,7 +16,7 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { CourseOfferStatus, CourseStatut, OrderStatus } from '@prisma/client';
 
-import { busSimule } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
+import { appliLivreurSimulee, busSimule } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
 import {
   FIN_PAUSE_INDEFINIE,
   filtreLivreursPouvantRecevoirOffre,
@@ -45,12 +45,20 @@ const MAINTENANT = new Date('2026-10-22T14:00:00.000Z');
 const avant = (s: number) => new Date(MAINTENANT.getTime() - s * 1000);
 const apres = (s: number) => new Date(MAINTENANT.getTime() + s * 1000);
 
-function monter(donnees: DonneesDispatch, options: { turbo?: { sentOrderIds: string[]; uncertain?: boolean } } = {}) {
+function monter(
+  donnees: DonneesDispatch,
+  options: {
+    turbo?: { sentOrderIds: string[]; uncertain?: boolean };
+    /** Appli des livreurs (24/10) : défaut, toutes actives (socket ouvert). */
+    appli?: Parameters<typeof appliLivreurSimulee>[1];
+  } = {},
+) {
   const base = monterBaseDispatch(donnees);
   const { bus, emis } = busSimule();
   const journal = new DispatchJournalService(base.prisma);
   const cloture = new OffresClotureService(base.prisma, bus as never, journal);
-  const garde = new GardeOffresService(base.prisma, cloture, journal);
+  const appli = appliLivreurSimulee(base.prisma, options.appli);
+  const garde = new GardeOffresService(base.prisma, cloture, journal, appli.service);
 
   const courseEvent = {
     offerNew: jest.fn(async () => undefined),
@@ -76,9 +84,11 @@ function monter(donnees: DonneesDispatch, options: { turbo?: { sentOrderIds: str
   };
   // Sélection : la VRAIE règle (filtre Prisma), dans l'ordre de la file.
   const scoring = {
-    pickBestCandidate: jest.fn(async ({ excludeIds }: { excludeIds: string[] }) => {
+    pickBestCandidate: jest.fn(async ({ restaurantId, excludeIds }: { restaurantId: string; excludeIds: string[] }) => {
+      const maintenant = new Date();
+      const contexte = await appli.service.contexteSelection(restaurantId, maintenant);
       const choisi = await base.prisma.deliverer.findFirst({
-        where: { ...filtreLivreursPouvantRecevoirOffre(new Date()), id: { notIn: excludeIds } },
+        where: { ...filtreLivreursPouvantRecevoirOffre(maintenant, contexte), id: { notIn: excludeIds } },
         orderBy: { last_available_at: 'asc' },
         select: { id: true },
       });
@@ -121,6 +131,7 @@ function monter(donnees: DonneesDispatch, options: { turbo?: { sentOrderIds: str
       cloche as never,
       turbo as never,
       garde,
+      appli.service,
     );
   const serviceOffres = nouveauServiceOffres();
   const actions = new CourseActionService(
@@ -136,7 +147,15 @@ function monter(donnees: DonneesDispatch, options: { turbo?: { sentOrderIds: str
   );
   // Présence de l'appli du livreur (socket ouvert), lue par l'affectation forcée.
   const presence = { livreurConnecte: jest.fn(async (): Promise<boolean | null> => true) };
-  const admin = new CourseAdminController({} as never, actions, serviceOffres, garde, presence as never, settings as never);
+  const admin = new CourseAdminController(
+    {} as never,
+    actions,
+    serviceOffres,
+    garde,
+    presence as never,
+    settings as never,
+    appli.service,
+  );
   const types = () => base.journal.map((l) => l.type);
   const relances = () =>
     emis.filter((e) => e.canal === DispatchEvenements.RECHERCHE_A_RELANCER).map((e) => e.charge.course_id);
@@ -160,6 +179,7 @@ function monter(donnees: DonneesDispatch, options: { turbo?: { sentOrderIds: str
     types,
     relances,
     fermetures,
+    appli,
   };
 }
 
@@ -392,6 +412,7 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
       success: true,
       message: 'Offre envoyée au livreur.',
       appli_connectee: true,
+      appli_active: true,
     });
 
     expect(offreAutre.status).toBe(CourseOfferStatus.CANCELLED);
@@ -418,6 +439,7 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
       success: true,
       message: 'Offre renvoyée au livreur.',
       appli_connectee: true,
+      appli_active: true,
     });
     expect(t.offres).toHaveLength(1);
     expect(t.courseEvent.offerNew).toHaveBeenCalledWith(
@@ -425,18 +447,17 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
     );
   });
 
-  it('appli du livreur sans socket : l’offre part quand même, l’admin sait qu’elle n’arrivera que par notification', async () => {
-    const d = livreur();
+  it('appli en arrière-plan (sans socket, positions récentes) : l’offre part par notification, rien à demander au livreur', async () => {
+    const d = livreur({ dernier_signal_at: avant(30) });
     const c = course();
-    const t = monter({ livreurs: [d], courses: [c] });
+    const t = monter({ livreurs: [d], courses: [c] }, { appli: { connectes: [] } });
     t.presence.livreurConnecte.mockResolvedValue(false);
 
     expect(await forcer(t, c.id, d.id)).toEqual({
       success: true,
-      message:
-        "Offre envoyée par notification seulement : l'appli du livreur n'est pas connectée en temps réel. " +
-        "Demandez-lui de rouvrir l'appli.",
+      message: "Offre envoyée par notification : l'appli du livreur est en arrière-plan.",
       appli_connectee: false,
+      appli_active: true,
     });
     expect(t.presence.livreurConnecte).toHaveBeenCalledWith(d.id);
     expect(t.offres.filter((o) => o.deliverer_id === d.id)).toHaveLength(1);
@@ -453,7 +474,78 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
       success: true,
       message: 'Offre envoyée au livreur.',
       appli_connectee: null,
+      appli_active: true,
     });
+  });
+
+  it('règle de l’appli coupée (réglage à 0), sans socket : l’ancien message, l’appli est peut-être fermée', async () => {
+    const d = livreur();
+    const c = course();
+    const t = monter({ livreurs: [d], courses: [c] }, { appli: { seuilS: 0, connectes: [] } });
+    t.presence.livreurConnecte.mockResolvedValue(false);
+
+    expect(await forcer(t, c.id, d.id)).toMatchObject({
+      success: true,
+      message:
+        "Offre envoyée par notification seulement : l'appli du livreur n'est pas connectée en temps réel. " +
+        "Demandez-lui de rouvrir l'appli.",
+      appli_connectee: false,
+    });
+  });
+
+  it('appli FERMÉE (24/10) : 409 « L’appli de ce livreur est fermée. », journal avec le dernier signe de vie, aucune offre', async () => {
+    const d = livreur({ dernier_signal_at: avant(600) });
+    const autre = livreur();
+    const c = course({ offer_expires_at: apres(30) });
+    const offreAutre = offre({ course_id: c.id, deliverer_id: autre.id, expires_at: apres(30) });
+    const t = monter({ livreurs: [d, autre], courses: [c], offres: [offreAutre] }, { appli: { connectes: [autre.id] } });
+
+    expect(await refus(forcer(t, c.id, d.id))).toEqual({
+      classe: ConflictException,
+      message: "L'appli de ce livreur est fermée.",
+    });
+    expect(t.offres.filter((o) => o.deliverer_id === d.id)).toHaveLength(0);
+    // Refusée avant toute clôture : l'offre de l'autre livreur reste en attente.
+    expect(offreAutre.status).toBe(CourseOfferStatus.PENDING);
+    expect(t.courseEvent.offerNew).not.toHaveBeenCalled();
+    expect(t.journal).toEqual([
+      expect.objectContaining({
+        type: 'AFFECTATION_FORCEE_REFUSEE',
+        motif: 'APPLI_FERMEE',
+        source: 'admin',
+        deliverer_id: d.id,
+        details: expect.objectContaining({ appli_vue_a: avant(600).toISOString() }),
+      }),
+    ]);
+  });
+
+  it('renvoi de l’offre de CETTE course à une appli fermée : 409 aussi', async () => {
+    const d = livreur({ dernier_signal_at: null });
+    const c = course({ offer_expires_at: apres(40) });
+    const t = monter(
+      { livreurs: [d], courses: [c], offres: [offre({ course_id: c.id, deliverer_id: d.id, expires_at: apres(40) })] },
+      { appli: { connectes: [] } },
+    );
+
+    expect((await refus(forcer(t, c.id, d.id))).message).toBe("L'appli de ce livreur est fermée.");
+  });
+
+  it('appli fermée entre le contrôle et l’écriture de l’offre : rien n’est écrit, 409 « Réessayez »', async () => {
+    const d = livreur({ dernier_signal_at: avant(30) });
+    const c = course();
+    const t = monter({ livreurs: [d], courses: [c] }, { appli: { connectes: [] } });
+    // Le contrôle voit l'appli active ; juste après, elle se tait depuis 10 min.
+    const verifier = t.garde.verifierAffectationForcee.bind(t.garde);
+    jest.spyOn(t.garde, 'verifierAffectationForcee').mockImplementation(async (...args) => {
+      const r = await verifier(...args);
+      d.dernier_signal_at = avant(600);
+      return r;
+    });
+
+    expect((await refus(forcer(t, c.id, d.id))).message).toBe(
+      "L'offre n'a pas pu être envoyée : la course ou le livreur vient de changer. Réessayez.",
+    );
+    expect(t.offres).toHaveLength(0);
   });
 });
 
@@ -768,5 +860,166 @@ describe('bascule manuelle vers Turbo (PATCH /courses/:id/turbo)', () => {
     expect(o.status).toBe(CourseOfferStatus.CANCELLED);
     const nouvelle = t.offres.find((x) => x.status === CourseOfferStatus.PENDING);
     expect(nouvelle?.deliverer_id).toBe(d.id);
+  });
+});
+
+// ============================================================
+// APPLI FERMÉE (demande du 24/10)
+// ============================================================
+
+/**
+ * « C'est lorsqu'il ferme la fenêtre que ça ne doit pas passer » : une appli
+ * sans socket ni signe de vie depuis 180 s ne reçoit plus rien, sans pause ni
+ * pénalité ; en arrière-plan (positions récentes) elle reste servie.
+ */
+describe('appli fermée (24/10) : plus rien ne passe, sans pause ni pénalité', () => {
+  const FERMEE = { dernier_signal_at: avant(600) };
+  const ARRIERE_PLAN = { dernier_signal_at: avant(30) };
+
+  it('tâche des relances : l’offre d’une appli fermée est close tout de suite (APPLI_FERMEE), la recherche repart', async () => {
+    const d = livreur(FERMEE);
+    const c = course({ offer_expires_at: apres(115) });
+    const o = offre({ course_id: c.id, deliverer_id: d.id, offered_at: avant(5), expires_at: apres(115) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [o] }, { appli: { connectes: [] } });
+
+    expect(await t.serviceOffres.remindPendingOffers()).toBe(0);
+
+    expect(o.status).toBe(CourseOfferStatus.CANCELLED);
+    expect(c.offer_expires_at).toBeNull();
+    expect(t.push.notifyCourseOfferReminder).not.toHaveBeenCalled();
+    expect(t.fermetures()).toEqual([{ course_id: c.id, deliverer_id: d.id, motif: 'APPLI_FERMEE' }]);
+    expect(t.relances()).toEqual([c.id]);
+    expect(t.journal).toEqual([expect.objectContaining({ type: 'OFFRE_CLOSE', motif: 'APPLI_FERMEE', deliverer_id: d.id })]);
+    // Ni pénalité, ni refus compté, ni pause : il reste en service, à sa place.
+    expect(t.queue.onOfferExpired).not.toHaveBeenCalled();
+    expect(c.refusal_count).toBe(0);
+    expect(d.pause_until).toBeNull();
+    expect(d.last_available_at).not.toBeNull();
+  });
+
+  it('tâche des relances : appli en arrière-plan (positions récentes, sans socket) ou socket ouvert : offre gardée et relancée', async () => {
+    const arrierePlan = livreur(ARRIERE_PLAN);
+    const socket = livreur({ dernier_signal_at: avant(900) });
+    const c1 = course();
+    const c2 = course();
+    const o1 = offre({ course_id: c1.id, deliverer_id: arrierePlan.id, offered_at: avant(35), expires_at: apres(85) });
+    const o2 = offre({ course_id: c2.id, deliverer_id: socket.id, offered_at: avant(35), expires_at: apres(85) });
+    const t = monter(
+      { livreurs: [arrierePlan, socket], courses: [c1, c2], offres: [o1, o2] },
+      { appli: { connectes: [socket.id] } },
+    );
+
+    expect(await t.serviceOffres.remindPendingOffers()).toBe(2);
+
+    expect([o1.status, o2.status]).toEqual([CourseOfferStatus.PENDING, CourseOfferStatus.PENDING]);
+    expect(t.push.notifyCourseOfferReminder).toHaveBeenCalledTimes(2);
+    // Présence demandée au serveur temps réel pour le seul signe de vie trop
+    // vieux (passage de la tâche, puis contrôle de la relance), jamais pour
+    // l'appli en arrière-plan.
+    const demandes = t.appli.gateway.livreursConnectes.mock.calls.map((a) => [...a[0]]);
+    expect(demandes.length).toBeGreaterThan(0);
+    expect(demandes.every((ids) => ids.length === 1 && ids[0] === socket.id)).toBe(true);
+  });
+
+  it('échéance d’une offre d’appli fermée : close (pas expirée), ni pénalité, ni refus, ni filet ; il reste candidat à sa réouverture', async () => {
+    const d = livreur(FERMEE);
+    const c = course({ offer_expires_at: avant(1) });
+    const o = offre({ course_id: c.id, deliverer_id: d.id, expires_at: avant(1) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [o] }, { appli: { connectes: [] } });
+
+    expect(await t.serviceOffres.expirePendingOffers()).toBe(1);
+
+    expect(o.status).toBe(CourseOfferStatus.CANCELLED);
+    expect(t.queue.onOfferExpired).not.toHaveBeenCalled();
+    expect(c.refusal_count).toBe(0);
+    // Pas d'« offre expirée » : le filet hors service n'est jamais appelé.
+    expect(t.courseEvent.offerExpired).not.toHaveBeenCalled();
+    expect(t.fermetures()).toEqual([{ course_id: c.id, deliverer_id: d.id, motif: 'APPLI_FERMEE' }]);
+    expect(t.journal[0]).toMatchObject({ type: 'OFFRE_CLOSE', motif: 'APPLI_FERMEE', details: expect.objectContaining({ echue: true }) });
+    expect(t.relances()).toEqual([c.id]);
+
+    // Il rouvre l'appli (position reçue) : la course peut lui revenir.
+    d.dernier_signal_at = MAINTENANT;
+    await t.serviceOffres.offerNextDeliverer(c.id);
+    expect(t.offres.find((x) => x.status === CourseOfferStatus.PENDING)?.deliverer_id).toBe(d.id);
+  });
+
+  it('échéance d’une offre d’appli en arrière-plan : expirée et pénalisée comme avant', async () => {
+    const d = livreur(ARRIERE_PLAN);
+    const c = course();
+    const o = offre({ course_id: c.id, deliverer_id: d.id, expires_at: avant(1) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [o] }, { appli: { connectes: [] } });
+
+    await t.serviceOffres.expirePendingOffers();
+
+    expect(o.status).toBe(CourseOfferStatus.EXPIRED);
+    expect(t.queue.onOfferExpired).toHaveBeenCalledWith(d.id);
+    expect(c.refusal_count).toBe(1);
+    expect(t.courseEvent.offerExpired).toHaveBeenCalledWith(expect.objectContaining({ motif: 'EXPIREE', penalite: true }));
+  });
+
+  it('recherche d’un livreur : l’appli fermée est sautée, même en tête de file', async () => {
+    const tete = livreur({ ...FERMEE, last_available_at: avant(3600) });
+    const suivant = livreur({ ...ARRIERE_PLAN, last_available_at: avant(60) });
+    const c = course();
+    const t = monter({ livreurs: [tete, suivant], courses: [c] }, { appli: { connectes: [] } });
+
+    await t.serviceOffres.offerNextDeliverer(c.id);
+
+    expect(t.offres.map((o) => o.deliverer_id)).toEqual([suivant.id]);
+    // La tête de file garde sa place (ni pause, ni sortie de la file).
+    expect(tete.last_available_at).toEqual(avant(3600));
+  });
+
+  it('aucune offre écrite pour une appli fermée, quelle qu’en soit la source (planificateur compris)', async () => {
+    const d = livreur(FERMEE);
+    const c = course();
+    const t = monter({ livreurs: [d], courses: [c] }, { appli: { connectes: [] } });
+
+    expect(await t.serviceOffres.offerToDeliverer(c.id, d.id)).toBe(false);
+    expect(t.offres).toHaveLength(0);
+    expect(t.courseEvent.offerNew).not.toHaveBeenCalled();
+    expect(t.push.notifyNewCourseOffer).not.toHaveBeenCalled();
+  });
+
+  it('acceptation d’une offre alors que le serveur croit l’appli fermée : acceptée (son appli vient de répondre)', async () => {
+    const d = livreur(FERMEE);
+    const c = course({ offer_expires_at: apres(60) });
+    const o = offre({ course_id: c.id, deliverer_id: d.id, expires_at: apres(60) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [o] }, { appli: { connectes: [] } });
+
+    const acceptee = await t.actions.acceptOffer(c.id, d.id);
+
+    expect(acceptee.id).toBe(c.id);
+    expect(o.status).toBe(CourseOfferStatus.ACCEPTED);
+    expect(c).toMatchObject({ statut: CourseStatut.ACCEPTED, deliverer_id: d.id });
+  });
+
+  it('relance à 30 s d’une appli qui vient de se fermer : close avec le motif APPLI_FERMEE', async () => {
+    const d = livreur(FERMEE);
+    const c = course({ offer_expires_at: apres(85) });
+    const o = offre({ course_id: c.id, deliverer_id: d.id, offered_at: avant(35), expires_at: apres(85) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [o] }, { appli: { connectes: [] } });
+
+    expect(await t.garde.relanceAutorisee(o.id, MAINTENANT)).toBe(false);
+
+    expect(o.status).toBe(CourseOfferStatus.CANCELLED);
+    expect(t.journal[0]).toMatchObject({
+      type: 'OFFRE_CLOSE',
+      motif: 'APPLI_FERMEE',
+      details: expect.objectContaining({ motif_livreur: 'APPLI_FERMEE' }),
+    });
+    expect(t.relances()).toEqual([c.id]);
+  });
+
+  it('réglage à 0 : règle coupée, l’offre d’une appli silencieuse reste en attente et expire comme avant', async () => {
+    const d = livreur(FERMEE);
+    const c = course();
+    const o = offre({ course_id: c.id, deliverer_id: d.id, offered_at: avant(35), expires_at: apres(85) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [o] }, { appli: { seuilS: 0, connectes: [] } });
+
+    expect(await t.serviceOffres.remindPendingOffers()).toBe(1);
+    expect(o.status).toBe(CourseOfferStatus.PENDING);
+    expect(t.appli.gateway.livreursConnectes).not.toHaveBeenCalled();
   });
 });

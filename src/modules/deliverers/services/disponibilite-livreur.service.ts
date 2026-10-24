@@ -16,6 +16,7 @@ import {
   estEnPauseAuto,
   messagePauseAuto,
 } from '../helpers/disponibilite.rules';
+import { AppliLivreurService } from './appli-livreur.service';
 import { DelivererPushService } from './deliverer-push.service';
 
 /** Au plus un rappel « Tu es en pause » toutes les 30 minutes. */
@@ -61,6 +62,8 @@ export class DisponibiliteLivreurService {
     private readonly settings: DelivererScoringSettingsHelper,
     private readonly cloture: OffresClotureService,
     private readonly journal: DispatchJournalService,
+    // Appli fermée (demande du 24/10) : le filet hors service l'épargne.
+    private readonly appliLivreur: AppliLivreurService,
   ) {}
 
   /**
@@ -227,11 +230,18 @@ export class DisponibiliteLivreurService {
    * « Tu as été mis en pause : touche Reprendre pour recevoir des courses. ».
    * Un absent coûte une offre, plus trois.
    *
+   * Appli simplement FERMÉE (demande du 24/10) : jamais. Elle ne reçoit plus
+   * d'offre et son offre en attente est close sans pénalité ; il redevient
+   * candidat dès qu'il la rouvre. Le filet ne vise que l'appli encore active
+   * (socket ouvert) qui laisse passer une offre sans signe de vie, ou la
+   * règle de l'appli coupée (`deliverer.appli_fermee_apres_s` à 0).
+   *
    * Réservation atomique (deux serveurs) : vrai si CET appel l'a mis hors service.
    */
   async mettreHorsServiceSiSansSignal(delivererId: string, maintenant = new Date()): Promise<boolean> {
     const { horsServiceSansSignalMin } = await this.settings.load();
     if (horsServiceSansSignalMin <= 0) return false;
+    if (!(await this.appliLivreur.estActive(delivererId, maintenant))) return false;
 
     const seuil = new Date(maintenant.getTime() - horsServiceSansSignalMin * 60_000);
     const reserve = await this.prisma.deliverer.updateMany({

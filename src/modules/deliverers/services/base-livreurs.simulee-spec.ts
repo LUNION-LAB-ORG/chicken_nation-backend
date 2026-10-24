@@ -17,6 +17,8 @@
  */
 import { CourseStatut, DelivererStatus, EntityStatus } from '@prisma/client';
 
+import { AppliLivreurService } from './appli-livreur.service';
+
 type Ligne = Record<string, any>;
 
 const egal = (a: unknown, b: unknown) =>
@@ -276,4 +278,31 @@ export function busSimule() {
     }),
   };
   return { bus, emis };
+}
+
+/**
+ * Le VRAI service de l'appli du livreur (AppliLivreurService), branché sur une
+ * base simulée :
+ *  - `seuilS` : réglage `deliverer.appli_fermee_apres_s` (défaut 180, comme en
+ *    production ; 0 coupe la règle) ;
+ *  - `connectes` : sockets ouverts, `'tous'` (défaut : toutes les applis
+ *    actives, pour les tests qui ne visent pas la règle), une liste d'ids, ou
+ *    `null` (présence inconnue, Redis muet).
+ * `gateway.livreursConnectes` note les livreurs dont la présence est demandée.
+ */
+export function appliLivreurSimulee(
+  prisma: any,
+  options: { seuilS?: number; connectes?: 'tous' | string[] | null } = {},
+) {
+  const etat = { seuilS: options.seuilS ?? 180, connectes: options.connectes === undefined ? 'tous' : options.connectes };
+  const gateway = {
+    livreursConnectes: jest.fn(async (ids: readonly string[]): Promise<Set<string> | null> => {
+      if (etat.connectes === null) return null;
+      const ouverts = etat.connectes;
+      return new Set(ids.filter((id) => ouverts === 'tous' || ouverts.includes(id)));
+    }),
+  };
+  const settings = { load: jest.fn(async () => ({ appliFermeeApresS: etat.seuilS })) };
+  const service = new AppliLivreurService(prisma, gateway as never, settings as never);
+  return { service, gateway, settings, etat };
 }

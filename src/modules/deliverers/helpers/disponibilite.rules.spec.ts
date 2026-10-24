@@ -1,6 +1,7 @@
 /**
  * Règle unique : un livreur peut-il recevoir une offre ? (demande du 22/10,
- * « un livreur en pause ne doit pas recevoir de commandes »).
+ * « un livreur en pause ne doit pas recevoir de commandes » ; demande du
+ * 24/10, appli fermée : plus rien ne passe).
  *
  * Le test d'équivalence évalue le filtre Prisma de la sélection sur toutes
  * les combinaisons d'état : une condition oubliée d'un côté ou de l'autre le
@@ -15,11 +16,16 @@ import {
 
 import { evaluer } from '../services/base-livreurs.simulee-spec';
 import {
+  APPLI_FERMEE_APRES_S_DEFAUT,
+  ContexteAppli,
   EtatLivreur,
   FIN_PAUSE_INDEFINIE,
+  SANS_REGLE_APPLI,
   SELECT_ETAT_LIVREUR,
   STATUTS_COURSE_EN_COURS,
+  appliActiveDepuis,
   disponibiliteLivreur,
+  estAppliActive,
   estEnPause,
   estEnPauseAuto,
   etatLivreurDepuis,
@@ -33,6 +39,7 @@ import {
 const MAINTENANT = new Date('2026-10-22T14:00:00.000Z');
 const avant = (min: number) => new Date(MAINTENANT.getTime() - min * 60_000);
 const apres = (min: number) => new Date(MAINTENANT.getTime() + min * 60_000);
+const avantS = (s: number) => new Date(MAINTENANT.getTime() - s * 1000);
 
 const libre = (surcharge: Partial<EtatLivreur> = {}): EtatLivreur => ({
   status: DelivererStatus.ACTIVE,
@@ -43,6 +50,7 @@ const libre = (surcharge: Partial<EtatLivreur> = {}): EtatLivreur => ({
   last_available_at: avant(30),
   en_course: false,
   offre_en_attente: false,
+  appli_active: true,
   ...surcharge,
 });
 
@@ -91,6 +99,28 @@ describe('peutRecevoirOffre', () => {
     ).toEqual({ ok: false, motif: 'EN_COURSE' });
   });
 
+  it('appli fermée (24/10) : non, APPLI_FERMEE', () => {
+    expect(peutRecevoirOffre(libre({ appli_active: false }), MAINTENANT)).toEqual({
+      ok: false,
+      motif: 'APPLI_FERMEE',
+    });
+  });
+
+  it('appli fermée : dite en dernier (pause, pause automatique, course, offre et hors service d’abord)', () => {
+    const ferme = { appli_active: false };
+    const cas: [Partial<EtatLivreur>, string][] = [
+      [{ ...ferme, pause_until: apres(5) }, 'EN_PAUSE'],
+      [{ ...ferme, auto_pause_until: apres(5) }, 'PAUSE_AUTO'],
+      [{ ...ferme, en_course: true }, 'EN_COURSE'],
+      [{ ...ferme, offre_en_attente: true }, 'OFFRE_EN_ATTENTE'],
+      [{ ...ferme, last_available_at: null }, 'HORS_SERVICE'],
+      [{ ...ferme, status: DelivererStatus.SUSPENDED }, 'INACTIF'],
+    ];
+    for (const [surcharge, motif] of cas) {
+      expect(peutRecevoirOffre(libre(surcharge), MAINTENANT)).toEqual({ ok: false, motif });
+    }
+  });
+
   it('offre déjà en attente : non, OFFRE_EN_ATTENTE', () => {
     expect(peutRecevoirOffre(libre({ offre_en_attente: true }), MAINTENANT)).toEqual({
       ok: false,
@@ -127,6 +157,64 @@ describe('peutRecevoirOffre', () => {
   });
 });
 
+describe('appli active ou fermée (demande du 24/10)', () => {
+  const S = APPLI_FERMEE_APRES_S_DEFAUT;
+
+  it('défaut : 180 secondes', () => {
+    expect(S).toBe(180);
+  });
+
+  it('socket ouvert : active, quel que soit le signe de vie', () => {
+    expect(estAppliActive({ socket_connecte: true, dernier_signal_at: null }, MAINTENANT, S)).toBe(true);
+    expect(estAppliActive({ socket_connecte: true, dernier_signal_at: avant(60) }, MAINTENANT, S)).toBe(true);
+  });
+
+  it('sans socket : active avec un signe de vie de MOINS de 180 s (borne exclue)', () => {
+    expect(estAppliActive({ socket_connecte: false, dernier_signal_at: avantS(10) }, MAINTENANT, S)).toBe(true);
+    expect(estAppliActive({ socket_connecte: false, dernier_signal_at: avantS(179.999) }, MAINTENANT, S)).toBe(true);
+    expect(estAppliActive({ socket_connecte: false, dernier_signal_at: avantS(180) }, MAINTENANT, S)).toBe(false);
+    expect(estAppliActive({ socket_connecte: false, dernier_signal_at: avantS(600) }, MAINTENANT, S)).toBe(false);
+    expect(estAppliActive({ socket_connecte: false, dernier_signal_at: null }, MAINTENANT, S)).toBe(false);
+  });
+
+  it('présence inconnue (Redis muet) : jugée sur le seul signe de vie', () => {
+    expect(estAppliActive({ socket_connecte: null, dernier_signal_at: avantS(30) }, MAINTENANT, S)).toBe(true);
+    expect(estAppliActive({ socket_connecte: null, dernier_signal_at: avantS(400) }, MAINTENANT, S)).toBe(false);
+  });
+
+  it('réglage à 0 (règle coupée) : toujours active', () => {
+    expect(estAppliActive({ socket_connecte: false, dernier_signal_at: null }, MAINTENANT, 0)).toBe(true);
+    expect(appliActiveDepuis({ id: 'l', dernier_signal_at: null }, SANS_REGLE_APPLI, MAINTENANT)).toBe(true);
+  });
+
+  it('appliActiveDepuis : le socket se lit dans `connectes`, null = inconnu', () => {
+    const vieux = { id: 'l', dernier_signal_at: avantS(400) };
+    expect(appliActiveDepuis(vieux, { appliFermeeApresS: S, connectes: new Set(['l']) }, MAINTENANT)).toBe(true);
+    expect(appliActiveDepuis(vieux, { appliFermeeApresS: S, connectes: new Set(['autre']) }, MAINTENANT)).toBe(false);
+    expect(appliActiveDepuis(vieux, { appliFermeeApresS: S, connectes: null }, MAINTENANT)).toBe(false);
+  });
+
+  it('etatLivreurDepuis : appli_active et appli_vue_a (dernier signe de vie)', () => {
+    const ligne = {
+      id: 'l',
+      restaurant_id: 'r',
+      status: DelivererStatus.ACTIVE,
+      is_operational: true,
+      entity_status: EntityStatus.ACTIVE,
+      pause_until: null,
+      auto_pause_until: null,
+      last_available_at: avant(30),
+      dernier_signal_at: avantS(200),
+      _count: { courses: 0, offer_attempts: 0 },
+    };
+    const ferme = etatLivreurDepuis(ligne, { appliFermeeApresS: S, connectes: new Set() }, MAINTENANT);
+    expect(ferme).toMatchObject({ appli_active: false, appli_vue_a: avantS(200) });
+    expect(peutRecevoirOffre(ferme, MAINTENANT)).toEqual({ ok: false, motif: 'APPLI_FERMEE' });
+    const enArrierePlan = etatLivreurDepuis({ ...ligne, dernier_signal_at: avantS(20) }, { appliFermeeApresS: S, connectes: new Set() }, MAINTENANT);
+    expect(peutRecevoirOffre(enArrierePlan, MAINTENANT)).toEqual({ ok: true });
+  });
+});
+
 describe('équivalence avec le filtre Prisma de la sélection', () => {
   const dates = [null, avant(5), MAINTENANT, apres(5)];
   const listesCourses: CourseStatut[][] = [
@@ -148,10 +236,35 @@ describe('équivalence avec le filtre Prisma de la sélection', () => {
     [{ status: CourseOfferStatus.ACCEPTED, expires_at: apres(1) }],
   ];
 
-  it('mêmes décisions sur toutes les combinaisons', () => {
-    const filtre = filtreLivreursPouvantRecevoirOffre(MAINTENANT);
-    const filtreCourses = SELECT_ETAT_LIVREUR._count.select.courses.where;
-    const filtreOffres = SELECT_ETAT_LIVREUR._count.select.offer_attempts.where;
+  const filtreCourses = SELECT_ETAT_LIVREUR._count.select.courses.where;
+  const filtreOffres = SELECT_ETAT_LIVREUR._count.select.offer_attempts.where;
+
+  /** Compare la règle et le filtre sur une ligne ; rend la décision de la règle. */
+  function comparer(ligne: Record<string, any>, appli: ContexteAppli, filtre: Record<string, any>) {
+    // L'état de la règle, lu comme le ferait SELECT_ETAT_LIVREUR.
+    const etat = etatLivreurDepuis(
+      {
+        ...(ligne as any),
+        restaurant_id: 'r',
+        _count: {
+          courses: ligne.courses.filter((c: any) => evaluer(c, filtreCourses)).length,
+          offer_attempts: ligne.offer_attempts.filter((o: any) => evaluer(o, filtreOffres)).length,
+        },
+      },
+      appli,
+      MAINTENANT,
+    );
+    const decision = peutRecevoirOffre(etat, MAINTENANT);
+    const prisma = evaluer(ligne, filtre);
+    if (decision.ok !== prisma) {
+      const contexte = { ...appli, connectes: appli.connectes && [...appli.connectes] };
+      throw new Error(`Divergence règle=${decision.ok} filtre=${prisma} pour ${JSON.stringify({ ligne, contexte })}`);
+    }
+    return decision;
+  }
+
+  it('mêmes décisions sur toutes les combinaisons (règle de l’appli coupée)', () => {
+    const filtre = filtreLivreursPouvantRecevoirOffre(MAINTENANT, SANS_REGLE_APPLI);
     let essais = 0;
     let acceptes = 0;
 
@@ -164,41 +277,89 @@ describe('équivalence avec le filtre Prisma de la sélection', () => {
                 for (const statuts of listesCourses)
                   for (const offres of listesOffres) {
                     const ligne = {
+                      id: 'l',
                       status,
                       is_operational,
                       entity_status,
                       pause_until,
                       auto_pause_until,
                       last_available_at,
+                      dernier_signal_at: null,
                       courses: statuts.map((statut) => ({ statut })),
                       offer_attempts: offres,
                     };
-                    // L'état de la règle, lu comme le ferait SELECT_ETAT_LIVREUR.
-                    const etat = etatLivreurDepuis({
-                      ...ligne,
-                      id: 'l',
-                      restaurant_id: 'r',
-                      _count: {
-                        courses: ligne.courses.filter((c) => evaluer(c, filtreCourses)).length,
-                        offer_attempts: ligne.offer_attempts.filter((o) => evaluer(o, filtreOffres))
-                          .length,
-                      },
-                    });
-                    const regle = peutRecevoirOffre(etat, MAINTENANT).ok;
-                    const prisma = evaluer(ligne, filtre);
-                    if (regle !== prisma) {
-                      throw new Error(
-                        `Divergence règle=${regle} filtre=${prisma} pour ${JSON.stringify(ligne)}`,
-                      );
-                    }
                     essais++;
-                    if (regle) acceptes++;
+                    if (comparer(ligne, SANS_REGLE_APPLI, filtre).ok) acceptes++;
                   }
 
     expect(essais).toBe(2 * 2 * 2 * 4 * 4 * 2 * 7 * 6);
     // Garde-fou : le test a bien vu des livreurs acceptés et refusés.
     expect(acceptes).toBeGreaterThan(0);
     expect(acceptes).toBeLessThan(essais);
+  });
+
+  it('appli (24/10) : mêmes décisions pour tout signe de vie, socket et réglage', () => {
+    // Signe de vie absent, récent, juste avant le seuil, pile au seuil, vieux ;
+    // socket ouvert, fermé, présence inconnue ; réglage à 180 s, coupé.
+    const signaux = [null, avantS(10), avantS(179.999), avantS(180), avantS(1800)];
+    const contextes: ContexteAppli[] = [];
+    for (const appliFermeeApresS of [180, 0])
+      for (const connectes of [new Set(['l']), new Set<string>(), null]) contextes.push({ appliFermeeApresS, connectes });
+    const comptes: { status: DelivererStatus; is_operational: boolean }[] = [
+      { status: DelivererStatus.ACTIVE, is_operational: true },
+      { status: DelivererStatus.SUSPENDED, is_operational: true },
+      { status: DelivererStatus.ACTIVE, is_operational: false },
+    ];
+    let essais = 0;
+    let acceptes = 0;
+    let refusesAppliFermee = 0;
+
+    for (const appli of contextes) {
+      const filtre = filtreLivreursPouvantRecevoirOffre(MAINTENANT, appli);
+      for (const compte of comptes)
+        for (const pause_until of dates)
+          for (const auto_pause_until of [null, apres(5)])
+            for (const last_available_at of [null, avant(30)])
+              for (const dernier_signal_at of signaux)
+                for (const statuts of [[], [CourseStatut.ACCEPTED], [CourseStatut.COMPLETED]])
+                  for (const offres of [listesOffres[0], listesOffres[1], listesOffres[3]]) {
+                    const ligne = {
+                      id: 'l',
+                      ...compte,
+                      entity_status: EntityStatus.ACTIVE,
+                      pause_until,
+                      auto_pause_until,
+                      last_available_at,
+                      dernier_signal_at,
+                      courses: statuts.map((statut) => ({ statut })),
+                      offer_attempts: offres,
+                    };
+                    const decision = comparer(ligne, appli, filtre);
+                    essais++;
+                    if (decision.ok) acceptes++;
+                    if (!decision.ok && decision.motif === 'APPLI_FERMEE') refusesAppliFermee++;
+                  }
+    }
+
+    expect(essais).toBe(6 * 3 * 4 * 2 * 2 * 5 * 3 * 3);
+    // Garde-fou : acceptés, refusés, et refusés pour l'appli fermée.
+    expect(acceptes).toBeGreaterThan(0);
+    expect(acceptes).toBeLessThan(essais);
+    expect(refusesAppliFermee).toBeGreaterThan(0);
+  });
+
+  it('réglage coupé : le filtre ne regarde ni le signe de vie ni les sockets', () => {
+    expect(JSON.stringify(filtreLivreursPouvantRecevoirOffre(MAINTENANT, SANS_REGLE_APPLI))).not.toMatch(
+      /dernier_signal_at/,
+    );
+  });
+
+  it('aucun socket connu : pas de liste d’ids vide dans le filtre', () => {
+    const filtre = JSON.stringify(
+      filtreLivreursPouvantRecevoirOffre(MAINTENANT, { appliFermeeApresS: 180, connectes: new Set() }),
+    );
+    expect(filtre).toMatch(/dernier_signal_at/);
+    expect(filtre).not.toMatch(/"in":\[\]/);
   });
 
   it('les courses qui occupent un livreur sont acceptée, au restaurant, en livraison', () => {
@@ -243,6 +404,7 @@ describe('textes', () => {
     expect(messageRefusOffre('HORS_SERVICE', etat, MAINTENANT)).toBe(
       "Ce livreur est hors service : il n'a pas repris le travail dans l'appli.",
     );
+    expect(messageRefusOffre('APPLI_FERMEE', etat, MAINTENANT)).toBe("L'appli de ce livreur est fermée.");
   });
 
   it('« Reprendre » pendant une pause automatique', () => {
@@ -254,7 +416,7 @@ describe('textes', () => {
   it('aucun tiret cadratin dans les textes', () => {
     const etat = { pause_until: apres(5), auto_pause_until: apres(5) };
     const textes = (
-      ['INACTIF', 'EN_PAUSE', 'PAUSE_AUTO', 'EN_COURSE', 'OFFRE_EN_ATTENTE', 'HORS_SERVICE'] as const
+      ['INACTIF', 'EN_PAUSE', 'PAUSE_AUTO', 'EN_COURSE', 'OFFRE_EN_ATTENTE', 'HORS_SERVICE', 'APPLI_FERMEE'] as const
     ).map((m) => messageRefusOffre(m, etat, MAINTENANT));
     textes.push(messagePauseAuto(apres(5), MAINTENANT));
     for (const t of textes) expect(t).not.toMatch(/[—–]/);
@@ -272,6 +434,7 @@ describe('disponibiliteLivreur (affichage au backoffice)', () => {
       [{ offre_en_attente: true }, 'OFFRE_EN_ATTENTE', 'Offre en attente'],
       [{ last_available_at: null }, 'HORS_SERVICE', 'Hors service'],
       [{ status: DelivererStatus.SUSPENDED }, 'INACTIF', 'Inactif'],
+      [{ appli_active: false }, 'APPLI_FERMEE', 'Appli fermée'],
     ];
     for (const [surcharge, etat, libelle] of cas) {
       expect([etat, disponibiliteLivreur(libre(surcharge), MAINTENANT).libelle]).toEqual([etat, libelle]);
@@ -294,6 +457,8 @@ describe('disponibiliteLivreur (affichage au backoffice)', () => {
       en_course: false,
       offre_en_attente: false,
       offre_course_id: null,
+      appli_active: true,
+      appli_vue_a: null,
     });
     expect(disponibiliteLivreur(libre({ offre_en_attente: true }), MAINTENANT, 'c1')).toMatchObject({
       peut_recevoir_offre: false,
@@ -304,6 +469,27 @@ describe('disponibiliteLivreur (affichage au backoffice)', () => {
       peut_recevoir_offre: true,
       message_refus: null,
       offre_course_id: null,
+    });
+  });
+
+  it('appli fermée (24/10) : « Appli fermée », le refus de l’affectation forcée, et l’heure du dernier signe de vie', () => {
+    const vue = avantS(400);
+    expect(disponibiliteLivreur(libre({ appli_active: false, appli_vue_a: vue }), MAINTENANT)).toMatchObject({
+      etat: 'APPLI_FERMEE',
+      libelle: 'Appli fermée',
+      peut_recevoir_offre: false,
+      message_refus: "L'appli de ce livreur est fermée.",
+      en_service: true,
+      appli_active: false,
+      appli_vue_a: vue,
+    });
+  });
+
+  it('appli active en arrière-plan, en course : l’état reste celui de la règle, appli_active à vrai', () => {
+    expect(disponibiliteLivreur(libre({ en_course: true, appli_vue_a: avantS(20) }), MAINTENANT)).toMatchObject({
+      etat: 'EN_COURSE',
+      appli_active: true,
+      appli_vue_a: avantS(20),
     });
   });
 });

@@ -3,10 +3,12 @@ import { CourseOfferStatus, CourseStatut } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 import {
+  SANS_REGLE_APPLI,
   SELECT_ETAT_LIVREUR,
   etatLivreurDepuis,
   messageRefusOffre,
 } from 'src/modules/deliverers/helpers/disponibilite.rules';
+import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import {
@@ -32,9 +34,12 @@ class AcceptationImpossible extends Error {
  * sources d'offre qui ne passent pas par la sélection automatique.
  *
  *  - affectation forcée par l'administrateur : 409 avec la raison
- *    (« Ce livreur est en pause jusqu'à 14 h 32. ») ;
+ *    (« Ce livreur est en pause jusqu'à 14 h 32. », « L'appli de ce livreur
+ *    est fermée. ») ;
  *  - relances à 30 et 60 s : offre close si la course ou le livreur ne s'y
  *    prête plus ;
+ *  - appli fermée (demande du 24/10) : offre close sans pénalité, recherche
+ *    relancée (tâche des relances et échéance de l'offre) ;
  *  - acceptation CONDITIONNELLE : la course doit encore chercher un livreur,
  *    ne pas être chez Turbo, et l'offre être encore en attente pour ce
  *    livreur ; sinon 409 « Cette course n'est plus disponible. » et offre
@@ -52,6 +57,8 @@ export class GardeOffresService {
     private readonly prisma: PrismaService,
     private readonly cloture: OffresClotureService,
     private readonly journal: DispatchJournalService,
+    // Appli active ou fermée : contexte de la règle unique (socket, signe de vie).
+    private readonly appliLivreur: AppliLivreurService,
   ) {}
 
   // ============================================================
@@ -107,12 +114,14 @@ export class GardeOffresService {
       where: { deliverer_id: delivererId, status: CourseOfferStatus.PENDING },
       select: { course_id: true },
     });
-    const etat = etatLivreurDepuis(ligne);
+    const appli = await this.appliLivreur.contexte([ligne], maintenant);
+    const etat = etatLivreurDepuis(ligne, appli, maintenant);
     const decision = decisionAffectationForcee(etat, offres, courseId, maintenant);
     if (!decision.ok) {
       throw await refuser(decision.motif, messageRefusOffre(decision.motif, etat, maintenant), {
         pause_until: etat.pause_until?.toISOString() ?? null,
         auto_pause_until: etat.auto_pause_until?.toISOString() ?? null,
+        appli_vue_a: ligne.dernier_signal_at?.toISOString() ?? null,
       });
     }
     return { renvoi: decision.renvoi };
@@ -162,9 +171,12 @@ export class GardeOffresService {
     });
     if (!offre || offre.status !== CourseOfferStatus.PENDING) return false;
 
+    const appli = offre.deliverer
+      ? await this.appliLivreur.contexte([offre.deliverer], maintenant)
+      : SANS_REGLE_APPLI;
     const decision = decisionRelance(
       offre.course,
-      offre.deliverer ? etatLivreurDepuis(offre.deliverer) : null,
+      offre.deliverer ? etatLivreurDepuis(offre.deliverer, appli, maintenant) : null,
       maintenant,
     );
     if (decision.relancer) return true;
@@ -174,6 +186,22 @@ export class GardeOffresService {
       details: decision.motif_livreur ? { motif_livreur: decision.motif_livreur } : undefined,
     });
     return false;
+  }
+
+  /**
+   * L'appli du livreur est fermée : son offre en attente est close, sans
+   * pénalité ni exclusion de la course (`course:offer:expired` au livreur,
+   * recherche relancée si la course cherche encore).
+   *
+   * @returns vrai si CET appel a clos l'offre.
+   */
+  async cloreOffreAppliFermee(
+    offreId: string,
+    maintenant = new Date(),
+    details?: Record<string, unknown>,
+  ): Promise<boolean> {
+    const closes = await this.cloture.cloreOffre(offreId, 'APPLI_FERMEE', { maintenant, details });
+    return closes.length > 0;
   }
 
   /**
@@ -231,8 +259,9 @@ export class GardeOffresService {
       where: { id: delivererId },
       select: SELECT_ETAT_LIVREUR,
     });
+    // L'appli répond à l'instant : elle est forcément ouverte (règle de l'appli sans objet).
     const decision = ligne
-      ? decisionAcceptation(etatLivreurDepuis(ligne), maintenant)
+      ? decisionAcceptation(etatLivreurDepuis(ligne, SANS_REGLE_APPLI, maintenant), maintenant)
       : ({ ok: false, motif: 'INACTIF', message: "Ton compte livreur n'est pas actif." } as const);
     if (!decision.ok) {
       await this.cloture.cloreOffre(offre.id, 'LIVREUR_INDISPONIBLE', {

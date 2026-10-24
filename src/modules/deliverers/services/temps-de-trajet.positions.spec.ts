@@ -3,7 +3,7 @@
  * les positions périmées sont écartées avant l'appel, comme pour la note de
  * distance. Une position de plus de 5 min ne dit plus où est le livreur.
  */
-import { livreur, monterBase } from './base-livreurs.simulee-spec';
+import { appliLivreurSimulee, livreur, monterBase } from './base-livreurs.simulee-spec';
 import { DelivererScoringService } from './deliverer-scoring.service';
 
 const MAINTENANT = new Date('2026-10-23T12:00:00.000Z');
@@ -42,7 +42,12 @@ describe('temps de trajet des livreurs : positions périmées écartées', () =>
     const perime = livreur({ last_available_at: avant(10), last_location: { lat: 5.3, lng: -3.99 }, last_location_at: avant(40) });
     const base = monterBase({ livreurs: [frais1, frais2, perime] });
     const maps = { getTravelTimes: jest.fn(async () => [600, 120]) };
-    const scoring = new DelivererScoringService(base.prisma, { load: jest.fn(async () => REGLAGES) } as never, maps as never);
+    const scoring = new DelivererScoringService(
+      base.prisma,
+      { load: jest.fn(async () => REGLAGES) } as never,
+      maps as never,
+      appliLivreurSimulee(base.prisma).service,
+    );
 
     const meilleur = await scoring.pickBestCandidate({ restaurantId: frais1.restaurant_id });
 
@@ -62,7 +67,12 @@ describe('temps de trajet des livreurs : positions périmées écartées', () =>
     const sansDate = livreur({ last_available_at: avant(5), last_location: { lat: 5.3, lng: -3.99 }, last_location_at: null });
     const base = monterBase({ livreurs: [frais, perime, sansDate] });
     const maps = { getTravelTimes: jest.fn(async () => [60, 60, 60]) };
-    const scoring = new DelivererScoringService(base.prisma, { load: jest.fn(async () => REGLAGES) } as never, maps as never);
+    const scoring = new DelivererScoringService(
+      base.prisma,
+      { load: jest.fn(async () => REGLAGES) } as never,
+      maps as never,
+      appliLivreurSimulee(base.prisma).service,
+    );
 
     await scoring.pickBestCandidate({ restaurantId: frais.restaurant_id });
 

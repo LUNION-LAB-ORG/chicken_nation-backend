@@ -14,6 +14,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { SELECT_ETAT_LIVREUR, etatLivreurDepuis, peutRecevoirOffre } from 'src/modules/deliverers/helpers/disponibilite.rules';
 import { DelivererScoringSettingsHelper } from 'src/modules/deliverers/helpers/deliverer-scoring-settings.helper';
 import { lirePositionLivreur } from 'src/modules/deliverers/helpers/position-livreur.rules';
+import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 import { MapsService } from 'src/modules/maps/maps.service';
 
 import { lireCommandesAttendues } from '../helpers/application-plan.rules';
@@ -98,6 +99,8 @@ export class InstantanePlanificationService {
     private readonly preparation: EstimationPreparationService,
     private readonly maps: MapsService,
     private readonly reglagesLivreurs: DelivererScoringSettingsHelper,
+    // Appli active ou fermée (demande du 24/10) : une appli fermée ne reçoit plus d'offre.
+    private readonly appliLivreur: AppliLivreurService,
   ) {}
 
   async lire(
@@ -183,6 +186,9 @@ export class InstantanePlanificationService {
         },
       }),
     ]);
+
+    // Appli de chaque livreur (socket, signe de vie) : l'état de la règle unique en dépend.
+    const appli = await this.appliLivreur.contexte(lignesLivreurs, maintenant);
 
     // Courses du jour de chaque livreur (équité, 4.2).
     const journee = journeeDeService(maintenant);
@@ -283,7 +289,7 @@ export class InstantanePlanificationService {
       const lue = lirePositionLivreur(l.last_location, l.last_location_at);
       return {
         id: l.id,
-        etat: etatLivreurDepuis(l),
+        etat: etatLivreurDepuis(l, appli, maintenant),
         position: lue.position,
         position_at: l.last_location_at,
         position_sure: lue.sure,

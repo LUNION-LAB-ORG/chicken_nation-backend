@@ -523,7 +523,9 @@ model Deliverer {
   // Dernier signe de vie du livreur : position reçue ou requête authentifiée,
   // écrit au plus une fois par minute. Un livreur qui laisse expirer une offre
   // sans aucun signal depuis `deliverer.hors_service_sans_signal_min` passe
-  // hors service (disponibilite.rules.ts).
+  // hors service (disponibilite.rules.ts). Sans socket ouvert ni signe de vie
+  // depuis `deliverer.appli_fermee_apres_s` secondes, son appli est réputée
+  // fermée : plus d'offre jusqu'à sa réouverture (appli-livreur.service.ts).
   dernier_signal_at DateTime? @db.Timestamp(6)
   // Version du protocole de l'appli, lue dans l'en-tête `x-deli-protocole`
   // de chaque requête : 1 = ancienne appli (en-tête absent), 2 = appli qui lit

@@ -37,6 +37,12 @@ const DEFAULTS = {
   // passe hors service. 0 = coupé.
   hors_service_sans_signal_min: 20,
 
+  // Appli fermée (demande du 24/10) : sans socket ouvert ni signe de vie
+  // (position ou requête) depuis ce nombre de secondes, l'appli du livreur est
+  // réputée fermée et il ne reçoit plus d'offre jusqu'à sa réouverture, sans
+  // pause ni pénalité. 0 = règle coupée.
+  appli_fermee_apres_s: 180,
+
   // Classement par TEMPS DE TRAJET réel (Google Distance Matrix)
   // Désactivé par défaut : chaque offre déclenche un appel Google facturé.
   // À activer quand le gain de pertinence justifie le coût.
@@ -76,6 +82,8 @@ export interface IDelivererScoringSettings {
 
   /** Minutes sans signal après lesquelles une offre ignorée met hors service. 0 = coupé. */
   horsServiceSansSignalMin: number;
+  /** Secondes sans socket ni signe de vie après lesquelles l'appli est réputée fermée. 0 = coupé. */
+  appliFermeeApresS: number;
 
   // GPS
   gpsUpdateIntervalSeconds: number;
@@ -127,6 +135,8 @@ export class DelivererScoringSettingsHelper {
       'deliverer.chain_max_per_hour',
       // Hors service sans signal
       'deliverer.hors_service_sans_signal_min',
+      // Appli fermée
+      'deliverer.appli_fermee_apres_s',
       // GPS
       'deliverer.travel_time_ranking',
       'deliverer.travel_time_top_n',
@@ -156,6 +166,8 @@ export class DelivererScoringSettingsHelper {
       chainMaxPerHour: this.toNumber(map['deliverer.chain_max_per_hour'], DEFAULTS.chain_max_per_hour, { allowZero: true }),
       // 0 accepté : coupe le filet.
       horsServiceSansSignalMin: this.toNumber(map['deliverer.hors_service_sans_signal_min'], DEFAULTS.hors_service_sans_signal_min, { allowZero: true }),
+      // 0 accepté : coupe la règle de l'appli fermée.
+      appliFermeeApresS: this.toNumber(map['deliverer.appli_fermee_apres_s'], DEFAULTS.appli_fermee_apres_s, { allowZero: true }),
 
       gpsUpdateIntervalSeconds: this.toNumber(map['deliverer.gps_update_interval_seconds'], DEFAULTS.gps_update_interval_seconds),
       gpsExpirationMinutes: this.toNumber(map['deliverer.gps_expiration_minutes'], DEFAULTS.gps_expiration_minutes),

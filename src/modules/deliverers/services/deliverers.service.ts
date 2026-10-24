@@ -25,6 +25,7 @@ import { DelivererEvent } from '../events/deliverer.event';
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
 import { positionAEnregistrer, releveAssezPrecis } from '../helpers/position-livreur.rules';
 import {
+  ContexteAppli,
   STATUTS_COURSE_EN_COURS,
   disponibiliteLivreur,
   etatLivreurDepuis,
@@ -61,6 +62,21 @@ type SafeDeliverer = Omit<Deliverer, 'password' | 'refresh_token'>;
  */
 function presence(connectes: Set<string> | null, delivererId: string): boolean | null {
   return connectes ? connectes.has(delivererId) : null;
+}
+
+/**
+ * État de l'appli d'un livreur dans les listes (demande du 24/10), à côté de
+ * `appli_connectee` :
+ *  - `appli_active` : socket ouvert ou signe de vie récent ; faux, « Appli
+ *    fermée » (plus aucune offre jusqu'à sa réouverture). Vrai sans socket :
+ *    appli en arrière-plan, les offres lui arrivent par notification ;
+ *  - `appli_vue_a` : dernier signe de vie (position ou requête), ISO.
+ */
+function etatAppli(disponibilite: { appli_active: boolean; appli_vue_a: Date | null }) {
+  return {
+    appli_active: disponibilite.appli_active,
+    appli_vue_a: disponibilite.appli_vue_a?.toISOString() ?? null,
+  };
 }
 
 /**
@@ -135,16 +151,24 @@ export class DeliverersService {
     // État de chaque livreur par la règle unique (fenêtre « Forcer l'affectation »).
     const maintenant = new Date();
     const connectes = await this.gateway.livreursConnectes(items.map((l) => l.id));
+    const appli: ContexteAppli = {
+      appliFermeeApresS: (await this.scoringSettings.load()).appliFermeeApresS,
+      connectes,
+    };
     return {
-      items: items.map(({ offer_attempts, _count, ...livreur }) => ({
-        ...livreur,
-        disponibilite: disponibiliteLivreur(
-          etatLivreurDepuis({ ...livreur, _count }),
+      items: items.map(({ offer_attempts, _count, ...livreur }) => {
+        const disponibilite = disponibiliteLivreur(
+          etatLivreurDepuis({ ...livreur, _count }, appli, maintenant),
           maintenant,
           offer_attempts[0]?.course_id ?? null,
-        ),
-        appli_connectee: presence(connectes, livreur.id),
-      })),
+        );
+        return {
+          ...livreur,
+          disponibilite,
+          appli_connectee: presence(connectes, livreur.id),
+          ...etatAppli(disponibilite),
+        };
+      }),
       total,
       page,
       limit,
@@ -640,6 +664,7 @@ export class DeliverersService {
         last_available_at: true,
         pause_until: true,
         auto_pause_until: true,
+        dernier_signal_at: true,
         status: true,
         is_operational: true,
         entity_status: true,
@@ -686,6 +711,7 @@ export class DeliverersService {
     inQueue.forEach((d, i) => rankMap.set(d.id, i + 1));
 
     const connectes = await this.gateway.livreursConnectes(deliverers.map((d) => d.id));
+    const appli: ContexteAppli = { appliFermeeApresS: settings.appliFermeeApresS, connectes };
     const result = deliverers
       .map((d) => {
         const locationAt = d.last_location_at;
@@ -703,6 +729,13 @@ export class DeliverersService {
         else if (d.last_available_at) availability = 'available';
         else availability = 'offline';
 
+        // État par la règle unique : « En pause », « Hors service » et « Appli fermée » visibles.
+        const disponibilite = disponibiliteLivreur(
+          etatLivreurDepuis(d, appli, now),
+          now,
+          d.offer_attempts[0]?.course_id ?? null,
+        );
+
         return {
           id: d.id,
           first_name: d.first_name,
@@ -719,13 +752,9 @@ export class DeliverersService {
           queue_rank: rankMap.get(d.id) ?? null,
           pause_until: d.pause_until?.toISOString() ?? null,
           auto_pause_until: d.auto_pause_until?.toISOString() ?? null,
-          // État par la règle unique : « En pause » et « Hors service » visibles.
-          disponibilite: disponibiliteLivreur(
-            etatLivreurDepuis(d),
-            now,
-            d.offer_attempts[0]?.course_id ?? null,
-          ),
+          disponibilite,
           appli_connectee: presence(connectes, d.id),
+          ...etatAppli(disponibilite),
           active_course: activeCourse
             ? {
                 id: activeCourse.id,

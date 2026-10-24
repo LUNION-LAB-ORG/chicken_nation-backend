@@ -15,7 +15,7 @@
  */
 import { CourseStatut, OrderStatus } from '@prisma/client';
 
-import { busSimule } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
+import { appliLivreurSimulee, busSimule } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
 
 import { CourseEvent } from '../events/course.event';
 import { CourseHelper } from '../helpers/course.helper';
@@ -59,6 +59,8 @@ export const prete = (surcharge: Record<string, unknown> = {}) =>
 export interface Options {
   reglages?: Record<string, string>;
   turbo?: { sentOrderIds: string[] };
+  /** Appli des livreurs (24/10) : défaut, toutes actives (socket ouvert). */
+  appli?: Parameters<typeof appliLivreurSimulee>[1];
 }
 
 export function monter(donnees: DonneesDispatch, options: Options = {}) {
@@ -73,7 +75,8 @@ export function monter(donnees: DonneesDispatch, options: Options = {}) {
   const settings = new CourseSettingsHelper(settingsService as never);
   const journal = new DispatchJournalService(base.prisma);
   const cloture = new OffresClotureService(base.prisma, bus as never, journal);
-  const garde = new GardeOffresService(base.prisma, cloture, journal);
+  const appli = appliLivreurSimulee(base.prisma, options.appli);
+  const garde = new GardeOffresService(base.prisma, cloture, journal, appli.service);
   const courseEvent = new CourseEvent(bus as never);
   const push = {
     notifyNewCourseOffer: jest.fn(),
@@ -115,6 +118,7 @@ export function monter(donnees: DonneesDispatch, options: Options = {}) {
     cloche as never,
     turbo as never,
     garde,
+    appli.service,
   );
   const cache = new Map<string, unknown>();
   const preparation = new EstimationPreparationService(
@@ -129,6 +133,7 @@ export function monter(donnees: DonneesDispatch, options: Options = {}) {
     preparation,
     {} as never,
     { load: jest.fn(async () => ({ travelTimeRanking: false })) } as never,
+    appli.service,
   );
   const regroupement = { tryGroupOrder: jest.fn(async () => ({ batchId: 'lot', flushed: false })) };
   const depart = new DepartCourseService(
@@ -223,6 +228,7 @@ export function monter(donnees: DonneesDispatch, options: Options = {}) {
     ecouteur,
     requetes,
     courseEvent,
+    appli,
     passer: (p = planificateur) => p.planifierRestaurant(RESTO, 'TEST', horloge),
   };
 }

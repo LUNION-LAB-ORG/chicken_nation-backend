@@ -16,6 +16,7 @@ import {
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
 import { filtreLivreursPouvantRecevoirOffre } from '../helpers/disponibilite.rules';
 import { MapsService } from 'src/modules/maps/maps.service';
+import { AppliLivreurService } from './appli-livreur.service';
 
 /**
  * CHAÎNAGE SUSPENDU (offre pendant la dernière livraison d'une course).
@@ -84,6 +85,9 @@ export class DelivererScoringService {
     // Temps de trajet réels : la distance à vol d'oiseau ment dès qu'il y a un
     // pont ou un sens unique.
     private readonly maps: MapsService,
+    // Appli active ou fermée (demande du 24/10) : sockets ouverts des livreurs
+    // au signe de vie trop vieux, pour le filtre de la règle unique.
+    private readonly appliLivreur: AppliLivreurService,
   ) {}
 
   // ============================================================
@@ -287,17 +291,19 @@ export class DelivererScoringService {
   /**
    * Candidats du restaurant qui peuvent recevoir une offre : la règle unique
    * `peutRecevoirOffre` (disponibilite.rules.ts), traduite en filtre Prisma.
-   * Exclut donc aussi les livreurs hors service (`last_available_at` nul) et
-   * ceux qui ont déjà une offre en attente : jamais deux offres au même livreur.
+   * Exclut donc aussi les livreurs hors service (`last_available_at` nul),
+   * ceux qui ont déjà une offre en attente (jamais deux offres au même
+   * livreur) et ceux dont l'appli est fermée.
    */
   private async findRegularCandidates(
     restaurantId: string,
     excludeIds: string[],
     now: Date,
   ) {
+    const appli = await this.appliLivreur.contexteSelection(restaurantId, now);
     return this.prisma.deliverer.findMany({
       where: {
-        ...filtreLivreursPouvantRecevoirOffre(now),
+        ...filtreLivreursPouvantRecevoirOffre(now, appli),
         restaurant_id: restaurantId,
         id: { notIn: excludeIds },
       },

@@ -33,6 +33,7 @@ function etat(surcharge: Partial<EtatLivreur> = {}): EtatLivreur {
     last_available_at: avant(30),
     en_course: false,
     offre_en_attente: false,
+    appli_active: true,
     ...surcharge,
   };
 }
@@ -88,10 +89,22 @@ describe('decisionCreationOffre (sous le verrou du livreur)', () => {
     });
     expect(decisionCreationOffre(null, false, MAINTENANT)).toEqual({ ok: false, motif: 'INACTIF' });
   });
+
+  it('appli fermée (24/10) : aucune offre, quelle qu’en soit la source', () => {
+    expect(decisionCreationOffre(etat({ appli_active: false }), false, MAINTENANT)).toEqual({
+      ok: false,
+      motif: 'APPLI_FERMEE',
+    });
+    // Renvoi de l'offre de CETTE course par l'administrateur : refusé aussi.
+    expect(decisionCreationOffre(etat({ appli_active: false, offre_en_attente: true }), false, MAINTENANT)).toEqual({
+      ok: false,
+      motif: 'APPLI_FERMEE',
+    });
+  });
 });
 
 describe('decisionExpiration', () => {
-  const libre = { pause_until: null, auto_pause_until: null };
+  const libre = { pause_until: null, auto_pause_until: null, appli_active: true };
 
   it('offre ignorée, course toujours en recherche : pénalité', () => {
     expect(decisionExpiration(EN_RECHERCHE, libre, MAINTENANT)).toEqual({ penaliser: true });
@@ -124,6 +137,25 @@ describe('decisionExpiration', () => {
       penaliser: true,
     });
   });
+
+  it('appli du livreur fermée (24/10) : aucune pénalité, il n’a pas pu voir l’offre', () => {
+    expect(decisionExpiration(EN_RECHERCHE, { ...libre, appli_active: false }, MAINTENANT)).toEqual({
+      penaliser: false,
+      raison: 'APPLI_FERMEE',
+    });
+  });
+
+  it('priorités : course disparue, puis pause, puis appli fermée', () => {
+    const ferme = { ...libre, appli_active: false };
+    expect(decisionExpiration({ ...EN_RECHERCHE, turbo_escalated_at: avant(1) }, ferme, MAINTENANT)).toEqual({
+      penaliser: false,
+      raison: 'COURSE_PLUS_EN_RECHERCHE',
+    });
+    expect(decisionExpiration(EN_RECHERCHE, { ...ferme, pause_until: apres(5) }, MAINTENANT)).toEqual({
+      penaliser: false,
+      raison: 'LIVREUR_EN_PAUSE',
+    });
+  });
 });
 
 describe('decisionRelance', () => {
@@ -152,6 +184,20 @@ describe('decisionRelance', () => {
     expect(
       decisionRelance({ ...EN_RECHERCHE, turbo_escalated_at: avant(1) }, etat(), MAINTENANT),
     ).toEqual({ relancer: false, motif: 'COURSE_PLUS_EN_RECHERCHE' });
+  });
+
+  it('appli du livreur fermée (24/10) : offre close avec le motif APPLI_FERMEE', () => {
+    expect(decisionRelance(EN_RECHERCHE, etat({ appli_active: false }), MAINTENANT)).toEqual({
+      relancer: false,
+      motif: 'APPLI_FERMEE',
+      motif_livreur: 'APPLI_FERMEE',
+    });
+  });
+
+  it('pause et appli fermée : la pause est dite d’abord (LIVREUR_INDISPONIBLE)', () => {
+    expect(
+      decisionRelance(EN_RECHERCHE, etat({ appli_active: false, pause_until: FIN_PAUSE_INDEFINIE }), MAINTENANT),
+    ).toEqual({ relancer: false, motif: 'LIVREUR_INDISPONIBLE', motif_livreur: 'EN_PAUSE' });
   });
 });
 
@@ -191,6 +237,15 @@ describe('decisionAffectationForcee', () => {
       motif: 'EN_COURSE',
     });
   });
+
+  it('appli fermée (24/10) : refus APPLI_FERMEE, même pour renvoyer l’offre de CETTE course', () => {
+    const ferme = { ...libre, appli_active: false };
+    expect(decisionAffectationForcee(ferme, [], 'c1', MAINTENANT)).toEqual({ ok: false, motif: 'APPLI_FERMEE' });
+    expect(decisionAffectationForcee(ferme, [{ course_id: 'c1' }], 'c1', MAINTENANT)).toEqual({
+      ok: false,
+      motif: 'APPLI_FERMEE',
+    });
+  });
 });
 
 describe('decisionAcceptation', () => {
@@ -198,6 +253,10 @@ describe('decisionAcceptation', () => {
     expect(decisionAcceptation(etat({ offre_en_attente: true, last_available_at: null }), MAINTENANT)).toEqual({
       ok: true,
     });
+  });
+
+  it('« appli fermée » est toléré : son appli vient de répondre', () => {
+    expect(decisionAcceptation(etat({ offre_en_attente: true, appli_active: false }), MAINTENANT)).toEqual({ ok: true });
   });
 
   it('déjà en course, en pause, en pause automatique, inactif : refus, message au livreur (tutoiement)', () => {

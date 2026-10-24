@@ -6,6 +6,7 @@
 import { CourseOfferStatus, CourseStatut } from '@prisma/client';
 
 import {
+  appliLivreurSimulee,
   course,
   livreur,
   monterBase,
@@ -248,6 +249,7 @@ describe('expiration d’une offre (CourseOfferService)', () => {
       {} as never,
       {} as never,
       {} as never,
+      appliLivreurSimulee(prisma).service,
     );
     jest.spyOn(service, 'offerNextDeliverer').mockResolvedValue(undefined);
 

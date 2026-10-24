@@ -26,15 +26,28 @@ import { CourseOfferService } from '../services/course-offer.service';
 import { CourseQueryService } from '../services/course-query.service';
 import { GardeOffresService } from '../services/garde-offres.service';
 import { ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
+import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
 /**
  * Réponse de l'affectation forcée. L'offre part dans tous les cas (temps réel
  * et notification) ; sans appli connectée, l'admin le sait tout de suite au
  * lieu de croire que le livreur l'a sous les yeux.
+ *
+ * @param regleAppli  Règle de l'appli fermée active (`deliverer.appli_fermee_apres_s`
+ *   au-dessus de 0) : l'affectation n'est passée que pour une appli active, donc
+ *   sans socket elle est en arrière-plan (demande du 24/10), rien à demander au
+ *   livreur. Règle coupée : l'appli est peut-être fermée.
  */
-export function messageAffectationForcee(renvoi: boolean, appliConnectee: boolean | null): string {
+export function messageAffectationForcee(
+  renvoi: boolean,
+  appliConnectee: boolean | null,
+  regleAppli = false,
+): string {
   if (appliConnectee === false) {
+    if (regleAppli) {
+      return `Offre ${renvoi ? 'renvoyée' : 'envoyée'} par notification : l'appli du livreur est en arrière-plan.`;
+    }
     return (
       `Offre ${renvoi ? 'renvoyée' : 'envoyée'} par notification seulement : l'appli du livreur ` +
       "n'est pas connectée en temps réel. Demandez-lui de rouvrir l'appli."
@@ -59,6 +72,8 @@ export class CourseAdminController {
     private readonly garde: GardeOffresService,
     private readonly gateway: AppGateway,
     private readonly settings: CourseSettingsHelper,
+    // Règle de l'appli fermée (demande du 24/10) : réglage lu pour le message.
+    private readonly appliLivreur: AppliLivreurService,
   ) {}
 
   @ApiOperation({
@@ -109,9 +124,11 @@ export class CourseAdminController {
     description:
       'Même règle que la sélection automatique. 409 avec la raison en français si la course ne ' +
       'cherche plus de livreur, ou si le livreur est en pause, en pause automatique, hors service, ' +
-      'en course ou a déjà une offre en attente (« Ce livreur est en pause jusqu\'à 14 h 32. »). ' +
-      'Les offres d\'autres livreurs sur cette course sont closes. `appli_connectee` : le livreur ' +
-      'a-t-il un socket ouvert (false : l\'offre ne lui arrive que par la notification ; null : inconnu).',
+      'en course, a déjà une offre en attente (« Ce livreur est en pause jusqu\'à 14 h 32. ») ou si ' +
+      'son appli est fermée (« L\'appli de ce livreur est fermée. »). Les offres d\'autres livreurs ' +
+      'sur cette course sont closes. `appli_connectee` : le livreur a-t-il un socket ouvert (false : ' +
+      'appli en arrière-plan, l\'offre ne lui arrive que par la notification ; null : inconnu). ' +
+      '`appli_active` : toujours vrai ici (une appli fermée est refusée).',
   })
   @ApiBody({ type: AssignDelivererDto })
   @Patch(':id/force-assign')
@@ -132,10 +149,12 @@ export class CourseAdminController {
       );
     }
     const appliConnectee = await this.gateway.livreurConnecte(dto.deliverer_id);
+    const regleAppli = (await this.appliLivreur.seuilS().catch(() => 0)) > 0;
     return {
       success: true,
-      message: messageAffectationForcee(renvoi, appliConnectee),
+      message: messageAffectationForcee(renvoi, appliConnectee, regleAppli),
       appli_connectee: appliConnectee,
+      appli_active: true,
     };
   }
 
