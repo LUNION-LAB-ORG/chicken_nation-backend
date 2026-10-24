@@ -71,10 +71,33 @@ export class TicketMessageService {
             author = await this.prisma.user.findUnique({ where: { id: authorId } });
         } else if (authorType === 'CUSTOMER') {
             author = await this.prisma.customer.findUnique({ where: { id: authorId } });
+        } else if (authorType === 'DELIVERER') {
+            /**
+             * Le livreur n'était pas traité ici : chaque réponse dans un ticket
+             * déjà ouvert finissait en 404 « Author not found », seul le premier
+             * message (posé à la création du ticket) passait.
+             */
+            author = await this.prisma.deliverer.findUnique({ where: { id: authorId }, select: { id: true } });
         }
 
         if (!author) {
             throw new HttpException('Author not found', 404);
+        }
+
+        if (authorType === 'DELIVERER') {
+            // ⚠️ SES tickets seulement, jamais celui d'un autre livreur ni d'un
+            // client. La route du livreur le vérifie déjà ; ce contrôle tient
+            // même pour un appelant qui l'oublierait.
+            const fil = await this.prisma.ticketThread.findUnique({
+                where: { id: ticketId },
+                select: { delivererId: true },
+            });
+            if (!fil) {
+                throw new HttpException('Ticket introuvable', HttpStatus.NOT_FOUND);
+            }
+            if (fil.delivererId !== authorId) {
+                throw new HttpException("Ce ticket ne t'appartient pas", HttpStatus.FORBIDDEN);
+            }
         }
 
         const [message, ticket] = await Promise.all([
@@ -85,6 +108,7 @@ export class TicketMessageService {
                     internal,
                     authorCustomerId: authorType === 'CUSTOMER' ? authorId : null,
                     authorUserId: authorType === 'USER' ? authorId : null,
+                    authorDelivererId: authorType === 'DELIVERER' ? authorId : null,
                     meta,
                 },
                 include: this.MessageInclude,
