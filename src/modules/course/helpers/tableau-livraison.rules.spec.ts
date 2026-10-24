@@ -155,6 +155,7 @@ describe('restaurants : chiffres et liste', () => {
     const etats: EtatAffichageLivreur[] = [
       'DISPONIBLE',
       'OFFRE_EN_ATTENTE',
+      'EN_APPEL',
       'EN_COURSE',
       'EN_PAUSE',
       'PAUSE_AUTO',
@@ -165,11 +166,11 @@ describe('restaurants : chiffres et liste', () => {
     ];
     const t = tableau({ livreurs: etats.map((etat) => livreur({ etat })) });
     expect(angre(t).livreurs).toEqual({
-      disponibles: 2,
+      disponibles: 3,
       en_course: 1,
       en_pause: 2,
       appli_fermee: 2,
-      en_service: 7,
+      en_service: 8,
       prevus: null,
     });
     expect(marcory(t).livreurs.en_service).toBe(0);

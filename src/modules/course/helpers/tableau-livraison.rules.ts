@@ -96,7 +96,7 @@ export interface RestaurantDuTableau {
   id: string;
   nom: string;
   livreurs: {
-    /** Disponible, Offre en attente. */
+    /** Disponible, Offre en attente, En appel (avec le service client). */
     disponibles: number;
     en_course: number;
     /** En pause, Pause automatique. */
@@ -233,6 +233,7 @@ const references = (livraisons: LivraisonLue[]): string[] => livraisons.map((l) 
 const ORDRE_ETATS: EtatAffichageLivreur[] = [
   'DISPONIBLE',
   'OFFRE_EN_ATTENTE',
+  'EN_APPEL',
   'EN_COURSE',
   'EN_PAUSE',
   'PAUSE_AUTO',
@@ -540,7 +541,8 @@ export function construireTableau(e: EntreeTableau): TableauLivraison {
       id: r.id,
       nom: r.nom,
       livreurs: {
-        disponibles: compte('DISPONIBLE', 'OFFRE_EN_ATTENTE'),
+        // En appel avec le service client : en service et dans la file, repris à la fin de l'appel.
+        disponibles: compte('DISPONIBLE', 'OFFRE_EN_ATTENTE', 'EN_APPEL'),
         en_course: compte('EN_COURSE'),
         en_pause: compte('EN_PAUSE', 'PAUSE_AUTO'),
         appli_fermee: compte('APPLI_FERMEE', 'INJOIGNABLE'),
