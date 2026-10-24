@@ -1,11 +1,33 @@
 /**
  * Redis simulé pour le minuteur « en ligne » : partagé par plusieurs
- * serveurs simulés, il exécute `SCRIPT_AVANCER_MINUTEUR` d'un bloc, comme
- * Redis. Le script y est transcrit ligne à ligne (valeurs en chaînes, champs
- * absents), indépendamment de `avancerMinuteur` : les tests de la règle
- * vérifient que les deux disent la même chose.
+ * serveurs simulés, il exécute le script Lua d'un bloc, comme Redis. Le
+ * script y est transcrit ligne à ligne (valeurs en chaînes, champs absents),
+ * indépendamment de `avancerMinuteur` : les tests de la règle vérifient que
+ * les deux disent la même chose.
+ *
+ * La transcription vaut pour CE texte du script (`SCRIPT_TRANSCRIT`), figé
+ * ici, et non pour la constante de production importée : un script de
+ * production modifié (`<=` devenu `<`, HINCRBY oublié) ne correspond plus et
+ * le simulateur refuse de l'exécuter. Il faut alors refaire la transcription
+ * et ce texte ensemble (relecture du 24/10 : la suite comparait la constante
+ * à elle-même et restait verte).
  */
-import { SCRIPT_AVANCER_MINUTEUR } from './minuteur-en-ligne.rules';
+export const SCRIPT_TRANSCRIT = `
+local etat = redis.call('HMGET', KEYS[1], 'ms', 'dernier', 'en_ligne')
+local a = tonumber(ARGV[1])
+local dernier = tonumber(etat[2])
+if dernier and a <= dernier then
+  return 0
+end
+local ajout = 0
+if dernier and etat[3] == '1' and ARGV[2] == '1' and a - dernier <= tonumber(ARGV[4]) then
+  ajout = a - dernier
+  redis.call('HINCRBY', KEYS[1], 'ms', ajout)
+end
+redis.call('HSET', KEYS[1], 'dernier', ARGV[1], 'en_ligne', ARGV[3])
+redis.call('EXPIRE', KEYS[1], ARGV[5])
+return ajout
+`;
 
 export class RedisMinuteurSimule {
   readonly hachages = new Map<string, Map<string, string>>();
@@ -15,7 +37,9 @@ export class RedisMinuteurSimule {
 
   async eval(script: string, nombreCles: number, cle: string, ...argv: string[]): Promise<number> {
     if (this.panne) throw new Error('Connection is closed.');
-    if (script !== SCRIPT_AVANCER_MINUTEUR || nombreCles !== 1) throw new Error('script inattendu');
+    if (script !== SCRIPT_TRANSCRIT || nombreCles !== 1) {
+      throw new Error('script Lua inattendu : refaire la transcription du simulateur (SCRIPT_TRANSCRIT)');
+    }
     this.scriptsRecus += 1;
     const h = this.hachages.get(cle) ?? new Map<string, string>();
     // local etat = redis.call('HMGET', KEYS[1], 'ms', 'dernier', 'en_ligne')
