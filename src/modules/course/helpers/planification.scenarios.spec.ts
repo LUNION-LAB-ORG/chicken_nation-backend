@@ -20,6 +20,8 @@ import { h, hms, Monde, R } from './monde-planification.simulee-spec';
 import { REGLAGES_PLANIFICATION_DEFAUT, ReglagesPlanification } from './planification.rules';
 
 const SANS_TURBO: ReglagesPlanification = { ...REGLAGES_PLANIFICATION_DEFAUT, turboActif: false };
+/** Attente courte seule, comme avant le 24/10 : cas du trajet long coupé. */
+const COURT: ReglagesPlanification = { ...REGLAGES_PLANIFICATION_DEFAUT, attenteMaxTrajetLongS: 0 };
 
 /** Heures (hh:mm:ss) des actions d'un type. */
 const heures = (m: Monde, type: Parameters<Monde['toutes']>[0]) => m.toutes(type).map((x) => hms(x.t));
@@ -30,8 +32,8 @@ describe('cas du client (3.9) : un seul livreur, au comptoir ; A prête, B et C 
    * 13 h 06). A (2,5 km est) prête à 12 h 30 ; B (1,5 km est) en préparation
    * depuis 12 h 24 ; C (2 km est) depuis 12 h 27, prête à 12 h 35.
    */
-  function monde(finCuisineB: Date | null, delaiDepartS = 120) {
-    const m = new Monde(h('12:29:50'))
+  function monde(finCuisineB: Date | null, delaiDepartS = 120, reglages = REGLAGES_PLANIFICATION_DEFAUT) {
+    const m = new Monde(h('12:29:50'), reglages)
       .livreur('d1', { libreDepuis: h('12:00'), delaiDepartS })
       .livreur('d2', { libreDepuis: h('11:00') })
       .commande('z', { nord: 5000, est: 0, creee: h('12:00'), enPreparation: h('12:05'), prete: h('12:20') })
@@ -55,8 +57,11 @@ describe('cas du client (3.9) : un seul livreur, au comptoir ; A prête, B et C 
     expect(hms(retenues[0].t)).toBe('12:30:10');
     expect(retenues[0].action.jusqua).toEqual(h('12:34'));
     expect(retenues[0].action.attendues.map((x) => x.order_id)).toEqual(['b']);
-    // C (prête vers 12:45 d'après les défauts) est au-delà de l'horizon : non attendue.
-    expect(m.historique.some(({ plan }) => plan.refus.some((r) => r.order_id === 'c' && r.refus === 'HORIZON'))).toBe(true);
+    // C (prête vers 12:45 d'après les défauts) est au-delà de l'horizon. Trajet
+    // long (aller-retour de A : 29 min à 16 km/h), mais A arriverait après sa
+    // promesse + 5 min en l'attendant : non attendue.
+    expect(m.historique.some(({ plan }) => plan.refus.some((r) => r.order_id === 'c' && r.refus === 'RETARD_CLIENT'))).toBe(true);
+    expect(m.toutes('RETENIR').every((x) => x.action.motif === 'ATTENTE_COURTE')).toBe(true);
 
     // 12:34 : B prête, ajoutée dans la seconde ; « Tout est prêt » ; la caisse remet A et B.
     const ajouts = m.toutes('AJOUTER');
@@ -86,8 +91,13 @@ describe('cas du client (3.9) : un seul livreur, au comptoir ; A prête, B et C 
   it('B prête vers 12 h 42 (au-delà de l’horizon) : A part seule ; B et C forment une course, Turbo en dernier recours', () => {
     const m = monde(null).jusqua(h('12:45'));
 
+    // Trajet long (A à 2,5 km, aller-retour de 29 min à 16 km/h), mais en
+    // attendant B jusqu'à 12 h 42, A arriverait après 12 h 58 (promesse + 5 min) : refusé.
     expect(m.toutes('RETENIR')).toEqual([]);
-    expect(m.historique.some(({ plan }) => plan.refus.some((r) => r.order_id === 'b' && r.refus === 'HORIZON'))).toBe(true);
+    expect(m.historique.some(({ plan }) => plan.refus.some((r) => r.order_id === 'b' && r.refus === 'RETARD_CLIENT'))).toBe(true);
+    // Attente courte seule : B au-delà de l'horizon, comme avant.
+    const court = monde(null, 120, COURT).jusqua(h('12:31'));
+    expect(court.historique.some(({ plan }) => plan.refus.some((r) => r.order_id === 'b' && r.refus === 'HORIZON'))).toBe(true);
     const ka = m.courseDe('a')!;
     expect(hms(m.commandes.get('a')!.remise_at!)).toBe('12:30:30'); // 20 s pour présenter le code
     expect(hms(ka.parti_at!)).toBe('12:32:30');
@@ -171,19 +181,136 @@ describe('une commande prête n’est jamais retenue au-delà de la limite', () 
     expect(m.violations).toEqual([]);
   });
 
-  it('B annoncée après la limite : aucune retenue, A remise aussitôt', () => {
-    const m = new Monde(h('12:29:50'))
+  const apresLaLimite = (r: ReglagesPlanification) =>
+    new Monde(h('12:29:50'), r)
       .livreur('d1', { libreDepuis: h('12:00'), delaiDepartS: 30 })
       .commande('a', { est: 2500, creee: h('12:18'), enPreparation: h('12:19'), prete: h('12:30') })
       .commande('b', { est: 2000, creee: h('12:20'), enPreparation: h('12:24'), prete: h('12:36'), finCuisine: h('12:36') });
-    m.jusqua(h('12:40'));
+
+  it('attente courte : B annoncée après la limite, aucune retenue, A remise aussitôt', () => {
+    const m = apresLaLimite(COURT).jusqua(h('12:40'));
 
     expect(m.toutes('RETENIR')).toEqual([]);
     expect(m.historique.some(({ plan }) => plan.refus.some((r) => r.order_id === 'b' && r.refus === 'LIMITE_RETENUE'))).toBe(true);
     expect(hms(m.commandes.get('a')!.remise_at!)).toBe('12:30:30');
     expect(m.violations).toEqual([]);
   });
+
+  it('trajet long : la même B (6 min) est attendue, A et B partent ensemble ; jamais au-delà de ready_at + 20 min', () => {
+    // A à 2,5 km : aller-retour de 29 min à 16 km/h, bien plus que 6 min + 5.
+    const m = apresLaLimite(REGLAGES_PLANIFICATION_DEFAUT).jusqua(h('12:40'));
+
+    expect(m.toutes('RETENIR').map((x) => [hms(x.t), hms(x.action.jusqua), x.action.motif])).toEqual([
+      ['12:30:10', '12:36:00', 'TRAJET_LONG'],
+    ]);
+    expect(m.toutes('LIBERER').map((x) => [hms(x.t), x.action.motif])).toEqual([['12:36:00', 'TOUT_PRET']]);
+    expect(m.courseDe('b')!.id).toBe(m.courseDe('a')!.id);
+    expect(hms(m.commandes.get('a')!.remise_at!)).toBe('12:36:00');
+    for (const r of m.retenuesVues) expect(r.jusqua.getTime()).toBeLessThanOrEqual(h('12:50').getTime());
+    expect(m.violations).toEqual([]);
+  });
 });
+
+describe('trajet long (demande du 24/10) : attendre toute la préparation si le livreur reviendrait tard', () => {
+  /**
+   * Restaurant Zone 4, 15 h 30 (22 km/h). Un seul livreur, D1, libre au
+   * comptoir. A prête à 15 h 28 (créée à 15 h 20) ; B, même direction à
+   * 5,5 km à l'est, en préparation depuis 15 h 28, la cuisine l'annonce pour
+   * 15 h 40 : prête dans 12 min.
+   */
+  const scene = (estA: number, r: ReglagesPlanification = REGLAGES_PLANIFICATION_DEFAUT) =>
+    new Monde(h('15:27:50'), r)
+      .livreur('d1', { libreDepuis: h('15:00'), delaiDepartS: 30 })
+      .commande('a', { est: estA, creee: h('15:20'), enPreparation: h('15:21'), prete: h('15:28') })
+      .commande('b', { est: 5500, creee: h('15:25'), enPreparation: h('15:28'), prete: h('15:40'), finCuisine: h('15:40') });
+
+  /** Délai de chaque client, de la commande à la remise chez lui (minutes), et leur somme. */
+  const delais = (m: Monde) => {
+    const delai = (id: string) => {
+      const c = m.commandes.get(id)!;
+      return (c.livree_at!.getTime() - c.created_at.getTime()) / 60_000;
+    };
+    return { a: delai('a'), b: delai('b'), total: delai('a') + delai('b') };
+  };
+  const SANS_TURBO_COURT: ReglagesPlanification = { ...SANS_TURBO, attenteMaxTrajetLongS: 0 };
+
+  it('A à 7 km (aller-retour de 41 min) : A attend B au comptoir, ils partent ensemble', () => {
+    const m = scene(5000).jusqua(h('16:15'));
+
+    // 15:28 : course de A créée et proposée à D1, acceptée au comptoir à 15:28:10.
+    expect(m.toutes('CREER_COURSE').map((x) => [hms(x.t), x.action.order_ids])).toEqual([['15:28:00', ['a']]]);
+    // 15:28:10 : partir seul le ferait revenir vers 16:09, 29 min après B : trajet long, A attend B jusqu'à 15:40.
+    expect(m.toutes('RETENIR').map((x) => [hms(x.t), hms(x.action.jusqua), x.action.motif, x.action.libelle])).toEqual([
+      ['15:28:10', '15:40:00', 'TRAJET_LONG', 'Trajet long : attendre CMD-B (prête vers 15 h 40), départ au plus tard 15 h 40'],
+    ]);
+    expect(m.toutes('RETENIR')[0].action.aller_retour_s! / 60).toBeCloseTo(41.2, 1);
+    // 15:40 : B prête, ajoutée dans la seconde, « Tout est prêt », A et B remises ensemble, départ à 15:40:30.
+    expect(m.toutes('AJOUTER').map((x) => [hms(x.t), x.action.order_id, x.action.attendue])).toEqual([['15:40:00', 'b', true]]);
+    expect(m.toutes('LIBERER').map((x) => [hms(x.t), x.action.motif])).toEqual([['15:40:00', 'TOUT_PRET']]);
+    const k = m.courseDe('a')!;
+    expect(m.courseDe('b')!.id).toBe(k.id);
+    expect(hms(m.commandes.get('a')!.remise_at!)).toBe('15:40:00');
+    expect(hms(m.commandes.get('b')!.remise_at!)).toBe('15:40:00');
+    expect(hms(k.parti_at!)).toBe('15:40:30');
+    // Arrivées (remise de 3 min comptée à part) dans la promesse + 5 min : A avant 16:00, B avant 16:05.
+    expect(hms(m.commandes.get('a')!.livree_at!)).toBe('16:02:35');
+    expect(hms(m.commandes.get('b')!.livree_at!)).toBe('16:07:29');
+    expect(m.toutes('CONFIER_TURBO')).toEqual([]);
+    expect(m.violations).toEqual([]);
+  });
+
+  it('A à 7 km : attendre réduit le délai total des clients (attente courte seule : B attend le retour de D1)', () => {
+    const long = scene(5000, SANS_TURBO).jusqua(h('16:45'));
+    const court = scene(5000, SANS_TURBO_COURT).jusqua(h('16:45'));
+
+    // Attente courte seule : A part à 15:29, D1 revient vers 16:10, B (prête à 15:40) part à 16:11:20.
+    expect(m2(court)).toEqual({ a: '15:51:05', b: '16:35:19' });
+    expect(m2(long)).toEqual({ a: '16:02:35', b: '16:07:29' });
+    const dL = delais(long);
+    const dC = delais(court);
+    // A : 11 min 30 s de plus (dans sa promesse) ; B : 28 min de moins ; au total, 16 min de moins.
+    expect(dL.a - dC.a).toBeCloseTo(11.5, 1);
+    expect(dC.b - dL.b).toBeCloseTo(27.8, 1);
+    expect(dL.total).toBeLessThan(dC.total);
+    expect(dC.total - dL.total).toBeCloseTo(16.3, 1);
+    expect(long.violations).toEqual([]);
+    expect(court.violations).toEqual([]);
+  });
+
+  it('A à 1,5 km (aller-retour de 11 min) : A part tout de suite, D1 revient à temps pour B', () => {
+    const m = scene(1070).jusqua(h('16:15'));
+
+    expect(m.toutes('RETENIR')).toEqual([]);
+    expect(m.historique.some(({ plan }) => plan.refus.some((r) => r.order_id === 'b' && r.refus === 'HORIZON'))).toBe(true);
+    expect(hms(m.commandes.get('a')!.remise_at!)).toBe('15:28:30');
+    expect(hms(m.courseDe('a')!.parti_at!)).toBe('15:29:00');
+    // D1 revient vers 15:40:12 : la course de B (créée à 15:40) lui est proposée au passage suivant.
+    expect(m.toutes('CREER_COURSE').map((x) => [hms(x.t), x.action.order_ids])).toEqual([
+      ['15:28:00', ['a']],
+      ['15:40:00', ['b']],
+    ]);
+    expect(m.toutes('OFFRIR').map((x) => [hms(x.t), x.action.deliverer_id])).toEqual([
+      ['15:28:00', 'd1'],
+      ['15:40:20', 'd1'],
+    ]);
+    expect(m2(m)).toEqual({ a: '15:36:05', b: '16:05:19' });
+    expect(m.toutes('CONFIER_TURBO')).toEqual([]);
+    expect(m.violations).toEqual([]);
+
+    // Exactement comme avec l'attente courte seule.
+    const court = scene(1070, COURT).jusqua(h('16:15'));
+    expect(court.historique.map(({ plan }) => plan.actions)).toEqual(m.historique.map(({ plan }) => plan.actions));
+    // Le faire attendre ici (attente courte élargie à 15 min) coûterait aux deux clients.
+    const force = scene(1070, { ...REGLAGES_PLANIFICATION_DEFAUT, horizonPreparationS: 900, attenteMaxCommandePreteS: 900 }).jusqua(h('16:15'));
+    expect(m2(force)).toEqual({ a: '15:47:35', b: '16:07:29' });
+    expect(delais(force).total - delais(m).total).toBeCloseTo(13.7, 1);
+  });
+});
+
+/** Heures de remise chez le client de A et B. */
+function m2(m: Monde): { a: string; b: string } {
+  return { a: hms(m.commandes.get('a')!.livree_at!), b: hms(m.commandes.get('b')!.livree_at!) };
+}
 
 describe('zéro offre à un livreur en pause', () => {
   it('D1 en pause au comptoir : rien tant qu’il n’a pas repris, la course dès qu’il reprend', () => {
@@ -251,7 +378,10 @@ describe('rush : 2 livreurs pour 6 commandes', () => {
     }
     const groupes = [...courses.values()].map((g) => g.sort());
     // Jamais l'est avec le nord ; au moins deux tournées groupées ; moins de courses que de commandes.
-    expect(groupes).toEqual(expect.arrayContaining([['o1', 'o2'], ['o4', 'o6']]));
+    // Trajet long : o3 (nord, prête à 12:09) attend o4 (prête à 12:13) au comptoir,
+    // au lieu de partir seule et de laisser o4 attendre le retour d'un livreur
+    // (attente cumulée au comptoir : 47,7 min au lieu de 52, délais clients : 203 min au lieu de 207,5).
+    expect(groupes).toEqual(expect.arrayContaining([['o1', 'o2'], ['o3', 'o4']]));
     expect(courses.size).toBeLessThan(ids.length);
     for (const g of groupes) {
       const est = g.some((id) => ['o1', 'o2', 'o5'].includes(id));

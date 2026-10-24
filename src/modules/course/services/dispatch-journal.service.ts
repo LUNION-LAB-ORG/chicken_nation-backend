@@ -60,7 +60,7 @@ export type TypeEvenementDispatch =
   | 'ARRETS_ORDONNES'
   /** Course proposée par le planificateur ; `motif` = AU_COMPTOIR ou MINUTES. */
   | 'OFFRE_PLANIFIEE'
-  /** Départ retenu au comptoir pour une commande en préparation. */
+  /** Départ retenu au comptoir pour une commande en préparation ; `motif` = ATTENTE_COURTE ou TRAJET_LONG. */
   | 'COURSE_RETENUE'
   /** Retenue levée ; `motif` = TOUT_PRET, ECHEANCE, PLUS_RIEN_A_ATTENDRE, PARTI, REPLI_V1. */
   | 'RETENUE_LEVEE'

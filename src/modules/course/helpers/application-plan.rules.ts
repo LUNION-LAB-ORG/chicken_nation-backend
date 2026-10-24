@@ -6,7 +6,7 @@
 import { DeliveryStatut } from '@prisma/client';
 
 import { libelleDirection, MotifDirection } from './direction.rules';
-import { CommandeAttendue, MotifLiberation } from './planification.rules';
+import { CommandeAttendue, MotifLiberation, MotifRetenue } from './planification.rules';
 
 /**
  * Raisons portées par `course:statut:changed` quand le planificateur change
@@ -73,12 +73,20 @@ export function libelleRegroupement(motif: MotifDirection | null | undefined): s
   return libelleDirection(motif).slice(0, 40);
 }
 
-/** Commandes attendues, telles qu'écrites dans `Course.commandes_attendues`. */
+/**
+ * Commandes attendues, telles qu'écrites dans `Course.commandes_attendues` et
+ * lues par les écrans (Opérations, caisse). `motif` : `TRAJET_LONG` (la course
+ * attend au-delà de l'attente courte parce que le trajet est long ; les écrans
+ * écrivent « Trajet long : attendre CMD-B, prête vers 12 h 55 ») ou
+ * `ATTENTE_COURTE` (texte habituel). Absent sur une retenue d'avant le 24/10 :
+ * attente courte.
+ */
 export interface CommandeAttendueEcrite {
   order_id: string;
   reference: string;
   prete_vers: string;
   prete_au_plus_tard: string;
+  motif: MotifRetenue;
 }
 
 export function commandesAttenduesAEcrire(attendues: readonly CommandeAttendue[]): CommandeAttendueEcrite[] {
@@ -87,6 +95,7 @@ export function commandesAttenduesAEcrire(attendues: readonly CommandeAttendue[]
     reference: a.reference,
     prete_vers: a.prete_vers.toISOString(),
     prete_au_plus_tard: a.prete_au_plus_tard.toISOString(),
+    motif: a.motif,
   }));
 }
 

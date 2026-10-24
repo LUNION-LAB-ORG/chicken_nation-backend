@@ -22,7 +22,8 @@
  * Chaque action est contrôlée au moment où elle est appliquée (invariants) :
  * jamais d'offre à un livreur qui ne peut pas la recevoir, jamais d'ajout ni
  * de fusion vers une course Turbo ou d'un livreur en pause, jamais plus de 3
- * commandes, retenue jamais repoussée ni au-delà de la limite, zéro temps
+ * commandes, retenue jamais repoussée ni au-delà de la limite (5 min depuis
+ * `ready_at` pour une attente courte, 20 min pour un trajet long), zéro temps
  * mort (un livreur libre et une course qui attend sans offre).
  *
  * Temps morts plus fins, COMPTÉS en secondes (`tempsMort`) plutôt que
@@ -797,8 +798,13 @@ export class Monde {
         }
         case 'RETENIR': {
           const k = this.courses.get(a.course_id)!;
+          // Attente courte : 5 min depuis ready_at ; trajet long : 20 min.
+          const attenteS =
+            a.motif === 'TRAJET_LONG'
+              ? Math.max(this.reglages.attenteMaxCommandePreteS, this.reglages.attenteMaxTrajetLongS)
+              : this.reglages.attenteMaxCommandePreteS;
           const limite = Math.min(
-            ...k.livraisons.map((x) => (this.commandes.get(x.order_id)!.ready_at?.getTime() ?? Infinity) + this.reglages.attenteMaxCommandePreteS * 1000),
+            ...k.livraisons.map((x) => (this.commandes.get(x.order_id)!.ready_at?.getTime() ?? Infinity) + attenteS * 1000),
           );
           if (a.jusqua.getTime() > limite) this.violation(`retenue de ${k.id} au-delà de la limite`);
           if (k.retenue_jusqua && a.jusqua.getTime() > k.retenue_jusqua.getTime()) this.violation(`retenue de ${k.id} repoussée`);

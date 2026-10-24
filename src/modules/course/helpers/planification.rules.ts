@@ -17,7 +17,10 @@
  *    même zone, jamais « même rayon ») : règle `direction.rules.ts` ;
  *  - une commande prête peut attendre, au comptoir et dans des LIMITES dures,
  *    une commande de la même direction encore en préparation ; celle-ci est
- *    ajoutée automatiquement dès qu'elle est prête ;
+ *    ajoutée automatiquement dès qu'elle est prête. 5 min au plus si le
+ *    livreur peut aller livrer et revenir la prendre avec un petit retard ;
+ *    toute sa préparation si le trajet est long et qu'il reviendrait tard
+ *    (demande du 24/10) ;
  *  - un livreur qui a récupéré sa course mais est encore au restaurant
  *    reçoit sans attendre la commande compatible qui devient prête (nouvelle
  *    appli seulement, protocole 3) ;
@@ -68,6 +71,13 @@
  *     comptoir (son temps par défaut compte).
  *  6. RETENUES au comptoir (3.5) : posées, réduites ou levées. Une retenue ne
  *     peut que diminuer ; levée, elle ne revient jamais sur la même course.
+ *     ATTENTE COURTE : la commande en préparation est prête dans l'horizon
+ *     (7 min) et aucune commande prête n'attend plus de 5 min. TRAJET LONG
+ *     (demande du 24/10) : partir sans elle ferait revenir le livreur plus de
+ *     5 min (`petitRetardRetourMin`) après sa fin estimée ; la course l'attend
+ *     alors jusqu'à sa fin estimée, sans qu'une commande prête attende plus
+ *     de 20 min (`attenteMaxTrajetLongS`), promesses, autres livreurs et
+ *     limites de 3.6 compris.
  *  7. TURBO (3.11) : dernier recours, compté depuis la plus ancienne commande
  *     prête de la course (6 min sous v2), jamais pendant une offre en attente ;
  *     différé d'au plus 4 min quand un livreur interne revient au restaurant
@@ -186,10 +196,26 @@ export const ECART_REPRISE_OFFRE_COMPTOIR_S = 120;
 // ─── Réglages ────────────────────────────────────────────────────────────────
 
 export interface ReglagesPlanification {
-  /** `course.attente_max_commande_prete_s` : jamais de retenue au-delà de `ready_at` + ce délai. */
+  /** `course.attente_max_commande_prete_s` : jamais de retenue au-delà de `ready_at` + ce délai (attente courte). */
   attenteMaxCommandePreteS: number;
-  /** `course.horizon_preparation_s` : on n'attend pas une commande prête dans plus de ce délai. */
+  /** `course.horizon_preparation_s` : on n'attend pas une commande prête dans plus de ce délai (attente courte). */
   horizonPreparationS: number;
+  /**
+   * `course.petit_retard_retour_min` : retard toléré au retour du livreur
+   * (trajet long, demande du 24/10). Partir sans la commande en préparation
+   * le ferait revenir au restaurant plus de ce délai après qu'elle est prête :
+   * le trajet est « long ». 0 = toute attente un peu plus longue que
+   * l'aller-retour passe en trajet long.
+   */
+  petitRetardRetourMin: number;
+  /**
+   * `course.attente_max_trajet_long_s` : trajet long, la course attend la
+   * commande en préparation jusqu'à sa fin estimée, au-delà de l'horizon et de
+   * l'attente courte, mais aucune commande prête de la course n'attend plus
+   * de ce délai depuis `ready_at`. 0 = cas du trajet long coupé (attente
+   * courte seule).
+   */
+  attenteMaxTrajetLongS: number;
   /** `course.retenue_meme_si_livreur_libre` : retenir même si un autre livreur pourrait la prendre. */
   retenueMemeSiLivreurLibre: boolean;
   /** `course.max_orders_per_course` : taille maximale d'une course (annulées non comptées). */
@@ -243,6 +269,8 @@ export interface ReglagesPlanification {
 export const REGLAGES_PLANIFICATION_DEFAUT: Readonly<ReglagesPlanification> = Object.freeze({
   attenteMaxCommandePreteS: 300,
   horizonPreparationS: 420,
+  petitRetardRetourMin: 5,
+  attenteMaxTrajetLongS: 1200,
   retenueMemeSiLivreurLibre: false,
   maxCommandesParCourse: 3,
   dureeTourneeMaxMin: 25,
@@ -276,6 +304,8 @@ type CleBooleen = 'retenueMemeSiLivreurLibre' | 'ajoutApresRetrait' | 'turboActi
 const BORNES: Record<CleNombre, { cle: string; min: number; max: number; zero: boolean; entier?: boolean }> = {
   attenteMaxCommandePreteS: { cle: 'course.attente_max_commande_prete_s', min: 0, max: 3600, zero: true },
   horizonPreparationS: { cle: 'course.horizon_preparation_s', min: 0, max: 3600, zero: true },
+  petitRetardRetourMin: { cle: 'course.petit_retard_retour_min', min: 0, max: 120, zero: true },
+  attenteMaxTrajetLongS: { cle: 'course.attente_max_trajet_long_s', min: 0, max: 3600, zero: true },
   maxCommandesParCourse: { cle: 'course.max_orders_per_course', min: 1, max: 10, zero: false, entier: true },
   dureeTourneeMaxMin: { cle: 'course.max_route_duration_min', min: 1, max: 240, zero: false },
   promesseClientMin: { cle: 'course.promesse_client_min', min: 1, max: 240, zero: false },
@@ -332,10 +362,12 @@ function lireBooleen(brut: string): boolean | null {
  * Lit les réglages du planificateur depuis les valeurs brutes de la table des
  * réglages. Contrairement au `toNumber` historique du module course (qui
  * refuse 0), 0 est accepté là où il a un sens : attente maximale 0 = jamais
- * de retenue, horizon 0 = jamais d'attente d'une commande en préparation,
- * fenêtre 0 = jamais d'ajout après le retrait, retard ou détour 0 = aucun
- * toléré, Turbo 0 = dès qu'aucun livreur n'est libre. Une valeur hors bornes
- * ou illisible est remplacée par le défaut et SIGNALÉE.
+ * de retenue courte, horizon 0 = jamais d'attente courte d'une commande en
+ * préparation, petit retard au retour 0 = toute attente un peu plus longue
+ * que l'aller-retour est un trajet long, attente d'un trajet long 0 = cas du
+ * trajet long coupé, fenêtre 0 = jamais d'ajout après le retrait, retard ou
+ * détour 0 = aucun toléré, Turbo 0 = dès qu'aucun livreur n'est libre. Une
+ * valeur hors bornes ou illisible est remplacée par le défaut et SIGNALÉE.
  */
 export function lireReglagesPlanification(valeurs: Record<string, string | null | undefined>): ReglagesPlanificationLus {
   const refusees: { cle: string; valeur: string }[] = [];
@@ -705,6 +737,16 @@ export interface ActionReprendreOffre {
   libelle: string;
 }
 
+/**
+ * Pourquoi la course attend une commande en préparation (3.5) :
+ *  - `ATTENTE_COURTE` : dans la règle d'avant, la commande est prête dans
+ *    l'horizon (7 min) et aucune commande prête n'attend plus de 5 min ;
+ *  - `TRAJET_LONG` : au-delà (demande du 24/10). Partir sans elle ferait
+ *    revenir le livreur trop tard pour la prendre ; la course l'attend
+ *    jusqu'à sa fin estimée, dans la limite `attenteMaxTrajetLongS`.
+ */
+export type MotifRetenue = 'ATTENTE_COURTE' | 'TRAJET_LONG';
+
 export interface CommandeAttendue {
   order_id: string;
   reference: string;
@@ -712,6 +754,8 @@ export interface CommandeAttendue {
   prete_vers: Date;
   /** Fin estimée pour décider (8e décile ou cuisine). */
   prete_au_plus_tard: Date;
+  /** Attente courte ou trajet long : écrit dans `Course.commandes_attendues`, lu par les écrans. */
+  motif: MotifRetenue;
 }
 
 export interface ActionRetenir {
@@ -721,6 +765,13 @@ export interface ActionRetenir {
   /** Départ retenu jusqu'à : ne peut que diminuer. */
   jusqua: Date;
   attendues: CommandeAttendue[];
+  /** `TRAJET_LONG` dès qu'une commande attendue l'est pour un trajet long, sinon `ATTENTE_COURTE`. */
+  motif: MotifRetenue;
+  /**
+   * Aller-retour estimé de la course sans les commandes attendues, depuis son
+   * départ possible (secondes, journal) ; `null` s'il n'a pas eu à être estimé.
+   */
+  aller_retour_s: number | null;
   libelle: string;
 }
 
@@ -1193,11 +1244,15 @@ export function estCourseVideSansLivreur(
  */
 export function pairesAEvaluer(
   instantane: InstantanePlanification,
-  r: Pick<ReglagesPlanification, 'horizonPreparationS'> = REGLAGES_PLANIFICATION_DEFAUT,
+  r: Pick<ReglagesPlanification, 'horizonPreparationS' | 'attenteMaxTrajetLongS'> = REGLAGES_PLANIFICATION_DEFAUT,
 ): [ClientDirection, ClientDirection][] {
   const t = instantane.maintenant.getTime();
   const mobiles: ClientDirection[] = [];
   const groupes: ClientDirection[][] = [];
+  // Une commande en préparation peut retenir une course si elle est prête dans
+  // l'horizon (attente courte) ou, pour un trajet long, avant que la commande
+  // prête n'ait attendu `attenteMaxTrajetLongS` (prête au plus tard d'ici là).
+  const fenetreS = Math.max(r.horizonPreparationS, r.attenteMaxTrajetLongS);
 
   for (const c of instantane.commandes) {
     if (c.delivery_service !== DeliveryService.CHICKEN_NATION) continue;
@@ -1205,7 +1260,7 @@ export function pairesAEvaluer(
     else if (
       c.statut === OrderStatus.IN_PROGRESS &&
       c.preparation &&
-      c.preparation.finDecision.getTime() - t <= r.horizonPreparationS * 1000
+      c.preparation.finDecision.getTime() - t <= fenetreS * 1000
     )
       mobiles.push(c.client);
   }
@@ -1482,6 +1537,62 @@ function memeBase(
     estimer(ctx, a.arrets, a.departMs, { volOiseau: true, geographique }),
     estimer(ctx, b.arrets, b.departMs, { volOiseau: true, geographique }),
   ];
+}
+
+/**
+ * Aller-retour estimé d'une course qui part du restaurant à `departMs`
+ * (trajet long, demande du 24/10) : la tournée de `estimer` (ordre des
+ * arrêts, trajets, remise de 3 min à chaque arrêt précédent), la remise au
+ * dernier client, puis son retour au restaurant. Retour estimé sans Google
+ * comme l'aller (`estimerTrajets`) : distance routière connue du dernier
+ * client, sinon vol d'oiseau × 1,4, à la vitesse du départ (pointe ou non).
+ * Jamais de mélange : si l'aller et le retour ne sont pas sur la même base,
+ * les deux sont repris au vol d'oiseau. Client (ou restaurant) sans
+ * coordonnées : trajet supposé `trajetSansCoordonneesMin`, comme pour le
+ * retour d'un livreur en course.
+ */
+function allerRetourMs(ctx: Contexte, arrets: readonly Arret[], departMs: number): number {
+  if (arrets.length === 0) return 0;
+  const R = ctx.restaurant;
+  const vitesse = vitesseKmh(new Date(departMs), ctx.r);
+  const tournee = (volOiseau: boolean) => {
+    const est = estimer(ctx, arrets, departMs, { volOiseau });
+    // Dernier arrêt de la tournée : la plus tardive des arrivées estimées.
+    let dernier: Arret = arrets[0];
+    let arriveeMs = Number.NEGATIVE_INFINITY;
+    for (const id of est.ordre) {
+      const a = est.arriveesMs.get(id);
+      if (a !== undefined && a >= arriveeMs) {
+        arriveeMs = a;
+        dernier = arrets.find((x) => x.id === id) ?? dernier;
+      }
+    }
+    const client = volOiseau ? sansCarte(dernier.client) : dernier.client;
+    const retour =
+      R && client.position ? estimerTrajets(R, [client], { mode: 'seul', vitesseKmh: vitesse }) : null;
+    return { est, arriveeMs, retour };
+  };
+  let choix = tournee(false);
+  if (choix.retour && choix.retour.base !== choix.est.base) choix = tournee(true);
+  const retourMs = choix.retour ? choix.retour.secondesTotal * 1000 : ctx.r.trajetSansCoordonneesMin * 60_000;
+  // À la milliseconde : la frontière « petit retard » se compare à des heures entières.
+  return Math.round(choix.arriveeMs - departMs + ARRET_CLIENT_S * 1000 + retourMs);
+}
+
+/**
+ * Aller-retour estimé (millisecondes) d'une course de l'instantané qui part du
+ * restaurant à `depart` : la mesure qui sépare l'attente courte du trajet
+ * long (3.5). Exposée pour les tests et l'analyse des retenues.
+ */
+export function allerRetourCourseMs(
+  instantane: InstantanePlanification,
+  course: Pick<CoursePlanif, 'livraisons'>,
+  depart: Date,
+  reglages: ReglagesPlanification = REGLAGES_PLANIFICATION_DEFAUT,
+  options: OptionsPlanification = {},
+): number {
+  const ctx = creerContexte(instantane, reglages, options);
+  return allerRetourMs(ctx, livraisonsActives(course.livraisons).map((l) => arretDe(ctx, l.commande)), depart.getTime());
 }
 
 const minutesTexte = (ms: number) => `${Math.max(1, Math.round(ms / 60_000))} min`;
@@ -2316,15 +2427,24 @@ export function planifier(
       return ra - rb || a.categorie! - b.categorie! || departOuDefaut(ctx, departCourse(ctx, a)) - departOuDefaut(ctx, departCourse(ctx, b));
     });
 
+  const trajetLongActif = r.attenteMaxTrajetLongS > 0;
   for (const k of aRetenir) {
     const T = k.source?.retenue_jusqua?.getTime() ?? null;
     if (T !== null && T <= t) continue; // terminée : jamais reposée
+    if (k.arrets.length === 0) continue;
     const dPossible = departOuDefaut(ctx, departCourse(ctx, k));
-    let limite = Math.min(...k.arrets.map((a) => (a.readyMs ?? t) + r.attenteMaxCommandePreteS * 1000));
-    // Après le retrait : la commande attendue doit pouvoir être ajoutée, puis remise.
-    if (k.fenetreFermeMs !== null) limite = Math.min(limite, k.fenetreFermeMs - margeRemiseApresRetraitMs(r));
-    if (T !== null) limite = Math.min(limite, T);
-    if (k.arrets.length === 0 || limite <= t || dPossible >= limite) continue;
+    // Plafond commun : après le retrait, la commande attendue doit pouvoir être
+    // ajoutée, puis remise ; une retenue posée ne peut que diminuer.
+    let plafond = Number.POSITIVE_INFINITY;
+    if (k.fenetreFermeMs !== null) plafond = Math.min(plafond, k.fenetreFermeMs - margeRemiseApresRetraitMs(r));
+    if (T !== null) plafond = Math.min(plafond, T);
+    /** Aucune commande prête de la course n'attend plus de `s` secondes depuis `ready_at`. */
+    const attenteAuPlus = (s: number) => Math.min(plafond, ...k.arrets.map((a) => (a.readyMs ?? t) + s * 1000));
+    // Attente courte (règle d'avant) : 5 min ; trajet long : 20 min.
+    const limiteCourte = attenteAuPlus(r.attenteMaxCommandePreteS);
+    const limiteLongue = trajetLongActif ? attenteAuPlus(r.attenteMaxTrajetLongS) : Number.NEGATIVE_INFINITY;
+    const limite = Math.max(limiteCourte, limiteLongue);
+    if (limite <= t || dPossible >= limite) continue;
 
     const attenduesAvant = new Set(k.source?.commandes_attendues ?? []);
     const candidates = enPreparation
@@ -2334,21 +2454,69 @@ export function planifier(
           Number(!attenduesAvant.has(a.id)) - Number(!attenduesAvant.has(b.id)) ||
           a.preparation!.finDecision.getTime() - b.preparation!.finDecision.getTime(),
       );
-    const choisies: { c: CommandePlanif; arret: Arret; fin: number }[] = [];
+    const choisies: { c: CommandePlanif; arret: Arret; fin: number; motif: MotifRetenue }[] = [];
+    // Retour au restaurant du livreur s'il partait sans la commande examinée :
+    // départ au plus tôt avec la course et les commandes déjà attendues
+    // (après la dernière d'entre elles), tournée, retour. Calculé au besoin,
+    // une fois par état des commandes attendues.
+    const mesure: { allerRetourSeulMs: number | null; retour: { attendues: number; ms: number } | null } = {
+      allerRetourSeulMs: null,
+      retour: null,
+    };
+    const retourSansAttendre = (): number => {
+      mesure.allerRetourSeulMs ??= allerRetourMs(ctx, k.arrets, dPossible);
+      if (!mesure.retour || mesure.retour.attendues !== choisies.length) {
+        const depart = Math.max(dPossible, ...choisies.map((x) => x.fin));
+        const ar =
+          choisies.length === 0
+            ? mesure.allerRetourSeulMs
+            : allerRetourMs(ctx, [...k.arrets, ...choisies.map((x) => x.arret)], depart);
+        mesure.retour = { attendues: choisies.length, ms: depart + ar };
+      }
+      return mesure.retour.ms;
+    };
     for (const c of candidates) {
-      const fin = c.preparation!.finDecision.getTime();
+      // Fin estimée de la commande (8e décile). `fin` peut ensuite être ramenée
+      // à l'échéance d'une retenue déjà posée ; elle, jamais.
+      const finEstimee = c.preparation!.finDecision.getTime();
+      let fin = finEstimee;
       const noter = (motif: MotifRefusPlanification, libelle: string) =>
         refus.push({ essai: 'RETENUE', order_id: c.id, source_id: null, course_cle: k.cle, refus: motif, libelle });
-      if (fin - t > r.horizonPreparationS * 1000) {
-        noter('HORIZON', `${c.reference} prête dans plus de ${minutesTexte(r.horizonPreparationS * 1000)}`);
-        continue;
-      }
-      if (fin > limite) {
-        noter('LIMITE_RETENUE', `${c.reference} prête trop tard`);
-        continue;
+      const courte = (f: number) => f - t <= r.horizonPreparationS * 1000 && f <= limiteCourte;
+      let motif: MotifRetenue = 'ATTENTE_COURTE';
+      if (!courte(fin)) {
+        // Trajet long (demande du 24/10) : partir sans elle ferait revenir le
+        // livreur plus d'un petit retard après qu'elle est prête. La course
+        // l'attend jusqu'à sa fin estimée, au-delà de l'horizon et de
+        // l'attente courte, sans qu'une commande prête attende plus de
+        // `attenteMaxTrajetLongS`. Sinon (il reviendrait à temps, à un petit
+        // retard près), la règle d'avant, inchangée.
+        const trajetLong = trajetLongActif && retourSansAttendre() > fin + r.petitRetardRetourMin * 60_000;
+        if (!trajetLong) {
+          if (fin - t > r.horizonPreparationS * 1000) {
+            noter('HORIZON', `${c.reference} prête dans plus de ${minutesTexte(r.horizonPreparationS * 1000)}`);
+          } else {
+            noter('LIMITE_RETENUE', `${c.reference} prête trop tard`);
+          }
+          continue;
+        }
+        if (fin > limiteLongue) {
+          // Déjà attendue, son estimation a reculé : la retenue n'est jamais
+          // prolongée, elle garde son échéance ; à l'échéance, la course part.
+          if (!attenduesAvant.has(c.id)) {
+            noter('LIMITE_RETENUE', `${c.reference} prête trop tard, même pour un trajet long`);
+            continue;
+          }
+          fin = limiteLongue;
+        }
+        motif = courte(fin) ? 'ATTENTE_COURTE' : 'TRAJET_LONG';
       }
       if (fin <= dPossible) continue; // prête avant le départ possible : rien à attendre
-      if (!r.retenueMemeSiLivreurLibre && autreLivreurATemps(ctx, k, fin)) {
+      // Un autre livreur la prendrait seule à temps : jugé à sa fin estimée,
+      // jamais à l'échéance d'une retenue qu'elle dépasse (relecture du 24/10 :
+      // annoncée plus tard, elle partait avec un livreur revenu entre-temps et
+      // la course l'avait attendue pour rien).
+      if (!r.retenueMemeSiLivreurLibre && autreLivreurATemps(ctx, k, finEstimee)) {
         noter('AUTRE_LIVREUR_LIBRE', `un autre livreur peut prendre ${c.reference}`);
         continue;
       }
@@ -2368,7 +2536,7 @@ export function planifier(
         noter(res.refus, res.libelle);
         continue;
       }
-      choisies.push({ c, arret, fin });
+      choisies.push({ c, arret, fin, motif });
     }
     if (choisies.length === 0) continue;
 
@@ -2380,21 +2548,25 @@ export function planifier(
       reference: x.c.reference,
       prete_vers: x.c.preparation!.finMediane,
       prete_au_plus_tard: x.c.preparation!.finDecision,
+      motif: x.motif,
     }));
     const memes =
       T === jusqua &&
       attenduesAvant.size === attendues.length &&
       attendues.every((a) => attenduesAvant.has(a.order_id));
     if (memes) continue;
+    const motif: MotifRetenue = attendues.some((a) => a.motif === 'TRAJET_LONG') ? 'TRAJET_LONG' : 'ATTENTE_COURTE';
+    const liste = attendues.map((a) => `${a.reference} (prête vers ${heureLisible(a.prete_vers, maintenant)})`).join(', ');
+    const depart = `départ au plus tard ${heureLisible(new Date(jusqua), maintenant)}`;
     actions.push({
       type: 'RETENIR',
       course_id: k.id!,
       deliverer_id: k.delivererId,
       jusqua: new Date(jusqua),
       attendues,
-      libelle: `Attendre ${attendues
-        .map((a) => `${a.reference} (prête vers ${heureLisible(a.prete_vers, maintenant)})`)
-        .join(', ')}, départ au plus tard ${heureLisible(new Date(jusqua), maintenant)}`,
+      motif,
+      aller_retour_s: mesure.allerRetourSeulMs === null ? null : Math.round(mesure.allerRetourSeulMs / 1000),
+      libelle: motif === 'TRAJET_LONG' ? `Trajet long : attendre ${liste}, ${depart}` : `Attendre ${liste}, ${depart}`,
     });
   }
 
@@ -2506,7 +2678,8 @@ function autreLivreurATemps(ctx: Contexte, k: CourseTravail, finMs: number): boo
  * Retour estimé d'un livreur en course au restaurant, sans Google : arrêts
  * restants à vol d'oiseau × 1,4, 3 min par arrêt, puis le retour. Depuis sa
  * position fraîche s'il est parti, sinon depuis le restaurant à son départ
- * (au plus tôt, ou à son arrivée s'il est en route). Un trajet vers ou
+ * (au plus tôt, ou à son arrivée s'il est en route, jamais avant l'échéance
+ * de sa retenue au comptoir). Un trajet vers ou
  * depuis un client sans coordonnées dure `trajetSansCoordonneesMin` : le
  * livreur qui le livre n'est jamais réputé déjà revenu. `null` sans
  * coordonnées du restaurant.
@@ -2540,6 +2713,12 @@ export function retourAuRestaurantMs(
   } else {
     point = restaurant;
     debut = course.statut === CourseStatut.ACCEPTED ? t + etaVersRestaurantMs : t;
+    // Course retenue au comptoir : le livreur part à l'échéance de la retenue.
+    // Jusqu'à 20 min pour un trajet long (relecture du 24/10) : compté depuis
+    // maintenant, son retour paraissait bien plus proche, au point de refuser
+    // une retenue à une autre course pour un livreur qui ne serait pas là.
+    const retenue = course.retenue_jusqua?.getTime() ?? null;
+    if (retenue !== null && retenue > debut) debut = retenue;
   }
   const mps = vitesseKmh(new Date(debut), r) / 3.6;
   const trajetInconnuS = r.trajetSansCoordonneesMin * 60;
