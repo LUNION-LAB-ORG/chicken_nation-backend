@@ -8,6 +8,7 @@ import { TurboModule } from 'src/turbo/turbo.module';
 import { CourseAdminController } from './controllers/course-admin.controller';
 import { CourseDelivererController } from './controllers/course-deliverer.controller';
 import { CourseOperationsController } from './controllers/course-operations.controller';
+import { LivraisonTableauController } from './controllers/livraison-tableau.controller';
 import { CourseEvent } from './events/course.event';
 import { CourseHelper } from './helpers/course.helper';
 import { CourseSettingsHelper } from './helpers/course-settings.helper';
@@ -37,6 +38,7 @@ import { GardeOffresService } from './services/garde-offres.service';
 import { InstantanePlanificationService } from './services/instantane-planification.service';
 import { LotsV2Service } from './services/lots-v2.service';
 import { OffreEnAttenteService } from './services/offre-en-attente.service';
+import { TableauLivraisonService } from './services/tableau-livraison.service';
 import { CourseBatchTask } from './tasks/course-batch.task';
 import { CoursePlanificateurTask } from './tasks/course-planificateur.task';
 import { CourseTask } from './tasks/course.task';
@@ -47,7 +49,12 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
   // TurboModule : bascule vers la flotte externe quand la flotte interne est saturée.
   // MapsModule : ETA client (trafic + arrêts) dans le suivi de livraison.
   imports: [AuthDelivererModule, DeliverersModule, TurboModule, MapsModule],
-  controllers: [CourseDelivererController, CourseAdminController, CourseOperationsController],
+  controllers: [
+    CourseDelivererController,
+    CourseAdminController,
+    CourseOperationsController,
+    LivraisonTableauController, // `GET /livraison/tableau` : bandeau, alertes, ligne Livreurs
+  ],
   providers: [
     // Helpers
     CourseHelper,
@@ -72,6 +79,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     LotsV2Service, // Lots sous v2 : vidés pour la flotte interne, direction pour Turbo
     DepartCourseService, // Départ du restaurant, « Je pars », retrait complémentaire
     ArriveeAutoService, // Arrivées au restaurant et chez le client déduites des positions
+    TableauLivraisonService, // Tableau de la livraison : chiffres par restaurant, alertes (gardé 10 s)
     // Events + WS
     CourseEvent,
     CourseWebSocketService,
