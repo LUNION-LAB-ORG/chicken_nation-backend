@@ -42,6 +42,7 @@ import { MarkPaidCashDto } from 'src/modules/order/dto/mark-paid-cash.dto';
 import { QueryOrderCustomerDto, QueryOrderDto } from 'src/modules/order/dto/query-order.dto';
 import { OrderUpdatedDto, UpdateOrderDto } from 'src/modules/order/dto/update-order.dto';
 import { SuiviOperationsService } from '../services/suivi-operations.service';
+import { SuiviLivraisonService } from '../services/suivi-livraison.service';
 import { OrderService } from 'src/modules/order/services/order.service';
 import { FraisLivraisonDto } from '../dto/frais-livrasion.dto';
 import { ReceiptsService } from '../services/receipts.service';
@@ -86,6 +87,8 @@ export class OrderController {
     private readonly kkiapayOrderListenerService: KkiapayOrderListenerService,
     // Écran Opérations : offre en attente nommée, fin de la fenêtre d'ajout après le retrait.
     @Optional() private readonly suiviOperations?: SuiviOperationsService,
+    // Tiroir de détail : section « Livraison » (livreur, étapes, durées).
+    @Optional() private readonly suiviLivraison?: SuiviLivraisonService,
   ) { }
 
   /**
@@ -486,6 +489,41 @@ export class OrderController {
     );
     return order;
   }
+
+  /**
+   * GET /orders/:id/livraison
+   *
+   * Section « Livraison » du tiroir de détail : service, course (référence,
+   * code de retrait, arrêt 2 sur 3), livreur et son état, étapes avec leur
+   * heure (ou l'heure prévue quand le serveur la connaît) et durées
+   * (`helpers/suivi-livraison.rules.ts`).
+   *
+   * Mêmes gardes et même cloisonnement que le détail juste au dessus : un
+   * compte de restaurant n'ouvre que les commandes de son restaurant. Le
+   * téléphone du livreur passe par le masquage global des coordonnées
+   * (clé `telephone`), comme toute réponse : aucune dérogation ici.
+   */
+  @Get(':id/livraison')
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.READ)
+  @ApiOperation({ summary: "Suivi de la livraison d'une commande (livreur, étapes, durées)" })
+  @ApiResponse({
+    status: 200,
+    description:
+      "{ service: 'CHICKEN_NATION' | 'TURBO' | null, course: { id, reference, code_retrait, nombre_commandes, rang_arret, statut } | null, " +
+      'livreur: { id, nom, telephone, etat } | null, etapes: { cle, heure, prevue }[], ' +
+      'durees: { vers_restaurant_s, attente_comptoir_s, vers_client_s, pret_a_livre_s } }',
+  })
+  async suiviDeLivraison(@Req() req: Request, @Param('id') id: string) {
+    if (!this.suiviLivraison) throw new NotFoundException('Suivi de livraison indisponible');
+    const user = req.user as User;
+    const commande = await this.suiviLivraison.lire(id, {
+      inclurePanierAnnuleParClient: peutVoirLesBrouillons(user),
+    });
+    assertCanAccessRestaurant(user, commande.restaurant_id);
+    return this.suiviLivraison.suivi(commande);
+  }
+
   @Get(':id/client')
   @UseGuards(JwtCustomerAuthGuard)
   async findOneClient(@Req() req: Request, @Param('id') id: string) {
