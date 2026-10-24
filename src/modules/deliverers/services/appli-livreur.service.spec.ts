@@ -229,6 +229,68 @@ describe('joignabilité : socket ouvert ou jeton de notification', () => {
   });
 });
 
+describe('en appel avec le service client (relecture du 24/10)', () => {
+  /** Table des appels simulée : seuls les appels vivants d'un livreur sont rendus. */
+  function avecAppels(t: ReturnType<typeof monter>, appels: { caller_deliverer_id: string | null; target_deliverer_id: string | null }[] | Error) {
+    const findMany = jest.fn(async () => {
+      if (appels instanceof Error) throw appels;
+      return appels;
+    });
+    (t.prisma as any).call = { findMany };
+    return findMany;
+  }
+
+  it('contexte, contextePour, contexteSelection : livreurs en appel, appelants ou appelés', async () => {
+    const l = livreur({ dernier_signal_at: avantS(20) });
+    const t = monter({ livreurs: [l] }, { connectes: [] });
+    const findMany = avecAppels(t, [
+      { caller_deliverer_id: 'appelant', target_deliverer_id: null },
+      { caller_deliverer_id: null, target_deliverer_id: 'appele' },
+    ]);
+
+    const contexte = await t.service.contexte([{ id: 'appelant', dernier_signal_at: avantS(20), protocole_appli: 4 }], MAINTENANT);
+    expect([...(contexte.enAppel ?? [])]).toEqual(['appelant', 'appele']);
+    expect([...((await t.service.contextePour([l.id], MAINTENANT)).enAppel ?? [])]).toEqual(['appelant', 'appele']);
+    expect([...((await t.service.contexteSelection(l.restaurant_id, MAINTENANT)).enAppel ?? [])]).toEqual([
+      'appelant',
+      'appele',
+    ]);
+    // Fenêtre des appels vivants : qui sonne (60 s) ou en ligne (4 h).
+    expect(JSON.stringify(findMany.mock.calls[0])).toMatch(/RINGING/);
+    expect(JSON.stringify(findMany.mock.calls[0])).toMatch(/ONGOING/);
+  });
+
+  it('règles de l’appli et des joignables coupées : les livreurs en appel restent écartés', async () => {
+    const t = monter({}, { seuilS: 0, joignablesSeulement: false });
+    avecAppels(t, [{ caller_deliverer_id: 'l', target_deliverer_id: null }]);
+    expect(await t.service.contexte([{ id: 'l', dernier_signal_at: null, protocole_appli: 4 }], MAINTENANT)).toEqual({
+      appliFermeeApresS: 0,
+      connectes: null,
+      enAppel: new Set(['l']),
+    });
+  });
+
+  it('appels illisibles ou aucun appel : personne n’est réputé en appel', async () => {
+    const t = monter({}, { connectes: [] });
+    avecAppels(t, new Error('base'));
+    expect(await t.service.contexte([{ id: 'l', dernier_signal_at: avantS(20), protocole_appli: 4 }], MAINTENANT)).not.toHaveProperty(
+      'enAppel',
+    );
+    avecAppels(t, []);
+    expect(await t.service.contexte([{ id: 'l', dernier_signal_at: avantS(20), protocole_appli: 4 }], MAINTENANT)).not.toHaveProperty(
+      'enAppel',
+    );
+  });
+
+  it('appli active (filet, passages au journal) : les appels ne sont pas lus', async () => {
+    const l = livreur({ dernier_signal_at: avantS(20) });
+    const t = monter({ livreurs: [l] }, { connectes: [] });
+    const findMany = avecAppels(t, [{ caller_deliverer_id: l.id, target_deliverer_id: null }]);
+    expect(await t.service.estActive(l.id, MAINTENANT)).toBe(true);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+});
+
 describe('passages au journal (tâche de 10 s)', () => {
   it('appli fermée : APPLI_FERMEE une seule fois, avec le dernier signe de vie ; rien pour l’appli active', async () => {
     const ferme = livreur({ dernier_signal_at: avantS(200) });

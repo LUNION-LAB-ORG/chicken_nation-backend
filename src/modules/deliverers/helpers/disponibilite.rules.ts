@@ -1,10 +1,17 @@
 import {
+  CallStatus,
   CourseOfferStatus,
   CourseStatut,
   DelivererStatus,
   EntityStatus,
   Prisma,
 } from '@prisma/client';
+
+import {
+  APPEL_FANTOME_MS,
+  MARGE_SONNERIE_LIVREUR_MS,
+  SONNERIE_LIVREUR_MS,
+} from 'src/modules/calls/constants/calls.constants';
 
 /**
  * DISPONIBILITÉ D'UN LIVREUR : peut-il recevoir une offre de course ?
@@ -44,7 +51,16 @@ import {
  *    Présence inconnue (Redis ou l'autre serveur muet) : personne n'est
  *    réputé injoignable. Cette règle ne garde que la CRÉATION d'une offre
  *    (sélection, planificateur, affectation forcée) : les relances,
- *    l'échéance et l'acceptation d'une offre déjà partie n'en dépendent pas.
+ *    l'échéance et l'acceptation d'une offre déjà partie n'en dépendent pas ;
+ *  - pas en appel avec le service client (relecture du 24/10 : l'écran d'appel
+ *    recouvre tout, une offre arrivée pendant l'appel restait cachée dessous
+ *    jusqu'à son échéance, comptée comme un refus) : un appel qui sonne (moins
+ *    de 60 s) ou en ligne (moins de 4 h, même fenêtre que
+ *    `GET /calls/deliverer/active`). Il est passé, sans pause ni pénalité, et
+ *    redevient candidat à la fin de l'appel (passage suivant du planificateur,
+ *    5 s). Comme la joignabilité, cette règle ne garde que la CRÉATION d'une
+ *    offre : relances, échéance et acceptation d'une offre déjà partie n'en
+ *    dépendent pas. Appels illisibles : personne n'est réputé en appel.
  *
  * Le chaînage (offre pendant la dernière livraison) est suspendu : il aura sa
  * propre règle s'il revient (lot 9 de la conception).
@@ -59,7 +75,8 @@ export type MotifRefusOffre =
   | 'OFFRE_EN_ATTENTE'
   | 'HORS_SERVICE'
   | 'APPLI_FERMEE'
-  | 'INJOIGNABLE';
+  | 'INJOIGNABLE'
+  | 'EN_APPEL';
 
 export type DecisionOffre = { ok: true } | { ok: false; motif: MotifRefusOffre };
 
@@ -88,6 +105,11 @@ export interface EtatLivreur {
    * coupée, jeton non lu, présence inconnue), réputé joignable.
    */
   joignable?: boolean;
+  /**
+   * En appel avec le service client (sonne ou en ligne). Absent : non jugé
+   * (appels illisibles), réputé hors appel.
+   */
+  en_appel?: boolean;
 }
 
 /** Une course dont le livreur est occupé : ni offre, ni chaînage. */
@@ -161,6 +183,51 @@ export interface ContexteAppli {
    * présence inconnue ; personne n'est alors réputé injoignable.
    */
   injoignables?: ReadonlySet<string> | null;
+  /**
+   * Livreurs EN APPEL avec le service client (`livreursEnAppel`). Absent ou
+   * vide : personne n'est réputé en appel.
+   */
+  enAppel?: ReadonlySet<string> | null;
+}
+
+// ============================================================
+// EN APPEL AVEC LE SERVICE CLIENT
+// ============================================================
+
+/**
+ * Appels vivants d'un livreur, appelant ou appelé : qui sonne depuis moins de
+ * 60 s (45 s de sonnerie et une marge), ou en ligne depuis moins de 4 h. Même
+ * fenêtre que `GET /calls/deliverer/active` : un appel resté « RINGING » ou
+ * « ONGOING » après un redémarrage n'écarte personne au-delà.
+ */
+export function filtreAppelsVivantsLivreurs(maintenant: Date): Prisma.CallWhereInput {
+  const t = maintenant.getTime();
+  return {
+    AND: [
+      { OR: [{ caller_deliverer_id: { not: null } }, { target_deliverer_id: { not: null } }] },
+      {
+        OR: [
+          {
+            status: CallStatus.RINGING,
+            started_at: { gte: new Date(t - SONNERIE_LIVREUR_MS - MARGE_SONNERIE_LIVREUR_MS) },
+          },
+          { status: CallStatus.ONGOING, started_at: { gte: new Date(t - APPEL_FANTOME_MS) } },
+        ],
+      },
+    ],
+  };
+}
+
+/** Livreurs de ces appels vivants, appelants ou appelés. */
+export function livreursDesAppels(
+  appels: readonly { caller_deliverer_id: string | null; target_deliverer_id: string | null }[],
+): Set<string> {
+  const ids = new Set<string>();
+  for (const a of appels) {
+    if (a.caller_deliverer_id) ids.add(a.caller_deliverer_id);
+    if (a.target_deliverer_id) ids.add(a.target_deliverer_id);
+  }
+  return ids;
 }
 
 // ============================================================
@@ -269,6 +336,7 @@ export function peutRecevoirOffre(l: EtatLivreur, maintenant: Date): DecisionOff
   if (!estEnService(l)) return { ok: false, motif: 'HORS_SERVICE' };
   if (!l.appli_active) return { ok: false, motif: 'APPLI_FERMEE' };
   if (l.joignable === false) return { ok: false, motif: 'INJOIGNABLE' };
+  if (l.en_appel === true) return { ok: false, motif: 'EN_APPEL' };
   return { ok: true };
 }
 
@@ -310,6 +378,10 @@ export function filtreLivreursPouvantRecevoirOffre(
   // Injoignables (ni socket ni jeton), jugés au contexte : passés.
   if (appli.injoignables && appli.injoignables.size > 0) {
     conditions.push({ id: { notIn: [...appli.injoignables] } });
+  }
+  // En appel avec le service client, jugés au contexte : passés.
+  if (appli.enAppel && appli.enAppel.size > 0) {
+    conditions.push({ id: { notIn: [...appli.enAppel] } });
   }
   return {
     status: DelivererStatus.ACTIVE,
@@ -364,6 +436,7 @@ export function etatLivreurDepuis(
     appli_vue_a: ligne.dernier_signal_at,
     // Jugée seulement quand le contexte l'a été (règle active, jetons lus, présence connue).
     ...(appli.injoignables ? { joignable: !appli.injoignables.has(ligne.id) } : {}),
+    ...(appli.enAppel ? { en_appel: appli.enAppel.has(ligne.id) } : {}),
   };
 }
 
@@ -444,6 +517,7 @@ const LIBELLES: Record<EtatAffichageLivreur, string> = {
   HORS_SERVICE: 'Hors service',
   APPLI_FERMEE: 'Appli fermée',
   INJOIGNABLE: 'Injoignable',
+  EN_APPEL: 'En appel',
 };
 
 /**
@@ -509,5 +583,7 @@ export function messageRefusOffre(
       return "L'appli de ce livreur est fermée.";
     case 'INJOIGNABLE':
       return 'Ce livreur est injoignable : ni appli connectée, ni notifications.';
+    case 'EN_APPEL':
+      return 'Ce livreur est en appel avec le service client.';
   }
 }

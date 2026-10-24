@@ -317,3 +317,34 @@ describe('injoignable : seule la création d’une offre est gardée', () => {
     expect(decisionAcceptation(injoignable, MAINTENANT)).toEqual({ ok: true });
   });
 });
+
+/**
+ * Livreur en appel avec le service client (relecture du 24/10) : l'écran
+ * d'appel recouvre tout. Seule la CRÉATION d'une offre le passe ; une offre
+ * déjà partie garde ses relances et son échéance, et l'écran d'appel la montre
+ * avec Accepter.
+ */
+describe('en appel : seule la création d’une offre est gardée', () => {
+  const enAppel = etat({ en_appel: true });
+
+  it('création (sélection, planificateur, dernier contrôle) : refusée, EN_APPEL', () => {
+    expect(decisionCreationOffre(enAppel, false, MAINTENANT)).toEqual({ ok: false, motif: 'EN_APPEL' });
+    expect(decisionCreationOffre(etat({ en_appel: false }), false, MAINTENANT)).toEqual({ ok: true });
+  });
+
+  it('affectation forcée : refusée, EN_APPEL (même règle que la sélection)', () => {
+    expect(decisionAffectationForcee(enAppel, [], 'c1', MAINTENANT)).toEqual({ ok: false, motif: 'EN_APPEL' });
+  });
+
+  it('relance d’une offre déjà partie : envoyée comme avant', () => {
+    expect(decisionRelance(EN_RECHERCHE, enAppel, MAINTENANT)).toEqual({ relancer: true });
+  });
+
+  it('échéance d’une offre déjà partie : pénalité inchangée', () => {
+    expect(decisionExpiration(EN_RECHERCHE, enAppel, MAINTENANT)).toEqual({ penaliser: true });
+  });
+
+  it('acceptation : permise (depuis l’écran d’appel)', () => {
+    expect(decisionAcceptation(enAppel, MAINTENANT)).toEqual({ ok: true });
+  });
+});

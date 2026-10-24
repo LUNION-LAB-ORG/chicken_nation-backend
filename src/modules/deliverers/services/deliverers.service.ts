@@ -29,7 +29,9 @@ import {
   STATUTS_COURSE_EN_COURS,
   disponibiliteLivreur,
   etatLivreurDepuis,
+  filtreAppelsVivantsLivreurs,
   injoignablesParmi,
+  livreursDesAppels,
   regleAppliPour,
 } from '../helpers/disponibilite.rules';
 import { DelivererPushService } from './deliverer-push.service';
@@ -68,16 +70,19 @@ function presence(connectes: Set<string> | null, delivererId: string): boolean |
 
 /**
  * Contexte de la règle unique pour une liste du backoffice, dont la présence
- * de chaque livreur a été lue : appli (réglage, sockets) et, règle des
- * joignables active, livreurs sans socket ni jeton (« Injoignable »).
+ * de chaque livreur a été lue : appli (réglage, sockets), règle des
+ * joignables active, livreurs sans socket ni jeton (« Injoignable »), et
+ * livreurs en appel avec le service client (« En appel »).
  */
 function contexteAffichage(
   reglages: { appliFermeeApresS: number; offreJoignablesSeulement?: boolean },
   connectes: Set<string> | null,
   livreurs: readonly { id: string; expo_push_token: string | null }[],
+  enAppel: Set<string> | null = null,
 ): ContexteAppli {
   const appli: ContexteAppli = { appliFermeeApresS: reglages.appliFermeeApresS, connectes };
   if (reglages.offreJoignablesSeulement) appli.injoignables = injoignablesParmi(livreurs, connectes);
+  if (enAppel && enAppel.size > 0) appli.enAppel = enAppel;
   return appli;
 }
 
@@ -117,6 +122,19 @@ export class DeliverersService {
     // Présence de l'appli (socket ouvert) dans les listes du backoffice
     private readonly gateway: AppGateway,
   ) {}
+
+  /** Livreurs en appel avec le service client (« En appel ») ; null si les appels n'ont pas pu être lus. */
+  private async livreursEnAppel(maintenant: Date): Promise<Set<string> | null> {
+    try {
+      const appels = await this.prisma.call.findMany({
+        where: filtreAppelsVivantsLivreurs(maintenant),
+        select: { caller_deliverer_id: true, target_deliverer_id: true },
+      });
+      return livreursDesAppels(appels);
+    } catch {
+      return null;
+    }
+  }
 
   // ============================================================
   // ADMIN : LISTE & DÉTAIL
@@ -170,7 +188,7 @@ export class DeliverersService {
     const maintenant = new Date();
     const connectes = await this.gateway.livreursConnectes(items.map((l) => l.id));
     const reglages = await this.scoringSettings.load();
-    const appli = contexteAffichage(reglages, connectes, items);
+    const appli = contexteAffichage(reglages, connectes, items, await this.livreursEnAppel(maintenant));
     return {
       items: items.map(({ offer_attempts, _count, ...livreur }) => {
         const disponibilite = disponibiliteLivreur(
@@ -714,7 +732,7 @@ export class DeliverersService {
     inQueue.forEach((d, i) => rankMap.set(d.id, i + 1));
 
     const connectes = await this.gateway.livreursConnectes(deliverers.map((d) => d.id));
-    const appli = contexteAffichage(settings, connectes, deliverers);
+    const appli = contexteAffichage(settings, connectes, deliverers, await this.livreursEnAppel(now));
     const result = deliverers
       .map((d) => {
         const locationAt = d.last_location_at;

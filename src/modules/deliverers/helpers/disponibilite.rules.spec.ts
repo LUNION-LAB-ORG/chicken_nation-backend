@@ -8,6 +8,7 @@
  * fait casser. Heures en UTC (= heure d'Abidjan).
  */
 import {
+  CallStatus,
   CourseOfferStatus,
   CourseStatut,
   DelivererStatus,
@@ -30,11 +31,13 @@ import {
   estEnPause,
   estEnPauseAuto,
   etatLivreurDepuis,
+  filtreAppelsVivantsLivreurs,
   filtreLivreursPouvantRecevoirOffre,
   heureLisible,
   idsSansJeton,
   injoignablesParmi,
   lireOffreJoignablesSeulement,
+  livreursDesAppels,
   messagePauseAuto,
   messageRefusOffre,
   peutRecevoirOffre,
@@ -642,5 +645,97 @@ describe('joignable : socket ouvert ou jeton de notification', () => {
       message_refus: 'Ce livreur est injoignable : ni appli connectée, ni notifications.',
       en_service: true,
     });
+  });
+});
+
+describe('en appel avec le service client (relecture du 24/10)', () => {
+  // L'écran d'appel recouvre tout : une offre arrivée pendant l'appel restait
+  // cachée dessous jusqu'à son échéance, comptée comme un refus.
+  const ligne = {
+    id: 'l',
+    restaurant_id: 'r',
+    status: DelivererStatus.ACTIVE,
+    is_operational: true,
+    entity_status: EntityStatus.ACTIVE,
+    pause_until: null,
+    auto_pause_until: null,
+    last_available_at: avant(30),
+    dernier_signal_at: null,
+    protocole_appli: 4,
+    _count: { courses: 0, offer_attempts: 0 },
+  };
+
+  it('peutRecevoirOffre : en appel, non, EN_APPEL ; non jugé ou hors appel : oui', () => {
+    expect(peutRecevoirOffre(libre({ en_appel: true }), MAINTENANT)).toEqual({ ok: false, motif: 'EN_APPEL' });
+    expect(peutRecevoirOffre(libre({ en_appel: false }), MAINTENANT)).toEqual({ ok: true });
+    expect(peutRecevoirOffre(libre(), MAINTENANT)).toEqual({ ok: true });
+    // Une raison plus forte se dit d'abord.
+    expect(peutRecevoirOffre(libre({ en_appel: true, en_course: true }), MAINTENANT)).toEqual({
+      ok: false,
+      motif: 'EN_COURSE',
+    });
+  });
+
+  it('etatLivreurDepuis : `en_appel` lu dans `enAppel`, absent quand rien n’a été lu', () => {
+    expect(etatLivreurDepuis(ligne, SANS_REGLE_APPLI, MAINTENANT)).not.toHaveProperty('en_appel');
+    expect(etatLivreurDepuis(ligne, { ...SANS_REGLE_APPLI, enAppel: null }, MAINTENANT)).not.toHaveProperty('en_appel');
+    expect(etatLivreurDepuis(ligne, { ...SANS_REGLE_APPLI, enAppel: new Set(['l']) }, MAINTENANT).en_appel).toBe(true);
+    expect(etatLivreurDepuis(ligne, { ...SANS_REGLE_APPLI, enAppel: new Set(['x']) }, MAINTENANT).en_appel).toBe(false);
+  });
+
+  it('filtre de la sélection : le livreur en appel est passé, les autres restent', () => {
+    const filtre = filtreLivreursPouvantRecevoirOffre(MAINTENANT, { ...SANS_REGLE_APPLI, enAppel: new Set(['l']) });
+    const enLigne = { ...ligne, courses: [], offer_attempts: [] };
+    expect(evaluer(enLigne, filtre)).toBe(false);
+    expect(evaluer({ ...enLigne, id: 'autre' }, filtre)).toBe(true);
+    // Personne en appel : pas de liste d'ids dans le filtre.
+    expect(JSON.stringify(filtreLivreursPouvantRecevoirOffre(MAINTENANT, { ...SANS_REGLE_APPLI, enAppel: new Set() }))).not.toMatch(
+      /notIn/,
+    );
+  });
+
+  it('appels vivants : qui sonne depuis moins de 60 s, en ligne depuis moins de 4 h, avec un livreur', () => {
+    const filtre = filtreAppelsVivantsLivreurs(MAINTENANT);
+    const appel = (surcharge: Record<string, unknown>) => ({
+      status: CallStatus.ONGOING,
+      started_at: avantS(30),
+      caller_deliverer_id: 'l1',
+      target_deliverer_id: null,
+      ...surcharge,
+    });
+    expect(evaluer(appel({ status: CallStatus.RINGING }), filtre)).toBe(true);
+    expect(evaluer(appel({ status: CallStatus.RINGING, started_at: avantS(59) }), filtre)).toBe(true);
+    // Sonnerie perdue (serveur redémarré) : n'écarte plus personne.
+    expect(evaluer(appel({ status: CallStatus.RINGING, started_at: avantS(61) }), filtre)).toBe(false);
+    expect(evaluer(appel({ started_at: avant(3 * 60) }), filtre)).toBe(true);
+    // Appel fantôme (plus de 4 h) : n'écarte plus personne.
+    expect(evaluer(appel({ started_at: avant(4 * 60 + 1) }), filtre)).toBe(false);
+    for (const status of [CallStatus.ENDED, CallStatus.MISSED, CallStatus.CANCELLED, CallStatus.FAILED]) {
+      expect(evaluer(appel({ status }), filtre)).toBe(false);
+    }
+    // Le service client appelle le livreur.
+    expect(evaluer(appel({ caller_deliverer_id: null, target_deliverer_id: 'l2' }), filtre)).toBe(true);
+    // Appel entre membres du personnel : aucun livreur.
+    expect(evaluer(appel({ caller_deliverer_id: null }), filtre)).toBe(false);
+  });
+
+  it('livreursDesAppels : appelants et appelés', () => {
+    expect([
+      ...livreursDesAppels([
+        { caller_deliverer_id: 'a', target_deliverer_id: null },
+        { caller_deliverer_id: null, target_deliverer_id: 'b' },
+        { caller_deliverer_id: null, target_deliverer_id: null },
+      ]),
+    ]).toEqual(['a', 'b']);
+  });
+
+  it('backoffice : « En appel », et le refus de l’affectation forcée', () => {
+    expect(disponibiliteLivreur(libre({ en_appel: true }), MAINTENANT)).toMatchObject({
+      etat: 'EN_APPEL',
+      libelle: 'En appel',
+      peut_recevoir_offre: false,
+      message_refus: 'Ce livreur est en appel avec le service client.',
+    });
+    expect(messageRefusOffre('EN_APPEL', libre(), MAINTENANT)).not.toMatch(/—/);
   });
 });

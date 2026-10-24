@@ -13,7 +13,9 @@ import {
   appliActiveDepuis,
   estEnPause,
   estEnPauseAuto,
+  filtreAppelsVivantsLivreurs,
   idsSansJeton,
+  livreursDesAppels,
   PROTOCOLE_APPLI_FERMEE,
   regleAppliPour,
 } from '../helpers/disponibilite.rules';
@@ -60,12 +62,18 @@ interface ReglagesPresence {
   appliFermeeApresS: number;
   /** `course.offre_joignables_seulement` : offre aux seuls livreurs joignables. */
   joignablesSeulement: boolean;
+  /** Livreurs en appel avec le service client écartés des offres. */
+  horsAppel: boolean;
 }
 
-/** L'appli seule (filet hors service, passages au journal) : la joignabilité ne garde que la création d'une offre. */
+/**
+ * L'appli seule (filet hors service, passages au journal) : la joignabilité
+ * et l'appel en cours ne gardent que la création d'une offre.
+ */
 const SANS_JOIGNABILITE = (appliFermeeApresS: number): ReglagesPresence => ({
   appliFermeeApresS,
   joignablesSeulement: false,
+  horsAppel: false,
 });
 
 /**
@@ -117,6 +125,10 @@ export function idsSansSignalSuffisant(
  * serveurs (adaptateur Redis de socket.io, `AppGateway.livreursConnectes`) ;
  * un serveur qui ne répond pas à temps rend la présence inconnue, et personne
  * n'est alors réputé injoignable.
+ *
+ * LIVREUR EN APPEL (relecture du 24/10) : un appel avec le service client qui
+ * sonne ou en ligne l'écarte des nouvelles offres (`enAppel`), l'écran d'appel
+ * recouvrant l'offre. Appels illisibles : personne n'est réputé en appel.
  */
 @Injectable()
 export class AppliLivreurService {
@@ -145,9 +157,9 @@ export class AppliLivreurService {
   async contextePour(ids: readonly string[], maintenant = new Date()): Promise<ContexteAppli> {
     const reglages = await this.reglagesPresence();
     if (!(reglages.appliFermeeApresS > 0) && !reglages.joignablesSeulement) {
-      return { appliFermeeApresS: reglages.appliFermeeApresS, connectes: null };
+      return this.avecAppels(reglages, { appliFermeeApresS: reglages.appliFermeeApresS, connectes: null }, maintenant);
     }
-    if (ids.length === 0) return this.assembler(reglages, [], []);
+    if (ids.length === 0) return this.assembler(reglages, [], [], maintenant);
     const lignes = await this.prisma.deliverer.findMany({
       where: { id: { in: [...ids] } },
       select: {
@@ -196,7 +208,9 @@ export class AppliLivreurService {
   async contexteSelection(restaurantId: string, maintenant = new Date()): Promise<ContexteAppli> {
     const reglages = await this.reglagesPresence();
     const { appliFermeeApresS, joignablesSeulement } = reglages;
-    if (!(appliFermeeApresS > 0) && !joignablesSeulement) return { appliFermeeApresS, connectes: null };
+    if (!(appliFermeeApresS > 0) && !joignablesSeulement) {
+      return this.avecAppels(reglages, { appliFermeeApresS, connectes: null }, maintenant);
+    }
     const enService = {
       restaurant_id: restaurantId,
       status: DelivererStatus.ACTIVE,
@@ -227,6 +241,7 @@ export class AppliLivreurService {
       reglages,
       aVerifier.map((l) => l.id),
       sansJeton.map((l) => l.id),
+      maintenant,
     );
     this.signalerInjoignables(contexte.injoignables);
     return contexte;
@@ -261,7 +276,39 @@ export class AppliLivreurService {
   /** Réglages de l'appli fermée et de la joignabilité, en une lecture. */
   private async reglagesPresence(): Promise<ReglagesPresence> {
     const r = await this.settings.load();
-    return { appliFermeeApresS: r.appliFermeeApresS, joignablesSeulement: r.offreJoignablesSeulement === true };
+    return {
+      appliFermeeApresS: r.appliFermeeApresS,
+      joignablesSeulement: r.offreJoignablesSeulement === true,
+      horsAppel: true,
+    };
+  }
+
+  /**
+   * Livreurs en appel avec le service client (qui sonne ou en ligne,
+   * `filtreAppelsVivantsLivreurs`) ; null si les appels n'ont pas pu être lus.
+   */
+  async livreursEnAppel(maintenant = new Date()): Promise<Set<string> | null> {
+    try {
+      const appels = await this.prisma.call.findMany({
+        where: filtreAppelsVivantsLivreurs(maintenant),
+        select: { caller_deliverer_id: true, target_deliverer_id: true },
+      });
+      return livreursDesAppels(appels);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Livreurs en appel ajoutés au contexte d'une offre (absent : personne). */
+  private async avecAppels(
+    reglages: ReglagesPresence,
+    contexte: ContexteAppli,
+    maintenant: Date,
+  ): Promise<ContexteAppli> {
+    if (!reglages.horsAppel) return contexte;
+    const enAppel = await this.livreursEnAppel(maintenant);
+    if (enAppel && enAppel.size > 0) contexte.enAppel = enAppel;
+    return contexte;
   }
 
   private async contexteAvec(
@@ -270,11 +317,14 @@ export class AppliLivreurService {
     maintenant: Date,
   ): Promise<ContexteAppli> {
     const { appliFermeeApresS, joignablesSeulement } = reglages;
-    if (!(appliFermeeApresS > 0) && !joignablesSeulement) return { appliFermeeApresS, connectes: null };
+    if (!(appliFermeeApresS > 0) && !joignablesSeulement) {
+      return this.avecAppels(reglages, { appliFermeeApresS, connectes: null }, maintenant);
+    }
     const contexte = await this.assembler(
       reglages,
       appliFermeeApresS > 0 ? idsSansSignalSuffisant(lignes, maintenant, appliFermeeApresS) : [],
       joignablesSeulement ? idsSansJeton(lignes) : [],
+      maintenant,
     );
     // Hors service ou en pause (déconnecté, jeton effacé) : pas candidat de toute façon, rien à signaler.
     const horsFile = new Set(lignes.filter((l) => l.last_available_at === null).map((l) => l.id));
@@ -292,6 +342,7 @@ export class AppliLivreurService {
     reglages: ReglagesPresence,
     idsAppli: readonly string[],
     idsSansJetonLus: readonly string[],
+    maintenant: Date,
   ): Promise<ContexteAppli> {
     const { appliFermeeApresS, joignablesSeulement } = reglages;
     const aDemander = [...new Set([...idsAppli, ...idsSansJetonLus])];
@@ -300,7 +351,7 @@ export class AppliLivreurService {
     if (joignablesSeulement) {
       contexte.injoignables = presence ? new Set(idsSansJetonLus.filter((id) => !presence.has(id))) : null;
     }
-    return contexte;
+    return this.avecAppels(reglages, contexte, maintenant);
   }
 
   /** Livreurs passés faute d'être joignables : visibles dans les journaux, une ligne par livreur toutes les 10 min. */

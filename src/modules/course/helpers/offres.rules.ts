@@ -156,9 +156,10 @@ export type DecisionRelance =
  * son livreur (`offre_en_attente` ignoré). Appli fermée : motif de clôture
  * `APPLI_FERMEE`.
  *
- * La joignabilité (socket ou jeton) ne garde que la création d'une offre :
- * une offre déjà partie garde ses relances et son échéance (décision du
- * client encore ouverte sur l'offre d'une appli non connectée).
+ * La joignabilité (socket ou jeton) et l'appel avec le service client ne
+ * gardent que la création d'une offre : une offre déjà partie garde ses
+ * relances et son échéance (décision du client encore ouverte sur l'offre
+ * d'une appli non connectée ; l'écran d'appel montre l'offre en attente).
  */
 export function decisionRelance(
   course: EtatCourse | null | undefined,
@@ -167,7 +168,7 @@ export function decisionRelance(
 ): DecisionRelance {
   if (!courseChercheLivreur(course)) return { relancer: false, motif: 'COURSE_PLUS_EN_RECHERCHE' };
   if (!livreur) return { relancer: false, motif: 'LIVREUR_INDISPONIBLE', motif_livreur: 'INACTIF' };
-  const d = peutRecevoirOffre({ ...livreur, offre_en_attente: false, joignable: true }, maintenant);
+  const d = peutRecevoirOffre({ ...livreur, offre_en_attente: false, joignable: true, en_appel: false }, maintenant);
   if (!d.ok) {
     return {
       relancer: false,
@@ -192,8 +193,9 @@ export type DecisionAffectationForcee =
 
 /**
  * L'administrateur force l'affectation d'une course à un livreur : même règle
- * que la sélection automatique, joignabilité comprise (un livreur sans socket
- * ni jeton ne recevrait rien). Seule tolérance : une offre en attente pour
+ * que la sélection automatique, joignabilité et appel en cours compris (un
+ * livreur sans socket ni jeton ne recevrait rien ; en appel, l'offre
+ * arriverait sous l'écran d'appel). Seule tolérance : une offre en attente pour
  * CETTE course (l'administrateur renvoie la notification).
  *
  * @param offresEnAttente  Courses des offres en attente du livreur.
@@ -221,8 +223,9 @@ export type DecisionAcceptation =
 /**
  * Le livreur peut-il prendre la course qu'il accepte ? La règle unique, sauf :
  *  - l'offre acceptée ne compte pas contre lui ;
- *  - « hors service », « appli fermée » et « injoignable » sont tolérés : il
- *    est là, son appli vient de répondre.
+ *  - « hors service », « appli fermée », « injoignable » et « en appel » sont
+ *    tolérés : il est là, son appli vient de répondre (l'écran d'appel montre
+ *    l'offre en attente, avec Accepter).
  * Message au livreur (tutoiement, comme l'appli).
  */
 export function decisionAcceptation(livreur: EtatLivreur, maintenant: Date): DecisionAcceptation {
@@ -233,6 +236,7 @@ export function decisionAcceptation(livreur: EtatLivreur, maintenant: Date): Dec
       last_available_at: livreur.last_available_at ?? maintenant,
       appli_active: true,
       joignable: true,
+      en_appel: false,
     },
     maintenant,
   );
