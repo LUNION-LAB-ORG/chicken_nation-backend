@@ -7,10 +7,12 @@ import {
   ParseUUIDPipe,
   Patch,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
+import { User, UserRole } from '@prisma/client';
+import type { Request } from 'express';
 
 import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
@@ -96,11 +98,14 @@ export class CourseAdminController {
     };
   }
 
-  @ApiOperation({ summary: 'Liste paginée des courses (toutes)' })
+  @ApiOperation({
+    summary: 'Liste paginée des courses (toutes)',
+    description: 'Code client des livraisons (`delivery_pin`) pour l\'ADMIN seulement.',
+  })
   @Get()
   @UserRoles(...ROLES_SUIVI_LIVRAISON)
-  async findAll(@Query() query: QueryCoursesDto) {
-    return this.queryService.findAllAdmin(query);
+  async findAll(@Req() req: Request, @Query() query: QueryCoursesDto) {
+    return this.queryService.findAllAdmin(query, req.user as User);
   }
 
   @ApiOperation({
@@ -112,11 +117,14 @@ export class CourseAdminController {
     return this.queryService.getStats(query);
   }
 
-  @ApiOperation({ summary: "Détail d'une course (+ tentatives d'affectation)" })
+  @ApiOperation({
+    summary: "Détail d'une course (+ tentatives d'affectation)",
+    description: 'Code client des livraisons (`delivery_pin`) pour l\'ADMIN seulement.',
+  })
   @Get(':id')
   @UserRoles(...ROLES_SUIVI_LIVRAISON)
-  async findOne(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.queryService.findOne(id);
+  async findOne(@Req() req: Request, @Param('id', new ParseUUIDPipe()) id: string) {
+    return this.queryService.findOne(id, req.user as User);
   }
 
   @ApiOperation({

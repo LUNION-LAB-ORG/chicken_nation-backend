@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { User, UserRole } from '@prisma/client';
 import type { Request } from 'express';
@@ -7,6 +7,7 @@ import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
 
+import { ConfirmerRecuperationDto } from '../dto/confirmer-recuperation.dto';
 import { QueryPickupCodeDto, ValidatePickupDto } from '../dto/validate-pickup.dto';
 import { CourseActionService } from '../services/course-action.service';
 import { CourseQueryService } from '../services/course-query.service';
@@ -22,6 +23,11 @@ import { CourseQueryService } from '../services/course-query.service';
  * (incident du 22/10) : la recherche se fait dans le restaurant du compte
  * connecté, lu dans le JWT, jamais dans la requête. Un compte du siège peut
  * préciser `restaurant_id`.
+ *
+ * Depuis le 24/10 (conception, 11.1), l'écran Commandes ne saisit plus le
+ * code : la caissière touche le groupe de la course et confirme. Routes par
+ * identifiant (`GET :id`, `POST :id/recuperation`), cloisonnées au restaurant
+ * de la course. Les routes à code restent (caisse Sunmi, repli de l'écran).
  */
 @ApiTags('Courses — Opérations (caissière)')
 @Controller('courses/operations')
@@ -63,5 +69,35 @@ export class CourseOperationsController {
   @Post('validate-pickup')
   async validatePickup(@Req() req: Request, @Body() dto: ValidatePickupDto) {
     return this.actionService.validatePickupByCashier(dto, req.user as User);
+  }
+
+  @ApiOperation({
+    summary: 'Aperçu de la course à remettre, par son identifiant',
+    description:
+      'Même course et même forme que l\'aperçu par code. 404 « Course introuvable. » (inconnue ou d\'un autre jour), ' +
+      '403 si la course est celle d\'un autre restaurant (compte de restaurant), 409 si elle n\'est plus à remettre ' +
+      'ou si aucun livreur ne l\'a encore acceptée.',
+  })
+  @Get(':id')
+  async apercuParId(@Req() req: Request, @Param('id', new ParseUUIDPipe()) id: string) {
+    return this.queryService.findARemettreParId(id, req.user as User);
+  }
+
+  @ApiOperation({
+    summary: 'Confirme la récupération d\'une course par la caissière, sans code',
+    description:
+      'Les commandes de `order_ids` passent PICKED_UP (retrait normal : toutes les commandes de la course doivent être prêtes ; ' +
+      'retrait complémentaire et sac oublié : les commandes prêtes). Mêmes refus que l\'aperçu ; 409 « La course a changé : ' +
+      'vérifiez les commandes et confirmez à nouveau. » si une commande envoyée n\'est plus dans la course ; 409 si la course ' +
+      'vient d\'être remise (double confirmation). Renvoie la course remise.',
+  })
+  @ApiBody({ type: ConfirmerRecuperationDto })
+  @Post(':id/recuperation')
+  async confirmerRecuperation(
+    @Req() req: Request,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: ConfirmerRecuperationDto,
+  ) {
+    return this.actionService.confirmerRecuperation(id, dto.order_ids, req.user as User);
   }
 }

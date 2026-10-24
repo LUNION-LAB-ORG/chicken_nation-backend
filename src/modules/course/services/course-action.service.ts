@@ -30,11 +30,15 @@ import { RefuseOfferDto } from '../dto/refuse-offer.dto';
 import { ValidatePickupDto } from '../dto/validate-pickup.dto';
 import { CourseEvent } from '../events/course.event';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
+import { commandesConfirmees } from '../helpers/recuperation.rules';
 import { WHERE_COURSE_ENCORE_A_REMETTRE, messageValidationImpossible } from '../helpers/remise-course.rules';
 import { CourseOfferService } from './course-offer.service';
 import { CourseQueryService } from './course-query.service';
 import { DepartCourseService } from './depart-course.service';
 import { GardeOffresService } from './garde-offres.service';
+
+/** Course lue avec le détail commun (livraisons, commandes, restaurant, livreur). */
+type CourseDetaillee = Prisma.CourseGetPayload<{ include: typeof COURSE_FULL_INCLUDE }>;
 
 /** Refus d'une offre déjà expirée, close ou traitée (texte montré au livreur). */
 export const MESSAGE_OFFRE_PLUS_EN_ATTENTE = "Cette offre n'est plus en attente.";
@@ -291,7 +295,7 @@ export class CourseActionService {
   }
 
   // ============================================================
-  // VALIDATION CAISSIÈRE (via pickup_code)
+  // RÉCUPÉRATION À LA CAISSE (code dicté, ou groupe de la course)
   // ============================================================
 
   /**
@@ -308,6 +312,9 @@ export class CourseActionService {
    * même recherche que l'aperçu (`CourseQueryService.findByActivePickupCode`).
    * Course SOUS-TRAITÉE encore PENDING_ASSIGNMENT comprise : le livreur Turbo
    * peut se présenter AVANT que leurs webhooks n'aient fait avancer la course.
+   *
+   * Route gardée pour la caisse Sunmi et le repli de l'écran : toutes les
+   * commandes lues sont remises.
    */
   async validatePickupByCashier(dto: ValidatePickupDto, user: ComptePersonnel | undefined) {
     const course = await this.queryService.findByActivePickupCode(
@@ -315,12 +322,55 @@ export class CourseActionService {
       user,
       dto.restaurant_id,
     );
+    return this.remettreCourse(
+      course,
+      user,
+      course.deliveries.map((d) => d.order.id),
+      `code ${dto.pickup_code}`,
+    );
+  }
 
+  /**
+   * Récupération confirmée sans code (conception du 24/10, 11.1) : le livreur
+   * dit son code, la caissière touche le groupe de la course et confirme les
+   * commandes que sa fenêtre montre. Même règle « à remettre » que le code
+   * (`findARemettreParId`), même cœur (`remettreCourse`). Une commande qui
+   * n'est plus dans la course : 409, la fenêtre est relue.
+   */
+  async confirmerRecuperation(courseId: string, orderIds: string[], user: ComptePersonnel | undefined) {
+    const course = await this.queryService.findARemettreParId(courseId, user);
+    return this.remettreCourse(course, user, commandesConfirmees(orderIds, course.deliveries), 'groupe de la course');
+  }
+
+  /**
+   * Cœur commun de la remise d'une course au livreur par la caisse (code ou
+   * groupe de la course). `orderIds` : les commandes que la caisse remet, toutes
+   * des commandes de la course.
+   *
+   *  - retrait normal (ACCEPTED, AT_RESTAURANT, Turbo en recherche) : toutes les
+   *    commandes de la course doivent être prêtes ; seules celles de `orderIds`
+   *    passent PICKED_UP, une commande prête ajoutée entre-temps devient un
+   *    ajout après le retrait (`marquerAjoutsPendantLaRemise`) ;
+   *  - retrait complémentaire et sac oublié (IN_DELIVERY) : les commandes
+   *    prêtes de `orderIds` (`DepartCourseService.remettreComplement`).
+   *
+   * @param origine  Pour le journal du serveur : « code 421 », « groupe de la course ».
+   */
+  async remettreCourse(
+    course: CourseDetaillee,
+    user: ComptePersonnel | undefined,
+    orderIds: string[],
+    origine: string,
+  ) {
     // Planificateur v2 : course déjà récupérée, livreur encore au restaurant,
     // commande ajoutée après le retrait. Seules les commandes prêtes sont
     // remises, avec le même code ; la course reste en livraison.
     if (course.statut === CourseStatut.IN_DELIVERY && this.depart) {
-      const complete = await this.depart.remettreComplement(course);
+      const remises = new Set(orderIds);
+      const complete = await this.depart.remettreComplement({
+        ...course,
+        deliveries: course.deliveries.filter((d) => remises.has(d.order.id)),
+      });
       void this.estimerDureeTournee(complete.id).catch(() => undefined);
       return complete;
     }
@@ -352,10 +402,10 @@ export class CourseActionService {
         include: COURSE_FULL_INCLUDE,
       }),
       // Orders : READY → PICKED_UP + timestamp. Seulement celles que la caisse
-      // a vues : une commande ajoutée à la course pendant la saisie (planificateur)
+      // remet : une commande ajoutée à la course pendant la saisie (planificateur)
       // n'a pas été remise ; elle reste à remettre avec le même code.
       this.prisma.order.updateMany({
-        where: { id: { in: course.deliveries.map((d) => d.order.id) }, delivery: { course_id: course.id } },
+        where: { id: { in: orderIds }, delivery: { course_id: course.id } },
         data: { status: OrderStatus.PICKED_UP, picked_up_at: now },
       }),
     ]).catch(async (err) => {
@@ -370,7 +420,7 @@ export class CourseActionService {
 
     // Commande ajoutée pendant la saisie : traitée comme un ajout après le
     // retrait (remise avec le même code, ou retirée au départ du livreur).
-    await this.depart?.marquerAjoutsPendantLaRemise(course.id, course.deliveries.map((d) => d.order.id));
+    await this.depart?.marquerAjoutsPendantLaRemise(course.id, orderIds);
     // Fenêtre d'ajout après le retrait fermée d'office si elle ne doit pas
     // s'ouvrir (ancienne appli, Turbo, réglage coupé, restaurant en v1).
     // L'événement qui suit porte la course relue (partie, première livraison démarrée).
@@ -425,7 +475,7 @@ export class CourseActionService {
     }
 
     this.logger.log(
-      `Course ${updated.reference} validée par caissière (code ${dto.pickup_code}, restaurant ${updated.restaurant_id}, compte ${user?.id ?? 'inconnu'}) — ${course.deliveries.length} order(s) → PICKED_UP`,
+      `Course ${updated.reference} validée par caissière (${origine}, restaurant ${updated.restaurant_id}, compte ${user?.id ?? 'inconnu'}) — ${orderIds.length} order(s) → PICKED_UP`,
     );
 
     return updated;

@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { CourseStatut, EntityStatus, Prisma } from '@prisma/client';
+import { CourseStatut, Prisma, UserRole } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 import { ComptePersonnel } from 'src/modules/users/helpers/personnel-scope.helper';
@@ -9,12 +9,28 @@ import { QueryCoursesDto } from '../dto/query-courses.dto';
 import {
   restaurantDuRetrait,
   retenirCourseARemettre,
+  whereCourseARemettreParId,
   whereCoursesARemettre,
 } from '../helpers/code-retrait.rules';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { COURSE_ADMIN_INCLUDE, COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { journeeDeService } from '../helpers/journee-service.rules';
 import { planificateurDuRestaurant } from '../helpers/planification.rules';
+import {
+  MESSAGE_COURSE_INTROUVABLE,
+  assertCourseDuRestaurant,
+  refusCourseHorsRemise,
+} from '../helpers/recuperation.rules';
+
+/**
+ * Détail d'une course au backoffice : le code client de chaque livraison
+ * (`delivery_pin`) n'est lu que pour l'ADMIN (support : client qui a perdu
+ * son code). Le suivi des livraisons (LIVRAISON_OPS) lit le reste sans lui
+ * (conception du 24/10, 11.7).
+ */
+export function includeCoursePour(compte: { role?: UserRole | null } | null | undefined) {
+  return compte?.role === UserRole.ADMIN ? COURSE_ADMIN_INCLUDE : COURSE_FULL_INCLUDE;
+}
 
 /**
  * Service : lectures Course (queries read-only).
@@ -67,6 +83,37 @@ export class CourseQueryService {
       take: 5,
     });
     return retenirCourseARemettre(await this.sansSacOublieEnV1(trouvees), restaurantId);
+  }
+
+  /**
+   * Course à remettre désignée par son identifiant (groupe de la course à
+   * l'écran Commandes, conception du 24/10, 11.1) : même règle « à remettre »
+   * que la recherche par code (journée de service, sac oublié écarté en v1).
+   *
+   * 404 « Course introuvable. » (inconnue ou d'un autre jour), 403 si un compte
+   * de restaurant désigne la course d'un autre restaurant, 409 si elle n'est
+   * plus à remettre ou n'a encore personne à qui remettre.
+   */
+  async findARemettreParId(
+    courseId: string,
+    user: ComptePersonnel | undefined,
+    maintenant: Date = new Date(),
+  ) {
+    const lue = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: { id: true, restaurant_id: true, statut: true, deliverer_id: true, turbo_escalated_at: true, created_at: true },
+    });
+    if (!lue) throw new NotFoundException(MESSAGE_COURSE_INTROUVABLE);
+    assertCourseDuRestaurant(user, lue.restaurant_id);
+
+    const journee = journeeDeService(maintenant);
+    const course = await this.prisma.course.findFirst({
+      where: whereCourseARemettreParId(courseId, journee),
+      include: COURSE_FULL_INCLUDE,
+    });
+    const [aRemettre] = course ? await this.sansSacOublieEnV1([course]) : [];
+    if (!aRemettre) throw refusCourseHorsRemise(course ?? lue, journee);
+    return aRemettre;
   }
 
   /**
@@ -123,8 +170,11 @@ export class CourseQueryService {
     return { items, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
-  /** Liste admin (backoffice) : toutes courses avec filtres complets */
-  async findAllAdmin(filters: QueryCoursesDto) {
+  /**
+   * Liste du backoffice (ADMIN, LIVRAISON_OPS) : toutes courses avec filtres
+   * complets. `compte` : le code client des livraisons n'est lu que pour l'ADMIN.
+   */
+  async findAllAdmin(filters: QueryCoursesDto, compte?: { role?: UserRole | null } | null) {
     const page = filters.page ?? 1;
     const limit = filters.limit ?? 20;
     const skip = (page - 1) * limit;
@@ -155,8 +205,8 @@ export class CourseQueryService {
         skip,
         take: limit,
         orderBy: { created_at: 'desc' },
-        // ADMIN : le staff voit le code de récupération client (delivery_pin).
-        include: COURSE_ADMIN_INCLUDE,
+        // ADMIN seulement : code de récupération client (delivery_pin).
+        include: includeCoursePour(compte),
       }),
       this.prisma.course.count({ where }),
     ]);
@@ -298,13 +348,16 @@ export class CourseQueryService {
     return Array.from(buckets.entries()).map(([date, v]) => ({ date, ...v }));
   }
 
-  /** Détail d'une Course (avec toutes Delivery + Order + restaurant + livreur) */
-  async findOne(courseId: string) {
+  /**
+   * Détail d'une Course (avec toutes Delivery + Order + restaurant + livreur).
+   * `compte` : le code client des livraisons n'est lu que pour l'ADMIN.
+   */
+  async findOne(courseId: string, compte?: { role?: UserRole | null } | null) {
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
       include: {
-        // ADMIN : le staff voit le code de récupération client (delivery_pin).
-        ...COURSE_ADMIN_INCLUDE,
+        // ADMIN seulement : code de récupération client (delivery_pin).
+        ...includeCoursePour(compte),
         offer_attempts: {
           orderBy: { offered_at: 'desc' },
           include: {
