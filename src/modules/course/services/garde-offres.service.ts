@@ -5,6 +5,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import {
   SANS_REGLE_APPLI,
   SELECT_ETAT_LIVREUR,
+  aUnJetonDeNotification,
   etatLivreurDepuis,
   messageRefusOffre,
 } from 'src/modules/deliverers/helpers/disponibilite.rules';
@@ -35,7 +36,8 @@ class AcceptationImpossible extends Error {
  *
  *  - affectation forcée par l'administrateur : 409 avec la raison
  *    (« Ce livreur est en pause jusqu'à 14 h 32. », « L'appli de ce livreur
- *    est fermée. ») ;
+ *    est fermée. », « Ce livreur est injoignable : ni appli connectée, ni
+ *    notifications. ») ;
  *  - relances à 30 et 60 s : offre close si la course ou le livreur ne s'y
  *    prête plus ;
  *  - appli fermée (demande du 24/10) : offre close sans pénalité, recherche
@@ -84,9 +86,10 @@ export class GardeOffresService {
     });
     if (!course) throw new NotFoundException('Course introuvable');
 
+    // Jeton de notification lu : un livreur sans socket ni jeton est refusé (injoignable).
     const ligne = await this.prisma.deliverer.findUnique({
       where: { id: delivererId },
-      select: SELECT_ETAT_LIVREUR,
+      select: { ...SELECT_ETAT_LIVREUR, expo_push_token: true },
     });
     if (!ligne) throw new NotFoundException('Livreur non trouvé');
 
@@ -122,6 +125,7 @@ export class GardeOffresService {
         pause_until: etat.pause_until?.toISOString() ?? null,
         auto_pause_until: etat.auto_pause_until?.toISOString() ?? null,
         appli_vue_a: ligne.dernier_signal_at?.toISOString() ?? null,
+        jeton_notification: aUnJetonDeNotification(ligne.expo_push_token),
       });
     }
     return { renvoi: decision.renvoi };

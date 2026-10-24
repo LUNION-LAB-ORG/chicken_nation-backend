@@ -29,6 +29,7 @@ import {
   STATUTS_COURSE_EN_COURS,
   disponibiliteLivreur,
   etatLivreurDepuis,
+  injoignablesParmi,
   regleAppliPour,
 } from '../helpers/disponibilite.rules';
 import { DelivererPushService } from './deliverer-push.service';
@@ -63,6 +64,21 @@ type SafeDeliverer = Omit<Deliverer, 'password' | 'refresh_token'>;
  */
 function presence(connectes: Set<string> | null, delivererId: string): boolean | null {
   return connectes ? connectes.has(delivererId) : null;
+}
+
+/**
+ * Contexte de la règle unique pour une liste du backoffice, dont la présence
+ * de chaque livreur a été lue : appli (réglage, sockets) et, règle des
+ * joignables active, livreurs sans socket ni jeton (« Injoignable »).
+ */
+function contexteAffichage(
+  reglages: { appliFermeeApresS: number; offreJoignablesSeulement?: boolean },
+  connectes: Set<string> | null,
+  livreurs: readonly { id: string; expo_push_token: string | null }[],
+): ContexteAppli {
+  const appli: ContexteAppli = { appliFermeeApresS: reglages.appliFermeeApresS, connectes };
+  if (reglages.offreJoignablesSeulement) appli.injoignables = injoignablesParmi(livreurs, connectes);
+  return appli;
 }
 
 /**
@@ -153,10 +169,8 @@ export class DeliverersService {
     // État de chaque livreur par la règle unique (fenêtre « Forcer l'affectation »).
     const maintenant = new Date();
     const connectes = await this.gateway.livreursConnectes(items.map((l) => l.id));
-    const appli: ContexteAppli = {
-      appliFermeeApresS: (await this.scoringSettings.load()).appliFermeeApresS,
-      connectes,
-    };
+    const reglages = await this.scoringSettings.load();
+    const appli = contexteAffichage(reglages, connectes, items);
     return {
       items: items.map(({ offer_attempts, _count, ...livreur }) => {
         const disponibilite = disponibiliteLivreur(
@@ -652,6 +666,8 @@ export class DeliverersService {
         auto_pause_until: true,
         dernier_signal_at: true,
         protocole_appli: true,
+        // Joignable (socket ou jeton) : lu pour l'état, jamais renvoyé.
+        expo_push_token: true,
         status: true,
         is_operational: true,
         entity_status: true,
@@ -698,7 +714,7 @@ export class DeliverersService {
     inQueue.forEach((d, i) => rankMap.set(d.id, i + 1));
 
     const connectes = await this.gateway.livreursConnectes(deliverers.map((d) => d.id));
-    const appli: ContexteAppli = { appliFermeeApresS: settings.appliFermeeApresS, connectes };
+    const appli = contexteAffichage(settings, connectes, deliverers);
     const result = deliverers
       .map((d) => {
         const locationAt = d.last_location_at;

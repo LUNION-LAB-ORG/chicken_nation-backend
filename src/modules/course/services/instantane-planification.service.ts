@@ -183,11 +183,14 @@ export class InstantanePlanificationService {
           protocole_appli: true,
           queue_penalty_until: true,
           queue_penalty_positions: true,
+          // Joignable (socket ou jeton) : sans jeton ni socket, jamais d'offre.
+          expo_push_token: true,
         },
       }),
     ]);
 
-    // Appli de chaque livreur (socket, signe de vie) : l'état de la règle unique en dépend.
+    // Appli de chaque livreur (socket, signe de vie) et joignabilité (socket ou
+    // jeton) : l'état de la règle unique en dépend.
     const appli = await this.appliLivreur.contexte(lignesLivreurs, maintenant);
 
     // Courses du jour de chaque livreur (équité, 4.2).

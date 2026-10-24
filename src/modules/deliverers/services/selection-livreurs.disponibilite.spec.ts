@@ -122,9 +122,10 @@ describe('sélection automatique des livreurs', () => {
     );
 
     expect(await scoring.rankCandidates({ restaurantId: enFinDeCourse.restaurant_id })).toEqual([]);
-    // Deux lectures : les livreurs dont l'appli est à vérifier, puis les
-    // candidats ordinaires ; jamais celle du chaînage (course en livraison).
-    expect(base.prisma.deliverer.findMany).toHaveBeenCalledTimes(2);
+    // Trois lectures : les livreurs dont l'appli est à vérifier, ceux sans
+    // jeton de notification (joignables ?), puis les candidats ordinaires ;
+    // jamais celle du chaînage (course en livraison).
+    expect(base.prisma.deliverer.findMany).toHaveBeenCalledTimes(3);
     const lectures = base.prisma.deliverer.findMany.mock.calls.map((a: any[]) => JSON.stringify(a[0].where));
     expect(lectures.some((w: string) => w.includes('"some"'))).toBe(false);
   });
@@ -224,6 +225,60 @@ describe('appli fermée (demande du 24/10) : la sélection ne propose qu’aux a
     );
 
     expect(await (service as any).findBestDeliverer(actif.restaurant_id, [])).toEqual({ id: actif.id, isChainBonus: false });
+  });
+});
+
+describe('livreur joignable seulement (socket ou jeton de notification) : sélection v1', () => {
+  function monterSelection(livreurs: Record<string, any>[], options: Parameters<typeof appliLivreurSimulee>[1]) {
+    const base = monterBase({ livreurs });
+    const appli = appliLivreurSimulee(base.prisma, options);
+    const scoring = new DelivererScoringService(
+      base.prisma,
+      { load: jest.fn(async () => REGLAGES) } as never,
+      {} as never,
+      appli.service,
+    );
+    return { base, appli, scoring };
+  }
+
+  it('jeton seul ou socket seul : candidat ; ni l’un ni l’autre : passé, le suivant est choisi', async () => {
+    const injoignable = livreur({ last_available_at: avant(60), expo_push_token: null });
+    const socketSeul = livreur({ last_available_at: avant(40), expo_push_token: null });
+    const jetonSeul = livreur({ last_available_at: avant(20) });
+    const t = monterSelection([injoignable, socketSeul, jetonSeul], { connectes: [socketSeul.id] });
+
+    const classes = await t.scoring.rankCandidates({ restaurantId: injoignable.restaurant_id });
+
+    expect(classes.map((c) => c.delivererId)).toEqual([socketSeul.id, jetonSeul.id]);
+    // Présence demandée pour les seuls livreurs sans jeton.
+    expect([...t.appli.gateway.livreursConnectes.mock.calls[0][0]].sort()).toEqual([injoignable.id, socketSeul.id].sort());
+    // Rien n'a changé pour lui : ni pause, ni sortie de la file.
+    expect(injoignable.pause_until).toBeNull();
+    expect(injoignable.last_available_at).toEqual(avant(60));
+  });
+
+  it('il se connecte : candidat à la sélection suivante', async () => {
+    const l = livreur({ expo_push_token: null });
+    const t = monterSelection([l], { connectes: [] });
+
+    expect(await t.scoring.pickBestCandidate({ restaurantId: l.restaurant_id })).toBeNull();
+    t.appli.etat.connectes = [l.id];
+    expect((await t.scoring.pickBestCandidate({ restaurantId: l.restaurant_id }))?.delivererId).toBe(l.id);
+  });
+
+  it('réglage à 0 : candidat comme avant, aucune question pour les jetons', async () => {
+    const l = livreur({ expo_push_token: null });
+    const t = monterSelection([l], { connectes: [], joignablesSeulement: false });
+
+    expect((await t.scoring.pickBestCandidate({ restaurantId: l.restaurant_id }))?.delivererId).toBe(l.id);
+    expect(t.appli.gateway.livreursConnectes).not.toHaveBeenCalled();
+  });
+
+  it('présence inconnue (Redis muet) : personne n’est réputé injoignable', async () => {
+    const l = livreur({ expo_push_token: null });
+    const t = monterSelection([l], { connectes: null });
+
+    expect((await t.scoring.pickBestCandidate({ restaurantId: l.restaurant_id }))?.delivererId).toBe(l.id);
   });
 });
 

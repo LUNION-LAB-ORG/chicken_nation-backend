@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { SettingsService } from 'src/modules/settings/settings.service';
 
+import { CLE_OFFRE_JOIGNABLES_SEULEMENT, lireOffreJoignablesSeulement } from './disponibilite.rules';
+
 /**
  * Valeurs par défaut pour le scoring + file d'attente + pénalités + chaînage + GPS livreur.
  * Utilisées si la clé Settings n'est pas définie en base — le backoffice expose
@@ -84,6 +86,13 @@ export interface IDelivererScoringSettings {
   horsServiceSansSignalMin: number;
   /** Secondes sans socket ni signe de vie après lesquelles l'appli est réputée fermée. 0 = coupé. */
   appliFermeeApresS: number;
+  /**
+   * Offre aux seuls livreurs joignables (socket ouvert ou jeton de
+   * notification). Réglage de course `course.offre_joignables_seulement`
+   * (défaut 1, 0 = coupé), lu ici avec ceux de l'appli : la règle unique des
+   * offres est au module des livreurs.
+   */
+  offreJoignablesSeulement: boolean;
 
   // GPS
   gpsUpdateIntervalSeconds: number;
@@ -137,6 +146,8 @@ export class DelivererScoringSettingsHelper {
       'deliverer.hors_service_sans_signal_min',
       // Appli fermée
       'deliverer.appli_fermee_apres_s',
+      // Livreurs joignables seulement (réglage de course)
+      CLE_OFFRE_JOIGNABLES_SEULEMENT,
       // GPS
       'deliverer.travel_time_ranking',
       'deliverer.travel_time_top_n',
@@ -168,6 +179,8 @@ export class DelivererScoringSettingsHelper {
       horsServiceSansSignalMin: this.toNumber(map['deliverer.hors_service_sans_signal_min'], DEFAULTS.hors_service_sans_signal_min, { allowZero: true }),
       // 0 accepté : coupe la règle de l'appli fermée.
       appliFermeeApresS: this.toNumber(map['deliverer.appli_fermee_apres_s'], DEFAULTS.appli_fermee_apres_s, { allowZero: true }),
+      // Défaut 1, comme les autres réglages de course à deux valeurs.
+      offreJoignablesSeulement: lireOffreJoignablesSeulement(map[CLE_OFFRE_JOIGNABLES_SEULEMENT]),
 
       gpsUpdateIntervalSeconds: this.toNumber(map['deliverer.gps_update_interval_seconds'], DEFAULTS.gps_update_interval_seconds),
       gpsExpirationMinutes: this.toNumber(map['deliverer.gps_expiration_minutes'], DEFAULTS.gps_expiration_minutes),

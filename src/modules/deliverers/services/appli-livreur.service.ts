@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DelivererStatus, EntityStatus } from '@prisma/client';
 
+import { JournalLimite, suffixeTues } from 'src/common/utils/journal-limite.util';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { DispatchJournalService } from 'src/modules/course/services/dispatch-journal.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
@@ -12,6 +13,7 @@ import {
   appliActiveDepuis,
   estEnPause,
   estEnPauseAuto,
+  idsSansJeton,
   PROTOCOLE_APPLI_FERMEE,
   regleAppliPour,
 } from '../helpers/disponibilite.rules';
@@ -43,7 +45,28 @@ export interface LignePresence {
   dernier_signal_at: Date | null;
   /** Appli d'avant le protocole 4 : la règle ne la vise pas, rien à demander. */
   protocole_appli: number | null;
+  /**
+   * Jeton de notification, quand la ligne l'a lu : la joignabilité n'est
+   * jugée que pour ces lignes (absent : non jugée, réputé joignable).
+   */
+  expo_push_token?: string | null;
+  /** En service (dans la file) : seuls ceux-là sont signalés injoignables au journal du serveur. */
+  last_available_at?: Date | null;
 }
+
+/** Réglages qui décident de ce qu'il faut demander au serveur temps réel. */
+interface ReglagesPresence {
+  /** `deliverer.appli_fermee_apres_s` ; 0 : règle de l'appli fermée coupée. */
+  appliFermeeApresS: number;
+  /** `course.offre_joignables_seulement` : offre aux seuls livreurs joignables. */
+  joignablesSeulement: boolean;
+}
+
+/** L'appli seule (filet hors service, passages au journal) : la joignabilité ne garde que la création d'une offre. */
+const SANS_JOIGNABILITE = (appliFermeeApresS: number): ReglagesPresence => ({
+  appliFermeeApresS,
+  joignablesSeulement: false,
+});
 
 /**
  * Passage à écrire au journal, d'après l'état de l'appli et le dernier passage
@@ -85,10 +108,21 @@ export function idsSansSignalSuffisant(
  * unique lit, en ne demandant la présence au serveur temps réel que pour les
  * livreurs dont le signe de vie ne suffit pas, et relève au journal de la
  * diffusion les passages « appli fermée » et « appli active ».
+ *
+ * LIVREUR JOIGNABLE (défaut signalé le 24/10 : « proposée » au backoffice,
+ * rien reçu par le livreur) : socket ouvert dans sa salle `deliverer_{id}`,
+ * OU jeton de notification. Réglage `course.offre_joignables_seulement`
+ * (défaut 1). Le contexte porte alors `injoignables` : livreurs dont le jeton
+ * a été lu, absent, et sans socket. La présence est celle de TOUS les
+ * serveurs (adaptateur Redis de socket.io, `AppGateway.livreursConnectes`) ;
+ * un serveur qui ne répond pas à temps rend la présence inconnue, et personne
+ * n'est alors réputé injoignable.
  */
 @Injectable()
 export class AppliLivreurService {
   private readonly logger = new Logger(AppliLivreurService.name);
+  /** Une ligne par livreur injoignable toutes les 10 min au plus (le planificateur passe toutes les 5 s). */
+  private readonly injoignablesLimite = new JournalLimite(10 * 60_000);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -102,21 +136,28 @@ export class AppliLivreurService {
     return (await this.settings.load()).appliFermeeApresS;
   }
 
-  /** Contexte pour juger l'appli de ces livreurs, déjà lus (`id`, `dernier_signal_at`). */
+  /** Contexte pour juger l'appli de ces livreurs, déjà lus (`id`, `dernier_signal_at`, et `expo_push_token` pour la joignabilité). */
   async contexte(lignes: readonly LignePresence[], maintenant = new Date()): Promise<ContexteAppli> {
-    return this.contexteAvec(await this.seuilS(), lignes, maintenant);
+    return this.contexteAvec(await this.reglagesPresence(), lignes, maintenant);
   }
 
-  /** Contexte pour juger l'appli de ces livreurs, lus en base. */
+  /** Contexte pour juger l'appli et la joignabilité de ces livreurs, lus en base. */
   async contextePour(ids: readonly string[], maintenant = new Date()): Promise<ContexteAppli> {
-    const appliFermeeApresS = await this.seuilS();
-    if (!(appliFermeeApresS > 0)) return { appliFermeeApresS, connectes: null };
-    if (ids.length === 0) return { appliFermeeApresS, connectes: new Set() };
+    const reglages = await this.reglagesPresence();
+    if (!(reglages.appliFermeeApresS > 0) && !reglages.joignablesSeulement) {
+      return { appliFermeeApresS: reglages.appliFermeeApresS, connectes: null };
+    }
+    if (ids.length === 0) return this.assembler(reglages, [], []);
     const lignes = await this.prisma.deliverer.findMany({
       where: { id: { in: [...ids] } },
-      select: { id: true, dernier_signal_at: true, protocole_appli: true },
+      select: {
+        id: true,
+        dernier_signal_at: true,
+        protocole_appli: true,
+        ...(reglages.joignablesSeulement ? { expo_push_token: true } : {}),
+      },
     });
-    return this.contexteAvec(appliFermeeApresS, lignes, maintenant);
+    return this.contexteAvec(reglages, lignes, maintenant);
   }
 
   /**
@@ -142,33 +183,53 @@ export class AppliLivreurService {
       select: { id: true, dernier_signal_at: true, protocole_appli: true },
     });
     if (!ligne) return true;
-    const appli = await this.contexteAvec(appliFermeeApresS, [ligne], maintenant);
+    const appli = await this.contexteAvec(SANS_JOIGNABILITE(appliFermeeApresS), [ligne], maintenant);
     return appliActiveDepuis(ligne, appli, maintenant);
   }
 
   /**
    * Contexte de la SÉLECTION des candidats d'un restaurant (filtre Prisma de
    * la règle unique) : présence demandée pour les livreurs en service dont le
-   * signe de vie ne suffit pas.
+   * signe de vie ne suffit pas, et pour ceux sans jeton de notification
+   * (joignabilité).
    */
   async contexteSelection(restaurantId: string, maintenant = new Date()): Promise<ContexteAppli> {
-    const appliFermeeApresS = await this.seuilS();
-    if (!(appliFermeeApresS > 0)) return { appliFermeeApresS, connectes: null };
+    const reglages = await this.reglagesPresence();
+    const { appliFermeeApresS, joignablesSeulement } = reglages;
+    if (!(appliFermeeApresS > 0) && !joignablesSeulement) return { appliFermeeApresS, connectes: null };
+    const enService = {
+      restaurant_id: restaurantId,
+      status: DelivererStatus.ACTIVE,
+      is_operational: true,
+      entity_status: EntityStatus.ACTIVE,
+      last_available_at: { not: null },
+    };
     const limite = new Date(maintenant.getTime() - Math.max(0, appliFermeeApresS * 1000 - MARGE_PRESENCE_MS));
-    const aVerifier = await this.prisma.deliverer.findMany({
-      where: {
-        restaurant_id: restaurantId,
-        status: DelivererStatus.ACTIVE,
-        is_operational: true,
-        entity_status: EntityStatus.ACTIVE,
-        last_available_at: { not: null },
-        protocole_appli: { gte: PROTOCOLE_APPLI_FERMEE },
-        OR: [{ dernier_signal_at: null }, { dernier_signal_at: { lte: limite } }],
-      },
-      select: { id: true },
-    });
-    if (aVerifier.length === 0) return { appliFermeeApresS, connectes: new Set() };
-    return { appliFermeeApresS, connectes: await this.presence(aVerifier.map((l) => l.id)) };
+    const aVerifier =
+      appliFermeeApresS > 0
+        ? await this.prisma.deliverer.findMany({
+            where: {
+              ...enService,
+              protocole_appli: { gte: PROTOCOLE_APPLI_FERMEE },
+              OR: [{ dernier_signal_at: null }, { dernier_signal_at: { lte: limite } }],
+            },
+            select: { id: true },
+          })
+        : [];
+    // Sans jeton de notification : seul un socket ouvert les rend joignables.
+    const sansJeton = joignablesSeulement
+      ? await this.prisma.deliverer.findMany({
+          where: { ...enService, OR: [{ expo_push_token: null }, { expo_push_token: '' }] },
+          select: { id: true },
+        })
+      : [];
+    const contexte = await this.assembler(
+      reglages,
+      aVerifier.map((l) => l.id),
+      sansJeton.map((l) => l.id),
+    );
+    this.signalerInjoignables(contexte.injoignables);
+    return contexte;
   }
 
   /**
@@ -197,15 +258,61 @@ export class AppliLivreurService {
   // HELPERS PRIVÉS
   // ============================================================
 
+  /** Réglages de l'appli fermée et de la joignabilité, en une lecture. */
+  private async reglagesPresence(): Promise<ReglagesPresence> {
+    const r = await this.settings.load();
+    return { appliFermeeApresS: r.appliFermeeApresS, joignablesSeulement: r.offreJoignablesSeulement === true };
+  }
+
   private async contexteAvec(
-    appliFermeeApresS: number,
+    reglages: ReglagesPresence,
     lignes: readonly LignePresence[],
     maintenant: Date,
   ): Promise<ContexteAppli> {
-    if (!(appliFermeeApresS > 0)) return { appliFermeeApresS, connectes: null };
-    const ids = idsSansSignalSuffisant(lignes, maintenant, appliFermeeApresS);
-    if (ids.length === 0) return { appliFermeeApresS, connectes: new Set() };
-    return { appliFermeeApresS, connectes: await this.presence(ids) };
+    const { appliFermeeApresS, joignablesSeulement } = reglages;
+    if (!(appliFermeeApresS > 0) && !joignablesSeulement) return { appliFermeeApresS, connectes: null };
+    const contexte = await this.assembler(
+      reglages,
+      appliFermeeApresS > 0 ? idsSansSignalSuffisant(lignes, maintenant, appliFermeeApresS) : [],
+      joignablesSeulement ? idsSansJeton(lignes) : [],
+    );
+    // Hors service ou en pause (déconnecté, jeton effacé) : pas candidat de toute façon, rien à signaler.
+    const horsFile = new Set(lignes.filter((l) => l.last_available_at === null).map((l) => l.id));
+    this.signalerInjoignables([...(contexte.injoignables ?? [])].filter((id) => !horsFile.has(id)));
+    return contexte;
+  }
+
+  /**
+   * Une seule demande de présence pour les deux règles : livreurs au signe de
+   * vie insuffisant (appli fermée) et livreurs sans jeton (joignabilité).
+   * Règle de l'appli coupée : `connectes` reste null, comme avant. Règle des
+   * joignables coupée : pas d'`injoignables`.
+   */
+  private async assembler(
+    reglages: ReglagesPresence,
+    idsAppli: readonly string[],
+    idsSansJetonLus: readonly string[],
+  ): Promise<ContexteAppli> {
+    const { appliFermeeApresS, joignablesSeulement } = reglages;
+    const aDemander = [...new Set([...idsAppli, ...idsSansJetonLus])];
+    const presence = aDemander.length > 0 ? await this.presence(aDemander) : new Set<string>();
+    const contexte: ContexteAppli = { appliFermeeApresS, connectes: appliFermeeApresS > 0 ? presence : null };
+    if (joignablesSeulement) {
+      contexte.injoignables = presence ? new Set(idsSansJetonLus.filter((id) => !presence.has(id))) : null;
+    }
+    return contexte;
+  }
+
+  /** Livreurs passés faute d'être joignables : visibles dans les journaux, une ligne par livreur toutes les 10 min. */
+  private signalerInjoignables(injoignables: Iterable<string> | null | undefined): void {
+    for (const id of injoignables ?? []) {
+      const tues = this.injoignablesLimite.autoriser(id);
+      if (tues === null) continue;
+      this.logger.warn(
+        `Livreur ${id.slice(0, 8)} injoignable (ni socket ouvert, ni jeton de notification) : ` +
+          `aucune offre tant qu'il ne l'est pas${suffixeTues(tues)}`,
+      );
+    }
   }
 
   /** Sockets ouverts parmi ces livreurs ; null si la présence n'a pas pu être lue. */
@@ -238,7 +345,7 @@ export class AppliLivreurService {
     });
     if (livreurs.length === 0) return 0;
 
-    const appli = await this.contexteAvec(appliFermeeApresS, livreurs, maintenant);
+    const appli = await this.contexteAvec(SANS_JOIGNABILITE(appliFermeeApresS), livreurs, maintenant);
     const derniers = await this.derniersPassages(livreurs.map((l) => l.id));
 
     let ecrits = 0;

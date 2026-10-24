@@ -64,3 +64,31 @@ describe('deliverer.appli_fermee_apres_s', () => {
     expect((getMany.mock.calls[0] as unknown as [string[]])[0]).toContain('deliverer.appli_fermee_apres_s');
   });
 });
+
+/** Réglage de course `course.offre_joignables_seulement` : offre aux seuls livreurs joignables (socket ou jeton). */
+describe('course.offre_joignables_seulement', () => {
+  const lire = async (valeur: string | undefined) => {
+    const helper = new DelivererScoringSettingsHelper({
+      getMany: jest.fn(async () => (valeur === undefined ? {} : { 'course.offre_joignables_seulement': valeur })),
+    } as never);
+    return (await helper.load()).offreJoignablesSeulement;
+  };
+
+  it('absent : 1 (règle active)', async () => {
+    expect(await lire(undefined)).toBe(true);
+  });
+
+  it('0 : ancien comportement (règle coupée)', async () => {
+    expect(await lire('0')).toBe(false);
+  });
+
+  it('1 : règle active', async () => {
+    expect(await lire('1')).toBe(true);
+  });
+
+  it('la clé est lue dans la même requête que les réglages des livreurs', async () => {
+    const getMany = jest.fn(async () => ({}));
+    await new DelivererScoringSettingsHelper({ getMany } as never).load();
+    expect((getMany.mock.calls[0] as unknown as [string[]])[0]).toContain('course.offre_joignables_seulement');
+  });
+});

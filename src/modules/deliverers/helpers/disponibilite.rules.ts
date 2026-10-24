@@ -32,7 +32,19 @@ import {
  *    glissée hors de la liste des applis, elle se tait et le livreur ne
  *    reçoit plus rien jusqu'à sa réouverture, sans pause ni pénalité. Seule
  *    l'appli au protocole 4 au moins est visée : celle d'avant se tait en
- *    arrière-plan et garde ses offres par notification.
+ *    arrière-plan et garde ses offres par notification ;
+ *  - joignable (défaut signalé le 24/10 : « la course est proposée au livreur
+ *    pourtant le livreur ne reçoit rien ») : au moins un socket ouvert dans sa
+ *    salle `deliverer_{id}`, OU un jeton de notification. Sans l'un ni
+ *    l'autre, rien ne peut lui arriver : il est passé, comme s'il n'était pas
+ *    disponible à ce moment, sans pause ni pénalité, et redevient candidat dès
+ *    qu'il est joignable. iOS suspend le socket en arrière-plan : avec un
+ *    jeton, le livreur reste joignable. Réglage
+ *    `course.offre_joignables_seulement` (défaut 1, 0 = règle coupée).
+ *    Présence inconnue (Redis ou l'autre serveur muet) : personne n'est
+ *    réputé injoignable. Cette règle ne garde que la CRÉATION d'une offre
+ *    (sélection, planificateur, affectation forcée) : les relances,
+ *    l'échéance et l'acceptation d'une offre déjà partie n'en dépendent pas.
  *
  * Le chaînage (offre pendant la dernière livraison) est suspendu : il aura sa
  * propre règle s'il revient (lot 9 de la conception).
@@ -46,7 +58,8 @@ export type MotifRefusOffre =
   | 'EN_COURSE'
   | 'OFFRE_EN_ATTENTE'
   | 'HORS_SERVICE'
-  | 'APPLI_FERMEE';
+  | 'APPLI_FERMEE'
+  | 'INJOIGNABLE';
 
 export type DecisionOffre = { ok: true } | { ok: false; motif: MotifRefusOffre };
 
@@ -69,6 +82,12 @@ export interface EtatLivreur {
   appli_active: boolean;
   /** Dernier signe de vie de l'appli (`dernier_signal_at`), pour l'affichage. */
   appli_vue_a?: Date | null;
+  /**
+   * Joignable : socket ouvert ou jeton de notification. Faux seulement quand
+   * le serveur SAIT que rien ne peut lui arriver ; absent : non jugé (règle
+   * coupée, jeton non lu, présence inconnue), réputé joignable.
+   */
+  joignable?: boolean;
 }
 
 /** Une course dont le livreur est occupé : ni offre, ni chaînage. */
@@ -135,6 +154,59 @@ export interface ContexteAppli {
   /** Réglage `deliverer.appli_fermee_apres_s` ; 0 ou moins : règle coupée. */
   appliFermeeApresS: number;
   connectes: ReadonlySet<string> | null;
+  /**
+   * Livreurs INJOIGNABLES : ni socket ouvert ni jeton de notification, parmi
+   * ceux dont le jeton a été lu (`injoignablesParmi`). Absent ou null : règle
+   * coupée (`course.offre_joignables_seulement` à 0), jetons non lus ou
+   * présence inconnue ; personne n'est alors réputé injoignable.
+   */
+  injoignables?: ReadonlySet<string> | null;
+}
+
+// ============================================================
+// JOIGNABLE OU NON
+// ============================================================
+
+/** Réglage de la règle des livreurs joignables (1 par défaut, 0 = coupée). */
+export const CLE_OFFRE_JOIGNABLES_SEULEMENT = 'course.offre_joignables_seulement';
+
+/**
+ * Lecture du réglage, comme les autres réglages de course à deux valeurs
+ * (`CourseSettingsHelper`) : absent ou vide, défaut 1 (règle active) ;
+ * « 1 », « true », « on », « yes » : active ; toute autre valeur la coupe.
+ */
+export function lireOffreJoignablesSeulement(brut: string | undefined): boolean {
+  if (brut === undefined || brut === '') return true;
+  const v = brut.trim().toLowerCase();
+  return v === 'true' || v === '1' || v === 'on' || v === 'yes';
+}
+
+/** Un jeton de notification utilisable : une chaîne non vide (le serveur l'efface à la déconnexion). */
+export function aUnJetonDeNotification(jeton: string | null | undefined): boolean {
+  return typeof jeton === 'string' && jeton.trim() !== '';
+}
+
+/**
+ * Livreurs dont le jeton a été LU (`expo_push_token` présent dans la ligne,
+ * même à null) et qui n'en ont pas : leur présence (socket) décide.
+ */
+export function idsSansJeton(lignes: readonly { id: string; expo_push_token?: string | null }[]): string[] {
+  return lignes
+    .filter((l) => l.expo_push_token !== undefined && !aUnJetonDeNotification(l.expo_push_token))
+    .map((l) => l.id);
+}
+
+/**
+ * Livreurs injoignables parmi ces lignes : sans jeton (`idsSansJeton`) et
+ * sans socket ouvert. Présence inconnue (`connectes` null) : null, personne
+ * n'est réputé injoignable.
+ */
+export function injoignablesParmi(
+  lignes: readonly { id: string; expo_push_token?: string | null }[],
+  connectes: ReadonlySet<string> | null,
+): Set<string> | null {
+  if (!connectes) return null;
+  return new Set(idsSansJeton(lignes).filter((id) => !connectes.has(id)));
 }
 
 /**
@@ -196,6 +268,7 @@ export function peutRecevoirOffre(l: EtatLivreur, maintenant: Date): DecisionOff
   if (l.offre_en_attente) return { ok: false, motif: 'OFFRE_EN_ATTENTE' };
   if (!estEnService(l)) return { ok: false, motif: 'HORS_SERVICE' };
   if (!l.appli_active) return { ok: false, motif: 'APPLI_FERMEE' };
+  if (l.joignable === false) return { ok: false, motif: 'INJOIGNABLE' };
   return { ok: true };
 }
 
@@ -233,6 +306,10 @@ export function filtreLivreursPouvantRecevoirOffre(
         ...(connectes.length > 0 ? [{ id: { in: connectes } }] : []),
       ],
     });
+  }
+  // Injoignables (ni socket ni jeton), jugés au contexte : passés.
+  if (appli.injoignables && appli.injoignables.size > 0) {
+    conditions.push({ id: { notIn: [...appli.injoignables] } });
   }
   return {
     status: DelivererStatus.ACTIVE,
@@ -285,6 +362,8 @@ export function etatLivreurDepuis(
     offre_en_attente: ligne._count.offer_attempts > 0,
     appli_active: appliActiveDepuis(ligne, appli, maintenant),
     appli_vue_a: ligne.dernier_signal_at,
+    // Jugée seulement quand le contexte l'a été (règle active, jetons lus, présence connue).
+    ...(appli.injoignables ? { joignable: !appli.injoignables.has(ligne.id) } : {}),
   };
 }
 
@@ -364,6 +443,7 @@ const LIBELLES: Record<EtatAffichageLivreur, string> = {
   OFFRE_EN_ATTENTE: 'Offre en attente',
   HORS_SERVICE: 'Hors service',
   APPLI_FERMEE: 'Appli fermée',
+  INJOIGNABLE: 'Injoignable',
 };
 
 /**
@@ -427,5 +507,7 @@ export function messageRefusOffre(
       return "Ce livreur est hors service : il n'a pas repris le travail dans l'appli.";
     case 'APPLI_FERMEE':
       return "L'appli de ce livreur est fermée.";
+    case 'INJOIGNABLE':
+      return 'Ce livreur est injoignable : ni appli connectée, ni notifications.';
   }
 }

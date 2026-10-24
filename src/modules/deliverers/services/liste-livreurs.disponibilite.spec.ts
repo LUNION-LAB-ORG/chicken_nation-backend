@@ -225,3 +225,55 @@ describe('appli active ou fermée (24/10) : `appli_active` et `appli_vue_a`', ()
     expect(carte.every((l) => l.appli_active === null && l.disponibilite.appli_active === null)).toBe(true);
   });
 });
+
+describe('« Injoignable » : ni socket ouvert, ni jeton de notification', () => {
+  function monterJoignables(offreJoignablesSeulement: boolean) {
+    const awa = livreur({ first_name: 'Awa', expo_push_token: null });
+    const fanta = livreur({ first_name: 'Fanta', expo_push_token: null });
+    const moussa = livreur({ first_name: 'Moussa' });
+    const base = monterBaseDispatch({ livreurs: [awa, fanta, moussa] });
+    // Awa a le socket, Fanta n'a rien, Moussa a un jeton (iOS en arrière-plan).
+    const presence = {
+      livreursConnectes: jest.fn(async (ids: string[]): Promise<Set<string> | null> =>
+        new Set(ids.filter((id) => id === awa.id)),
+      ),
+    };
+    const service = new DeliverersService(
+      base.prisma,
+      {} as never,
+      {} as never,
+      { load: jest.fn(async () => ({ gpsExpirationMinutes: 5, appliFermeeApresS: 180, offreJoignablesSeulement })) } as never,
+      {} as never,
+      presence as never,
+    );
+    return { service, awa, fanta, moussa };
+  }
+
+  it('liste et carte : Fanta « Injoignable », non sélectionnable ; Awa et Moussa disponibles', async () => {
+    const t = monterJoignables(true);
+
+    const { items } = await t.service.findAll({ limit: 50 } as never);
+    const liste = Object.fromEntries(items.map((l: any) => [l.first_name, l.disponibilite]));
+    expect(liste.Fanta).toMatchObject({
+      etat: 'INJOIGNABLE',
+      libelle: 'Injoignable',
+      peut_recevoir_offre: false,
+      message_refus: 'Ce livreur est injoignable : ni appli connectée, ni notifications.',
+    });
+    expect(liste.Awa).toMatchObject({ etat: 'DISPONIBLE' });
+    expect(liste.Moussa).toMatchObject({ etat: 'DISPONIBLE' });
+
+    const carte = await t.service.getLiveLocations({ includeOffline: true });
+    const parId = Object.fromEntries(carte.map((l) => [l.id, l]));
+    expect(parId[t.fanta.id].disponibilite.etat).toBe('INJOIGNABLE');
+    expect(parId[t.moussa.id].disponibilite.etat).toBe('DISPONIBLE');
+    // Le jeton est lu pour l'état, jamais renvoyé par la carte.
+    expect(carte.every((l) => !('expo_push_token' in l))).toBe(true);
+  });
+
+  it('réglage à 0 : disponible comme avant', async () => {
+    const t = monterJoignables(false);
+    const { items } = await t.service.findAll({ limit: 50 } as never);
+    expect(items.find((l: any) => l.first_name === 'Fanta')?.disponibilite.etat).toBe('DISPONIBLE');
+  });
+});

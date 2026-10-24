@@ -33,7 +33,8 @@ export class DeliverersAdminController {
     summary: 'Liste paginée des livreurs avec filtres',
     description:
       'Chaque livreur porte `disponibilite` (état par la règle unique des offres, dont ' +
-      '`APPLI_FERMEE` « Appli fermée »), `appli_connectee` (socket ouvert ; null : inconnu), ' +
+      '`APPLI_FERMEE` « Appli fermée » et `INJOIGNABLE` « Injoignable » : ni socket ouvert ni jeton ' +
+      'de notification), `appli_connectee` (socket ouvert ; null : inconnu), ' +
       '`appli_active` (socket ouvert ou signe de vie de moins de `deliverer.appli_fermee_apres_s` ' +
       'secondes ; vrai sans socket : appli en arrière-plan ; null : règle coupée, réglage à 0) et ' +
       '`appli_vue_a` (dernier signe de vie, ISO).',

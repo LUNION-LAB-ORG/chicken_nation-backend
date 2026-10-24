@@ -84,7 +84,7 @@ describe('idsSansSignalSuffisant (présence à demander)', () => {
 
 describe('contexte de la règle unique', () => {
   it('règle coupée (0) : aucune présence demandée, `connectes` inconnu', async () => {
-    const t = monter({}, { seuilS: 0 });
+    const t = monter({}, { seuilS: 0, joignablesSeulement: false });
     expect(await t.service.contexte([{ id: 'l', dernier_signal_at: null, protocole_appli: 4 }], MAINTENANT)).toEqual({
       appliFermeeApresS: 0,
       connectes: null,
@@ -142,6 +142,90 @@ describe('contexte de la règle unique', () => {
 
     expect(t.gateway.livreursConnectes).toHaveBeenCalledWith([vieux.id]);
     expect([...(contexte.connectes ?? [])]).toEqual([vieux.id]);
+  });
+});
+
+describe('joignabilité : socket ouvert ou jeton de notification', () => {
+  it('jeton lu : présence demandée pour les seuls livreurs sans jeton ; sans socket : injoignable', async () => {
+    const t = monter({}, { connectes: ['socket'] });
+    const contexte = await t.service.contexte(
+      [
+        { id: 'jeton', dernier_signal_at: avantS(20), protocole_appli: 4, expo_push_token: 'ExponentPushToken[a]' },
+        { id: 'socket', dernier_signal_at: avantS(20), protocole_appli: 4, expo_push_token: null },
+        { id: 'rien', dernier_signal_at: avantS(20), protocole_appli: 4, expo_push_token: null },
+      ],
+      MAINTENANT,
+    );
+    expect(t.gateway.livreursConnectes).toHaveBeenCalledWith(['socket', 'rien']);
+    expect([...(contexte.injoignables ?? [])]).toEqual(['rien']);
+  });
+
+  it('une seule question au serveur temps réel pour les deux règles', async () => {
+    const t = monter({}, { connectes: [] });
+    const contexte = await t.service.contexte(
+      [
+        { id: 'vieux', dernier_signal_at: avantS(900), protocole_appli: 4, expo_push_token: 'ExponentPushToken[a]' },
+        { id: 'rien', dernier_signal_at: avantS(20), protocole_appli: 4, expo_push_token: null },
+      ],
+      MAINTENANT,
+    );
+    expect(t.gateway.livreursConnectes).toHaveBeenCalledTimes(1);
+    expect(t.gateway.livreursConnectes).toHaveBeenCalledWith(['vieux', 'rien']);
+    expect([...(contexte.injoignables ?? [])]).toEqual(['rien']);
+  });
+
+  it('jeton non lu (relances, échéance) : rien de jugé, aucune question', async () => {
+    const t = monter({}, { connectes: [] });
+    const contexte = await t.service.contexte([{ id: 'l', dernier_signal_at: avantS(20), protocole_appli: 4 }], MAINTENANT);
+    expect([...(contexte.injoignables ?? [])]).toEqual([]);
+    expect(t.gateway.livreursConnectes).not.toHaveBeenCalled();
+  });
+
+  it('présence inconnue (Redis ou l’autre serveur muet) : personne n’est réputé injoignable', async () => {
+    const t = monter({}, { connectes: null });
+    const contexte = await t.service.contexte(
+      [{ id: 'rien', dernier_signal_at: avantS(20), protocole_appli: 4, expo_push_token: null }],
+      MAINTENANT,
+    );
+    expect(contexte.injoignables).toBeNull();
+  });
+
+  it('réglage à 0 : pas d’`injoignables`, aucune question pour les jetons', async () => {
+    const t = monter({}, { connectes: [], joignablesSeulement: false });
+    const contexte = await t.service.contexte(
+      [{ id: 'rien', dernier_signal_at: avantS(20), protocole_appli: 4, expo_push_token: null }],
+      MAINTENANT,
+    );
+    expect(contexte).not.toHaveProperty('injoignables');
+    expect(t.gateway.livreursConnectes).not.toHaveBeenCalled();
+  });
+
+  it('règle de l’appli coupée, joignabilité active : `connectes` reste inconnu, `injoignables` jugé', async () => {
+    const t = monter({}, { seuilS: 0, connectes: [] });
+    const contexte = await t.service.contexte(
+      [{ id: 'rien', dernier_signal_at: null, protocole_appli: 4, expo_push_token: null }],
+      MAINTENANT,
+    );
+    expect(contexte.connectes).toBeNull();
+    expect([...(contexte.injoignables ?? [])]).toEqual(['rien']);
+  });
+
+  it('contextePour (création d’une offre) : jeton relu en base', async () => {
+    const sansJeton = livreur({ dernier_signal_at: avantS(20), expo_push_token: null });
+    const avecJeton = livreur({ dernier_signal_at: avantS(20) });
+    const t = monter({ livreurs: [sansJeton, avecJeton] }, { connectes: [] });
+    const contexte = await t.service.contextePour([sansJeton.id, avecJeton.id], MAINTENANT);
+    expect([...(contexte.injoignables ?? [])]).toEqual([sansJeton.id]);
+  });
+
+  it('contexteSelection : livreurs en service du restaurant sans jeton ; hors service ignoré', async () => {
+    const rien = livreur({ dernier_signal_at: avantS(20), expo_push_token: null });
+    const socket = livreur({ dernier_signal_at: avantS(20), expo_push_token: null });
+    const horsService = livreur({ dernier_signal_at: avantS(20), expo_push_token: null, last_available_at: null });
+    const t = monter({ livreurs: [rien, socket, horsService] }, { connectes: [socket.id] });
+    const contexte = await t.service.contexteSelection(rien.restaurant_id, MAINTENANT);
+    expect(t.gateway.livreursConnectes).toHaveBeenCalledWith([rien.id, socket.id]);
+    expect([...(contexte.injoignables ?? [])]).toEqual([rien.id]);
   });
 });
 

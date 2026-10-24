@@ -124,8 +124,10 @@ export class CourseAdminController {
     description:
       'Même règle que la sélection automatique. 409 avec la raison en français si la course ne ' +
       'cherche plus de livreur, ou si le livreur est en pause, en pause automatique, hors service, ' +
-      'en course, a déjà une offre en attente (« Ce livreur est en pause jusqu\'à 14 h 32. ») ou si ' +
-      'son appli est fermée (« L\'appli de ce livreur est fermée. »). Les offres d\'autres livreurs ' +
+      'en course, a déjà une offre en attente (« Ce livreur est en pause jusqu\'à 14 h 32. »), si ' +
+      'son appli est fermée (« L\'appli de ce livreur est fermée. ») ou s\'il est injoignable, ni ' +
+      'socket ouvert ni jeton de notification (« Ce livreur est injoignable : ni appli connectée, ni ' +
+      'notifications. », réglage `course.offre_joignables_seulement`). Les offres d\'autres livreurs ' +
       'sur cette course sont closes. `appli_connectee` : le livreur a-t-il un socket ouvert (false : ' +
       'appli en arrière-plan, l\'offre ne lui arrive que par la notification ; null : inconnu). ' +
       '`appli_active` : vrai (une appli fermée est refusée) ; null si la règle est coupée (réglage à 0).',

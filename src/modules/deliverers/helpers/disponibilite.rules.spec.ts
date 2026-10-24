@@ -23,6 +23,7 @@ import {
   SANS_REGLE_APPLI,
   SELECT_ETAT_LIVREUR,
   STATUTS_COURSE_EN_COURS,
+  aUnJetonDeNotification,
   appliActiveDepuis,
   disponibiliteLivreur,
   estAppliActive,
@@ -31,6 +32,9 @@ import {
   etatLivreurDepuis,
   filtreLivreursPouvantRecevoirOffre,
   heureLisible,
+  idsSansJeton,
+  injoignablesParmi,
+  lireOffreJoignablesSeulement,
   messagePauseAuto,
   messageRefusOffre,
   peutRecevoirOffre,
@@ -426,7 +430,7 @@ describe('textes', () => {
   it('aucun tiret cadratin dans les textes', () => {
     const etat = { pause_until: apres(5), auto_pause_until: apres(5) };
     const textes = (
-      ['INACTIF', 'EN_PAUSE', 'PAUSE_AUTO', 'EN_COURSE', 'OFFRE_EN_ATTENTE', 'HORS_SERVICE', 'APPLI_FERMEE'] as const
+      ['INACTIF', 'EN_PAUSE', 'PAUSE_AUTO', 'EN_COURSE', 'OFFRE_EN_ATTENTE', 'HORS_SERVICE', 'APPLI_FERMEE', 'INJOIGNABLE'] as const
     ).map((m) => messageRefusOffre(m, etat, MAINTENANT));
     textes.push(messagePauseAuto(apres(5), MAINTENANT));
     for (const t of textes) expect(t).not.toMatch(/[—–]/);
@@ -500,6 +504,143 @@ describe('disponibiliteLivreur (affichage au backoffice)', () => {
       etat: 'EN_COURSE',
       appli_active: true,
       appli_vue_a: avantS(20),
+    });
+  });
+});
+
+/**
+ * LIVREUR JOIGNABLE (défaut signalé le 24/10 : « proposée » au backoffice,
+ * rien reçu par le livreur) : socket ouvert OU jeton de notification. Sinon
+ * passé, comme s'il n'était pas disponible, sans pause ni pénalité.
+ */
+describe('joignable : socket ouvert ou jeton de notification', () => {
+  it('réglage `course.offre_joignables_seulement` : 1 par défaut, 0 coupe la règle', () => {
+    expect(lireOffreJoignablesSeulement(undefined)).toBe(true);
+    expect(lireOffreJoignablesSeulement('')).toBe(true);
+    expect(lireOffreJoignablesSeulement('1')).toBe(true);
+    expect(lireOffreJoignablesSeulement('true')).toBe(true);
+    expect(lireOffreJoignablesSeulement('0')).toBe(false);
+    expect(lireOffreJoignablesSeulement('false')).toBe(false);
+  });
+
+  it('jeton utilisable : une chaîne non vide', () => {
+    expect(aUnJetonDeNotification('ExponentPushToken[abc]')).toBe(true);
+    expect(aUnJetonDeNotification(null)).toBe(false);
+    expect(aUnJetonDeNotification(undefined)).toBe(false);
+    expect(aUnJetonDeNotification('  ')).toBe(false);
+  });
+
+  it('injoignable : jeton lu et absent, aucun socket ; jeton non lu : non jugé ; présence inconnue : personne', () => {
+    const lignes = [
+      { id: 'jeton', expo_push_token: 'ExponentPushToken[abc]' },
+      { id: 'socket', expo_push_token: null },
+      { id: 'rien', expo_push_token: null },
+      { id: 'vide', expo_push_token: '' },
+      { id: 'non-lu' },
+    ];
+    expect(idsSansJeton(lignes)).toEqual(['socket', 'rien', 'vide']);
+    expect([...injoignablesParmi(lignes, new Set(['socket']))!]).toEqual(['rien', 'vide']);
+    expect(injoignablesParmi(lignes, null)).toBeNull();
+  });
+
+  it('peutRecevoirOffre : injoignable, non, INJOIGNABLE, dit en dernier ; non jugé : oui', () => {
+    expect(peutRecevoirOffre(libre({ joignable: false }), MAINTENANT)).toEqual({ ok: false, motif: 'INJOIGNABLE' });
+    expect(peutRecevoirOffre(libre({ joignable: true }), MAINTENANT)).toEqual({ ok: true });
+    expect(peutRecevoirOffre(libre(), MAINTENANT)).toEqual({ ok: true });
+    expect(peutRecevoirOffre(libre({ joignable: false, appli_active: false }), MAINTENANT)).toEqual({
+      ok: false,
+      motif: 'APPLI_FERMEE',
+    });
+    expect(peutRecevoirOffre(libre({ joignable: false, last_available_at: null }), MAINTENANT)).toEqual({
+      ok: false,
+      motif: 'HORS_SERVICE',
+    });
+  });
+
+  it('etatLivreurDepuis : `joignable` lu dans `injoignables`, absent quand la règle n’a rien jugé', () => {
+    const ligne = {
+      id: 'l',
+      restaurant_id: 'r',
+      status: DelivererStatus.ACTIVE,
+      is_operational: true,
+      entity_status: EntityStatus.ACTIVE,
+      pause_until: null,
+      auto_pause_until: null,
+      last_available_at: avant(30),
+      dernier_signal_at: null,
+      protocole_appli: 4,
+      _count: { courses: 0, offer_attempts: 0 },
+    };
+    expect(etatLivreurDepuis(ligne, SANS_REGLE_APPLI, MAINTENANT)).not.toHaveProperty('joignable');
+    expect(etatLivreurDepuis(ligne, { ...SANS_REGLE_APPLI, injoignables: null }, MAINTENANT)).not.toHaveProperty('joignable');
+    expect(etatLivreurDepuis(ligne, { ...SANS_REGLE_APPLI, injoignables: new Set(['l']) }, MAINTENANT).joignable).toBe(false);
+    expect(etatLivreurDepuis(ligne, { ...SANS_REGLE_APPLI, injoignables: new Set(['x']) }, MAINTENANT).joignable).toBe(true);
+  });
+
+  it('équivalence avec le filtre Prisma : mêmes décisions, injoignable ou non, avec ou sans règle de l’appli', () => {
+    const filtreCourses = SELECT_ETAT_LIVREUR._count.select.courses.where;
+    const filtreOffres = SELECT_ETAT_LIVREUR._count.select.offer_attempts.where;
+    const contextes: ContexteAppli[] = [];
+    for (const appli of [SANS_REGLE_APPLI, { appliFermeeApresS: 180, connectes: new Set<string>() }])
+      for (const injoignables of [new Set(['l']), new Set(['autre']), new Set<string>(), null, undefined])
+        contextes.push({ ...appli, injoignables });
+    let essais = 0;
+    let refusesInjoignable = 0;
+    for (const appli of contextes) {
+      const filtre = filtreLivreursPouvantRecevoirOffre(MAINTENANT, appli);
+      for (const pause_until of [null, apres(5)])
+        for (const last_available_at of [null, avant(30)])
+          for (const dernier_signal_at of [null, avantS(10)])
+            for (const offres of [[], [{ status: CourseOfferStatus.PENDING, expires_at: apres(1) }]]) {
+              const ligne = {
+                id: 'l',
+                status: DelivererStatus.ACTIVE,
+                is_operational: true,
+                entity_status: EntityStatus.ACTIVE,
+                pause_until,
+                auto_pause_until: null,
+                last_available_at,
+                dernier_signal_at,
+                protocole_appli: 4,
+                courses: [] as { statut: CourseStatut }[],
+                offer_attempts: offres,
+              };
+              const etat = etatLivreurDepuis(
+                {
+                  ...ligne,
+                  restaurant_id: 'r',
+                  _count: {
+                    courses: ligne.courses.filter((c) => evaluer(c, filtreCourses)).length,
+                    offer_attempts: ligne.offer_attempts.filter((o) => evaluer(o, filtreOffres)).length,
+                  },
+                },
+                appli,
+                MAINTENANT,
+              );
+              const decision = peutRecevoirOffre(etat, MAINTENANT);
+              expect([decision.ok, JSON.stringify(ligne)]).toEqual([evaluer(ligne, filtre), JSON.stringify(ligne)]);
+              essais++;
+              if (!decision.ok && decision.motif === 'INJOIGNABLE') refusesInjoignable++;
+            }
+    }
+    expect(essais).toBe(10 * 2 * 2 * 2 * 2);
+    expect(refusesInjoignable).toBeGreaterThan(0);
+  });
+
+  it('aucun injoignable connu : pas de liste d’ids vide dans le filtre', () => {
+    const filtre = JSON.stringify(
+      filtreLivreursPouvantRecevoirOffre(MAINTENANT, { ...SANS_REGLE_APPLI, injoignables: new Set() }),
+    );
+    expect(filtre).not.toMatch(/notIn/);
+  });
+
+  it('backoffice : « Injoignable », et le refus de l’affectation forcée', () => {
+    expect(disponibiliteLivreur(libre({ joignable: false }), MAINTENANT)).toMatchObject({
+      etat: 'INJOIGNABLE',
+      libelle: 'Injoignable',
+      peut_recevoir_offre: false,
+      message_refus: 'Ce livreur est injoignable : ni appli connectée, ni notifications.',
+      en_service: true,
     });
   });
 });

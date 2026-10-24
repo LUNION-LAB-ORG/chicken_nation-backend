@@ -287,3 +287,33 @@ describe('decisionAcceptation', () => {
     expect(MESSAGE_COURSE_PLUS_DISPONIBLE).not.toMatch(/—/);
   });
 });
+
+/**
+ * Livreur injoignable (ni socket ni jeton) : seule la CRÉATION d'une offre le
+ * passe. Une offre déjà partie garde ses relances, son échéance et sa
+ * pénalité (décision du client encore ouverte), et l'acceptation reste permise.
+ */
+describe('injoignable : seule la création d’une offre est gardée', () => {
+  const injoignable = etat({ joignable: false });
+
+  it('création (sélection, planificateur) : refusée, INJOIGNABLE', () => {
+    expect(decisionCreationOffre(injoignable, false, MAINTENANT)).toEqual({ ok: false, motif: 'INJOIGNABLE' });
+    expect(decisionCreationOffre(etat({ joignable: true }), false, MAINTENANT)).toEqual({ ok: true });
+  });
+
+  it('affectation forcée : refusée, INJOIGNABLE (même règle que la sélection)', () => {
+    expect(decisionAffectationForcee(injoignable, [], 'c1', MAINTENANT)).toEqual({ ok: false, motif: 'INJOIGNABLE' });
+  });
+
+  it('relance d’une offre déjà partie : envoyée comme avant', () => {
+    expect(decisionRelance(EN_RECHERCHE, injoignable, MAINTENANT)).toEqual({ relancer: true });
+  });
+
+  it('échéance d’une offre déjà partie : pénalité inchangée', () => {
+    expect(decisionExpiration(EN_RECHERCHE, injoignable, MAINTENANT)).toEqual({ penaliser: true });
+  });
+
+  it('acceptation : permise (son appli vient de répondre)', () => {
+    expect(decisionAcceptation(injoignable, MAINTENANT)).toEqual({ ok: true });
+  });
+});
