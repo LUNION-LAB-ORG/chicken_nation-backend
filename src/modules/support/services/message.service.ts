@@ -46,6 +46,16 @@ export class TicketMessageService {
                 image: true,
             }
         },
+        // Message écrit par un livreur (tickets de l'appli livreur). Sans lui,
+        // l'appli et le backoffice affichaient « Inconnu ».
+        authorDeliverer: {
+            select: {
+                id: true,
+                first_name: true,
+                last_name: true,
+                image: true,
+            }
+        },
         ticket: {
             select: {
                 id: true,
@@ -288,6 +298,13 @@ export class TicketMessageService {
                 image: message.authorCustomer.image,
                 first_name: message.authorCustomer.first_name,
                 last_name: message.authorCustomer.last_name,
+            } : null,
+            authorDeliverer: message.authorDeliverer ? {
+                id: message.authorDeliverer.id,
+                name: [message.authorDeliverer.first_name, message.authorDeliverer.last_name].filter(Boolean).join(' ') || 'Livreur',
+                image: message.authorDeliverer.image,
+                first_name: message.authorDeliverer.first_name,
+                last_name: message.authorDeliverer.last_name,
             } : null,
             ticket: message.ticket,
             isRead: message.isRead,
