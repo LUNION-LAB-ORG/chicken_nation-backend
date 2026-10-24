@@ -9,11 +9,11 @@ import {
 } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
+import { jourDuPlanning, prevusParRestaurant } from 'src/modules/deliverers/helpers/planning-du-jour.rules';
 import { resolveRestaurantScope } from 'src/modules/order/helpers/restaurant-scope.helper';
 
 import { lireMembresDuPlanning } from '../helpers/membres-planning';
 import {
-  debutDuJour,
   MESSAGE_PLANNING_INTROUVABLE,
   planningsDuRestaurant,
   verifierPlanningDuRestaurant,
@@ -141,10 +141,14 @@ export class ScheduleQueryService {
    * Aperçu des plannings par restaurant (tableau du siège, 24/10) : planning
    * en cours avec ses réponses, planning suivant, livreurs prévus aujourd'hui.
    * Un compte de restaurant ne reçoit que la ligne du sien.
+   *
+   * « Aujourd'hui » est la journée de service (05 h à 05 h), et les prévus
+   * suivent la règle du bandeau (`prevusParRestaurant`) : plannings envoyés ou
+   * confirmés seulement, affectations pas refusées, livreurs au repos retirés.
    */
   async apercu(user: User | undefined, restaurantId?: string, maintenant = new Date()) {
     const perimetre = resolveRestaurantScope(user, restaurantId);
-    const aujourdhui = debutDuJour(maintenant);
+    const aujourdhui = jourDuPlanning(maintenant);
 
     const restaurants = await this.prisma.restaurant.findMany({
       where: { entity_status: EntityStatus.ACTIVE, ...(perimetre ? { id: perimetre } : {}) },
@@ -173,15 +177,10 @@ export class ScheduleQueryService {
     const enCoursIds = parRestaurant.flatMap((l) => (l.en_cours ? [l.en_cours.id] : []));
     const [reponses, prevus] = await Promise.all([
       Promise.all(enCoursIds.map((id) => this.countConfirmations(id))),
-      enCoursIds.length > 0
-        ? this.prisma.shiftAssignment.findMany({
-            where: {
-              shift: { plan_id: { in: enCoursIds }, date: aujourdhui },
-              status: { not: ShiftAssignmentStatus.REFUSED },
-            },
-            select: { deliverer_id: true, shift: { select: { plan_id: true } } },
-          })
-        : Promise.resolve([] as { deliverer_id: string; shift: { plan_id: string } }[]),
+      this.prevusDuJour(
+        restaurants.map((r) => r.id),
+        aujourdhui,
+      ),
     ]);
     const reponsesParPlanning = new Map(enCoursIds.map((id, i) => [id, reponses[i]]));
 
@@ -205,11 +204,50 @@ export class ScheduleQueryService {
         suivant: suivant
           ? { id: suivant.id, statut: suivant.status, debut: suivant.period_start, fin: suivant.period_end }
           : null,
-        prevus_aujourdhui: en_cours
-          ? new Set(prevus.filter((a) => a.shift.plan_id === en_cours.id).map((a) => a.deliverer_id)).size
-          : 0,
+        prevus_aujourdhui: prevus.get(restaurant.id)?.size ?? 0,
       };
     });
+  }
+
+  /**
+   * Livreurs prévus ce jour, par restaurant : même lecture que le planning du
+   * jour du bandeau (`DeliverersService.lirePlanningDuJour`), même règle.
+   */
+  private async prevusDuJour(restaurantIds: string[], jour: Date): Promise<Map<string, Set<string>>> {
+    const plans = await this.prisma.schedulePlan.findMany({
+      where: {
+        restaurant_id: { in: restaurantIds },
+        status: { in: [SchedulePlanStatus.SENT, SchedulePlanStatus.CONFIRMED] },
+        entity_status: { not: EntityStatus.DELETED },
+        period_start: { lte: jour },
+        period_end: { gte: jour },
+      },
+      select: {
+        id: true,
+        restaurant_id: true,
+        shifts: {
+          where: { date: jour, entity_status: { not: EntityStatus.DELETED } },
+          select: {
+            type: true,
+            start_time: true,
+            end_time: true,
+            assignments: {
+              where: { entity_status: { not: EntityStatus.DELETED } },
+              select: { deliverer_id: true, status: true },
+            },
+          },
+        },
+      },
+    });
+    const affectes = [...new Set(plans.flatMap((p) => p.shifts.flatMap((s) => s.assignments.map((a) => a.deliverer_id))))];
+    const repos =
+      affectes.length > 0
+        ? await this.prisma.restDay.findMany({
+            where: { date: jour, deliverer_id: { in: affectes }, entity_status: { not: EntityStatus.DELETED } },
+            select: { deliverer_id: true },
+          })
+        : [];
+    return prevusParRestaurant({ jour, plans, repos: repos.map((r) => r.deliverer_id), absents: [] });
   }
 
   /**

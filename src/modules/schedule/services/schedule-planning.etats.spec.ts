@@ -671,6 +671,25 @@ describe('aperçu des plannings', () => {
     ]);
   });
 
+  it('prévus aujourd’hui : même règle que le bandeau (envoyé ou confirmé, repos retirés, journée de service)', async () => {
+    // Un brouillon, que les livreurs ne voient pas : personne n'est prévu.
+    const brouillon = monterBase();
+    brouillon.planningAngre(DRAFT);
+    const [angreBrouillon] = await brouillon.requetes.apercu(ADMIN, RESTO_A, new Date('2026-10-28T10:00:00Z'));
+    expect(angreBrouillon.prevus_aujourdhui).toBe(0);
+
+    // Koffi pose lui-même un repos le 28/10 et garde ses créneaux : il n'est pas prévu.
+    const b = monterBase();
+    const plan = b.planningAngre(CONFIRMED);
+    b.ajouterRepos({ deliverer_id: KOFFI, date: jour('2026-10-28'), source: RestDaySource.MANUAL_DELIVERER });
+    const [angre] = await b.requetes.apercu(ADMIN, RESTO_A, new Date('2026-10-28T10:00:00Z'));
+    expect(angre.prevus_aujourdhui).toBe(1);
+
+    // Lundi 26/10 à 0 h 30, c'est encore la journée de service du dimanche : le planning n'a pas commencé.
+    const [nuit] = await b.requetes.apercu(ADMIN, RESTO_A, new Date('2026-10-26T00:30:00Z'));
+    expect(nuit).toMatchObject({ en_cours: null, suivant: { id: plan.id }, prevus_aujourdhui: 0 });
+  });
+
   it('un manager ne reçoit que la ligne de son restaurant', async () => {
     const b = monterBase();
     const apercu = await b.controleur.apercu(b.requete(MANAGER_B, 'GET'), RESTO_A);
