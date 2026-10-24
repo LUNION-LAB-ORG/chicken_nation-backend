@@ -7,10 +7,12 @@ export class StartCallDto {
    * - 'RESTAURANT' + restaurantId  → sonnerie de groupe du restaurant
    * - 'CALL_CENTER'                → sonnerie de groupe du call center
    * - 'USER' + targetUserId        → appel individuel (P2P)
+   * Le service client (CALL_CENTER) et l'admin appellent un livreur :
+   * - 'DELIVERER' + deliverer_id   → l'appli du livreur sonne (24/10)
    */
   @IsOptional()
-  @IsIn(['RESTAURANT', 'CALL_CENTER', 'USER'])
-  targetKind?: 'RESTAURANT' | 'CALL_CENTER' | 'USER';
+  @IsIn(['RESTAURANT', 'CALL_CENTER', 'USER', 'DELIVERER'])
+  targetKind?: 'RESTAURANT' | 'CALL_CENTER' | 'USER' | 'DELIVERER';
 
   /** Requis quand la cible est un restaurant précis. */
   @IsOptional()
@@ -21,4 +23,9 @@ export class StartCallDto {
   @IsOptional()
   @IsUUID()
   targetUserId?: string;
+
+  /** Requis avec `targetKind: 'DELIVERER'` : le livreur dont l'appli sonne. */
+  @IsOptional()
+  @IsUUID()
+  deliverer_id?: string;
 }

@@ -30,7 +30,8 @@ export type DelivererPushType =
   | 'account_reactivated' // Admin a réactivé le compte suspendu
   | 'plan_sent' // Nouveau planning à valider
   | 'presence_check' // Question de présence du matin (8 h)
-  | 'new_ticket_message'; // Réponse support
+  | 'new_ticket_message' // Réponse support
+  | 'appel_entrant'; // Le service client appelle le livreur dans l'appli (24/10)
 
 /** Canal des offres : sonnerie dédiée (Android : canal ; iOS : son embarqué). */
 export const CANAL_OFFRES = 'offres_v1';
@@ -558,6 +559,23 @@ export class DelivererPushService {
       title: 'Compte réactivé ✅',
       body: 'Ton compte est à nouveau actif. Tu peux recommencer à recevoir des courses.',
       data: {},
+      critical: true,
+    });
+  }
+
+  /**
+   * Le service client appelle le livreur (demande du 24/10). Envoyée à chaque
+   * appel : appli fermée ou en arrière-plan, c'est elle qui le prévient ; appli
+   * ouverte, c'est `call:incoming` qui sonne et l'appli la tait. Une appli qui
+   * ne sait pas encore répondre dans l'appli donne le numéro à rappeler.
+   */
+  notifyAppelEntrant(input: { delivererId: string; callId: string }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'appel_entrant',
+      title: "Le service client t'appelle",
+      body: "Ouvre l'appli pour répondre, ou rappelle le 27 21 71 21 30.",
+      data: { callId: input.callId },
       critical: true,
     });
   }

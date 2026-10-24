@@ -15,8 +15,21 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
-import { CALL_EVENTS } from '../constants/calls.constants';
+import {
+  APPELANT_LIVREUR,
+  APPEL_FANTOME_MS,
+  CALL_EVENTS,
+  CIBLE_LIVREUR,
+  RaisonFinAppel,
+} from '../constants/calls.constants';
 import { StartCallDto } from '../dto/start-call.dto';
+import {
+  appelantLivreur,
+  nomLivreur,
+  PartieAppel,
+  partiesAPrevenir,
+  SELECT_LIVREUR_APPEL,
+} from '../helpers/appels-livreur.rules';
 import { CallsConfigService } from './calls-config.service';
 import { LunionMeetService } from './lunion-meet.service';
 
@@ -45,6 +58,10 @@ export class CallsService {
    */
   async start(caller: User, dto: StartCallDto) {
     const isAdmin = caller.role === UserRole.ADMIN;
+    // Appeler un livreur passe par AppelsLivreurService (aiguillé par le contrôleur).
+    if (dto.targetKind === CIBLE_LIVREUR) {
+      throw new BadRequestException('Appel vers un livreur : cible non prise en charge ici');
+    }
 
     // L'admin peut cibler explicitement, au-delà de la config de routage.
     if (isAdmin && dto.targetKind === 'USER') {
@@ -230,8 +247,8 @@ export class CallsService {
 
     const access = await this.lunion.createToken(call.room_slug, `user-${user.id}`, user.fullname);
 
-    // L'appelant apprend qui a décroché
-    this.gateway.emitToUser(call.caller_id, 'user', CALL_EVENTS.ACCEPTED, {
+    // L'appelant apprend qui a décroché (membre du personnel ou livreur)
+    this.prevenirAppelant(call, CALL_EVENTS.ACCEPTED, {
       callId: call.id,
       answeredById: user.id,
       answeredByName: user.fullname,
@@ -286,19 +303,21 @@ export class CallsService {
         where: { id: callId, status: CallStatus.RINGING },
         data: { status: CallStatus.MISSED, ended_at: new Date() },
       });
-      this.gateway.emitToUser(call.caller_id, 'user', CALL_EVENTS.ENDED, {
+      this.prevenirAppelant(call, CALL_EVENTS.ENDED, {
         callId: call.id,
-        reason: 'no-answer',
+        reason: 'no-answer' satisfies RaisonFinAppel,
       });
       void this.lunion.deleteRoom(call.room_slug);
       return { status: CallStatus.MISSED };
     }
 
-    // Info non bloquante à l'appelant
-    this.gateway.emitToUser(call.caller_id, 'user', CALL_EVENTS.REJECTED, {
-      callId: call.id,
-      rejectedBy: user.fullname,
-    });
+    // Info non bloquante à l'appelant du personnel (l'appli du livreur n'en a pas l'usage)
+    if (call.caller_id) {
+      this.gateway.emitToUser(call.caller_id, 'user', CALL_EVENTS.REJECTED, {
+        callId: call.id,
+        rejectedBy: user.fullname,
+      });
+    }
     return { status: CallStatus.RINGING };
   }
 
@@ -328,32 +347,52 @@ export class CallsService {
       if (cancelled.count === 0) {
         const fresh = await this.prisma.call.findUnique({ where: { id: callId } });
         if (fresh && fresh.status === CallStatus.ONGOING) {
-          return this.endOngoing(fresh, user);
+          return this.terminerAppelEnCours(fresh, { type: 'user', id: user.id });
         }
         return { status: fresh?.status ?? CallStatus.CANCELLED };
       }
       for (const rid of call.ringing_user_ids) {
         this.gateway.emitToUser(rid, 'user', CALL_EVENTS.CANCELLED, { callId: call.id });
       }
+      // Le livreur appelé arrête de sonner.
+      if (call.target_deliverer_id) {
+        this.gateway.emitToDeliverer(call.target_deliverer_id, CALL_EVENTS.ENDED, {
+          callId: call.id,
+          reason: 'cancelled' satisfies RaisonFinAppel,
+        });
+      }
       void this.lunion.deleteRoom(call.room_slug);
       return { status: CallStatus.CANCELLED };
     }
 
-    return this.endOngoing(call, user);
+    return this.terminerAppelEnCours(call, { type: 'user', id: user.id });
   }
 
-  /** Fin normale d'un appel ONGOING (idempotent : conditionné sur le statut). */
-  private async endOngoing(call: { id: string; room_slug: string; caller_id: string; answered_by_id: string | null }, user: User) {
+  /**
+   * Fin normale d'un appel ONGOING (idempotent : conditionné sur le statut).
+   * Chaque partie, sauf celle qui raccroche, reçoit `call:ended` (`hangup`) :
+   * membre du personnel dans `user_{id}`, livreur dans `deliverer_{id}`.
+   */
+  async terminerAppelEnCours(
+    call: {
+      id: string;
+      room_slug: string;
+      caller_id: string | null;
+      caller_deliverer_id: string | null;
+      answered_by_id: string | null;
+      target_deliverer_id: string | null;
+    },
+    acteur: PartieAppel,
+  ) {
     const ended = await this.prisma.call.updateMany({
       where: { id: call.id, status: CallStatus.ONGOING },
       data: { status: CallStatus.ENDED, ended_at: new Date() },
     });
     if (ended.count > 0) {
-      const otherId = call.caller_id === user.id ? call.answered_by_id : call.caller_id;
-      if (otherId) {
-        this.gateway.emitToUser(otherId, 'user', CALL_EVENTS.ENDED, {
+      for (const partie of partiesAPrevenir(call, acteur)) {
+        this.prevenir(partie, CALL_EVENTS.ENDED, {
           callId: call.id,
-          reason: 'hangup',
+          reason: 'hangup' satisfies RaisonFinAppel,
         });
       }
       void this.lunion.deleteRoom(call.room_slug);
@@ -361,9 +400,38 @@ export class CallsService {
     return { status: CallStatus.ENDED };
   }
 
+  /** Événement vers une partie : `user_{id}` pour le personnel, `deliverer_{id}` pour un livreur. */
+  prevenir<T>(partie: PartieAppel, event: string, data: T) {
+    if (partie.type === 'deliverer') this.gateway.emitToDeliverer(partie.id, event, data);
+    else this.gateway.emitToUser(partie.id, 'user', event, data);
+  }
+
+  /** Événement vers l'appelant, membre du personnel ou livreur. */
+  prevenirAppelant<T>(
+    call: { caller_id: string | null; caller_deliverer_id: string | null },
+    event: string,
+    data: T,
+  ) {
+    if (call.caller_deliverer_id) this.prevenir({ type: 'deliverer', id: call.caller_deliverer_id }, event, data);
+    else if (call.caller_id) this.prevenir({ type: 'user', id: call.caller_id }, event, data);
+  }
+
+  /** « Call Center », le restaurant, la personne ou le livreur appelé. */
+  private libelleCible(c: {
+    target_kind: string;
+    target_restaurant?: { name: string } | null;
+    target_user?: { fullname: string } | null;
+    target_deliverer?: { first_name: string | null; last_name: string | null; phone: string } | null;
+  }): string {
+    if (c.target_kind === 'CALL_CENTER') return 'Call Center';
+    if (c.target_kind === 'USER') return c.target_user?.fullname ?? 'Personne';
+    if (c.target_kind === CIBLE_LIVREUR) return nomLivreur(c.target_deliverer);
+    return c.target_restaurant?.name ?? 'Restaurant';
+  }
+
   /** L'utilisateur est-il partie prenante de cet appel ? (sinon 403) */
   private assertParticipant(
-    call: { caller_id: string; answered_by_id: string | null; rung_user_ids: string[] },
+    call: { caller_id: string | null; answered_by_id: string | null; rung_user_ids: string[] },
     user: User,
   ) {
     const ok =
@@ -403,7 +471,7 @@ export class CallsService {
    * encore en sonnerie (< 90 s). Renvoie null si rien à restaurer.
    */
   async getActiveForMe(user: User) {
-    const STALE_MS = 4 * 60 * 60 * 1000; // 4 h — au-delà, un ONGOING est un zombie
+    const STALE_MS = APPEL_FANTOME_MS; // 4 h : au-delà, un ONGOING est un zombie
 
     // Balayage opportuniste : clôt les appels ONGOING fantômes (navigateur
     // fermé sans raccrocher, crash…) pour ne jamais restaurer un panneau mort.
@@ -417,6 +485,9 @@ export class CallsService {
       answered_by: { select: { id: true, fullname: true } },
       target_restaurant: { select: { name: true } },
       target_user: { select: { fullname: true } },
+      caller_deliverer: { select: SELECT_LIVREUR_APPEL },
+      target_deliverer: { select: SELECT_LIVREUR_APPEL },
+      course: { select: { reference: true } },
     } as const;
 
     let call = await this.prisma.call.findFirst({
@@ -444,15 +515,13 @@ export class CallsService {
     if (!call) return null;
 
     const isCaller = call.caller_id === user.id;
-    const targetLabel =
-      call.target_kind === 'CALL_CENTER'
-        ? 'Call Center'
-        : call.target_kind === 'USER'
-          ? (call.target_user?.fullname ?? 'Personne')
-          : (call.target_restaurant?.name ?? 'Restaurant');
+    const targetLabel = this.libelleCible(call);
     const peerLabel = isCaller
       ? (call.answered_by?.fullname ?? targetLabel)
-      : (call.caller?.fullname ?? 'Appelant');
+      : (call.caller?.fullname ??
+        (call.caller_deliverer ? nomLivreur(call.caller_deliverer) : 'Appelant'));
+    // Appel avec un livreur : de quoi le reconnaître dans le panneau restauré.
+    const livreur = call.caller_deliverer ?? call.target_deliverer;
 
     const access = await this.lunion.createToken(
       call.room_slug,
@@ -465,6 +534,7 @@ export class CallsService {
       direction: isCaller ? 'outgoing' : 'incoming',
       phase: call.status === CallStatus.ONGOING ? 'connected' : 'calling',
       peerLabel,
+      ...(livreur ? { livreur: appelantLivreur(livreur, call.course) } : {}),
       access: {
         room: call.room_slug,
         token: access.token,
@@ -490,22 +560,22 @@ export class CallsService {
         caller: { select: { id: true, fullname: true, type: true } },
         target_restaurant: { select: { name: true } },
         target_user: { select: { fullname: true } },
+        caller_deliverer: { select: SELECT_LIVREUR_APPEL },
+        course: { select: { reference: true } },
       },
     });
     return calls.map((c) => ({
       callId: c.id,
       room: c.room_slug,
-      callerId: c.caller_id,
-      callerName: c.caller?.fullname ?? 'Appelant',
-      callerType: c.caller_type,
+      callerId: c.caller_id ?? c.caller_deliverer_id,
+      callerName:
+        c.caller?.fullname ?? (c.caller_deliverer ? nomLivreur(c.caller_deliverer) : 'Appelant'),
+      callerType: c.caller_type ?? APPELANT_LIVREUR,
       targetKind: c.target_kind,
-      targetLabel:
-        c.target_kind === 'CALL_CENTER'
-          ? 'Call Center'
-          : c.target_kind === 'USER'
-            ? (c.target_user?.fullname ?? 'Personne')
-            : (c.target_restaurant?.name ?? 'Restaurant'),
+      targetLabel: this.libelleCible(c),
       startedAt: c.started_at,
+      // Un livreur appelle : nom, téléphone, restaurant et course, comme sur call:incoming.
+      ...(c.caller_deliverer ? { livreur: appelantLivreur(c.caller_deliverer, c.course) } : {}),
     }));
   }
 
@@ -520,7 +590,7 @@ export class CallsService {
     ];
     if (user.restaurant_id) or.push({ target_restaurant_id: user.restaurant_id });
 
-    return this.prisma.call.findMany({
+    const calls = await this.prisma.call.findMany({
       where: { OR: or },
       orderBy: { started_at: 'desc' },
       take: Math.min(Math.max(limit, 1), 100),
@@ -537,12 +607,21 @@ export class CallsService {
         answered_by: { select: { id: true, fullname: true } },
         target_restaurant: { select: { id: true, name: true } },
         target_user: { select: { id: true, fullname: true } },
+        // Appels avec un livreur (24/10) : lui, son restaurant et la course.
+        caller_deliverer: { select: SELECT_LIVREUR_APPEL },
+        target_deliverer: { select: SELECT_LIVREUR_APPEL },
+        course: { select: { id: true, reference: true } },
       },
     });
+    // Un livreur qui appelle n'a pas de type de personnel : `caller_type: 'DELIVERER'`.
+    return calls.map((c) => ({ ...c, caller_type: c.caller_type ?? APPELANT_LIVREUR }));
   }
 
-  /** Résout les receveurs éligibles (actifs, du bon type/rôle, hors appelant). */
-  private async resolveReceivers(
+  /**
+   * Résout les receveurs éligibles (actifs, du bon type/rôle, hors appelant).
+   * Sert aussi aux appels d'un livreur vers le service client.
+   */
+  async resolveReceivers(
     receiverType: UserType,
     receiverRoles: UserRole[],
     restaurantId: string | null,

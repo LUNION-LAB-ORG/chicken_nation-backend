@@ -484,6 +484,10 @@ model Deliverer {
   courses        Course[]
   offer_attempts CourseOfferAttempt[]
 
+  // Appels dans l'appli (24/10) : passés au service client, reçus du service client.
+  calls_made     Call[] @relation("CallsMadeByDeliverer")
+  calls_received Call[] @relation("CallsToDeliverer")
+
   // ── Module Schedule (P7 — créneaux & disponibilité) ────────────────────
   // Affectations à des shifts d'un planning, jours de repos, check-ins matinaux.
   schedule_assignments ShiftAssignment[]
@@ -605,6 +609,9 @@ model Course {
 
   /// Historique des propositions envoyées aux livreurs
   offer_attempts CourseOfferAttempt[]
+
+  /// Appels du livreur avec le service client pendant cette course (24/10).
+  calls Call[]
 
   /// Batch de regroupement d'origine (si la Course est issue du grouping auto).
   /// Null si créée "en legacy" (1 order = 1 course sans batch).
@@ -1712,6 +1719,8 @@ model Order {
   /// Relance téléphonique du panier non payé (une ligne au plus) et son journal.
   relance           OrderRelance?
   relance_journal   OrderRelanceJournal[]
+  /// Appels du livreur avec le service client au sujet de cette commande (24/10).
+  calls             Call[]
 
   @@index([reference, status, entity_status, customer_id])
   // Index pour les agrégations statistiques (page Stats > Clients/Commandes) :
@@ -2667,18 +2676,30 @@ model Call {
   room_name String?    @db.VarChar // nom lisible de la room
   status    CallStatus @default(RINGING)
 
-  // Appelant (toujours un membre du staff = User)
-  caller_id   String   @db.Uuid
-  caller      User     @relation("CallsMade", fields: [caller_id], references: [id])
-  caller_type UserType // type de l'appelant au moment de l'appel (BACKOFFICE | RESTAURANT)
+  // Appelant : un membre du personnel (`caller_id`) ou, depuis le 24/10, un
+  // livreur depuis son appli (`caller_deliverer_id`). Jamais les deux.
+  caller_id           String?    @db.Uuid
+  caller              User?      @relation("CallsMade", fields: [caller_id], references: [id], onDelete: Restrict)
+  caller_type         UserType? // type du membre du personnel au moment de l'appel ; null quand un livreur appelle
+  caller_deliverer_id String?    @db.Uuid
+  caller_deliverer    Deliverer? @relation("CallsMadeByDeliverer", fields: [caller_deliverer_id], references: [id], onDelete: SetNull)
 
   // Cible de l'appel
-  target_kind          String      @db.VarChar // 'RESTAURANT' | 'CALL_CENTER' | 'USER'
+  target_kind          String      @db.VarChar // 'RESTAURANT' | 'CALL_CENTER' | 'USER' | 'DELIVERER'
   target_restaurant_id String?     @db.Uuid
   target_restaurant    Restaurant? @relation("CallsToRestaurant", fields: [target_restaurant_id], references: [id])
   // Cible individuelle (appel P2P, ex : admin appelle une personne précise)
   target_user_id       String?     @db.Uuid
   target_user          User?       @relation("CallsToUser", fields: [target_user_id], references: [id])
+  // Cible livreur : le service client appelle un livreur dans son appli (24/10).
+  target_deliverer_id  String?     @db.Uuid
+  target_deliverer     Deliverer?  @relation("CallsToDeliverer", fields: [target_deliverer_id], references: [id], onDelete: SetNull)
+
+  // Appel avec un livreur : la course (et la commande) dont il est question.
+  course_id String? @db.Uuid
+  course    Course? @relation(fields: [course_id], references: [id], onDelete: SetNull)
+  order_id  String? @db.Uuid
+  order     Order?  @relation(fields: [order_id], references: [id], onDelete: SetNull)
 
   // Receveurs qui sonnent encore (retirés au refus). Vide + RINGING => MISSED.
   ringing_user_ids String[] @default([])
@@ -2701,6 +2722,8 @@ model Call {
   @@index([answered_by_id])
   @@index([target_restaurant_id])
   @@index([target_user_id])
+  @@index([caller_deliverer_id])
+  @@index([target_deliverer_id])
   @@index([status])
   @@map("calls")
 }
