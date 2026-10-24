@@ -119,6 +119,20 @@ export function decisionExpiration(
   return { penaliser: true };
 }
 
+/**
+ * Signe de vie qui compte à l'échéance d'une offre : seulement s'il est
+ * postérieur à l'envoi de l'offre. Un signe de vie plus ancien ne prouve pas
+ * que l'appli vivait encore pendant l'offre : glissée hors de la liste juste
+ * avant, elle reste « active » jusqu'à 180 s et l'offre lui serait comptée.
+ * Sans signe de vie pendant l'offre, seul un socket ouvert à l'échéance la
+ * rend active (l'appli en arrière-plan envoie une position toutes les 45 à
+ * 85 s, l'offre dure 120 s). Envoi inconnu : le signe de vie compte tel quel.
+ */
+export function signalPendantOffre(dernierSignal: Date | null, offreeA: Date | null | undefined): Date | null {
+  if (!dernierSignal || !offreeA) return dernierSignal;
+  return dernierSignal.getTime() > offreeA.getTime() ? dernierSignal : null;
+}
+
 // ============================================================
 // RELANCES (30 et 60 s)
 // ============================================================

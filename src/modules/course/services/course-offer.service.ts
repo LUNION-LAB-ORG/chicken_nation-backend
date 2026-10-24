@@ -38,6 +38,7 @@ import {
   CLASSE_VERROU_OFFRE_LIVREUR,
   decisionCreationOffre,
   decisionExpiration,
+  signalPendantOffre,
 } from '../helpers/offres.rules';
 import { planificateurDuRestaurant } from '../helpers/planification.rules';
 import { GardeOffresService } from './garde-offres.service';
@@ -487,7 +488,8 @@ export class CourseOfferService {
    * ou si le livreur s'est mis en pause entre-temps (`decisionExpiration`).
    * Appli du livreur fermée : l'offre n'expire pas, elle est close
    * (`APPLI_FERMEE`) : ni pénalité, ni exclusion de la course, ni filet hors
-   * service, et la recherche repart.
+   * service, et la recherche repart. À l'échéance, l'appli n'est active que
+   * si elle a donné signe de vie pendant l'offre, ou si son socket est ouvert.
    */
   async expirePendingOffers(): Promise<number> {
     const now = new Date();
@@ -497,6 +499,7 @@ export class CourseOfferService {
         id: true,
         course_id: true,
         deliverer_id: true,
+        offered_at: true,
         course: { select: { statut: true, turbo_escalated_at: true } },
         deliverer: { select: { pause_until: true, auto_pause_until: true, dernier_signal_at: true } },
       },
@@ -504,9 +507,11 @@ export class CourseOfferService {
 
     if (expired.length === 0) return 0;
 
+    // Seul un signe de vie PENDANT l'offre compte (sinon socket ouvert) : une
+    // appli fermée juste avant l'envoi n'est jamais pénalisée.
     const presence = (e: (typeof expired)[number]) => ({
       id: e.deliverer_id,
-      dernier_signal_at: e.deliverer?.dernier_signal_at ?? null,
+      dernier_signal_at: signalPendantOffre(e.deliverer?.dernier_signal_at ?? null, e.offered_at),
     });
     const appli = await this.appliLivreur.contexte(expired.map(presence), now);
 

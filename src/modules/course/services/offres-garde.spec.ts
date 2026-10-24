@@ -944,6 +944,41 @@ describe('appli fermée (24/10) : plus rien ne passe, sans pause ni pénalité',
     expect(t.offres.find((x) => x.status === CourseOfferStatus.PENDING)?.deliverer_id).toBe(d.id);
   });
 
+  it('échéance d’une offre envoyée juste après la fermeture (dernier signe de vie AVANT l’offre, moins de 180 s) : close, sans pénalité', async () => {
+    // Appli glissée hors de la liste à -136 s ; l'offre part à -121 s (l'appli
+    // paraît encore active) ; à l'échéance, son signe de vie a moins de 180 s.
+    const d = livreur({ dernier_signal_at: avant(136) });
+    const c = course({ offer_expires_at: avant(1) });
+    const o = offre({ course_id: c.id, deliverer_id: d.id, offered_at: avant(121), expires_at: avant(1) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [o] }, { appli: { connectes: [] } });
+
+    expect(await t.serviceOffres.expirePendingOffers()).toBe(1);
+
+    expect(o.status).toBe(CourseOfferStatus.CANCELLED);
+    expect(t.queue.onOfferExpired).not.toHaveBeenCalled();
+    expect(c.refusal_count).toBe(0);
+    expect(t.courseEvent.offerExpired).not.toHaveBeenCalled();
+    expect(t.fermetures()).toEqual([{ course_id: c.id, deliverer_id: d.id, motif: 'APPLI_FERMEE' }]);
+  });
+
+  it('échéance : signe de vie pendant l’offre, ou socket ouvert, l’offre est expirée et pénalisée', async () => {
+    const position = livreur({ dernier_signal_at: avant(60) });
+    const socket = livreur({ dernier_signal_at: avant(136) });
+    const c1 = course();
+    const c2 = course();
+    const o1 = offre({ course_id: c1.id, deliverer_id: position.id, offered_at: avant(121), expires_at: avant(1) });
+    const o2 = offre({ course_id: c2.id, deliverer_id: socket.id, offered_at: avant(121), expires_at: avant(1) });
+    const t = monter(
+      { livreurs: [position, socket], courses: [c1, c2], offres: [o1, o2] },
+      { appli: { connectes: [socket.id] } },
+    );
+
+    await t.serviceOffres.expirePendingOffers();
+
+    expect([o1.status, o2.status]).toEqual([CourseOfferStatus.EXPIRED, CourseOfferStatus.EXPIRED]);
+    expect(t.queue.onOfferExpired).toHaveBeenCalledTimes(2);
+  });
+
   it('échéance d’une offre d’appli en arrière-plan : expirée et pénalisée comme avant', async () => {
     const d = livreur(ARRIERE_PLAN);
     const c = course();
