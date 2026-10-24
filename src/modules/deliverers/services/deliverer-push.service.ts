@@ -36,6 +36,16 @@ export type DelivererPushType =
 /** Canal des offres : sonnerie dédiée (Android : canal ; iOS : son embarqué). */
 export const CANAL_OFFRES = 'offres_v1';
 /**
+ * Canal des appels du service client (relecture du 24/10) : sonnerie longue,
+ * vibration répétée, importance maximale. Créé par l'appli 1.1.0, qui embarque
+ * `sonnerie_appel.wav` ; une appli plus ancienne la reçoit sur le canal de
+ * secours d'Android, avec le son du système. Sur le canal par défaut, l'appel
+ * ne faisait qu'un « ding » court, comme un message.
+ */
+export const CANAL_APPELS = 'appels_v1';
+/** Son de l'appel du service client (iOS : fichier embarqué dans le binaire 1.1.0). */
+export const SON_APPEL = 'sonnerie_appel.wav';
+/**
  * Appli qui rend muettes, appli ouverte, les notifications des événements de
  * course (TYPES_MUETS_APPLI_OUVERTE) et sait les faire vibrer elle-même.
  */
@@ -577,6 +587,8 @@ export class DelivererPushService {
       body: "Ouvre l'appli pour répondre, ou rappelle le 27 21 71 21 30.",
       data: { callId: input.callId },
       critical: true,
+      channelId: CANAL_APPELS,
+      sound: SON_APPEL,
     });
   }
 }

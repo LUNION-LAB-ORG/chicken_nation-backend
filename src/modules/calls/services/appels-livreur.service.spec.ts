@@ -446,7 +446,7 @@ describe('Appels avec les livreurs', () => {
     expect((await t.calls.history(t.awa))[0].caller_type).toBe(UserType.RESTAURANT);
   });
 
-  it('notification « Le service client t’appelle » : type appel_entrant, priorité haute', async () => {
+  it('notification « Le service client t’appelle » : type appel_entrant, priorité haute, canal et sonnerie des appels', async () => {
     const prisma = {
       deliverer: { findUnique: jest.fn(async () => ({ expo_push_token: 'ExponentPushToken[x]', first_name: 'Koffi', protocole_appli: 4 })) },
     };
@@ -460,6 +460,9 @@ describe('Appels avec les livreurs', () => {
         title: "Le service client t'appelle",
         priority: 'high',
         data: { type: 'appel_entrant', callId: 'c1' },
+        // Pas le canal par défaut (un « ding » court) : le canal des appels de l'appli 1.1.0.
+        channelId: 'appels_v1',
+        sound: 'sonnerie_appel.wav',
       }),
     );
   });
