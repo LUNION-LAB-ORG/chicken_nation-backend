@@ -20,6 +20,7 @@ import { ConnectedUser } from '../interfaces/app.gateway.interface';
 import { Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { sansSecretsRestaurant } from 'src/common/utils/restaurant-secrets.util';
+import { sansTelephoneClientTermine } from 'src/common/securite/telephone-client-livreur';
 import { JournalLimite, suffixeTues } from 'src/common/utils/journal-limite.util';
 import {
   SALLE_BACKOFFICE,
@@ -593,6 +594,9 @@ export class AppGateway implements OnGatewayInit, OnGatewayConnection, OnGateway
   // doit recevoir la clé Turbo ni le jeton HubRise d'un restaurant, même si une
   // requête en amont charge la ligne complète. Qui entend quoi : voir
   // `salles.util.ts`.
+  // Vers un livreur, en plus, `sansTelephoneClientTermine` : plus de numéro du
+  // client pour une livraison terminée ou une course close. La même course
+  // part au siège et au restaurant avec le numéro : elle n'est pas modifiée.
 
   // Émettre à un utilisateur spécifique
   emitToUser<T>(
@@ -601,12 +605,15 @@ export class AppGateway implements OnGatewayInit, OnGatewayConnection, OnGateway
     event: string,
     data: T,
   ) {
-    this.server.to(sallePersonnelle(userType, userId)).emit(event, sansSecretsRestaurant(data));
+    const charge = userType === 'deliverer' ? sansTelephoneClientTermine(data) : data;
+    this.server.to(sallePersonnelle(userType, userId)).emit(event, sansSecretsRestaurant(charge));
   }
 
   // Émettre à un livreur spécifique (alias sémantique)
   emitToDeliverer<T>(delivererId: string, event: string, data: T) {
-    this.server.to(salleLivreur(delivererId)).emit(event, sansSecretsRestaurant(data));
+    this.server
+      .to(salleLivreur(delivererId))
+      .emit(event, sansSecretsRestaurant(sansTelephoneClientTermine(data)));
   }
 
   // Émettre à tous les backoffice

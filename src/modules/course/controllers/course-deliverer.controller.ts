@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CourseStatut, Deliverer } from '@prisma/client';
 
+import { TelephoneClientLivreurInterceptor } from 'src/common/securite/telephone-client-livreur.interceptor';
 import { CurrentDeliverer } from 'src/modules/auth-deliverer/decorators/current-deliverer.decorator';
 import { JwtDelivererAuthGuard } from 'src/modules/auth-deliverer/guards/jwt-deliverer-auth.guard';
 
@@ -20,10 +21,15 @@ import { OffreEnAttenteService } from '../services/offre-en-attente.service';
 /**
  * Endpoints livreur pour le module course.
  * Tous protégés par JwtDelivererAuthGuard — scope strict au livreur connecté.
+ *
+ * Numéro du client : `null` dans toute réponse pour une livraison terminée ou
+ * une course close (historique, course rendue après une action, annulation).
+ * Pendant la course, il reste là pour que le livreur puisse appeler.
  */
 @ApiTags('Courses — Deliverer')
 @Controller('courses/deliverer')
 @UseGuards(JwtDelivererAuthGuard)
+@UseInterceptors(TelephoneClientLivreurInterceptor)
 export class CourseDelivererController {
   constructor(
     private readonly actionService: CourseActionService,

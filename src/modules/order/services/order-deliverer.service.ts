@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EntityStatus, OrderStatus, Prisma } from '@prisma/client';
 
+import { telephoneClientVisible } from 'src/common/securite/telephone-client-livreur';
 import { PrismaService } from 'src/database/services/prisma.service';
 
 import { QueryDelivererHistoryDto } from '../dto/query-deliverer-history.dto';
@@ -24,6 +25,11 @@ export class OrderDelivererService {
    * Si `status` est fourni, on filtre sur celui-ci uniquement.
    *
    * Tri par `created_at` DESC (plus récent en premier).
+   *
+   * Numéro du client (`phone`, `customer.phone`) à `null` dès que la livraison
+   * est terminée ou la course close : le livreur ne le garde pas après la
+   * course (voir `telephone-client-livreur.ts`). Le statut de la livraison et
+   * de la course est lu pour cela, puis retiré : la réponse garde sa forme.
    */
   async getHistory(delivererId: string, filters: QueryDelivererHistoryDto) {
     const page = filters.page ?? 1;
@@ -52,7 +58,7 @@ export class OrderDelivererService {
         : {}),
     };
 
-    const [items, total] = await Promise.all([
+    const [lignes, total] = await Promise.all([
       this.prisma.order.findMany({
         where,
         skip,
@@ -81,10 +87,21 @@ export class OrderDelivererService {
             },
           },
           restaurant: { select: { id: true, name: true, address: true } },
+          delivery: { select: { statut: true, course: { select: { statut: true } } } },
         },
       }),
       this.prisma.order.count({ where }),
     ]);
+
+    const items = lignes.map(({ delivery, ...commande }) =>
+      delivery && telephoneClientVisible(delivery.course.statut, delivery.statut)
+        ? commande
+        : {
+            ...commande,
+            phone: null,
+            customer: commande.customer ? { ...commande.customer, phone: null } : commande.customer,
+          },
+    );
 
     return {
       items,

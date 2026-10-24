@@ -528,6 +528,61 @@ describe('AppGateway', () => {
       expect(emissions.map((e) => e.salles)).toEqual(['customer_c1', 'user_u1', 'deliverer_d1', 'deliverer_d2']);
     });
 
+    describe('numéro du client vers le livreur', () => {
+      const courseClose = () => ({
+        id: 'k1',
+        statut: 'COMPLETED',
+        restaurant_id: 'r1',
+        deliveries: [
+          {
+            id: 'l1',
+            statut: 'DELIVERED',
+            order: { id: 'o1', phone: '+2250700000001', customer: { id: 'c1', phone: '+2250100000001' } },
+          },
+        ],
+      });
+      const enCours = () => ({
+        id: 'k2',
+        statut: 'IN_DELIVERY',
+        restaurant_id: 'r1',
+        deliveries: [
+          { id: 'l2', statut: 'DELIVERED', order: { id: 'o2', phone: '+2250700000002', customer: null } },
+          { id: 'l3', statut: 'IN_ROUTE', order: { id: 'o3', phone: '+2250700000003', customer: null } },
+        ],
+      });
+      type Charge = { course: ReturnType<typeof enCours> };
+
+      it('emitToDeliverer : plus de numéro pour une course close', () => {
+        const { gateway, emissions } = creerPasserelle();
+        gateway.emitToDeliverer('d1', 'course:completed', { course: courseClose() });
+        expect(JSON.stringify(emissions[0].donnees)).not.toContain('+225');
+      });
+
+      it('emitToDeliverer : course en cours, numéro absent pour l\'arrêt livré, présent pour le suivant', () => {
+        const { gateway, emissions } = creerPasserelle();
+        gateway.emitToDeliverer('d1', 'course:statut:changed', { course: enCours() });
+        const { course } = emissions[0].donnees as Charge;
+        expect(course.deliveries.map((l) => l.order.phone)).toEqual([null, '+2250700000003']);
+      });
+
+      it('emitToUser vers un livreur : même règle', () => {
+        const { gateway, emissions } = creerPasserelle();
+        gateway.emitToUser('d1', 'deliverer', 'course:completed', { course: courseClose() });
+        expect(JSON.stringify(emissions[0].donnees)).not.toContain('+225');
+      });
+
+      it('le siège, le restaurant et le client gardent le numéro', () => {
+        const { gateway, emissions } = creerPasserelle();
+        const charge = { course: courseClose() };
+        gateway.emitToDeliverer('d1', 'course:completed', charge);
+        gateway.emitToBackoffice('course:completed', charge);
+        gateway.emitToRestaurant('r1', 'course:completed', charge);
+        gateway.emitToUser('c1', 'customer', 'x', charge);
+        expect(emissions.slice(1).map((e) => e.donnees)).toEqual([charge, charge, charge]);
+        expect(charge.course.deliveries[0].order.phone).toBe('+2250700000001');
+      });
+    });
+
     it('emitToBackoffice vise backoffice_all', () => {
       const { gateway, emissions } = creerPasserelle();
       gateway.emitToBackoffice('x', {});
