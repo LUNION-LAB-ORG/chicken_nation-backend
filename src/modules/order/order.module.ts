@@ -2,6 +2,7 @@ import { MenuModule } from 'src/modules/menu/menu.module';
 import { KkiapayModule } from 'src/kkiapay/kkiapay.module';
 import { Module } from '@nestjs/common';
 import { SuiviOperationsService } from './services/suivi-operations.service';
+import { SuiviLivraisonService } from './services/suivi-livraison.service';
 import { OrderService } from './services/order.service';
 import { OrderDelivererService } from './services/order-deliverer.service';
 import { OrderController } from './controllers/order.controller';
@@ -64,6 +65,7 @@ import { OrderImpayeTask } from './tasks/order-impaye.task';
   providers: [
     OrderService,
     SuiviOperationsService, // Écran Opérations : offre nommée, fenêtre d'ajout après le retrait
+    SuiviLivraisonService, // Tiroir de détail : section « Livraison »
     OrderCouponService,
     OrderDelivererService,
     OrderHelper,
