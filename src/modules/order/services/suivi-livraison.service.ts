@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { CourseOfferStatus, CourseStatut, EntityStatus, Prisma } from '@prisma/client';
 
 import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
@@ -8,10 +8,18 @@ import {
   lireReglagesPlanification,
   REGLAGES_PLANIFICATION_DEFAUT,
 } from 'src/modules/course/helpers/planification.rules';
+import { STATUTS_COURSE_EN_COURS } from 'src/modules/deliverers/helpers/disponibilite.rules';
 import { SettingsService } from 'src/modules/settings/settings.service';
+import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
 import { PANIER_ANNULE_PAR_CLIENT_WHERE } from '../helpers/brouillons.rules';
 import { CommandeLivraisonLue, SuiviLivraison, suiviLivraison } from '../helpers/suivi-livraison.rules';
+import {
+  CLE_APPLI_FERMEE_APRES_S,
+  CLE_FACTEUR_RETARD,
+  lireAppliFermeeApresS,
+  lireFacteurRetard,
+} from '../helpers/suivi-operations.rules';
 
 /**
  * Ce que la section « Livraison » lit d'une commande, en une requête. Liste
@@ -34,6 +42,9 @@ const SELECT_SUIVI_LIVRAISON = {
       statut: true,
       arrived_at: true,
       delivered_at: true,
+      // Échec de CETTE livraison : motif et note du livreur.
+      failure_reason: true,
+      failure_note: true,
       turbo_courier_id: true,
       turbo_courier_name: true,
       turbo_courier_phone: true,
@@ -49,9 +60,15 @@ const SELECT_SUIVI_LIVRAISON = {
           parti_at: true,
           motif_depart: true,
           estimated_duration_min: true,
+          // Retard de la tournée (règle commune, alerte du cron déjà donnée).
+          delay_alerted_at: true,
           retenue_jusqua: true,
           deliverer: {
-            select: { id: true, first_name: true, last_name: true, phone: true, last_location: true, last_location_at: true },
+            select: {
+              id: true, first_name: true, last_name: true, phone: true, last_location: true, last_location_at: true,
+              // Appli du livreur : signe de vie et protocole, jamais renvoyés tels quels.
+              dernier_signal_at: true, protocole_appli: true,
+            },
           },
           // Offre en attente : « Proposée à Koffi ».
           offer_attempts: {
@@ -60,10 +77,20 @@ const SELECT_SUIVI_LIVRAISON = {
             take: 1,
             select: { expires_at: true, deliverer: { select: { id: true, first_name: true, last_name: true } } },
           },
-          // Arrêt 2 sur 3, sac encore attendu au comptoir.
+          // Arrêt 2 sur 3, sac encore attendu au comptoir, tournée : référence et
+          // état de chaque commande, rien d'autre des autres clients.
           deliveries: {
             orderBy: { sequence_order: 'asc' },
-            select: { id: true, statut: true, sequence_order: true, order: { select: { status: true } } },
+            select: {
+              id: true,
+              statut: true,
+              sequence_order: true,
+              in_route_at: true,
+              arrived_at: true,
+              delivered_at: true,
+              failed_at: true,
+              order: { select: { reference: true, status: true } },
+            },
           },
         },
       },
@@ -80,8 +107,11 @@ export type CommandeSuiviLivraison = Prisma.OrderGetPayload<{ select: typeof SEL
  *
  * Aucun appel externe : les heures prévues sont celles que le serveur a déjà
  * (retenue, fenêtre d'ajout de l'écran Opérations, durée de la tournée figée
- * au retrait). Les réglages du planificateur ne sont relus que pour une
- * course récupérée et pas encore partie, seul cas où la fenêtre compte.
+ * au retrait). Les réglages ne sont relus que pour une course en cours
+ * (acceptée, au restaurant, en livraison), en une lecture : fenêtre d'ajout
+ * (course récupérée et pas encore partie), facteur de retard, seuil de
+ * l'appli fermée. La présence de l'appli (socket ouvert) n'est demandée que
+ * pour un livreur Chicken Nation sur une course en cours.
  */
 @Injectable()
 export class SuiviLivraisonService {
@@ -90,6 +120,7 @@ export class SuiviLivraisonService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly settings: SettingsService,
+    @Optional() private readonly gateway?: AppGateway,
   ) {}
 
   /**
@@ -111,19 +142,49 @@ export class SuiviLivraisonService {
 
   async suivi(commande: CommandeSuiviLivraison, maintenant = new Date()): Promise<SuiviLivraison> {
     const course = commande.delivery?.course;
-    let fenetreMaxS: number | undefined;
-    let departRayonM: number | undefined;
-    if (course?.statut === CourseStatut.IN_DELIVERY && course.picked_up_at && !course.parti_at) {
-      fenetreMaxS = REGLAGES_PLANIFICATION_DEFAUT.ajoutApresRetraitMaxS;
-      departRayonM = REGLAGES_PLANIFICATION_DEFAUT.departRayonM;
-      try {
-        const { reglages } = lireReglagesPlanification(await this.settings.getMany([...CLES_REGLAGES_PLANIFICATION]));
+    // Course terminée ou sans livreur : ni retard ni appli à juger, rien à relire.
+    if (!course || !STATUTS_COURSE_EN_COURS.includes(course.statut)) {
+      return suiviLivraison(commande as CommandeLivraisonLue, { maintenant });
+    }
+
+    const fenetre = course.statut === CourseStatut.IN_DELIVERY && !!course.picked_up_at && !course.parti_at;
+    let fenetreMaxS: number | undefined = fenetre ? REGLAGES_PLANIFICATION_DEFAUT.ajoutApresRetraitMaxS : undefined;
+    let departRayonM: number | undefined = fenetre ? REGLAGES_PLANIFICATION_DEFAUT.departRayonM : undefined;
+    let facteurRetard = lireFacteurRetard(undefined);
+    let appliFermeeApresS = lireAppliFermeeApresS(undefined);
+    try {
+      const valeurs = await this.settings.getMany([
+        ...CLES_REGLAGES_PLANIFICATION,
+        CLE_FACTEUR_RETARD,
+        CLE_APPLI_FERMEE_APRES_S,
+      ]);
+      if (fenetre) {
+        const { reglages } = lireReglagesPlanification(valeurs);
         fenetreMaxS = reglages.ajoutApresRetrait ? reglages.ajoutApresRetraitMaxS : 0;
         departRayonM = reglages.departRayonM;
-      } catch (err) {
-        this.logger.warn(`Réglages du planificateur illisibles : ${(err as Error)?.message ?? err}`);
       }
+      facteurRetard = lireFacteurRetard(valeurs[CLE_FACTEUR_RETARD]);
+      appliFermeeApresS = lireAppliFermeeApresS(valeurs[CLE_APPLI_FERMEE_APRES_S]);
+    } catch (err) {
+      this.logger.warn(`Réglages du suivi de la livraison illisibles : ${(err as Error)?.message ?? err}`);
     }
-    return suiviLivraison(commande as CommandeLivraisonLue, { maintenant, fenetreMaxS, departRayonM });
+    const connectes = course.deliverer ? await this.presence(course.deliverer.id) : null;
+    return suiviLivraison(commande as CommandeLivraisonLue, {
+      maintenant,
+      fenetreMaxS,
+      departRayonM,
+      facteurRetard,
+      appli: { appliFermeeApresS, connectes },
+    });
+  }
+
+  /** Socket ouvert de l'appli du livreur ; `null` si la présence n'a pas pu être lue. */
+  private async presence(delivererId: string): Promise<Set<string> | null> {
+    if (!this.gateway) return null;
+    try {
+      return await this.gateway.livreursConnectes([delivererId]);
+    } catch {
+      return null;
+    }
   }
 }

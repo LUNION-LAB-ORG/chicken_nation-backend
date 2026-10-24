@@ -6,12 +6,24 @@ import { CommandeSuiviLivraison, SuiviLivraisonService } from './suivi-livraison
 
 const UUID = '11111111-1111-4111-8111-111111111111';
 
-function monter(commande: unknown, reglages: Record<string, string> | Error = {}) {
+function monter(
+  commande: unknown,
+  reglages: Record<string, string> | Error = {},
+  connectes: Set<string> | null | Error = new Set<string>(),
+) {
   const prisma = { order: { findFirst: jest.fn().mockResolvedValue(commande) } };
   const settings = {
     getMany: reglages instanceof Error ? jest.fn().mockRejectedValue(reglages) : jest.fn().mockResolvedValue(reglages),
   };
-  return { service: new SuiviLivraisonService(prisma as never, settings as never), prisma, settings };
+  const gateway = {
+    livreursConnectes: connectes instanceof Error ? jest.fn().mockRejectedValue(connectes) : jest.fn().mockResolvedValue(connectes),
+  };
+  return {
+    service: new SuiviLivraisonService(prisma as never, settings as never, gateway as never),
+    prisma,
+    settings,
+    gateway,
+  };
 }
 
 /** Commande récupérée à 12:18, livreur encore au comptoir. */
@@ -109,13 +121,60 @@ describe('SuiviLivraisonService.suivi', () => {
     expect(departPrevu(r)).toBe('2026-10-24T12:22:00.000Z');
   });
 
-  it('aucune lecture des réglages hors de ce cas', async () => {
+  it('course terminée ou commande sans course : aucune lecture des réglages ni de la présence', async () => {
+    const terminee = {
+      ...AU_COMPTOIR,
+      delivery: { ...AU_COMPTOIR.delivery!, course: { ...AU_COMPTOIR.delivery!.course!, statut: 'COMPLETED' } },
+    } as CommandeSuiviLivraison;
+    const sansCourse = { ...AU_COMPTOIR, delivery: null } as CommandeSuiviLivraison;
+    for (const commande of [terminee, sansCourse]) {
+      const { service, settings, gateway } = monter(commande);
+      const r = await service.suivi(commande, MAINTENANT);
+      expect(settings.getMany).not.toHaveBeenCalled();
+      expect(gateway.livreursConnectes).not.toHaveBeenCalled();
+      expect(r.livreur ?? {}).not.toHaveProperty('appli_active');
+    }
+  });
+
+  it('course partie : une lecture (facteur de retard, seuil de l’appli), présence du seul livreur de la course', async () => {
     const partie = {
       ...AU_COMPTOIR,
-      delivery: { ...AU_COMPTOIR.delivery!, course: { ...AU_COMPTOIR.delivery!.course!, parti_at: new Date('2026-10-24T12:19:00.000Z') } },
+      delivery: {
+        ...AU_COMPTOIR.delivery!,
+        course: {
+          ...AU_COMPTOIR.delivery!.course!,
+          picked_up_at: new Date('2026-10-24T11:40:00.000Z'),
+          parti_at: new Date('2026-10-24T11:45:00.000Z'),
+          motif_depart: 'POSITION',
+          estimated_duration_min: 10,
+          deliverer: {
+            ...AU_COMPTOIR.delivery!.course!.deliverer!,
+            protocole_appli: 4,
+            dernier_signal_at: new Date('2026-10-24T12:10:00.000Z'),
+          },
+        },
+      },
     } as CommandeSuiviLivraison;
-    const { service, settings } = monter(partie);
-    await service.suivi(partie, MAINTENANT);
-    expect(settings.getMany).not.toHaveBeenCalled();
+    const { service, settings, gateway } = monter(partie, {
+      'course.delay_alert_factor': '2',
+      'deliverer.appli_fermee_apres_s': '300',
+    });
+    const r = await service.suivi(partie, MAINTENANT);
+    expect(settings.getMany).toHaveBeenCalledTimes(1);
+    expect(settings.getMany.mock.calls[0][0]).toEqual(
+      expect.arrayContaining(['course.delay_alert_factor', 'deliverer.appli_fermee_apres_s']),
+    );
+    expect(gateway.livreursConnectes).toHaveBeenCalledWith(['liv-koffi']);
+    // Retrait 11:40, 10 min × 2 = 20 min dépassées à 12:20 : fin prévue 11:55, 25 min de retard.
+    expect(r.course).toMatchObject({ fin_prevue: '2026-10-24T11:55:00.000Z', en_retard: true, retard_min: 25 });
+    // Vu il y a 10 min, sans socket, seuil 300 s : appli fermée.
+    expect(r.livreur).toMatchObject({ appli_active: false, appli_vue_a: '2026-10-24T12:10:00.000Z', appli_connectee: false });
+  });
+
+  it('présence illisible ou réglages illisibles : valeurs par défaut, présence inconnue, jamais d’erreur', async () => {
+    const { service } = monter(AU_COMPTOIR, new Error('base indisponible'), new Error('Redis muet'));
+    const r = await service.suivi(AU_COMPTOIR, MAINTENANT);
+    expect(r.livreur).toMatchObject({ appli_connectee: null });
+    expect(r.course).toMatchObject({ en_retard: false });
   });
 });
