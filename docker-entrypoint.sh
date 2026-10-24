@@ -16,6 +16,16 @@
 # backend a redémarré 6 fois d'affilée en renvoyant des 502, les 30/09 et
 # 02/10, jusqu'à ce que la base se réveille d'elle-même.
 #
+# ⚠️ CONNEXION DIRECTE POUR LES MIGRATIONS (24/10). En production,
+# DATABASE_URL passe par le pooler de Neon (hôte « ...-pooler. »). `prisma
+# migrate deploy` prend un verrou de session (pg_advisory_lock) : à travers le
+# pooler, une session précédente peut le garder, et chaque essai attend 10 s
+# puis échoue en P1002 (« Timed out trying to acquire a postgres advisory
+# lock »). Le 24/10 à 23 h 28, les six essais ont échoué ainsi et le serveur
+# est resté coupé 4 minutes. Prisma demande une connexion directe pour les
+# migrations : DIRECT_URL si elle est fournie, sinon DATABASE_URL sans
+# « -pooler » dans l'hôte. L'application, elle, garde le pooler.
+#
 # On réessaie donc, en doublant l'attente. UNIQUEMENT sur une panne de
 # CONNEXION : une migration réellement cassée doit arrêter le conteneur tout de
 # suite et bruyamment, pas après deux minutes de tentatives inutiles.
@@ -32,6 +42,18 @@ set -e
 
 MIGRATION_ESSAIS="${MIGRATION_ESSAIS:-6}"
 
+# Adresse des migrations : DIRECT_URL, ou DATABASE_URL sans le pooler de Neon.
+# Une adresse sans « -pooler. » (base locale, banc) reste telle quelle.
+url_migrations() {
+  if [ -n "$DIRECT_URL" ]; then
+    printf '%s' "$DIRECT_URL"
+  else
+    # Sans le pooler, l'option pgbouncer=true n'a plus d'objet.
+    printf '%s' "$DATABASE_URL" \
+      | sed -e 's/-pooler\././' -e 's/pgbouncer=true&//' -e 's/[?&]pgbouncer=true$//'
+  fi
+}
+
 appliquer_migrations() {
   essai=1
   attente=5
@@ -39,7 +61,7 @@ appliquer_migrations() {
   while : ; do
     echo "[entrypoint] Application des migrations Prisma (essai ${essai}/${MIGRATION_ESSAIS})..."
 
-    if sortie="$(npx prisma migrate deploy 2>&1)"; then
+    if sortie="$(DATABASE_URL="$(url_migrations)" npx prisma migrate deploy 2>&1)"; then
       echo "$sortie"
       echo "[entrypoint] Migrations Prisma appliquées."
       return 0
