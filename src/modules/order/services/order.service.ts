@@ -2363,7 +2363,7 @@ export class OrderService {
      * ce total sur le site, frais de service compris, et le livreur le lui
      * réclamera. La reprendre au téléphone ne doit pas le changer. Vaut aussi
      * quand elle est réactivée après une annulation par le client.
-     *  - TAXE : gardée (voir `garderTaxe`) ;
+     *  - TAXE : retirée comme pour toute reprise (demande du 24/10) ;
      *  - ARTICLES : le formulaire les renvoie toujours ; inchangés, la commande
      *    garde ses lignes d'origine, comme à la réactivation. Recalculées au
      *    prix de la carte, elles factureraient un plat ou un supplément offert,
@@ -2663,31 +2663,36 @@ export class OrderService {
      * refaire ces gestes.
      */
     /**
-     * ⚠️ Sauf quand le MONTANT est déjà ENGAGÉ : taxe et total ne bougent pas.
-     *  - commande déjà payée : le client a réglé la taxe, la retirer du total
-     *    laisserait un trop-perçu que plus aucun écran n'explique ;
-     *  - commande à livrer déjà prête ou plus loin : la course est partie (ou
-     *    part dans les minutes qui suivent) avec le montant à encaisser du
-     *    moment, et Turbo ne le relit jamais. Le livreur réclamerait l'ancien
-     *    total au client.
+     * ⚠️ Demande du 24/10 : la taxe tombe TOUJOURS au passage en manuel, y
+     * compris pour une commande du site à payer à la livraison (la règle du
+     * 19/10 qui la gardait est annulée) et pour une livraison déjà prête avec
+     * un livreur Chicken Nation (l'appli du livreur et la caisse relisent le
+     * montant). Deux exceptions seulement, annoncées à l'agent :
+     *  - commande déjà PAYÉE en ligne : le client a réglé la taxe, la retirer
+     *    laisserait un trop-perçu à rembourser ;
+     *  - livraison déjà CONFIÉE À TURBO : Turbo ne relit jamais le montant à
+     *    encaisser qui lui a été envoyé.
      */
+    const confieeATurbo =
+      passeEnManuel &&
+      !reactivation &&
+      order.type === OrderType.DELIVERY &&
+      !!(await this.prisma.delivery.findFirst({
+        where: { order_id: order.id, course: { turbo_escalated_at: { not: null } } },
+        select: { id: true },
+      }));
     const montantEngage =
       passeEnManuel &&
       // Un panier réactivé n'a jamais été payé ni préparé : rien d'engagé.
       !reactivation &&
-      (order.paied ||
-        (order.type === OrderType.DELIVERY &&
-          order.status !== OrderStatus.PENDING &&
-          order.status !== OrderStatus.ACCEPTED &&
-          order.status !== OrderStatus.IN_PROGRESS));
-    /**
-     * ⚠️ Ni pour une commande du site à payer à la livraison
-     * (`fraisAcceptesSurLeSite`, plus haut) : le client a validé ce total sur
-     * le site, frais de service compris. Si l'agent change les articles, la
-     * taxe garde sa valeur de création et le total est refait, comme pour un
-     * montant engagé.
-     */
-    const garderTaxe = montantEngage || fraisAcceptesSurLeSite;
+      (order.paied || confieeATurbo);
+    const garderTaxe = montantEngage;
+    const avertissementTaxe =
+      montantEngage && (order.tax ?? 0) > 0
+        ? order.paied
+          ? "Commande déjà payée en ligne : la taxe reste, le client l'a réglée."
+          : 'Livraison confiée à Turbo : le montant à encaisser ne peut plus changer.'
+        : null;
     if (passeEnManuel) {
       if (!garderTaxe) updateData.tax = 0;
       /**
@@ -3020,6 +3025,7 @@ export class OrderService {
       if (cadeauxFactures.length > 0) {
         avertissements.push(avertissementCadeaux(cadeauxFactures, updatedOrder.amount, !perteRemise));
       }
+      if (avertissementTaxe) avertissements.push(avertissementTaxe);
       if (avertissements.length > 0) {
         return { ...updatedOrder, avertissement_reprise: avertissements.join(' ') };
       }
@@ -3029,9 +3035,15 @@ export class OrderService {
     if (!reactivation && cadeauxFactures.length > 0) {
       return {
         ...updatedOrder,
-        avertissement_reprise: avertissementCadeaux(cadeauxFactures, updatedOrder.amount, true, false),
+        avertissement_reprise: [
+          avertissementCadeaux(cadeauxFactures, updatedOrder.amount, true, false),
+          avertissementTaxe,
+        ]
+          .filter(Boolean)
+          .join(' '),
       };
     }
+    if (avertissementTaxe) return { ...updatedOrder, avertissement_reprise: avertissementTaxe };
     return updatedOrder;
   }
 
