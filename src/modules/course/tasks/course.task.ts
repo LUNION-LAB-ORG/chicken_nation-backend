@@ -7,6 +7,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
 
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
+import { enRetard } from '../helpers/retard-tournee.rules';
 import { AnnulationAutoService } from '../services/annulation-auto.service';
 import { CourseOfferService } from '../services/course-offer.service';
 
@@ -103,16 +104,18 @@ export class CourseTask {
           id: true,
           reference: true,
           restaurant_id: true,
+          statut: true,
           picked_up_at: true,
           estimated_duration_min: true,
+          delay_alerted_at: true,
         },
         take: 100,
       });
 
       for (const c of enCours) {
+        // Règle commune du retard, la même que celle des écrans de suivi.
+        if (!enRetard(c, now, delayAlertFactor)) continue;
         const ecouleMin = (now.getTime() - c.picked_up_at!.getTime()) / 60000;
-        const seuil = c.estimated_duration_min! * delayAlertFactor;
-        if (ecouleMin < seuil) continue;
 
         // Claim atomique : une seule alerte, même avec deux backends.
         const claim = await this.prisma.course.updateMany({
