@@ -292,6 +292,54 @@ describe('POST /deliverers/me/resume', () => {
   });
 });
 
+describe('POST /deliverers/me/unavailable (écran de blocage de la nouvelle appli, 24/10)', () => {
+  it("sort de la file et clôt l'offre en attente sans pénalité, la recherche repart", async () => {
+    const l = livreur();
+    const c = course({ offer_expires_at: apres(1) });
+    const o = offre({ course_id: c.id, deliverer_id: l.id, expires_at: apres(1) });
+    const t = monter({ livreurs: [l], courses: [c], offres: [o] });
+
+    const reponse = await t.controleur.markUnavailable(connecte(l));
+
+    expect(reponse).toEqual({ id: l.id, last_available_at: null });
+    expect(l.last_available_at).toBeNull();
+    // Ni pause : il revient par `/available` dès que l'appli est débloquée.
+    expect(l.pause_until).toBeNull();
+    // Offre close, sans pénalité : ni refus compté sur la course, ni sanction du livreur.
+    expect(o.status).toBe(CourseOfferStatus.CANCELLED);
+    expect(o.responded_at).toEqual(MAINTENANT);
+    expect(c.refusal_count).toBe(0);
+    expect(l.queue_penalty_positions).toBe(0);
+    expect(t.emis).toEqual([
+      {
+        canal: CourseChannels.COURSE_OFFER_EXPIRED,
+        charge: { course_id: c.id, deliverer_id: l.id, motif: 'LIVREUR_SORTI_DE_LA_FILE' },
+      },
+      { canal: DispatchEvenements.RECHERCHE_A_RELANCER, charge: { course_id: c.id } },
+    ]);
+    expect(t.journal[0]).toMatchObject({
+      type: 'OFFRE_CLOSE',
+      motif: 'LIVREUR_SORTI_DE_LA_FILE',
+      source: 'appli',
+      course_id: c.id,
+      deliverer_id: l.id,
+    });
+  });
+
+  it("sans offre en attente : sorti de la file, rien d'autre ; une clôture qui échoue ne l'empêche pas", async () => {
+    const l = livreur();
+    const t = monter({ livreurs: [l] });
+    await t.controleur.markUnavailable(connecte(l));
+    expect(l.last_available_at).toBeNull();
+    expect(t.emis).toEqual([]);
+
+    l.last_available_at = avant(1);
+    jest.spyOn(t.cloture, 'clorePourLivreur').mockRejectedValue(new Error('base indisponible'));
+    await expect(t.controleur.markUnavailable(connecte(l))).resolves.toEqual({ id: l.id, last_available_at: null });
+    expect(l.last_available_at).toBeNull();
+  });
+});
+
 describe('POST /auth/deliverer/logout', () => {
   it('hors service, pause « jusqu’à Reprendre », jeton de notification effacé, offres closes', async () => {
     const l = livreur();

@@ -218,10 +218,12 @@ export class DeliverersSelfController {
   @ApiOperation({
     summary: 'Sortie file d\'attente (sans être en pause stricto sensu)',
     description:
-      "Utilisé automatiquement à l'acceptation d'une offre (livreur devient \"en activité\").",
+      "Appelé par l'appli quand une autorisation manque (écran de blocage) ; remis par `/available` " +
+      'une fois débloquée. Les offres en attente sont closes sans pénalité (motif ' +
+      '`LIVREUR_SORTI_DE_LA_FILE`) et la course repart vers un autre livreur.',
   })
   @Post('unavailable')
   async markUnavailable(@CurrentDeliverer() deliverer: Deliverer) {
-    return this.deliverersService.markUnavailable(deliverer.id);
+    return this.disponibilite.sortirDeLaFile(deliverer.id);
   }
 }

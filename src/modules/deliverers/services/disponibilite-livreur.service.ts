@@ -95,6 +95,26 @@ export class DisponibiliteLivreurService {
   }
 
   /**
+   * Sortie de la file sans pause (`POST /deliverers/me/unavailable`). La
+   * nouvelle appli l'appelle quand une autorisation manque (écran de blocage,
+   * demande du 24/10) et le remet par `/available` une fois débloquée.
+   *
+   * Les offres en attente sont closes, comme pour une pause (sans pénalité,
+   * la course repart vers un autre livreur) : sinon l'offre restait derrière
+   * l'écran de blocage jusqu'à la relance suivante, ou, les relances passées,
+   * jusqu'à son échéance, comptée contre lui.
+   */
+  async sortirDeLaFile(delivererId: string) {
+    const livreur = await this.prisma.deliverer.update({
+      where: { id: delivererId },
+      data: { last_available_at: null },
+      select: { id: true, last_available_at: true },
+    });
+    await this.clore(delivererId, 'LIVREUR_SORTI_DE_LA_FILE');
+    return livreur;
+  }
+
+  /**
    * Bouton « Reprendre » (premier appel). Lève la pause manuelle SEULEMENT.
    * Ne remet pas dans la file : l'appli appelle ensuite `/available`.
    *

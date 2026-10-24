@@ -20,6 +20,11 @@ export type MotifClotureOffre =
   /** Le livreur ne peut plus recevoir d'offre (règle `peutRecevoirOffre`), vu à une relance. */
   | 'LIVREUR_INDISPONIBLE'
   /**
+   * Le livreur est sorti de la file sans pause (`POST /deliverers/me/unavailable`) :
+   * la nouvelle appli le fait quand une autorisation manque (écran de blocage).
+   */
+  | 'LIVREUR_SORTI_DE_LA_FILE'
+  /**
    * L'appli du livreur est fermée (ni socket ni signe de vie depuis
    * `deliverer.appli_fermee_apres_s`) : offre close par la tâche des
    * relances, ou à son échéance, sans pénalité ni exclusion de la course.

@@ -605,25 +605,8 @@ export class DeliverersService {
     return updated;
   }
 
-  // Pause, reprise, entrée dans la file et déconnexion : DisponibiliteLivreurService
+  // Pause, reprise, entrée et sortie de la file, déconnexion : DisponibiliteLivreurService
   // (la pause enregistrée au serveur est la seule vérité, demande du 22/10).
-
-  /**
-   * Livreur sort de la file d'attente (sans être en pause stricto sensu).
-   * Utilisé notamment quand une offre est acceptée → il devient "en activité".
-   */
-  async markUnavailable(delivererId: string) {
-    return this.prisma.deliverer.update({
-      where: { id: delivererId },
-      data: {
-        last_available_at: null,
-      },
-      select: {
-        id: true,
-        last_available_at: true,
-      },
-    });
-  }
 
   // ============================================================
   // DASHBOARD LIVE (P6c) — carte temps réel des livreurs actifs
