@@ -105,7 +105,7 @@ describe('textes vus par le livreur : courts, chiffres, tutoiement, sans tiret c
   it('valeurs exactes', () => {
     expect(textes).toEqual([
       { titre: 'Commande ajoutée', corps: '2 commandes à prendre' },
-      { titre: '2 commandes ajoutées', corps: 'Code 421 au comptoir' },
+      { titre: '2 commandes ajoutées', corps: 'Code 421 au restaurant' },
       { titre: 'Commande retirée', corps: '1 commande à livrer' },
       { titre: 'Attends 3 min', corps: 'Départ 12 h 34' },
       { titre: 'Tout est prêt', corps: '2 commandes · code 421' },

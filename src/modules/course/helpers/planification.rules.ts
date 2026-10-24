@@ -1677,7 +1677,7 @@ function evaluerAjoutSelonOrdre(ctx: Contexte, p: ParametresAjout, geographique:
     p.departApresMs > p.attente.premierePreteMs + r.attenteMaxCommandePreteS * 1000 &&
     p.departSeulMs < p.departApresMs
   ) {
-    return { ok: false, refus: 'ATTENTE_COMMANDE_PRETE', libelle: 'attente trop longue au comptoir' };
+    return { ok: false, refus: 'ATTENTE_COMMANDE_PRETE', libelle: 'attente trop longue au restaurant' };
   }
 
   const apres = estimer(ctx, tous, p.departApresMs, opt);
@@ -2357,7 +2357,7 @@ export function planifier(
       marge_s: Math.round(marge / 1000),
       cout: premier,
       libelle: premier.au_comptoir
-        ? 'Proposée au livreur au comptoir'
+        ? 'Proposée au livreur au restaurant'
         : `Proposée au livreur à ${minutesTexte(premier.eta_s * 1000)}`,
     });
   }
@@ -2405,7 +2405,7 @@ export function planifier(
       marge_s: Math.round(margeMs(ctx, k.arrets) / 1000),
       cout: premier,
       libelle: premier.au_comptoir
-        ? 'Proposée au livreur au comptoir'
+        ? 'Proposée au livreur au restaurant'
         : `Proposée au livreur à ${minutesTexte(premier.eta_s * 1000)}`,
     });
   }

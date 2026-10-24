@@ -237,7 +237,7 @@ export class KkiapayOrderListenerService {
                     `Le client a payé dans l'application alors que la commande est à encaisser en caisse ou à la livraison.`,
                     order.paied
                         ? `La commande était déjà marquée payée : comparer ses paiements, un double encaissement est probable.`
-                        : `Vérifier qu'elle n'a pas aussi été encaissée au comptoir ou par le livreur, et prévenir le livreur s'il ne l'a pas encore livrée.`,
+                        : `Vérifier qu'elle n'a pas aussi été encaissée au restaurant ou par le livreur, et prévenir le livreur s'il ne l'a pas encore livrée.`,
                 ],
                 cleBridage: `${CodeAlerte.PAIEMENT_APRES_REPRISE}:${order.reference}`,
                 meta: { orderId: order.id, transactionId: payload.transactionId, statut: order.status },

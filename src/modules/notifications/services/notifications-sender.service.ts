@@ -600,7 +600,7 @@ export class NotificationsSenderService {
                 title: () => (pluriel ? '⚠️ Commandes pas remises' : '⚠️ Commande pas remise'),
                 message: () =>
                     `Le livreur de la course ${reference} est parti, mais ${pluriel ? 'les commandes' : 'la commande'} ${liste} ` +
-                    `${pluriel ? 'sont encore notées' : 'est encore notée'} au comptoir. Si le sac a bien été donné, ` +
+                    `${pluriel ? 'sont encore notées' : 'est encore notée'} au restaurant. Si le sac a bien été donné, ` +
                     `touchez « Livreur a récupéré » ; sinon appelez le livreur.`,
                 icon: () => notificationIcons.delivery.url,
                 iconBgColor: () => notificationIcons.delivery.color,

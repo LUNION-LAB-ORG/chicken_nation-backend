@@ -411,7 +411,7 @@ describe('ajout après le retrait, livreur encore au restaurant (3.8)', () => {
     expect(ajoutee).toMatchObject({ ajoutee_apres_retrait: true, statut: DeliveryStatut.PENDING });
     expect(s.k.parti_at).toBeNull();
     expect(t.push.notifyCommandeAjoutee).toHaveBeenCalledWith(
-      expect.objectContaining({ apresRetrait: true, corps: `Code ${s.k.pickup_code} au comptoir` }),
+      expect.objectContaining({ apresRetrait: true, corps: `Code ${s.k.pickup_code} au restaurant` }),
     );
 
     // La caisse retrouve la course par le même code…

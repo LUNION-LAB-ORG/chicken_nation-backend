@@ -137,7 +137,7 @@ describe('R10 : retrait validé, nouvelle appli encore au restaurant, une comman
     const ajoutee = t.livraisonsDe(s.k.id).find((l) => l.order_id === s.c.id);
     expect(ajoutee).toMatchObject({ ajoutee_apres_retrait: true, statut: DeliveryStatut.PENDING });
     expect(t.push.notifyCommandeAjoutee).toHaveBeenCalledWith(
-      expect.objectContaining({ delivererId: s.d1.id, apresRetrait: true, corps: `Code ${s.k.pickup_code} au comptoir`, code: s.k.pickup_code }),
+      expect.objectContaining({ delivererId: s.d1.id, apresRetrait: true, corps: `Code ${s.k.pickup_code} au restaurant`, code: s.k.pickup_code }),
     );
     expect(t.journalDe('COMMANDE_AJOUTEE')[0]).toMatchObject({
       order_id: s.c.id,

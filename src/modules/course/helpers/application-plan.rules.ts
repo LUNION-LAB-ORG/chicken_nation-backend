@@ -136,7 +136,7 @@ const commandes = (n: number) => `${n} commande${n > 1 ? 's' : ''}`;
  */
 export function texteCommandeAjoutee(p: { ajoutees: number; total: number; apresRetrait: boolean; code: string }): TexteNotification {
   const titre = p.ajoutees > 1 ? `${p.ajoutees} commandes ajoutées` : 'Commande ajoutée';
-  if (p.apresRetrait) return { titre, corps: `Code ${p.code} au comptoir` };
+  if (p.apresRetrait) return { titre, corps: `Code ${p.code} au restaurant` };
   return { titre, corps: `${commandes(p.total)} à prendre` };
 }
 
