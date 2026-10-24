@@ -59,6 +59,15 @@ export interface DelivererLocationUpdatedPayload {
   restaurantId: string | null;
 }
 
+/** Signe de vie d'une requête authentifiée (`DelivererChannels.DELIVERER_SIGNAL`). */
+export interface DelivererSignalPayload {
+  delivererId: string;
+  /** Moment du signe de vie (ISO), celui écrit dans `dernier_signal_at`. */
+  a: string;
+  /** État du livreur à l'arrivée de la requête, avant qu'elle ne le change. */
+  etat: Pick<Deliverer, 'pause_until' | 'auto_pause_until' | 'last_available_at'>;
+}
+
 /**
  * Émetteur d'événements internes pour le cycle de vie du livreur.
  * Les listeners (WebSocket / notifications) sont déclarés en Phase 4.

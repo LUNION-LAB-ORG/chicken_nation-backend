@@ -4,7 +4,9 @@ import { CourseStatut, DelivererStatus, EntityStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
+import { estEnLigne } from '../helpers/minuteur-en-ligne.rules';
 import { DelivererScoringService } from './deliverer-scoring.service';
+import { MinuteurEnLigneService } from './minuteur-en-ligne.service';
 
 /**
  * Vue scoring + file d'attente pour UN livreur.
@@ -25,6 +27,8 @@ export class DelivererInfoService {
     private readonly prisma: PrismaService,
     private readonly scoringService: DelivererScoringService,
     private readonly settings: DelivererScoringSettingsHelper,
+    // Minuteur « en ligne » tenu par le serveur (demande du 24/10).
+    private readonly minuteur: MinuteurEnLigneService,
   ) {}
 
   /**
@@ -91,6 +95,10 @@ export class DelivererInfoService {
       select: { id: true, reference: true, statut: true },
     });
 
+    // Minuteur « en ligne » : en service ou en course, hors pause.
+    const enLigne = estEnLigne(deliverer, activeCourse !== null, now);
+    const enLigneAujourdhuiS = await this.minuteur.lire(delivererId, enLigne, settings.appliFermeeApresS, now);
+
     const baseInfo: IDelivererScoringInfoView = {
       delivererId: deliverer.id,
       restaurantId: deliverer.restaurant_id,
@@ -100,6 +108,8 @@ export class DelivererInfoService {
         ? { id: activeCourse.id, reference: activeCourse.reference, statut: activeCourse.statut }
         : null,
       lastAvailableAt: deliverer.last_available_at?.toISOString() ?? null,
+      en_ligne: enLigne,
+      en_ligne_aujourdhui_s: enLigneAujourdhuiS,
       pauses: {
         pauseUntil: pauseUntil?.toISOString() ?? null,
         autoPauseUntil: autoPauseUntil?.toISOString() ?? null,
@@ -239,6 +249,22 @@ export interface IDelivererScoringInfoView {
   } | null;
 
   lastAvailableAt: string | null;
+
+  /**
+   * En ligne à l'instant : en service (dans la file) ou en course, ni en
+   * pause ni en pause automatique. Vrai : le minuteur de l'appli avance.
+   */
+  en_ligne: boolean;
+
+  /**
+   * Temps en ligne de la journée de service (05 h à 05 h), en secondes
+   * entières, tenu par le serveur (minuteur-en-ligne.rules.ts). Compté à
+   * chaque signe de vie de l'appli, même en arrière-plan ; un silence de plus
+   * de `deliverer.appli_fermee_apres_s` secondes (connexion coupée, appli
+   * fermée, panne) et les pauses ne sont pas comptés. Remis à 0 à 05 h.
+   * `null` : compteur momentanément illisible (garder la dernière valeur).
+   */
+  en_ligne_aujourdhui_s: number | null;
 
   pauses: {
     pauseUntil: string | null;

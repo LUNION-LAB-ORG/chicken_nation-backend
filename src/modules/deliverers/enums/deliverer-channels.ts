@@ -49,4 +49,10 @@ export enum DelivererChannels {
   // importer le module des livreurs) et attendu (`emitAsync`) ; écouté par
   // DisponibiliteListener → mise hors service, offres closes, journal.
   DELIVERER_LOGGED_OUT = 'deliverer:logged-out',
+
+  // ÉVÉNEMENT INTERNE : signe de vie d'une requête authentifiée du livreur
+  // (`dernier_signal_at` écrit, au plus une fois par minute). Émis par
+  // JwtDelivererStrategy (module d'authentification, qui ne peut pas importer
+  // le module des livreurs), écouté par MinuteurEnLigneListener.
+  DELIVERER_SIGNAL = 'deliverer:signal',
 }

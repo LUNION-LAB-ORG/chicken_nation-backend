@@ -22,6 +22,9 @@ import { DelivererScoringService } from './services/deliverer-scoring.service';
 import { DeliverersService } from './services/deliverers.service';
 import { DisponibiliteLivreurService } from './services/disponibilite-livreur.service';
 import { DisponibiliteListener } from './listeners/disponibilite.listener';
+import { MinuteurEnLigneListener } from './listeners/minuteur-en-ligne.listener';
+import { MinuteurEnLigneService } from './services/minuteur-en-ligne.service';
+import { redisMinuteurEnLigneProvider } from './services/redis-minuteur-en-ligne.provider';
 import { DeliverersTask } from './tasks/deliverers.task';
 import { DeliverersWebSocketService } from './websockets/deliverers-websocket.service';
 
@@ -53,6 +56,10 @@ import { DeliverersWebSocketService } from './websockets/deliverers-websocket.se
     DisponibiliteListener,
     // Appli active ou fermée (demande du 24/10) : contexte de la règle unique, passages au journal.
     AppliLivreurService,
+    // Minuteur « en ligne » tenu par le serveur (demande du 24/10), compteur dans Redis.
+    redisMinuteurEnLigneProvider,
+    MinuteurEnLigneService,
+    MinuteurEnLigneListener,
   ],
   exports: [
     DeliverersService,

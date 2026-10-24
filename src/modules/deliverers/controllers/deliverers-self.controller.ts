@@ -75,7 +75,10 @@ export class DeliverersSelfController {
       "Agrège tous les champs calculés par le scoring P4 / queue P5 / chainage P6 : " +
       'rang dans la file, score composite + breakdown, pénalités glissantes, auto-pause, ' +
       'raisons humaines pour expliquer le statut courant. Consommé par le mobile pour ' +
-      'afficher la card "Mon score & ma file" sur l\'écran d\'accueil.',
+      'afficher la card "Mon score & ma file" sur l\'écran d\'accueil. ' +
+      'Minuteur « en ligne » tenu par le serveur : `en_ligne` (en service ou en course, hors pause) ' +
+      'et `en_ligne_aujourdhui_s` (secondes en ligne depuis 05 h, sans les pauses ni les silences ' +
+      'de plus de `deliverer.appli_fermee_apres_s` secondes ; `null` si le compteur est illisible).',
   })
   @Get('scoring-info')
   async getMyScoringInfo(@CurrentDeliverer() deliverer: Deliverer) {

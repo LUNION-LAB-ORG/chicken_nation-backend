@@ -61,8 +61,13 @@ describe('JwtDelivererStrategy.validate', () => {
         update: jest.fn(async () => ({ id: livreur.id })),
       },
     };
-    const strategie = new JwtDelivererStrategy({ get: () => 'secret-essai' } as never, prisma as never);
-    return { strategie, prisma };
+    const events = { emit: jest.fn() };
+    const strategie = new JwtDelivererStrategy(
+      { get: () => 'secret-essai' } as never,
+      prisma as never,
+      events as never,
+    );
+    return { strategie, prisma, events };
   };
   const requete = (protocole?: string) =>
     ({ headers: protocole ? { [ENTETE_PROTOCOLE_APPLI]: protocole } : {} }) as never;
@@ -98,6 +103,30 @@ describe('JwtDelivererStrategy.validate', () => {
     });
     await strategie.validate(requete(), { sub: 'livreur-1', type: 'deliverer' });
     expect(prisma.deliverer.update).not.toHaveBeenCalled();
+  });
+
+  it('signe de vie écrit : part au minuteur « en ligne » avec l’état d’avant la requête', async () => {
+    const entree = avant(600);
+    const { strategie, events } = monter({
+      id: 'livreur-1',
+      dernier_signal_at: avant(61),
+      protocole_appli: 4,
+      pause_until: null,
+      auto_pause_until: null,
+      last_available_at: entree,
+    });
+    await strategie.validate(requete('4'), { sub: 'livreur-1', type: 'deliverer' });
+    expect(events.emit).toHaveBeenCalledWith('deliverer:signal', {
+      delivererId: 'livreur-1',
+      a: MAINTENANT.toISOString(),
+      etat: { pause_until: null, auto_pause_until: null, last_available_at: entree },
+    });
+  });
+
+  it('rien d’écrit : rien pour le minuteur', async () => {
+    const { strategie, events } = monter({ id: 'livreur-1', dernier_signal_at: avant(20), protocole_appli: 4 });
+    await strategie.validate(requete('4'), { sub: 'livreur-1', type: 'deliverer' });
+    expect(events.emit).not.toHaveBeenCalled();
   });
 
   it('une écriture qui échoue ne refuse pas la requête', async () => {
