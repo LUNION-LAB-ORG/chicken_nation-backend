@@ -146,6 +146,7 @@ export class TicketMessageService {
         const payload = {
             message: messageDto,
             restaurantId: ticket?.order?.restaurant_id || null,
+            delivererId: ticket?.delivererId ?? null,
         }
 
         this.supportWebSocketService.emitNewTicketMessage(ticketId, payload);

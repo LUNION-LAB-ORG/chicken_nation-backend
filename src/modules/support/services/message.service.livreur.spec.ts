@@ -15,6 +15,7 @@ import { TicketMessageService } from './message.service';
 describe('TicketMessageService : message écrit par un livreur', () => {
   const LIVREUR = 'liv-1';
   const AUTRE_LIVREUR = 'liv-2';
+  const AGENT = 'agent-1';
 
   const fils: Record<string, { delivererId: string | null; customerId: string | null }> = {
     'ticket-livreur': { delivererId: LIVREUR, customerId: null },
@@ -28,8 +29,12 @@ describe('TicketMessageService : message écrit par un livreur', () => {
       [AUTRE_LIVREUR]: { id: AUTRE_LIVREUR, first_name: 'Yao', last_name: 'Kouassi', image: null },
     };
 
+    const agents: Record<string, { id: string; fullname: string; email: string; image: string | null }> = {
+      [AGENT]: { id: AGENT, fullname: 'Service client', email: 'support@exemple.ci', image: null },
+    };
+
     const prisma = {
-      user: { findUnique: jest.fn(async () => null) },
+      user: { findUnique: jest.fn(async ({ where }: { where: { id: string } }) => agents[where.id] ?? null) },
       customer: { findUnique: jest.fn(async () => null) },
       deliverer: {
         findUnique: jest.fn(async ({ where }: { where: { id: string } }) => livreurs[where.id] ?? null),
@@ -54,7 +59,7 @@ describe('TicketMessageService : message écrit par un livreur', () => {
           updatedAt: new Date('2026-10-24T10:00:00Z'),
           deletedAt: null,
           reactions: [],
-          authorUser: null,
+          authorUser: data.authorUserId ? agents[data.authorUserId] : null,
           authorCustomer: null,
           authorDeliverer: data.authorDelivererId ? livreurs[data.authorDelivererId] : null,
           ticket: { id: data.ticketId, code: 'LIV-0001' },
@@ -136,5 +141,74 @@ describe('TicketMessageService : message écrit par un livreur', () => {
     expect((erreur as HttpException).getStatus()).toBe(404);
     expect((erreur as HttpException).message).toBe('Author not found');
     expect(t.prisma.ticketMessage.create).not.toHaveBeenCalled();
+  });
+
+  /**
+   * L'appli livreur écoute `new:ticket_message` dans son canal privé pour
+   * recharger le fil, mais rien n'y partait : la réponse du service client
+   * n'arrivait que par la notification, ou au rechargement suivant.
+   */
+  describe('réponse du personnel : new:ticket_message dans la salle du livreur', () => {
+    const repondre = (service: TicketMessageService, ticketId: string, internal = false) =>
+      service.createMessage(ticketId, {
+        ticketId,
+        body: 'On appelle le client',
+        internal,
+        authorId: AGENT,
+        authorType: 'USER',
+      });
+
+    const versLivreur = (appGateway: { emitToUser: jest.Mock }, livreurId: string) =>
+      appGateway.emitToUser.mock.calls.filter(
+        ([id, type, evenement]) => id === livreurId && type === 'deliverer' && evenement === 'new:ticket_message',
+      );
+
+    it('ticket du livreur : il reçoit le message, même forme que le backoffice', async () => {
+      const t = monter();
+
+      await repondre(t.service, 'ticket-livreur');
+
+      expect(t.appGateway.emitToUser).toHaveBeenCalledWith(LIVREUR, 'deliverer', 'new:ticket_message', {
+        ticketId: 'ticket-livreur',
+        message: expect.objectContaining({
+          body: 'On appelle le client',
+          authorUser: expect.objectContaining({ id: AGENT, name: 'Service client' }),
+          authorDeliverer: null,
+          authorCustomer: null,
+        }),
+      });
+      const [, , , charge] = versLivreur(t.appGateway, LIVREUR)[0];
+      expect(t.appGateway.emitToBackoffice).toHaveBeenCalledWith('new:ticket_message', charge);
+    });
+
+    it("ticket d'un client ou d'un autre livreur : rien dans sa salle", async () => {
+      const t = monter();
+
+      await repondre(t.service, 'ticket-client');
+      await repondre(t.service, 'ticket-autre-livreur');
+
+      expect(versLivreur(t.appGateway, LIVREUR)).toHaveLength(0);
+      expect(versLivreur(t.appGateway, AUTRE_LIVREUR)).toHaveLength(1);
+      expect(
+        t.appGateway.emitToUser.mock.calls.filter(([, type]) => type === 'deliverer'),
+      ).toHaveLength(1);
+    });
+
+    it('note interne : jamais dans sa salle', async () => {
+      const t = monter();
+
+      await repondre(t.service, 'ticket-livreur', true);
+
+      expect(versLivreur(t.appGateway, LIVREUR)).toHaveLength(0);
+      expect(t.appGateway.emitToBackoffice).toHaveBeenCalledWith('new:ticket_message', expect.anything());
+    });
+
+    it("son propre message : pas renvoyé, l'appli recharge déjà le fil à l'envoi", async () => {
+      const t = monter();
+
+      await ecrire(t.service, 'ticket-livreur', LIVREUR);
+
+      expect(versLivreur(t.appGateway, LIVREUR)).toHaveLength(0);
+    });
   });
 });

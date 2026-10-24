@@ -101,7 +101,11 @@ export class SupportWebSocketService {
 
   emitNewTicketMessage(
     ticketId: string,
-    { message, restaurantId }: { message: ResponseTicketMessageDto; restaurantId: string | null },
+    {
+      message,
+      restaurantId,
+      delivererId = null,
+    }: { message: ResponseTicketMessageDto; restaurantId: string | null; delivererId?: string | null },
   ) {
     this.logger.log(`Emitting new ticket message event for ticket ${ticketId}`);
     const payload = { ticketId, message };
@@ -118,6 +122,19 @@ export class SupportWebSocketService {
     if (message.authorCustomer) {
       // Message envoyé par un customer → notifier le staff assigné
       // Le backoffice reçoit déjà via emitToBackoffice
+    }
+
+    /**
+     * Ticket d'un livreur : le message part dans SON canal privé. L'appli
+     * livreur y écoute `new:ticket_message` pour recharger le fil, mais rien
+     * n'y partait : la réponse du service client n'arrivait que par la
+     * notification, ou au rechargement suivant.
+     *
+     * Jamais une note interne. Pas son propre message non plus : l'appli
+     * recharge déjà le fil quand l'envoi réussit.
+     */
+    if (delivererId && !message.internal && !message.authorDeliverer) {
+      this.appGateway.emitToUser(delivererId, 'deliverer', 'new:ticket_message', payload);
     }
 
     if (restaurantId) {
