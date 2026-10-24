@@ -8,6 +8,7 @@ import {
   DUREE_VIE_MINUTEUR_S,
   INTERVALLE_MINUTEUR_MS,
   SCRIPT_AVANCER_MINUTEUR,
+  SCRIPT_LIRE_MINUTEURS,
   cleMinuteurEnLigne,
   ecartMaxMinuteurMs,
   estEnLigne,
@@ -123,6 +124,41 @@ export class MinuteurEnLigneService implements OnModuleDestroy {
         enLigneMaintenant,
         ecartMaxMinuteurMs(appliFermeeApresS),
       );
+    } catch (erreur) {
+      this.journaliserPanne(erreur);
+      return null;
+    }
+  }
+
+  /**
+   * Secondes en ligne aujourd'hui de plusieurs livreurs, en une seule
+   * commande Redis (vue Livreurs « Aujourd'hui »). `enLigne` : en ligne à
+   * l'instant (`estEnLigne`). `null` : Redis ne répond pas.
+   */
+  async lirePlusieurs(
+    livreurs: readonly { id: string; enLigne: boolean }[],
+    appliFermeeApresS: number,
+    maintenant: Date = new Date(),
+  ): Promise<Map<string, number> | null> {
+    const secondes = new Map<string, number>();
+    if (livreurs.length === 0) return secondes;
+    try {
+      const cles = livreurs.map((l) => cleMinuteurEnLigne(l.id, maintenant));
+      const brut = await avantDelai(this.redis.eval(SCRIPT_LIRE_MINUTEURS, cles.length, ...cles), DELAI_REDIS_MS);
+      const lignes = Array.isArray(brut) ? brut : [];
+      livreurs.forEach((l, i) => {
+        const valeurs = Array.isArray(lignes[i]) ? (lignes[i] as (string | null)[]) : [];
+        secondes.set(
+          l.id,
+          secondesEnLigne(
+            lireEtatMinuteur(valeurs),
+            maintenant.getTime(),
+            l.enLigne,
+            ecartMaxMinuteurMs(appliFermeeApresS),
+          ),
+        );
+      });
+      return secondes;
     } catch (erreur) {
       this.journaliserPanne(erreur);
       return null;

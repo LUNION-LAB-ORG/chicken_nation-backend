@@ -29,16 +29,34 @@ redis.call('EXPIRE', KEYS[1], ARGV[5])
 return ajout
 `;
 
+/** Lecture groupée (vue Livreurs « Aujourd'hui ») : texte figé de la même façon. */
+export const SCRIPT_LIRE_TRANSCRIT = `
+local sortie = {}
+for i, cle in ipairs(KEYS) do
+  sortie[i] = redis.call('HMGET', cle, 'ms', 'dernier', 'en_ligne')
+end
+return sortie
+`;
+
 export class RedisMinuteurSimule {
   readonly hachages = new Map<string, Map<string, string>>();
   readonly durees = new Map<string, number>();
   panne = false;
   scriptsRecus = 0;
+  lecturesGroupees = 0;
 
-  async eval(script: string, nombreCles: number, cle: string, ...argv: string[]): Promise<number> {
+  async eval(script: string, nombreCles: number, cle: string, ...argv: string[]): Promise<number | (string | null)[][]> {
     if (this.panne) throw new Error('Connection is closed.');
+    if (script === SCRIPT_LIRE_TRANSCRIT) {
+      // for i, cle in ipairs(KEYS) do sortie[i] = redis.call('HMGET', cle, 'ms', 'dernier', 'en_ligne') end
+      this.lecturesGroupees += 1;
+      return [cle, ...argv].slice(0, nombreCles).map((k) => {
+        const h = this.hachages.get(k);
+        return ['ms', 'dernier', 'en_ligne'].map((c) => h?.get(c) ?? null);
+      });
+    }
     if (script !== SCRIPT_TRANSCRIT || nombreCles !== 1) {
-      throw new Error('script Lua inattendu : refaire la transcription du simulateur (SCRIPT_TRANSCRIT)');
+      throw new Error('script Lua inattendu : refaire la transcription du simulateur (SCRIPT_TRANSCRIT, SCRIPT_LIRE_TRANSCRIT)');
     }
     this.scriptsRecus += 1;
     const h = this.hachages.get(cle) ?? new Map<string, string>();

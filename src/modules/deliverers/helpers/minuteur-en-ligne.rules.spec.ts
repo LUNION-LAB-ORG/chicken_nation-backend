@@ -5,6 +5,7 @@ import {
   DUREE_VIE_MINUTEUR_S,
   EtatMinuteur,
   SCRIPT_AVANCER_MINUTEUR,
+  SCRIPT_LIRE_MINUTEURS,
   avancerMinuteur,
   cleMinuteurEnLigne,
   ecartMaxMinuteurMs,
@@ -12,7 +13,7 @@ import {
   lireEtatMinuteur,
   secondesEnLigne,
 } from './minuteur-en-ligne.rules';
-import { RedisMinuteurSimule, SCRIPT_TRANSCRIT } from './minuteur-en-ligne.redis-simule-spec';
+import { RedisMinuteurSimule, SCRIPT_LIRE_TRANSCRIT, SCRIPT_TRANSCRIT } from './minuteur-en-ligne.redis-simule-spec';
 
 const T0 = new Date('2026-10-24T10:00:00.000Z').getTime();
 const s = (secondes: number) => T0 + secondes * 1000;
@@ -129,6 +130,10 @@ describe('réglage et lecture Redis', () => {
 describe('script Redis : même résultat que la règle', () => {
   it('le script de production est celui que le simulateur transcrit (un changement du Lua casse ce test)', () => {
     expect(SCRIPT_AVANCER_MINUTEUR).toBe(SCRIPT_TRANSCRIT);
+  });
+
+  it('le script de lecture groupée est celui que le simulateur transcrit', () => {
+    expect(SCRIPT_LIRE_MINUTEURS).toBe(SCRIPT_LIRE_TRANSCRIT);
   });
 
   it('suites de signes de vie au hasard (retards, doublons, pauses, trous)', async () => {

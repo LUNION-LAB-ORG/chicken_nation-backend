@@ -92,3 +92,24 @@ describe('course.offre_joignables_seulement', () => {
     expect((getMany.mock.calls[0] as unknown as [string[]])[0]).toContain('course.offre_joignables_seulement');
   });
 });
+
+/** Réglage de course `course.delay_alert_factor`, lu aussi ici (course en cours de live-locations). */
+describe('course.delay_alert_factor', () => {
+  const lire = async (valeur: string | undefined) => {
+    const helper = new DelivererScoringSettingsHelper({
+      getMany: jest.fn(async () => (valeur === undefined ? {} : { 'course.delay_alert_factor': valeur })),
+    } as never);
+    return (await helper.load()).facteurRetard;
+  };
+
+  it('absent : 1,5 (même défaut que le module course)', async () => {
+    expect(await lire(undefined)).toBe(1.5);
+  });
+
+  it('valeur réglée : prise telle quelle ; 0, négatif ou illisible : 1,5', async () => {
+    expect(await lire('2')).toBe(2);
+    expect(await lire('0')).toBe(1.5);
+    expect(await lire('-1')).toBe(1.5);
+    expect(await lire('vite')).toBe(1.5);
+  });
+});
