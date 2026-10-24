@@ -104,7 +104,8 @@ export function choisirCodeRetrait(
  *  - SAC OUBLIÉ (relecture du 24/10) : récupérées et parties, avec une
  *    commande d'ORIGINE encore prête (remise une par une au bouton de la
  *    caisse, la suivante jamais remise) : le livreur revient la chercher et
- *    montre le même code ;
+ *    montre le même code. Restaurant en v1 : écartée ensuite par
+ *    `CourseQueryService` (l'ancienne méthode garde son comportement) ;
  * du restaurant concerné (tous si `restaurantId` est absent), créées pendant
  * la journée de service. Une course d'hier restée active est ignorée.
  */

@@ -154,15 +154,22 @@ describe('le livreur revient et montre le code (écran « Sac au restaurant »)'
     expect(t.push.notifyCommandeRemise).toHaveBeenCalledTimes(1);
   });
 
-  it('restaurant en v1, remise commande par commande : le code remet aussi le second sac (introuvable avant)', async () => {
+  it('restaurant en v1 : exactement comme avant, le code ne retrouve pas la course partie et le bouton n’annonce rien', async () => {
     const { a, b, k, t } = auRestaurant(3, { 'course.planificateur': 'v1' });
     await t.remiseCaisse.onStatutCommande(boutonCaisse(a));
     expect(k.parti_at).toEqual(MAINTENANT);
     expect(k.motif_depart).toBe('REPLI_V1');
 
     jest.setSystemTime(apres(60));
-    await saisirCode(t, k.pickup_code);
-    expect(b.status).toBe(OrderStatus.PICKED_UP);
+    await expect(saisirCode(t, k.pickup_code)).rejects.toBeInstanceOf(NotFoundException);
+    expect(b.status).toBe(OrderStatus.READY);
+
+    t.emis.length = 0;
+    const journalAvant = t.base.journal.length;
+    await t.remiseCaisse.onStatutCommande(boutonCaisse(b));
+    expect(evenementsRetrait(t)).toHaveLength(0);
+    expect(t.push.notifyCommandeRemise).not.toHaveBeenCalled();
+    expect(t.base.journal.length).toBe(journalAvant);
   });
 });
 

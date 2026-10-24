@@ -639,7 +639,8 @@ export class DepartCourseService {
    *    l'appli, sans attendre sa relecture) ;
    *  - y compris APRÈS SON DÉPART (relecture du 24/10) : il était parti sans
    *    ce sac (« Sac oublié »), revenu le chercher ; sa livraison démarre dans
-   *    l'appli dès la course relue, au lieu d'attendre 15 s.
+   *    l'appli dès la course relue, au lieu d'attendre 15 s. Restaurant en
+   *    v1 : rien, exactement comme avant.
    */
   async surRemiseParCaisse(courseId: string, commande: { id: string; reference?: string | null }): Promise<void> {
     const course = await this.prisma.course.findUnique({
@@ -655,6 +656,7 @@ export class DepartCourseService {
       },
     });
     if (!course || course.statut !== CourseStatut.IN_DELIVERY) return;
+    if (course.parti_at && (await this.settings.versionPour(course.restaurant_id)) === 'v1') return;
     await this.journal.ecrire({
       type: 'RETRAIT_COMPLEMENTAIRE',
       source: 'caisse',

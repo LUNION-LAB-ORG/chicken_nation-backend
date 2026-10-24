@@ -11,8 +11,10 @@ import {
   retenirCourseARemettre,
   whereCoursesARemettre,
 } from '../helpers/code-retrait.rules';
+import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { COURSE_ADMIN_INCLUDE, COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { journeeDeService } from '../helpers/journee-service.rules';
+import { planificateurDuRestaurant } from '../helpers/planification.rules';
 
 /**
  * Service : lectures Course (queries read-only).
@@ -20,7 +22,11 @@ import { journeeDeService } from '../helpers/journee-service.rules';
  */
 @Injectable()
 export class CourseQueryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Restaurant repassé à l'ancienne méthode : un sac oublié n'est pas retrouvé par le code (comme avant).
+    private readonly settings?: CourseSettingsHelper,
+  ) {}
 
   /** Course active du livreur connecté (ACCEPTED / AT_RESTAURANT / IN_DELIVERY) */
   async getCurrentForDeliverer(delivererId: string) {
@@ -53,14 +59,29 @@ export class CourseQueryService {
     maintenant: Date = new Date(),
   ) {
     const restaurantId = restaurantDuRetrait(user, restaurantIdDemande);
-    const courses = await this.prisma.course.findMany({
+    const trouvees = await this.prisma.course.findMany({
       where: whereCoursesARemettre(pickupCode, restaurantId, journeeDeService(maintenant)),
       include: COURSE_FULL_INCLUDE,
       orderBy: [{ assigned_at: 'desc' }, { created_at: 'desc' }],
       // Au-delà d'une, on refuse : inutile de tout charger.
       take: 5,
     });
-    return retenirCourseARemettre(courses, restaurantId);
+    return retenirCourseARemettre(await this.sansSacOublieEnV1(trouvees), restaurantId);
+  }
+
+  /**
+   * Sac oublié (course partie, commande d'origine encore prête) : retrouvé
+   * par le code seulement pour un restaurant en v2. L'ancienne méthode garde
+   * exactement son comportement : le code ne retrouve pas une course partie.
+   */
+  private async sansSacOublieEnV1<T extends { statut: CourseStatut; parti_at: Date | null; restaurant_id: string }>(
+    courses: T[],
+  ): Promise<T[]> {
+    if (!this.settings || !courses.some((c) => c.statut === CourseStatut.IN_DELIVERY && c.parti_at)) return courses;
+    const lu = (await this.settings.lirePlanification()).planificateur;
+    return courses.filter(
+      (c) => !(c.statut === CourseStatut.IN_DELIVERY && c.parti_at && planificateurDuRestaurant(lu, c.restaurant_id) === 'v1'),
+    );
   }
 
   /** Historique livreur : COMPLETED + CANCELLED + EXPIRED */
