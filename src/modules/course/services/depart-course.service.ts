@@ -146,7 +146,7 @@ export class DepartCourseService {
 
     const { count } = await this.prisma.course.updateMany({
       where: { id: courseId, statut: CourseStatut.IN_DELIVERY, parti_at: null },
-      data: { parti_at: maintenant },
+      data: { parti_at: maintenant, motif_depart: motif },
     });
     if (count === 1 && version === 'v2') {
       await this.journal.ecrire({
@@ -253,7 +253,7 @@ export class DepartCourseService {
       detachees = await this.prisma.$transaction(async (tx) => {
         const partie = await tx.course.updateMany({
           where: { id: courseId, statut: CourseStatut.IN_DELIVERY, parti_at: null },
-          data: { parti_at: maintenant },
+          data: { parti_at: maintenant, motif_depart: p.motif },
         });
         if (partie.count !== 1) throw new DepartDejaEnregistre();
         await tx.course.updateMany({
@@ -559,11 +559,17 @@ export class DepartCourseService {
    * RETRAIT COMPLÉMENTAIRE par le code de retrait : course récupérée, livreur
    * encore au restaurant. Seules les commandes prêtes sont remises (les déjà
    * remises sont ignorées) ; la course reste en livraison. Écriture
-   * conditionnée : si le livreur vient de partir, 409 et rien n'est remis.
+   * conditionnée : si le livreur vient de partir, ses commandes AJOUTÉES pas
+   * remises sont détachées (elles repartent seules) : 409 et rien n'est remis.
    * Deux caisses qui saisissent le même code au même instant : la ligne de
    * la course, verrouillée par la première, fait attendre la seconde, qui ne
    * trouve plus rien de prêt et reçoit 409 ; le livreur n'est prévenu qu'une
    * fois.
+   *
+   * SAC OUBLIÉ (relecture du 24/10) : le livreur est parti sans une commande
+   * d'ORIGINE encore prête (remise une par une au bouton de la caisse), puis
+   * revient la chercher et montre le même code (écran « Sac au restaurant »
+   * de l'appli) : elle lui est remise, sa livraison démarre dans l'appli.
    */
   async remettreComplement(
     course: CourseDetaillee,
@@ -575,25 +581,37 @@ export class DepartCourseService {
     );
     if (aRemettre.length === 0) throw new ConflictException(MESSAGE_RIEN_A_REMETTRE);
 
-    const remises = await this.prisma.$transaction(async (tx) => {
+    const { remises, apresDepart } = await this.prisma.$transaction(async (tx) => {
       const encore = await tx.course.updateMany({
-        where: { id: course.id, statut: CourseStatut.IN_DELIVERY, parti_at: null },
+        where: { id: course.id, statut: CourseStatut.IN_DELIVERY },
         data: { updated_at: maintenant },
       });
       if (encore.count !== 1) throw new ConflictException(MESSAGE_LIVREUR_PARTI);
+      // Relu sous le verrou de la ligne : un départ enregistré au même instant
+      // a déjà détaché les commandes ajoutées pas remises.
+      const etat = await tx.course.findUnique({ where: { id: course.id }, select: { parti_at: true } });
+      const partie = !!etat?.parti_at;
       // Relues sous le verrou de la ligne : une autre caisse (ou le bouton
-      // « Livreur a récupéré ») a pu les remettre entre-temps.
+      // « Livreur a récupéré ») a pu les remettre entre-temps. Après le
+      // départ, seules les commandes d'origine restent à remettre.
       const pretes = await tx.order.findMany({
-        where: { id: { in: aRemettre.map((d) => d.order.id) }, status: OrderStatus.READY, delivery: { course_id: course.id } },
+        where: {
+          id: { in: aRemettre.map((d) => d.order.id) },
+          status: OrderStatus.READY,
+          delivery: { course_id: course.id, ...(partie ? { ajoutee_apres_retrait: false } : {}) },
+        },
         select: { id: true, reference: true },
       });
-      if (pretes.length === 0) throw new ConflictException(MESSAGE_RIEN_A_REMETTRE);
+      if (pretes.length === 0) {
+        const originales = aRemettre.some((d) => !d.ajoutee_apres_retrait);
+        throw new ConflictException(partie && !originales ? MESSAGE_LIVREUR_PARTI : MESSAGE_RIEN_A_REMETTRE);
+      }
       const { count } = await tx.order.updateMany({
         where: { id: { in: pretes.map((o) => o.id) }, status: OrderStatus.READY },
         data: { status: OrderStatus.PICKED_UP, picked_up_at: maintenant },
       });
       if (count === 0) throw new ConflictException(MESSAGE_RIEN_A_REMETTRE);
-      return pretes;
+      return { remises: pretes, apresDepart: partie };
     });
 
     const references = remises.map((o) => o.reference);
@@ -603,17 +621,25 @@ export class DepartCourseService {
       restaurant_id: course.restaurant_id,
       course_id: course.id,
       deliverer_id: course.deliverer_id,
-      details: { course: course.reference, commandes: references },
+      details: { course: course.reference, commandes: references, ...(apresDepart ? { apres_depart: true } : {}) },
     });
     const detaillee = await this.annoncerToutRecupere(course.id);
-    this.logger.log(`Course ${course.reference} : retrait complémentaire (${references.join(', ')}), même code.`);
+    this.logger.log(
+      `Course ${course.reference} : retrait complémentaire (${references.join(', ')}), même code${apresDepart ? ', après le départ' : ''}.`,
+    );
     return detaillee ?? course;
   }
 
   /**
    * Bouton « Livreur a récupéré » de la caisse sur une commande d'une course
-   * déjà récupérée, livreur encore au restaurant : quand plus rien n'est à
-   * remettre, le livreur est prévenu qu'il peut partir.
+   * déjà récupérée :
+   *  - quand plus rien n'est à remettre, le livreur est prévenu qu'il peut
+   *    partir (« Tout est récupéré ») ;
+   *  - sinon, la course relue lui part tout de suite (sac pris coché dans
+   *    l'appli, sans attendre sa relecture) ;
+   *  - y compris APRÈS SON DÉPART (relecture du 24/10) : il était parti sans
+   *    ce sac (« Sac oublié »), revenu le chercher ; sa livraison démarre dans
+   *    l'appli dès la course relue, au lieu d'attendre 15 s.
    */
   async surRemiseParCaisse(courseId: string, commande: { id: string; reference?: string | null }): Promise<void> {
     const course = await this.prisma.course.findUnique({
@@ -628,7 +654,7 @@ export class DepartCourseService {
         deliveries: { select: { statut: true, order: { select: { status: true } } } },
       },
     });
-    if (!course || course.statut !== CourseStatut.IN_DELIVERY || course.parti_at) return;
+    if (!course || course.statut !== CourseStatut.IN_DELIVERY) return;
     await this.journal.ecrire({
       type: 'RETRAIT_COMPLEMENTAIRE',
       source: 'caisse',
@@ -636,23 +662,33 @@ export class DepartCourseService {
       course_id: course.id,
       deliverer_id: course.deliverer_id,
       order_id: commande.id,
-      details: { course: course.reference, commandes: [commande.reference ?? commande.id] },
+      details: {
+        course: course.reference,
+        commandes: [commande.reference ?? commande.id],
+        ...(course.parti_at ? { apres_depart: true } : {}),
+      },
     });
     const resteAPrendre = course.deliveries.some(
       (d) => !STATUTS_LIVRAISON_TERMINEE.includes(d.statut) && d.order.status === OrderStatus.READY,
     );
     if (!resteAPrendre) await this.annoncerToutRecupere(course.id);
+    else await this.annoncerCourse(course.id, RaisonsPlanificateur.RETRAIT_COMPLEMENTAIRE);
   }
 
   /** `course:statut:changed` raison DEPART (livreur, restaurant, siège). */
   private async annoncerDepart(courseId: string): Promise<void> {
+    await this.annoncerCourse(courseId, RaisonsPlanificateur.DEPART);
+  }
+
+  /** `course:statut:changed` de la course relue, en livraison (livreur, restaurant, siège). */
+  private async annoncerCourse(courseId: string, reason: string): Promise<void> {
     const detaillee = await this.prisma.course.findUnique({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
     if (!detaillee) return;
     await this.courseEvent.courseStatutChanged({
       course: detaillee,
       previous_statut: CourseStatut.IN_DELIVERY,
       new_statut: CourseStatut.IN_DELIVERY,
-      reason: RaisonsPlanificateur.DEPART,
+      reason,
     });
   }
 

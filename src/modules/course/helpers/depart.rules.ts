@@ -27,6 +27,21 @@ import { STATUTS_COMMANDE_REMISE } from './remise-course.rules';
 export type MotifDepartDirect = 'BOUTON' | 'POSITION' | 'LIVRAISON_DEMARREE';
 
 /**
+ * Départs où le livreur a vraiment quitté le comptoir, ou n'y attend plus
+ * rien (fenêtre écoulée sans sac attendu). Les autres motifs écrits dans
+ * `Course.motif_depart` (ANCIENNE_APPLI, REPLI_V1, AJOUT_COUPE, SANS_LIVREUR,
+ * DEJA_PARTI, SANS_RETRAIT) ferment une fenêtre qui ne devait pas s'ouvrir :
+ * le livreur est peut-être encore au comptoir, la caisse remet peut-être le
+ * second sac.
+ */
+export const MOTIFS_DEPART_REEL: readonly string[] = ['BOUTON', 'POSITION', 'LIVRAISON_DEMARREE', 'FENETRE_ECHUE'];
+
+/** Vrai si ce motif de départ (`Course.motif_depart`) est un départ réel. */
+export function estDepartReel(motif: string | null | undefined): boolean {
+  return !!motif && MOTIFS_DEPART_REEL.includes(motif);
+}
+
+/**
  * Position reçue APRÈS la validation du retrait, à plus du rayon de départ
  * du restaurant : le livreur est parti. Une position d'avant le retrait ne
  * dit rien (il arrivait). Sans coordonnées du restaurant : rien à conclure.

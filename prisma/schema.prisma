@@ -647,6 +647,10 @@ model Course {
   /// fenêtre d'ajout écoulée). Null après le retrait : le livreur est encore au
   /// restaurant et peut recevoir une commande de plus (nouvelle appli seulement).
   parti_at            DateTime? @db.Timestamp(6)
+  /// Ce qui a posé `parti_at` : départ réel (BOUTON, POSITION, LIVRAISON_DEMARREE,
+  /// FENETRE_ECHUE) ou fenêtre fermée d'office (ANCIENNE_APPLI, REPLI_V1, AJOUT_COUPE…).
+  /// Lu par la caisse et le backoffice pour dire « Parti » ou « Au comptoir ».
+  motif_depart        String?   @db.VarChar(40)
   /// Pourquoi ces commandes vont ensemble : « sur le trajet », « même zone »… (affichage).
   motif_regroupement  String?   @db.VarChar(40)
 

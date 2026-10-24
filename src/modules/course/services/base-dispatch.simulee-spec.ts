@@ -58,6 +58,7 @@ export function course(surcharge: Ligne = {}): Ligne {
     retenue_jusqua: null,
     commandes_attendues: null,
     parti_at: null,
+    motif_depart: null,
     motif_regroupement: null,
     created_at: new Date('2026-10-22T09:30:00.000Z'),
     updated_at: new Date('2026-10-22T09:30:00.000Z'),

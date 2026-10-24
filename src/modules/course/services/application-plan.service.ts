@@ -28,6 +28,7 @@ import {
 } from '../helpers/application-plan.rules';
 import { CourseHelper } from '../helpers/course.helper';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
+import { estDepartReel } from '../helpers/depart.rules';
 import { recalculerFraisCourse } from '../helpers/frais-course';
 import {
   ActionAjouter,
@@ -43,7 +44,6 @@ import {
   ActionPlanification,
   ActionReprendreOffre,
   ActionRetenir,
-  MotifDepart,
   MotifLiberation,
   PlanRestaurant,
   TypeActionPlanification,
@@ -77,8 +77,6 @@ const MOTIF_TURBO_PAS_AVANT = 'TURBO_PAS_AVANT';
  */
 export const DELAI_ENVOI_TURBO_MS = 15_000;
 
-/** Départs du planificateur où le livreur a vraiment quitté le comptoir (ou n'y attend plus rien). */
-const MOTIFS_DEPART_REEL: MotifDepart[] = ['POSITION', 'LIVRAISON_DEMARREE', 'FENETRE_ECHUE'];
 
 /** Statuts d'une course dont le livreur est affecté et pas parti. */
 const STATUTS_AVEC_LIVREUR: CourseStatut[] = [CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT, CourseStatut.IN_DELIVERY];
@@ -293,7 +291,7 @@ export class ApplicationPlanService {
   private async marquerParti(a: ActionMarquerParti, p: Passage): Promise<void> {
     const { count } = await this.prisma.course.updateMany({
       where: { id: a.course_id, statut: CourseStatut.IN_DELIVERY, parti_at: null },
-      data: { parti_at: p.maintenant },
+      data: { parti_at: p.maintenant, motif_depart: a.motif },
     });
     if (count !== 1) throw new ActionAbandonnee('COURSE_CHANGEE');
     p.touchees.set(a.course_id, RaisonsPlanificateur.DEPART);
@@ -309,7 +307,7 @@ export class ApplicationPlanService {
     await this.depart?.demarrerPremiereLivraison(a.course_id, p.maintenant).catch(() => null);
     // Départ réel (pas une fenêtre qui n'aurait jamais dû s'ouvrir) : une
     // commande d'origine pas remise est signalée au restaurant et au siège.
-    if (MOTIFS_DEPART_REEL.includes(a.motif)) {
+    if (estDepartReel(a.motif)) {
       await this.depart?.signalerCommandesPasRemises(a.course_id, a.motif).catch(() => []);
     }
   }

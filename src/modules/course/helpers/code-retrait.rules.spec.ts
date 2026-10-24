@@ -124,10 +124,29 @@ describe('whereCoursesARemettre (évalué sur des courses en mémoire)', () => {
         { statut: DeliveryStatut.PENDING, order: { status: OrderStatus.READY } },
       ],
     }),
+    // Partie : une commande AJOUTÉE pas remise (détachée au départ, jamais remise avec le code).
     course('a-recuperee-partie', {
       statut: CourseStatut.IN_DELIVERY,
       parti_at: new Date('2026-10-22T12:50:00.000Z'),
-      deliveries: [{ statut: DeliveryStatut.PENDING, order: { status: OrderStatus.READY } }],
+      deliveries: [
+        { statut: DeliveryStatut.PENDING, ajoutee_apres_retrait: false, order: { status: OrderStatus.PICKED_UP } },
+        { statut: DeliveryStatut.PENDING, ajoutee_apres_retrait: true, order: { status: OrderStatus.READY } },
+      ],
+    }),
+    // Sac oublié (relecture du 24/10) : partie sans une commande d'ORIGINE encore prête ; le livreur revient.
+    course('a-partie-sac-oublie', {
+      statut: CourseStatut.IN_DELIVERY,
+      parti_at: new Date('2026-10-22T12:50:00.000Z'),
+      deliveries: [
+        { statut: DeliveryStatut.DELIVERED, ajoutee_apres_retrait: false, order: { status: OrderStatus.COMPLETED } },
+        { statut: DeliveryStatut.PENDING, ajoutee_apres_retrait: false, order: { status: OrderStatus.READY } },
+      ],
+    }),
+    // Partie, commande d'origine prête mais livraison annulée : rien à remettre.
+    course('a-partie-livraison-annulee', {
+      statut: CourseStatut.IN_DELIVERY,
+      parti_at: new Date('2026-10-22T12:50:00.000Z'),
+      deliveries: [{ statut: DeliveryStatut.CANCELLED, ajoutee_apres_retrait: false, order: { status: OrderStatus.READY } }],
     }),
     course('a-recuperee-tout-remis', {
       statut: CourseStatut.IN_DELIVERY,
@@ -140,7 +159,19 @@ describe('whereCoursesARemettre (évalué sur des courses en mémoire)', () => {
     courses.filter((c) => correspond(c, whereCoursesARemettre('421', restaurantId, journee))).map((c) => c.id);
 
   it('restaurant connu : ses seules courses à remettre de la journée', () => {
-    expect(trouvees(RESTO_A)).toEqual(['a-acceptee', 'a-au-restaurant', 'a-turbo-en-attente', 'a-recuperee-complement']);
+    expect(trouvees(RESTO_A)).toEqual([
+      'a-acceptee',
+      'a-au-restaurant',
+      'a-turbo-en-attente',
+      'a-recuperee-complement',
+      'a-partie-sac-oublie',
+    ]);
+  });
+
+  it('sac oublié : partie, retrouvée par le code seulement pour une commande d\'origine encore prête', () => {
+    expect(trouvees(RESTO_A)).toContain('a-partie-sac-oublie');
+    expect(trouvees(RESTO_A)).not.toContain('a-recuperee-partie');
+    expect(trouvees(RESTO_A)).not.toContain('a-partie-livraison-annulee');
   });
 
   it('retrait complémentaire : récupérée seulement si le livreur est encore là et qu\'une commande est prête', () => {
@@ -167,6 +198,7 @@ describe('whereCoursesARemettre (évalué sur des courses en mémoire)', () => {
       'a-turbo-en-attente',
       'b-meme-code',
       'a-recuperee-complement',
+      'a-partie-sac-oublie',
     ]);
   });
 });

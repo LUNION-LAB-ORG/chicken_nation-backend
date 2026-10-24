@@ -101,6 +101,10 @@ export function choisirCodeRetrait(
  *    (IN_DELIVERY) mais livreur encore au restaurant (`parti_at` nul), avec au
  *    moins une commande prête à remettre (ajoutée après le retrait) : elle
  *    est remise avec le même code ;
+ *  - SAC OUBLIÉ (relecture du 24/10) : récupérées et parties, avec une
+ *    commande d'ORIGINE encore prête (remise une par une au bouton de la
+ *    caisse, la suivante jamais remise) : le livreur revient la chercher et
+ *    montre le même code ;
  * du restaurant concerné (tous si `restaurantId` est absent), créées pendant
  * la journée de service. Une course d'hier restée active est ignorée.
  */
@@ -122,6 +126,17 @@ export function whereCoursesARemettre(
         deliveries: {
           some: {
             statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
+            order: { status: OrderStatus.READY },
+          },
+        },
+      },
+      {
+        statut: CourseStatut.IN_DELIVERY,
+        parti_at: { not: null },
+        deliveries: {
+          some: {
+            statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
+            ajoutee_apres_retrait: false,
             order: { status: OrderStatus.READY },
           },
         },
