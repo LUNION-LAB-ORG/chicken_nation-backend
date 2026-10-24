@@ -293,5 +293,33 @@ export class ExpoPushService {
         } catch (error) {
             this.logger.error(`Révocation impossible : ${error?.message ?? error}`);
         }
+        await this.effacerJetonLivreur(token, cause);
+    }
+
+    /**
+     * Même révocation pour un LIVREUR, dont le jeton n'était jamais effacé :
+     * il comptait encore comme joignable pour les offres (un jeton suffit à la
+     * règle des livreurs joignables) alors qu'aucune notification ne pouvait
+     * lui arriver.
+     *
+     * ⚠️ Effacé, pas déplacé : `Deliverer` n'a pas de colonne de révocation.
+     * Sans risque ici, l'appli livreur renvoie son jeton au serveur à chaque
+     * ouverture, contrairement à l'appli cliente.
+     *
+     * ⚠️ `updateMany` sur la VALEUR du jeton : un jeton plus récent enregistré
+     * entre l'envoi et la réponse d'Expo n'est pas touché.
+     */
+    private async effacerJetonLivreur(token: string, cause: string) {
+        try {
+            const { count } = await this.prisma.deliverer.updateMany({
+                where: { expo_push_token: token },
+                data: { expo_push_token: null },
+            });
+            if (count > 0) {
+                this.logger.log(`Jeton Expo effacé (${cause}) sur ${count} livreur(s)`);
+            }
+        } catch (error) {
+            this.logger.error(`Effacement du jeton livreur impossible : ${error?.message ?? error}`);
+        }
     }
 }
