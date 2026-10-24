@@ -1,12 +1,24 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   CourseStatut,
+  EntityStatus,
   SchedulePlan,
   SchedulePlanStatus,
   ShiftAssignmentStatus,
+  User,
 } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
+import { resolveRestaurantScope } from 'src/modules/order/helpers/restaurant-scope.helper';
+
+import { lireMembresDuPlanning } from '../helpers/membres-planning';
+import {
+  debutDuJour,
+  MESSAGE_PLANNING_INTROUVABLE,
+  planningsDuRestaurant,
+  verifierPlanningDuRestaurant,
+} from '../helpers/planning.rules';
+import { ScheduleSettingsHelper } from '../helpers/schedule-settings.helper';
 
 interface IListPlansFilters {
   restaurantId?: string;
@@ -21,13 +33,21 @@ interface IListPlansFilters {
  */
 @Injectable()
 export class ScheduleQueryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly settings: ScheduleSettingsHelper,
+  ) {}
 
-  /** Liste paginée des plans avec filtres optionnels (admin). */
-  async listPlans(filters: IListPlansFilters = {}, limit = 50): Promise<SchedulePlan[]> {
+  /**
+   * Liste des plans avec filtres optionnels. Avec un compte connecté, un
+   * compte de restaurant ne voit que les plannings du sien, quel que soit le
+   * `restaurantId` reçu.
+   */
+  async listPlans(filters: IListPlansFilters = {}, limit = 50, user?: User): Promise<SchedulePlan[]> {
+    const restaurantId = user ? resolveRestaurantScope(user, filters.restaurantId) : filters.restaurantId;
     return this.prisma.schedulePlan.findMany({
       where: {
-        restaurant_id: filters.restaurantId,
+        restaurant_id: restaurantId,
         status: filters.status,
       },
       orderBy: { period_start: 'desc' },
@@ -35,7 +55,29 @@ export class ScheduleQueryService {
     });
   }
 
-  /** Détail d'un plan avec ses shifts + assignments + livreurs. */
+  /**
+   * Cloisonnement d'une route `:id` : le planning existe (sinon 404) et, pour
+   * un compte de restaurant, c'est celui de son restaurant (sinon 403).
+   */
+  async lirePlanAccessible(planId: string, user: User | undefined): Promise<{ id: string; restaurant_id: string }> {
+    const plan = await this.prisma.schedulePlan.findUnique({
+      where: { id: planId },
+      select: { id: true, restaurant_id: true },
+    });
+    if (!plan) throw new NotFoundException(MESSAGE_PLANNING_INTROUVABLE);
+    verifierPlanningDuRestaurant(user, plan.restaurant_id);
+    return plan;
+  }
+
+  /**
+   * Détail d'un plan avec ses shifts + assignments + livreurs.
+   *
+   * Complété le 24/10 (les champs d'avant restent) :
+   * - `livreurs` : tous les livreurs du planning, même ceux qui n'ont que des
+   *   repos, triés par prénom ;
+   * - `repos` : leurs jours de repos dans la période, avec leur origine ;
+   * - `regles.jours_sans_repos` : les jours où le repos est interdit.
+   */
   async getPlanDetail(planId: string) {
     const plan = await this.prisma.schedulePlan.findUnique({
       where: { id: planId },
@@ -64,8 +106,110 @@ export class ScheduleQueryService {
         },
       },
     });
-    if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
-    return plan;
+    if (!plan) throw new NotFoundException(MESSAGE_PLANNING_INTROUVABLE);
+
+    const membres = await lireMembresDuPlanning(this.prisma, plan);
+    const [livreurs, repos, settings] = await Promise.all([
+      this.prisma.deliverer.findMany({
+        where: { id: { in: membres } },
+        select: { id: true, first_name: true, last_name: true, image: true },
+      }),
+      this.prisma.restDay.findMany({
+        where: {
+          deliverer_id: { in: membres },
+          date: { gte: plan.period_start, lte: plan.period_end },
+        },
+        select: { deliverer_id: true, date: true, source: true },
+        orderBy: [{ date: 'asc' }],
+      }),
+      this.settings.load(),
+    ]);
+
+    const parPrenom = (a: { first_name: string | null; last_name: string | null }, b: typeof a) =>
+      (a.first_name ?? '').localeCompare(b.first_name ?? '', 'fr') ||
+      (a.last_name ?? '').localeCompare(b.last_name ?? '', 'fr');
+
+    return {
+      ...plan,
+      livreurs: [...livreurs].sort(parPrenom),
+      repos,
+      regles: { jours_sans_repos: settings.noRestDays },
+    };
+  }
+
+  /**
+   * Aperçu des plannings par restaurant (tableau du siège, 24/10) : planning
+   * en cours avec ses réponses, planning suivant, livreurs prévus aujourd'hui.
+   * Un compte de restaurant ne reçoit que la ligne du sien.
+   */
+  async apercu(user: User | undefined, restaurantId?: string, maintenant = new Date()) {
+    const perimetre = resolveRestaurantScope(user, restaurantId);
+    const aujourdhui = debutDuJour(maintenant);
+
+    const restaurants = await this.prisma.restaurant.findMany({
+      where: { entity_status: EntityStatus.ACTIVE, ...(perimetre ? { id: perimetre } : {}) },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    if (restaurants.length === 0) return [];
+
+    const plannings = await this.prisma.schedulePlan.findMany({
+      where: {
+        restaurant_id: { in: restaurants.map((r) => r.id) },
+        status: { not: SchedulePlanStatus.ARCHIVED },
+        period_end: { gte: aujourdhui },
+      },
+      select: { id: true, restaurant_id: true, status: true, period_start: true, period_end: true },
+    });
+
+    const parRestaurant = restaurants.map((r) => ({
+      restaurant: r,
+      ...planningsDuRestaurant(
+        plannings.filter((p) => p.restaurant_id === r.id),
+        aujourdhui,
+      ),
+    }));
+
+    const enCoursIds = parRestaurant.flatMap((l) => (l.en_cours ? [l.en_cours.id] : []));
+    const [reponses, prevus] = await Promise.all([
+      Promise.all(enCoursIds.map((id) => this.countConfirmations(id))),
+      enCoursIds.length > 0
+        ? this.prisma.shiftAssignment.findMany({
+            where: {
+              shift: { plan_id: { in: enCoursIds }, date: aujourdhui },
+              status: { not: ShiftAssignmentStatus.REFUSED },
+            },
+            select: { deliverer_id: true, shift: { select: { plan_id: true } } },
+          })
+        : Promise.resolve([] as { deliverer_id: string; shift: { plan_id: string } }[]),
+    ]);
+    const reponsesParPlanning = new Map(enCoursIds.map((id, i) => [id, reponses[i]]));
+
+    return parRestaurant.map(({ restaurant, en_cours, suivant }) => {
+      const stats = en_cours ? reponsesParPlanning.get(en_cours.id) : undefined;
+      return {
+        restaurant: { id: restaurant.id, nom: restaurant.name },
+        en_cours: en_cours
+          ? {
+              id: en_cours.id,
+              statut: en_cours.status,
+              debut: en_cours.period_start,
+              fin: en_cours.period_end,
+              reponses: {
+                confirmees: stats?.confirmed ?? 0,
+                en_attente: stats?.pending ?? 0,
+                refusees: stats?.refused ?? 0,
+              },
+            }
+          : null,
+        suivant: suivant
+          ? { id: suivant.id, statut: suivant.status, debut: suivant.period_start, fin: suivant.period_end }
+          : null,
+        prevus_aujourdhui: en_cours
+          ? new Set(prevus.filter((a) => a.shift.plan_id === en_cours.id).map((a) => a.deliverer_id)).size
+          : 0,
+      };
+    });
   }
 
   /**

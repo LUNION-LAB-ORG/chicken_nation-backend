@@ -3,13 +3,15 @@ import { UserRole } from '@prisma/client';
 import { UserRolesGuard } from './user-roles.guard';
 import { CourseAdminController } from 'src/modules/course/controllers/course-admin.controller';
 import { DeliverersAdminController } from 'src/modules/deliverers/controllers/deliverers-admin.controller';
-import { ScheduleAdminController } from 'src/modules/schedule/controllers/schedule-admin.controller';
 
 /**
- * Les écrans Courses, Livreurs et Planning ne sont PAS gardés par une
- * permission mais par une liste de rôles, posée sur la classe. Ouvrir leurs
- * lectures à LIVRAISON_OPS repose donc entièrement sur le fait que le garde
- * fait primer la méthode sur la classe.
+ * Les écrans Courses et Livreurs ne sont PAS gardés par une permission mais
+ * par une liste de rôles, posée sur la classe. Ouvrir leurs lectures à
+ * LIVRAISON_OPS repose donc entièrement sur le fait que le garde fait primer
+ * la méthode sur la classe.
+ *
+ * Le planning est sorti de cette liste le 24/10 : il est gardé par le droit
+ * `Modules.PLANNING` (voir `schedule-admin.droits.spec.ts`).
  *
  * Ce test rejoue le VRAI garde sur les VRAIES méthodes des contrôleurs : si
  * quelqu'un déplace un décorateur, ou si NestJS changeait cette précédence,
@@ -37,12 +39,6 @@ const ECRANS: { nom: string; proto: object; lectures: string[]; actions: string[
     proto: DeliverersAdminController.prototype,
     lectures: ['findAll', 'getLiveLocations', 'findOne', 'getScoringInfo'],
     actions: ['validate', 'reject', 'suspend', 'reactivate', 'forceActivate', 'assignRestaurant', 'remove'],
-  },
-  {
-    nom: 'Planning',
-    proto: ScheduleAdminController.prototype,
-    lectures: ['listPlans', 'getPlanDetail', 'getPlanStats'],
-    actions: ['generatePlan', 'sendPlan', 'confirmPlan', 'archivePlan', 'deletePlan', 'setDelivererDay', 'addDeliverer', 'regeneratePlan'],
   },
 ];
 
