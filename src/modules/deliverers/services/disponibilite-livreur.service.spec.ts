@@ -44,6 +44,13 @@ function monter(
   const settings = {
     load: jest.fn(async () => ({ horsServiceSansSignalMin: reglages.horsServiceSansSignalMin ?? 20 })),
   };
+  // Redis simulé (place gardée pendant un écran de blocage).
+  const memoire = new Map<string, unknown>();
+  const cache = {
+    get: jest.fn(async (cle: string) => memoire.get(cle)),
+    set: jest.fn(async (cle: string, valeur: unknown) => void memoire.set(cle, valeur)),
+    del: jest.fn(async (cle: string) => memoire.delete(cle)),
+  };
   const disponibilite = new DisponibiliteLivreurService(
     base.prisma,
     delivererEvent as never,
@@ -52,6 +59,7 @@ function monter(
     cloture,
     journal,
     appli.service,
+    cache as never,
   );
   const controleur = new DeliverersSelfController(
     {} as never,
@@ -60,7 +68,7 @@ function monter(
     disponibilite,
   );
   const types = () => base.journal.map((l) => l.type);
-  return { ...base, emis, bus, push, delivererEvent, disponibilite, controleur, cloture, types, appli };
+  return { ...base, emis, bus, push, delivererEvent, disponibilite, controleur, cloture, types, appli, cache };
 }
 
 /** Le livreur connecté, tel que le décorateur `CurrentDeliverer` le passe. */
@@ -337,6 +345,50 @@ describe('POST /deliverers/me/unavailable (écran de blocage de la nouvelle appl
     jest.spyOn(t.cloture, 'clorePourLivreur').mockRejectedValue(new Error('base indisponible'));
     await expect(t.controleur.markUnavailable(connecte(l))).resolves.toEqual({ id: l.id, last_available_at: null });
     expect(l.last_available_at).toBeNull();
+  });
+});
+
+describe('écran de blocage : la place dans la file est gardée (24/10)', () => {
+  it('sorti par /unavailable puis remis par /available : il retrouve sa place d’avant, pas la queue de la file', async () => {
+    const l = livreur({ last_available_at: avant(40) });
+    const t = monter({ livreurs: [l] });
+
+    await t.controleur.markUnavailable(connecte(l));
+    expect(l.last_available_at).toBeNull();
+    // Second appel pendant le même blocage : la place gardée ne bouge pas.
+    await t.controleur.markUnavailable(connecte(l));
+
+    jest.setSystemTime(apres(2));
+    const reponse = await t.controleur.markAvailable(connecte(l));
+
+    expect(l.last_available_at).toEqual(avant(40));
+    expect(reponse).toMatchObject({ last_available_at: avant(40), en_pause: false });
+    // Place rendue une seule fois : une sortie suivante repart de la nouvelle.
+    expect(await t.cache.get('livreur:place-file:' + l.id)).toBeUndefined();
+  });
+
+  it('pause entre-temps : la place est perdue, reprise en queue de file', async () => {
+    const l = livreur({ last_available_at: avant(40) });
+    const t = monter({ livreurs: [l] });
+
+    await t.controleur.markUnavailable(connecte(l));
+    await t.controleur.pause(connecte(l), {});
+    await t.controleur.resume(connecte(l));
+    await t.controleur.markAvailable(connecte(l));
+
+    expect(l.last_available_at).toEqual(MAINTENANT);
+  });
+
+  it('Redis indisponible : sortie et retour fonctionnent, il entre à maintenant', async () => {
+    const l = livreur({ last_available_at: avant(40) });
+    const t = monter({ livreurs: [l] });
+    t.cache.set.mockRejectedValue(new Error('redis'));
+    t.cache.get.mockRejectedValue(new Error('redis'));
+
+    await expect(t.controleur.markUnavailable(connecte(l))).resolves.toEqual({ id: l.id, last_available_at: null });
+    await t.controleur.markAvailable(connecte(l));
+
+    expect(l.last_available_at).toEqual(MAINTENANT);
   });
 });
 

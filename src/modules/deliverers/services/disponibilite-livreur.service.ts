@@ -1,4 +1,6 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import type { Cache } from 'cache-manager';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 import { DispatchJournalService } from 'src/modules/course/services/dispatch-journal.service';
@@ -21,6 +23,15 @@ import { DelivererPushService } from './deliverer-push.service';
 
 /** Au plus un rappel « Tu es en pause » toutes les 30 minutes. */
 export const INTERVALLE_RAPPEL_PAUSE_MS = 30 * 60_000;
+
+/**
+ * Place dans la file gardée pendant un écran de blocage (`/unavailable`),
+ * rendue par `/available` dans les 30 minutes : une coupure du GPS ne coûte
+ * pas plus cher que de fermer l'appli (qui, elle, garde sa place).
+ */
+export const DUREE_PLACE_GARDEE_MS = 30 * 60_000;
+
+const clePlaceGardee = (delivererId: string) => `livreur:place-file:${delivererId}`;
 
 /** Réponse de `POST /deliverers/me/available`. */
 export interface ReponseDisponible {
@@ -64,6 +75,8 @@ export class DisponibiliteLivreurService {
     private readonly journal: DispatchJournalService,
     // Appli fermée (demande du 24/10) : le filet hors service l'épargne.
     private readonly appliLivreur: AppliLivreurService,
+    // Place gardée pendant un écran de blocage (Redis, partagé entre serveurs).
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
   ) {}
 
   /**
@@ -82,6 +95,7 @@ export class DisponibiliteLivreurService {
       select: { id: true, pause_until: true, last_available_at: true, restaurant_id: true },
     });
 
+    await this.oublierPlace(delivererId);
     await this.clore(delivererId, 'LIVREUR_EN_PAUSE');
     await this.journal.ecrire({
       type: 'PAUSE',
@@ -103,8 +117,16 @@ export class DisponibiliteLivreurService {
    * la course repart vers un autre livreur) : sinon l'offre restait derrière
    * l'écran de blocage jusqu'à la relance suivante, ou, les relances passées,
    * jusqu'à son échéance, comptée contre lui.
+   *
+   * Sa place dans la file est gardée (`DUREE_PLACE_GARDEE_MS`) : `/available`
+   * la lui rend une fois débloqué.
    */
   async sortirDeLaFile(delivererId: string) {
+    const avant = await this.prisma.deliverer.findUnique({
+      where: { id: delivererId },
+      select: { last_available_at: true },
+    });
+    if (avant?.last_available_at) await this.retenirPlace(delivererId, avant.last_available_at);
     const livreur = await this.prisma.deliverer.update({
       where: { id: delivererId },
       data: { last_available_at: null },
@@ -165,7 +187,8 @@ export class DisponibiliteLivreurService {
    *    n'affiche pas d'erreur), rappel « Tu es en pause » au plus une fois
    *    toutes les 30 minutes, journal `DISPONIBLE_REFUSE_EN_PAUSE`.
    *  - Sinon : `last_available_at = coalesce(last_available_at, maintenant)`.
-   *    Rouvrir l'appli ne fait plus perdre sa place dans la file.
+   *    Rouvrir l'appli ne fait plus perdre sa place dans la file. Sorti par un
+   *    écran de blocage (`/unavailable`) : il retrouve la place qu'il avait.
    */
   async marquerDisponible(delivererId: string, maintenant = new Date()): Promise<ReponseDisponible> {
     const livreur = await this.prisma.deliverer.findUnique({
@@ -195,6 +218,9 @@ export class DisponibiliteLivreurService {
 
     // Entrée dans la file seulement si le livreur n'y est pas déjà, et toujours
     // hors pause : une pause posée entre la lecture et l'écriture l'emporte.
+    // Sorti par un écran de blocage : sa place d'avant, sinon maintenant.
+    const place = livreur.last_available_at ? null : await this.placeGardee(delivererId, maintenant);
+    const entreeA = place ?? maintenant;
     const entree = await this.prisma.deliverer.updateMany({
       where: {
         id: delivererId,
@@ -204,18 +230,20 @@ export class DisponibiliteLivreurService {
           { OR: [{ auto_pause_until: null }, { auto_pause_until: { lte: maintenant } }] },
         ],
       },
-      data: { last_available_at: maintenant },
+      data: { last_available_at: entreeA },
     });
 
     if (entree.count === 1) {
+      if (place) await this.oublierPlace(delivererId);
       await this.journal.ecrire({
         type: 'DISPONIBLE',
         source: 'appli',
         deliverer_id: delivererId,
         restaurant_id: livreur.restaurant_id,
+        ...(place ? { details: { place_gardee: place.toISOString() } } : {}),
       });
       this.delivererEvent.queueChanged(livreur.id, livreur.restaurant_id);
-      return { ...livreur, last_available_at: maintenant, en_pause: false };
+      return { ...livreur, last_available_at: entreeA, en_pause: false };
     }
     return { ...livreur, en_pause: false };
   }
@@ -232,6 +260,7 @@ export class DisponibiliteLivreurService {
       select: { id: true, restaurant_id: true },
     });
 
+    await this.oublierPlace(delivererId);
     await this.clore(delivererId, 'LIVREUR_DECONNECTE');
     await this.journal.ecrire({
       type: 'DECONNEXION',
@@ -291,6 +320,7 @@ export class DisponibiliteLivreurService {
       select: { id: true, restaurant_id: true, dernier_signal_at: true },
     });
 
+    await this.oublierPlace(delivererId);
     await this.clore(delivererId, 'LIVREUR_HORS_SERVICE');
     this.pushService.notifyMisEnPause({ delivererId });
     await this.journal.ecrire({
@@ -324,6 +354,36 @@ export class DisponibiliteLivreurService {
     if (reserve.count !== 1) return false;
     this.pushService.notifyRappelPause({ delivererId });
     return true;
+  }
+
+  /** Garde la place du livreur dans la file (écran de blocage). Sans Redis : il la perd, rien d'autre. */
+  private async retenirPlace(delivererId: string, place: Date): Promise<void> {
+    try {
+      await this.cache.set(clePlaceGardee(delivererId), place.toISOString(), DUREE_PLACE_GARDEE_MS);
+    } catch (err) {
+      this.logger.warn(`Place de ${delivererId.slice(0, 8)} non gardée : ${(err as Error)?.message}`);
+    }
+  }
+
+  /** Place gardée encore valable (jamais après maintenant), ou null. */
+  private async placeGardee(delivererId: string, maintenant: Date): Promise<Date | null> {
+    try {
+      const brut = await this.cache.get<string>(clePlaceGardee(delivererId));
+      const place = brut ? new Date(brut) : null;
+      if (!place || Number.isNaN(place.getTime())) return null;
+      return place.getTime() < maintenant.getTime() ? place : maintenant;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Pause, déconnexion, hors service : la place gardée est perdue. */
+  private async oublierPlace(delivererId: string): Promise<void> {
+    try {
+      await this.cache.del(clePlaceGardee(delivererId));
+    } catch {
+      // Sans Redis, aucune place n'a pu être gardée.
+    }
   }
 
   /**
