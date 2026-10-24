@@ -145,6 +145,13 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.MESSAGES]: [Action.READ, Action.CREATE],
       // Appels internes : le manager appelle le call center et reçoit ses appels.
       [Modules.CALLS]: [Action.READ],
+      /**
+       * Planning des livreurs de SON restaurant (24/10) : il le fait, l'envoie,
+       * le change dans tous ses états et le supprime. Le cloisonnement est fait
+       * par le serveur sur le restaurant du compte. Pas de droit LIVREURS : ni
+       * courses, ni livreurs, ni En direct.
+       */
+      [Modules.PLANNING]: [Action.READ, Action.CREATE, Action.UPDATE, Action.DELETE],
     },
   },
 
@@ -174,6 +181,8 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       [Modules.MESSAGES]: [Action.READ, Action.CREATE],
       // Appels internes : l'assistant manager appelle le call center et reçoit ses appels.
       [Modules.CALLS]: [Action.READ],
+      // Planning des livreurs de SON restaurant, comme le manager (24/10).
+      [Modules.PLANNING]: [Action.READ, Action.CREATE, Action.UPDATE, Action.DELETE],
     },
   },
 
@@ -230,9 +239,9 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       // gardés côté serveur par une liste de rôles (ROLES_SUIVI_LIVRAISON),
       // pas par une permission. Les deux doivent rester alignés.
       [Modules.LIVREURS]: [Action.READ],
-      // Planning, en lecture (24/10) : son droit propre, que le manager
-      // recevra pour son restaurant. Tant que la garde du planning n'est pas
-      // passée à ce droit, l'API reste ouverte par ROLES_SUIVI_LIVRAISON.
+      // Planning, en lecture (24/10) : son droit propre, partagé avec le
+      // manager pour son restaurant. Il garde aussi l'API du planning, qui
+      // n'est plus dans la liste de rôles.
       [Modules.PLANNING]: [Action.READ],
     },
   },
