@@ -98,6 +98,8 @@ function monter(
   let enBase: Commande = { ...commande };
   const prisma = {
     restaurant: { findUnique: jest.fn().mockResolvedValue({ name: 'Riviera' }) },
+    // Course de la commande confiée à Turbo ? Non par défaut.
+    delivery: { findFirst: jest.fn().mockResolvedValue(null) },
     order: {
       // Relecture de la commande reprise, pour l'événement de statut.
       findUnique: jest.fn(async (_args: { where: { id: string }; include: Record<string, any> }) => ({
@@ -238,19 +240,37 @@ describe('OrderService.update : reprise par le personnel', () => {
     expect(base().payment_method).toBe(PaymentMethod.ONLINE);
   });
 
-  it("garde taxe et total d'une commande à livrer déjà prête, mais passe son paiement à la caisse", async () => {
+  it("retire la taxe d'une commande à livrer déjà prête avec un livreur Chicken Nation (demande du 24/10)", async () => {
     const { service, prisma, base } = monter(
       commandeAppli({ type: OrderType.DELIVERY, status: OrderStatus.READY }),
     );
 
-    await basculer(service);
+    const commande = await basculer(service);
 
     const ecriture = prisma.order.update.mock.calls[0][0].data;
-    // La course est partie avec ce montant à encaisser : il ne doit plus bouger.
-    expect(ecriture).not.toHaveProperty('tax');
-    expect(ecriture).not.toHaveProperty('amount');
+    // L'appli du livreur et la caisse relisent le montant : la taxe tombe.
+    expect(ecriture.tax).toBe(0);
+    const b = base() as unknown as { amount: number; net_amount: number; delivery_fee?: number };
+    expect(b.amount).toBe(b.net_amount + (b.delivery_fee ?? 0));
     expect(ecriture).not.toHaveProperty('status');
     expect(base().payment_method).toBe(PaymentMethod.OFFLINE);
+    expect(commande).not.toHaveProperty('avertissement_reprise');
+  });
+
+  it("garde taxe et total d'une livraison déjà confiée à Turbo, et le dit à l'agent", async () => {
+    const { service, prisma, base } = monter(
+      commandeAppli({ type: OrderType.DELIVERY, status: OrderStatus.READY }),
+    );
+    prisma.delivery.findFirst.mockResolvedValue({ id: 'livraison-turbo' });
+
+    const commande = await basculer(service);
+
+    const ecriture = prisma.order.update.mock.calls[0][0].data;
+    // Turbo ne relit jamais le montant à encaisser qui lui a été envoyé.
+    expect(ecriture).not.toHaveProperty('tax');
+    expect(ecriture).not.toHaveProperty('amount');
+    expect(base()).toEqual(expect.objectContaining({ tax: 500, amount: 10500 }));
+    expect((commande as { avertissement_reprise?: string }).avertissement_reprise).toBe('Livraison confiée à Turbo : le montant à encaisser ne peut plus changer.');
   });
 
   it('ne se laisse pas défaire par un payment_method ONLINE venu du corps', async () => {
@@ -460,7 +480,7 @@ describe('OrderService.update : reprise d’une commande du site à payer à la 
       ...surcharge,
     });
 
-  it('confirmée : acceptée, manuelle, taxe et total conservés, toujours à payer à la livraison', async () => {
+  it('confirmée : acceptée, manuelle, taxe retirée (demande du 24/10), toujours à payer à la livraison', async () => {
     const monte = monter(aConfirmer());
 
     const commande = await basculer(monte.service);
@@ -469,14 +489,14 @@ describe('OrderService.update : reprise d’une commande du site à payer à la 
     const ecriture = monte.prisma.order.update.mock.calls[0][0].data;
     expect(ecriture).toEqual(expect.objectContaining({ auto: false, status: OrderStatus.ACCEPTED }));
     expect(ecriture.accepted_at).toBeInstanceOf(Date);
-    expect(ecriture).not.toHaveProperty('tax');
-    expect(ecriture).not.toHaveProperty('amount');
+    expect(ecriture.tax).toBe(0);
+    expect(ecriture.amount).toBe(11000);
     expect(monte.base()).toEqual(
       expect.objectContaining({
         auto: false,
         status: OrderStatus.ACCEPTED,
-        tax: 500,
-        amount: 11500,
+        tax: 0,
+        amount: 11000,
         payment_method: PaymentMethod.OFFLINE,
       }),
     );
@@ -496,7 +516,7 @@ describe('OrderService.update : reprise d’une commande du site à payer à la 
     expect(monte.promoCodeService.activateUsageForOrder).toHaveBeenCalledTimes(1);
   });
 
-  it('articles changés au téléphone : la taxe garde sa valeur de création, le total est refait sur les nouveaux articles', async () => {
+  it('articles changés au téléphone : taxe retirée, le total est refait sur les nouveaux articles', async () => {
     const monte = monter(aConfirmer());
     Object.assign(monte.prisma, { dish: { findMany: jest.fn().mockResolvedValue([{ id: 'plat-1', price: 6000 }]) } });
     Object.assign(monte.orderHelper, {
@@ -521,8 +541,7 @@ describe('OrderService.update : reprise d’une commande du site à payer à la 
     await basculer(monte.service, { items: [{ dish_id: 'plat-1', quantity: 2, epice: false, supplements: [] }] });
 
     const ecriture = monte.prisma.order.update.mock.calls[0][0].data;
-    expect(ecriture).not.toHaveProperty('tax');
-    expect(ecriture).toEqual(expect.objectContaining({ net_amount: 12000, amount: 13500 }));
+    expect(ecriture).toEqual(expect.objectContaining({ tax: 0, net_amount: 12000, amount: 13000 }));
   });
 
   /**
@@ -589,7 +608,7 @@ describe('OrderService.update : reprise d’une commande du site à payer à la 
       });
     };
 
-    it('rien de changé : lignes d’origine (cadeau à 0 F), frais de la commande, total validé sur le site', async () => {
+    it('rien de changé : lignes d’origine (cadeau à 0 F), frais de la commande, total sans la taxe', async () => {
       const monte = monter(siteAvecCadeau());
       recalcul(monte, [
         { dish_id: 'plat-cadeau', quantity: 1, prix: 3000 },
@@ -601,10 +620,10 @@ describe('OrderService.update : reprise d’une commande du site à payer à la 
       expect((monte.orderHelper as { calculateOrderDetails?: jest.Mock }).calculateOrderDetails).not.toHaveBeenCalled();
       const ecriture = monte.prisma.order.update.mock.calls[0][0].data;
       expect(ecriture).not.toHaveProperty('order_items');
-      expect(ecriture).not.toHaveProperty('amount');
+      expect(ecriture.amount).toBe(11000);
       expect(ecriture.delivery_fee).toBe(1000);
       expect(monte.base()).toEqual(
-        expect.objectContaining({ status: OrderStatus.ACCEPTED, tax: 500, delivery_fee: 1000, amount: 11500 }),
+        expect.objectContaining({ status: OrderStatus.ACCEPTED, tax: 0, delivery_fee: 1000, amount: 11000 }),
       );
       expect(commande).not.toHaveProperty('avertissement_reprise');
     });
@@ -621,11 +640,11 @@ describe('OrderService.update : reprise d’une commande du site à payer à la 
         formulaire({ items: [article('plat-cadeau', 1), article('plat-1', 3)] }),
       )) as { avertissement_reprise?: string };
 
-      // 18 000 F d'articles, taxe de création, frais de la commande (livraison inchangée).
-      expect(monte.base()).toEqual(expect.objectContaining({ net_amount: 18000, tax: 500, delivery_fee: 1000, amount: 19500 }));
+      // 18 000 F d'articles, taxe retirée (24/10), frais de la commande (livraison inchangée).
+      expect(monte.base()).toEqual(expect.objectContaining({ net_amount: 18000, tax: 0, delivery_fee: 1000, amount: 19000 }));
       const texte = (commande.avertissement_reprise ?? '').replace(/[\u00a0\u202f]/g, ' ');
       expect(texte).toContain('le cadeau offert (Burger) est désormais facturé au prix de la carte');
-      expect(texte).toContain('Nouveau total : 19 500 F, à annoncer au client.');
+      expect(texte).toContain('Nouveau total : 19 000 F, à annoncer au client.');
       expect(texte).not.toContain("rendu au client à l'annulation");
     });
 
@@ -637,7 +656,7 @@ describe('OrderService.update : reprise d’une commande du site à payer à la 
 
       const ecriture = monte.prisma.order.update.mock.calls[0][0].data;
       expect(ecriture).not.toHaveProperty('order_items');
-      expect(monte.base()).toEqual(expect.objectContaining({ tax: 500, delivery_fee: 1500, amount: 12000 }));
+      expect(monte.base()).toEqual(expect.objectContaining({ tax: 0, delivery_fee: 1500, amount: 11500 }));
     });
   });
 

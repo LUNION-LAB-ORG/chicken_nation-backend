@@ -465,6 +465,8 @@ function monterReprise(commande: Commande, donnees: Parameters<typeof monterCoup
     if (paiements && enBase.paiements.some((p: Commande) => p.status === paiements.none.status)) return false;
     return correspond(enBase, reste);
   };
+  // Course de la commande confiée à Turbo ? Non.
+  coupons.prisma.delivery = { findFirst: jest.fn().mockResolvedValue(null) };
   coupons.prisma.order = {
     updateMany: jest.fn(async ({ where, data }: { where: Commande; data: Commande }) => {
       if (!accepte(where)) return { count: 0 };
@@ -1167,7 +1169,7 @@ describe('Commande du site à payer à la livraison, annulée par le client', ()
     }
   });
 
-  it('reprise au téléphone : réactivée, acceptée, frais de service et total conservés, toujours à la livraison', async () => {
+  it('reprise au téléphone : réactivée, acceptée, frais de service retirés (demande du 24/10), toujours à la livraison', async () => {
     const m = monterReprise(aConfirmerAnnulee());
 
     const reponse = await reprendre(m.service);
@@ -1181,8 +1183,8 @@ describe('Commande du site à payer à la livraison, annulée par le client', ()
         status: OrderStatus.ACCEPTED,
         cancelled_by: null,
         auto: false,
-        tax: 500,
-        amount: 11500,
+        tax: 0,
+        amount: 11000,
         payment_method: PaymentMethod.OFFLINE,
       }),
     );
