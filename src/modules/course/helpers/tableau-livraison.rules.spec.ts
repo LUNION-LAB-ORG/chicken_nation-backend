@@ -3,7 +3,15 @@
  * signal et son seuil, restaurant sans livreur, sans planning, journée de
  * service à 04 h 59 et 05 h 00, place dans la file par restaurant.
  */
-import { CourseStatut, DeliveryStatut, EntityStatus, OrderStatus, ShiftAssignmentStatus, ShiftType } from '@prisma/client';
+import {
+  CourseStatut,
+  DeliveryService,
+  DeliveryStatut,
+  EntityStatus,
+  OrderStatus,
+  ShiftAssignmentStatus,
+  ShiftType,
+} from '@prisma/client';
 
 import type { EtatAffichageLivreur } from 'src/modules/deliverers/helpers/disponibilite.rules';
 import {
@@ -325,6 +333,26 @@ describe('SANS_LIVREUR (course.no_deliverer_alert_after_min)', () => {
     expect(signaux(t, 'SANS_LIVREUR')).toEqual([]);
     expect(angre(t).sans_livreur.courses).toBe(0);
   });
+
+  it('planificateur v2 avec Turbo : rouge au seuil du restaurant, comme la cloche ; course d’origine Turbo : seuil simple', () => {
+    // Angré en v2 avec Turbo : la cloche attend 7 min (Turbo à 6 min, plus une) ; Marcory garde 5 min.
+    const reglages = { ...REGLAGES, sansLivreurAlerteMinParRestaurant: { [ANGRE.id]: 7 } };
+    const angre6 = course({ created_at: ilYA(6) });
+    const angre7 = course({ created_at: ilYA(7) });
+    const marcory5 = course({ restaurant_id: MARCORY.id, created_at: ilYA(5) });
+    const turbo5 = course({
+      created_at: ilYA(5),
+      deliveries: [livraison({ order: { delivery_service: DeliveryService.TURBO } })],
+    });
+    const t = tableau({ reglages, courses: [angre6, angre7, marcory5, turbo5] });
+    expect(Object.fromEntries(signaux(t, 'SANS_LIVREUR').map((s) => [s.course!.id, s.gravite]))).toEqual({
+      [angre6.id]: 'ambre',
+      [angre7.id]: 'rouge',
+      [marcory5.id]: 'rouge',
+      [turbo5.id]: 'rouge',
+    });
+    expect(angre(t).alertes).toBe(2);
+  });
 });
 
 describe('PARTI_SANS_SAC (même règle que la cloche du sac oublié)', () => {
@@ -446,6 +474,26 @@ describe('APPLI_FERMEE_EN_COURSE et POSITION_PERDUE_EN_COURSE', () => {
       depuis: null,
       minutes: null,
     });
+  });
+
+  it('la course du signal : identifiant, référence, état seulement, même si la lecture du livreur en porte plus', () => {
+    // `getLiveLocations` renvoie aussi le code de retrait et les adresses des clients de la tournée.
+    const lue = {
+      ...enCourse,
+      pickup_code: '4821',
+      restaurant_id: ANGRE.id,
+      deliveries: [{ address: 'Cocody Angré, 7e tranche', order: { reference: 'ORD-4822' } }],
+    } as LivreurLu['active_course'];
+    const t = tableau({
+      livreurs: [
+        livreur({ etat: 'EN_COURSE', active_course: lue, appli_active: false, appli_vue_a: ilYA(6).toISOString() }),
+        livreur({ etat: 'EN_COURSE', active_course: lue, location_at: ilYA(6).toISOString() }),
+      ],
+    });
+    expect(t.signaux.map((s) => [s.cle, s.course])).toEqual([
+      ['APPLI_FERMEE_EN_COURSE', { ...enCourse, expiree: false }],
+      ['POSITION_PERDUE_EN_COURSE', { ...enCourse, expiree: false }],
+    ]);
   });
 
   it('sans course : ni l’un ni l’autre ; règle de l’appli coupée (null) : pas d’appli fermée', () => {

@@ -5,8 +5,10 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { DelivererScoringSettingsHelper } from 'src/modules/deliverers/helpers/deliverer-scoring-settings.helper';
 import { DeliverersService } from 'src/modules/deliverers/services/deliverers.service';
 
+import { seuilAlerteSansLivreurMin } from '../helpers/alerte-sans-livreur.rules';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { journeeDeService } from '../helpers/journee-service.rules';
+import { planificateurDuRestaurant } from '../helpers/planification.rules';
 import { TableauLivraison, construireTableau } from '../helpers/tableau-livraison.rules';
 
 /** Résultat gardé en mémoire, par périmètre (un restaurant, ou tout le réseau). */
@@ -70,8 +72,9 @@ export class TableauLivraisonService {
     const journee = journeeDeService(maintenant);
     const duRestaurant = restaurantId ? { restaurant_id: restaurantId } : {};
 
-    const [course, livreur, restaurants, livreurs, courses, aEncaisser, livrees, planning] = await Promise.all([
+    const [course, planification, livreur, restaurants, livreurs, courses, aEncaisser, livrees, planning] = await Promise.all([
       this.reglagesCourse.load(),
+      this.reglagesCourse.lirePlanification(),
       this.reglagesLivreur.load(),
       this.prisma.restaurant.findMany({
         // Compte de restaurant : le sien, quel que soit son état ; siège : les restaurants ouverts.
@@ -110,7 +113,7 @@ export class TableauLivraisonService {
             select: {
               statut: true,
               ajoutee_apres_retrait: true,
-              order: { select: { reference: true, status: true, entity_status: true } },
+              order: { select: { reference: true, status: true, entity_status: true, delivery_service: true } },
             },
           },
         },
@@ -151,6 +154,18 @@ export class TableauLivraisonService {
       reglages: {
         facteurRetard: course.delayAlertFactor,
         sansLivreurAlerteMin: course.noDelivererAlertAfterMin,
+        // Même seuil que la cloche « aucun livreur », restaurant par restaurant.
+        sansLivreurAlerteMinParRestaurant: Object.fromEntries(
+          restaurants.map((r) => [
+            r.id,
+            seuilAlerteSansLivreurMin({
+              alerteMin: course.noDelivererAlertAfterMin,
+              v2: planificateurDuRestaurant(planification.planificateur, r.id) === 'v2',
+              turboActif: planification.planification.reglages.turboActif,
+              turboApresMinV2: planification.planification.reglages.turboApresMinV2,
+            }),
+          ]),
+        ),
         attenteAuRestaurantMin: course.autoCancelAtRestaurantAfterMin / 2,
         positionExpireeMin: livreur.gpsExpirationMinutes,
       },

@@ -1,4 +1,12 @@
-import { CourseStatut, DeliveryStatut, EntityStatus, OrderStatus, ShiftAssignmentStatus, ShiftType } from '@prisma/client';
+import {
+  CourseStatut,
+  DeliveryService,
+  DeliveryStatut,
+  EntityStatus,
+  OrderStatus,
+  ShiftAssignmentStatus,
+  ShiftType,
+} from '@prisma/client';
 
 import type { EtatAffichageLivreur } from 'src/modules/deliverers/helpers/disponibilite.rules';
 import {
@@ -24,8 +32,8 @@ import { CourseTourneeLue, departEstReel, enRetard, finTourneePrevue, retardMin 
  *
  *  - TOURNEE_EN_RETARD (rouge) : course en livraison en retard
  *    (retard-tournee.rules.ts, `course.delay_alert_factor`) ;
- *  - SANS_LIVREUR : recherche sans livreur ni Turbo (ambre, rouge passé
- *    `course.no_deliverer_alert_after_min`), ou expirée dans la journée
+ *  - SANS_LIVREUR : recherche sans livreur ni Turbo (ambre, rouge au seuil
+ *    de la cloche, `seuilAlerteSansLivreurMin`), ou expirée dans la journée
  *    (rouge), avec des commandes vivantes ;
  *  - PARTI_SANS_SAC (rouge) : départ réel avec une commande d'origine encore
  *    prête au comptoir ;
@@ -132,6 +140,12 @@ export interface ReglagesTableau {
   facteurRetard: number;
   /** `course.no_deliverer_alert_after_min`. */
   sansLivreurAlerteMin: number;
+  /**
+   * Seuil de « Sans livreur » par restaurant, quand il diffère du précédent :
+   * planificateur v2 avec Turbo actif (`seuilAlerteSansLivreurMin`, comme la
+   * cloche). Une course d'origine Turbo garde `sansLivreurAlerteMin`.
+   */
+  sansLivreurAlerteMinParRestaurant?: Record<string, number>;
   /** Moitié de `course.auto_cancel_at_restaurant_after_min`. */
   attenteAuRestaurantMin: number;
   /** `deliverer.gps_expiration_minutes`. */
@@ -165,7 +179,7 @@ export interface CourseLue extends CourseTourneeLue {
   deliveries: Array<{
     statut: DeliveryStatut;
     ajoutee_apres_retrait: boolean;
-    order: { reference: string; status: OrderStatus; entity_status: EntityStatus };
+    order: { reference: string; status: OrderStatus; entity_status: EntityStatus; delivery_service?: DeliveryService };
   }>;
 }
 
@@ -259,6 +273,17 @@ export function estSansLivreur(c: CourseLue, journee: JourneeDeService): boolean
   return false;
 }
 
+/**
+ * Seuil de la cloche « aucun livreur » pour cette course : celui de son
+ * restaurant (v2 avec Turbo : Turbo d'abord), sauf course d'origine Turbo.
+ */
+function seuilSansLivreurMin(c: CourseLue, reglages: ReglagesTableau): number {
+  const turboNatif =
+    c.deliveries.length > 0 && c.deliveries.every((l) => l.order.delivery_service === DeliveryService.TURBO);
+  if (turboNatif) return reglages.sansLivreurAlerteMin;
+  return reglages.sansLivreurAlerteMinParRestaurant?.[c.restaurant_id] ?? reglages.sansLivreurAlerteMin;
+}
+
 function signauxDesCourses(e: EntreeTableau, journee: JourneeDeService): SignalLivraison[] {
   const { maintenant, reglages } = e;
   const signaux: SignalLivraison[] = [];
@@ -270,7 +295,7 @@ function signauxDesCourses(e: EntreeTableau, journee: JourneeDeService): SignalL
     if (estSansLivreur(c, journee)) {
       const creee = lireDate(c.created_at);
       const rouge =
-        course.expiree || (!!creee && ecouleMs(creee, maintenant) >= reglages.sansLivreurAlerteMin * UNE_MINUTE_MS);
+        course.expiree || (!!creee && ecouleMs(creee, maintenant) >= seuilSansLivreurMin(c, reglages) * UNE_MINUTE_MS);
       signaux.push({
         ...base,
         cle: 'SANS_LIVREUR',
@@ -368,7 +393,9 @@ function signauxDesLivreurs(e: EntreeTableau): SignalLivraison[] {
     if (!l.active_course || !l.restaurant) continue;
     const base = {
       restaurant_id: l.restaurant.id,
-      course: { ...l.active_course, expiree: false },
+      // Champ par champ : la lecture du livreur porte aussi le code de retrait
+      // et les adresses de la tournée, qui n'ont rien à faire ici.
+      course: { id: l.active_course.id, reference: l.active_course.reference, statut: l.active_course.statut, expiree: false },
       livreur: { id: l.id, prenom: l.first_name },
       commandes: [] as string[],
     };

@@ -31,6 +31,7 @@ import {
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 
 import { CourseEvent } from '../events/course.event';
+import { seuilAlerteSansLivreurMin } from '../helpers/alerte-sans-livreur.rules';
 import { CourseHelper } from '../helpers/course.helper';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
@@ -807,10 +808,13 @@ export class CourseOfferService {
       //    Sous v2, Turbo passe 6 min après la commande prête : la cloche
       //    attend qu'il ait eu sa chance (une minute de plus), comme sous v1
       //    où Turbo (4 min) passait avant elle (5 min). Turbo refuse : elle sonne.
-      const seuilAlerteMin =
-        v2 && lue.planification.reglages.turboActif
-          ? Math.max(settings.noDelivererAlertAfterMin, lue.planification.reglages.turboApresMinV2 + 1)
-          : settings.noDelivererAlertAfterMin;
+      // Même règle que le tableau de la livraison (`seuilAlerteSansLivreurMin`).
+      const seuilAlerteMin = seuilAlerteSansLivreurMin({
+        alerteMin: settings.noDelivererAlertAfterMin,
+        v2,
+        turboActif: lue.planification.reglages.turboActif,
+        turboApresMinV2: lue.planification.reglages.turboApresMinV2,
+      });
       if (
         !course.no_deliverer_alerted_at &&
         waitingMin >= seuilAlerteMin
