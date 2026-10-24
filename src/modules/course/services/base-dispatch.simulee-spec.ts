@@ -17,7 +17,8 @@
  *    jusqu'à la fin de la transaction qui l'a pris (deux « serveurs » qui
  *    partagent la base se l'arrachent comme en vrai), rendu tout de suite
  *    hors transaction ;
- *  - `deleteMany` est un DELETE ... WHERE.
+ *  - `deleteMany` est un DELETE ... WHERE ;
+ *  - `dispatchEvenement.groupBy` (`by`, `where`, `_max`) regroupe le journal.
  *
  * Fichier de test seulement. Son nom finit par « -spec.ts » : exclu de la
  * construction sans être lancé comme une suite par jest.
@@ -363,6 +364,27 @@ export function monterBaseDispatch(donnees: DonneesDispatch = {}) {
       findFirst: jest.fn(async (args: Ligne = {}) => {
         const ligne = journal.find((l) => evaluer(l, args.where));
         return ligne ? projeter(ligne, args) : null;
+      }),
+      groupBy: jest.fn(async (args: Ligne) => {
+        const groupes = new Map<string, Ligne[]>();
+        for (const l of journal.filter((x) => evaluer(x, args.where))) {
+          const cle = JSON.stringify((args.by as string[]).map((b) => l[b]));
+          groupes.set(cle, [...(groupes.get(cle) ?? []), l]);
+        }
+        const valeur = (v: unknown) => (v instanceof Date ? v.getTime() : (v as number));
+        return [...groupes.values()].map((g) => ({
+          ...Object.fromEntries((args.by as string[]).map((b) => [b, g[0][b]])),
+          ...(args._max
+            ? {
+                _max: Object.fromEntries(
+                  Object.keys(args._max).map((c) => [
+                    c,
+                    g.reduce<unknown>((m, l) => (m === null || valeur(l[c]) > valeur(m) ? l[c] : m), null),
+                  ]),
+                ),
+              }
+            : {}),
+        }));
       }),
     },
     $executeRaw: jest.fn(async (_sql: TemplateStringsArray, ...valeurs: unknown[]) => {

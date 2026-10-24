@@ -30,6 +30,14 @@ export type TypeEvenementDispatch =
   | 'DECONNEXION'
   /** Offre ignorée sans aucun signal depuis le seuil réglé. */
   | 'HORS_SERVICE_SANS_SIGNAL'
+  /**
+   * Appli réputée fermée (ni socket ni signe de vie depuis
+   * `deliverer.appli_fermee_apres_s`) : plus d'offre jusqu'à sa réouverture.
+   * `details.appli_vue_a` : dernier signe de vie.
+   */
+  | 'APPLI_FERMEE'
+  /** Appli rouverte après un passage `APPLI_FERMEE` ; `details.fermee_a`, `details.par` (socket ou signal). */
+  | 'APPLI_ACTIVE'
   /** Remis dans la file après la perte de sa course (fusion, annulation). */
   | 'REMIS_EN_FILE'
   // Course

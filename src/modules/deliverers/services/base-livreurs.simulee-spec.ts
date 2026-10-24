@@ -17,6 +17,8 @@
  */
 import { CourseStatut, DelivererStatus, EntityStatus } from '@prisma/client';
 
+import { DispatchJournalService } from 'src/modules/course/services/dispatch-journal.service';
+
 import { AppliLivreurService } from './appli-livreur.service';
 
 type Ligne = Record<string, any>;
@@ -303,6 +305,6 @@ export function appliLivreurSimulee(
     }),
   };
   const settings = { load: jest.fn(async () => ({ appliFermeeApresS: etat.seuilS })) };
-  const service = new AppliLivreurService(prisma, gateway as never, settings as never);
+  const service = new AppliLivreurService(prisma, gateway as never, settings as never, new DispatchJournalService(prisma));
   return { service, gateway, settings, etat };
 }

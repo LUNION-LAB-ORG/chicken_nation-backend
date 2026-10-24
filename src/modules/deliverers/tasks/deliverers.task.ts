@@ -5,6 +5,8 @@ import { EntityStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { S3Service } from 'src/s3/s3.service';
 
+import { AppliLivreurService } from '../services/appli-livreur.service';
+
 /**
  * Tâche cron pour la purge des comptes livreur dont la période de grâce
  * de 90 jours est expirée (suppression programmée par le user lui-même).
@@ -22,6 +24,9 @@ import { S3Service } from 'src/s3/s3.service';
  *
  * Note : on n'utilise PAS `deleteMany` Prisma — on ne veut PAS hard-delete
  * la ligne (FK ferait casser les courses passées). On anonymise et on flag.
+ *
+ * Et, toutes les 10 s, le relevé des passages « appli fermée » / « appli
+ * active » au journal de la diffusion (AppliLivreurService).
  */
 @Injectable()
 export class DeliverersTask {
@@ -30,7 +35,22 @@ export class DeliverersTask {
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3Service: S3Service,
+    private readonly appliLivreur: AppliLivreurService,
   ) {}
+
+  /**
+   * Passages de l'appli des livreurs au journal (demande du 24/10) : appli
+   * réputée fermée, puis rouverte. Les offres en attente d'une appli fermée
+   * sont closes par la tâche des relances (CourseTask, 10 s).
+   */
+  @Cron(CronExpression.EVERY_10_SECONDS)
+  async suivreApplis() {
+    try {
+      await this.appliLivreur.suivrePassages();
+    } catch (err) {
+      this.logger.error(`Erreur cron suivreApplis: ${(err as Error).message}`);
+    }
+  }
 
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
   async purgeExpiredDeletions() {
