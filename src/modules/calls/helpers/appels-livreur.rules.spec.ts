@@ -1,5 +1,6 @@
 import { CallStatus, UserRole } from '@prisma/client';
 
+import { APPEL_FANTOME_MS, TTL_JETON_LIVREUR_S } from '../constants/calls.constants';
 import {
   appelantLivreur,
   lireAppelsLivreursActifs,
@@ -84,5 +85,14 @@ describe('Appels avec les livreurs : règles', () => {
       direction: 'incoming',
       phase: 'connected',
     });
+  });
+
+  it('jeton du livreur : valable aussi longtemps que l’appel le plus long toléré (relecture du 24/10)', () => {
+    // Le SDK Lunion se reconnecte avec le jeton d'origine et le serveur Lunion
+    // refuse un jeton échu : avec 30 min, un appel plus long était coupé à la
+    // première coupure de réseau.
+    expect(TTL_JETON_LIVREUR_S * 1000).toBeGreaterThanOrEqual(APPEL_FANTOME_MS);
+    // Borne du service Lunion (60 s à 24 h).
+    expect(TTL_JETON_LIVREUR_S).toBeLessThanOrEqual(86_400);
   });
 });

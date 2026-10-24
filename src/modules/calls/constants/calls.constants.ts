@@ -83,11 +83,21 @@ export const TELEPHONE_SERVICE_CLIENT = '+2252721712130';
  */
 export const SONNERIE_LIVREUR_MS = 45_000;
 
-/** Jeton de participant d'un livreur : 30 min (GET /calls/deliverer/active en redonne un frais). */
-export const TTL_JETON_LIVREUR_S = 30 * 60;
+/** Marge après la sonnerie avant qu'un appel encore « RINGING » soit tenu pour manqué (serveur redémarré). */
+export const MARGE_SONNERIE_LIVREUR_MS = 15_000;
 
 /** Au-delà, un appel ONGOING est un appel fantôme (appli fermée sans raccrocher). */
 export const APPEL_FANTOME_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * Jeton de participant d'un livreur : aussi long que l'appel le plus long
+ * toléré (4 h, `APPEL_FANTOME_MS`). Le SDK Lunion se reconnecte avec le jeton
+ * d'origine (coupure de réseau, changement d'antenne) et le serveur Lunion
+ * refuse un jeton échu : avec 30 min, un appel plus long, sonnerie comprise,
+ * était coupé à la première coupure (relecture du 24/10). Le jeton ne vaut
+ * que pour la salle de CET appel.
+ */
+export const TTL_JETON_LIVREUR_S = APPEL_FANTOME_MS / 1000;
 
 /** Rôles du personnel qui appellent un livreur : le service client et l'admin. */
 export const ROLES_APPEL_LIVREUR: readonly UserRole[] = [UserRole.ADMIN, UserRole.CALL_CENTER];

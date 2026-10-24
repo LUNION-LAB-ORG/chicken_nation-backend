@@ -30,6 +30,7 @@ import {
   CIBLE_LIVREUR,
   CODES_APPEL_LIVREUR,
   LIBELLE_SERVICE_CLIENT,
+  MARGE_SONNERIE_LIVREUR_MS,
   RaisonFinAppel,
   SONNERIE_LIVREUR_MS,
   TELEPHONE_SERVICE_CLIENT,
@@ -70,7 +71,7 @@ const COURSE_EN_COURS: CourseStatut[] = [
 ];
 
 /** Marge après la sonnerie avant qu'un appel encore « RINGING » soit tenu pour manqué (serveur redémarré). */
-const MARGE_SONNERIE_MS = 15_000;
+const MARGE_SONNERIE_MS = MARGE_SONNERIE_LIVREUR_MS;
 
 const NUMERO_LISIBLE = '27 21 71 21 30';
 
@@ -88,7 +89,7 @@ const NUMERO_LISIBLE = '27 21 71 21 30';
  *
  * Un livreur n'agit que sur SES appels : chaque écriture est conditionnée sur
  * son identifiant (appelant ou appelé), jamais sur le seul identifiant de
- * l'appel. Il ne reçoit qu'un jeton de participant Lunion de 30 min, jamais la
+ * l'appel. Il ne reçoit qu'un jeton de participant Lunion de 4 h, jamais la
  * clé du service. Ses actions vont au journal d'audit (l'intercepteur ne
  * journalise que le personnel).
  *
