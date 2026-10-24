@@ -158,8 +158,9 @@ describe('rôle LIVRAISON_OPS (demande du 08/10)', () => {
 
   it('lit les commandes, les courses, les livreurs et leur planning', () => {
     expect(peut(Modules.COMMANDES, Action.READ)).toBe(true);
-    // Un seul droit couvre les trois écrans du suivi des livraisons.
+    // Un droit pour les courses et les livreurs, un autre pour le planning.
     expect(peut(Modules.LIVREURS, Action.READ)).toBe(true);
+    expect(peut(Modules.PLANNING, Action.READ)).toBe(true);
   });
 
   /**
@@ -187,8 +188,8 @@ describe('rôle LIVRAISON_OPS (demande du 08/10)', () => {
   });
 
   it('n’a rien d’autre, nulle part', () => {
-    // Deux droits, tous deux en LECTURE. Le reste du tableau doit rester vide.
-    const lectures = new Set<Modules>([Modules.COMMANDES, Modules.LIVREURS]);
+    // Trois droits, tous en LECTURE. Le reste du tableau doit rester vide.
+    const lectures = new Set<Modules>([Modules.COMMANDES, Modules.LIVREURS, Modules.PLANNING]);
     for (const module of modules) {
       for (const action of actions) {
         const attendu = lectures.has(module) && action === Action.READ;
@@ -198,6 +199,7 @@ describe('rôle LIVRAISON_OPS (demande du 08/10)', () => {
     expect(Object.keys(permissionsByRole[UserRole.LIVRAISON_OPS].modules)).toEqual([
       Modules.COMMANDES,
       Modules.LIVREURS,
+      Modules.PLANNING,
     ]);
   });
 
@@ -212,6 +214,28 @@ describe('rôle LIVRAISON_OPS (demande du 08/10)', () => {
   });
 });
 
+
+describe('droit PLANNING (conception du 24/10)', () => {
+  const actions = Object.values(Action) as Action[];
+
+  it('valeur partagée avec le backoffice', () => {
+    expect(Modules.PLANNING).toBe('planning');
+  });
+
+  it('administrateur : tout ; LIVRAISON_OPS : lecture seule ; les autres : rien pour l’instant', () => {
+    for (const role of Object.values(UserRole)) {
+      for (const action of actions) {
+        const attendu =
+          role === UserRole.ADMIN || (role === UserRole.LIVRAISON_OPS && action === Action.READ);
+        expect([role, action, rolePeut(role, Modules.PLANNING, action)]).toEqual([role, action, attendu]);
+      }
+    }
+  });
+
+  it('ne change pas l’écran d’arrivée de LIVRAISON_OPS', () => {
+    expect(Object.keys(permissionsByRole[UserRole.LIVRAISON_OPS].modules)[0]).toBe(Modules.COMMANDES);
+  });
+});
 
 describe('filtrerParDroit', () => {
   it('alertes de commande : tous les rôles sauf MARKETING lisent les commandes', () => {
