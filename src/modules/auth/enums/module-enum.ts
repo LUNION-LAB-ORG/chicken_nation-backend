@@ -23,5 +23,10 @@ export enum Modules {
   /** Diffusions de messages : séparées de MARKETING pour que le menu Marketing puisse être en lecture seule. */
   DIFFUSIONS = 'broadcasts',
   AUDIT = 'audit',
+  /**
+   * Planning des livreurs : séparé de LIVREURS pour que le manager tienne le
+   * planning de son restaurant sans ouvrir les courses ni les livreurs.
+   */
+  PLANNING = 'planning',
   ALL = 'all',
 }

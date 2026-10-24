@@ -225,11 +225,15 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
   [UserRole.LIVRAISON_OPS]: {
     modules: {
       [Modules.COMMANDES]: [Action.READ],
-      // Courses, livreurs et planning, en lecture (ajout du 08/10).
+      // Courses et livreurs, en lecture (ajout du 08/10).
       // ⚠️ Ce droit ne fait qu'AFFICHER les entrées du menu : ces écrans sont
       // gardés côté serveur par une liste de rôles (ROLES_SUIVI_LIVRAISON),
       // pas par une permission. Les deux doivent rester alignés.
       [Modules.LIVREURS]: [Action.READ],
+      // Planning, en lecture (24/10) : son droit propre, que le manager
+      // recevra pour son restaurant. Tant que la garde du planning n'est pas
+      // passée à ce droit, l'API reste ouverte par ROLES_SUIVI_LIVRAISON.
+      [Modules.PLANNING]: [Action.READ],
     },
   },
 

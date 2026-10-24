@@ -46,7 +46,7 @@
  * Aucun appel Google, aucune lecture : tout vient de la commande lue par le
  * service (`SuiviLivraisonService`).
  */
-import { estDepartReel } from 'src/modules/course/helpers/depart.rules';
+import { departEstReel, finTourneePrevue } from 'src/modules/course/helpers/retard-tournee.rules';
 
 import { CourseLue, enrichirCourseOperations } from './suivi-operations.rules';
 
@@ -333,12 +333,8 @@ export function suiviLivraison(c: CommandeLivraisonLue, ctx: ContexteSuiviLivrai
   const heureRecuperee = date(c.picked_up_at) ?? (STATUTS_RECUPEREE.includes(c.status) ? retraitCourse : null);
   const parti = date(course.parti_at);
   // Départ réel : motif du serveur ; sans motif (course d'avant le motif), un
-  // départ noté après la validation du retrait.
-  const departReel =
-    !!parti &&
-    (course.motif_depart
-      ? estDepartReel(course.motif_depart)
-      : !!retraitCourse && parti.getTime() > retraitCourse.getTime());
+  // départ noté après la validation du retrait. Règle commune du retard.
+  const departReel = departEstReel(course);
   const departDistinct =
     departReel && (!heureRecuperee || parti!.getTime() - heureRecuperee.getTime() >= DEPART_DISTINCT_MS);
 
@@ -368,17 +364,11 @@ export function suiviLivraison(c: CommandeLivraisonLue, ctx: ContexteSuiviLivrai
   const rang = actives.findIndex((l) => l.id === livraison.id);
   const rangArret = rang >= 0 ? rang + 1 : null;
 
-  // Dernier arrêt d'une course partie : départ + durée de la tournée.
-  const baseTournee = departReel ? parti : parti ? retraitCourse : null;
-  if (
-    !annulee &&
-    baseTournee &&
-    typeof course.estimated_duration_min === 'number' &&
-    course.estimated_duration_min > 0 &&
-    rangArret !== null &&
-    rangArret === actives.length
-  ) {
-    prevues.arrivee_client = new Date(baseTournee.getTime() + course.estimated_duration_min * 60_000);
+  // Dernier arrêt d'une course partie : fin prévue de la tournée (départ +
+  // durée estimée), la même que celle des écrans de suivi.
+  const finTournee = finTourneePrevue(course);
+  if (!annulee && finTournee && rangArret !== null && rangArret === actives.length) {
+    prevues.arrivee_client = finTournee;
   }
 
   const departDonne = departDistinct || (!heures.depart && !parti && !!prevues.depart);
