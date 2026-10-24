@@ -29,6 +29,7 @@ export type DelivererPushType =
   | 'account_suspended' // Admin a suspendu le compte
   | 'account_reactivated' // Admin a réactivé le compte suspendu
   | 'plan_sent' // Nouveau planning à valider
+  | 'plan_modifie' // Planning envoyé ou confirmé changé par le restaurant (repos, retrait, dates, annulation)
   | 'presence_check' // Question de présence du matin (8 h)
   | 'new_ticket_message' // Réponse support
   | 'appel_entrant'; // Le service client appelle le livreur dans l'appli (24/10)
@@ -522,6 +523,28 @@ export class DelivererPushService {
       type: 'plan_sent',
       title: 'Nouveau planning',
       body: `Plan ${input.periodStart} → ${input.periodEnd} à valider`,
+      data: { planId: input.planId },
+    });
+  }
+
+  /**
+   * Un geste du restaurant sur un planning envoyé ou confirmé (conception du
+   * 24/10, 11.6). `plan_sent` quand il y a un créneau à confirmer, sinon
+   * `plan_modifie` : l'appli actuelle ne connaît pas ce type, elle affiche la
+   * notification et l'ouvre sans écran particulier.
+   */
+  notifyPlanModifie(input: {
+    delivererId: string;
+    planId: string;
+    type: Extract<DelivererPushType, 'plan_sent' | 'plan_modifie'>;
+    titre: string;
+    texte: string;
+  }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: input.type,
+      title: input.titre,
+      body: input.texte,
       data: { planId: input.planId },
     });
   }

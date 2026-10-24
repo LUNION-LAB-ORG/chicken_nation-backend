@@ -1,17 +1,47 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   DelivererStatus,
   EntityStatus,
+  Prisma,
   RestDaySource,
   SchedulePlan,
   SchedulePlanStatus,
   ShiftAssignmentStatus,
   ShiftType,
+  User,
 } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
+import { AuditService } from 'src/modules/audit/audit.service';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 
+import { lireMembresDuPlanning, SOURCES_REPOS_DU_PLANNING } from '../helpers/membres-planning';
+import {
+  actionAuJournal,
+  type GestePlanning,
+  MESSAGE_DEJA_SUR_LE_PLANNING,
+  MESSAGE_JOUR_HORS_PLANNING,
+  MESSAGE_JOUR_SANS_REPOS,
+  MESSAGE_LIVREUR_PAS_ACTIF,
+  MESSAGE_PAS_SUR_LE_PLANNING,
+  MESSAGE_PLANNING_CHANGE,
+  MESSAGE_PLANNING_INTROUVABLE,
+  type NotificationPlanning,
+  notificationDates,
+  notificationJour,
+  notificationRetrait,
+  notificationSuppression,
+  periode,
+  prevenirLesLivreurs,
+  type ResumeJournal,
+  resumeJournal,
+} from '../helpers/planning.rules';
 import {
   type IScheduleSettings,
   ScheduleSettingsHelper,
@@ -30,10 +60,47 @@ const WEEKDAY_NAMES: WeekDay[] = [
 
 const WEEKEND = new Set<WeekDay>(['saturday', 'sunday']);
 
+/** Nom d'un état dans les refus montrés à l'écran (section 3.3). */
+const NOM_ETAT: Record<SchedulePlanStatus, string> = {
+  [SchedulePlanStatus.DRAFT]: 'Brouillon',
+  [SchedulePlanStatus.SENT]: 'Envoyé',
+  [SchedulePlanStatus.CONFIRMED]: 'Confirmé',
+  [SchedulePlanStatus.ARCHIVED]: 'Archivé',
+};
+
 /** Ordre naturel des jours (lundi d'abord) — pour trouver le 1er jour de repos autorisé. */
 const ALL_WEEKDAYS: WeekDay[] = [
   'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
 ];
+
+/**
+ * Le compte qui agit et sa requête : sert au journal d'audit. Absent quand
+ * c'est une tâche planifiée qui agit.
+ */
+export interface ActeurPlanning {
+  user: User;
+  method: string;
+  path: string;
+}
+
+/** Planning lu avant un geste : son état décide qui prévenir et quoi noter. */
+const SELECT_PLANNING = {
+  id: true,
+  restaurant_id: true,
+  status: true,
+  period_start: true,
+  period_end: true,
+  restaurant: { select: { name: true } },
+} satisfies Prisma.SchedulePlanSelect;
+
+type PlanningAvantGeste = Prisma.SchedulePlanGetPayload<{ select: typeof SELECT_PLANNING }>;
+
+const SELECT_LIVREUR_NOMME = {
+  id: true,
+  first_name: true,
+  last_name: true,
+  genre: true,
+} satisfies Prisma.DelivererSelect;
 
 interface IGenerateInput {
   restaurantId: string;
@@ -70,6 +137,8 @@ export class SchedulePlanningService {
     private readonly settings: ScheduleSettingsHelper,
     // P-push livreur : push "Nouveau planning" quand le plan est envoyé
     private readonly pushService: DelivererPushService,
+    // Ligne lisible au journal pour un planning archivé (24/10)
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -87,7 +156,7 @@ export class SchedulePlanningService {
     );
 
     if (periodEnd < periodStart) {
-      throw new BadRequestException('periodEnd doit être >= periodStart');
+      throw new BadRequestException('La date de fin ne peut pas précéder la date de début.');
     }
 
     // 0. Vérification de chevauchement avec un plan ACTIVE existant.
@@ -110,12 +179,9 @@ export class SchedulePlanningService {
       select: { id: true, period_start: true, period_end: true, status: true },
     });
     if (overlapping) {
-      const ovStart = overlapping.period_start.toISOString().substring(0, 10);
-      const ovEnd = overlapping.period_end.toISOString().substring(0, 10);
       throw new BadRequestException(
-        `Chevauchement avec le plan ${overlapping.id.slice(0, 8)} ` +
-          `(${ovStart} → ${ovEnd}, statut ${overlapping.status}). ` +
-          `Archive ou supprime ce plan avant d'en générer un nouveau pour cette période.`,
+        `Le planning du ${periode(overlapping.period_start, overlapping.period_end)} ` +
+          `(${NOM_ETAT[overlapping.status]}) couvre déjà ces dates. Archivez-le ou supprimez-le d'abord.`,
       );
     }
 
@@ -131,9 +197,7 @@ export class SchedulePlanningService {
     });
 
     if (deliverers.length === 0) {
-      throw new BadRequestException(
-        `Aucun livreur ACTIVE pour le restaurant ${input.restaurantId.slice(0, 8)}`,
-      );
+      throw new BadRequestException('Aucun livreur actif dans ce restaurant.');
     }
 
     // 2. Calculer les jours du plan + jours de repos par livreur
@@ -278,23 +342,16 @@ export class SchedulePlanningService {
    * rattaché au restaurant APRÈS la génération du plan). On PRÉSERVE le plan et
    * toutes les affectations/confirmations existantes — on n'ajoute QUE le nouveau
    * livreur à ses shifts (hors ses jours de repos, calculés indépendamment).
-   * Autorisé sur DRAFT/SENT/CONFIRMED (pas ARCHIVED). Idempotent (skipDuplicates).
+   *
+   * Permis dans les quatre états (24/10). Envoyé ou confirmé : le livreur
+   * reçoit « Nouveau planning ». Archivé : ligne au journal.
    */
-  async addDelivererToPlan(planId: string, delivererId: string): Promise<{ added: number }> {
-    const plan = await this.prisma.schedulePlan.findUnique({
-      where: { id: planId },
-      select: {
-        id: true,
-        restaurant_id: true,
-        status: true,
-        period_start: true,
-        period_end: true,
-      },
-    });
-    if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
-    if (plan.status === SchedulePlanStatus.ARCHIVED) {
-      throw new BadRequestException('Un plan archivé ne peut plus être modifié.');
-    }
+  async addDelivererToPlan(
+    planId: string,
+    delivererId: string,
+    acteur?: ActeurPlanning,
+  ): Promise<{ added: number }> {
+    const plan = await this.lirePlanning(planId);
 
     // Le livreur doit être ACTIVE et rattaché au restaurant du plan.
     const deliverer = await this.prisma.deliverer.findFirst({
@@ -304,21 +361,14 @@ export class SchedulePlanningService {
         status: DelivererStatus.ACTIVE,
         entity_status: EntityStatus.ACTIVE,
       },
-      select: { id: true },
+      select: SELECT_LIVREUR_NOMME,
     });
-    if (!deliverer) {
-      throw new BadRequestException(
-        'Livreur introuvable, inactif, ou non rattaché au restaurant de ce plan.',
-      );
-    }
+    if (!deliverer) throw new BadRequestException(MESSAGE_LIVREUR_PAS_ACTIF);
 
-    // Déjà présent dans ce plan ? → rien à faire.
-    const already = await this.prisma.shiftAssignment.findFirst({
-      where: { deliverer_id: delivererId, shift: { plan_id: planId } },
-      select: { id: true },
-    });
-    if (already) {
-      throw new BadRequestException('Ce livreur est déjà présent dans ce planning.');
+    // Déjà sur ce planning (une affectation, ou des repos du planning) ? → refus.
+    const membres = await lireMembresDuPlanning(this.prisma, plan);
+    if (membres.includes(delivererId)) {
+      throw new BadRequestException(MESSAGE_DEJA_SUR_LE_PLANNING);
     }
 
     // Shifts du plan + jours de repos du NOUVEAU livreur (rotation calculée pour lui
@@ -356,10 +406,7 @@ export class SchedulePlanningService {
     });
 
     // Plan déjà envoyé/confirmé → prévenir le nouveau livreur qu'il a un planning.
-    if (
-      plan.status === SchedulePlanStatus.SENT ||
-      plan.status === SchedulePlanStatus.CONFIRMED
-    ) {
+    if (prevenirLesLivreurs(plan.status)) {
       this.pushService.notifyPlanSent({
         delivererId,
         periodStart: plan.period_start.toISOString().substring(0, 10),
@@ -367,6 +414,7 @@ export class SchedulePlanningService {
         planId,
       });
     }
+    this.noterAuJournal(plan, 'ajout', acteur, { geste: 'ajout', livreur: deliverer }, { delivererId });
 
     this.logger.log(
       `Livreur ${delivererId.slice(0, 8)} ajouté au plan ${planId.slice(0, 8)} : ${assignments.length} shift(s).`,
@@ -375,24 +423,91 @@ export class SchedulePlanningService {
   }
 
   /**
+   * Retire un livreur d'un planning, dans les quatre états (24/10) : ses
+   * affectations du planning et ses repos `AUTO` et `MANUAL_ADMIN` de la
+   * période sont effacés. Les repos qu'il a posés lui-même restent.
+   *
+   * Envoyé ou confirmé : il est prévenu. Archivé : ligne au journal.
+   */
+  async removeDelivererFromPlan(
+    planId: string,
+    delivererId: string,
+    acteur?: ActeurPlanning,
+  ): Promise<{ removed: number }> {
+    const plan = await this.lirePlanning(planId);
+    const membres = await lireMembresDuPlanning(this.prisma, plan);
+    if (!membres.includes(delivererId)) throw new BadRequestException(MESSAGE_PAS_SUR_LE_PLANNING);
+
+    const deliverer = await this.prisma.deliverer.findUnique({
+      where: { id: delivererId },
+      select: SELECT_LIVREUR_NOMME,
+    });
+
+    const [affectations, repos] = await this.prisma.$transaction([
+      this.prisma.shiftAssignment.deleteMany({
+        where: { deliverer_id: delivererId, shift: { plan_id: planId } },
+      }),
+      this.prisma.restDay.deleteMany({
+        where: {
+          deliverer_id: delivererId,
+          date: { gte: plan.period_start, lte: plan.period_end },
+          source: { in: SOURCES_REPOS_DU_PLANNING },
+        },
+      }),
+    ]);
+    // Une autre requête l'a retiré entre-temps : rien à annoncer une seconde fois.
+    if (affectations.count === 0 && repos.count === 0) {
+      throw new ConflictException(MESSAGE_PLANNING_CHANGE);
+    }
+
+    this.prevenir(plan, [delivererId], notificationRetrait(plan));
+    this.noterAuJournal(plan, 'retrait', acteur, { geste: 'retrait', livreur: deliverer }, { delivererId });
+
+    this.logger.log(
+      `Livreur ${delivererId.slice(0, 8)} retiré du plan ${planId.slice(0, 8)} : ` +
+        `${affectations.count} affectation(s), ${repos.count} repos.`,
+    );
+    return { removed: affectations.count };
+  }
+
+  /**
+   * Livreurs actifs du restaurant du planning qui n'y sont pas encore : la
+   * liste de la fenêtre « Ajouter un livreur ».
+   */
+  async livreursAjoutables(planId: string) {
+    const plan = await this.lirePlanning(planId);
+    const membres = await lireMembresDuPlanning(this.prisma, plan);
+    return this.prisma.deliverer.findMany({
+      where: {
+        restaurant_id: plan.restaurant_id,
+        status: DelivererStatus.ACTIVE,
+        entity_status: EntityStatus.ACTIVE,
+        id: { notIn: membres },
+      },
+      select: { id: true, first_name: true, last_name: true, image: true },
+      orderBy: [{ first_name: 'asc' }, { last_name: 'asc' }],
+    });
+  }
+
+  /**
    * Transition DRAFT → SENT : verrouille le plan, démarre la deadline d'acceptation.
    * À ce stade, les shifts sont visibles côté livreur mobile.
+   *
+   * Prise atomique : un double envoi ne prévient pas deux fois les livreurs.
    *
    * @throws BadRequestException si le plan n'est pas en DRAFT
    * @throws NotFoundException si le plan n'existe pas
    */
   async sendPlan(planId: string): Promise<SchedulePlan> {
-    const plan = await this.prisma.schedulePlan.findUnique({ where: { id: planId } });
-    if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
-    if (plan.status !== SchedulePlanStatus.DRAFT) {
-      throw new BadRequestException(
-        `Seul un plan DRAFT peut être envoyé (statut actuel : ${plan.status})`,
-      );
-    }
-    const updated = await this.prisma.schedulePlan.update({
-      where: { id: planId },
+    const pris = await this.prisma.schedulePlan.updateMany({
+      where: { id: planId, status: SchedulePlanStatus.DRAFT },
       data: { status: SchedulePlanStatus.SENT, sent_at: new Date() },
     });
+    if (pris.count !== 1) {
+      await this.lirePlanning(planId);
+      throw new BadRequestException('Seul un planning en brouillon peut être envoyé.');
+    }
+    const updated = await this.prisma.schedulePlan.findUniqueOrThrow({ where: { id: planId } });
 
     // P-push livreur : alerter chaque livreur ayant des assignments dans ce plan.
     // On bouble en interne sur les delivererId distincts.
@@ -418,6 +533,9 @@ export class SchedulePlanningService {
   /**
    * Marque un plan comme CONFIRMED (toutes les réponses collectées ou deadline
    * passée). Le snapshot `confirmed_count` est calculé ici.
+   *
+   * Prise atomique sur l'état SENT : la tâche `closeOverduePlans` et un clic
+   * au même moment ne confirment qu'une fois.
    */
   async confirmPlan(planId: string): Promise<SchedulePlan> {
     const plan = await this.prisma.schedulePlan.findUnique({
@@ -426,11 +544,9 @@ export class SchedulePlanningService {
         shifts: { include: { assignments: true } },
       },
     });
-    if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
+    if (!plan) throw new NotFoundException(MESSAGE_PLANNING_INTROUVABLE);
     if (plan.status !== SchedulePlanStatus.SENT) {
-      throw new BadRequestException(
-        `Seul un plan SENT peut être confirmé (statut actuel : ${plan.status})`,
-      );
+      throw new BadRequestException('Seul un planning envoyé peut être confirmé.');
     }
 
     const allAssignments = plan.shifts.flatMap((s) => s.assignments);
@@ -440,75 +556,92 @@ export class SchedulePlanningService {
         .map((a) => a.deliverer_id),
     ).size;
 
-    return this.prisma.schedulePlan.update({
-      where: { id: planId },
+    const pris = await this.prisma.schedulePlan.updateMany({
+      where: { id: planId, status: SchedulePlanStatus.SENT },
       data: {
         status: SchedulePlanStatus.CONFIRMED,
         confirmed_at: new Date(),
         confirmed_count: confirmedCount,
       },
     });
-  }
-
-  /** Archive un plan terminé (libère l'espace de la matrice UI). */
-  async archivePlan(planId: string): Promise<SchedulePlan> {
-    return this.prisma.schedulePlan.update({
-      where: { id: planId },
-      data: { status: SchedulePlanStatus.ARCHIVED, archived_at: new Date() },
-    });
+    if (pris.count !== 1) throw new ConflictException(MESSAGE_PLANNING_CHANGE);
+    return this.prisma.schedulePlan.findUniqueOrThrow({ where: { id: planId } });
   }
 
   /**
-   * Supprime DÉFINITIVEMENT un plan (et, par cascade, ses Shifts + ShiftAssignments).
-   * Autorisé pour DRAFT / SENT / ARCHIVED → permet de « supprimer et reprendre »
-   * (régénérer pour la même période). REFUSÉ pour CONFIRMED (utiliser archivePlan
-   * pour conserver l'historique des confirmations).
-   *
-   * NB : les RestDay AUTO ne sont pas supprimés ici (non rattachés au plan) ; ils
-   * sont ré-utilisés tels quels lors d'une régénération (createMany skipDuplicates).
+   * Archive un plan (libère l'espace de la matrice UI). Depuis tout état non
+   * archivé, comme avant. Idempotent : un planning déjà archivé est rendu tel
+   * quel, sans toucher à sa date d'archivage (la tâche `archiveOldPlans` peut
+   * passer deux fois).
    */
-  async deletePlan(planId: string): Promise<{ id: string; deleted: true }> {
+  async archivePlan(planId: string): Promise<SchedulePlan> {
+    await this.prisma.schedulePlan.updateMany({
+      where: { id: planId, status: { not: SchedulePlanStatus.ARCHIVED } },
+      data: { status: SchedulePlanStatus.ARCHIVED, archived_at: new Date() },
+    });
     const plan = await this.prisma.schedulePlan.findUnique({ where: { id: planId } });
-    if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
-    if (plan.status === SchedulePlanStatus.CONFIRMED) {
-      throw new BadRequestException(
-        'Un plan confirmé ne peut pas être supprimé — archivez-le pour conserver l\'historique.',
-      );
-    }
-    await this.prisma.schedulePlan.delete({ where: { id: planId } });
+    if (!plan) throw new NotFoundException(MESSAGE_PLANNING_INTROUVABLE);
+    return plan;
+  }
+
+  /**
+   * Supprime DÉFINITIVEMENT un plan (et, par cascade, ses Shifts + ShiftAssignments),
+   * dans les quatre états (24/10).
+   *
+   * - Les livreurs à prévenir sont lus AVANT la suppression : envoyé ou
+   *   confirmé, chacun reçoit « Planning annulé ».
+   * - Confirmé ou archivé : ligne au journal.
+   * - Les repos `AUTO` et `MANUAL_ADMIN` de ses livreurs dans sa période
+   *   partent avec lui (le livreur ne les voit plus, et un planning refait
+   *   pour ces dates repart propre), sauf les jours couverts par un autre
+   *   planning du restaurant.
+   */
+  async deletePlan(planId: string, acteur?: ActeurPlanning): Promise<{ id: string; deleted: true }> {
+    const plan = await this.lirePlanning(planId);
+    const membres = await lireMembresDuPlanning(this.prisma, plan);
+    const reposAEffacer = await this.reposDuPlanningAEffacer(plan, membres);
+
+    await this.prisma.$transaction(async (tx) => {
+      const supprime = await tx.schedulePlan.deleteMany({
+        where: { id: planId, status: plan.status },
+      });
+      if (supprime.count !== 1) throw new ConflictException(MESSAGE_PLANNING_CHANGE);
+      if (reposAEffacer.length > 0) {
+        await tx.restDay.deleteMany({ where: { id: { in: reposAEffacer.map((r) => r.id) } } });
+      }
+    });
+
+    this.prevenir(plan, membres, notificationSuppression(plan));
+    this.noterAuJournal(plan, 'suppression', acteur, { geste: 'suppression' });
+
     this.logger.log(`Plan ${planId.slice(0, 8)} supprimé (statut ${plan.status})`);
     return { id: planId, deleted: true };
   }
 
   /**
-   * ÉDITION ADMIN d'un jour : bascule un (livreur, jour) entre REPOS et TRAVAIL,
+   * ÉDITION d'un jour : bascule un (livreur, jour) entre REPOS et TRAVAIL,
    * en gardant la matrice cohérente (RestDay + ShiftAssignment).
    *
    * - `REST` : pose un RestDay MANUAL_ADMIN + retire les assignments du jour.
-   *   Refusé si le jour est dans `no_rest_days` (l'admin respecte la règle métier).
-   * - `WORK` : retire le RestDay + (re)crée les assignments matin/soir du jour.
+   *   Refusé si le jour est dans `no_rest_days` (le restaurant respecte la règle métier).
+   * - `WORK` : retire le RestDay + (re)crée les assignments matin/soir du jour,
+   *   en ASSIGNED : le livreur confirme, même sur un planning confirmé.
    *
-   * Autorisé sur tout plan NON archivé (y compris SENT/CONFIRMED — ajustement d'un
-   * planning en cours).
+   * Permis dans les quatre états (24/10). Si le jour change vraiment : envoyé
+   * ou confirmé, le livreur est prévenu ; archivé, ligne au journal.
    */
   async setDelivererDayMode(
     planId: string,
     delivererId: string,
     dateInput: Date,
     mode: 'REST' | 'WORK',
+    acteur?: ActeurPlanning,
   ): Promise<SchedulePlan> {
-    const plan = await this.prisma.schedulePlan.findUnique({ where: { id: planId } });
-    if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
-    // Édition autorisée sur tout plan NON archivé (DRAFT/SENT/CONFIRMED) : l'admin
-    // peut ajuster un planning en cours. Sur un plan confirmé, la modification
-    // s'applique immédiatement (les assignments recréés repartent en ASSIGNED).
-    if (plan.status === SchedulePlanStatus.ARCHIVED) {
-      throw new BadRequestException('Un plan archivé ne peut plus être édité.');
-    }
+    const plan = await this.lirePlanning(planId);
 
     const day = startOfDay(dateInput);
     if (day < startOfDay(plan.period_start) || day > startOfDay(plan.period_end)) {
-      throw new BadRequestException('Date hors de la période du plan');
+      throw new BadRequestException(MESSAGE_JOUR_HORS_PLANNING);
     }
 
     // Le livreur doit appartenir au restaurant du plan et être ACTIF.
@@ -518,22 +651,23 @@ export class SchedulePlanningService {
         restaurant_id: plan.restaurant_id,
         status: DelivererStatus.ACTIVE,
       },
-      select: { id: true },
+      select: SELECT_LIVREUR_NOMME,
     });
-    if (!deliverer) {
-      throw new BadRequestException('Livreur introuvable ou non rattaché à ce restaurant');
-    }
+    if (!deliverer) throw new BadRequestException(MESSAGE_LIVREUR_PAS_ACTIF);
 
+    let change: boolean;
     if (mode === 'REST') {
-      // L'admin respecte la règle : pas de repos sur les jours interdits.
+      // Le restaurant respecte la règle : pas de repos sur les jours interdits.
       const settings = await this.settings.load();
       const dayName = WEEKDAY_NAMES[day.getUTCDay()];
       if (new Set<WeekDay>(settings.noRestDays).has(dayName)) {
-        throw new BadRequestException(
-          `Repos interdit le ${dayName} — jour de forte activité (no_rest_days).`,
-        );
+        throw new BadRequestException(MESSAGE_JOUR_SANS_REPOS);
       }
-      await this.prisma.$transaction([
+      const reposAvant = await this.prisma.restDay.findUnique({
+        where: { deliverer_id_date: { deliverer_id: delivererId, date: day } },
+        select: { id: true },
+      });
+      const [, retirees] = await this.prisma.$transaction([
         this.prisma.restDay.upsert({
           where: { deliverer_id_date: { deliverer_id: delivererId, date: day } },
           update: { source: RestDaySource.MANUAL_ADMIN },
@@ -543,12 +677,13 @@ export class SchedulePlanningService {
           where: { deliverer_id: delivererId, shift: { plan_id: planId, date: day } },
         }),
       ]);
+      change = retirees.count > 0 || !reposAvant;
     } else {
       const shifts = await this.prisma.shift.findMany({
         where: { plan_id: planId, date: day },
         select: { id: true },
       });
-      await this.prisma.$transaction([
+      const [reposRetires, creees] = await this.prisma.$transaction([
         this.prisma.restDay.deleteMany({ where: { deliverer_id: delivererId, date: day } }),
         this.prisma.shiftAssignment.createMany({
           data: shifts.map((s) => ({
@@ -559,63 +694,186 @@ export class SchedulePlanningService {
           skipDuplicates: true,
         }),
       ]);
+      change = reposRetires.count > 0 || creees.count > 0;
+    }
+
+    if (change) {
+      this.prevenir(plan, [delivererId], notificationJour(mode, day));
+      this.noterAuJournal(
+        plan,
+        'jour',
+        acteur,
+        { geste: 'jour', livreur: deliverer, mode, date: day },
+        { delivererId, date: this.dateKey(day), mode },
+      );
     }
 
     this.logger.log(
       `Plan ${planId.slice(0, 8)} : livreur ${delivererId.slice(0, 8)} → ${mode} le ${this.dateKey(day)}`,
     );
-    return plan;
+    return this.prisma.schedulePlan.findUniqueOrThrow({ where: { id: planId } });
   }
 
   /**
-   * Réédite les DATES d'un plan : archive l'ancien, régénère un plan DRAFT pour la
-   * nouvelle période (mêmes règles : repos no_rest_days, etc.), puis supprime l'ancien.
+   * Réédite les DATES d'un plan : régénère un plan DRAFT pour la nouvelle
+   * période (mêmes règles : repos no_rest_days, etc.), puis supprime l'ancien.
    * En cas d'échec de génération, l'ancien plan est RESTAURÉ → aucune perte de données.
-   * Autorisé sur DRAFT ou SENT (pas CONFIRMED/ARCHIVED).
+   *
+   * Permis dans les quatre états (24/10) : le planning repart en brouillon et
+   * les réponses des livreurs sont effacées. Le contrôle de chevauchement de
+   * `generatePlan` reste la garde. Envoyé ou confirmé : ses livreurs sont
+   * prévenus ; archivé : ligne au journal.
    */
   async regeneratePlan(
     planId: string,
     periodStart: Date,
     periodEnd?: Date,
+    acteur?: ActeurPlanning,
   ): Promise<SchedulePlan> {
-    const plan = await this.prisma.schedulePlan.findUnique({ where: { id: planId } });
-    if (!plan) throw new NotFoundException(`Plan ${planId} introuvable`);
-    if (
-      plan.status === SchedulePlanStatus.CONFIRMED ||
-      plan.status === SchedulePlanStatus.ARCHIVED
-    ) {
-      throw new BadRequestException(
-        `Seul un plan brouillon ou envoyé peut être réédité (statut actuel : ${plan.status})`,
-      );
+    const plan = await this.lirePlanning(planId);
+    const previousStatus = plan.status;
+    const dejaArchive = previousStatus === SchedulePlanStatus.ARCHIVED;
+    const membres = await lireMembresDuPlanning(this.prisma, plan);
+
+    // Archive temporaire : libère l'overlap-check + l'index unique le temps de
+    // régénérer. Prise atomique : deux rééditions en même temps n'en font qu'une.
+    // Un planning déjà archivé ne gêne ni l'un ni l'autre.
+    if (!dejaArchive) {
+      const pris = await this.prisma.schedulePlan.updateMany({
+        where: { id: planId, status: previousStatus },
+        data: { status: SchedulePlanStatus.ARCHIVED, archived_at: new Date() },
+      });
+      if (pris.count !== 1) throw new ConflictException(MESSAGE_PLANNING_CHANGE);
     }
 
-    const previousStatus = plan.status;
-    // Archive temporaire : libère l'overlap-check + l'index unique le temps de régénérer.
-    await this.prisma.schedulePlan.update({
-      where: { id: planId },
-      data: { status: SchedulePlanStatus.ARCHIVED, archived_at: new Date() },
-    });
+    // Repos de l'ancien planning : effacés pour que le nouveau parte de sa
+    // propre rotation, remis tels quels si la génération échoue.
+    const reposAEffacer = await this.reposDuPlanningAEffacer(plan, membres);
 
     try {
+      if (reposAEffacer.length > 0) {
+        await this.prisma.restDay.deleteMany({ where: { id: { in: reposAEffacer.map((r) => r.id) } } });
+      }
       const fresh = await this.generatePlan({
         restaurantId: plan.restaurant_id,
         periodStart,
         periodEnd,
       });
       // Génération OK → l'ancien plan (archivé) est supprimé.
-      await this.prisma.schedulePlan.delete({ where: { id: planId } });
+      await this.prisma.schedulePlan.deleteMany({ where: { id: planId } });
+
+      this.prevenir(plan, membres, notificationDates(plan));
+      this.noterAuJournal(
+        plan,
+        'dates',
+        acteur,
+        { geste: 'dates', debut: fresh.period_start, fin: fresh.period_end },
+        { nouveauPlanningId: fresh.id },
+      );
+
       this.logger.log(
         `Plan ${planId.slice(0, 8)} réédité → nouveau plan ${fresh.id.slice(0, 8)}`,
       );
       return fresh;
     } catch (err) {
       // Échec → RESTAURE l'ancien plan dans son état initial (aucune perte).
-      await this.prisma.schedulePlan.update({
-        where: { id: planId },
-        data: { status: previousStatus, archived_at: null },
-      });
+      if (reposAEffacer.length > 0) {
+        await this.prisma.restDay.createMany({
+          data: reposAEffacer.map(({ deliverer_id, date, source, reason }) => ({
+            deliverer_id,
+            date,
+            source,
+            reason,
+          })),
+          skipDuplicates: true,
+        });
+      }
+      if (!dejaArchive) {
+        await this.prisma.schedulePlan.updateMany({
+          where: { id: planId, status: SchedulePlanStatus.ARCHIVED },
+          data: { status: previousStatus, archived_at: null },
+        });
+      }
       throw err;
     }
+  }
+
+  // ============================================================
+  // GESTES : LECTURE, NOTIFICATIONS, JOURNAL
+  // ============================================================
+
+  /** Le planning avant un geste, avec le nom de son restaurant. 404 s'il n'existe plus. */
+  private async lirePlanning(planId: string): Promise<PlanningAvantGeste> {
+    const plan = await this.prisma.schedulePlan.findUnique({
+      where: { id: planId },
+      select: SELECT_PLANNING,
+    });
+    if (!plan) throw new NotFoundException(MESSAGE_PLANNING_INTROUVABLE);
+    return plan;
+  }
+
+  /**
+   * Repos `AUTO` et `MANUAL_ADMIN` des livreurs d'un planning, dans sa période,
+   * hors des jours couverts par un AUTRE planning du restaurant (ceux-là
+   * appartiennent aussi à l'autre planning).
+   */
+  private async reposDuPlanningAEffacer(plan: PlanningAvantGeste, membres: string[]) {
+    if (membres.length === 0) return [];
+    const autres = await this.prisma.schedulePlan.findMany({
+      where: {
+        id: { not: plan.id },
+        restaurant_id: plan.restaurant_id,
+        period_start: { lte: plan.period_end },
+        period_end: { gte: plan.period_start },
+      },
+      select: { period_start: true, period_end: true },
+    });
+    return this.prisma.restDay.findMany({
+      where: {
+        deliverer_id: { in: membres },
+        date: { gte: plan.period_start, lte: plan.period_end },
+        source: { in: SOURCES_REPOS_DU_PLANNING },
+        NOT: autres.map((a) => ({ date: { gte: a.period_start, lte: a.period_end } })),
+      },
+      select: { id: true, deliverer_id: true, date: true, source: true, reason: true },
+    });
+  }
+
+  /** Une notification par livreur, seulement sur un planning envoyé ou confirmé. */
+  private prevenir(plan: PlanningAvantGeste, livreurs: string[], notification: NotificationPlanning): void {
+    if (!prevenirLesLivreurs(plan.status)) return;
+    for (const delivererId of livreurs) {
+      this.pushService.notifyPlanModifie({ delivererId, planId: plan.id, ...notification });
+    }
+  }
+
+  /**
+   * Ligne lisible au journal d'audit (planning archivé, suppression d'un
+   * planning confirmé), en plus de celle que l'intercepteur écrit pour toute
+   * modification. Rien sans compte connecté (tâche planifiée).
+   */
+  private noterAuJournal(
+    plan: PlanningAvantGeste,
+    geste: GestePlanning,
+    acteur: ActeurPlanning | undefined,
+    resume: ResumeJournal,
+    metadata?: Prisma.InputJsonValue,
+  ): void {
+    const action = actionAuJournal(plan.status, geste);
+    if (!action || !acteur) return;
+    this.audit.record({
+      actor_id: acteur.user.id,
+      actor_name: acteur.user.fullname ?? acteur.user.email ?? null,
+      actor_role: acteur.user.role,
+      restaurant_id: plan.restaurant_id,
+      action,
+      module: 'schedule',
+      entity_id: plan.id,
+      method: acteur.method,
+      path: acteur.path,
+      summary: resumeJournal(plan, resume),
+      ...(metadata !== undefined ? { metadata } : {}),
+    });
   }
 
   // ============================================================

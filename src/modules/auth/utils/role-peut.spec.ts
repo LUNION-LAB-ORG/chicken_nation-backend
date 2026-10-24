@@ -222,18 +222,36 @@ describe('droit PLANNING (conception du 24/10)', () => {
     expect(Modules.PLANNING).toBe('planning');
   });
 
-  it('administrateur : tout ; LIVRAISON_OPS : lecture seule ; les autres : rien pour l’instant', () => {
+  /**
+   * Administrateur : tout. Manager et assistant : lecture, création,
+   * modification et suppression, sur leur restaurant (le cloisonnement est
+   * fait par le serveur). LIVRAISON_OPS : lecture. Les autres : rien.
+   */
+  it('qui a quoi sur le planning', () => {
+    const gestion = new Set<string>([Action.READ, Action.CREATE, Action.UPDATE, Action.DELETE]);
     for (const role of Object.values(UserRole)) {
       for (const action of actions) {
         const attendu =
-          role === UserRole.ADMIN || (role === UserRole.LIVRAISON_OPS && action === Action.READ);
+          role === UserRole.ADMIN ||
+          ((role === UserRole.MANAGER || role === UserRole.ASSISTANT_MANAGER) && gestion.has(action)) ||
+          (role === UserRole.LIVRAISON_OPS && action === Action.READ);
         expect([role, action, rolePeut(role, Modules.PLANNING, action)]).toEqual([role, action, attendu]);
       }
     }
   });
 
-  it('ne change pas l’écran d’arrivée de LIVRAISON_OPS', () => {
+  it('le manager et l’assistant n’ont toujours ni courses ni livreurs', () => {
+    for (const role of [UserRole.MANAGER, UserRole.ASSISTANT_MANAGER]) {
+      for (const action of actions) {
+        expect([role, action, rolePeut(role, Modules.LIVREURS, action)]).toEqual([role, action, false]);
+      }
+    }
+  });
+
+  it('ne change pas l’écran d’arrivée de LIVRAISON_OPS, du manager ni de l’assistant', () => {
     expect(Object.keys(permissionsByRole[UserRole.LIVRAISON_OPS].modules)[0]).toBe(Modules.COMMANDES);
+    expect(Object.keys(permissionsByRole[UserRole.MANAGER].modules)[0]).toBe(Modules.DASHBOARD);
+    expect(Object.keys(permissionsByRole[UserRole.ASSISTANT_MANAGER].modules)[0]).toBe(Modules.DASHBOARD);
   });
 });
 

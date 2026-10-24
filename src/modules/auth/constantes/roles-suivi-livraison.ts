@@ -1,14 +1,15 @@
 import { UserRole } from '@prisma/client';
 
 /**
- * Rôles qui CONSULTENT le suivi des livraisons : les courses, les livreurs et
- * leur planning.
+ * Rôles qui CONSULTENT le suivi des livraisons : les courses et les livreurs.
+ * Le planning n'en fait plus partie (24/10) : il est gardé par le droit
+ * `Modules.PLANNING`, que le manager reçoit pour son restaurant.
  *
- * ⚠️ À poser sur les routes de LECTURE uniquement. Les trois contrôleurs
- * concernés (`courses`, `deliverers`, `schedule`) restent `@UserRoles(ADMIN)`
- * au niveau de la classe, et le garde fait primer la méthode sur la classe :
- * les GET s'ouvrent, tout ce qui agit reste à l'administrateur. Forcer une
- * course, suspendre un livreur ou générer un planning ne bougent pas.
+ * ⚠️ À poser sur les routes de LECTURE uniquement. Les deux contrôleurs
+ * concernés (`courses`, `deliverers`) restent `@UserRoles(ADMIN)` au niveau de
+ * la classe, et le garde fait primer la méthode sur la classe : les GET
+ * s'ouvrent, tout ce qui agit reste à l'administrateur. Forcer une course ou
+ * suspendre un livreur ne bougent pas.
  *
  * ⚠️ Ces écrans ne sont pas gardés par une permission mais par une LISTE DE
  * RÔLES. Ajouter `LIVREURS: [READ]` à un rôle fait donc apparaître l'entrée au
