@@ -4,6 +4,10 @@ import { SettingsService } from 'src/modules/settings/settings.service';
 
 import { CLE_OFFRE_JOIGNABLES_SEULEMENT, lireOffreJoignablesSeulement } from './disponibilite.rules';
 
+/** Réglage de course du retard d'une tournée, et son défaut (`CourseSettingsHelper`). */
+const CLE_FACTEUR_RETARD = 'course.delay_alert_factor';
+const FACTEUR_RETARD_DEFAUT = 1.5;
+
 /**
  * Valeurs par défaut pour le scoring + file d'attente + pénalités + chaînage + GPS livreur.
  * Utilisées si la clé Settings n'est pas définie en base — le backoffice expose
@@ -99,6 +103,13 @@ export interface IDelivererScoringSettings {
   gpsExpirationMinutes: number;
   gpsMaxSpeedKmh: number;
 
+  /**
+   * Retard d'une tournée : réglage de course `course.delay_alert_factor`
+   * (défaut 1,5, comme `CourseSettingsHelper`), lu ici pour la course en
+   * cours de chaque livreur (`GET /deliverers/live-locations`).
+   */
+  facteurRetard: number;
+
   // Shadow mode
   scoringShadowMode: boolean;
   /** Affiner le classement des meilleurs candidats par temps de trajet réel. */
@@ -154,6 +165,8 @@ export class DelivererScoringSettingsHelper {
       'deliverer.gps_update_interval_seconds',
       'deliverer.gps_expiration_minutes',
       'deliverer.gps_max_speed_kmh',
+      // Retard d'une tournée (réglage de course)
+      CLE_FACTEUR_RETARD,
       // Shadow mode
       'deliverer.scoring_shadow_mode',
     ]);
@@ -185,6 +198,8 @@ export class DelivererScoringSettingsHelper {
       gpsUpdateIntervalSeconds: this.toNumber(map['deliverer.gps_update_interval_seconds'], DEFAULTS.gps_update_interval_seconds),
       gpsExpirationMinutes: this.toNumber(map['deliverer.gps_expiration_minutes'], DEFAULTS.gps_expiration_minutes),
       gpsMaxSpeedKmh: this.toNumber(map['deliverer.gps_max_speed_kmh'], DEFAULTS.gps_max_speed_kmh),
+
+      facteurRetard: this.toNumber(map[CLE_FACTEUR_RETARD], FACTEUR_RETARD_DEFAUT),
 
       scoringShadowMode: this.toBoolean(map['deliverer.scoring_shadow_mode']),
     };

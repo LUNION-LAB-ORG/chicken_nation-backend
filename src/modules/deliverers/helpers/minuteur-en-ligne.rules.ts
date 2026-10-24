@@ -162,3 +162,16 @@ redis.call('HSET', KEYS[1], 'dernier', ARGV[1], 'en_ligne', ARGV[3])
 redis.call('EXPIRE', KEYS[1], ARGV[5])
 return ajout
 `;
+
+/**
+ * Lecture de plusieurs compteurs en une seule commande (vue Livreurs
+ * « Aujourd'hui ») : `HMGET ms dernier en_ligne` de chaque clé, dans l'ordre
+ * de KEYS. Un champ absent revient à `null`, comme pour `HMGET`.
+ */
+export const SCRIPT_LIRE_MINUTEURS = `
+local sortie = {}
+for i, cle in ipairs(KEYS) do
+  sortie[i] = redis.call('HMGET', cle, 'ms', 'dernier', 'en_ligne')
+end
+return sortie
+`;

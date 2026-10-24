@@ -51,17 +51,24 @@ export class DeliverersAdminController {
       'Retourne les livreurs ACTIVE operationnels avec GPS récent + statut ' +
       'availability + course active éventuelle. Les livreurs sans GPS récent ' +
       '(> `deliverer.gps_expiration_minutes`) sont exclus par défaut. Mêmes champs ' +
-      '`disponibilite`, `appli_connectee`, `appli_active` et `appli_vue_a` que la liste.',
+      '`disponibilite`, `appli_connectee`, `appli_active` et `appli_vue_a` que la liste. ' +
+      '`rang_file` : place dans la file de son restaurant (`queue_rank`, gardé, range tous les ' +
+      'livreurs lus ensemble). `active_course` porte aussi le code de retrait, les heures, ' +
+      '`fin_prevue`, `en_retard` et `retard_min`. Avec `jour=true` (vue Livreurs « Aujourd\'hui ») : ' +
+      '`creneau_du_jour` (`matin`, `soir` : ASSIGNED, CONFIRMED, REFUSED ou null ; `repos`), ' +
+      '`en_ligne_aujourdhui_s` (null si le minuteur ne répond pas) et `courses_du_jour`.',
   })
   @Get('live-locations')
   @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async getLiveLocations(
     @Query('restaurantId') restaurantId?: string,
     @Query('includeOffline') includeOffline?: string,
+    @Query('jour') jour?: string,
   ) {
     return this.deliverersService.getLiveLocations({
       restaurantId,
       includeOffline: includeOffline === 'true',
+      jour: jour === 'true',
     });
   }
 

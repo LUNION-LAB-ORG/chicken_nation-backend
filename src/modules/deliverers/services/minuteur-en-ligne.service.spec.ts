@@ -188,6 +188,31 @@ describe('MinuteurEnLigneService', () => {
     await m.minuteur.noterSignal('l1', a(0));
     expect(m.redis.scriptsRecus).toBe(0);
   });
+
+  it('plusieurs livreurs en une seule commande : même valeur que la lecture d’un seul', async () => {
+    const m = monter();
+    await m.signaux(0, 600);
+    const parLivreur = await m.minuteur.lirePlusieurs(
+      [
+        { id: 'l1', enLigne: true },
+        { id: 'jamais-vu', enLigne: true },
+      ],
+      180,
+      a(630),
+    );
+    expect(m.redis.lecturesGroupees).toBe(1);
+    expect(parLivreur?.get('l1')).toBe(await m.lire(a(630)));
+    expect(parLivreur?.get('l1')).toBe(630);
+    expect(parLivreur?.get('jamais-vu')).toBe(0);
+  });
+
+  it('plusieurs livreurs, aucun : rien n’est demandé à Redis ; Redis muet : null', async () => {
+    const m = monter();
+    expect(await m.minuteur.lirePlusieurs([], 180, a(0))).toEqual(new Map());
+    expect(m.redis.lecturesGroupees).toBe(0);
+    m.redis.panne = true;
+    expect(await m.minuteur.lirePlusieurs([{ id: 'l1', enLigne: true }], 180, a(0))).toBeNull();
+  });
 });
 
 describe('MinuteurEnLigneListener', () => {

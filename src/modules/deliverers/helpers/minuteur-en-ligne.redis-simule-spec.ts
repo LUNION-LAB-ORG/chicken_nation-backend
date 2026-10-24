@@ -5,16 +5,25 @@
  * absents), indépendamment de `avancerMinuteur` : les tests de la règle
  * vérifient que les deux disent la même chose.
  */
-import { SCRIPT_AVANCER_MINUTEUR } from './minuteur-en-ligne.rules';
+import { SCRIPT_AVANCER_MINUTEUR, SCRIPT_LIRE_MINUTEURS } from './minuteur-en-ligne.rules';
 
 export class RedisMinuteurSimule {
   readonly hachages = new Map<string, Map<string, string>>();
   readonly durees = new Map<string, number>();
   panne = false;
   scriptsRecus = 0;
+  lecturesGroupees = 0;
 
-  async eval(script: string, nombreCles: number, cle: string, ...argv: string[]): Promise<number> {
+  async eval(script: string, nombreCles: number, cle: string, ...argv: string[]): Promise<number | (string | null)[][]> {
     if (this.panne) throw new Error('Connection is closed.');
+    if (script === SCRIPT_LIRE_MINUTEURS) {
+      // for i, cle in ipairs(KEYS) do sortie[i] = redis.call('HMGET', cle, 'ms', 'dernier', 'en_ligne') end
+      this.lecturesGroupees += 1;
+      return [cle, ...argv].slice(0, nombreCles).map((k) => {
+        const h = this.hachages.get(k);
+        return ['ms', 'dernier', 'en_ligne'].map((c) => h?.get(c) ?? null);
+      });
+    }
     if (script !== SCRIPT_AVANCER_MINUTEUR || nombreCles !== 1) throw new Error('script inattendu');
     this.scriptsRecus += 1;
     const h = this.hachages.get(cle) ?? new Map<string, string>();

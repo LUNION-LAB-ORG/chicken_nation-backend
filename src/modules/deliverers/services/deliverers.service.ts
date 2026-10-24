@@ -11,11 +11,15 @@ import {
   Deliverer,
   DelivererStatus,
   EntityStatus,
+  PresenceCheckResponse,
   Prisma,
+  SchedulePlanStatus,
 } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { S3Service } from 'src/s3/s3.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import { journeeDeService } from 'src/modules/course/helpers/journee-service.rules';
+import { enRetard, finTourneePrevue, retardMin } from 'src/modules/course/helpers/retard-tournee.rules';
 
 import { AssignRestaurantDto } from '../dto/assign-restaurant.dto';
 import { QueryDeliverersDto } from '../dto/query-deliverers.dto';
@@ -32,7 +36,11 @@ import {
   injoignablesParmi,
   regleAppliPour,
 } from '../helpers/disponibilite.rules';
+import { estEnLigne } from '../helpers/minuteur-en-ligne.rules';
+import { PlanningDuJourLu, creneauDuJour, jourDuPlanning } from '../helpers/planning-du-jour.rules';
+import { rangsDansLaFile } from '../helpers/rang-file.rules';
 import { DelivererPushService } from './deliverer-push.service';
+import { MinuteurEnLigneService } from './minuteur-en-ligne.service';
 
 /**
  * Lecture de quoi calculer l'état d'un livreur (`disponibilite`) dans une
@@ -116,6 +124,8 @@ export class DeliverersService {
     private readonly pushService: DelivererPushService,
     // Présence de l'appli (socket ouvert) dans les listes du backoffice
     private readonly gateway: AppGateway,
+    // Temps en ligne de la journée (vue Livreurs « Aujourd'hui », `jour=true`)
+    private readonly minuteur?: MinuteurEnLigneService,
   ) {}
 
   // ============================================================
@@ -636,11 +646,23 @@ export class DeliverersService {
    * Les livreurs sans GPS récent (`last_location_at > gps_expiration_minutes`)
    * sont **exclus par défaut** — on ne veut pas afficher des markers obsolètes
    * sur la carte admin. Passer `includeOffline=true` pour les voir quand même.
+   *
+   * Complété le 24/10 (conception, 11.5), sans rien retirer (`queue_rank`
+   * reste pour les anciens écrans) :
+   *  - `rang_file` : place dans la file DE SON restaurant (rang-file.rules.ts) ;
+   *  - `restaurant.latitude`, `restaurant.longitude` ;
+   *  - `active_course` : restaurant, code de retrait, heures, fin prévue et
+   *    retard (retard-tournee.rules.ts) ;
+   *  - avec `jour` (vue Livreurs « Aujourd'hui ») : `creneau_du_jour` (matin,
+   *    soir, repos), `en_ligne_aujourdhui_s` (minuteur tenu par le serveur,
+   *    `null` si Redis ne répond pas) et `courses_du_jour` (courses terminées
+   *    de la journée de service).
    */
-  async getLiveLocations(params: { restaurantId?: string; includeOffline?: boolean }) {
+  async getLiveLocations(params: { restaurantId?: string; includeOffline?: boolean; jour?: boolean }) {
     const now = new Date();
     const settings = await this.scoringSettings.load();
     const gpsExpirationMs = settings.gpsExpirationMinutes * 60_000;
+    const facteurRetard = settings.facteurRetard ?? 1.5;
 
     const deliverers = await this.prisma.deliverer.findMany({
       where: {
@@ -656,7 +678,7 @@ export class DeliverersService {
         image: true,
         type_vehicule: true,
         restaurant_id: true,
-        restaurant: { select: { id: true, name: true } },
+        restaurant: { select: { id: true, name: true, latitude: true, longitude: true } },
         last_location: true,
         last_location_at: true,
         last_speed_kmh: true,
@@ -686,7 +708,15 @@ export class DeliverersService {
             id: true,
             reference: true,
             statut: true,
+            restaurant_id: true,
+            pickup_code: true,
             assigned_at: true,
+            at_restaurant_at: true,
+            picked_up_at: true,
+            parti_at: true,
+            motif_depart: true,
+            estimated_duration_min: true,
+            delay_alerted_at: true,
             deliveries: {
               orderBy: { sequence_order: 'asc' },
               select: {
@@ -702,7 +732,8 @@ export class DeliverersService {
       },
     });
 
-    // Rang FIFO pour les livreurs disponibles
+    // Rang FIFO pour les livreurs disponibles (tous les livreurs lus ensemble :
+    // anciens écrans). La place dans la file de chaque restaurant est `rang_file`.
     const inQueue = deliverers
       .filter((d) => d.last_available_at !== null)
       .sort(
@@ -715,6 +746,28 @@ export class DeliverersService {
 
     const connectes = await this.gateway.livreursConnectes(deliverers.map((d) => d.id));
     const appli = contexteAffichage(settings, connectes, deliverers);
+    // État par la règle unique : « En pause », « Hors service » et « Appli fermée » visibles.
+    const disponibilites = new Map(
+      deliverers.map((d) => [
+        d.id,
+        disponibiliteLivreur(
+          etatLivreurDepuis(d, appli, now),
+          now,
+          d.offer_attempts[0]?.course_id ?? null,
+          regleAppliPour(d.protocole_appli, appli.appliFermeeApresS),
+        ),
+      ]),
+    );
+    const rangs = rangsDansLaFile(
+      deliverers.map((d) => ({
+        id: d.id,
+        restaurant_id: d.restaurant_id,
+        etat: disponibilites.get(d.id)!.etat,
+        last_available_at: d.last_available_at,
+      })),
+    );
+    const duJour = params.jour ? await this.lireLeJour(deliverers, params.restaurantId, settings.appliFermeeApresS, now) : null;
+
     const result = deliverers
       .map((d) => {
         const locationAt = d.last_location_at;
@@ -732,13 +785,8 @@ export class DeliverersService {
         else if (d.last_available_at) availability = 'available';
         else availability = 'offline';
 
-        // État par la règle unique : « En pause », « Hors service » et « Appli fermée » visibles.
-        const disponibilite = disponibiliteLivreur(
-          etatLivreurDepuis(d, appli, now),
-          now,
-          d.offer_attempts[0]?.course_id ?? null,
-          regleAppliPour(d.protocole_appli, appli.appliFermeeApresS),
-        );
+        const disponibilite = disponibilites.get(d.id)!;
+        const finPrevue = activeCourse ? finTourneePrevue(activeCourse) : null;
 
         return {
           id: d.id,
@@ -754,6 +802,7 @@ export class DeliverersService {
           heading_deg: d.last_heading_deg,
           availability,
           queue_rank: rankMap.get(d.id) ?? null,
+          rang_file: rangs.get(d.id) ?? null,
           pause_until: d.pause_until?.toISOString() ?? null,
           auto_pause_until: d.auto_pause_until?.toISOString() ?? null,
           disponibilite,
@@ -764,7 +813,16 @@ export class DeliverersService {
                 id: activeCourse.id,
                 reference: activeCourse.reference,
                 statut: activeCourse.statut,
+                restaurant_id: activeCourse.restaurant_id,
+                pickup_code: activeCourse.pickup_code,
                 assigned_at: activeCourse.assigned_at?.toISOString() ?? null,
+                at_restaurant_at: activeCourse.at_restaurant_at?.toISOString() ?? null,
+                picked_up_at: activeCourse.picked_up_at?.toISOString() ?? null,
+                parti_at: activeCourse.parti_at?.toISOString() ?? null,
+                estimated_duration_min: activeCourse.estimated_duration_min,
+                fin_prevue: finPrevue?.toISOString() ?? null,
+                en_retard: enRetard(activeCourse, now, facteurRetard),
+                retard_min: retardMin(activeCourse, now, facteurRetard),
                 deliveries: activeCourse.deliveries.map((dv) => ({
                   id: dv.id,
                   statut: dv.statut,
@@ -774,10 +832,111 @@ export class DeliverersService {
                 })),
               }
             : null,
+          ...(duJour && {
+            creneau_du_jour: creneauDuJour(duJour.planning, d.id),
+            en_ligne_aujourdhui_s: duJour.enLigne ? (duJour.enLigne.get(d.id) ?? 0) : null,
+            courses_du_jour: duJour.courses.get(d.id) ?? 0,
+          }),
         };
       })
       .filter((d) => params.includeOffline || d.location_fresh);
 
     return result;
+  }
+
+  /**
+   * Ce que la vue Livreurs « Aujourd'hui » ajoute à la liste : planning du
+   * jour, temps en ligne (une seule commande Redis) et courses terminées de
+   * la journée de service (un seul regroupement).
+   */
+  private async lireLeJour(
+    livreurs: readonly {
+      id: string;
+      pause_until: Date | null;
+      auto_pause_until: Date | null;
+      last_available_at: Date | null;
+      courses: readonly unknown[];
+    }[],
+    restaurantId: string | undefined,
+    appliFermeeApresS: number,
+    maintenant: Date,
+  ) {
+    const ids = livreurs.map((l) => l.id);
+    const [planning, terminees, enLigne] = await Promise.all([
+      this.lirePlanningDuJour(restaurantId, maintenant),
+      ids.length === 0
+        ? Promise.resolve([] as { deliverer_id: string | null; _count: { _all: number } }[])
+        : this.prisma.course.groupBy({
+            by: ['deliverer_id'],
+            where: {
+              deliverer_id: { in: ids },
+              statut: CourseStatut.COMPLETED,
+              completed_at: { gte: journeeDeService(maintenant).debut },
+            },
+            _count: { _all: true },
+          }),
+      this.minuteur
+        ? this.minuteur.lirePlusieurs(
+            livreurs.map((l) => ({ id: l.id, enLigne: estEnLigne(l, l.courses.length > 0, maintenant) })),
+            appliFermeeApresS,
+            maintenant,
+          )
+        : Promise.resolve(null),
+    ]);
+    const courses = new Map<string, number>();
+    for (const t of terminees) if (t.deliverer_id) courses.set(t.deliverer_id, t._count._all);
+    return { planning, courses, enLigne };
+  }
+
+  /**
+   * Planning du jour (journée de service) : plannings envoyés ou confirmés
+   * qui couvrent ce jour, avec leurs créneaux du jour et leurs affectations
+   * (refusées comprises), repos du jour et « Non » au point du matin. Lu par
+   * la vue Livreurs « Aujourd'hui » et par le tableau de la livraison.
+   */
+  async lirePlanningDuJour(restaurantId: string | undefined, maintenant: Date = new Date()): Promise<PlanningDuJourLu> {
+    const jour = jourDuPlanning(maintenant);
+    const duPerimetre = restaurantId ? { deliverer: { restaurant_id: restaurantId } } : {};
+    const [plans, repos, absents] = await Promise.all([
+      this.prisma.schedulePlan.findMany({
+        where: {
+          status: { in: [SchedulePlanStatus.SENT, SchedulePlanStatus.CONFIRMED] },
+          entity_status: { not: EntityStatus.DELETED },
+          period_start: { lte: jour },
+          period_end: { gte: jour },
+          ...(restaurantId && { restaurant_id: restaurantId }),
+        },
+        select: {
+          id: true,
+          restaurant_id: true,
+          shifts: {
+            where: { date: jour, entity_status: { not: EntityStatus.DELETED } },
+            select: {
+              type: true,
+              start_time: true,
+              end_time: true,
+              assignments: {
+                where: { entity_status: { not: EntityStatus.DELETED } },
+                select: { deliverer_id: true, status: true },
+              },
+            },
+          },
+        },
+      }),
+      this.prisma.restDay.findMany({
+        where: { date: jour, entity_status: { not: EntityStatus.DELETED }, ...duPerimetre },
+        select: { deliverer_id: true },
+      }),
+      this.prisma.dailyPresenceCheck.findMany({
+        where: { date: jour, response: PresenceCheckResponse.ABSENT, ...duPerimetre },
+        select: { deliverer_id: true },
+      }),
+    ]);
+    return {
+      jour,
+      plans,
+      repos: repos.map((r) => r.deliverer_id),
+      absents: absents.map((a) => a.deliverer_id),
+    };
   }
 }
