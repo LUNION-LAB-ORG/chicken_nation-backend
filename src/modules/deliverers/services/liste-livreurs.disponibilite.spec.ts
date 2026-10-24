@@ -200,9 +200,14 @@ describe('appli active ou fermée (24/10) : `appli_active` et `appli_vue_a`', ()
     expect(parId[t.awa.id]).toMatchObject({ appli_connectee: true, appli_active: true });
   });
 
-  it('réglage à 0 : règle coupée, toute appli est active', async () => {
+  it('réglage à 0 : règle coupée, toute appli peut recevoir une offre, mais son état est inconnu (null, jamais « En arrière-plan »)', async () => {
     const t = monterAppli(0);
     const { items } = await t.service.findAll({ limit: 50 } as never);
-    expect(items.every((l: any) => l.appli_active === true && l.disponibilite.etat === 'DISPONIBLE')).toBe(true);
+    expect(items.every((l: any) => l.disponibilite.etat === 'DISPONIBLE')).toBe(true);
+    expect(items.every((l: any) => l.appli_active === null && l.disponibilite.appli_active === null)).toBe(true);
+
+    const carte = await t.service.getLiveLocations({ includeOffline: true });
+    expect(carte.length).toBeGreaterThan(0);
+    expect(carte.every((l) => l.appli_active === null && l.disponibilite.appli_active === null)).toBe(true);
   });
 });

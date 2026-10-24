@@ -69,10 +69,11 @@ function presence(connectes: Set<string> | null, delivererId: string): boolean |
  * `appli_connectee` :
  *  - `appli_active` : socket ouvert ou signe de vie récent ; faux, « Appli
  *    fermée » (plus aucune offre jusqu'à sa réouverture). Vrai sans socket :
- *    appli en arrière-plan, les offres lui arrivent par notification ;
+ *    appli en arrière-plan, les offres lui arrivent par notification ; null :
+ *    règle coupée (réglage à 0), état inconnu ;
  *  - `appli_vue_a` : dernier signe de vie (position ou requête), ISO.
  */
-function etatAppli(disponibilite: { appli_active: boolean; appli_vue_a: Date | null }) {
+function etatAppli(disponibilite: { appli_active: boolean | null; appli_vue_a: Date | null }) {
   return {
     appli_active: disponibilite.appli_active,
     appli_vue_a: disponibilite.appli_vue_a?.toISOString() ?? null,
@@ -161,6 +162,7 @@ export class DeliverersService {
           etatLivreurDepuis({ ...livreur, _count }, appli, maintenant),
           maintenant,
           offer_attempts[0]?.course_id ?? null,
+          appli.appliFermeeApresS > 0,
         );
         return {
           ...livreur,
@@ -717,6 +719,7 @@ export class DeliverersService {
           etatLivreurDepuis(d, appli, now),
           now,
           d.offer_attempts[0]?.course_id ?? null,
+          appli.appliFermeeApresS > 0,
         );
 
         return {

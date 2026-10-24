@@ -128,7 +128,7 @@ export class CourseAdminController {
       'son appli est fermée (« L\'appli de ce livreur est fermée. »). Les offres d\'autres livreurs ' +
       'sur cette course sont closes. `appli_connectee` : le livreur a-t-il un socket ouvert (false : ' +
       'appli en arrière-plan, l\'offre ne lui arrive que par la notification ; null : inconnu). ' +
-      '`appli_active` : toujours vrai ici (une appli fermée est refusée).',
+      '`appli_active` : vrai (une appli fermée est refusée) ; null si la règle est coupée (réglage à 0).',
   })
   @ApiBody({ type: AssignDelivererDto })
   @Patch(':id/force-assign')
@@ -154,7 +154,8 @@ export class CourseAdminController {
       success: true,
       message: messageAffectationForcee(renvoi, appliConnectee, regleAppli),
       appli_connectee: appliConnectee,
-      appli_active: true,
+      // Règle coupée (réglage à 0) : l'appli est peut-être fermée, état inconnu.
+      appli_active: regleAppli ? true : null,
     };
   }
 

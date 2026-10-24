@@ -35,7 +35,8 @@ export class DeliverersAdminController {
       'Chaque livreur porte `disponibilite` (état par la règle unique des offres, dont ' +
       '`APPLI_FERMEE` « Appli fermée »), `appli_connectee` (socket ouvert ; null : inconnu), ' +
       '`appli_active` (socket ouvert ou signe de vie de moins de `deliverer.appli_fermee_apres_s` ' +
-      'secondes ; vrai sans socket : appli en arrière-plan) et `appli_vue_a` (dernier signe de vie, ISO).',
+      'secondes ; vrai sans socket : appli en arrière-plan ; null : règle coupée, réglage à 0) et ' +
+      '`appli_vue_a` (dernier signe de vie, ISO).',
   })
   @Get()
   @UserRoles(...ROLES_SUIVI_LIVRAISON)

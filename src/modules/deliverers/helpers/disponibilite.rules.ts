@@ -322,9 +322,10 @@ export interface DisponibiliteLivreur {
   offre_course_id: string | null;
   /**
    * Appli active : socket ouvert ou signe de vie récent. Faux : « Appli
-   * fermée », plus aucune offre jusqu'à sa réouverture.
+   * fermée », plus aucune offre jusqu'à sa réouverture. Null : règle coupée
+   * (`deliverer.appli_fermee_apres_s` à 0), état de l'appli inconnu.
    */
-  appli_active: boolean;
+  appli_active: boolean | null;
   /** Dernier signe de vie de l'appli (position ou requête), null si jamais vu. */
   appli_vue_a: Date | null;
 }
@@ -343,11 +344,16 @@ const LIBELLES: Record<EtatAffichageLivreur, string> = {
 /**
  * État d'un livreur à afficher au backoffice, calculé par la règle unique :
  * l'écran montre exactement ce que le serveur refuserait.
+ *
+ * @param regleAppli  Règle de l'appli fermée active (réglage au-dessus de 0).
+ *   Coupée, la règle tient toute appli pour active ; l'écran, lui, ne sait
+ *   pas : `appli_active` vaut null (« Appli non connectée » sans socket).
  */
 export function disponibiliteLivreur(
   l: EtatLivreur,
   maintenant: Date,
   offreCourseId: string | null = null,
+  regleAppli = true,
 ): DisponibiliteLivreur {
   const decision = peutRecevoirOffre(l, maintenant);
   const etat: EtatAffichageLivreur = decision.ok ? 'DISPONIBLE' : decision.motif;
@@ -367,7 +373,7 @@ export function disponibiliteLivreur(
     en_course: l.en_course,
     offre_en_attente: l.offre_en_attente,
     offre_course_id: l.offre_en_attente ? offreCourseId : null,
-    appli_active: l.appli_active,
+    appli_active: regleAppli ? l.appli_active : null,
     appli_vue_a: l.appli_vue_a ?? null,
   };
 }

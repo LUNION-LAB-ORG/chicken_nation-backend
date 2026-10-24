@@ -490,6 +490,8 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
         "Offre envoyée par notification seulement : l'appli du livreur n'est pas connectée en temps réel. " +
         "Demandez-lui de rouvrir l'appli.",
       appli_connectee: false,
+      // État de l'appli inconnu : le backoffice n'affiche pas « En arrière-plan ».
+      appli_active: null,
     });
   });
 
