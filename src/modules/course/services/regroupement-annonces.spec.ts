@@ -20,7 +20,7 @@
 import { CourseStatut, OrderStatus, OrderType } from '@prisma/client';
 
 import { commande, course, DonneesDispatch, livraison, livreur, RESTO } from './base-dispatch.simulee-spec';
-import { apres, AU_COMPTOIR, avant, B, MAINTENANT, monter, prete } from './banc-planificateur.simulee-spec';
+import { apres, AU_COMPTOIR, avant, B, MAINTENANT, monter, O, prete } from './banc-planificateur.simulee-spec';
 
 beforeEach(() => {
   jest.useFakeTimers({ now: MAINTENANT, doNotFake: ['nextTick', 'queueMicrotask', 'setImmediate'] });
@@ -372,6 +372,28 @@ describe('S13. refus du planificateur journalisés (PLAN_REFUS)', () => {
     jest.setSystemTime(apres(10 * 60 + 5));
     await t.passer();
     expect(t.journalDe('PLAN_REFUS')).toHaveLength(2);
+  });
+
+  it('écrits après les actions du passage, en une seule insertion : jamais avant une offre', async () => {
+    const s = horizon();
+    // C prête dans l'autre direction, D2 libre au comptoir : course créée et proposée dans ce passage.
+    const c = prete({ address: O, ready_at: avant(5) });
+    const d2 = livreur({ ...AU_COMPTOIR, last_available_at: avant(60), protocole_appli: 4 });
+    const t = monter({ ...s.donnees, commandes: [...s.donnees.commandes!, c], livreurs: [s.d1, d2] });
+    const appliquer = t.application.appliquer.bind(t.application);
+    let ecritsAvant = -1;
+    jest.spyOn(t.application, 'appliquer').mockImplementation(async (...args: Parameters<typeof appliquer>) => {
+      ecritsAvant = t.journalDe('PLAN_REFUS').length;
+      return appliquer(...args);
+    });
+    const r1 = await t.passer();
+    expect(r1?.appliquees).toEqual(expect.arrayContaining(['CREER_COURSE', 'OFFRIR']));
+    expect(ecritsAvant).toBe(0);
+    expect(t.journalDe('PLAN_REFUS').length).toBeGreaterThan(0);
+    expect(t.base.prisma.dispatchEvenement.createMany).toHaveBeenCalledTimes(1);
+    expect(t.base.prisma.dispatchEvenement.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ type: 'PLAN_REFUS' }) }),
+    );
   });
 
   it('motif qui change : une nouvelle ligne', async () => {

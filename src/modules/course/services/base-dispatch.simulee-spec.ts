@@ -361,6 +361,10 @@ export function monterBaseDispatch(donnees: DonneesDispatch = {}) {
         journal.push(ligne);
         return ligne;
       }),
+      createMany: jest.fn(async ({ data }: { data: Ligne[] }) => {
+        for (const d of data) journal.push({ id: ident('evenement'), created_at: new Date(), ...d });
+        return { count: data.length };
+      }),
       findFirst: jest.fn(async (args: Ligne = {}) => {
         const ligne = journal.find((l) => evaluer(l, args.where));
         return ligne ? projeter(ligne, args) : null;

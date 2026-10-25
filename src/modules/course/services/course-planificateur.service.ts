@@ -15,7 +15,7 @@ import {
   VersionPlanificateur,
 } from '../helpers/planification.rules';
 import { ApplicationPlanService } from './application-plan.service';
-import { DispatchJournalService } from './dispatch-journal.service';
+import { DispatchJournalService, EvenementDispatch } from './dispatch-journal.service';
 import { FRAICHEUR_COURSE_EN_LIVRAISON_MS, InstantanePlanificationService } from './instantane-planification.service';
 
 /** Demandes d'un même restaurant regroupées pendant ce délai (conception 3.12). */
@@ -209,6 +209,9 @@ export class CoursePlanificateurService implements OnModuleDestroy {
     // v1 : rien à faire tant qu'il ne reste rien de v2 (cas normal).
     if (version === 'v1' && !(await this.aDesRestesV2(restaurantId, horloge()))) return null;
 
+    // Refus du passage (PLAN_REFUS) : écrits après le passage, sans l'attendre,
+    // en une insertion. Observation seulement : jamais avant une offre.
+    let refusAEcrire: EvenementDispatch[] = [];
     const resultat = await this.sousVerrou(restaurantId, async (): Promise<ResultatPassage> => {
       const maintenant = horloge();
       const echeanceMs = Date.now() + ECHEANCE_ACTIONS_MS;
@@ -239,8 +242,8 @@ export class CoursePlanificateurService implements OnModuleDestroy {
       // repartent dans l'ancien regroupement.
       const rendues = version === 'v1' ? await this.application.rendreAuxLots(await this.commandesSansLot(restaurantId, maintenant)) : 0;
       if (rendues > 0) vide.rendues_aux_lots = rendues;
-      // Refus journalisés avant tout (passage sans action compris) : observation, aucune décision n'en dépend.
-      await this.journaliserRefus(restaurantId, plan.refus, new Set(lu.instantane.courses.map((k) => k.id)), maintenant);
+      // Refus retenus pour le journal (passage sans action compris) : aucune décision n'en dépend.
+      refusAEcrire = this.refusAJournaliser(restaurantId, plan.refus, new Set(lu.instantane.courses.map((k) => k.id)), maintenant);
       if (plan.actions.length === 0) return vide;
 
       const { maxRefusalCount } = await this.settings.load();
@@ -259,6 +262,8 @@ export class CoursePlanificateurService implements OnModuleDestroy {
         }),
       );
       return { ...vide, appliquees: applique.appliquees, abandonnees: applique.abandonnees, creees: applique.creees };
+    }).finally(() => {
+      if (refusAEcrire.length && this.journal) void this.journal.ecrireTous(refusAEcrire);
     });
 
     if (resultat) {
@@ -337,36 +342,36 @@ export class CoursePlanificateurService implements OnModuleDestroy {
    * joué). Un même refus au plus une fois par 10 min (deux serveurs : deux
    * lignes au plus). `course_id` : seulement l'identifiant d'une course lue,
    * jamais la clé d'une course du plan (`nouvelle-1`), qui reste dans
-   * `details`. Au mieux : une écriture en échec ne touche pas le passage.
+   * `details`. Lignes rendues ici, écrites après le passage en une insertion
+   * (`ecrireTous`, sans l'attendre) : le journal ne retarde jamais une offre
+   * ni les passages des autres restaurants (relecture du 25/10).
    */
-  private async journaliserRefus(
+  private refusAJournaliser(
     restaurantId: string,
     refus: readonly RefusPlanification[],
     coursesLues: ReadonlySet<string>,
     maintenant: Date,
-  ): Promise<void> {
-    if (!this.journal) return;
+  ): EvenementDispatch[] {
+    if (!this.journal) return [];
     const t = maintenant.getTime();
+    const lignes: EvenementDispatch[] = [];
     for (const x of refus) {
       if (!ESSAIS_JOURNALISES.includes(x.essai)) continue;
       const cle = [restaurantId, x.essai, x.order_id ?? x.source_id ?? '', x.course_cle, x.refus].join('|');
       const vu = this.refusJournalises.get(cle);
       if (vu !== undefined && t - vu < DELAI_REFUS_JOURNALISE_MS) continue;
       this.retenirRefus(cle, t);
-      try {
-        await this.journal.ecrire({
-          type: 'PLAN_REFUS',
-          motif: x.refus,
-          source: 'serveur',
-          restaurant_id: restaurantId,
-          course_id: coursesLues.has(x.course_cle) ? x.course_cle : null,
-          order_id: x.order_id,
-          details: { essai: x.essai, course_cle: x.course_cle, source_id: x.source_id, libelle: x.libelle },
-        });
-      } catch {
-        // Le journal n'échoue jamais ; par prudence, rien ne remonte au passage.
-      }
+      lignes.push({
+        type: 'PLAN_REFUS',
+        motif: x.refus,
+        source: 'serveur',
+        restaurant_id: restaurantId,
+        course_id: coursesLues.has(x.course_cle) ? x.course_cle : null,
+        order_id: x.order_id,
+        details: { essai: x.essai, course_cle: x.course_cle, source_id: x.source_id, libelle: x.libelle },
+      });
     }
+    return lignes;
   }
 
   /** Mémoire des refus bornée : les plus vieux d'abord, puis les plus anciens écrits. */

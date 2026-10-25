@@ -144,6 +144,34 @@ export class DispatchJournalService {
       );
     }
   }
+
+  /**
+   * Plusieurs lignes en une seule insertion (refus d'un passage du
+   * planificateur). Même règle que `ecrire` : n'échoue jamais.
+   */
+  async ecrireTous(evenements: readonly EvenementDispatch[]): Promise<void> {
+    if (evenements.length === 0) return;
+    try {
+      for (const e of evenements) this.logger.log(JSON.stringify(sansVides(e)));
+      await this.prisma.dispatchEvenement.createMany({
+        data: evenements.map((e) => ({
+          type: e.type,
+          motif: e.motif ?? null,
+          source: e.source ?? null,
+          restaurant_id: e.restaurant_id ?? null,
+          course_id: e.course_id ?? null,
+          deliverer_id: e.deliverer_id ?? null,
+          order_id: e.order_id ?? null,
+          offre_id: e.offre_id ?? null,
+          details: (e.details ?? undefined) as Prisma.InputJsonValue | undefined,
+        })),
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Écriture du journal impossible (${evenements.length} lignes ${evenements[0].type}) : ${(err as Error)?.message ?? err}`,
+      );
+    }
+  }
 }
 
 /** Ligne de journal compacte : sans les champs vides. */
