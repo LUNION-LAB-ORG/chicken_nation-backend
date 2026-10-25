@@ -30,21 +30,23 @@ import {
 import {
   actionAuJournal,
   type GestePlanning,
+  MESSAGE_CONFIRMATION_HORS_ENVOYE,
   MESSAGE_DEJA_SUR_LE_PLANNING,
+  MESSAGE_ENVOI_HORS_BROUILLON,
   MESSAGE_JOUR_HORS_PLANNING,
   MESSAGE_JOUR_SANS_REPOS,
+  MESSAGE_LIVREUR_HORS_RESTAURANT,
   MESSAGE_LIVREUR_PAS_ACTIF,
   MESSAGE_PAS_SUR_LE_PLANNING,
   MESSAGE_PLANNING_CHANGE,
   MESSAGE_PLANNING_INTROUVABLE,
+  messageChevauchement,
   messageJourDuPlanningEnCours,
-  NOM_ETAT,
   type NotificationPlanning,
   notificationDates,
   notificationJour,
   notificationRetrait,
   notificationSuppression,
-  periode,
   prevenirLesLivreurs,
   type ResumeJournal,
   resumeJournal,
@@ -178,10 +180,7 @@ export class SchedulePlanningService {
       select: { id: true, period_start: true, period_end: true, status: true },
     });
     if (overlapping) {
-      throw new BadRequestException(
-        `Le planning du ${periode(overlapping.period_start, overlapping.period_end)} ` +
-          `(${NOM_ETAT[overlapping.status]}) couvre déjà ces dates. Archivez-le ou supprimez-le d'abord.`,
-      );
+      throw new BadRequestException(messageChevauchement(overlapping));
     }
 
     // 1. Fetch livreurs candidats
@@ -507,7 +506,7 @@ export class SchedulePlanningService {
     });
     if (pris.count !== 1) {
       await this.lirePlanning(planId);
-      throw new BadRequestException('Seul un planning en brouillon peut être envoyé.');
+      throw new BadRequestException(MESSAGE_ENVOI_HORS_BROUILLON);
     }
     const updated = await this.prisma.schedulePlan.findUniqueOrThrow({ where: { id: planId } });
 
@@ -548,7 +547,7 @@ export class SchedulePlanningService {
     });
     if (!plan) throw new NotFoundException(MESSAGE_PLANNING_INTROUVABLE);
     if (plan.status !== SchedulePlanStatus.SENT) {
-      throw new BadRequestException('Seul un planning envoyé peut être confirmé.');
+      throw new BadRequestException(MESSAGE_CONFIRMATION_HORS_ENVOYE);
     }
 
     const allAssignments = plan.shifts.flatMap((s) => s.assignments);
@@ -657,7 +656,7 @@ export class SchedulePlanningService {
       },
       select: SELECT_LIVREUR_NOMME,
     });
-    if (!deliverer) throw new BadRequestException(MESSAGE_LIVREUR_PAS_ACTIF);
+    if (!deliverer) throw new BadRequestException(MESSAGE_LIVREUR_HORS_RESTAURANT);
 
     const enCours = planningQuiCouvre(await plansEnCoursQuiChevauchent(this.prisma, plan), day);
     if (enCours) throw new BadRequestException(messageJourDuPlanningEnCours(enCours));

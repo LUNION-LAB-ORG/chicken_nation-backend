@@ -11,16 +11,25 @@ import { assertCanAccessRestaurant } from 'src/modules/order/helpers/restaurant-
  * Abidjan vit en UTC toute l'année : tout est lu en UTC.
  */
 
-export const MESSAGE_PLANNING_AUTRE_RESTAURANT = "Ce planning n'est pas celui de votre restaurant.";
+// Refus montrés au backoffice : les mots d'avant (serveur ca20651, écran
+// Planning), « plan » pour un plan de la liste, « planning » quand un livreur
+// y est ajouté ou retiré.
+export const MESSAGE_PLANNING_AUTRE_RESTAURANT = "Ce plan n'est pas celui de votre restaurant.";
 export const MESSAGE_GENERER_AUTRE_RESTAURANT =
-  'Vous ne pouvez faire un planning que pour votre restaurant.';
-export const MESSAGE_PLANNING_INTROUVABLE = "Ce planning n'existe plus.";
-export const MESSAGE_PLANNING_CHANGE = 'Ce planning vient de changer. Rechargez la page.';
+  'Vous ne pouvez générer un plan que pour votre restaurant.';
+export const MESSAGE_PLANNING_INTROUVABLE = 'Plan introuvable.';
+export const MESSAGE_PLANNING_CHANGE = 'Ce plan vient de changer. Rechargez la page.';
 export const MESSAGE_PAS_SUR_LE_PLANNING = "Ce livreur n'est pas sur ce planning.";
-export const MESSAGE_DEJA_SUR_LE_PLANNING = 'Ce livreur est déjà sur ce planning.';
-export const MESSAGE_LIVREUR_PAS_ACTIF = "Ce livreur n'est pas actif dans ce restaurant.";
-export const MESSAGE_JOUR_HORS_PLANNING = "Ce jour n'est pas dans le planning.";
+export const MESSAGE_DEJA_SUR_LE_PLANNING = 'Ce livreur est déjà présent dans ce planning.';
+/** Ajout d'un livreur au plan. */
+export const MESSAGE_LIVREUR_PAS_ACTIF =
+  'Livreur introuvable, inactif, ou non rattaché au restaurant de ce plan.';
+/** Jour d'un livreur changé. */
+export const MESSAGE_LIVREUR_HORS_RESTAURANT = 'Livreur introuvable ou non rattaché à ce restaurant';
+export const MESSAGE_JOUR_HORS_PLANNING = 'Date hors de la période du plan';
 export const MESSAGE_JOUR_SANS_REPOS = 'Repos interdit ce jour-là : jour de forte activité.';
+export const MESSAGE_ENVOI_HORS_BROUILLON = 'Seul un plan brouillon peut être envoyé.';
+export const MESSAGE_CONFIRMATION_HORS_ENVOYE = 'Seul un plan envoyé peut être confirmé.';
 
 /** Nom d'un état dans les refus montrés à l'écran (section 3.3). */
 export const NOM_ETAT: Record<SchedulePlanStatus, string> = {
@@ -40,8 +49,23 @@ export function messageJourDuPlanningEnCours(autre: {
   period_end: Date;
 }): string {
   return (
-    `Ce jour est dans le planning du ${periode(autre.period_start, autre.period_end)} ` +
-    `(${NOM_ETAT[autre.status]}). Changez-le depuis ce planning.`
+    `Ce jour est dans le plan (${periodePlan(autre.period_start, autre.period_end)}, ` +
+    `${NOM_ETAT[autre.status]}). Changez-le depuis ce plan.`
+  );
+}
+
+/**
+ * Refus de générer un plan sur des dates qu'un autre plan couvre déjà : le
+ * texte d'avant, avec la période et l'état lisibles.
+ */
+export function messageChevauchement(autre: {
+  status: SchedulePlanStatus;
+  period_start: Date;
+  period_end: Date;
+}): string {
+  return (
+    `Chevauchement avec le plan (${periodePlan(autre.period_start, autre.period_end)}, ` +
+    `${NOM_ETAT[autre.status]}). Archive ou supprime ce plan avant d'en générer un nouveau pour cette période.`
   );
 }
 
@@ -106,9 +130,19 @@ export function jourCourt(d: Date): string {
   return `${JOURS_COURTS[d.getUTCDay()]} ${dateCourte(d)}`;
 }
 
-/** « 27/10 au 09/11 » */
+/** « 27/10 au 09/11 » (notifications au livreur) */
 export function periode(debut: Date, fin: Date): string {
   return `${dateCourte(debut)} au ${dateCourte(fin)}`;
+}
+
+/** Mois abrégés comme date-fns en français, le format d'avant au backoffice. */
+const MOIS_COURTS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+
+const jourEtMois = (d: Date): string => `${deux(d.getUTCDate())} ${MOIS_COURTS[d.getUTCMonth()]}`;
+
+/** « 27 oct. → 09 nov. 2026 » : période d'un plan, comme l'écran Planning du backoffice. */
+export function periodePlan(debut: Date, fin: Date): string {
+  return `${jourEtMois(debut)} → ${jourEtMois(fin)} ${fin.getUTCFullYear()}`;
 }
 
 interface LivreurNomme {
@@ -135,7 +169,7 @@ export function deRestaurant(nom: string | null | undefined): string {
 }
 
 const ADJECTIF_ETAT: Record<SchedulePlanStatus, string> = {
-  [SchedulePlanStatus.DRAFT]: 'en brouillon',
+  [SchedulePlanStatus.DRAFT]: 'brouillon',
   [SchedulePlanStatus.SENT]: 'envoyé',
   [SchedulePlanStatus.CONFIRMED]: 'confirmé',
   [SchedulePlanStatus.ARCHIVED]: 'archivé',
@@ -148,11 +182,11 @@ export interface PlanningNomme {
   restaurant?: { name?: string | null } | null;
 }
 
-/** « Planning archivé d'Angré (13/10 au 26/10) » */
+/** « Plan archivé d'Angré (13 oct. → 26 oct. 2026) », les mots de l'écran Planning. */
 function enTeteJournal(plan: PlanningNomme): string {
   return (
-    `Planning ${ADJECTIF_ETAT[plan.status]} ${deRestaurant(plan.restaurant?.name)} ` +
-    `(${periode(plan.period_start, plan.period_end)})`
+    `Plan ${ADJECTIF_ETAT[plan.status]} ${deRestaurant(plan.restaurant?.name)} ` +
+    `(${periodePlan(plan.period_start, plan.period_end)})`
   );
 }
 
@@ -165,8 +199,8 @@ export type ResumeJournal =
 
 /**
  * Phrase du journal d'audit :
- *  « Planning archivé d'Angré (13/10 au 26/10) : Koffi Yao en repos le 21/10 »,
- *  « Planning confirmé d'Angré (27/10 au 09/11) supprimé ».
+ *  « Plan archivé d'Angré (13 oct. → 26 oct. 2026) : Koffi Yao en repos le 21/10 »,
+ *  « Plan confirmé d'Angré (27 oct. → 09 nov. 2026) supprimé ».
  */
 export function resumeJournal(plan: PlanningNomme, r: ResumeJournal): string {
   const tete = enTeteJournal(plan);
@@ -178,7 +212,7 @@ export function resumeJournal(plan: PlanningNomme, r: ResumeJournal): string {
     case 'retrait':
       return `${tete} : ${nomLivreur(r.livreur)} ${accorde('retiré', r.livreur)}`;
     case 'dates':
-      return `${tete} : dates changées pour le ${periode(r.debut, r.fin)}`;
+      return `${tete} : régénéré pour les nouvelles dates (${periodePlan(r.debut, r.fin)})`;
     case 'suppression':
       return `${tete} supprimé`;
   }

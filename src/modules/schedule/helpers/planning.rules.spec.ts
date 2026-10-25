@@ -8,12 +8,15 @@ import {
   type GestePlanning,
   jourCourt,
   MESSAGE_PLANNING_AUTRE_RESTAURANT,
+  messageChevauchement,
+  messageJourDuPlanningEnCours,
   nomLivreur,
   notificationDates,
   notificationJour,
   notificationRetrait,
   notificationSuppression,
   periode,
+  periodePlan,
   planningsDuRestaurant,
   prevenirLesLivreurs,
   resumeJournal,
@@ -60,6 +63,18 @@ describe('textes', () => {
     expect(jourCourt(jour('2026-10-26'))).toBe('Lun. 26/10');
     expect(jourCourt(jour('2026-11-01'))).toBe('Dim. 01/11');
     expect(periode(jour('2026-10-27'), jour('2026-11-09'))).toBe('27/10 au 09/11');
+    expect(periodePlan(jour('2026-10-27'), jour('2026-11-09'))).toBe('27 oct. → 09 nov. 2026');
+    expect(periodePlan(jour('2026-12-28'), jour('2027-01-10'))).toBe('28 déc. → 10 janv. 2027');
+  });
+
+  it('refus du backoffice : les mots d’avant, « plan » et la période de l’écran Planning', () => {
+    const autre = { status: SENT, period_start: jour('2026-10-27'), period_end: jour('2026-11-09') };
+    expect(messageChevauchement(autre)).toBe(
+      "Chevauchement avec le plan (27 oct. → 09 nov. 2026, Envoyé). Archive ou supprime ce plan avant d'en générer un nouveau pour cette période.",
+    );
+    expect(messageJourDuPlanningEnCours({ ...autre, status: CONFIRMED })).toBe(
+      'Ce jour est dans le plan (27 oct. → 09 nov. 2026, Confirmé). Changez-le depuis ce plan.',
+    );
   });
 
   it('le jour est lu en UTC (Abidjan), même tard le soir', () => {
@@ -85,33 +100,33 @@ describe('textes', () => {
     const awa = { first_name: 'Awa', last_name: 'Koné', genre: Genre.FEMME };
     const plan = angre(ARCHIVED);
     expect(resumeJournal(plan, { geste: 'jour', livreur: koffi, mode: 'REST', date: jour('2026-10-21') })).toBe(
-      "Planning archivé d'Angré (13/10 au 26/10) : Koffi Yao en repos le 21/10",
+      "Plan archivé d'Angré (13 oct. → 26 oct. 2026) : Koffi Yao en repos le 21/10",
     );
     expect(resumeJournal(plan, { geste: 'jour', livreur: koffi, mode: 'WORK', date: jour('2026-10-21') })).toBe(
-      "Planning archivé d'Angré (13/10 au 26/10) : Koffi Yao au travail le 21/10",
+      "Plan archivé d'Angré (13 oct. → 26 oct. 2026) : Koffi Yao au travail le 21/10",
     );
     expect(resumeJournal(plan, { geste: 'retrait', livreur: koffi })).toBe(
-      "Planning archivé d'Angré (13/10 au 26/10) : Koffi Yao retiré",
+      "Plan archivé d'Angré (13 oct. → 26 oct. 2026) : Koffi Yao retiré",
     );
     expect(resumeJournal(plan, { geste: 'retrait', livreur: awa })).toBe(
-      "Planning archivé d'Angré (13/10 au 26/10) : Awa Koné retirée",
+      "Plan archivé d'Angré (13 oct. → 26 oct. 2026) : Awa Koné retirée",
     );
     expect(resumeJournal(plan, { geste: 'ajout', livreur: awa })).toBe(
-      "Planning archivé d'Angré (13/10 au 26/10) : Awa Koné ajoutée",
+      "Plan archivé d'Angré (13 oct. → 26 oct. 2026) : Awa Koné ajoutée",
     );
     expect(resumeJournal(plan, { geste: 'ajout', livreur: { first_name: 'Ali', last_name: null, genre: null } })).toBe(
-      "Planning archivé d'Angré (13/10 au 26/10) : Ali ajouté",
+      "Plan archivé d'Angré (13 oct. → 26 oct. 2026) : Ali ajouté",
     );
     expect(resumeJournal(plan, { geste: 'dates', debut: jour('2026-10-14'), fin: jour('2026-10-27') })).toBe(
-      "Planning archivé d'Angré (13/10 au 26/10) : dates changées pour le 14/10 au 27/10",
+      "Plan archivé d'Angré (13 oct. → 26 oct. 2026) : régénéré pour les nouvelles dates (14 oct. → 27 oct. 2026)",
     );
-    expect(resumeJournal(plan, { geste: 'suppression' })).toBe('Planning archivé d\'Angré (13/10 au 26/10) supprimé');
+    expect(resumeJournal(plan, { geste: 'suppression' })).toBe('Plan archivé d\'Angré (13 oct. → 26 oct. 2026) supprimé');
     expect(
       resumeJournal(
         { ...angre(CONFIRMED), period_start: jour('2026-10-27'), period_end: jour('2026-11-09') },
         { geste: 'suppression' },
       ),
-    ).toBe("Planning confirmé d'Angré (27/10 au 09/11) supprimé");
+    ).toBe("Plan confirmé d'Angré (27 oct. → 09 nov. 2026) supprimé");
   });
 
   it('notifications au livreur : type, titre et texte de la conception', () => {

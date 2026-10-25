@@ -66,9 +66,9 @@ describe.each(ETATS)('planning %s', (statut) => {
     plan = b.planningAngre(statut);
   });
 
-  const enTete = `Planning ${
-    { DRAFT: 'en brouillon', SENT: 'envoyé', CONFIRMED: 'confirmé', ARCHIVED: 'archivé' }[statut]
-  } d'Angré (26/10 au 08/11)`;
+  const enTete = `Plan ${
+    { DRAFT: 'brouillon', SENT: 'envoyé', CONFIRMED: 'confirmé', ARCHIVED: 'archivé' }[statut]
+  } d'Angré (26 oct. → 08 nov. 2026)`;
 
   describe('changer un jour', () => {
     it('travail → repos : affectations du jour retirées, repos posé par le restaurant', async () => {
@@ -159,7 +159,7 @@ describe.each(ETATS)('planning %s', (statut) => {
     it('jour hors du planning : refus', async () => {
       await expect(
         b.controleur.setDelivererDay(b.requete(ADMIN), plan.id, KOFFI, { date: '2026-11-09', mode: 'WORK' }),
-      ).rejects.toThrow("Ce jour n'est pas dans le planning.");
+      ).rejects.toThrow('Date hors de la période du plan');
     });
   });
 
@@ -204,13 +204,13 @@ describe.each(ETATS)('planning %s', (statut) => {
     it('déjà sur le planning, ou livreur inactif ou d’un autre restaurant : refus', async () => {
       const req = b.requete(ADMIN, 'POST');
       await expect(b.controleur.addDeliverer(req, plan.id, KOFFI)).rejects.toThrow(
-        'Ce livreur est déjà sur ce planning.',
+        'Ce livreur est déjà présent dans ce planning.',
       );
       await expect(b.controleur.addDeliverer(req, plan.id, SUSPENDU)).rejects.toThrow(
-        "Ce livreur n'est pas actif dans ce restaurant.",
+        'Livreur introuvable, inactif, ou non rattaché au restaurant de ce plan.',
       );
       await expect(b.controleur.addDeliverer(req, plan.id, LIVREUR_B)).rejects.toThrow(
-        "Ce livreur n'est pas actif dans ce restaurant.",
+        'Livreur introuvable, inactif, ou non rattaché au restaurant de ce plan.',
       );
       expect(b.push.notifyPlanSent).not.toHaveBeenCalled();
     });
@@ -331,7 +331,7 @@ describe.each(ETATS)('planning %s', (statut) => {
           expect.objectContaining({
             action: 'PLANNING_ARCHIVE_MODIFIE',
             entity_id: plan.id,
-            summary: `${enTete} : dates changées pour le 02/11 au 15/11`,
+            summary: `${enTete} : régénéré pour les nouvelles dates (02 nov. → 15 nov. 2026)`,
           }),
         );
       } else {
@@ -452,7 +452,7 @@ describe('transitions : prises atomiques', () => {
     const plan = b.planningAngre(DRAFT);
     await b.controleur.sendPlan(b.requete(MANAGER_A), plan.id);
     await expect(b.controleur.sendPlan(b.requete(MANAGER_A), plan.id)).rejects.toThrow(
-      'Seul un planning en brouillon peut être envoyé.',
+      'Seul un plan brouillon peut être envoyé.',
     );
     expect(b.db.plans[0].status).toBe(SENT);
     expect(b.push.notifyPlanSent).toHaveBeenCalledTimes(2); // Koffi et Ali
@@ -464,7 +464,7 @@ describe('transitions : prises atomiques', () => {
     const confirme = await b.controleur.confirmPlan(b.requete(ADMIN), plan.id);
     expect(confirme.status).toBe(CONFIRMED);
     await expect(b.controleur.confirmPlan(b.requete(ADMIN), plan.id)).rejects.toThrow(
-      'Seul un planning envoyé peut être confirmé.',
+      'Seul un plan envoyé peut être confirmé.',
     );
   });
 
@@ -503,7 +503,7 @@ describe('transitions : prises atomiques', () => {
         return lu;
       });
     await expect(b.controleur.deletePlan(b.requete(ADMIN, 'DELETE'), plan.id)).rejects.toThrow(
-      new ConflictException('Ce planning vient de changer. Rechargez la page.'),
+      new ConflictException('Ce plan vient de changer. Rechargez la page.'),
     );
     expect(b.db.plans).toHaveLength(1);
     expect(b.push.notifyPlanModifie).not.toHaveBeenCalled();
@@ -623,7 +623,7 @@ describe('cloisonnement par restaurant', () => {
   it('planning inconnu : 404', async () => {
     await expect(
       b.controleur.getPlanDetail(b.requete(ADMIN, 'GET'), '00000000-0000-4000-8000-000000000000'),
-    ).rejects.toThrow(new NotFoundException("Ce planning n'existe plus."));
+    ).rejects.toThrow(new NotFoundException('Plan introuvable.'));
   });
 });
 

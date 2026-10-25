@@ -184,7 +184,7 @@ describe('planning archivé qui chevauche le planning en cours du restaurant', (
     });
   });
 
-  const MESSAGE = 'Ce jour est dans le planning du 02/11 au 15/11 (Confirmé). Changez-le depuis ce planning.';
+  const MESSAGE = 'Ce jour est dans le plan (02 nov. → 15 nov. 2026, Confirmé). Changez-le depuis ce plan.';
 
   it('archivé, jour du planning en cours passé au travail : refus qui nomme ce planning, son repos reste', async () => {
     await expect(
