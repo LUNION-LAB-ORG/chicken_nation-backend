@@ -76,6 +76,13 @@ export type TypeEvenementDispatch =
   | 'TURBO_PLANIFIE'
   /** Action abandonnée : la course ou la commande a changé entre la lecture et l'écriture. */
   | 'ACTION_ABANDONNEE'
+  /**
+   * Refus du planificateur (ajout, fusion, retenue), observation seulement :
+   * `motif` = MotifRefusPlanification ; `details.essai`, `details.course_cle`
+   * (clé du plan), `details.source_id` (course absorbée d'une fusion),
+   * `details.libelle`. Un même refus au plus une fois par 10 min et par serveur.
+   */
+  | 'PLAN_REFUS'
   /** Fin de préparation estimée comparée à la réelle (commande prête). */
   | 'PREPARATION_MESUREE'
   /** Arrivée au restaurant déduite d'une position (appli en arrière-plan). */

@@ -302,3 +302,56 @@ describe('S12. retenue reposée pour une commande entrée en préparation après
     expect(t.push.notifyCourseAttente).not.toHaveBeenCalled();
   });
 });
+
+describe('S13. refus du planificateur journalisés (PLAN_REFUS)', () => {
+  /** K au comptoir avec A ; B en cuisine pour 30 min (trajet court) : refus HORIZON, aucune action. */
+  function horizon() {
+    const d1 = livreur({ ...AU_COMPTOIR, last_available_at: null, protocole_appli: 4 });
+    const a = prete({ ready_at: avant(20) });
+    const b = enCuisine(30 * 60, 60);
+    const k = course({ statut: CourseStatut.AT_RESTAURANT, deliverer_id: d1.id, assigned_at: avant(200), at_restaurant_at: avant(100) });
+    const donnees: DonneesDispatch = {
+      commandes: [a, b],
+      courses: [k],
+      livraisons: [livraison({ course_id: k.id, order_id: a.id })],
+      livreurs: [d1],
+    };
+    return { d1, a, b, k, donnees };
+  }
+
+  it('passage sans action : le refus est écrit ; le même refus au passage suivant, non ; 10 min plus tard, de nouveau', async () => {
+    const s = horizon();
+    const t = monter(s.donnees);
+    const r1 = await t.passer();
+    expect(r1?.appliquees).toEqual([]);
+    expect(t.journalDe('PLAN_REFUS')).toEqual([
+      expect.objectContaining({
+        motif: 'HORIZON',
+        source: 'serveur',
+        restaurant_id: RESTO,
+        order_id: s.b.id,
+        course_id: s.k.id,
+        details: expect.objectContaining({ essai: 'RETENUE', course_cle: s.k.id, source_id: null }),
+      }),
+    ]);
+    jest.setSystemTime(apres(10));
+    await t.passer();
+    expect(t.journalDe('PLAN_REFUS')).toHaveLength(1);
+    jest.setSystemTime(apres(10 * 60 + 5));
+    await t.passer();
+    expect(t.journalDe('PLAN_REFUS')).toHaveLength(2);
+  });
+
+  it('motif qui change : une nouvelle ligne', async () => {
+    const s = horizon();
+    const d2 = livreur({ ...AU_COMPTOIR, last_available_at: avant(60), protocole_appli: 4 });
+    const t = monter({ ...s.donnees, livreurs: [s.d1] });
+    await t.passer();
+    // B annoncée dans 9 min (trajet long pour D1), D2 libre au comptoir la prendrait seule.
+    t.base.livreurs.push(d2);
+    s.b.estimated_preparation_time = apres(10 + 9 * 60);
+    jest.setSystemTime(apres(10));
+    await t.passer();
+    expect(t.journalDe('PLAN_REFUS').map((l) => l.motif)).toEqual(['HORIZON', 'AUTRE_LIVREUR_LIBRE']);
+  });
+});

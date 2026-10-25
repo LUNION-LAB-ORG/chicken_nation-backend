@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, Optional } from '@nestjs/common';
 import { CourseStatut, DeliveryService, DeliveryStatut, EntityStatus, OrderStatus, OrderType, Prisma } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -10,10 +10,12 @@ import {
   planificateurDuRestaurant,
   planifier,
   PlanRestaurant,
+  RefusPlanification,
   TypeActionPlanification,
   VersionPlanificateur,
 } from '../helpers/planification.rules';
 import { ApplicationPlanService } from './application-plan.service';
+import { DispatchJournalService } from './dispatch-journal.service';
 import { FRAICHEUR_COURSE_EN_LIVRAISON_MS, InstantanePlanificationService } from './instantane-planification.service';
 
 /** Demandes d'un même restaurant regroupées pendant ce délai (conception 3.12). */
@@ -47,6 +49,15 @@ const NOUVELLES_DEMANDES_MAX = 10;
  * comptoir attendait d'autant son « Tu peux partir »).
  */
 export const MARGE_REVEIL_RETENUE_MS = 300;
+/**
+ * Journal des refus (PLAN_REFUS) : un même refus (restaurant, essai,
+ * commande ou course essayée, course cible, motif) au plus une fois par
+ * 10 min et par serveur. Mémoire bornée à 5 000 refus.
+ */
+export const DELAI_REFUS_JOURNALISE_MS = 10 * 60_000;
+const REFUS_JOURNALISES_MAX = 5000;
+/** Essais dont les refus sont journalisés : ceux qui disent pourquoi une commande n'a pas rejoint une course. */
+const ESSAIS_JOURNALISES: readonly RefusPlanification['essai'][] = ['AJOUT', 'FUSION', 'RETENUE'];
 
 export interface ResultatPassage {
   restaurant_id: string;
@@ -111,12 +122,15 @@ export class CoursePlanificateurService implements OnModuleDestroy {
   private readonly minuteursNouvelleDemande = new Set<NodeJS.Timeout>();
   /** Réveil programmé à la prochaine échéance de retenue, par restaurant (ce serveur). */
   private readonly reveils = new Map<string, { a: number; minuteur: NodeJS.Timeout }>();
+  /** Refus déjà journalisés (clé du refus → heure), ce serveur. */
+  private readonly refusJournalises = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly settings: CourseSettingsHelper,
     private readonly instantanes: InstantanePlanificationService,
     private readonly application: ApplicationPlanService,
+    @Optional() private readonly journal?: DispatchJournalService,
   ) {}
 
   onModuleDestroy() {
@@ -225,6 +239,8 @@ export class CoursePlanificateurService implements OnModuleDestroy {
       // repartent dans l'ancien regroupement.
       const rendues = version === 'v1' ? await this.application.rendreAuxLots(await this.commandesSansLot(restaurantId, maintenant)) : 0;
       if (rendues > 0) vide.rendues_aux_lots = rendues;
+      // Refus journalisés avant tout (passage sans action compris) : observation, aucune décision n'en dépend.
+      await this.journaliserRefus(restaurantId, plan.refus, new Set(lu.instantane.courses.map((k) => k.id)), maintenant);
       if (plan.actions.length === 0) return vide;
 
       const { maxRefusalCount } = await this.settings.load();
@@ -314,6 +330,56 @@ export class CoursePlanificateurService implements OnModuleDestroy {
     }, a - maintenant + MARGE_REVEIL_RETENUE_MS);
     minuteur.unref?.();
     this.reveils.set(restaurantId, { a, minuteur });
+  }
+
+  /**
+   * PLAN_REFUS (essai du 25/10 : on ne pouvait pas savoir quel refus avait
+   * joué). Un même refus au plus une fois par 10 min (deux serveurs : deux
+   * lignes au plus). `course_id` : seulement l'identifiant d'une course lue,
+   * jamais la clé d'une course du plan (`nouvelle-1`), qui reste dans
+   * `details`. Au mieux : une écriture en échec ne touche pas le passage.
+   */
+  private async journaliserRefus(
+    restaurantId: string,
+    refus: readonly RefusPlanification[],
+    coursesLues: ReadonlySet<string>,
+    maintenant: Date,
+  ): Promise<void> {
+    if (!this.journal) return;
+    const t = maintenant.getTime();
+    for (const x of refus) {
+      if (!ESSAIS_JOURNALISES.includes(x.essai)) continue;
+      const cle = [restaurantId, x.essai, x.order_id ?? x.source_id ?? '', x.course_cle, x.refus].join('|');
+      const vu = this.refusJournalises.get(cle);
+      if (vu !== undefined && t - vu < DELAI_REFUS_JOURNALISE_MS) continue;
+      this.retenirRefus(cle, t);
+      try {
+        await this.journal.ecrire({
+          type: 'PLAN_REFUS',
+          motif: x.refus,
+          source: 'serveur',
+          restaurant_id: restaurantId,
+          course_id: coursesLues.has(x.course_cle) ? x.course_cle : null,
+          order_id: x.order_id,
+          details: { essai: x.essai, course_cle: x.course_cle, source_id: x.source_id, libelle: x.libelle },
+        });
+      } catch {
+        // Le journal n'échoue jamais ; par prudence, rien ne remonte au passage.
+      }
+    }
+  }
+
+  /** Mémoire des refus bornée : les plus vieux d'abord, puis les plus anciens écrits. */
+  private retenirRefus(cle: string, t: number): void {
+    this.refusJournalises.delete(cle);
+    if (this.refusJournalises.size >= REFUS_JOURNALISES_MAX) {
+      for (const [c, vu] of this.refusJournalises) if (t - vu >= DELAI_REFUS_JOURNALISE_MS) this.refusJournalises.delete(c);
+      for (const c of this.refusJournalises.keys()) {
+        if (this.refusJournalises.size < REFUS_JOURNALISES_MAX) break;
+        this.refusJournalises.delete(c);
+      }
+    }
+    this.refusJournalises.set(cle, t);
   }
 
   /** Repli v1 : commandes prêtes de la flotte interne sans lot ni course depuis plus d'une minute. */

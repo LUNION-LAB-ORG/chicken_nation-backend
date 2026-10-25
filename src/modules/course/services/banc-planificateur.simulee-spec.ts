@@ -157,7 +157,7 @@ export function monter(donnees: DonneesDispatch, options: Options = {}) {
     regroupement as never,
     depart,
   );
-  const nouveauPlanificateur = () => new CoursePlanificateurService(base.prisma, settings, instantanes, application);
+  const nouveauPlanificateur = () => new CoursePlanificateurService(base.prisma, settings, instantanes, application, journal);
   const planificateur = nouveauPlanificateur();
   const requetes = new CourseQueryService(base.prisma, settings);
   const cartes = { getDirections: jest.fn(async () => null) };
