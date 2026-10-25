@@ -176,7 +176,8 @@ export class CourseDelivererController {
     description:
       'Seulement une livraison du livreur connecté encore à faire (PENDING, IN_ROUTE, ARRIVED), course ' +
       'en livraison, comme démarrer, arrivé et confirmer : 403 « Cette livraison ne vous est pas ' +
-      'affectée » sinon, 400 si la course n\'est pas en livraison ou la livraison déjà terminée.',
+      'affectée » sinon, 400 si la course n\'est pas en livraison ou la livraison déjà terminée. ' +
+      'Rejeu (sa livraison déjà en échec : réponse perdue, double toucher) : rendue telle quelle.',
   })
   @ApiBody({ type: FailDeliveryDto })
   @Patch('deliveries/:deliveryId/fail')

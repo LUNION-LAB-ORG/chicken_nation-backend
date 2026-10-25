@@ -46,8 +46,9 @@ export interface ResultatAnnulationAuto {
  *    réservation atomique).
  *
  * Journal `ANNULATION_AUTO_COMMANDES_GARDEES`. L'annulation MANUELLE
- * (administration, livreur) passe par `cancelCourse` : elle n'annule pas non
- * plus les commandes et relance celles qui ne sont pas livrées.
+ * (administration ; le livreur n'a plus de route depuis le 25/10) passe par
+ * `cancelCourse` : elle n'annule pas non plus les commandes et relance celles
+ * qui ne sont pas livrées.
  */
 @Injectable()
 export class AnnulationAutoService {

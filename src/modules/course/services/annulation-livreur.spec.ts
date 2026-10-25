@@ -107,6 +107,28 @@ describe('annulation par le livreur (garde du service, route retirée le 25/10)'
     expect(c.statut).toBe(CourseStatut.PENDING_ASSIGNMENT);
   });
 
+  it('annulation « deliverer » sans identifiant de livreur : 403 avant toute écriture', async () => {
+    // La route est retirée, la garde reste dans le service. Sans elle, la
+    // condition `deliverer_id: undefined` ne filtre rien pour Prisma : la
+    // course de n'importe quel livreur serait annulée.
+    const a = livreur();
+    const { course: c, commandes, livraisons } = courseAvecCommandes(
+      { statut: CourseStatut.IN_DELIVERY, deliverer_id: a.id },
+      [OrderStatus.PICKED_UP],
+    );
+    const t = monter({ livreurs: [a], courses: [c], commandes, livraisons });
+
+    const refus = t.actions.cancelCourse(c.id, 'deliverer', { reason: 'x' } as never);
+    await expect(refus).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(refus).rejects.toThrow(MESSAGE_COURSE_PAS_A_TOI);
+
+    expect(t.prisma.$transaction).not.toHaveBeenCalled();
+    expect(c).toMatchObject({ statut: CourseStatut.IN_DELIVERY, cancelled_at: null });
+    expect(livraisons[0].statut).toBe(DeliveryStatut.PENDING);
+    expect(commandes[0].status).toBe(OrderStatus.PICKED_UP);
+    expect(t.courseEvent.courseCancelled).not.toHaveBeenCalled();
+  });
+
   it.each([CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT, CourseStatut.IN_DELIVERY])(
     'le livreur A annule SA course (%s) : annulée comme avant, par « deliverer », sans push à lui-même',
     async (statut) => {
