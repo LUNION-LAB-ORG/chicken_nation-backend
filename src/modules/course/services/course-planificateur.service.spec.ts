@@ -743,6 +743,35 @@ describe('lots sous v2 (5.5)', () => {
 
     expect(await service.libererLotsV2({ version: 'v1', restaurants: [], refusees: [] })).toEqual([]);
   });
+
+  it('lot Turbo dont une commande interne a été annulée : jugé sur ses commandes prêtes, il reste à Turbo', async () => {
+    const base = monterBaseDispatch({});
+    const lots = [
+      {
+        id: 'lot-mixte',
+        restaurant_id: RESTO,
+        status: CourseBatchStatus.PENDING,
+        orders: [
+          { id: 'o1', status: OrderStatus.CANCELLED, delivery_service: DeliveryService.CHICKEN_NATION },
+          { id: 'o2', status: OrderStatus.READY, delivery_service: DeliveryService.TURBO },
+        ],
+      },
+    ];
+    const prisma = {
+      ...base.prisma,
+      courseBatch: {
+        findMany: jest.fn(async () => lots),
+        updateMany: jest.fn(async () => ({ count: 1 })),
+      },
+      order: { updateMany: jest.fn(async () => ({ count: 1 })) },
+    };
+    const service = new LotsV2Service(prisma as never, {} as never);
+
+    expect(await service.libererLotsV2({ version: 'v2', restaurants: [], refusees: [] })).toEqual([]);
+
+    expect(prisma.courseBatch.updateMany).not.toHaveBeenCalled();
+    expect(prisma.order.updateMany).not.toHaveBeenCalled();
+  });
 });
 
 describe('appli fermée (24/10) : le planificateur ne la choisit jamais, la reprend dès sa réouverture', () => {
