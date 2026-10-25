@@ -721,8 +721,14 @@ export class ApplicationPlanService {
         id: a.course_id,
         statut: { in: STATUTS_AVEC_LIVREUR },
         parti_at: null,
-        // Une retenue ne peut que diminuer ; terminée, elle ne revient jamais.
-        OR: [{ retenue_jusqua: null }, { retenue_jusqua: { gt: now, gte: a.jusqua } }],
+        // Une retenue ne peut que diminuer ; terminée, elle ne revient que
+        // pour une commande entrée en préparation après sa fin, et seulement
+        // si elle n'a pas bougé depuis la lecture (claim atomique).
+        OR: [
+          { retenue_jusqua: null },
+          { retenue_jusqua: { gt: now, gte: a.jusqua } },
+          ...(a.reprise_de ? [{ retenue_jusqua: a.reprise_de }] : []),
+        ],
       },
       data: { retenue_jusqua: a.jusqua, commandes_attendues: commandesAttenduesAEcrire(a.attendues) as unknown as Prisma.InputJsonValue },
     });
@@ -744,8 +750,9 @@ export class ApplicationPlanService {
         libelle: a.libelle,
       },
     });
-    // Première retenue de la course : le livreur sera prévenu (vibration, notification).
-    if (!avant?.retenue_jusqua) {
+    // Première retenue de la course, ou retenue terminée reposée : le livreur
+    // sera prévenu (vibration, notification).
+    if (!avant?.retenue_jusqua || avant.retenue_jusqua.getTime() <= now.getTime()) {
       p.retenues.set(a.course_id, { jusqua: a.jusqua, attendues: a.attendues.map((x) => x.reference) });
     }
   }

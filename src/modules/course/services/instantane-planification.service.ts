@@ -248,6 +248,7 @@ export class InstantanePlanificationService {
       ready_at: o.ready_at,
       heure_programmee: heureProgrammee(o.date, o.time),
       preparation: estimations.get(o.id) ?? null,
+      prepared_at: o.prepared_at,
     });
 
     const commandes = lignesCommandes.map(commandePlanif);

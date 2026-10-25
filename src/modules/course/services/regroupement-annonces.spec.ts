@@ -250,3 +250,55 @@ describe('S11. retenue levée : le bon texte selon que le livreur a déjà ses s
     expect(t.push.notifyCommandeRemise).not.toHaveBeenCalled();
   });
 });
+
+describe('S12. retenue reposée pour une commande entrée en préparation après sa fin', () => {
+  /** K au comptoir, retenue levée il y a 30 s ; C entrée en cuisine il y a 10 s, finie dans 2 min. */
+  function levee() {
+    const d1 = livreur({ ...AU_COMPTOIR, last_available_at: null, protocole_appli: 4 });
+    const a = prete({ ready_at: avant(60) });
+    const c = enCuisine(120, 10);
+    const k = course({
+      statut: CourseStatut.AT_RESTAURANT,
+      deliverer_id: d1.id,
+      assigned_at: avant(300),
+      at_restaurant_at: avant(200),
+      created_at: avant(400),
+      retenue_jusqua: avant(30),
+      commandes_attendues: [],
+    });
+    const donnees: DonneesDispatch = {
+      commandes: [a, c],
+      courses: [k],
+      livraisons: [livraison({ course_id: k.id, order_id: a.id })],
+      livreurs: [d1],
+    };
+    return { d1, a, c, k, donnees };
+  }
+
+  it('écrite, le livreur est prévenu', async () => {
+    const s = levee();
+    const t = monter(s.donnees);
+    await t.passer();
+    expect(s.k.retenue_jusqua).toEqual(apres(120));
+    expect(s.k.commandes_attendues).toEqual([expect.objectContaining({ order_id: s.c.id })]);
+    expect(t.journalDe('COURSE_RETENUE')).toHaveLength(1);
+    expect(t.push.notifyCourseAttente).toHaveBeenCalledWith(
+      expect.objectContaining({ delivererId: s.d1.id, titre: 'Attends 2 min', corps: 'Départ 15 h 32' }),
+    );
+  });
+
+  it('la retenue a bougé entre la lecture et l’écriture : abandonnée (COURSE_CHANGEE), rien d’écrit', async () => {
+    const s = levee();
+    const t = monter(s.donnees);
+    const lire = t.instantanes.lire.bind(t.instantanes);
+    jest.spyOn(t.instantanes, 'lire').mockImplementation(async (...args: Parameters<typeof lire>) => {
+      const lu = await lire(...args);
+      s.k.retenue_jusqua = avant(20); // levée encore une fois ailleurs
+      return lu;
+    });
+    const resultat = await t.passer();
+    expect(resultat?.abandonnees).toEqual([{ type: 'RETENIR', motif: 'COURSE_CHANGEE' }]);
+    expect(s.k.retenue_jusqua).toEqual(avant(20));
+    expect(t.push.notifyCourseAttente).not.toHaveBeenCalled();
+  });
+});

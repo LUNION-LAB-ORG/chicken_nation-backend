@@ -25,7 +25,9 @@
  * de fusion vers une course Turbo ou d'un livreur en pause, jamais plus de 3
  * commandes, retenue jamais repoussée ni au-delà de la limite (5 min depuis
  * `ready_at` pour une attente courte, 20 min pour un trajet long), zéro temps
- * mort (un livreur libre et une course qui attend sans offre).
+ * mort (un livreur libre et une course qui attend sans offre). Une retenue
+ * terminée n'est reposée que pour des commandes entrées en préparation après
+ * sa fin.
  *
  * Temps morts plus fins, COMPTÉS en secondes (`tempsMort`) plutôt que
  * refusés : un livreur libre AU COMPTOIR pendant qu'une commande prête
@@ -441,6 +443,7 @@ export class Monde {
         null,
         maintenant,
       ),
+      prepared_at: c.prepared_at,
     });
     const ouverts: CourseStatut[] = [
       CourseStatut.PENDING_ASSIGNMENT,
@@ -816,8 +819,15 @@ export class Monde {
             ...k.livraisons.map((x) => (this.commandes.get(x.order_id)!.ready_at?.getTime() ?? Infinity) + attenteS * 1000),
           );
           if (a.jusqua.getTime() > limite) this.violation(`retenue de ${k.id} au-delà de la limite`);
-          if (k.retenue_jusqua && a.jusqua.getTime() > k.retenue_jusqua.getTime()) this.violation(`retenue de ${k.id} repoussée`);
-          if (k.retenue_jusqua && k.retenue_jusqua.getTime() <= this.t.getTime()) this.violation(`retenue de ${k.id} reposée`);
+          const enCours = !!k.retenue_jusqua && k.retenue_jusqua.getTime() > this.t.getTime();
+          if (enCours && a.jusqua.getTime() > k.retenue_jusqua!.getTime()) this.violation(`retenue de ${k.id} repoussée`);
+          // Terminée : reposée seulement pour des commandes entrées en préparation après sa fin.
+          const fin = k.retenue_jusqua;
+          const nouvelles = a.attendues.every((x) => {
+            const debut = this.commandes.get(x.order_id)?.prepared_at ?? null;
+            return !!fin && !!debut && debut.getTime() > fin.getTime();
+          });
+          if (fin && !enCours && !nouvelles) this.violation(`retenue de ${k.id} reposée`);
           k.retenue_jusqua = a.jusqua;
           k.commandes_attendues = a.attendues.map((x) => x.order_id);
           this.retenuesVues.push({ course: k.id, t: this.t, jusqua: a.jusqua, limite: new Date(limite) });

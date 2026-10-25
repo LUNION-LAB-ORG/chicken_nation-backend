@@ -73,7 +73,9 @@
  *     sans position récente : reprise seulement au profit d'un livreur au
  *     comptoir (son temps par défaut compte).
  *  6. RETENUES au comptoir (3.5) : posées, réduites ou levées. Une retenue ne
- *     peut que diminuer ; levée, elle ne revient jamais sur la même course.
+ *     peut que diminuer ; levée, elle ne revient sur la même course que pour
+ *     une commande entrée en préparation APRÈS sa fin (essai du 25/10),
+ *     jamais pour une commande déjà jugée.
  *     Remise ou non, elle ne dépend pas de la fenêtre d'ajout après le
  *     retrait : c'est la fenêtre qui court depuis sa fin (essai du 25/10, la
  *     caisse remet dès le code).
@@ -480,6 +482,13 @@ export interface CommandePlanif {
   heure_programmee?: Date | null;
   /** Fin de préparation estimée (preparation.rules.ts), commandes IN_PROGRESS seulement. */
   preparation?: EstimationPreparation | null;
+  /**
+   * Début de la préparation (`Order.prepared_at`). Une retenue terminée n'est
+   * reposée que pour une commande entrée en préparation après sa fin ; sans
+   * début connu, jamais (l'estimation le prendrait à maintenant, à chaque
+   * passage).
+   */
+  prepared_at?: Date | null;
 }
 
 export interface OffrePlanif {
@@ -521,7 +530,11 @@ export interface CoursePlanif {
   picked_up_at: Date | null;
   /** Départ réel du restaurant (nouvelle colonne). */
   parti_at: Date | null;
-  /** Retenue au comptoir : active si dans le futur ; passée = retenue terminée, jamais reposée. */
+  /**
+   * Retenue au comptoir : active si dans le futur ; passée = retenue
+   * terminée, reposée seulement pour une commande entrée en préparation
+   * après cette heure.
+   */
   retenue_jusqua: Date | null;
   /** Commandes attendues par la retenue (identifiants). */
   commandes_attendues: string[];
@@ -781,6 +794,12 @@ export interface ActionRetenir {
    * départ possible (secondes, journal) ; `null` s'il n'a pas eu à être estimé.
    */
   aller_retour_s: number | null;
+  /**
+   * Retenue terminée reposée pour une commande entrée en préparation après
+   * sa fin : l'échéance lue (`retenue_jusqua`). Écrite seulement si elle n'a
+   * pas bougé depuis. `null` : retenue posée ou réduite.
+   */
+  reprise_de: Date | null;
   libelle: string;
 }
 
@@ -2473,14 +2492,17 @@ export function planifier(
   const trajetLongActif = r.attenteMaxTrajetLongS > 0;
   for (const k of aRetenir) {
     const T = k.source?.retenue_jusqua?.getTime() ?? null;
-    if (T !== null && T <= t) continue; // terminée : jamais reposée
+    // Terminée : reposée seulement pour une commande entrée en préparation
+    // APRÈS sa fin (essai du 25/10 : C passée en cuisine juste après la
+    // levée n'était jamais attendue), jamais pour une commande déjà jugée.
+    const reprise = T !== null && T <= t;
     if (k.arrets.length === 0) continue;
     const dPossible = departOuDefaut(ctx, departCourse(ctx, k));
     // Une retenue posée ne peut que diminuer. Après le retrait, elle n'est
     // plus bornée par la fenêtre d'ajout : la fenêtre court depuis sa fin
     // (essai du 25/10 : la remise au code la ramenait à remise + 150 s).
     let plafond = Number.POSITIVE_INFINITY;
-    if (T !== null) plafond = Math.min(plafond, T);
+    if (T !== null && !reprise) plafond = Math.min(plafond, T);
     /** Aucune commande prête de la course n'attend plus de `s` secondes depuis `ready_at`. */
     const attenteAuPlus = (s: number) => Math.min(plafond, ...k.arrets.map((a) => (a.readyMs ?? t) + s * 1000));
     // Attente courte (règle d'avant) : 5 min ; trajet long : 20 min.
@@ -2491,7 +2513,7 @@ export function planifier(
 
     const attenduesAvant = new Set(k.source?.commandes_attendues ?? []);
     const candidates = enPreparation
-      .filter((c) => !reservees.has(c.id))
+      .filter((c) => !reservees.has(c.id) && (!reprise || (!!c.prepared_at && c.prepared_at.getTime() > T!)))
       .sort(
         (a, b) =>
           Number(!attenduesAvant.has(a.id)) - Number(!attenduesAvant.has(b.id)) ||
@@ -2617,6 +2639,7 @@ export function planifier(
       attendues,
       motif,
       aller_retour_s: mesure.allerRetourSeulMs === null ? null : Math.round(mesure.allerRetourSeulMs / 1000),
+      reprise_de: reprise ? new Date(T!) : null,
       libelle: motif === 'TRAJET_LONG' ? `Trajet long : attendre ${liste}, ${depart}` : `Attendre ${liste}, ${depart}`,
     });
   }

@@ -264,6 +264,58 @@ describe('S4. commandes déjà en retard seules : elles ne bloquent plus la cour
   });
 });
 
+describe('S5. une commande entrée en préparation APRÈS la fin d’une retenue peut être attendue', () => {
+  const a = cmd('a', { est: 2000, created_at: h('12:15'), ready_at: h('12:30') });
+  const bPrete = cmd('b', { est: 2200, created_at: h('12:18'), ready_at: h('12:32') });
+  const t = h('12:32:40');
+  const plan = (debutC: string | null) =>
+    planifier(
+      instant(t, {
+        commandes: [enPrep('c', h('12:34'), { est: 2400, created_at: h('12:20'), prepared_at: debutC ? h(debutC) : null })],
+        courses: [
+          crs('ka', {
+            commandes: [a, bPrete],
+            statut: CourseStatut.AT_RESTAURANT,
+            deliverer_id: 'l1',
+            retenue_jusqua: h('12:32'),
+            commandes_attendues: [],
+          }),
+        ],
+        livreurs: [enCourseAuComptoir('l1', t)],
+      }),
+    );
+  it('C en préparation depuis 12:32:30 (après la levée de 12:32) : retenue jusqu’à 12:34', () => {
+    expect(actionsDe(plan('12:32:30'), 'RETENIR').map((x) => [hms(x.jusqua), x.attendues.map((y) => y.order_id)])).toEqual([
+      ['12:34:00', ['c']],
+    ]);
+  });
+  it('C en préparation depuis 12:25 (déjà jugée pendant la retenue) : jamais reposée, comme avant', () => {
+    expect(plan('12:25').actions).toEqual([]);
+  });
+  it('début de préparation inconnu : jamais reposée', () => {
+    expect(plan(null).actions).toEqual([]);
+  });
+  it('retenue encore en cours : la commande nouvelle ne la repousse pas (inchangé)', () => {
+    const t2 = h('12:31:40');
+    const p = planifier(
+      instant(t2, {
+        commandes: [enPrep('c', h('12:34'), { est: 2400, created_at: h('12:20'), prepared_at: h('12:31:30') })],
+        courses: [
+          crs('ka', {
+            commandes: [a],
+            statut: CourseStatut.AT_RESTAURANT,
+            deliverer_id: 'l1',
+            retenue_jusqua: h('12:33'),
+            commandes_attendues: ['b'],
+          }),
+        ],
+        livreurs: [enCourseAuComptoir('l1', t2)],
+      }),
+    );
+    expect(actionsDe(p, 'RETENIR')).toEqual([]);
+  });
+});
+
 describe('S6. ce qui ne change pas', () => {
   it('C prête dans une AUTRE direction : course à part, aucune offre au livreur en course', () => {
     const t = h('12:32');
