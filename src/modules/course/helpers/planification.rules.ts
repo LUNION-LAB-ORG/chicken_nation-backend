@@ -81,7 +81,9 @@
  *     jamais pour une commande déjà jugée.
  *     Remise ou non, elle ne dépend pas de la fenêtre d'ajout après le
  *     retrait : c'est la fenêtre qui court depuis sa fin (essai du 25/10, la
- *     caisse remet dès le code).
+ *     caisse remet dès le code). Une retenue NOUVELLE sur une course déjà
+ *     récupérée (aucune en cours) se décide comme un ajout : jamais à moins
+ *     de 90 s de la fin de la fenêtre, ni pendant sa prolongation.
  *     ATTENTE COURTE : la commande en préparation est prête dans l'horizon
  *     (7 min) et aucune commande prête n'attend plus de 5 min. TRAJET LONG
  *     (demande du 24/10) : partir sans elle ferait revenir le livreur plus de
@@ -168,8 +170,9 @@ export const HEURES_DE_POINTE: readonly [number, number][] = [
 ];
 /**
  * Ajout après le retrait : jamais à moins de 90 s de la fin de la fenêtre
- * (le temps que la caisse remette le sac). La retenue au comptoir n'y est
- * plus bornée (essai du 25/10) : la fenêtre court depuis sa fin
+ * (le temps que la caisse remette le sac). Même borne pour POSER une
+ * retenue sur une course déjà récupérée ; sa fin, elle, n'y est plus bornée
+ * (essai du 25/10) : la fenêtre court depuis sa fin
  * (`debutFenetreApresRetraitMs`), la commande attendue peut toujours être
  * ajoutée puis remise.
  */
@@ -2499,6 +2502,12 @@ export function planifier(
     // levée n'était jamais attendue), jamais pour une commande déjà jugée.
     const reprise = T !== null && T <= t;
     if (k.arrets.length === 0) continue;
+    // Course déjà récupérée sans retenue en cours (aucune, ou terminée) : une
+    // retenue NOUVELLE se décide comme un ajout, jamais à moins de la marge de
+    // remise de la fin de la fenêtre, ni pendant sa prolongation pour un sac
+    // (relecture du 25/10 : posée 4 min après « Tu peux partir », elle
+    // rouvrait la fenêtre d'une course déjà partie).
+    if (k.categorie === 0 && (T === null || reprise) && finDeFenetreProche(ctx, k)) continue;
     const dPossible = departOuDefaut(ctx, departCourse(ctx, k));
     // Une retenue posée ne peut que diminuer. Après le retrait, elle n'est
     // plus bornée par la fenêtre d'ajout : la fenêtre court depuis sa fin

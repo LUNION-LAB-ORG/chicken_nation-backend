@@ -517,3 +517,71 @@ describe('S15. commandes de test passées tôt, deux livreurs : le retard ne sé
     expect(refusRetenue(p)).toEqual([]);
   });
 });
+
+describe('S16. retenue NOUVELLE après la remise : décidée comme un ajout, jamais en fin de fenêtre (relecture du 25/10)', () => {
+  /**
+   * 15 h 28, hors pointe, D1 seul. A (5 km à l'est, créée 15:20, prête 15:28)
+   * remise au code à 15:28:30 SANS retenue : « Sacs remis / Tu peux partir ».
+   * Dernière position précise de D1 au comptoir, avant la remise (téléphone
+   * qui n'envoie plus rien). B (5,5 km), annoncée pour 15:40.
+   */
+  const aRemise = cmd('a', { est: 5000, created_at: h('15:20'), ready_at: h('15:28'), statut: OrderStatus.PICKED_UP });
+  const livA = { id: 'liv-a', statut: DeliveryStatut.PENDING, sequence_order: 1, commande: aRemise };
+  const k = (o: Parameters<typeof crs>[1] = {}) =>
+    crs('ka', { statut: CourseStatut.IN_DELIVERY, deliverer_id: 'd1', assigned_at: h('15:28:10'), picked_up_at: h('15:28:30'), livraisons: [livA], ...o });
+  const plan = (t: string, debutB: string, o: Parameters<typeof crs>[1] = {}, finB = '15:40') => {
+    const tt = h(t);
+    return planifier(
+      instant(tt, {
+        commandes: [enPrep('b', h(finB), { est: 5500, created_at: h('15:25'), prepared_at: h(debutB) })],
+        courses: [k(o)],
+        livreurs: [enCourseAuComptoir('d1', tt, h('15:28:20'))],
+      }),
+    );
+  };
+
+  it('B en préparation 5 s après la remise : retenue jusqu’à 15:40, la règle du client (trajet long)', () => {
+    expect(actionsDe(plan('15:28:40', '15:28:35'), 'RETENIR').map((x) => [hms(x.jusqua), x.motif])).toEqual([['15:40:00', 'TRAJET_LONG']]);
+  });
+
+  it('B en préparation 3 min 45 s après la remise : plus aucune retenue, la course part à remise + 240 s', () => {
+    const p = plan('15:32:20', '15:32:15');
+    expect(actionsDe(p, 'RETENIR')).toEqual([]);
+    expect(p.actions).toEqual([]);
+    expect(actionsDe(plan('15:32:30', '15:32:15'), 'MARQUER_PARTI').map((x) => x.motif)).toEqual(['FENETRE_ECHUE']);
+  });
+
+  it('fenêtre prolongée pour un sac au comptoir : aucune retenue (la course attend seulement son sac)', () => {
+    // Trajet court : A (2 km, prête 15:28:20) remise à 15:28:30 ; C (2,1 km)
+    // ajoutée après la remise, pas encore remise ; B (2,2 km) en préparation
+    // à 15:32:35, finie 15:33:10, dans l'attente courte de A.
+    const a = cmd('a', { est: 2000, created_at: h('15:20'), ready_at: h('15:28:20'), statut: OrderStatus.PICKED_UP });
+    const c = cmd('c', { est: 2100, created_at: h('15:22'), ready_at: h('15:31') });
+    const tt = h('15:32:40');
+    const p = planifier(
+      instant(tt, {
+        commandes: [enPrep('b', h('15:33:10'), { est: 2200, created_at: h('15:25'), prepared_at: h('15:32:35') })],
+        courses: [
+          k({
+            livraisons: [
+              { ...livA, commande: a },
+              { id: 'liv-c', statut: DeliveryStatut.PENDING, sequence_order: 2, ajoutee_apres_retrait: true, commande: c },
+            ],
+          }),
+        ],
+        livreurs: [enCourseAuComptoir('d1', tt, h('15:28:20'))],
+      }),
+    );
+    expect(actionsDe(p, 'MARQUER_PARTI')).toEqual([]);
+    expect(actionsDe(p, 'RETENIR')).toEqual([]);
+  });
+
+  it('reprise après une retenue levée après la remise : seulement avant la fin de la fenêtre comptée depuis la levée', () => {
+    // Retenue levée à 15:30 (fenêtre jusqu'à 15:34, marge de remise 90 s : 15:32:30).
+    const levee = { retenue_jusqua: h('15:30'), commandes_attendues: [] };
+    expect(actionsDe(plan('15:30:20', '15:30:10', levee), 'RETENIR').map((x) => [hms(x.jusqua), x.reprise_de && hms(x.reprise_de)])).toEqual([
+      ['15:40:00', '15:30:00'],
+    ]);
+    expect(actionsDe(plan('15:33:00', '15:32:50', levee), 'RETENIR')).toEqual([]);
+  });
+});
