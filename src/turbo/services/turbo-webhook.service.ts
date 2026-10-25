@@ -104,15 +104,43 @@ export class TurboWebhookService {
    * course (référence neuve). Un webhook rejoué de l'ANCIENNE course (annulée)
    * ne doit pas toucher la nouvelle : quand Turbo fournit `referenceCourse` et
    * qu'elle ne correspond plus à la course actuelle de la livraison, l'événement
-   * est ignoré. Tolérant : sans `referenceCourse`, on traite normalement.
+   * est ignoré, et noté au journal du serveur. Tolérant : sans
+   * `referenceCourse`, on traite normalement.
    */
   private isStaleForCourse(
     delivery: { course?: { reference?: string | null } | null },
     data: any,
+    alias?: WebhookEvent,
   ): boolean {
     const refCourse = data?.referenceCourse ? String(data.referenceCourse) : null;
     const current = delivery.course?.reference ?? null;
-    return Boolean(refCourse && current && refCourse !== current);
+    const perime = Boolean(refCourse && current && refCourse !== current);
+    if (perime) {
+      this.logger.warn(
+        `Webhook Turbo ${alias ?? '?'} sans effet (en retard ou rejoué) : il vient de l'ancienne course ${refCourse}, ` +
+          `la commande ${data?.numero ?? '?'} est sur la course ${current}.`,
+      );
+    }
+    return perime;
+  }
+
+  /**
+   * Webhook EN RETARD OU REJOUÉ : accepté (réponse 200, Turbo ne le renvoie
+   * pas), sans effet, et noté au journal du serveur. `warn` quand il aurait
+   * fait reculer l'état ; `log` quand l'état est déjà celui-là (rejeu, ou
+   * `in_transit` après `picked_up`).
+   */
+  private noterSansEffet(
+    alias: WebhookEvent | undefined,
+    quoi: string,
+    actuel: string | null | undefined,
+    vise: string,
+  ): void {
+    const message =
+      `Webhook Turbo ${alias ?? '?'} sans effet (en retard ou rejoué) : ` +
+      `${quoi} déjà ${actuel ?? 'introuvable'}, ${vise} ignoré.`;
+    if (actuel === vise) this.logger.log(message);
+    else this.logger.warn(message);
   }
 
   /**
@@ -147,8 +175,13 @@ export class TurboWebhookService {
    * Fait progresser la COURSE CN sur son cycle de vie normal. Idempotent et
    * ANTI-RETOUR : on n'applique la transition que si elle avance (un webhook
    * rejoué ou arrivé dans le désordre ne fait jamais reculer la course).
+   *
+   * L'écriture est CONDITIONNÉE au rang : la course a pu avancer entre la
+   * lecture et l'écriture (retrait validé par la caisse, autre webhook, second
+   * serveur). Avant, un « livreur trouvé » lu avant la validation du retrait et
+   * écrit après ramenait la course validée à « acceptée ».
    */
-  private async advanceCourse(courseId: string, next: CourseStatut): Promise<void> {
+  private async advanceCourse(courseId: string, next: CourseStatut, alias?: WebhookEvent): Promise<void> {
     const ORDER: CourseStatut[] = [
       CourseStatut.PENDING_ASSIGNMENT,
       CourseStatut.ACCEPTED,
@@ -158,17 +191,21 @@ export class TurboWebhookService {
     ];
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
-      select: { id: true, statut: true, restaurant_id: true },
+      select: { id: true, reference: true, statut: true, restaurant_id: true },
     });
     if (!course) return;
 
     const from = ORDER.indexOf(course.statut);
     const to = ORDER.indexOf(next);
-    if (from === -1 || to === -1 || to <= from) return; // terminal, inconnu ou recul
+    if (from === -1 || to === -1 || to <= from) {
+      // Terminale (annulée, expirée), inconnue ou recul.
+      this.noterSansEffet(alias, `course ${course.reference}`, course.statut, next);
+      return;
+    }
 
     const now = new Date();
-    await this.prisma.course.update({
-      where: { id: courseId },
+    const { count } = await this.prisma.course.updateMany({
+      where: { id: courseId, statut: { in: ORDER.slice(0, to) } },
       data: {
         statut: next,
         ...(next === CourseStatut.ACCEPTED && { assigned_at: now }),
@@ -176,6 +213,13 @@ export class TurboWebhookService {
         ...(next === CourseStatut.COMPLETED && { completed_at: now }),
       },
     });
+    if (count !== 1) {
+      const relue = await this.prisma.course
+        .findUnique({ where: { id: courseId }, select: { statut: true } })
+        .catch(() => null);
+      this.noterSansEffet(alias, `course ${course.reference}`, relue?.statut, next);
+      return;
+    }
     const charge = { course_id: courseId, statut: next, source: 'turbo' };
     this.appGateway.emitToBackoffice(CourseChannels.COURSE_STATUT_CHANGED, charge);
     // Caisse et écran Opérations du restaurant : relus aussi (sans le restaurant,
@@ -189,6 +233,7 @@ export class TurboWebhookService {
     next: DeliveryStatut,
     customerId?: string | null,
     orderId?: string,
+    contexte: { alias?: WebhookEvent; numero?: string } = {},
   ): Promise<void> {
     const now = new Date();
 
@@ -223,7 +268,13 @@ export class TurboWebhookService {
       },
     });
     // Rien n'a bougé : webhook rejoué ou hors séquence, on n'informe personne.
-    if (count === 0) return;
+    if (count === 0) {
+      const relue = await this.prisma.delivery
+        .findUnique({ where: { id: deliveryId }, select: { statut: true } })
+        .catch(() => null);
+      this.noterSansEffet(contexte.alias, `livraison de ${contexte.numero ?? deliveryId}`, relue?.statut, next);
+      return;
+    }
     // Même canal que le suivi interne → l'app cliente n'a rien à changer.
     if (customerId) {
       this.appGateway.emitToUser(
@@ -260,6 +311,7 @@ export class TurboWebhookService {
       return this.ack(alias, false);
     }
     if (order.status === newStatus) {
+      this.noterSansEffet(alias, `commande ${numero}`, order.status, newStatus);
       return this.ack(alias); // déjà à ce statut → rien à faire
     }
 
@@ -270,6 +322,7 @@ export class TurboWebhookService {
       order.status === OrderStatus.CANCELLED ||
       order.status === OrderStatus.COMPLETED
     ) {
+      this.noterSansEffet(alias, `commande ${numero}`, order.status, newStatus);
       return this.ack(alias);
     }
     const RANK: Partial<Record<OrderStatus, number>> = {
@@ -284,12 +337,17 @@ export class TurboWebhookService {
     const from = RANK[order.status];
     const to = RANK[newStatus];
     if (from !== undefined && to !== undefined && to <= from) {
+      this.noterSansEffet(alias, `commande ${numero}`, order.status, newStatus);
       return this.ack(alias); // recul → no-op
     }
 
+    // Écriture CONDITIONNÉE au statut lu : la commande a pu avancer entre la
+    // lecture et l'écriture (code du client validé, autre webhook, second
+    // serveur). Avant, un « récupérée » lu avant la validation du code et
+    // écrit après ramenait la commande livrée à « en livraison ».
     const previousStatus = order.status;
-    const updated = await this.prisma.order.update({
-      where: { id: order.id },
+    const { count } = await this.prisma.order.updateMany({
+      where: { id: order.id, status: previousStatus },
       data: {
         status: newStatus,
         updated_at: new Date(),
@@ -304,12 +362,23 @@ export class TurboWebhookService {
           cancelled_reason: 'Annulée par Turbo',
         }),
       },
+    });
+    if (count !== 1) {
+      const relue = await this.prisma.order
+        .findUnique({ where: { id: order.id }, select: { status: true } })
+        .catch(() => null);
+      this.noterSansEffet(alias, `commande ${numero}`, relue?.status, newStatus);
+      return this.ack(alias);
+    }
+    const updated = await this.prisma.order.findUnique({
+      where: { id: order.id },
       include: {
         // Liste blanche : la commande part sur les sockets juste après.
         restaurant: { select: RESTAURANT_COMMANDE_SELECT },
         customer: { include: { notification_settings: true } },
       },
     });
+    if (!updated) return this.ack(alias);
 
     // Temps réel UI — même canal/payload que les mises à jour de statut normales.
     const statusData = {
@@ -370,7 +439,7 @@ export class TurboWebhookService {
       this.logger.warn(`Webhook Turbo courier_assigned : livraison « ${data?.numero} » introuvable.`);
       return this.ack(WebhookEvent.DELIVERY_COURIER_ASSIGNED, false);
     }
-    if (this.isStaleForCourse(delivery, data)) {
+    if (this.isStaleForCourse(delivery, data, WebhookEvent.DELIVERY_COURIER_ASSIGNED)) {
       return this.ack(WebhookEvent.DELIVERY_COURIER_ASSIGNED); // webhook d'une ancienne course
     }
 
@@ -390,7 +459,7 @@ export class TurboWebhookService {
     });
 
     if (delivery.course_id) {
-      await this.advanceCourse(delivery.course_id, CourseStatut.ACCEPTED);
+      await this.advanceCourse(delivery.course_id, CourseStatut.ACCEPTED, WebhookEvent.DELIVERY_COURIER_ASSIGNED);
     }
 
     this.logger.log(
@@ -402,11 +471,11 @@ export class TurboWebhookService {
   /** Le livreur Turbo est en route vers le restaurant / sur place. */
   async handlePickupStarted(data: any): Promise<WebhookResponseDto> {
     const delivery = await this.resolveDelivery(data?.numero);
-    if (delivery && this.isStaleForCourse(delivery, data)) {
+    if (delivery && this.isStaleForCourse(delivery, data, WebhookEvent.DELIVERY_PICKUP_STARTED)) {
       return this.ack(WebhookEvent.DELIVERY_PICKUP_STARTED);
     }
     if (delivery?.course_id) {
-      await this.advanceCourse(delivery.course_id, CourseStatut.AT_RESTAURANT);
+      await this.advanceCourse(delivery.course_id, CourseStatut.AT_RESTAURANT, WebhookEvent.DELIVERY_PICKUP_STARTED);
     }
     // La commande reste READY tant que les plats ne sont pas récupérés.
     return this.ack(WebhookEvent.DELIVERY_PICKUP_STARTED);
@@ -415,18 +484,19 @@ export class TurboWebhookService {
   /** Plats récupérés au restaurant → la tournée démarre. */
   async handlePickedUp(data: any): Promise<WebhookResponseDto> {
     const delivery = await this.resolveDelivery(data?.numero);
-    if (delivery && this.isStaleForCourse(delivery, data)) {
+    if (delivery && this.isStaleForCourse(delivery, data, WebhookEvent.DELIVERY_PICKED_UP)) {
       return this.ack(WebhookEvent.DELIVERY_PICKED_UP);
     }
     if (delivery) {
       if (delivery.course_id) {
-        await this.advanceCourse(delivery.course_id, CourseStatut.IN_DELIVERY);
+        await this.advanceCourse(delivery.course_id, CourseStatut.IN_DELIVERY, WebhookEvent.DELIVERY_PICKED_UP);
       }
       await this.advanceDelivery(
         delivery.id,
         DeliveryStatut.IN_ROUTE,
         delivery.order?.customer_id,
         delivery.order_id,
+        { alias: WebhookEvent.DELIVERY_PICKED_UP, numero: data?.numero },
       );
     }
     return this.syncStatus(data?.numero, OrderStatus.PICKED_UP, WebhookEvent.DELIVERY_PICKED_UP);
@@ -435,18 +505,19 @@ export class TurboWebhookService {
   /** En route vers le client (même étape métier que picked_up côté commande). */
   async handleInTransit(data: any): Promise<WebhookResponseDto> {
     const delivery = await this.resolveDelivery(data?.numero);
-    if (delivery && this.isStaleForCourse(delivery, data)) {
+    if (delivery && this.isStaleForCourse(delivery, data, WebhookEvent.DELIVERY_IN_TRANSIT)) {
       return this.ack(WebhookEvent.DELIVERY_IN_TRANSIT);
     }
     if (delivery) {
       if (delivery.course_id) {
-        await this.advanceCourse(delivery.course_id, CourseStatut.IN_DELIVERY);
+        await this.advanceCourse(delivery.course_id, CourseStatut.IN_DELIVERY, WebhookEvent.DELIVERY_IN_TRANSIT);
       }
       await this.advanceDelivery(
         delivery.id,
         DeliveryStatut.IN_ROUTE,
         delivery.order?.customer_id,
         delivery.order_id,
+        { alias: WebhookEvent.DELIVERY_IN_TRANSIT, numero: data?.numero },
       );
     }
     return this.syncStatus(data?.numero, OrderStatus.PICKED_UP, WebhookEvent.DELIVERY_IN_TRANSIT);
@@ -547,7 +618,7 @@ export class TurboWebhookService {
    */
   async handleDelivered(data: any): Promise<WebhookResponseDto> {
     const delivery = await this.resolveDelivery(data?.numero);
-    if (delivery && this.isStaleForCourse(delivery, data)) {
+    if (delivery && this.isStaleForCourse(delivery, data, WebhookEvent.DELIVERY_DELIVERED)) {
       return this.ack(WebhookEvent.DELIVERY_DELIVERED); // webhook d'une ancienne course
     }
     if (delivery) {
@@ -556,6 +627,7 @@ export class TurboWebhookService {
         DeliveryStatut.DELIVERED,
         delivery.order?.customer_id,
         delivery.order_id,
+        { alias: WebhookEvent.DELIVERY_DELIVERED, numero: data?.numero },
       );
       if (delivery.course_id) {
         const restantes = await this.prisma.delivery.count({
@@ -565,7 +637,7 @@ export class TurboWebhookService {
           },
         });
         if (restantes === 0) {
-          await this.advanceCourse(delivery.course_id, CourseStatut.COMPLETED);
+          await this.advanceCourse(delivery.course_id, CourseStatut.COMPLETED, WebhookEvent.DELIVERY_DELIVERED);
         }
       }
     }
@@ -582,6 +654,12 @@ export class TurboWebhookService {
       order.status === OrderStatus.CANCELLED ||
       order.status === OrderStatus.COMPLETED
     ) {
+      this.noterSansEffet(
+        WebhookEvent.DELIVERY_DELIVERED,
+        `commande ${order.reference}`,
+        order.status,
+        order.paied ? OrderStatus.COMPLETED : OrderStatus.COLLECTED,
+      );
       return this.ack(WebhookEvent.DELIVERY_DELIVERED);
     }
 
@@ -621,7 +699,7 @@ export class TurboWebhookService {
 
     // ── Portée COMMANDE : data.numero identifie une livraison précise ────────
     const delivery = await this.resolveDelivery(data?.numero);
-    if (delivery && this.isStaleForCourse(delivery, data)) {
+    if (delivery && this.isStaleForCourse(delivery, data, WebhookEvent.DELIVERY_CANCELLED)) {
       // Rejeu de l'annulation d'une ANCIENNE course déjà relancée : la
       // nouvelle course est vivante chez Turbo — ne surtout pas l'annuler.
       return this.ack(WebhookEvent.DELIVERY_CANCELLED);
@@ -968,7 +1046,7 @@ export class TurboWebhookService {
         },
       });
       if (restantes === 0) {
-        await this.advanceCourse(delivery.course_id, CourseStatut.COMPLETED);
+        await this.advanceCourse(delivery.course_id, CourseStatut.COMPLETED, WebhookEvent.DELIVERY_DELIVERED);
       }
     }
 

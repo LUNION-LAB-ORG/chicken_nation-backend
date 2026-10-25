@@ -22,8 +22,9 @@ import { ComptePersonnel } from 'src/modules/users/helpers/personnel-scope.helpe
 import { TurboService } from 'src/turbo/services/turbo.service';
 
 import { parseOrderLatLng } from '../helpers/geo.helper';
-import { messageCommandesPasPretes } from '../helpers/code-retrait.rules';
+import { STATUTS_COURSE_TERMINEE, messageCommandesPasPretes } from '../helpers/code-retrait.rules';
 import { MESSAGE_COURSE_PAS_A_TOI } from '../helpers/depart.rules';
+import { recalculerFraisCourse } from '../helpers/frais-course';
 import { CancelCourseDto } from '../dto/cancel-course.dto';
 import { ConfirmDeliveryDto } from '../dto/confirm-delivery.dto';
 import { FailDeliveryDto } from '../dto/fail-delivery.dto';
@@ -32,7 +33,11 @@ import { ValidatePickupDto } from '../dto/validate-pickup.dto';
 import { CourseEvent } from '../events/course.event';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { commandesConfirmees } from '../helpers/recuperation.rules';
-import { WHERE_COURSE_ENCORE_A_REMETTRE, messageValidationImpossible } from '../helpers/remise-course.rules';
+import {
+  STATUTS_LIVRAISON_TERMINEE,
+  WHERE_COURSE_ENCORE_A_REMETTRE,
+  messageValidationImpossible,
+} from '../helpers/remise-course.rules';
 import { CourseOfferService } from './course-offer.service';
 import { CourseQueryService } from './course-query.service';
 import { DepartCourseService } from './depart-course.service';
@@ -43,6 +48,12 @@ type CourseDetaillee = Prisma.CourseGetPayload<{ include: typeof COURSE_FULL_INC
 
 /** Refus d'une offre déjà expirée, close ou traitée (texte montré au livreur). */
 export const MESSAGE_OFFRE_PLUS_EN_ATTENTE = "Cette offre n'est plus en attente.";
+
+/** Refus d'annuler une course terminée, annulée ou expirée (y compris par une annulation simultanée). */
+export const MESSAGE_COURSE_DEJA_TERMINEE = 'Course déjà terminée';
+
+/** Une autre annulation (ou la fin de la course) est passée entre la lecture et l'écriture. */
+class CourseDejaTerminee extends Error {}
 
 /**
  * Service : transitions de statut d'une Course + actions sur les Delivery.
@@ -211,85 +222,103 @@ export class CourseActionService {
   }
 
   /**
-   * Annulation de la course par le livreur ou admin.
+   * ANNULATION MANUELLE d'une course (administration, livreur). Règle du
+   * client : annuler une course n'annule JAMAIS une commande, une commande ne
+   * s'annule que manuellement. Après l'annulation, aucune commande ne reste
+   * sur la course :
+   *  - la course est réservée par une écriture conditionnée (pas encore
+   *    terminée) : deux annulations en même temps, une seule passe, l'autre
+   *    reçoit 400 ;
+   *  - par le livreur (`delivererId`, lu du jeton) : seulement SA course,
+   *    celle qu'il a acceptée, sinon 403 (la condition porte aussi sur le
+   *    livreur). Avant le 25/10, la route ne passait pas le livreur : n'importe
+   *    quel livreur annulait la course d'un autre ;
+   *  - ses livraisons pas terminées sont annulées ; les commandes déjà livrées
+   *    ne bougent pas ;
+   *  - course interne : une commande remise au livreur et pas livrée revient
+   *    prête au comptoir, puis toutes les commandes prêtes repartent dans une
+   *    NOUVELLE course, à référence neuve (`relancerCourseAnnulee`, comme
+   *    l'annulation automatique et la relance après une annulation de Turbo) ;
+   *  - course confiée à Turbo : rien n'est relancé d'office, leur livreur est
+   *    peut-être en route (jamais deux livreurs sur une commande) ; les
+   *    commandes restent à relancer depuis le backoffice, comme après une
+   *    annulation venue de Turbo ;
+   *  - paiements et encaissements ne sont jamais touchés ;
+   *  - livreur, backoffice et restaurant prévenus (`course:cancelled`) ; le
+   *    DispatchListener clôt les offres et remet le livreur dans la file.
    *
-   * Par le livreur (`delivererId`, lu du jeton) : seulement SA course, celle
-   * qu'il a acceptée, sinon 403. Avant le 25/10, la route ne passait pas le
-   * livreur : n'importe quel livreur annulait la course d'un autre.
-   *
-   * Écriture CONDITIONNÉE (statut pas terminal, livreur du jeton) et d'un seul
-   * tenant : une course terminée ou confiée à un autre au même instant n'est
-   * pas annulée, et rien d'autre n'est écrit.
+   * Avant : l'écriture sur les commandes suivait, dans la même transaction,
+   * l'annulation des livraisons et filtrait sur une livraison pas annulée :
+   * elle ne trouvait jamais rien (code mort depuis c7ed9de). Les commandes
+   * restaient accrochées à la course annulée.
    */
   async cancelCourse(courseId: string, cancelledBy: string, dto: CancelCourseDto, delivererId?: string) {
     const parLeLivreur = cancelledBy === 'deliverer';
     if (parLeLivreur && !delivererId) throw new ForbiddenException(MESSAGE_COURSE_PAS_A_TOI);
 
-    const terminal: CourseStatut[] = [
-      CourseStatut.COMPLETED,
-      CourseStatut.CANCELLED,
-      CourseStatut.EXPIRED,
-    ];
-
     const now = new Date();
-    // Une annulation AUTOMATIQUE n'annule jamais une commande de client (« une
-    // commande ne s'annule que manuellement ») : la tâche passe par
-    // AnnulationAutoService, ceci n'est qu'un garde-fou.
-    const annulerLesCommandes = cancelledBy !== 'system';
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const annulee = await tx.course.updateMany({
-        where: {
-          id: courseId,
-          ...(parLeLivreur ? { deliverer_id: delivererId } : {}),
-          statut: { notIn: terminal },
-        },
-        data: {
-          statut: CourseStatut.CANCELLED,
-          cancelled_at: now,
-          cancelled_by: cancelledBy,
-          cancelled_reason: dto.reason,
-        },
-      });
-      if (annulee.count !== 1) {
-        // Le refus dit pourquoi : la course d'un autre passe avant son état.
-        const lue = await tx.course.findUnique({
-          where: { id: courseId },
-          select: { deliverer_id: true },
-        });
-        if (!lue) throw new NotFoundException('Course non trouvée');
-        if (parLeLivreur && lue.deliverer_id !== delivererId) {
-          throw new ForbiddenException(MESSAGE_COURSE_PAS_A_TOI);
-        }
-        throw new BadRequestException('Course déjà terminée');
-      }
-      // Propage CANCELLED aux Deliveries non terminales
-      await tx.delivery.updateMany({
-        where: {
-          course_id: courseId,
-          statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
-        },
-        data: { statut: DeliveryStatut.CANCELLED },
-      });
-      // Propage CANCELLED + traçabilité aux Orders dont la Delivery n'est pas terminale
-      if (annulerLesCommandes) {
-        await tx.order.updateMany({
+    let annulation: { updated: CourseDetaillee; confieeATurbo: boolean };
+    try {
+      annulation = await this.prisma.$transaction(async (tx) => {
+        const reservee = await tx.course.updateMany({
           where: {
-            delivery: {
-              course_id: courseId,
-              statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
-            },
-            status: { notIn: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
+            id: courseId,
+            ...(parLeLivreur ? { deliverer_id: delivererId } : {}),
+            statut: { notIn: STATUTS_COURSE_TERMINEE },
           },
           data: {
-            status: OrderStatus.CANCELLED,
+            statut: CourseStatut.CANCELLED,
             cancelled_at: now,
             cancelled_by: cancelledBy,
-            cancelled_reason: dto.reason ?? 'Course annulée',
+            cancelled_reason: dto.reason,
           },
         });
-      }
-      return tx.course.findUniqueOrThrow({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
-    });
+        if (reservee.count !== 1) {
+          // Le refus dit pourquoi : la course d'un autre passe avant son état.
+          const lue = await tx.course.findUnique({ where: { id: courseId }, select: { deliverer_id: true } });
+          if (!lue) throw new NotFoundException('Course non trouvée');
+          if (parLeLivreur && lue.deliverer_id !== delivererId) {
+            throw new ForbiddenException(MESSAGE_COURSE_PAS_A_TOI);
+          }
+          throw new CourseDejaTerminee();
+        }
+
+        // Lu après la réservation : la ligne de la course est verrouillée.
+        const course = await tx.course.findUniqueOrThrow({
+          where: { id: courseId },
+          select: {
+            turbo_escalated_at: true,
+            deliveries: {
+              where: { statut: { notIn: STATUTS_LIVRAISON_TERMINEE } },
+              select: { id: true, order_id: true },
+            },
+          },
+        });
+        const confieeATurbo = course.turbo_escalated_at !== null;
+        const enCours = course.deliveries;
+        if (enCours.length > 0) {
+          await tx.delivery.updateMany({
+            where: { id: { in: enCours.map((d) => d.id) }, statut: { notIn: STATUTS_LIVRAISON_TERMINEE } },
+            data: { statut: DeliveryStatut.CANCELLED },
+          });
+          // Remise au livreur interne, pas livrée : elle revient au comptoir
+          // pour repartir. Chez Turbo, leur livreur la garde (ses webhooks la
+          // livrent et l'encaissent).
+          if (!confieeATurbo) {
+            await tx.order.updateMany({
+              where: { id: { in: enCours.map((d) => d.order_id) }, status: OrderStatus.PICKED_UP },
+              data: { status: OrderStatus.READY, picked_up_at: null },
+            });
+          }
+        }
+        const detail = await tx.course.findUniqueOrThrow({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
+        return { updated: detail, confieeATurbo };
+      });
+    } catch (err) {
+      if (err instanceof CourseDejaTerminee) throw new BadRequestException(MESSAGE_COURSE_DEJA_TERMINEE);
+      throw err;
+    }
+    const { updated, confieeATurbo } = annulation;
 
     await this.courseEvent.courseCancelled({ course: updated, cancelled_by: cancelledBy, reason: dto.reason });
 
@@ -311,7 +340,35 @@ export class CourseActionService {
       });
     }
 
+    if (confieeATurbo) {
+      this.logger.warn(
+        `Course ${updated.reference} confiée à Turbo, annulée (${cancelledBy}) : commandes laissées à relancer depuis le backoffice.`,
+      );
+    } else {
+      await this.relancerApresAnnulation(updated);
+    }
+
     return updated;
+  }
+
+  /**
+   * Commandes prêtes d'une course interne annulée : nouvelle course, référence
+   * neuve, recherche de livreur (réservation atomique des livraisons dans
+   * `relancerCourseAnnulee`). Un échec laisse la course annulée et ses
+   * commandes à relancer depuis le backoffice : il est noté, jamais remonté.
+   */
+  private async relancerApresAnnulation(course: { id: string; reference: string }): Promise<void> {
+    try {
+      const relance = await this.offerService.relancerCourseAnnulee(course.id);
+      if (!relance.ok) return; // rien à relancer (tout est livré) ou déjà relancée
+      // Les livraisons relancées ont quitté la course : ses frais suivent.
+      await recalculerFraisCourse(this.prisma, course.id).catch(() => undefined);
+      this.logger.log(`Course ${course.reference} annulée : ${relance.message}`);
+    } catch (err) {
+      this.logger.error(
+        `Course ${course.reference} annulée, relance de ses commandes impossible : ${(err as Error)?.message}`,
+      );
+    }
   }
 
   // ============================================================

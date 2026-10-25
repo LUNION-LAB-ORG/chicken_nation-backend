@@ -862,9 +862,10 @@ export class CourseOfferService {
    *   - **Dégroupage** : l'API Turbo prend UNE commande par course → on émet une
    *     course Turbo par commande de la course interne.
    *
-   * ⚠️ On NE réutilise PAS `cancelCourse` : il annulerait les COMMANDES CLIENTS.
-   * Ici les commandes restent vivantes (READY) — ce sont les webhooks Turbo qui
-   * piloteront ensuite leur statut (PICKED_UP → COMPLETED).
+   * ⚠️ On NE réutilise PAS `cancelCourse` : il annulerait la course et
+   * relancerait ses commandes dans une autre. Ici la même course passe chez
+   * Turbo, ses commandes restent vivantes (READY) : ce sont les webhooks Turbo
+   * qui piloteront ensuite leur statut (PICKED_UP puis COMPLETED).
    *
    * Renvoie `true` si au moins une commande est passée chez Turbo. Si Turbo est
    * injoignable, renvoie `false` : la course reste en recherche interne + alerte
