@@ -238,6 +238,38 @@ describe('S11. retenue levée : le bon texte selon que le livreur a déjà ses s
     expect(t.push.notifyCommandeRemise).not.toHaveBeenCalled();
   });
 
+  it('remise commande par commande (A1 au bouton de la caisse, A2 encore au comptoir), échéance : « Tout est prêt / 1 commande · code », jamais « Commande ajoutée »', async () => {
+    const s = recupereeRetenue({ retenueJusqua: avant(5), bPrete: false });
+    const a2 = prete({ ready_at: avant(90) });
+    s.donnees.commandes!.push(a2);
+    s.donnees.livraisons!.push(livraison({ course_id: s.k.id, order_id: a2.id, sequence_order: 2 }));
+    const t = monter(s.donnees);
+    await t.passer();
+    expect(t.journalDe('RETENUE_LEVEE')).toEqual([expect.objectContaining({ course_id: s.k.id, motif: 'ECHEANCE' })]);
+    expect(t.push.notifyCourseToutPret).toHaveBeenCalledWith(
+      expect.objectContaining({ delivererId: s.d1.id, titre: 'Tout est prêt', corps: `1 commande · code ${s.k.pickup_code}` }),
+    );
+    expect(t.push.notifyCommandeAjoutee).not.toHaveBeenCalled();
+    expect(t.push.notifyCommandeRemise).not.toHaveBeenCalled();
+  });
+
+  it('commande ajoutée et annoncée à un passage précédent, pas encore remise, l’autre attendue pas prête : pas de second « Commande ajoutée »', async () => {
+    const s = recupereeRetenue({ retenueJusqua: avant(5), bPrete: false });
+    const deja = prete({ address: B, ready_at: avant(40), created_at: avant(900) });
+    s.donnees.commandes!.push(deja);
+    s.donnees.livraisons!.push(
+      livraison({ course_id: s.k.id, order_id: deja.id, sequence_order: 2, ajoutee_apres_retrait: true, ajoutee_at: avant(40) }),
+    );
+    s.k.commandes_attendues = [attendue(deja, avant(5)), attendue(s.b, avant(5))];
+    const t = monter(s.donnees);
+    await t.passer();
+    expect(t.journalDe('RETENUE_LEVEE')).toEqual([expect.objectContaining({ course_id: s.k.id, motif: 'ECHEANCE' })]);
+    expect(t.push.notifyCourseToutPret).toHaveBeenCalledWith(
+      expect.objectContaining({ delivererId: s.d1.id, titre: 'Tout est prêt', corps: `1 commande · code ${s.k.pickup_code}` }),
+    );
+    expect(t.push.notifyCommandeAjoutee).not.toHaveBeenCalled();
+  });
+
   it('avant la remise (au comptoir) : « Tout est prêt / 2 commandes · code 421 », comme avant', async () => {
     const s = auComptoirRetenu();
     s.b.status = OrderStatus.READY;

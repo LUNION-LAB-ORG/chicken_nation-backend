@@ -851,8 +851,9 @@ export class ApplicationPlanService {
    * offres) : UNE notification par course et par passage, la plus utile
    *  1. commande retirée à son départ ;
    *  2. tout est prêt (retenue levée, livreur au comptoir, pas parti) ; après
-   *     la remise, « Commande ajoutée · code » si la commande attendue reste
-   *     à prendre, sinon « Tout est récupéré » ;
+   *     la remise, « Commande ajoutée · code » si une commande vient d'être
+   *     ajoutée, « Tout est prêt » avec les sacs qui restent, sinon « Tout
+   *     est récupéré » ;
    *  3. attente posée (« Attends 3 min », livreur au comptoir) ;
    *  4. commande(s) ajoutée(s).
    * Course encore en recherche avec une offre en attente : l'offre à jour est
@@ -896,25 +897,35 @@ export class ApplicationPlanService {
     const pasParti = course.statut !== CourseStatut.IN_DELIVERY || !course.parti_at;
     if (liberation && liberationAAnnoncer(liberation) && pasParti && !enRoute && course.statut === CourseStatut.IN_DELIVERY) {
       // Levée APRÈS la remise (la caisse remet dès le code, essai du 25/10) :
-      // « Tout est prêt · code » lui ferait présenter un code pour des sacs
-      // déjà remis. La commande attendue vient d'être ajoutée et reste à
-      // prendre : « Commande ajoutée / Code 421 au restaurant » ; sinon
-      // « Tout est récupéré / Tu peux partir ».
+      // « Tout est prêt · 2 commandes » lui ferait compter des sacs déjà
+      // remis. Une commande vient d'être ajoutée dans ce passage : « Commande
+      // ajoutée / Code 421 au restaurant ». Un sac reste à prendre sans ajout
+      // (remise commande par commande, ajout déjà annoncé) : « Tout est prêt /
+      // 1 commande · code 421 », les sacs qui restent. Rien à prendre : « Tout
+      // est récupéré / Tu peux partir ».
       const sacs = course.deliveries.filter(
         (d) => !STATUTS_LIVRAISON_TERMINEE.includes(d.statut) && d.order.status === OrderStatus.READY,
       ).length;
-      if (sacs > 0) {
-        const ajoutees = ajout?.n ?? sacs;
-        const texte = texteCommandeAjoutee({ ajoutees, total, apresRetrait: true, code: course.pickup_code });
+      if (ajout) {
+        const texte = texteCommandeAjoutee({ ajoutees: ajout.n, total, apresRetrait: true, code: course.pickup_code });
         this.push.notifyCommandeAjoutee({
           delivererId: livreur,
           courseId: course.id,
           courseReference: course.reference,
           titre: texte.titre,
           corps: texte.corps,
-          ajoutees,
+          ajoutees: ajout.n,
           total,
           apresRetrait: true,
+          code: course.pickup_code,
+        });
+      } else if (sacs > 0) {
+        const texte = texteToutEstPret({ code: course.pickup_code, total: sacs });
+        this.push.notifyCourseToutPret({
+          delivererId: livreur,
+          courseId: course.id,
+          titre: texte.titre,
+          corps: texte.corps,
           code: course.pickup_code,
         });
       } else {
