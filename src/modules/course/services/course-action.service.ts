@@ -161,22 +161,39 @@ export class CourseActionService {
   // COURSE : transitions phase "restaurant"
   // ============================================================
 
-  /** Livreur arrivé au restaurant (ACCEPTED → AT_RESTAURANT) */
+  /**
+   * Livreur arrivé au restaurant (ACCEPTED → AT_RESTAURANT).
+   *
+   * Écriture CONDITIONNÉE (course encore acceptée par ce livreur) : quand le
+   * serveur déclare l'arrivée d'après la position au même instant, un seul
+   * des deux passe (une seule annonce « Attends », un seul passage du
+   * planificateur) ; une course annulée entre-temps ne revient jamais au
+   * restaurant.
+   */
   async markAtRestaurant(courseId: string, delivererId: string) {
     // Arrivée déjà déclarée par le serveur d'après la position : réponse normale.
-    const deja = await this.prisma.course.findUnique({ where: { id: courseId }, select: { statut: true, deliverer_id: true } });
-    if (deja?.deliverer_id === delivererId && deja.statut === CourseStatut.AT_RESTAURANT) {
-      return this.prisma.course.findUniqueOrThrow({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
-    }
-    const course = await this.assertOwnedCourse(courseId, delivererId, CourseStatut.ACCEPTED);
-    const updated = await this.prisma.course.update({
-      where: { id: courseId },
+    const dejaAuRestaurant = async () => {
+      const deja = await this.prisma.course.findUnique({ where: { id: courseId }, select: { statut: true, deliverer_id: true } });
+      return deja?.deliverer_id === delivererId && deja.statut === CourseStatut.AT_RESTAURANT;
+    };
+    const relire = () => this.prisma.course.findUniqueOrThrow({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
+    if (await dejaAuRestaurant()) return relire();
+
+    await this.assertOwnedCourse(courseId, delivererId, CourseStatut.ACCEPTED);
+    const { count } = await this.prisma.course.updateMany({
+      where: { id: courseId, deliverer_id: delivererId, statut: CourseStatut.ACCEPTED },
       data: {
         statut: CourseStatut.AT_RESTAURANT,
         at_restaurant_at: new Date(),
       },
-      include: COURSE_FULL_INCLUDE,
     });
+    if (count !== 1) {
+      if (await dejaAuRestaurant()) return relire();
+      // Annulée, relancée ou reprise entre la lecture et l'écriture : le message habituel.
+      await this.assertOwnedCourse(courseId, delivererId, CourseStatut.ACCEPTED);
+      throw new ConflictException('La course a changé. Réessaie.');
+    }
+    const updated = await relire();
     await this.courseEvent.courseStatutChanged({
       course: updated,
       previous_statut: CourseStatut.ACCEPTED,

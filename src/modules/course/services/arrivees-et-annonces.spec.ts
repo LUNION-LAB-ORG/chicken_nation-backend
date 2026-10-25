@@ -12,6 +12,7 @@
  *
  * Les VRAIS services sur la base simulée (banc-planificateur.simulee-spec.ts).
  */
+import { BadRequestException } from '@nestjs/common';
 import { CourseStatut, DeliveryStatut, OrderStatus } from '@prisma/client';
 
 import { CourseChannels } from '../enums/course-channels';
@@ -128,6 +129,40 @@ describe('arrivée au restaurant déduite de la position', () => {
     expect(await arrivees(t).surPosition({ delivererId: d1.id, ...aLEst(20) })).toBeNull();
     expect(t.emisSur(CourseChannels.COURSE_STATUT_CHANGED)).toHaveLength(1);
   });
+
+  it('le serveur déclare l’arrivée entre la lecture et l’écriture de la route : un seul événement, réponse normale', async () => {
+    const { d1, k, t } = enRoute();
+    const lire = t.base.prisma.course.findUnique.getMockImplementation()!;
+    let appels = 0;
+    t.base.prisma.course.findUnique.mockImplementation(async (...args: Parameters<typeof lire>) => {
+      const lue = await lire(...args);
+      // Contrôle de la route fait : la position du livreur arrive au même instant.
+      if (++appels === 2) await arrivees(t).surPosition({ delivererId: d1.id, ...aLEst(20) });
+      return lue;
+    });
+
+    const reponse = await t.actions.markAtRestaurant(k.id, d1.id);
+
+    expect(reponse).toMatchObject({ id: k.id, statut: CourseStatut.AT_RESTAURANT });
+    expect(t.journalDe('ARRIVEE_RESTAURANT_AUTO')).toHaveLength(1);
+    expect(t.emisSur(CourseChannels.COURSE_STATUT_CHANGED)).toHaveLength(1);
+  });
+
+  it('course annulée entre la lecture et l’écriture de la route : 400, elle ne revient pas au restaurant', async () => {
+    const { d1, k, t } = enRoute();
+    const lire = t.base.prisma.course.findUnique.getMockImplementation()!;
+    let appels = 0;
+    t.base.prisma.course.findUnique.mockImplementation(async (...args: Parameters<typeof lire>) => {
+      const lue = await lire(...args);
+      if (++appels === 2) k.statut = CourseStatut.CANCELLED;
+      return lue;
+    });
+
+    await expect(t.actions.markAtRestaurant(k.id, d1.id)).rejects.toBeInstanceOf(BadRequestException);
+    expect(k.statut).toBe(CourseStatut.CANCELLED);
+    expect(k.at_restaurant_at).toBeNull();
+    expect(t.emisSur(CourseChannels.COURSE_STATUT_CHANGED)).toHaveLength(0);
+  });
 });
 
 describe('arrivée chez le client déduite de la position', () => {
@@ -181,6 +216,23 @@ describe('arrivée chez le client déduite de la position', () => {
 
     // Deuxième position au même endroit : rien de plus.
     expect(await arrivees(t).surPosition({ delivererId: d1.id, ...aLEst(1950) })).toBeNull();
+  });
+
+  it('le serveur déclare l’arrivée chez le client entre la lecture et l’écriture de la route : un seul événement', async () => {
+    const { d1, la, t } = enLivraison();
+    const lire = t.base.prisma.delivery.findUnique.getMockImplementation()!;
+    let appels = 0;
+    t.base.prisma.delivery.findUnique.mockImplementation(async (...args: Parameters<typeof lire>) => {
+      const lue = await lire(...args);
+      if (++appels === 1) await arrivees(t).surPosition({ delivererId: d1.id, ...aLEst(1950), accuracyM: 10 });
+      return lue;
+    });
+
+    const reponse = await t.actionsLivraison.markArrived(la.id, d1.id);
+
+    expect(reponse).toMatchObject({ id: la.id, statut: DeliveryStatut.ARRIVED });
+    expect(t.journalDe('ARRIVEE_CLIENT_AUTO')).toHaveLength(1);
+    expect(t.emisSur(CourseChannels.DELIVERY_STATUT_CHANGED)).toHaveLength(1);
   });
 
   it('position imprécise près du client : rien', async () => {

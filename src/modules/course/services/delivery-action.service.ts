@@ -98,23 +98,30 @@ export class DeliveryActionService {
     return this.prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId }, omit: { delivery_pin: true } });
   }
 
-  /** Livreur arrivé à l'adresse client (IN_ROUTE → ARRIVED) */
+  /**
+   * Livreur arrivé à l'adresse client (IN_ROUTE → ARRIVED). Écriture
+   * CONDITIONNÉE : si le serveur déclare l'arrivée d'après la position au
+   * même instant, un seul des deux passe (le client n'est prévenu qu'une fois).
+   */
   async markArrived(deliveryId: string, delivererId: string) {
     const delivery = await this.assertOwned(deliveryId, delivererId, [DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED]);
     // Arrivée déjà déclarée (par le serveur d'après la position, ou deux
     // touchers) : réponse normale, rien ne change.
-    if (delivery.statut === DeliveryStatut.ARRIVED) {
-      return this.prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId }, omit: { delivery_pin: true } });
-    }
+    if (delivery.statut === DeliveryStatut.ARRIVED) return this.lireSansCode(deliveryId);
 
-    const updated = await this.prisma.delivery.update({
-      where: { id: deliveryId },
-      // Le livreur ne doit JAMAIS lire le code : c'est le client qui le lui
-      // dicte, et c'est ce qui prouve la remise. Sans cette omission, la
-      // reponse de la route lui donnait de quoi valider sans voir personne.
-      omit: { delivery_pin: true },
+    const { count } = await this.prisma.delivery.updateMany({
+      where: {
+        id: deliveryId,
+        statut: DeliveryStatut.IN_ROUTE,
+        course: { deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY },
+      },
       data: { statut: DeliveryStatut.ARRIVED, arrived_at: new Date() },
     });
+    if (count !== 1) return this.livraisonChangee(deliveryId, DeliveryStatut.ARRIVED);
+    // Le livreur ne doit JAMAIS lire le code : c'est le client qui le lui
+    // dicte, et c'est ce qui prouve la remise. Sans cette omission, la
+    // reponse de la route lui donnait de quoi valider sans voir personne.
+    const updated = await this.lireSansCode(deliveryId);
 
     await this.emitDeliveryStatut(updated, delivery.statut);
     return updated;
