@@ -46,7 +46,8 @@ export interface ResultatAnnulationAuto {
  *    réservation atomique).
  *
  * Journal `ANNULATION_AUTO_COMMANDES_GARDEES`. L'annulation MANUELLE
- * (administration, restaurant) garde son comportement (`cancelCourse`).
+ * (administration, livreur) passe par `cancelCourse` : elle n'annule pas non
+ * plus les commandes et relance celles qui ne sont pas livrées.
  */
 @Injectable()
 export class AnnulationAutoService {
