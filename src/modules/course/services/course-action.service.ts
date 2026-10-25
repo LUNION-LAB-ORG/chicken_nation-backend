@@ -80,12 +80,21 @@ export class CourseActionService {
    * Mise à jour CONDITIONNELLE (GardeOffresService) : course encore en
    * recherche, pas confiée à Turbo, offre encore en attente pour ce livreur ;
    * sinon 409 « Cette course n'est plus disponible. » et offre close.
+   *
+   * Rejeu (course déjà à lui : réponse perdue, erreur rejouée par l'appli,
+   * double toucher) : la course est rendue, sans nouvel événement ni
+   * notification.
    */
   async acceptOffer(courseId: string, delivererId: string) {
-    const course = await this.garde.reserverAcceptation(courseId, delivererId);
+    const { course, rejeu } = await this.garde.reserverAcceptation(courseId, delivererId);
 
     // P5 : sortie de la queue FIFO (le livreur est maintenant "en activité").
-    await this.queueService.onAccept(delivererId);
+    // La course est réservée : une panne ici ne rend plus d'erreur au livreur,
+    // sinon l'appli rejoue l'acceptation. Sans risque au rejeu (même écriture).
+    await this.queueService
+      .onAccept(delivererId)
+      .catch((e) => this.logger.warn(`Sortie de la file du livreur ${delivererId.slice(0, 8)} impossible : ${e?.message}`));
+    if (rejeu) return course;
 
     await this.courseEvent.courseAssigned({ course });
 

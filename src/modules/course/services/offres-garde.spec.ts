@@ -326,6 +326,71 @@ describe('acceptation conditionnelle (POST /courses/deliverer/:id/accept)', () =
     expect(t.offres.filter((o) => o.status === CourseOfferStatus.ACCEPTED)).toHaveLength(1);
     expect(t.queue.onAccept).toHaveBeenCalledTimes(1);
   });
+
+  it('rejeu par le même livreur (réponse perdue, erreur rejouée par l’appli) : la course lui est rendue, sans refus ni nouvel événement', async () => {
+    const d = livreur();
+    const c = course({ offer_expires_at: apres(60) });
+    const o = offre({ course_id: c.id, deliverer_id: d.id, expires_at: apres(60) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [o] });
+
+    await t.actions.acceptOffer(c.id, d.id);
+    const rejeu = await t.actions.acceptOffer(c.id, d.id);
+
+    expect(rejeu).toMatchObject({ id: c.id, statut: CourseStatut.ACCEPTED, deliverer_id: d.id });
+    expect(o.status).toBe(CourseOfferStatus.ACCEPTED);
+    expect(t.types()).not.toContain('ACCEPTATION_REFUSEE');
+    expect(t.courseEvent.courseAssigned).toHaveBeenCalledTimes(1);
+    expect(t.push.notifyCourseAssigned).toHaveBeenCalledTimes(1);
+    expect(t.queue.onRefuse).not.toHaveBeenCalled();
+    expect(t.queue.onOfferExpired).not.toHaveBeenCalled();
+
+    // Livreur déjà au restaurant : toujours sa course.
+    c.statut = CourseStatut.AT_RESTAURANT;
+    expect(await t.actions.acceptOffer(c.id, d.id)).toMatchObject({ id: c.id, statut: CourseStatut.AT_RESTAURANT });
+    expect(t.types()).not.toContain('ACCEPTATION_REFUSEE');
+  });
+
+  it('double toucher sur « Accepter » : les deux réponses rendent la course, un seul événement', async () => {
+    const d = livreur();
+    const c = course({ offer_expires_at: apres(60) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [offre({ course_id: c.id, deliverer_id: d.id, expires_at: apres(60) })] });
+
+    const resultats = await Promise.allSettled([t.actions.acceptOffer(c.id, d.id), t.actions.acceptOffer(c.id, d.id)]);
+
+    expect(resultats.map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
+    expect(c).toMatchObject({ statut: CourseStatut.ACCEPTED, deliverer_id: d.id });
+    expect(t.courseEvent.courseAssigned).toHaveBeenCalledTimes(1);
+    expect(t.types()).not.toContain('ACCEPTATION_REFUSEE');
+  });
+
+  it('la sortie de la file échoue après la réservation : la course est rendue (une erreur ferait rejouer l’appli)', async () => {
+    const d = livreur();
+    const c = course({ offer_expires_at: apres(60) });
+    const t = monter({ livreurs: [d], courses: [c], offres: [offre({ course_id: c.id, deliverer_id: d.id, expires_at: apres(60) })] });
+    t.queue.onAccept.mockRejectedValueOnce(new Error('base indisponible'));
+
+    const acceptee = await t.actions.acceptOffer(c.id, d.id);
+
+    expect(acceptee).toMatchObject({ id: c.id, statut: CourseStatut.ACCEPTED, deliverer_id: d.id });
+    expect(t.courseEvent.courseAssigned).toHaveBeenCalledTimes(1);
+  });
+
+  it('course prise par un AUTRE livreur : le rejeu d’un tiers reste un 409', async () => {
+    const d1 = livreur();
+    const d2 = livreur();
+    const c = course({ statut: CourseStatut.ACCEPTED, deliverer_id: d1.id });
+    const t = monter({
+      livreurs: [d1, d2],
+      courses: [c],
+      offres: [
+        offre({ course_id: c.id, deliverer_id: d1.id, status: CourseOfferStatus.ACCEPTED, expires_at: apres(60) }),
+        offre({ course_id: c.id, deliverer_id: d2.id, status: CourseOfferStatus.CANCELLED, expires_at: apres(60) }),
+      ],
+    });
+
+    expect((await refus(t.actions.acceptOffer(c.id, d2.id))).message).toBe("Cette course n'est plus disponible.");
+    expect(c.deliverer_id).toBe(d1.id);
+  });
 });
 
 // ============================================================
