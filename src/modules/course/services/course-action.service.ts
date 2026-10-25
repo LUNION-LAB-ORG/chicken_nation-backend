@@ -23,6 +23,7 @@ import { TurboService } from 'src/turbo/services/turbo.service';
 
 import { parseOrderLatLng } from '../helpers/geo.helper';
 import { messageCommandesPasPretes } from '../helpers/code-retrait.rules';
+import { MESSAGE_COURSE_PAS_A_TOI } from '../helpers/depart.rules';
 import { CancelCourseDto } from '../dto/cancel-course.dto';
 import { ConfirmDeliveryDto } from '../dto/confirm-delivery.dto';
 import { FailDeliveryDto } from '../dto/fail-delivery.dto';
@@ -209,67 +210,86 @@ export class CourseActionService {
     return updatedCourse;
   }
 
-  /** Annulation de la course par le livreur ou admin */
-  async cancelCourse(courseId: string, cancelledBy: string, dto: CancelCourseDto) {
-    const course = await this.prisma.course.findUniqueOrThrow({
-      where: { id: courseId },
-      include: COURSE_FULL_INCLUDE,
-    });
+  /**
+   * Annulation de la course par le livreur ou admin.
+   *
+   * Par le livreur (`delivererId`, lu du jeton) : seulement SA course, celle
+   * qu'il a acceptée, sinon 403. Avant le 25/10, la route ne passait pas le
+   * livreur : n'importe quel livreur annulait la course d'un autre.
+   *
+   * Écriture CONDITIONNÉE (statut pas terminal, livreur du jeton) et d'un seul
+   * tenant : une course terminée ou confiée à un autre au même instant n'est
+   * pas annulée, et rien d'autre n'est écrit.
+   */
+  async cancelCourse(courseId: string, cancelledBy: string, dto: CancelCourseDto, delivererId?: string) {
+    const parLeLivreur = cancelledBy === 'deliverer';
+    if (parLeLivreur && !delivererId) throw new ForbiddenException(MESSAGE_COURSE_PAS_A_TOI);
 
     const terminal: CourseStatut[] = [
       CourseStatut.COMPLETED,
       CourseStatut.CANCELLED,
       CourseStatut.EXPIRED,
     ];
-    if (terminal.includes(course.statut)) {
-      throw new BadRequestException('Course déjà terminée');
-    }
 
     const now = new Date();
     // Une annulation AUTOMATIQUE n'annule jamais une commande de client (« une
     // commande ne s'annule que manuellement ») : la tâche passe par
     // AnnulationAutoService, ceci n'est qu'un garde-fou.
     const annulerLesCommandes = cancelledBy !== 'system';
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.course.update({
-        where: { id: courseId },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const annulee = await tx.course.updateMany({
+        where: {
+          id: courseId,
+          ...(parLeLivreur ? { deliverer_id: delivererId } : {}),
+          statut: { notIn: terminal },
+        },
         data: {
           statut: CourseStatut.CANCELLED,
           cancelled_at: now,
           cancelled_by: cancelledBy,
           cancelled_reason: dto.reason,
         },
-        include: COURSE_FULL_INCLUDE,
-      }),
+      });
+      if (annulee.count !== 1) {
+        // Le refus dit pourquoi : la course d'un autre passe avant son état.
+        const lue = await tx.course.findUnique({
+          where: { id: courseId },
+          select: { deliverer_id: true },
+        });
+        if (!lue) throw new NotFoundException('Course non trouvée');
+        if (parLeLivreur && lue.deliverer_id !== delivererId) {
+          throw new ForbiddenException(MESSAGE_COURSE_PAS_A_TOI);
+        }
+        throw new BadRequestException('Course déjà terminée');
+      }
       // Propage CANCELLED aux Deliveries non terminales
-      this.prisma.delivery.updateMany({
+      await tx.delivery.updateMany({
         where: {
           course_id: courseId,
           statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
         },
         data: { statut: DeliveryStatut.CANCELLED },
-      }),
+      });
       // Propage CANCELLED + traçabilité aux Orders dont la Delivery n'est pas terminale
-      ...(annulerLesCommandes
-        ? [
-            this.prisma.order.updateMany({
-              where: {
-                delivery: {
-                  course_id: courseId,
-                  statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
-                },
-                status: { notIn: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
-              },
-              data: {
-                status: OrderStatus.CANCELLED,
-                cancelled_at: now,
-                cancelled_by: cancelledBy,
-                cancelled_reason: dto.reason ?? 'Course annulée',
-              },
-            }),
-          ]
-        : []),
-    ]);
+      if (annulerLesCommandes) {
+        await tx.order.updateMany({
+          where: {
+            delivery: {
+              course_id: courseId,
+              statut: { notIn: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED] },
+            },
+            status: { notIn: [OrderStatus.COMPLETED, OrderStatus.CANCELLED] },
+          },
+          data: {
+            status: OrderStatus.CANCELLED,
+            cancelled_at: now,
+            cancelled_by: cancelledBy,
+            cancelled_reason: dto.reason ?? 'Course annulée',
+          },
+        });
+      }
+      return tx.course.findUniqueOrThrow({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
+    });
 
     await this.courseEvent.courseCancelled({ course: updated, cancelled_by: cancelledBy, reason: dto.reason });
 

@@ -454,16 +454,33 @@ describe('cancelCourse : l’annulation manuelle garde son comportement, l’aut
       commandes: [...auto.commandes, ...manuelle.commandes],
       livraisons: [...auto.livraisons, ...manuelle.livraisons],
     });
+    // Écritures faites dans la transaction de l'annulation (écriture conditionnée) :
+    // celles sur les commandes sont relevées ici.
+    const ecrituresCommandes = jest.fn();
+    const transaction = t.prisma.$transaction.getMockImplementation();
+    t.prisma.$transaction.mockImplementation(async (arg: unknown) =>
+      typeof arg === 'function'
+        ? transaction(async (tx: any) => {
+            const ecrire = tx.order.updateMany;
+            tx.order.updateMany = jest.fn(async (args: unknown) => {
+              ecrituresCommandes(args);
+              return ecrire(args);
+            });
+            return (arg as (tx: unknown) => Promise<unknown>)(tx);
+          })
+        : transaction(arg),
+    );
 
     await t.actions.cancelCourse(auto.course.id, 'system', { reason: 'test' } as never);
     expect(auto.livraisons[0].statut).toBe(DeliveryStatut.CANCELLED);
     expect(auto.commandes[0].status).toBe(OrderStatus.READY);
+    expect(ecrituresCommandes).not.toHaveBeenCalled();
     expect(t.prisma.order.updateMany).not.toHaveBeenCalled();
 
     // Annulation manuelle : la même écriture qu'avant sur les commandes.
     await t.actions.cancelCourse(manuelle.course.id, 'admin', { reason: 'Client injoignable' } as never);
-    expect(t.prisma.order.updateMany).toHaveBeenCalledTimes(1);
-    expect(t.prisma.order.updateMany).toHaveBeenCalledWith({
+    expect(ecrituresCommandes).toHaveBeenCalledTimes(1);
+    expect(ecrituresCommandes).toHaveBeenCalledWith({
       where: {
         delivery: {
           course_id: manuelle.course.id,

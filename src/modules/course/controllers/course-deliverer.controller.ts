@@ -137,7 +137,12 @@ export class CourseDelivererController {
     return this.depart.jePars(id, deliverer.id);
   }
 
-  @ApiOperation({ summary: 'Annuler la course (cas exceptionnel)' })
+  @ApiOperation({
+    summary: 'Annuler la course (cas exceptionnel)',
+    description:
+      "Seulement la course du livreur connecté (celle qu'il a acceptée) : 403 « Cette course n'est pas " +
+      "à toi. » sinon, 400 « Course déjà terminée » si elle l'est.",
+  })
   @ApiBody({ type: CancelCourseDto })
   @Patch(':id/cancel')
   async cancel(
@@ -145,7 +150,7 @@ export class CourseDelivererController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: CancelCourseDto,
   ) {
-    return this.actionService.cancelCourse(id, 'deliverer', dto);
+    return this.actionService.cancelCourse(id, 'deliverer', dto, deliverer.id);
   }
 
   // ============================================================
