@@ -7,6 +7,7 @@ import {
   enRetard,
   finTourneePrevue,
   retardMin,
+  tempsDeTourneeMin,
 } from './retard-tournee.rules';
 
 const RETRAIT = new Date('2026-10-24T12:00:00.000Z');
@@ -125,6 +126,34 @@ describe('enRetard : même règle que le cron detecterRetards', () => {
   it('suit le réglage du facteur', () => {
     expect(enRetard(partie, minutes(25), 1.2)).toBe(true);
     expect(enRetard(partie, minutes(25), 1.5)).toBe(false);
+  });
+
+  describe('retenue au comptoir après la remise (relecture du 25/10) : l’attente ne compte pas comme tournée', () => {
+    // Remise à 12:00 (la caisse remet dès le code), retenue jusqu'à 12:12, départ 12:13, tournée de 26 min.
+    const retenue = { ...partie, retenue_jusqua: minutes(12), parti_at: minutes(13), estimated_duration_min: 26 };
+
+    it('comptée depuis la fin de la retenue : 26 × 1,5 = 39 min après 12:12, pas 39 min après la remise', () => {
+      expect(enRetard(retenue, minutes(40), FACTEUR)).toBe(false);
+      expect(enRetard(retenue, minutes(50), FACTEUR)).toBe(false);
+      expect(enRetard(retenue, minutes(51), FACTEUR)).toBe(true);
+      expect(tempsDeTourneeMin(retenue, minutes(51))).toBe(39);
+    });
+
+    it('livreur encore au comptoir pendant la retenue : jamais en retard', () => {
+      const auComptoir = { ...retenue, parti_at: null, motif_depart: null, estimated_duration_min: 6 };
+      expect(enRetard(auComptoir, minutes(11), FACTEUR)).toBe(false);
+    });
+
+    it('parti pour de bon pendant la retenue : compté depuis son départ', () => {
+      const parti = { ...retenue, parti_at: minutes(5), motif_depart: 'POSITION' };
+      expect(enRetard(parti, minutes(43), FACTEUR)).toBe(false);
+      expect(enRetard(parti, minutes(44), FACTEUR)).toBe(true);
+    });
+
+    it('retenue levée avant la remise, ou texte ISO : depuis la remise, comme avant', () => {
+      expect(enRetard({ ...partie, retenue_jusqua: minutes(-2) }, minutes(30), FACTEUR)).toBe(true);
+      expect(enRetard({ ...retenue, retenue_jusqua: minutes(12).toISOString() }, minutes(50), FACTEUR)).toBe(false);
+    });
   });
 });
 

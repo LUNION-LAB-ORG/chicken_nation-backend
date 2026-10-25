@@ -13,7 +13,8 @@
  *    base que l'heure d'arrivée prévue du suivi d'une commande
  *    (`suiviLivraison`), qui la lit ici ;
  *  - en retard : course IN_DELIVERY, alerte déjà donnée (`delay_alerted_at`),
- *    ou temps écoulé depuis le retrait au moins égal à la durée estimée
+ *    ou temps écoulé depuis le retrait (depuis la fin de la retenue au
+ *    comptoir si elle finit après, 25/10) au moins égal à la durée estimée
  *    multipliée par le réglage `course.delay_alert_factor`. C'est la règle du
  *    cron, qui la lit ici ;
  *  - retard en minutes : au-delà de la fin prévue, seulement quand la course
@@ -24,6 +25,7 @@
 import { CourseStatut } from '@prisma/client';
 
 import { estDepartReel } from './depart.rules';
+import { debutFenetreApresRetraitMs } from './planification.rules';
 
 type DateLue = Date | string | null | undefined;
 
@@ -35,6 +37,8 @@ export interface CourseTourneeLue {
   motif_depart?: string | null;
   estimated_duration_min?: number | null;
   delay_alerted_at?: DateLue;
+  /** Fin de la retenue au comptoir (en cours, ou heure de sa levée). */
+  retenue_jusqua?: DateLue;
 }
 
 const UNE_MINUTE_MS = 60_000;
@@ -73,14 +77,31 @@ export function finTourneePrevue(course: CourseTourneeLue): Date | null {
   return new Date(base.getTime() + duree * UNE_MINUTE_MS);
 }
 
+/**
+ * Minutes de tournée comptées pour le retard : depuis le retrait, ou depuis
+ * la fin de la retenue au comptoir quand elle finit après le retrait (la
+ * caisse remet dès le code, la course attend ensuite la commande voisine :
+ * relecture du 25/10, sinon l'alerte partait au comptoir ou juste après le
+ * départ). Même début que la fenêtre d'ajout (`debutFenetreApresRetraitMs`).
+ * Livreur parti pour de bon pendant la retenue : depuis son départ. `null`
+ * sans retrait.
+ */
+export function tempsDeTourneeMin(course: CourseTourneeLue, maintenant: Date): number | null {
+  const retrait = date(course.picked_up_at);
+  if (!retrait) return null;
+  let debut = debutFenetreApresRetraitMs({ picked_up_at: retrait, retenue_jusqua: date(course.retenue_jusqua) })!;
+  const parti = departEstReel(course) ? date(course.parti_at) : null;
+  if (parti) debut = Math.min(debut, parti.getTime());
+  return (maintenant.getTime() - debut) / UNE_MINUTE_MS;
+}
+
 /** La tournée dépasse-t-elle nettement sa durée estimée ? Même règle que `CourseTask.detecterRetards`. */
 export function enRetard(course: CourseTourneeLue, maintenant: Date, facteur: number): boolean {
   if (course.statut !== CourseStatut.IN_DELIVERY) return false;
   if (date(course.delay_alerted_at)) return true;
-  const retrait = date(course.picked_up_at);
+  const ecouleMin = tempsDeTourneeMin(course, maintenant);
   const duree = course.estimated_duration_min;
-  if (!retrait || typeof duree !== 'number') return false;
-  const ecouleMin = (maintenant.getTime() - retrait.getTime()) / UNE_MINUTE_MS;
+  if (ecouleMin === null || typeof duree !== 'number') return false;
   return ecouleMin >= duree * facteur;
 }
 

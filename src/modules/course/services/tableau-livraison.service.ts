@@ -108,6 +108,8 @@ export class TableauLivraisonService {
           motif_depart: true,
           estimated_duration_min: true,
           delay_alerted_at: true,
+          // Retard de la tournée compté depuis la fin de la retenue (règle commune).
+          retenue_jusqua: true,
           cancelled_at: true,
           deliveries: {
             select: {
