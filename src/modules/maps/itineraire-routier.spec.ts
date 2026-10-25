@@ -8,6 +8,7 @@
  */
 import type { Cache } from 'cache-manager';
 
+import { DELAI_CACHE_MS } from './cache-borne.helper';
 import { CompteurAppelsGoogleService } from './compteur-appels-google.service';
 import { MapsService } from './maps.service';
 
@@ -351,5 +352,67 @@ describe('délais et compteurs des autres appels', () => {
     );
     await jest.advanceTimersByTimeAsync(2500);
     await expect(attente).resolves.toBeNull();
+  });
+});
+
+describe('Redis en coupure (relecture du 25/10) : le cache ne retient plus le dispatch, les trajets ni les frais', () => {
+  /**
+   * Cache d'un Redis en reconnexion : la commande reste dans la file du
+   * client, sans réponse ni erreur.
+   */
+  function monterRedisMuet() {
+    process.env.GOOGLE_MAPS_API_KEY = 'cle-essai';
+    const jamais = () => new Promise<never>(() => undefined);
+    const cache = { get: jest.fn(jamais), set: jest.fn(jamais) };
+    const maps = new MapsService(cache as unknown as Cache, compteurSimule() as unknown as CompteurAppelsGoogleService);
+    return { maps, cache };
+  }
+
+  /** Avance l'horloge de trois délais du cache, puis dit si la promesse est réglée et sa valeur. */
+  async function reglee<T>(promesse: Promise<T>): Promise<{ fini: boolean; valeur?: T }> {
+    let fini = false;
+    let valeur: T | undefined;
+    void promesse.then((v) => {
+      fini = true;
+      valeur = v;
+    });
+    await jest.advanceTimersByTimeAsync(DELAI_CACHE_MS * 3);
+    return { fini, valeur };
+  }
+
+  it('itinéraire routier (frais, direction) : lecture et écriture abandonnées, Google répond, résultat rendu', async () => {
+    jest.useFakeTimers();
+    const { maps, cache } = monterRedisMuet();
+    appelsGoogle.mockResolvedValueOnce(reponseDirections([{ metres: 4800, secondes: 720 }], 'abc@'));
+
+    const r = await reglee(maps.itineraireRoutier({ ...ZONE_4, ...PORT_BOUET }));
+
+    expect(r).toEqual({ fini: true, valeur: { metres: 4800, secondes: 720, polyligne: 'abc@' } });
+    expect(cache.get).toHaveBeenCalled();
+    expect(cache.set).toHaveBeenCalled();
+  });
+
+  it('getTravelTimes (choix du livreur) : lecture abandonnée, Google consulté, écriture abandonnée', async () => {
+    jest.useFakeTimers();
+    const { maps } = monterRedisMuet();
+    appelsGoogle.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 'OK', rows: [{ elements: [{ status: 'OK', duration: { value: 300 } }] }] }),
+    } as unknown as Response);
+
+    const r = await reglee(maps.getTravelTimes([{ latitude: 5.28, longitude: -3.97 }], { latitude: 5.286, longitude: -3.9737 }));
+
+    expect(r).toEqual({ fini: true, valeur: [300] });
+  });
+
+  it('getDirections (trajet affiché) : rendu malgré Redis muet', async () => {
+    jest.useFakeTimers();
+    const { maps } = monterRedisMuet();
+    appelsGoogle.mockResolvedValueOnce(reponseDirections([{ metres: 3000, secondes: 400 }]));
+
+    const r = await reglee(maps.getDirections({ originLat: 5.286, originLng: -3.9737, destLat: 5.26, destLng: -3.942 }));
+
+    expect(r.fini).toBe(true);
+    expect(r.valeur).toMatchObject({ totalDistanceMeters: 3000, totalDurationSeconds: 400 });
   });
 });

@@ -92,12 +92,21 @@ export class CourseActionService {
    * Mise à jour CONDITIONNELLE (GardeOffresService) : course encore en
    * recherche, pas confiée à Turbo, offre encore en attente pour ce livreur ;
    * sinon 409 « Cette course n'est plus disponible. » et offre close.
+   *
+   * Rejeu (course déjà à lui : réponse perdue, erreur rejouée par l'appli,
+   * double toucher) : la course est rendue, sans nouvel événement ni
+   * notification.
    */
   async acceptOffer(courseId: string, delivererId: string) {
-    const course = await this.garde.reserverAcceptation(courseId, delivererId);
+    const { course, rejeu } = await this.garde.reserverAcceptation(courseId, delivererId);
 
     // P5 : sortie de la queue FIFO (le livreur est maintenant "en activité").
-    await this.queueService.onAccept(delivererId);
+    // La course est réservée : une panne ici ne rend plus d'erreur au livreur,
+    // sinon l'appli rejoue l'acceptation. Sans risque au rejeu (même écriture).
+    await this.queueService
+      .onAccept(delivererId)
+      .catch((e) => this.logger.warn(`Sortie de la file du livreur ${delivererId.slice(0, 8)} impossible : ${e?.message}`));
+    if (rejeu) return course;
 
     await this.courseEvent.courseAssigned({ course });
 
@@ -164,22 +173,39 @@ export class CourseActionService {
   // COURSE : transitions phase "restaurant"
   // ============================================================
 
-  /** Livreur arrivé au restaurant (ACCEPTED → AT_RESTAURANT) */
+  /**
+   * Livreur arrivé au restaurant (ACCEPTED → AT_RESTAURANT).
+   *
+   * Écriture CONDITIONNÉE (course encore acceptée par ce livreur) : quand le
+   * serveur déclare l'arrivée d'après la position au même instant, un seul
+   * des deux passe (une seule annonce « Attends », un seul passage du
+   * planificateur) ; une course annulée entre-temps ne revient jamais au
+   * restaurant.
+   */
   async markAtRestaurant(courseId: string, delivererId: string) {
     // Arrivée déjà déclarée par le serveur d'après la position : réponse normale.
-    const deja = await this.prisma.course.findUnique({ where: { id: courseId }, select: { statut: true, deliverer_id: true } });
-    if (deja?.deliverer_id === delivererId && deja.statut === CourseStatut.AT_RESTAURANT) {
-      return this.prisma.course.findUniqueOrThrow({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
-    }
-    const course = await this.assertOwnedCourse(courseId, delivererId, CourseStatut.ACCEPTED);
-    const updated = await this.prisma.course.update({
-      where: { id: courseId },
+    const dejaAuRestaurant = async () => {
+      const deja = await this.prisma.course.findUnique({ where: { id: courseId }, select: { statut: true, deliverer_id: true } });
+      return deja?.deliverer_id === delivererId && deja.statut === CourseStatut.AT_RESTAURANT;
+    };
+    const relire = () => this.prisma.course.findUniqueOrThrow({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
+    if (await dejaAuRestaurant()) return relire();
+
+    await this.assertOwnedCourse(courseId, delivererId, CourseStatut.ACCEPTED);
+    const { count } = await this.prisma.course.updateMany({
+      where: { id: courseId, deliverer_id: delivererId, statut: CourseStatut.ACCEPTED },
       data: {
         statut: CourseStatut.AT_RESTAURANT,
         at_restaurant_at: new Date(),
       },
-      include: COURSE_FULL_INCLUDE,
     });
+    if (count !== 1) {
+      if (await dejaAuRestaurant()) return relire();
+      // Annulée, relancée ou reprise entre la lecture et l'écriture : le message habituel.
+      await this.assertOwnedCourse(courseId, delivererId, CourseStatut.ACCEPTED);
+      throw new ConflictException('La course a changé. Réessaie.');
+    }
+    const updated = await relire();
     await this.courseEvent.courseStatutChanged({
       course: updated,
       previous_statut: CourseStatut.ACCEPTED,
@@ -188,51 +214,19 @@ export class CourseActionService {
     return updated;
   }
 
-  /** Colis récupérés au resto (AT_RESTAURANT → IN_DELIVERY + Orders → PICKED_UP) */
-  async markPickedUp(courseId: string, delivererId: string) {
-    const course = await this.assertOwnedCourse(courseId, delivererId, CourseStatut.AT_RESTAURANT);
-
-    const now = new Date();
-    let [updatedCourse] = await this.prisma.$transaction([
-      this.prisma.course.update({
-        where: { id: courseId },
-        data: { statut: CourseStatut.IN_DELIVERY, picked_up_at: now },
-        include: COURSE_FULL_INCLUDE,
-      }),
-      // Propage le statut PICKED_UP + timestamp sur chaque Order (côté cuisine/client)
-      this.prisma.order.updateMany({
-        where: { delivery: { course_id: courseId } },
-        data: { status: OrderStatus.PICKED_UP, picked_up_at: now },
-      }),
-    ]);
-
-    // Fenêtre d'ajout après le retrait fermée d'office si elle ne doit pas
-    // s'ouvrir ; l'événement qui suit porte alors la course relue (partie).
-    if (await this.depart?.fermerFenetreALaValidation(courseId, now, { annoncer: false })) {
-      updatedCourse =
-        (await this.prisma.course.findUnique({ where: { id: courseId }, include: COURSE_FULL_INCLUDE })) ?? updatedCourse;
-    }
-
-    await this.courseEvent.courseStatutChanged({
-      course: updatedCourse,
-      previous_statut: CourseStatut.AT_RESTAURANT,
-      new_statut: CourseStatut.IN_DELIVERY,
-    });
-    return updatedCourse;
-  }
-
   /**
-   * ANNULATION MANUELLE d'une course (administration, livreur). Règle du
-   * client : annuler une course n'annule JAMAIS une commande, une commande ne
-   * s'annule que manuellement. Après l'annulation, aucune commande ne reste
-   * sur la course :
+   * ANNULATION MANUELLE d'une course (administration). Règle du client :
+   * annuler une course n'annule JAMAIS une commande, une commande ne s'annule
+   * que manuellement. Après l'annulation, aucune commande ne reste sur la
+   * course :
    *  - la course est réservée par une écriture conditionnée (pas encore
    *    terminée) : deux annulations en même temps, une seule passe, l'autre
    *    reçoit 400 ;
-   *  - par le livreur (`delivererId`, lu du jeton) : seulement SA course,
-   *    celle qu'il a acceptée, sinon 403 (la condition porte aussi sur le
-   *    livreur). Avant le 25/10, la route ne passait pas le livreur : n'importe
-   *    quel livreur annulait la course d'un autre ;
+   *  - le livreur n'a plus de route pour annuler (relecture du 25/10) : une
+   *    course qu'il abandonne est relancée par l'annulation automatique. La
+   *    garde reste ici : une annulation « deliverer » exige son identifiant
+   *    (`delivererId`, du jeton) et ne passe que sur SA course, celle qu'il a
+   *    acceptée, sinon 403 (la condition porte aussi sur le livreur) ;
    *  - ses livraisons pas terminées sont annulées ; les commandes déjà livrées
    *    ne bougent pas ;
    *  - course interne : une commande remise au livreur et pas livrée revient
@@ -380,7 +374,7 @@ export class CourseActionService {
    * elle saisit le pickup_code dicté par le livreur → on enchaîne en cascade :
    *   Course ACCEPTED/AT_RESTAURANT → IN_DELIVERY
    *   Orders READY → PICKED_UP (+ picked_up_at)
-   *   Remplace l'ancienne action livreur `markPickedUp` (supprimée côté mobile).
+   *   Remplace l'ancienne action livreur « colis récupérés » (route retirée le 25/10).
    *
    * Préconditions : toutes les Orders liées doivent être READY (sinon 400).
    *

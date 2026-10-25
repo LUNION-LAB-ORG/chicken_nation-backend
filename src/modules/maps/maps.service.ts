@@ -3,6 +3,7 @@ import { racinePublique, urlApi } from 'src/common/utils/url-publique.util';
 import { Inject, Injectable, Logger, BadGatewayException } from '@nestjs/common';
 import type { Cache } from 'cache-manager';
 
+import { ecrireCacheBorne, lireCacheBorne } from './cache-borne.helper';
 import { CompteurAppelsGoogleService } from './compteur-appels-google.service';
 
 // ─── Types partagés ──────────────────────────────────────────────────────────
@@ -249,7 +250,7 @@ export class MapsService {
       waypointsStr,
     );
 
-    const cached = await this.cache.get<IDirectionsResult>(cacheKey);
+    const cached = await this.lireCache<IDirectionsResult>(cacheKey);
     if (cached) {
       this.logger.debug(`[Maps] directions cache HIT ${cacheKey}`);
       return cached;
@@ -326,7 +327,7 @@ export class MapsService {
         legs,
       };
 
-      await this.cache.set(cacheKey, result, TTL.DIRECTIONS);
+      await this.ecrireCache(cacheKey, result, TTL.DIRECTIONS);
       return result;
     } catch (err) {
       this.logger.warn(`[Maps] Directions error: ${(err as Error).message}`);
@@ -341,21 +342,19 @@ export class MapsService {
     return this.key(prefixe, ...points.flatMap((p) => [p.lat.toFixed(4), p.lng.toFixed(4)]));
   }
 
-  /** Lecture du cache qui ne lève jamais (Redis coupé = absent). */
-  private async lireCache<T>(cle: string): Promise<T | undefined> {
-    try {
-      return (await this.cache.get<T>(cle)) ?? undefined;
-    } catch {
-      return undefined;
-    }
+  /**
+   * Lecture du cache qui ne lève jamais et n'attend jamais plus de 400 ms
+   * (Redis coupé, en reconnexion ou lent = absent) : le dispatch, les trajets
+   * et les frais continuent sans lui.
+   */
+  private lireCache<T>(cle: string): Promise<T | undefined> {
+    return lireCacheBorne<T>(this.cache, cle);
   }
 
+  /** Écriture du cache, bornée de même ; un échec est seulement noté. */
   private async ecrireCache(cle: string, valeur: unknown, ttl: number): Promise<void> {
-    try {
-      await this.cache.set(cle, valeur, ttl);
-    } catch (err) {
-      this.logger.warn(`[Maps] Cache indisponible : ${(err as Error).message}`);
-    }
+    const echec = await ecrireCacheBorne(this.cache, cle, valeur, ttl);
+    if (echec) this.logger.warn(`[Maps] Cache indisponible : ${echec.message}`);
   }
 
   /** Itinéraire routier déjà en cache, sans jamais appeler Google. */
@@ -618,7 +617,7 @@ export class MapsService {
     const destStr = `${destination.latitude},${destination.longitude}`;
     const cacheKey = this.key('matrix', originsStr, destStr);
 
-    const cached = await this.cache.get<(number | null)[]>(cacheKey);
+    const cached = await this.lireCache<(number | null)[]>(cacheKey);
     if (cached) return cached;
 
     if (!this.apiKey) return null;
@@ -655,7 +654,7 @@ export class MapsService {
         return el.duration_in_traffic?.value ?? el.duration?.value ?? null;
       });
 
-      await this.cache.set(cacheKey, result, TTL.DIRECTIONS);
+      await this.ecrireCache(cacheKey, result, TTL.DIRECTIONS);
       return result;
     } catch (err) {
       this.logger.warn(`[Maps] DistanceMatrix error: ${(err as Error).message}`);
@@ -668,7 +667,7 @@ export class MapsService {
   async reverseGeocode(lat: number, lng: number): Promise<IReverseGeocodeResult | null> {
     const cacheKey = this.key('rev_geocode', lat.toFixed(4), lng.toFixed(4));
 
-    const cached = await this.cache.get<IReverseGeocodeResult>(cacheKey);
+    const cached = await this.lireCache<IReverseGeocodeResult>(cacheKey);
     if (cached) {
       this.logger.debug(`[Maps] reverseGeocode cache HIT ${cacheKey}`);
       return cached;
@@ -701,7 +700,7 @@ export class MapsService {
         components: best.address_components,
       };
 
-      await this.cache.set(cacheKey, result, TTL.REVERSE_GEOCODE);
+      await this.ecrireCache(cacheKey, result, TTL.REVERSE_GEOCODE);
       return result;
     } catch (err) {
       this.logger.warn(`[Maps] ReverseGeocode error: ${(err as Error).message}`);
@@ -723,7 +722,7 @@ export class MapsService {
       params.components ?? 'ci',
     );
 
-    const cached = await this.cache.get<IAutocompleteResult[]>(cacheKey);
+    const cached = await this.lireCache<IAutocompleteResult[]>(cacheKey);
     if (cached) {
       this.logger.debug(`[Maps] autocomplete cache HIT "${params.input}"`);
       return cached;
@@ -761,7 +760,7 @@ export class MapsService {
         secondaryText: p.structured_formatting.secondary_text ?? '',
       }));
 
-      await this.cache.set(cacheKey, results, TTL.AUTOCOMPLETE);
+      await this.ecrireCache(cacheKey, results, TTL.AUTOCOMPLETE);
       return results;
     } catch (err) {
       this.logger.warn(`[Maps] Autocomplete error: ${(err as Error).message}`);
@@ -845,7 +844,7 @@ export class MapsService {
       `${originLat.toFixed(5)},${originLng.toFixed(5)}_${destLat.toFixed(5)},${destLng.toFixed(5)}_${width}x${height}@${scale}_t${topPad.toFixed(2)}`,
     );
 
-    const cached = await this.cache.get<string>(cacheKey);
+    const cached = await this.lireCache<string>(cacheKey);
     if (cached) return Buffer.from(cached, 'base64');
 
     const itineraire = await this.getDirections({
@@ -1009,7 +1008,7 @@ export class MapsService {
         }
       }
 
-      await this.cache.set(cacheKey, resultat.image.toString('base64'), TTL.STATIC_ROUTE);
+      await this.ecrireCache(cacheKey, resultat.image.toString('base64'), TTL.STATIC_ROUTE);
       return resultat.image;
     } catch (err) {
       this.logger.warn(`[Maps] StaticRoute error: ${(err as Error).message}`);
@@ -1022,7 +1021,7 @@ export class MapsService {
   async placeDetails(placeId: string, sessionToken?: string): Promise<IPlaceDetailsResult | null> {
     const cacheKey = this.key('place_det', placeId);
 
-    const cached = await this.cache.get<IPlaceDetailsResult>(cacheKey);
+    const cached = await this.lireCache<IPlaceDetailsResult>(cacheKey);
     if (cached) {
       this.logger.debug(`[Maps] placeDetails cache HIT ${placeId}`);
       return cached;
@@ -1079,7 +1078,7 @@ export class MapsService {
         viewport: r.geometry.viewport ?? null,
       };
 
-      await this.cache.set(cacheKey, result, TTL.PLACE_DETAILS);
+      await this.ecrireCache(cacheKey, result, TTL.PLACE_DETAILS);
       return result;
     } catch (err) {
       this.logger.warn(`[Maps] PlaceDetails error: ${(err as Error).message}`);

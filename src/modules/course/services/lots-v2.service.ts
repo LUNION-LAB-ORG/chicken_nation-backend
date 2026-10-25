@@ -123,7 +123,8 @@ export class LotsV2Service {
    * Passage en v2 : les lots en attente de la flotte interne des restaurants
    * en v2 sont vidés aussitôt. Le lot est clos (EXPIRED, sans course) et ses
    * commandes rendues au planificateur, qui les reprend à son passage.
-   * Les lots Turbo d'origine ne sont pas touchés.
+   * Les lots Turbo d'origine (toutes leurs commandes prêtes confiées à Turbo)
+   * ne sont pas touchés.
    *
    * @returns les restaurants dont des commandes ont été rendues (pour demander un passage).
    */
@@ -133,13 +134,19 @@ export class LotsV2Service {
       select: {
         id: true,
         restaurant_id: true,
-        orders: { select: { id: true, delivery_service: true } },
+        orders: { select: { id: true, status: true, delivery_service: true } },
       },
     });
     const restaurants = new Set<string>();
     for (const lot of lots) {
       if (planificateurDuRestaurant(planificateur, lot.restaurant_id) !== 'v2') continue;
-      const turbo = lot.orders.length > 0 && lot.orders.every((o) => o.delivery_service === DeliveryService.TURBO);
+      // Jugé sur ses commandes PRÊTES, comme l'entrée dans un lot (une
+      // commande annulée reste dans le lot sans compter) : un lot Turbo avec
+      // une commande interne annulée était vidé, et sa commande Turbo prête
+      // restait sans lot ni course (relecture du 25/10).
+      const pretes = lot.orders.filter((o) => o.status === OrderStatus.READY);
+      const jugees = pretes.length > 0 ? pretes : lot.orders;
+      const turbo = jugees.length > 0 && jugees.every((o) => o.delivery_service === DeliveryService.TURBO);
       if (turbo) continue;
 
       // Réservation : un seul serveur clôt le lot.

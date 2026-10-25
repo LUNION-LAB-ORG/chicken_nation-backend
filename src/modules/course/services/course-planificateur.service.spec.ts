@@ -588,6 +588,58 @@ describe('Turbo sous v2 (3.11)', () => {
     await v1.offres.retryUnassignedCourses();
     expect(v1.turbo.creerCourseGroupe).toHaveBeenCalledTimes(1);
   });
+
+  it('commande neuve ajoutée à une course sans livreur de 58 min, Turbo coupé : la course n’expire pas avec elle, la cloche repart pour elle', async () => {
+    const vieille = prete({ ready_at: avant(58 * 60) });
+    const neuve = prete({ ready_at: avant(10) });
+    const k = course({ created_at: avant(58 * 60), no_deliverer_alerted_at: avant(53 * 60) });
+    const t = monter(
+      {
+        commandes: [vieille, neuve],
+        courses: [k],
+        livraisons: [livraison({ course_id: k.id, order_id: vieille.id })],
+        livreurs: [livreur({ last_available_at: null })],
+      },
+      { reglages: { 'course.turbo_fallback_enabled': '0' } },
+    );
+
+    await t.passer();
+    expect(t.livraisonsDe(k.id).map((l) => l.order_id).sort()).toEqual([vieille.id, neuve.id].sort());
+    expect(k.no_deliverer_alerted_at).toBeNull();
+
+    // La course a 60 min, la commande neuve 2 : la course attend encore un livreur.
+    jest.setSystemTime(apres(2 * 60));
+    await t.offres.retryUnassignedCourses();
+    expect(k.statut).toBe(CourseStatut.PENDING_ASSIGNMENT);
+    expect(t.cloche.sendCourseNoDelivererBell).toHaveBeenCalledTimes(1);
+
+    // Une heure après l'ajout, toujours personne : la course expire comme avant.
+    jest.setSystemTime(apres(60 * 60));
+    await t.offres.retryUnassignedCourses();
+    expect(k.statut).toBe(CourseStatut.EXPIRED);
+  });
+
+  it('commande ajoutée puis annulée : elle ne prolonge pas l’attente de la course', async () => {
+    const vieille = prete({ ready_at: avant(61 * 60) });
+    const annulee = prete({ status: OrderStatus.CANCELLED });
+    const k = course({ created_at: avant(61 * 60) });
+    const t = monter(
+      {
+        commandes: [vieille, annulee],
+        courses: [k],
+        livraisons: [
+          livraison({ course_id: k.id, order_id: vieille.id }),
+          livraison({ course_id: k.id, order_id: annulee.id, sequence_order: 2, ajoutee_at: avant(60) }),
+        ],
+        livreurs: [livreur({ last_available_at: null })],
+      },
+      { reglages: { 'course.turbo_fallback_enabled': '0' } },
+    );
+
+    await t.offres.retryUnassignedCourses();
+
+    expect(k.statut).toBe(CourseStatut.EXPIRED);
+  });
 });
 
 describe('repli : planificateur v1 (« course.planificateur » = v1)', () => {
@@ -742,6 +794,35 @@ describe('lots sous v2 (5.5)', () => {
     expect(prisma.order.updateMany).toHaveBeenCalledWith({ where: { batch_id: 'lot-interne', delivery: null }, data: { batch_id: null } });
 
     expect(await service.libererLotsV2({ version: 'v1', restaurants: [], refusees: [] })).toEqual([]);
+  });
+
+  it('lot Turbo dont une commande interne a été annulée : jugé sur ses commandes prêtes, il reste à Turbo', async () => {
+    const base = monterBaseDispatch({});
+    const lots = [
+      {
+        id: 'lot-mixte',
+        restaurant_id: RESTO,
+        status: CourseBatchStatus.PENDING,
+        orders: [
+          { id: 'o1', status: OrderStatus.CANCELLED, delivery_service: DeliveryService.CHICKEN_NATION },
+          { id: 'o2', status: OrderStatus.READY, delivery_service: DeliveryService.TURBO },
+        ],
+      },
+    ];
+    const prisma = {
+      ...base.prisma,
+      courseBatch: {
+        findMany: jest.fn(async () => lots),
+        updateMany: jest.fn(async () => ({ count: 1 })),
+      },
+      order: { updateMany: jest.fn(async () => ({ count: 1 })) },
+    };
+    const service = new LotsV2Service(prisma as never, {} as never);
+
+    expect(await service.libererLotsV2({ version: 'v2', restaurants: [], refusees: [] })).toEqual([]);
+
+    expect(prisma.courseBatch.updateMany).not.toHaveBeenCalled();
+    expect(prisma.order.updateMany).not.toHaveBeenCalled();
   });
 });
 

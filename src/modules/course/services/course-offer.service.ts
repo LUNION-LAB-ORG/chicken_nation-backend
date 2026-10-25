@@ -36,6 +36,7 @@ import { CourseHelper } from '../helpers/course.helper';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import {
+  CLASSE_VERROU_OFFRE_COURSE,
   CLASSE_VERROU_OFFRE_LIVREUR,
   decisionCreationOffre,
   decisionExpiration,
@@ -47,6 +48,28 @@ import { GardeOffresService } from './garde-offres.service';
 interface CreateCourseFromOrdersInput {
   restaurantId: string;
   orderIds: string[];
+}
+
+/**
+ * Minutes d'attente d'une course sans livreur depuis la dernière commande
+ * entrée : sa création, ou le dernier ajout ou la dernière fusion
+ * (`ajoutee_at`) d'une livraison encore à faire dont la commande n'est pas
+ * annulée.
+ */
+export function attenteDepuisDerniereEntreeMin(
+  course: {
+    created_at: Date;
+    deliveries: { ajoutee_at: Date | null; statut: DeliveryStatut; order: { status: OrderStatus } }[];
+  },
+  maintenant: Date,
+): number {
+  let derniere = course.created_at.getTime();
+  for (const d of course.deliveries) {
+    if (!d.ajoutee_at || d.order.status === OrderStatus.CANCELLED) continue;
+    if (d.statut === DeliveryStatut.CANCELLED || d.statut === DeliveryStatut.FAILED) continue;
+    derniere = Math.max(derniere, d.ajoutee_at.getTime());
+  }
+  return (maintenant.getTime() - derniere) / 60000;
 }
 
 /**
@@ -370,6 +393,29 @@ export class CourseOfferService {
           select: { id: true },
         });
         if (!enRecherche) return null;
+
+        // JAMAIS DEUX LIVREURS SOLLICITÉS POUR LA MÊME COURSE (relecture du
+        // 25/10) : une affectation forcée pendant un passage du planificateur
+        // créait une seconde offre, et le livreur choisi par l'administrateur
+        // pouvait voir « Course perdue ». Verrou de la course pris AVANT celui
+        // du livreur (toujours dans cet ordre). Une offre échue, pas encore
+        // traitée par la tâche d'expiration, ne bloque pas la suivante.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${CLASSE_VERROU_OFFRE_COURSE}::int, hashtext(${courseId}))`;
+        const offreAutreLivreur = await tx.courseOfferAttempt.findFirst({
+          where: {
+            course_id: courseId,
+            deliverer_id: { not: delivererId },
+            status: CourseOfferStatus.PENDING,
+            expires_at: { gt: new Date() },
+          },
+          select: { id: true },
+        });
+        if (offreAutreLivreur) {
+          this.logger.warn(
+            `offerToDeliverer SKIP : la course ${courseId.slice(0, 8)} a déjà une offre en attente chez un autre livreur`,
+          );
+          return null;
+        }
 
         // JAMAIS DEUX OFFRES EN ATTENTE POUR UN LIVREUR, ni d'offre à un livreur
         // en pause, même à deux serveurs : verrou du livreur tenu jusqu'à la fin
@@ -713,7 +759,11 @@ export class CourseOfferService {
         restaurant_id: true,
         offer_expires_at: true,
         deliveries: {
-          select: { order: { select: { delivery_service: true } } },
+          select: {
+            ajoutee_at: true,
+            statut: true,
+            order: { select: { delivery_service: true, status: true } },
+          },
         },
       },
       orderBy: { created_at: 'asc' }, // la plus ancienne d'abord (équité client)
@@ -728,7 +778,11 @@ export class CourseOfferService {
       //    Claim ATOMIQUE (conditionné sur le statut) : deux backends tournent
       //    en parallèle sur la même base, un update non conditionné écraserait
       //    une course entre-temps acceptée par un livreur.
-      if (waitingMin >= settings.noDelivererMaxWaitMin) {
+      //    Attente comptée depuis la DERNIÈRE commande entrée dans la course
+      //    (ajout ou fusion du planificateur v2) : une commande prête ajoutée
+      //    à une course de 58 min n'expire pas avec elle 2 min plus tard
+      //    (relecture du 25/10). Sans ajout, depuis la création, comme avant.
+      if (attenteDepuisDerniereEntreeMin(course, now) >= settings.noDelivererMaxWaitMin) {
         const claimed = await this.prisma.course.updateMany({
           where: { id: course.id, statut: CourseStatut.PENDING_ASSIGNMENT },
           data: { statut: CourseStatut.EXPIRED, offer_expires_at: null },

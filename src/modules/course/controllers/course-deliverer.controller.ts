@@ -6,7 +6,6 @@ import { TelephoneClientLivreurInterceptor } from 'src/common/securite/telephone
 import { CurrentDeliverer } from 'src/modules/auth-deliverer/decorators/current-deliverer.decorator';
 import { JwtDelivererAuthGuard } from 'src/modules/auth-deliverer/guards/jwt-deliverer-auth.guard';
 
-import { CancelCourseDto } from '../dto/cancel-course.dto';
 import { ConfirmDeliveryDto } from '../dto/confirm-delivery.dto';
 import { FailDeliveryDto } from '../dto/fail-delivery.dto';
 import { QueryCoursesDto } from '../dto/query-courses.dto';
@@ -21,6 +20,11 @@ import { OffreEnAttenteService } from '../services/offre-en-attente.service';
 /**
  * Endpoints livreur pour le module course.
  * Tous protégés par JwtDelivererAuthGuard — scope strict au livreur connecté.
+ *
+ * Plus de route « annuler la course » ni « colis récupérés » (relecture du
+ * 25/10, inutilisées par l'appli depuis mai) : elles ne vérifiaient ni le
+ * livreur ni l'état de la course. Le retrait se valide à la caisse (code
+ * dicté), une course abandonnée est relancée par l'annulation automatique.
  *
  * Numéro du client : `null` dans toute réponse pour une livraison terminée ou
  * une course close (historique, course rendue après une action, annulation).
@@ -110,15 +114,6 @@ export class CourseDelivererController {
     return this.actionService.markAtRestaurant(id, deliverer.id);
   }
 
-  @ApiOperation({ summary: 'Colis récupérés (AT_RESTAURANT → IN_DELIVERY)' })
-  @Patch(':id/picked-up')
-  async pickedUp(
-    @CurrentDeliverer() deliverer: Deliverer,
-    @Param('id', new ParseUUIDPipe()) id: string,
-  ) {
-    return this.actionService.markPickedUp(id, deliverer.id);
-  }
-
   @ApiOperation({
     summary: 'Je pars : le livreur quitte le restaurant (course récupérée), facultatif',
     description:
@@ -135,22 +130,6 @@ export class CourseDelivererController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.depart.jePars(id, deliverer.id);
-  }
-
-  @ApiOperation({
-    summary: 'Annuler la course (cas exceptionnel)',
-    description:
-      "Seulement la course du livreur connecté (celle qu'il a acceptée) : 403 « Cette course n'est pas " +
-      "à toi. » sinon, 400 « Course déjà terminée » si elle l'est.",
-  })
-  @ApiBody({ type: CancelCourseDto })
-  @Patch(':id/cancel')
-  async cancel(
-    @CurrentDeliverer() deliverer: Deliverer,
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: CancelCourseDto,
-  ) {
-    return this.actionService.cancelCourse(id, 'deliverer', dto, deliverer.id);
   }
 
   // ============================================================

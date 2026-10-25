@@ -31,7 +31,12 @@ import { CourseEvent } from '../events/course.event';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { DepartCourseService } from './depart-course.service';
 
-/** Livraison encore à faire : le livreur peut la passer en échec. */
+/**
+ * Livraison encore à faire : le livreur peut la passer en échec. PENDING
+ * compris : la livraison suivante d'une tournée attend que l'appli la
+ * démarre, et le livreur doit pouvoir signaler un problème si ce démarrage
+ * n'est pas passé.
+ */
 const LIVRAISON_A_FAIRE: DeliveryStatut[] = [DeliveryStatut.PENDING, DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED];
 
 const messageStatutAttendu = (attendus: DeliveryStatut[], actuel: DeliveryStatut) =>
@@ -57,6 +62,9 @@ function refusLivraison(
   if (!attendus.includes(lue.statut)) return new BadRequestException(messageStatutAttendu(attendus, lue.statut));
   return null;
 }
+
+/** Commandes qu'un échec de livraison ne touche plus : terminée, collectée, déjà annulée. */
+const COMMANDES_CLOSES: OrderStatus[] = [OrderStatus.COMPLETED, OrderStatus.COLLECTED, OrderStatus.CANCELLED];
 
 /**
  * Service : transitions de statut sur les Delivery individuelles.
@@ -116,23 +124,30 @@ export class DeliveryActionService {
     return this.prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId }, omit: { delivery_pin: true } });
   }
 
-  /** Livreur arrivé à l'adresse client (IN_ROUTE → ARRIVED) */
+  /**
+   * Livreur arrivé à l'adresse client (IN_ROUTE → ARRIVED). Écriture
+   * CONDITIONNÉE : si le serveur déclare l'arrivée d'après la position au
+   * même instant, un seul des deux passe (le client n'est prévenu qu'une fois).
+   */
   async markArrived(deliveryId: string, delivererId: string) {
     const delivery = await this.assertOwned(deliveryId, delivererId, [DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED]);
     // Arrivée déjà déclarée (par le serveur d'après la position, ou deux
     // touchers) : réponse normale, rien ne change.
-    if (delivery.statut === DeliveryStatut.ARRIVED) {
-      return this.prisma.delivery.findUniqueOrThrow({ where: { id: deliveryId }, omit: { delivery_pin: true } });
-    }
+    if (delivery.statut === DeliveryStatut.ARRIVED) return this.lireSansCode(deliveryId);
 
-    const updated = await this.prisma.delivery.update({
-      where: { id: deliveryId },
-      // Le livreur ne doit JAMAIS lire le code : c'est le client qui le lui
-      // dicte, et c'est ce qui prouve la remise. Sans cette omission, la
-      // reponse de la route lui donnait de quoi valider sans voir personne.
-      omit: { delivery_pin: true },
+    const { count } = await this.prisma.delivery.updateMany({
+      where: {
+        id: deliveryId,
+        statut: DeliveryStatut.IN_ROUTE,
+        course: { deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY },
+      },
       data: { statut: DeliveryStatut.ARRIVED, arrived_at: new Date() },
     });
+    if (count !== 1) return this.livraisonChangee(deliveryId, DeliveryStatut.ARRIVED);
+    // Le livreur ne doit JAMAIS lire le code : c'est le client qui le lui
+    // dicte, et c'est ce qui prouve la remise. Sans cette omission, la
+    // reponse de la route lui donnait de quoi valider sans voir personne.
+    const updated = await this.lireSansCode(deliveryId);
 
     await this.emitDeliveryStatut(updated, delivery.statut);
     return updated;
@@ -155,6 +170,17 @@ export class DeliveryActionService {
    *       dépassement du seuil `OVERDUE_COLLECTED_UNPAID_MIN`.
    */
   async confirmDelivery(deliveryId: string, delivererId: string, dto: ConfirmDeliveryDto) {
+    // Rejeu avec le bon code (réponse perdue, double toucher) : la livraison
+    // est rendue telle quelle. Avant, le 400 qui suivait poussait le livreur
+    // vers « Problème » sur une commande déjà remise.
+    const deja = await this.prisma.delivery.findUnique({
+      where: { id: deliveryId },
+      select: { statut: true, delivery_pin: true, course: { select: { deliverer_id: true } } },
+    });
+    if (deja?.statut === DeliveryStatut.DELIVERED && deja.course.deliverer_id === delivererId && deja.delivery_pin === dto.pin) {
+      return this.lireSansCode(deliveryId);
+    }
+
     const delivery = await this.assertOwned(deliveryId, delivererId, DeliveryStatut.ARRIVED);
 
     if (delivery.delivery_pin !== dto.pin) {
@@ -174,17 +200,26 @@ export class DeliveryActionService {
           collected_at: now,
         };
 
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.delivery.update({
-        where: { id: deliveryId },
-        omit: { delivery_pin: true },
+    // Écritures CONDITIONNÉES sur l'état lu : un « Problème » validé au même
+    // instant n'est jamais effacé par la confirmation (ni l'inverse).
+    const ecrite = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.delivery.updateMany({
+        where: {
+          id: deliveryId,
+          statut: DeliveryStatut.ARRIVED,
+          course: { deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY },
+        },
         data: { statut: DeliveryStatut.DELIVERED, delivered_at: now },
-      }),
-      this.prisma.order.update({
-        where: { id: delivery.order_id },
+      });
+      if (count !== 1) return false;
+      await tx.order.updateMany({
+        where: { id: delivery.order_id, status: { notIn: COMMANDES_CLOSES } },
         data: orderUpdate,
-      }),
-    ]);
+      });
+      return true;
+    });
+    if (!ecrite) return this.livraisonChangee(deliveryId, DeliveryStatut.DELIVERED);
+    const updated = await this.lireSansCode(deliveryId);
 
     // ENCAISSEMENT À LA LIVRAISON : commande non payée → le livreur a choisi le
     // moyen de paiement du client dans l'app. On enregistre un Paiement
@@ -283,18 +318,30 @@ export class DeliveryActionService {
   /**
    * Échec de livraison (client absent, refus, etc.).
    *
-   * Seulement SA livraison encore à faire, dans sa course en livraison : les
-   * mêmes refus que démarrer, arrivé et confirmer. Avant le 25/10, seul le
-   * livreur était vérifié, par une lecture à part : il passait en échec une
-   * livraison déjà remise (commande terminée annulée), une livraison d'une
-   * course close, ou une livraison que le regroupement confiait au même
-   * instant à un autre livreur (commande de l'autre annulée).
+   * Seulement SA livraison encore à faire (en attente, en route, arrivé), dans
+   * sa course en livraison : les mêmes refus que démarrer, arrivé et
+   * confirmer. Avant le 25/10, seul le livreur était vérifié, par une lecture
+   * à part : il passait en échec une livraison déjà remise (commande payée et
+   * terminée annulée, points et coupon rendus), une livraison d'une course pas
+   * encore récupérée ou close, ou une livraison que le regroupement confiait
+   * au même instant à un autre livreur (commande de l'autre annulée).
    *
    * Écriture CONDITIONNÉE (livreur, course en livraison, livraison à faire) et
-   * d'un seul tenant avec la commande : si la livraison change entre la
-   * lecture et l'écriture, rien n'est écrit et le refus dit pourquoi.
+   * d'un seul tenant avec la commande, qui n'est touchée que si elle n'est ni
+   * terminée, ni collectée, ni annulée : si la livraison change entre la
+   * lecture et l'écriture, rien n'est écrit et le refus dit pourquoi. Rejeu
+   * (réponse perdue, double toucher) : la livraison est rendue telle quelle,
+   * sans second événement.
    */
   async failDelivery(deliveryId: string, delivererId: string, dto: FailDeliveryDto) {
+    const deja = await this.prisma.delivery.findUnique({
+      where: { id: deliveryId },
+      select: { statut: true, course: { select: { deliverer_id: true } } },
+    });
+    if (deja?.statut === DeliveryStatut.FAILED && deja.course.deliverer_id === delivererId) {
+      return this.lireSansCode(deliveryId);
+    }
+
     const delivery = await this.assertOwned(deliveryId, delivererId, LIVRAISON_A_FAIRE);
 
     // OTHER nécessite une note
@@ -303,7 +350,7 @@ export class DeliveryActionService {
     }
 
     const now = new Date();
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const issue = await this.prisma.$transaction(async (tx) => {
       const echouee = await tx.delivery.updateMany({
         where: {
           id: deliveryId,
@@ -323,14 +370,17 @@ export class DeliveryActionService {
           where: { id: deliveryId },
           select: { statut: true, course: { select: { deliverer_id: true, statut: true } } },
         });
+        // Son « Problème » passé au même instant (double toucher) : rendue telle quelle.
+        if (relue?.statut === DeliveryStatut.FAILED && relue.course.deliverer_id === delivererId) return 'deja' as const;
         throw (
           refusLivraison(relue, delivererId, LIVRAISON_A_FAIRE) ??
           new BadRequestException(messageStatutAttendu(LIVRAISON_A_FAIRE, relue!.statut))
         );
       }
-      // Order annulée avec traçabilité du motif (délivré au livreur)
-      await tx.order.update({
-        where: { id: delivery.order_id },
+      // Order annulée avec traçabilité du motif (délivré au livreur), sauf si
+      // elle est déjà terminée, collectée ou annulée.
+      await tx.order.updateMany({
+        where: { id: delivery.order_id, status: { notIn: COMMANDES_CLOSES } },
         data: {
           status: OrderStatus.CANCELLED,
           cancelled_at: now,
@@ -338,8 +388,10 @@ export class DeliveryActionService {
           cancelled_reason: dto.note ?? `Livraison échouée : ${dto.reason}`,
         },
       });
-      return tx.delivery.findUniqueOrThrow({ where: { id: deliveryId }, omit: { delivery_pin: true } });
+      return 'ecrite' as const;
     });
+    const updated = await this.lireSansCode(deliveryId);
+    if (issue === 'deja') return updated;
 
     await this.emitDeliveryStatut(updated, delivery.statut);
     await this.checkCourseCompletion(delivery.course_id);
@@ -435,6 +487,17 @@ export class DeliveryActionService {
   }
 
   /**
+   * L'écriture conditionnée n'a rien trouvé : la livraison a changé entre la
+   * lecture et l'écriture. Déjà dans l'état visé (double toucher) : rendue
+   * telle quelle, sans événement ; sinon 400, rien n'est écrit.
+   */
+  private async livraisonChangee(deliveryId: string, visee: DeliveryStatut) {
+    const relue = await this.lireSansCode(deliveryId);
+    if (relue.statut === visee) return relue;
+    throw new BadRequestException(`Statut delivery changé entre-temps, actuel ${relue.statut}`);
+  }
+
+  /**
    * Vérifie si toutes les Delivery de la Course sont terminées (DELIVERED/FAILED/CANCELLED).
    * Si oui → Course passe en COMPLETED + émet event.
    */
@@ -453,9 +516,15 @@ export class DeliveryActionService {
 
     if (!allTerminal) return;
 
-    const completed = await this.prisma.course.update({
-      where: { id: courseId },
+    // Réservation : deux fins de livraison au même instant ne terminent la
+    // course (événement, remise en file, notification) qu'une fois.
+    const { count } = await this.prisma.course.updateMany({
+      where: { id: courseId, statut: CourseStatut.IN_DELIVERY },
       data: { statut: CourseStatut.COMPLETED, completed_at: new Date() },
+    });
+    if (count !== 1) return;
+    const completed = await this.prisma.course.findUniqueOrThrow({
+      where: { id: courseId },
       include: COURSE_FULL_INCLUDE,
     });
 

@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { CourseOfferStatus, CourseStatut } from '@prisma/client';
+import { CourseOfferStatus, CourseStatut, Prisma } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 import {
@@ -22,6 +22,26 @@ import {
 } from '../helpers/offres.rules';
 import { DispatchJournalService } from './dispatch-journal.service';
 import { OffresClotureService } from './offres-cloture.service';
+
+/** Course rendue au livreur qui l'accepte (`COURSE_FULL_INCLUDE`). */
+export type CourseAcceptee = Prisma.CourseGetPayload<{ include: typeof COURSE_FULL_INCLUDE }>;
+
+/**
+ * Résultat de l'acceptation. `rejeu` : la course était DÉJÀ à ce livreur
+ * (réponse perdue, erreur rejouée par l'appli, double toucher) ; rien n'a été
+ * écrit, aucun événement n'est à émettre.
+ */
+export interface AcceptationReservee {
+  course: CourseAcceptee;
+  rejeu: boolean;
+}
+
+/** Statuts d'une course acceptée et pas encore terminée. */
+const STATUTS_COURSE_ACCEPTEE: CourseStatut[] = [
+  CourseStatut.ACCEPTED,
+  CourseStatut.AT_RESTAURANT,
+  CourseStatut.IN_DELIVERY,
+];
 
 /** Acceptation refusée dans la transaction (rien n'est écrit). */
 class AcceptationImpossible extends Error {
@@ -233,9 +253,23 @@ export class GardeOffresService {
    * Après l'acceptation, les autres offres en attente de la course (affectation
    * forcée) et du livreur sont closes : jamais deux offres en attente.
    *
-   * @returns la course acceptée (`COURSE_FULL_INCLUDE`).
+   * REJEU (relecture du 25/10) : la course est déjà à ce livreur, avec son
+   * offre acceptée (réponse perdue, erreur 5xx que l'appli rejoue, double
+   * toucher). Elle lui est rendue, sans refus au journal, sans clôture ni
+   * pénalité : avant, il recevait 409 et l'appli lui annonçait une course
+   * perdue alors qu'elle était à son nom.
+   *
+   * @returns la course acceptée (`COURSE_FULL_INCLUDE`), et si c'est un rejeu.
    */
-  async reserverAcceptation(courseId: string, delivererId: string, maintenant = new Date()) {
+  async reserverAcceptation(
+    courseId: string,
+    delivererId: string,
+    maintenant = new Date(),
+  ): Promise<AcceptationReservee> {
+    const dejaAcceptee = async (): Promise<AcceptationReservee | null> => {
+      const course = await this.courseDejaAcceptee(courseId, delivererId);
+      return course ? { course, rejeu: true } : null;
+    };
     const refuser = async (motif: string, message: string, restaurantId: string | null = null) => {
       await this.journal.ecrire({
         type: 'ACCEPTATION_REFUSEE',
@@ -255,6 +289,8 @@ export class GardeOffresService {
     // Offre close, refusée, expirée : l'expiration d'une offre échue reste à
     // la tâche d'expiration (elle compte comme une offre ignorée).
     if (!offre || offre.expires_at.getTime() <= maintenant.getTime()) {
+      const rejeu = await dejaAcceptee();
+      if (rejeu) return rejeu;
       throw await refuser('OFFRE_PLUS_EN_ATTENTE', MESSAGE_COURSE_PLUS_DISPONIBLE);
     }
     const restaurantId = offre.course?.restaurant_id ?? null;
@@ -268,6 +304,9 @@ export class GardeOffresService {
       ? decisionAcceptation(etatLivreurDepuis(ligne, SANS_REGLE_APPLI, maintenant), maintenant)
       : ({ ok: false, motif: 'INACTIF', message: "Ton compte livreur n'est pas actif." } as const);
     if (!decision.ok) {
+      // Double toucher : l'autre appel vient d'accepter, le livreur est « en course ».
+      const rejeu = await dejaAcceptee();
+      if (rejeu) return rejeu;
       await this.cloture.cloreOffre(offre.id, 'LIVREUR_INDISPONIBLE', {
         source: 'appli',
         details: { motif_livreur: decision.motif },
@@ -305,6 +344,9 @@ export class GardeOffresService {
       });
     } catch (err) {
       if (!(err instanceof AcceptationImpossible)) throw err;
+      // Double toucher : l'autre appel a accepté l'offre entre la lecture et l'écriture.
+      const rejeu = await dejaAcceptee();
+      if (rejeu) return rejeu;
       // La transaction a tout annulé : l'offre est encore en attente si la
       // course a disparu. Elle est close (l'appli la ferme), sans pénalité.
       if (err.motif === 'COURSE_PLUS_EN_RECHERCHE') {
@@ -320,8 +362,26 @@ export class GardeOffresService {
       .clorePourLivreur(delivererId, 'LIVREUR_INDISPONIBLE')
       .catch((e) => this.logger.warn(`Clôture des autres offres du livreur impossible : ${e?.message}`));
 
-    return this.prisma.course.findUniqueOrThrow({
+    const course = await this.prisma.course.findUniqueOrThrow({
       where: { id: courseId },
+      include: COURSE_FULL_INCLUDE,
+    });
+    return { course, rejeu: false };
+  }
+
+  /**
+   * La course est-elle déjà à ce livreur, acceptée par lui et pas terminée ?
+   * L'offre ACCEPTÉE de ce livreur est exigée : une affectation sans offre
+   * n'est pas un rejeu.
+   */
+  private courseDejaAcceptee(courseId: string, delivererId: string): Promise<CourseAcceptee | null> {
+    return this.prisma.course.findFirst({
+      where: {
+        id: courseId,
+        deliverer_id: delivererId,
+        statut: { in: STATUTS_COURSE_ACCEPTEE },
+        offer_attempts: { some: { deliverer_id: delivererId, status: CourseOfferStatus.ACCEPTED } },
+      },
       include: COURSE_FULL_INCLUDE,
     });
   }

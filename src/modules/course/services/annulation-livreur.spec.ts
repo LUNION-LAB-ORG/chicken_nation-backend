@@ -1,12 +1,15 @@
 /**
- * Annulation d'une course par le livreur (`PATCH /courses/deliverer/:id/cancel`).
+ * Annulation d'une course « par le livreur » (`cancelCourse(..., 'deliverer', dto, delivererId)`).
  *
- * Faille du 25/10 : la route ne passait pas le livreur connecté au service ;
- * n'importe quel livreur annulait la course d'un autre (et les commandes des
- * clients avec). Règle : seul le livreur de la course, celui qui l'a acceptée,
- * l'annule, dans les états où c'était déjà permis (course pas terminée). Un
- * autre livreur reçoit 403, comme sur les routes voisines (« Je pars »).
- * L'identité vient du jeton, jamais du corps de la requête.
+ * Faille du 25/10 : `PATCH /courses/deliverer/:id/cancel` ne passait pas le
+ * livreur connecté au service ; n'importe quel livreur annulait la course d'un
+ * autre (et les commandes des clients avec). La route et « Colis récupérés »
+ * sont retirées le même jour (inutilisées par l'appli depuis mai,
+ * course-deliverer.routes.spec.ts). La garde reste dans le service : seul le
+ * livreur de la course, celui qui l'a acceptée, l'annule, dans les états où
+ * c'était déjà permis (course pas terminée). Un autre livreur reçoit 403,
+ * comme sur les routes voisines (« Je pars »). L'identité vient du jeton,
+ * jamais du corps de la requête.
  */
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { CourseStatut, DeliveryStatut, OrderStatus } from '@prisma/client';
@@ -52,13 +55,13 @@ function monter(donnees: DonneesDispatch) {
   const actionsLivraison = new DeliveryActionService(base.prisma, {} as never, {} as never, {} as never, {} as never);
   const depart = new DepartCourseService(base.prisma, {} as never, {} as never, {} as never, {} as never);
   const controleur = new CourseDelivererController(actions, actionsLivraison, {} as never, {} as never, depart);
-  /** Ce que fait la route : livreur lu du jeton, identifiant de l'URL, corps tel quel. */
+  /** Ce que faisait la route : livreur lu du jeton, identifiant de l'URL, corps tel quel. */
   const annuler = (livreurConnecte: Record<string, any>, courseId: string, corps: Record<string, unknown> = {}) =>
-    controleur.cancel(livreurConnecte as never, courseId, corps as never);
+    actions.cancelCourse(courseId, 'deliverer', corps as never, livreurConnecte.id);
   return { ...base, courseEvent, push, actions, controleur, annuler };
 }
 
-describe('annulation par le livreur (PATCH /courses/deliverer/:id/cancel)', () => {
+describe('annulation par le livreur (garde du service, route retirée le 25/10)', () => {
   it('un livreur B annule la course du livreur A : 403, rien n’est écrit', async () => {
     const a = livreur();
     const b = livreur();
@@ -219,9 +222,7 @@ describe('les autres routes d’action du livreur : la course, la livraison ou l
     ['POST :id/accept', (ctl, b, ids) => ctl.accept(b, ids.course), "Cette course n'est plus disponible."],
     ['POST :id/refuse', (ctl, b, ids) => ctl.refuse(b, ids.course, {} as never), MESSAGE_OFFRE_PLUS_EN_ATTENTE],
     ['PATCH :id/at-restaurant', (ctl, b, ids) => ctl.atRestaurant(b, ids.course), 'Cette course ne vous est pas affectée'],
-    ['PATCH :id/picked-up', (ctl, b, ids) => ctl.pickedUp(b, ids.course), 'Cette course ne vous est pas affectée'],
     ['POST :id/depart', (ctl, b, ids) => ctl.jePars(b, ids.course), MESSAGE_COURSE_PAS_A_TOI],
-    ['PATCH :id/cancel', (ctl, b, ids) => ctl.cancel(b, ids.course, {} as never), MESSAGE_COURSE_PAS_A_TOI],
     [
       'PATCH deliveries/:deliveryId/start',
       (ctl, b, ids) => ctl.startDelivery(b, ids.livraison),
