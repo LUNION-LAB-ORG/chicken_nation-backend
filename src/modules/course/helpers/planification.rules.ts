@@ -83,7 +83,9 @@
  *     5 min (`petitRetardRetourMin`) après sa fin estimée ; la course l'attend
  *     alors jusqu'à sa fin estimée, sans qu'une commande prête attende plus
  *     de 20 min (`attenteMaxTrajetLongS`), promesses, autres livreurs et
- *     limites de 3.6 compris.
+ *     limites de 3.6 compris. Un autre livreur libre (ou de retour à temps)
+ *     ne coupe que le trajet long : l'attente courte tient quels que soient
+ *     les autres livreurs (essai du 25/10).
  *  7. TURBO (3.11) : dernier recours, compté depuis la plus ancienne commande
  *     prête de la course (6 min sous v2), jamais pendant une offre en attente ;
  *     différé d'au plus 4 min quand un livreur interne revient au restaurant
@@ -2524,6 +2526,7 @@ export function planifier(
       const noter = (motif: MotifRefusPlanification, libelle: string) =>
         refus.push({ essai: 'RETENUE', order_id: c.id, source_id: null, course_cle: k.cle, refus: motif, libelle });
       const courte = (f: number) => f - t <= r.horizonPreparationS * 1000 && f <= limiteCourte;
+      const attenteCourte = courte(finEstimee);
       let motif: MotifRetenue = 'ATTENTE_COURTE';
       if (!courte(fin)) {
         // Trajet long (demande du 24/10) : partir sans elle ferait revenir le
@@ -2556,14 +2559,20 @@ export function planifier(
       // Un autre livreur la prendrait seule à temps : jugé à sa fin estimée,
       // jamais à l'échéance d'une retenue qu'elle dépasse (relecture du 24/10 :
       // annoncée plus tard, elle partait avec un livreur revenu entre-temps et
-      // la course l'avait attendue pour rien).
-      if (!r.retenueMemeSiLivreurLibre && autreLivreurATemps(ctx, k, finEstimee)) {
+      // la course l'avait attendue pour rien). Il ne coupe que le TRAJET LONG
+      // (le livreur ne reviendrait pas pour elle) : l'attente courte du client
+      // tient, la même direction part ensemble et l'autre livreur reste libre
+      // pour la suite (essai du 25/10 : deux livreurs partaient dans la même
+      // direction, plus personne pour la commande suivante).
+      if (!attenteCourte && !r.retenueMemeSiLivreurLibre && autreLivreurATemps(ctx, k, finEstimee)) {
         noter('AUTRE_LIVREUR_LIBRE', `un autre livreur peut prendre ${c.reference}`);
         continue;
       }
       const arret = arretDe(ctx, c);
       const departApres = Math.max(dPossible, fin, ...choisies.map((x) => x.fin));
-      const alternative = r.retenueMemeSiLivreurLibre ? departLibreMs(ctx) : null;
+      // Un livreur libre la prendrait seule : elle n'est pas groupée si elle
+      // arrivait groupée après sa limite et plus tard que seule avec lui.
+      const alternative = departLibreMs(ctx);
       const res = evaluerAjout(ctx, {
         existants: k.arrets,
         nouveaux: [...choisies.map((x) => x.arret), arret],

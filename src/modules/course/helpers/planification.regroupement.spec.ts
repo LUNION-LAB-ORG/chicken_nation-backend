@@ -34,6 +34,7 @@ const enCourseAuComptoir = (id: string, t: Date, vuA: Date = plus(t, -10)) =>
     protocole_appli: 4,
     etat: { en_course: true, last_available_at: null },
   });
+const libreAuComptoir = (id: string, t: Date) => livr(id, t, { auComptoir: true, protocole_appli: 4 });
 
 /** Monde du terrain : la caisse remet dès le code. */
 const mondeDuTerrain = (debut: Date) => new Monde(debut, r, { caisseRemetAuCode: true });
@@ -44,6 +45,8 @@ const lignes = (m: Monde, type: ActionPlanification['type']) =>
     const a = action as { motif?: string | null; order_id?: string; jusqua?: Date };
     return [hms(t), a.motif ?? a.order_id ?? null, a.jusqua ? hms(a.jusqua) : null];
   });
+const refusRetenue = (plan: ReturnType<typeof planifier>) =>
+  plan.refus.filter((x) => x.essai === 'RETENUE').map((x) => x.refus);
 
 describe('S1. le scénario du client : un livreur au comptoir, la caisse remet A dès le code', () => {
   const monde = () =>
@@ -85,6 +88,91 @@ describe('S2. trajet long : la remise ne rabote plus la retenue', () => {
     expect(m.courseDe('b')!.id).toBe(m.courseDe('a')!.id);
     expect(m.toutes('CONFIER_TURBO')).toEqual([]);
     expect(m.violations).toEqual([]);
+  });
+});
+
+describe('S3. deux livreurs : la même direction part ensemble, le second reste libre', () => {
+  it('L1 et L2 libres au comptoir ; A 12:30, B annoncée 12:33, C (autre direction) 12:35 : A+B avec L1, C avec L2', () => {
+    const m = mondeDuTerrain(h('12:29:50'))
+      .livreur('l1', { libreDepuis: h('12:00'), protocole_appli: 4 })
+      .livreur('l2', { libreDepuis: h('12:05'), protocole_appli: 4 })
+      .commande('a', { est: 2000, creee: h('12:15'), enPreparation: h('12:18'), prete: h('12:30') })
+      .commande('b', { est: 2200, creee: h('12:18'), enPreparation: h('12:22'), prete: h('12:33'), finCuisine: h('12:33') })
+      .commande('c', { est: -2000, creee: h('12:20'), enPreparation: h('12:24'), prete: h('12:35') })
+      .jusqua(h('13:10'));
+    expect(lignes(m, 'RETENIR')).toEqual([['12:30:10', 'ATTENTE_COURTE', '12:33:00']]);
+    expect(m.courseDe('b')!.id).toBe(m.courseDe('a')!.id);
+    expect(m.courseDe('a')!.deliverer_id).toBe('l1');
+    expect(m.courseDe('c')!.deliverer_id).toBe('l2');
+    expect(m.toutes('OFFRIR').map(({ t, action }) => [hms(t), action.deliverer_id])).toEqual([
+      ['12:30:00', 'l1'],
+      ['12:35:00', 'l2'],
+    ]);
+    expect(m.violations).toEqual([]);
+  });
+
+  it('S3b. trajet long avec un autre livreur libre au comptoir : pas d’attente de 12 min (inchangé), B ira à L2', () => {
+    const t = h('15:28:20');
+    const a = cmd('a', { est: 5000, created_at: h('15:20'), ready_at: h('15:28') });
+    const b = enPrep('b', h('15:40'), { est: 5500, created_at: h('15:25') });
+    const plan = planifier(
+      instant(t, {
+        commandes: [b],
+        courses: [crs('k', { statut: CourseStatut.AT_RESTAURANT, deliverer_id: 'd1', commandes: [a] })],
+        livreurs: [enCourseAuComptoir('d1', t), libreAuComptoir('d2', t)],
+      }),
+    );
+    expect(actionsDe(plan, 'RETENIR')).toEqual([]);
+    expect(refusRetenue(plan)).toEqual(['AUTRE_LIVREUR_LIBRE']);
+  });
+
+  it('S3c. attente courte avec un livreur EN COURSE qui revient dans les 3 min : la retenue est posée', () => {
+    const t = h('12:30:15');
+    const a = cmd('a', { est: 2000, created_at: h('12:15'), ready_at: h('12:30') });
+    const b = enPrep('b', h('12:33'), { est: 2200, created_at: h('12:18') });
+    const z = cmd('z', { est: 300, created_at: h('11:50'), ready_at: h('12:10'), statut: OrderStatus.PICKED_UP });
+    const plan = planifier(
+      instant(t, {
+        commandes: [b],
+        courses: [
+          crs('ka', { commandes: [a], statut: CourseStatut.AT_RESTAURANT, deliverer_id: 'l1', assigned_at: h('12:30:10') }),
+          crs('kz', {
+            statut: CourseStatut.IN_DELIVERY,
+            deliverer_id: 'l2',
+            picked_up_at: h('12:25'),
+            parti_at: h('12:26'),
+            livraisons: [{ id: 'liv-z', statut: DeliveryStatut.IN_ROUTE, sequence_order: 1, commande: z }],
+          }),
+        ],
+        livreurs: [enCourseAuComptoir('l1', t), livr('l2', t, { aEst: 300, protocole_appli: 4, etat: { en_course: true, last_available_at: null } })],
+      }),
+    );
+    expect(actionsDe(plan, 'RETENIR').map((x) => [hms(x.jusqua), x.motif])).toEqual([['12:33:00', 'ATTENTE_COURTE']]);
+  });
+
+  it('S3d. livreur de retour avant la fin de B + 3 min, trajet long : pas d’attente (inchangé)', () => {
+    const t = h('16:00:10');
+    const a = cmd('a', { est: 2500, created_at: h('15:50'), ready_at: h('16:00') });
+    const b = enPrep('b', h('16:08'), { est: 2000, created_at: h('15:52') });
+    const z = cmd('z', { est: 700, created_at: h('15:30'), ready_at: h('15:50'), statut: OrderStatus.PICKED_UP });
+    const plan = planifier(
+      instant(t, {
+        commandes: [b],
+        courses: [
+          crs('ka', { commandes: [a], statut: CourseStatut.AT_RESTAURANT, deliverer_id: 'l1', assigned_at: h('16:00:05') }),
+          crs('kz', {
+            statut: CourseStatut.IN_DELIVERY,
+            deliverer_id: 'l2',
+            picked_up_at: h('15:55'),
+            parti_at: h('15:56'),
+            livraisons: [{ id: 'liv-z', statut: DeliveryStatut.IN_ROUTE, sequence_order: 1, commande: z }],
+          }),
+        ],
+        livreurs: [enCourseAuComptoir('l1', t), livr('l2', t, { aEst: 700, protocole_appli: 4, etat: { en_course: true, last_available_at: null } })],
+      }),
+    );
+    expect(actionsDe(plan, 'RETENIR')).toEqual([]);
+    expect(refusRetenue(plan)).toEqual(['AUTRE_LIVREUR_LIBRE']);
   });
 });
 

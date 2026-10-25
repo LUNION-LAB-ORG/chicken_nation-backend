@@ -796,15 +796,16 @@ describe('retenue au comptoir : une commande prête attend une commande en prép
     expect(plan.actions).toEqual([]);
   });
 
-  it('autre livreur libre : pas de retenue (sauf réglage contraire)', () => {
+  it('autre livreur libre : l’attente courte tient quand même, la même direction part ensemble (essai du 25/10)', () => {
+    // Le trajet long, lui, y renonce (« trajet long : pas de retenue si un autre livreur… »).
     const d2 = livr('d2', T0, { auComptoir: true });
     const plan = base({ autres: [d2] });
-    expect(actionsDe(plan, 'RETENIR')).toEqual([]);
-    expect(refusDe(plan, 'b', 'k')).toEqual(['AUTRE_LIVREUR_LIBRE']);
+    expect(actionsDe(plan, 'RETENIR')).toEqual([expect.objectContaining({ jusqua: h('12:33'), motif: 'ATTENTE_COURTE' })]);
+    expect(refusDe(plan, 'b', 'k')).toEqual([]);
     expect(actionsDe(base({ autres: [d2], reglages: avec({ retenueMemeSiLivreurLibre: true }) }), 'RETENIR')).toHaveLength(1);
   });
 
-  it('autre livreur de retour avant la fin de B + 3 min : pas de retenue ; de retour bien plus tard : retenue', () => {
+  it('autre livreur de retour avant la fin de B + 3 min, ou bien plus tard : l’attente courte tient (essai du 25/10)', () => {
     const tournee = (est: number) =>
       crs('k2', {
         statut: CourseStatut.IN_DELIVERY,
@@ -815,7 +816,7 @@ describe('retenue au comptoir : une commande prête attend une commande en prép
       });
     const d2 = livr('d2', T0, { etat: { en_course: true, last_available_at: null } });
     // 1 km : retour vers 12:33:30
-    expect(refusDe(base({ autres: [d2], coursesEnPlus: [tournee(1000)] }), 'b', 'k')).toEqual(['AUTRE_LIVREUR_LIBRE']);
+    expect(actionsDe(base({ autres: [d2], coursesEnPlus: [tournee(1000)] }), 'RETENIR')).toHaveLength(1);
     // 5 km : retour bien après 12:36
     expect(actionsDe(base({ autres: [d2], coursesEnPlus: [tournee(5000)] }), 'RETENIR')).toHaveLength(1);
   });
