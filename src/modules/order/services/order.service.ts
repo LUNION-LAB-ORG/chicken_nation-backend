@@ -75,6 +75,7 @@ import {
   peutVoirLesBrouillons,
 } from '../helpers/brouillons.rules';
 import { motifRefusModification, peutModifierCommande } from '../helpers/modification-commande.rules';
+import { heureDeLaCommande } from '../helpers/heure-commande.rules';
 import { OrderRelanceService } from './order-relance.service';
 import {
   ajouterAuEt,
@@ -935,6 +936,9 @@ export class OrderService {
     await this.orderHelperV2.validateRestaurantChoice(restaurant.id, items.map((item) => item.dish_id));
     // Générer un numéro de commande unique
     const orderNumber = await this.referenceLibre(() => this.generateDataService.generateOrderReference());
+    // Un seul instant pour la date et l'heure par défaut : lus séparément,
+    // ils pouvaient tomber de part et d'autre de minuit.
+    const creeLe = new Date();
 
     // Transaction pour garantir l'intégrité des données
     const { createdOrder: order, consommation } = await this.prisma.$transaction(async (prisma) => {
@@ -992,8 +996,9 @@ export class OrderService {
           discount: Number(discount),
           net_amount: Number(netAmount),
           amount: Number(totalAmount),
-          date: orderData.date ? new Date(orderData.date || '') : new Date(),
-          time: orderData.time || '10:00',
+          date: orderData.date ? new Date(orderData.date || '') : creeLe,
+          // Sans heure saisie : l'heure de création à Abidjan, plus « 10:00 ».
+          time: heureDeLaCommande(orderData.time, creeLe),
           payment_method: user_id ? PaymentMethod.OFFLINE : PaymentMethod.ONLINE,
           status: user_id ? OrderStatus.ACCEPTED : OrderStatus.PENDING,
           paied_at: payment ? payment.created_at : null,
