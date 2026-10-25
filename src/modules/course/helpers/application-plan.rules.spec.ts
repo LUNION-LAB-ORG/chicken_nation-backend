@@ -13,6 +13,7 @@ import {
   lireCommandesAttendues,
   numeroterArrets,
   referencesAttendues,
+  retenueEnCours,
   texteCommandeAjoutee,
   texteCommandeRemise,
   texteCommandeRetiree,
@@ -87,6 +88,19 @@ describe('commandes attendues (colonne JSON)', () => {
     expect(referencesAttendues(ecrites)).toEqual(['CMD-B', 'CMD-C']);
     expect(lireCommandesAttendues(null)).toEqual([]);
     expect(lireCommandesAttendues([{ x: 1 }, 'c', 3])).toEqual(['c']);
+  });
+
+  it('retenue en cours (remise pendant la retenue, 25/10) : échéance à venir et commandes attendues, sinon rien', () => {
+    const maintenant = new Date('2026-10-22T12:30:30Z');
+    const attendues = [{ order_id: 'b', reference: 'CMD-B' }];
+    expect(retenueEnCours({ retenue_jusqua: '2026-10-22T12:34:00.000Z', commandes_attendues: attendues }, maintenant)).toEqual({
+      jusqua: new Date('2026-10-22T12:34:00Z'),
+      attendues: ['CMD-B'],
+    });
+    // Échue, levée (plus rien d'attendu), ou aucune.
+    expect(retenueEnCours({ retenue_jusqua: new Date('2026-10-22T12:30:30Z'), commandes_attendues: attendues }, maintenant)).toBeNull();
+    expect(retenueEnCours({ retenue_jusqua: new Date('2026-10-22T12:34:00Z'), commandes_attendues: [] }, maintenant)).toBeNull();
+    expect(retenueEnCours({ retenue_jusqua: null, commandes_attendues: attendues }, maintenant)).toBeNull();
   });
 });
 

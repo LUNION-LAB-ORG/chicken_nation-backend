@@ -174,3 +174,21 @@ export function texteSacOublie(p: { sacs: number }): TexteNotification {
 export function liberationAAnnoncer(motif: MotifLiberation): boolean {
   return motif === 'TOUT_PRET' || motif === 'ECHEANCE' || motif === 'PLUS_RIEN_A_ATTENDRE';
 }
+
+/**
+ * Retenue en cours sur la course : échéance à venir et commandes attendues
+ * (essai du 25/10). La caisse remet les sacs dès le code, même pendant la
+ * retenue : le livreur doit alors entendre « Attends 4 min / Départ
+ * 12 h 34 » (`texteRetenue`), jamais « Tu peux partir ». `null` sans
+ * retenue en cours.
+ */
+export function retenueEnCours(
+  course: { retenue_jusqua?: Date | string | null; commandes_attendues?: unknown },
+  maintenant: Date,
+): { jusqua: Date; attendues: string[] } | null {
+  if (!course.retenue_jusqua) return null;
+  const jusqua = new Date(course.retenue_jusqua);
+  if (!(jusqua.getTime() > maintenant.getTime())) return null;
+  if (lireCommandesAttendues(course.commandes_attendues).length === 0) return null;
+  return { jusqua, attendues: referencesAttendues(course.commandes_attendues) };
+}

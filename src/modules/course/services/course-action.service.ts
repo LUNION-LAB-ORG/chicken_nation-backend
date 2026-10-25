@@ -31,6 +31,7 @@ import { FailDeliveryDto } from '../dto/fail-delivery.dto';
 import { RefuseOfferDto } from '../dto/refuse-offer.dto';
 import { ValidatePickupDto } from '../dto/validate-pickup.dto';
 import { CourseEvent } from '../events/course.event';
+import { retenueEnCours, texteRetenue } from '../helpers/application-plan.rules';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { commandesConfirmees } from '../helpers/recuperation.rules';
 import {
@@ -510,12 +511,28 @@ export class CourseActionService {
 
     // P-push livreur : alerte "tu peux partir, la caissière a validé".
     // Critique pour les livreurs qui ne regardent pas leur écran en attendant.
+    // Retenue en cours (la caisse remet dès le code) : il attend encore la
+    // commande en cuisine, « Attends 4 min / Départ 12 h 34 », jamais « Tu
+    // peux partir » (essai du 25/10). Fenêtre fermée d'office : il part.
     if (updated.deliverer_id) {
-      this.pushService.notifyPickupValidated({
-        delivererId: updated.deliverer_id,
-        courseReference: updated.reference,
-        courseId: updated.id,
-      });
+      const retenue = updated.parti_at ? null : retenueEnCours(updated, now);
+      if (retenue) {
+        const texte = texteRetenue({ jusqua: retenue.jusqua, maintenant: now });
+        this.pushService.notifyCourseAttente({
+          delivererId: updated.deliverer_id,
+          courseId: updated.id,
+          titre: texte.titre,
+          corps: texte.corps,
+          jusqua: retenue.jusqua,
+          attendues: retenue.attendues,
+        });
+      } else {
+        this.pushService.notifyPickupValidated({
+          delivererId: updated.deliverer_id,
+          courseReference: updated.reference,
+          courseId: updated.id,
+        });
+      }
     }
 
     // Fige la durée ESTIMÉE de la tournée (trafic + arrêts) au moment du retrait.

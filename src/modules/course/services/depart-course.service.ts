@@ -16,8 +16,10 @@ import { NotificationsSenderService } from 'src/modules/notifications/services/n
 import { CourseEvent } from '../events/course.event';
 import {
   RaisonsPlanificateur,
+  retenueEnCours,
   texteCommandeRemise,
   texteCommandeRetiree,
+  texteRetenue,
   texteSacOublie,
 } from '../helpers/application-plan.rules';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
@@ -623,7 +625,7 @@ export class DepartCourseService {
       deliverer_id: course.deliverer_id,
       details: { course: course.reference, commandes: references, ...(apresDepart ? { apres_depart: true } : {}) },
     });
-    const detaillee = await this.annoncerToutRecupere(course.id);
+    const detaillee = await this.annoncerToutRecupere(course.id, maintenant);
     this.logger.log(
       `Course ${course.reference} : retrait complémentaire (${references.join(', ')}), même code${apresDepart ? ', après le départ' : ''}.`,
     );
@@ -694,8 +696,13 @@ export class DepartCourseService {
     });
   }
 
-  /** `course:statut:changed` (livreur, restaurant, siège) et « Tout est récupéré » au livreur. */
-  private async annoncerToutRecupere(courseId: string): Promise<CourseDetaillee | null> {
+  /**
+   * `course:statut:changed` (livreur, restaurant, siège) et « Tout est
+   * récupéré » au livreur. Retenue encore en cours pour une autre commande
+   * (livreur pas parti) : « Attends 4 min / Départ 12 h 34 », jamais « Tu
+   * peux partir » (essai du 25/10).
+   */
+  private async annoncerToutRecupere(courseId: string, maintenant = new Date()): Promise<CourseDetaillee | null> {
     const detaillee = await this.prisma.course.findUnique({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
     if (!detaillee) return null;
     await this.courseEvent.courseStatutChanged({
@@ -704,7 +711,18 @@ export class DepartCourseService {
       new_statut: CourseStatut.IN_DELIVERY,
       reason: RaisonsPlanificateur.RETRAIT_COMPLEMENTAIRE,
     });
-    if (detaillee.deliverer_id) {
+    const retenue = detaillee.parti_at ? null : retenueEnCours(detaillee, maintenant);
+    if (detaillee.deliverer_id && retenue) {
+      const texte = texteRetenue({ jusqua: retenue.jusqua, maintenant });
+      this.push.notifyCourseAttente({
+        delivererId: detaillee.deliverer_id,
+        courseId,
+        titre: texte.titre,
+        corps: texte.corps,
+        jusqua: retenue.jusqua,
+        attendues: retenue.attendues,
+      });
+    } else if (detaillee.deliverer_id) {
       const texte = texteCommandeRemise();
       this.push.notifyCommandeRemise({
         delivererId: detaillee.deliverer_id,

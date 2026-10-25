@@ -22,6 +22,7 @@ import {
   RaisonPlanificateur,
   RaisonsPlanificateur,
   texteCommandeAjoutee,
+  texteCommandeRemise,
   texteCommandeRetiree,
   texteRetenue,
   texteToutEstPret,
@@ -842,7 +843,9 @@ export class ApplicationPlanService {
    * Ce que le livreur doit sentir (vibration et notification sur le canal des
    * offres) : UNE notification par course et par passage, la plus utile
    *  1. commande retirée à son départ ;
-   *  2. tout est prêt (retenue levée, livreur au comptoir, pas parti) ;
+   *  2. tout est prêt (retenue levée, livreur au comptoir, pas parti) ; après
+   *     la remise, « Commande ajoutée · code » si la commande attendue reste
+   *     à prendre, sinon « Tout est récupéré » ;
    *  3. attente posée (« Attends 3 min », livreur au comptoir) ;
    *  4. commande(s) ajoutée(s).
    * Course encore en recherche avec une offre en attente : l'offre à jour est
@@ -884,6 +887,35 @@ export class ApplicationPlanService {
     const enRoute = course.statut === CourseStatut.ACCEPTED;
     const liberation = p.liberations.get(course.id);
     const pasParti = course.statut !== CourseStatut.IN_DELIVERY || !course.parti_at;
+    if (liberation && liberationAAnnoncer(liberation) && pasParti && !enRoute && course.statut === CourseStatut.IN_DELIVERY) {
+      // Levée APRÈS la remise (la caisse remet dès le code, essai du 25/10) :
+      // « Tout est prêt · code » lui ferait présenter un code pour des sacs
+      // déjà remis. La commande attendue vient d'être ajoutée et reste à
+      // prendre : « Commande ajoutée / Code 421 au restaurant » ; sinon
+      // « Tout est récupéré / Tu peux partir ».
+      const sacs = course.deliveries.filter(
+        (d) => !STATUTS_LIVRAISON_TERMINEE.includes(d.statut) && d.order.status === OrderStatus.READY,
+      ).length;
+      if (sacs > 0) {
+        const ajoutees = ajout?.n ?? sacs;
+        const texte = texteCommandeAjoutee({ ajoutees, total, apresRetrait: true, code: course.pickup_code });
+        this.push.notifyCommandeAjoutee({
+          delivererId: livreur,
+          courseId: course.id,
+          courseReference: course.reference,
+          titre: texte.titre,
+          corps: texte.corps,
+          ajoutees,
+          total,
+          apresRetrait: true,
+          code: course.pickup_code,
+        });
+      } else {
+        const texte = texteCommandeRemise();
+        this.push.notifyCommandeRemise({ delivererId: livreur, courseId: course.id, titre: texte.titre, corps: texte.corps });
+      }
+      return;
+    }
     if (liberation && liberationAAnnoncer(liberation) && pasParti && !enRoute) {
       const texte = texteToutEstPret({ code: course.pickup_code, total });
       this.push.notifyCourseToutPret({

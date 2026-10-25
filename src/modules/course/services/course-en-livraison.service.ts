@@ -5,6 +5,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
 
 import { CourseEvent } from '../events/course.event';
+import { retenueEnCours, texteRetenue } from '../helpers/application-plan.rules';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { STATUTS_COURSE_AVANT_DEPART, STATUTS_LIVRAISON_TERMINEE } from '../helpers/remise-course.rules';
 import { CourseActionService } from './course-action.service';
@@ -152,8 +153,21 @@ export class CourseEnLivraisonService {
     // course reste à remettre (bouton de la caisse commande par commande) et
     // que le livreur peut encore attendre au comptoir (fenêtre ouverte) ; la
     // dernière remise l'annonce (`surRemiseParCaisse`, « Tout est récupéré »).
-    // Fenêtre fermée d'office (ancienne appli, v1) : comme avant.
-    if (course && (fermee || !resteARemettre(course.deliveries))) {
+    // Fenêtre fermée d'office (ancienne appli, v1) : comme avant. Retenue en
+    // cours : « Attends 4 min / Départ 12 h 34 », jamais « Tu peux partir »
+    // (essai du 25/10, la caisse remet pendant la retenue).
+    const retenue = course && !fermee ? retenueEnCours(course, maintenant) : null;
+    if (course && retenue) {
+      const texte = texteRetenue({ jusqua: retenue.jusqua, maintenant });
+      this.pushService.notifyCourseAttente({
+        delivererId: avant.deliverer_id,
+        courseId,
+        titre: texte.titre,
+        corps: texte.corps,
+        jusqua: retenue.jusqua,
+        attendues: retenue.attendues,
+      });
+    } else if (course && (fermee || !resteARemettre(course.deliveries))) {
       this.pushService.notifyPickupValidated({
         delivererId: avant.deliverer_id,
         courseReference: course.reference,
