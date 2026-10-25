@@ -31,6 +31,16 @@ import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { DepartCourseService } from './depart-course.service';
 
 /**
+ * Livraisons qui peuvent encore échouer : pas terminées. PENDING compris : la
+ * livraison suivante d'une tournée attend que l'appli la démarre, et le
+ * livreur doit pouvoir signaler un problème si ce démarrage n'est pas passé.
+ */
+const LIVRAISONS_EN_COURS: DeliveryStatut[] = [DeliveryStatut.PENDING, DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED];
+
+/** Commandes qu'un échec de livraison ne touche plus : terminée, collectée, déjà annulée. */
+const COMMANDES_CLOSES: OrderStatus[] = [OrderStatus.COMPLETED, OrderStatus.COLLECTED, OrderStatus.CANCELLED];
+
+/**
  * Service : transitions de statut sur les Delivery individuelles.
  * Auto-complétion de la Course parent quand toutes les Delivery sont terminées.
  */
@@ -127,6 +137,17 @@ export class DeliveryActionService {
    *       dépassement du seuil `OVERDUE_COLLECTED_UNPAID_MIN`.
    */
   async confirmDelivery(deliveryId: string, delivererId: string, dto: ConfirmDeliveryDto) {
+    // Rejeu avec le bon code (réponse perdue, double toucher) : la livraison
+    // est rendue telle quelle. Avant, le 400 qui suivait poussait le livreur
+    // vers « Problème » sur une commande déjà remise.
+    const deja = await this.prisma.delivery.findUnique({
+      where: { id: deliveryId },
+      select: { statut: true, delivery_pin: true, course: { select: { deliverer_id: true } } },
+    });
+    if (deja?.statut === DeliveryStatut.DELIVERED && deja.course.deliverer_id === delivererId && deja.delivery_pin === dto.pin) {
+      return this.lireSansCode(deliveryId);
+    }
+
     const delivery = await this.assertOwned(deliveryId, delivererId, DeliveryStatut.ARRIVED);
 
     if (delivery.delivery_pin !== dto.pin) {
@@ -146,17 +167,26 @@ export class DeliveryActionService {
           collected_at: now,
         };
 
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.delivery.update({
-        where: { id: deliveryId },
-        omit: { delivery_pin: true },
+    // Écritures CONDITIONNÉES sur l'état lu : un « Problème » validé au même
+    // instant n'est jamais effacé par la confirmation (ni l'inverse).
+    const ecrite = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.delivery.updateMany({
+        where: {
+          id: deliveryId,
+          statut: DeliveryStatut.ARRIVED,
+          course: { deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY },
+        },
         data: { statut: DeliveryStatut.DELIVERED, delivered_at: now },
-      }),
-      this.prisma.order.update({
-        where: { id: delivery.order_id },
+      });
+      if (count !== 1) return false;
+      await tx.order.updateMany({
+        where: { id: delivery.order_id, status: { notIn: COMMANDES_CLOSES } },
         data: orderUpdate,
-      }),
-    ]);
+      });
+      return true;
+    });
+    if (!ecrite) return this.livraisonChangee(deliveryId, DeliveryStatut.DELIVERED);
+    const updated = await this.lireSansCode(deliveryId);
 
     // ENCAISSEMENT À LA LIVRAISON : commande non payée → le livreur a choisi le
     // moyen de paiement du client dans l'app. On enregistre un Paiement
@@ -253,10 +283,23 @@ export class DeliveryActionService {
   }
 
   /** Échec de livraison (client absent, refus, etc.) */
+  /**
+   * Échec de livraison (client absent, refus, etc.), sur une livraison en
+   * cours d'une course partie seulement : jamais une livraison déjà confirmée
+   * (sa commande payée et terminée passait annulée, points et coupon rendus),
+   * ni une course pas encore récupérée ou annulée. Écritures conditionnées sur
+   * l'état lu ; rejeu (réponse perdue, double toucher) rendu tel quel.
+   */
   async failDelivery(deliveryId: string, delivererId: string, dto: FailDeliveryDto) {
-    const delivery = await this.prisma.delivery.findUnique({ where: { id: deliveryId } });
-    if (!delivery) throw new NotFoundException('Delivery non trouvée');
-    await this.assertOwnership(delivery.course_id, delivererId);
+    const deja = await this.prisma.delivery.findUnique({
+      where: { id: deliveryId },
+      select: { statut: true, course: { select: { deliverer_id: true } } },
+    });
+    if (deja?.statut === DeliveryStatut.FAILED && deja.course.deliverer_id === delivererId) {
+      return this.lireSansCode(deliveryId);
+    }
+
+    const delivery = await this.assertOwned(deliveryId, delivererId, LIVRAISONS_EN_COURS);
 
     // OTHER nécessite une note
     if (dto.reason === DeliveryFailureReason.OTHER && !dto.note?.trim()) {
@@ -264,28 +307,36 @@ export class DeliveryActionService {
     }
 
     const now = new Date();
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.delivery.update({
-        where: { id: deliveryId },
-        omit: { delivery_pin: true },
+    const ecrite = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.delivery.updateMany({
+        where: {
+          id: deliveryId,
+          statut: { in: LIVRAISONS_EN_COURS },
+          course: { deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY },
+        },
         data: {
           statut: DeliveryStatut.FAILED,
           failed_at: now,
           failure_reason: dto.reason,
           failure_note: dto.note,
         },
-      }),
-      // Order annulée avec traçabilité du motif (délivré au livreur)
-      this.prisma.order.update({
-        where: { id: delivery.order_id },
+      });
+      if (count !== 1) return false;
+      // Order annulée avec traçabilité du motif (délivré au livreur), sauf si
+      // elle est déjà terminée ou annulée.
+      await tx.order.updateMany({
+        where: { id: delivery.order_id, status: { notIn: COMMANDES_CLOSES } },
         data: {
           status: OrderStatus.CANCELLED,
           cancelled_at: now,
           cancelled_by: 'deliverer',
           cancelled_reason: dto.note ?? `Livraison échouée : ${dto.reason}`,
         },
-      }),
-    ]);
+      });
+      return true;
+    });
+    if (!ecrite) return this.livraisonChangee(deliveryId, DeliveryStatut.FAILED);
+    const updated = await this.lireSansCode(deliveryId);
 
     await this.emitDeliveryStatut(updated, delivery.statut);
     await this.checkCourseCompletion(delivery.course_id);
@@ -389,12 +440,15 @@ export class DeliveryActionService {
     return delivery;
   }
 
-  private async assertOwnership(courseId: string, delivererId: string) {
-    const course = await this.prisma.course.findUnique({ where: { id: courseId } });
-    if (!course) throw new NotFoundException('Course non trouvée');
-    if (course.deliverer_id !== delivererId) {
-      throw new ForbiddenException("Cette livraison ne vous est pas affectée");
-    }
+  /**
+   * L'écriture conditionnée n'a rien trouvé : la livraison a changé entre la
+   * lecture et l'écriture. Déjà dans l'état visé (double toucher) : rendue
+   * telle quelle, sans événement ; sinon 400, rien n'est écrit.
+   */
+  private async livraisonChangee(deliveryId: string, visee: DeliveryStatut) {
+    const relue = await this.lireSansCode(deliveryId);
+    if (relue.statut === visee) return relue;
+    throw new BadRequestException(`Statut delivery changé entre-temps, actuel ${relue.statut}`);
   }
 
   /**
@@ -416,9 +470,15 @@ export class DeliveryActionService {
 
     if (!allTerminal) return;
 
-    const completed = await this.prisma.course.update({
-      where: { id: courseId },
+    // Réservation : deux fins de livraison au même instant ne terminent la
+    // course (événement, remise en file, notification) qu'une fois.
+    const { count } = await this.prisma.course.updateMany({
+      where: { id: courseId, statut: CourseStatut.IN_DELIVERY },
       data: { statut: CourseStatut.COMPLETED, completed_at: new Date() },
+    });
+    if (count !== 1) return;
+    const completed = await this.prisma.course.findUniqueOrThrow({
+      where: { id: courseId },
       include: COURSE_FULL_INCLUDE,
     });
 
