@@ -71,6 +71,9 @@
  *     comptoir (son temps par défaut compte).
  *  6. RETENUES au comptoir (3.5) : posées, réduites ou levées. Une retenue ne
  *     peut que diminuer ; levée, elle ne revient jamais sur la même course.
+ *     Remise ou non, elle ne dépend pas de la fenêtre d'ajout après le
+ *     retrait : c'est la fenêtre qui court depuis sa fin (essai du 25/10, la
+ *     caisse remet dès le code).
  *     ATTENTE COURTE : la commande en préparation est prête dans l'horizon
  *     (7 min) et aucune commande prête n'attend plus de 5 min. TRAJET LONG
  *     (demande du 24/10) : partir sans elle ferait revenir le livreur plus de
@@ -155,9 +158,10 @@ export const HEURES_DE_POINTE: readonly [number, number][] = [
 ];
 /**
  * Ajout après le retrait : jamais à moins de 90 s de la fin de la fenêtre
- * (le temps que la caisse remette le sac). Une retenue au comptoir finit
- * aussi 90 s avant : au-delà, la commande attendue ne pourrait plus être
- * ajoutée et le livreur aurait attendu pour rien.
+ * (le temps que la caisse remette le sac). La retenue au comptoir n'y est
+ * plus bornée (essai du 25/10) : la fenêtre court depuis sa fin
+ * (`debutFenetreApresRetraitMs`), la commande attendue peut toujours être
+ * ajoutée puis remise.
  */
 export const MARGE_REMISE_APRES_RETRAIT_S = 90;
 
@@ -1076,15 +1080,16 @@ const STATUTS_LIVRAISON_TERMINEE: DeliveryStatut[] = [
  *  - aucune position PRÉCISE (80 m au plus), reçue après le retrait, à
  *    plus du rayon de départ (un relevé imprécis ne décide rien, comme pour
  *    l'écouteur des positions) ;
- *  - retrait il y a moins de la fenêtre (240 s) ; au-delà, la course reste
- *    au comptoir au plus 2 min de plus si un sac de la course n'est pas
- *    encore remis (commande ajoutée, ou commande d'origine remise une par
- *    une au bouton de la caisse) et que le livreur y est encore (dernière
- *    position dans le rayon de départ) : sinon elle lui serait retirée sous
- *    les yeux pendant qu'il attend son sac.
+ *  - retrait il y a moins de la fenêtre (240 s), comptée depuis la fin de la
+ *    retenue si elle finit après le retrait (`debutFenetreApresRetraitMs`) ;
+ *    au-delà, la course reste au comptoir au plus 2 min de plus si un sac de
+ *    la course n'est pas encore remis (commande ajoutée, ou commande
+ *    d'origine remise une par une au bouton de la caisse) et que le livreur
+ *    y est encore (dernière position dans le rayon de départ) : sinon elle
+ *    lui serait retirée sous les yeux pendant qu'il attend son sac.
  */
 export function fenetreApresRetrait(
-  course: Pick<CoursePlanif, 'statut' | 'parti_at' | 'picked_up_at' | 'livraisons'>,
+  course: Pick<CoursePlanif, 'statut' | 'parti_at' | 'picked_up_at' | 'livraisons'> & Partial<Pick<CoursePlanif, 'retenue_jusqua'>>,
   livreur: Pick<LivreurPlanif, 'protocole_appli' | 'position' | 'position_at' | 'position_sure'> | null,
   restaurant: ILatLng | null,
   r: Pick<ReglagesPlanification, 'ajoutApresRetrait' | 'ajoutApresRetraitMaxS' | 'departRayonM'>,
@@ -1108,7 +1113,7 @@ export function fenetreApresRetrait(
   ) {
     return { ouverte: false, motif: 'POSITION' };
   }
-  const fermeA = course.picked_up_at.getTime() + r.ajoutApresRetraitMaxS * 1000;
+  const fermeA = debutFenetreApresRetraitMs(course)! + r.ajoutApresRetraitMaxS * 1000;
   if (fermeA <= maintenant.getTime()) {
     const prolongee = attendSonSac({
       fermeAMs: fermeA,
@@ -1122,6 +1127,25 @@ export function fenetreApresRetrait(
     return prolongee ? { ouverte: true, ferme_a: new Date(fermeA), prolongee: true } : { ouverte: false, motif: 'FENETRE_ECHUE' };
   }
   return { ouverte: true, ferme_a: new Date(fermeA) };
+}
+
+/**
+ * Début de la fenêtre d'ajout après le retrait (essai du 25/10) : la fin de
+ * la retenue si elle tombe après le retrait (retenue en cours, ou levée
+ * après la remise : la levée écrit son heure dans `retenue_jusqua`), sinon
+ * le retrait. La caisse remet dès le code, même pendant une retenue : la
+ * fenêtre comptée depuis la remise faisait partir la course 4 min après,
+ * livreur au comptoir, et la commande attendue partait seule. `null` sans
+ * retrait. Règle partagée avec l'écran Opérations (`fenetre_ajout_ferme_a`).
+ */
+export function debutFenetreApresRetraitMs(course: {
+  picked_up_at: Date | null;
+  retenue_jusqua?: Date | null;
+}): number | null {
+  if (!course.picked_up_at) return null;
+  const retrait = course.picked_up_at.getTime();
+  const retenue = course.retenue_jusqua?.getTime() ?? null;
+  return retenue !== null && retenue > retrait ? retenue : retrait;
 }
 
 /**
@@ -2433,10 +2457,10 @@ export function planifier(
     if (T !== null && T <= t) continue; // terminée : jamais reposée
     if (k.arrets.length === 0) continue;
     const dPossible = departOuDefaut(ctx, departCourse(ctx, k));
-    // Plafond commun : après le retrait, la commande attendue doit pouvoir être
-    // ajoutée, puis remise ; une retenue posée ne peut que diminuer.
+    // Une retenue posée ne peut que diminuer. Après le retrait, elle n'est
+    // plus bornée par la fenêtre d'ajout : la fenêtre court depuis sa fin
+    // (essai du 25/10 : la remise au code la ramenait à remise + 150 s).
     let plafond = Number.POSITIVE_INFINITY;
-    if (k.fenetreFermeMs !== null) plafond = Math.min(plafond, k.fenetreFermeMs - margeRemiseApresRetraitMs(r));
     if (T !== null) plafond = Math.min(plafond, T);
     /** Aucune commande prête de la course n'attend plus de `s` secondes depuis `ready_at`. */
     const attenteAuPlus = (s: number) => Math.min(plafond, ...k.arrets.map((a) => (a.readyMs ?? t) + s * 1000));

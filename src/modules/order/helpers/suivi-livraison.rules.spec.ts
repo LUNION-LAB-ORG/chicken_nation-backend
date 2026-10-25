@@ -290,6 +290,27 @@ describe('suivi de livraison : course en cours', () => {
     ]);
   });
 
+  it('récupérée pendant une retenue levée depuis : départ prévu à la fin de la fenêtre comptée depuis la levée (25/10)', () => {
+    const r = suiviLivraison(
+      commande(
+        { status: 'PICKED_UP', picked_up_at: d('12:18') },
+        {
+          course: course({
+            statut: 'IN_DELIVERY',
+            assigned_at: d('12:02'),
+            at_restaurant_at: d('12:08'),
+            picked_up_at: d('12:18'),
+            retenue_jusqua: d('12:19', '30'),
+            deliverer: KOFFI,
+            deliveries: [{ id: 'liv-a', statut: 'PENDING', sequence_order: 1, order: { status: 'PICKED_UP' } }],
+          }),
+        },
+      ),
+      ctx,
+    );
+    expect(r.etapes.find((e) => e.cle === 'depart')?.prevue).toBe(t('12:23', '30'));
+  });
+
   it('retenue au comptoir : départ prévu à la fin de la retenue, récupération à venir', () => {
     const r = suiviLivraison(
       commande(

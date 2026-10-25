@@ -584,6 +584,7 @@ function fenetreAjout(c: CommandeLivraisonLue, course: CourseLivraisonLue, ctx: 
     statut: course.statut,
     picked_up_at: course.picked_up_at ?? null,
     parti_at: course.parti_at ?? null,
+    retenue_jusqua: course.retenue_jusqua ?? null,
     offer_attempts: null,
     deliverer: course.deliverer
       ? { last_location: course.deliverer.last_location, last_location_at: course.deliverer.last_location_at ?? null }

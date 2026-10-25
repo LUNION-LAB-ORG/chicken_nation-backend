@@ -41,6 +41,19 @@ describe('écran Opérations : fin de la fenêtre d’ajout après le retrait', 
     expect(r.fenetre_ajout_ferme_a).toBe('2026-10-23T12:33:00.000Z');
   });
 
+  it('remise pendant une retenue : la fenêtre court depuis la fin de la retenue, comme au serveur (25/10)', () => {
+    const remise = { statut: 'IN_DELIVERY', picked_up_at: '2026-10-23T12:30:30.000Z', parti_at: null };
+    // Retenue jusqu'à 12:34 (en cours, ou levée à cette heure) : 12:38.
+    expect(enrichirCourseOperations({ ...remise, retenue_jusqua: '2026-10-23T12:34:00.000Z' }, p).fenetre_ajout_ferme_a).toBe(
+      '2026-10-23T12:38:00.000Z',
+    );
+    // Retenue levée avant la remise, ou aucune : depuis la remise.
+    expect(enrichirCourseOperations({ ...remise, retenue_jusqua: '2026-10-23T12:30:10.000Z' }, p).fenetre_ajout_ferme_a).toBe(
+      '2026-10-23T12:34:30.000Z',
+    );
+    expect(enrichirCourseOperations({ ...remise, retenue_jusqua: null }, p).fenetre_ajout_ferme_a).toBe('2026-10-23T12:34:30.000Z');
+  });
+
   it('partie, pas encore récupérée, ou ajout après retrait coupé : rien', () => {
     expect(
       enrichirCourseOperations({ statut: 'IN_DELIVERY', picked_up_at: '2026-10-23T12:29:00.000Z', parti_at: '2026-10-23T12:29:30.000Z' }, p)

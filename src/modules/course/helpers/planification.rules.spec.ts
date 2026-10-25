@@ -1038,11 +1038,10 @@ describe('retenue au comptoir : trajet long (le livreur reviendrait trop tard)',
     ]);
   });
 
-  it('après le retrait : jamais au-delà de la fenêtre d’ajout, même pour un trajet long', () => {
-    // Retrait à 15 h 30 : fenêtre jusqu'à 15 h 34, marge de remise 90 s : 15 h 32 min 30 s au plus.
+  it('après le retrait : la fenêtre d’ajout ne borne plus la retenue, trajet long compris (essai du 25/10)', () => {
+    // Retrait à 15 h 30 : la retenue va jusqu'à 15 h 40 ; la fenêtre court ensuite depuis sa fin.
     const plan = scene({ statut: CourseStatut.IN_DELIVERY, picked_up_at: h('15:30') }).plan;
-    expect(actionsDe(plan, 'RETENIR')).toEqual([]);
-    expect(refusDe(plan, 'b', 'k')).toEqual(['LIMITE_RETENUE']);
+    expect(actionsDe(plan, 'RETENIR')).toEqual([expect.objectContaining({ jusqua: h('15:40'), motif: 'TRAJET_LONG' })]);
   });
 
   it('heure de pointe : la vitesse de pointe allonge l’aller-retour (même trajet, court à 15 h 30, long à 12 h 30)', () => {
@@ -1189,9 +1188,10 @@ describe('retenue au comptoir : trajet long (le livreur reviendrait trop tard)',
     ]);
   });
 
-  it('estimation qui recule après le retrait : la retenue descend à la fenêtre, attente courte (motif jamais plus long que la retenue)', () => {
-    // Retenue jusqu'à 15 h 33 pour B ; retrait validé à 15 h 30 (fenêtre 15 h 34,
-    // marge 90 s : 15 h 32 min 30 s au plus) ; B annoncée maintenant pour 15 h 36.
+  it('estimation qui recule après le retrait : la retenue garde son échéance, la remise ne la rabote plus (essai du 25/10)', () => {
+    // Retenue jusqu'à 15 h 33 pour B ; retrait validé à 15 h 30 ; B annoncée
+    // maintenant pour 15 h 36 : la retenue n'est jamais prolongée, ni réduite
+    // par la remise (la fenêtre court depuis 15 h 33).
     const plan = scene({
       statut: CourseStatut.IN_DELIVERY,
       picked_up_at: h('15:30'),
@@ -1200,13 +1200,7 @@ describe('retenue au comptoir : trajet long (le livreur reviendrait trop tard)',
       attendues: ['b'],
       finB: h('15:36'),
     }).plan;
-    expect(actionsDe(plan, 'RETENIR')).toEqual([
-      expect.objectContaining({
-        jusqua: h('15:32:30'),
-        motif: 'ATTENTE_COURTE',
-        attendues: [expect.objectContaining({ order_id: 'b', motif: 'ATTENTE_COURTE' })],
-      }),
-    ]);
+    expect(plan.actions).toEqual([]);
   });
 });
 
@@ -1312,7 +1306,7 @@ describe('ajout après le retrait (3.8) et départ', () => {
     expect(actionsDe(apres, 'MARQUER_PARTI')[0].motif).toBe('FENETRE_ECHUE');
   });
 
-  it('fin de fenêtre : plus d’ajout ni de retenue à moins de 90 s, le sac a le temps d’être remis (relecture)', () => {
+  it('fin de fenêtre : plus d’ajout à moins de 90 s, le sac a le temps d’être remis (relecture) ; la retenue n’y est plus bornée', () => {
     // Retrait à 12:30, fenêtre jusqu'à 12:34. À 12:32:35 (85 s avant) : la commande prête part seule.
     const tard = h('12:32:35');
     const plan = planifier(
@@ -1326,16 +1320,17 @@ describe('ajout après le retrait (3.8) et départ', () => {
     const ok = planifier(instant(avant, { commandes: [cmd('q', { est: 2300, ready_at: avant })], courses: [recuperee()], livreurs: [d1(avant)] }));
     expect(actionsDe(ok, 'AJOUTER')[0]).toMatchObject({ course_id: 'k', apres_retrait: true });
 
-    // Retenue : jamais au-delà de la fin de la fenêtre moins 90 s (12:32:30).
+    // Retenue : plus bornée par la fin de la fenêtre moins 90 s (essai du
+    // 25/10) ; la fenêtre court depuis la fin de la retenue.
     const t0 = h('12:31');
     const retenue = planifier(
       instant(t0, { commandes: [enPrep('b', h('12:32:20'), { est: 2300 })], courses: [recuperee()], livreurs: [d1(t0)] }),
     );
     expect(actionsDe(retenue, 'RETENIR')[0]).toMatchObject({ course_id: 'k', jusqua: h('12:32:20') });
-    const tropTard = planifier(
+    const auDela = planifier(
       instant(t0, { commandes: [enPrep('b', h('12:32:40'), { est: 2300 })], courses: [recuperee()], livreurs: [d1(t0)] }),
     );
-    expect(actionsDe(tropTard, 'RETENIR')).toEqual([]);
+    expect(actionsDe(auDela, 'RETENIR')[0]).toMatchObject({ course_id: 'k', jusqua: h('12:32:40') });
   });
 
   it('fenêtre réglée sous 3 min : la marge de remise est la moitié de la fenêtre, les ajouts restent possibles (banc du 23/10)', () => {
@@ -1354,18 +1349,18 @@ describe('ajout après le retrait (3.8) et départ', () => {
     );
     expect(refusDe(non, 'q', 'k')).toEqual(['FIN_DE_FENETRE']);
     expect(actionsDe(non, 'CREER_COURSE')[0].order_ids).toEqual(['q']);
-    // Retenue bornée à la fin de la fenêtre moins 30 s (12:30:30).
+    // Retenue : plus bornée par la fin de la fenêtre moins 30 s (essai du 25/10).
     const t0 = h('12:30:05');
     const retenue = planifier(
       instant(t0, { commandes: [enPrep('b', h('12:30:25'), { est: 2300 })], courses: [recuperee()], livreurs: [d1(t0)] }),
       courte,
     );
     expect(actionsDe(retenue, 'RETENIR')[0]).toMatchObject({ course_id: 'k', jusqua: h('12:30:25') });
-    const tropTard = planifier(
+    const auDela = planifier(
       instant(t0, { commandes: [enPrep('b', h('12:30:40'), { est: 2300 })], courses: [recuperee()], livreurs: [d1(t0)] }),
       courte,
     );
-    expect(actionsDe(tropTard, 'RETENIR')).toEqual([]);
+    expect(actionsDe(auDela, 'RETENIR')[0]).toMatchObject({ course_id: 'k', jusqua: h('12:30:40') });
     // Fenêtre par défaut (240 s) : marge inchangée de 90 s.
     expect(margeRemiseApresRetraitMs(REG)).toBe(90_000);
     expect(margeRemiseApresRetraitMs(avec({ ajoutApresRetraitMaxS: 0 }))).toBe(0);

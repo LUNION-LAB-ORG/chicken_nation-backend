@@ -7,7 +7,9 @@
  *    base (`offer_attempts`) est retirée de la réponse ;
  *  - `fenetre_ajout_ferme_a` : course récupérée, livreur pas encore parti
  *    (`parti_at` nul) : fin de la fenêtre d'ajout après le retrait
- *    (`picked_up_at` + `course.ajout_apres_retrait_max_s`). Le planificateur
+ *    (`picked_up_at` + `course.ajout_apres_retrait_max_s`, comptée depuis la
+ *    fin de la retenue si elle finit après le retrait, comme le serveur :
+ *    `debutFenetreApresRetraitMs`, 25/10). Le planificateur
  *    pose `parti_at` à cette échéance au plus tard (passage de 10 s), sauf
  *    quand la course attend encore son sac : une commande de la course reste
  *    à remettre et le livreur est encore au comptoir. La fin
@@ -26,7 +28,7 @@
  *    dernier signe de vie et le protocole lus pour les calculer sont retirés.
  */
 import { enRetard, finTourneePrevue, retardMin } from 'src/modules/course/helpers/retard-tournee.rules';
-import { attendSonSac, PROLONGATION_REMISE_S } from 'src/modules/course/helpers/planification.rules';
+import { attendSonSac, debutFenetreApresRetraitMs, PROLONGATION_REMISE_S } from 'src/modules/course/helpers/planification.rules';
 import {
   APPLI_FERMEE_APRES_S_DEFAUT,
   appliActiveDepuis,
@@ -56,6 +58,8 @@ export interface CourseLue {
   statut?: string | null;
   picked_up_at?: DateLue;
   parti_at?: DateLue;
+  /** Fin de la retenue au comptoir (en cours, ou heure de sa levée). */
+  retenue_jusqua?: DateLue;
   motif_depart?: string | null;
   estimated_duration_min?: number | null;
   delay_alerted_at?: DateLue;
@@ -199,7 +203,9 @@ export function enrichirCourseOperations<T extends CourseLue>(
   let fenetre_ajout_ferme_a: string | null = null;
   const retrait = date(course.picked_up_at);
   if (course.statut === 'IN_DELIVERY' && retrait && !course.parti_at && p.fenetreMaxS > 0) {
-    const fermeA = retrait.getTime() + p.fenetreMaxS * 1000;
+    // Depuis la fin de la retenue si elle finit après le retrait, comme le planificateur.
+    const debut = debutFenetreApresRetraitMs({ picked_up_at: retrait, retenue_jusqua: date(course.retenue_jusqua) })!;
+    const fermeA = debut + p.fenetreMaxS * 1000;
     // Dernière position PRÉCISE seulement, comme le planificateur.
     const sure = lirePositionLivreur(course.deliverer?.last_location, course.deliverer?.last_location_at ?? null).sure;
     const prolongee =
