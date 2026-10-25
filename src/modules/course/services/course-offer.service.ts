@@ -51,6 +51,28 @@ interface CreateCourseFromOrdersInput {
 }
 
 /**
+ * Minutes d'attente d'une course sans livreur depuis la dernière commande
+ * entrée : sa création, ou le dernier ajout ou la dernière fusion
+ * (`ajoutee_at`) d'une livraison encore à faire dont la commande n'est pas
+ * annulée.
+ */
+export function attenteDepuisDerniereEntreeMin(
+  course: {
+    created_at: Date;
+    deliveries: { ajoutee_at: Date | null; statut: DeliveryStatut; order: { status: OrderStatus } }[];
+  },
+  maintenant: Date,
+): number {
+  let derniere = course.created_at.getTime();
+  for (const d of course.deliveries) {
+    if (!d.ajoutee_at || d.order.status === OrderStatus.CANCELLED) continue;
+    if (d.statut === DeliveryStatut.CANCELLED || d.statut === DeliveryStatut.FAILED) continue;
+    derniere = Math.max(derniere, d.ajoutee_at.getTime());
+  }
+  return (maintenant.getTime() - derniere) / 60000;
+}
+
+/**
  * Service : création d'une Course à partir d'orders READY + algo d'affectation livreur.
  *
  * Séparé de CourseActionService pour respecter la séparation des responsabilités
@@ -737,7 +759,11 @@ export class CourseOfferService {
         restaurant_id: true,
         offer_expires_at: true,
         deliveries: {
-          select: { order: { select: { delivery_service: true } } },
+          select: {
+            ajoutee_at: true,
+            statut: true,
+            order: { select: { delivery_service: true, status: true } },
+          },
         },
       },
       orderBy: { created_at: 'asc' }, // la plus ancienne d'abord (équité client)
@@ -752,7 +778,11 @@ export class CourseOfferService {
       //    Claim ATOMIQUE (conditionné sur le statut) : deux backends tournent
       //    en parallèle sur la même base, un update non conditionné écraserait
       //    une course entre-temps acceptée par un livreur.
-      if (waitingMin >= settings.noDelivererMaxWaitMin) {
+      //    Attente comptée depuis la DERNIÈRE commande entrée dans la course
+      //    (ajout ou fusion du planificateur v2) : une commande prête ajoutée
+      //    à une course de 58 min n'expire pas avec elle 2 min plus tard
+      //    (relecture du 25/10). Sans ajout, depuis la création, comme avant.
+      if (attenteDepuisDerniereEntreeMin(course, now) >= settings.noDelivererMaxWaitMin) {
         const claimed = await this.prisma.course.updateMany({
           where: { id: course.id, statut: CourseStatut.PENDING_ASSIGNMENT },
           data: { statut: CourseStatut.EXPIRED, offer_expires_at: null },

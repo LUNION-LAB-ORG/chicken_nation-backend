@@ -124,6 +124,15 @@ interface Passage {
 }
 
 /**
+ * Commande ajoutée ou fusionnée dans une course SANS livreur : la cloche
+ * « aucun livreur » peut sonner de nouveau, pour elle (relecture du 25/10).
+ * Sans cela, une course qui avait déjà sonné n'alertait plus personne.
+ */
+function rouvrirClocheSansLivreur(statut: CourseStatut): { no_deliverer_alerted_at?: null } {
+  return statut === CourseStatut.PENDING_ASSIGNMENT ? { no_deliverer_alerted_at: null } : {};
+}
+
+/**
  * APPLICATION DU PLAN du planificateur v2 (planification.rules.ts) : chaque
  * action est écrite par une mise à jour CONDITIONNELLE (la course et la
  * commande doivent être encore telles que lues) ; si la condition échoue,
@@ -360,7 +369,11 @@ export class ApplicationPlanService {
             turbo_escalated_at: null,
             ...(a.statut_course === CourseStatut.IN_DELIVERY ? { parti_at: null } : {}),
           },
-          data: { updated_at: now, ...(motif ? { motif_regroupement: motif } : {}) },
+          data: {
+            updated_at: now,
+            ...(motif ? { motif_regroupement: motif } : {}),
+            ...rouvrirClocheSansLivreur(a.statut_course),
+          },
         });
         if (course.count !== 1) throw new ActionAbandonnee('COURSE_CHANGEE');
         const commande = await tx.order.findFirst({
@@ -502,7 +515,11 @@ export class ApplicationPlanService {
           turbo_escalated_at: null,
           ...(a.statut_cible === CourseStatut.IN_DELIVERY ? { parti_at: null } : {}),
         },
-        data: { updated_at: now, ...(motif ? { motif_regroupement: motif } : {}) },
+        data: {
+          updated_at: now,
+          ...(motif ? { motif_regroupement: motif } : {}),
+          ...rouvrirClocheSansLivreur(a.statut_cible),
+        },
       });
       if (cible.count !== 1) throw new ActionAbandonnee('CIBLE_CHANGEE');
 
