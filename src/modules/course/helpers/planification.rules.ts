@@ -50,7 +50,10 @@
  *     3 min) de la fin de sa fenêtre. Personne de libre : le départ
  *     est le premier retour estimé d'un livreur en course qui n'a pas refusé
  *     la course (le retard toléré joue), et regrouper n'avance pas la bascule
- *     vers Turbo d'une commande.
+ *     vers Turbo d'une commande. Vers la course d'un livreur déjà affecté (et
+ *     pour sa retenue, étape 6), une commande déjà en retard seule ne bloque
+ *     plus l'ajout : seul un ajout qui la FAIT passer en retard est refusé
+ *     (essai du 25/10).
  *  3. FUSIONS (demande 4) : une course sans livreur rejoint une course ouverte
  *     avec livreur, ou une autre course sans livreur, de la même direction et
  *     dans les limites ; l'offre en attente de la course absorbée est close
@@ -1676,6 +1679,17 @@ interface ParametresAjout {
    * course par commande) : le regroupement n'y gagne rien.
    */
   attendLivreur?: { retourMs: number | null } | null;
+  /**
+   * La cible est la course d'un livreur déjà affecté (acceptée, au comptoir,
+   * ou récupérée encore au restaurant), ou la retenue d'une telle course
+   * (essai du 25/10) : une commande déjà prévue n'y bloque l'ajout que si
+   * l'ajout la FAIT passer en retard. Déjà en retard seule, le détour
+   * maximal et la règle d'attente du client la protègent ; sinon les
+   * commandes passées puis traitées à la main partaient chacune seule.
+   * Cibles sans livreur (création, course qui cherche un livreur, fusion
+   * entre elles) : la règle d'avant.
+   */
+  courseDuLivreur?: boolean;
 }
 
 function evaluerAjoutSelonOrdre(ctx: Contexte, p: ParametresAjout, geographique: boolean): ResultatAjout {
@@ -1726,7 +1740,8 @@ function evaluerAjoutSelonOrdre(ctx: Contexte, p: ParametresAjout, geographique:
     if (retardTournee > r.detourMaxAjoutMin * 60_000) {
       return { ok: false, refus: 'DETOUR_AJOUT', libelle: `retarderait ${o.reference} de ${minutesTexte(retardTournee)}` };
     }
-    if (p.departConnu && a1 > o.limiteMs && a1 > a0) {
+    const dejaEnRetard = a0 > o.limiteMs;
+    if (p.departConnu && a1 > o.limiteMs && a1 > a0 && !(p.courseDuLivreur && dejaEnRetard)) {
       return { ok: false, refus: 'RETARD_CLIENT', libelle: `${o.reference} arriverait en retard` };
     }
   }
@@ -2123,6 +2138,7 @@ export function planifier(
         attente: { premierePreteMs: q.readyMs ?? t },
         departConnu: dk !== null,
         attendLivreur: attendUnLivreur(ctx, k) ? { retourMs: retourAvantTurbo(ctx, k.arrets, k.dejaSollicites) } : null,
+        courseDuLivreur: k.categorie !== 3,
       });
       if (!res.ok) {
         refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: res.refus, libelle: res.libelle });
@@ -2282,6 +2298,7 @@ export function planifier(
           departSeulMs: departU,
           attente: { premierePreteMs: premiere },
           departConnu: true,
+          courseDuLivreur: true,
         });
         if (!res.ok) {
           refus.push({ essai: 'FUSION', order_id: null, source_id: u.cle, course_cle: k.cle, refus: res.refus, libelle: res.libelle });
@@ -2555,6 +2572,7 @@ export function planifier(
         departSeulMs: alternative === null ? null : Math.max(alternative, fin),
         attente: null,
         departConnu: true,
+        courseDuLivreur: true,
       });
       if (!res.ok) {
         noter(res.refus, res.libelle);

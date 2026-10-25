@@ -88,6 +88,94 @@ describe('S2. trajet long : la remise ne rabote plus la retenue', () => {
   });
 });
 
+describe('S4. commandes déjà en retard seules : elles ne bloquent plus la course du livreur', () => {
+  it('S4a. B prête rejoint la course au comptoir pas encore récupérée (A et B passées à 11:55 et 11:56)', () => {
+    const a = cmd('a', { est: 3000, created_at: h('11:55'), ready_at: h('12:30') });
+    const b = cmd('b', { est: 1500, created_at: h('11:56'), ready_at: h('12:31') });
+    const t = h('12:31:05');
+    const plan = planifier(
+      instant(t, {
+        commandes: [b],
+        courses: [crs('ka', { commandes: [a], statut: CourseStatut.AT_RESTAURANT, deliverer_id: 'l1', assigned_at: h('12:30:10') })],
+        livreurs: [enCourseAuComptoir('l1', t)],
+      }),
+    );
+    expect(actionsDe(plan, 'AJOUTER').map((x) => [x.order_id, x.course_id])).toEqual([['b', 'ka']]);
+    expect(actionsDe(plan, 'CREER_COURSE')).toEqual([]);
+  });
+
+  it('S4a. même chose pour une course déjà récupérée, livreur encore au comptoir', () => {
+    const a = cmd('a', { est: 3000, created_at: h('11:55'), ready_at: h('12:30'), statut: OrderStatus.PICKED_UP });
+    const b = cmd('b', { est: 1500, created_at: h('11:56'), ready_at: h('12:31') });
+    const t = h('12:31:05');
+    const plan = planifier(
+      instant(t, {
+        commandes: [b],
+        courses: [
+          crs('ka', {
+            commandes: [a],
+            statut: CourseStatut.IN_DELIVERY,
+            deliverer_id: 'l1',
+            assigned_at: h('12:30:10'),
+            picked_up_at: h('12:30:30'),
+          }),
+        ],
+        livreurs: [enCourseAuComptoir('l1', t, h('12:30:20'))],
+      }),
+    );
+    expect(actionsDe(plan, 'AJOUTER').map((x) => [x.order_id, x.course_id, x.apres_retrait])).toEqual([['b', 'ka', true]]);
+  });
+
+  describe('S4b. retenue et retard de A', () => {
+    const t = h('12:30:15');
+    const b = enPrep('b', h('12:33'), { est: 2200, created_at: h('12:02') });
+    const plan = (creeeA: string) =>
+      planifier(
+        instant(t, {
+          commandes: [b],
+          courses: [
+            crs('ka', {
+              commandes: [cmd('a', { est: 2000, created_at: h(creeeA), ready_at: h('12:30') })],
+              statut: CourseStatut.AT_RESTAURANT,
+              deliverer_id: 'l1',
+              assigned_at: h('12:30:10'),
+            }),
+          ],
+          livreurs: [enCourseAuComptoir('l1', t)],
+        }),
+      );
+    it('A passée à 12:00, déjà en retard seule : retenue posée', () => {
+      expect(actionsDe(plan('12:00'), 'RETENIR').map((x) => hms(x.jusqua))).toEqual(['12:33:00']);
+    });
+    it('A passée à 12:02, à l’heure seule et en retard après l’attente : refusée (inchangé)', () => {
+      const p = plan('12:02');
+      expect(actionsDe(p, 'RETENIR')).toEqual([]);
+      expect(p.refus.filter((x) => x.essai === 'RETENUE').map((x) => [x.refus, x.libelle])).toEqual([
+        ['RETARD_CLIENT', 'CMD-A arriverait en retard'],
+      ]);
+    });
+    it('A passée à 12:05 : retenue posée (inchangé)', () => {
+      expect(actionsDe(plan('12:05'), 'RETENIR').map((x) => hms(x.jusqua))).toEqual(['12:33:00']);
+    });
+  });
+
+  it('S4c. deux courses sans livreur (fusion) : la règle du retard reste celle d’avant', () => {
+    const t = h('12:31');
+    const u = crs('u', { commandes: [cmd('a', { ready_at: h('12:30'), created_at: h('12:20'), est: 3000 })], created_at: h('12:30') });
+    const v = crs('v', { commandes: [cmd('b', { ready_at: h('12:31'), created_at: h('12:12'), est: 3800 })], created_at: h('12:31') });
+    const enRetour = (id: string, est: number) => livr(id, t, { aEst: est, etat: { en_course: true, last_available_at: null } });
+    const k1 = crs('k1', {
+      statut: CourseStatut.IN_DELIVERY,
+      deliverer_id: 'd1',
+      picked_up_at: h('12:10'),
+      parti_at: h('12:11'),
+      livraisons: [{ id: 'l1', statut: DeliveryStatut.DELIVERED, sequence_order: 1, commande: cmd('x', { statut: OrderStatus.PICKED_UP, est: -1500 }) }],
+    });
+    const plan = planifier(instant(t, { courses: [u, v, k1], livreurs: [enRetour('d1', -700), enRetour('d2', -900)] }));
+    expect(actionsDe(plan, 'FUSIONNER')).toEqual([]);
+  });
+});
+
 describe('S6. ce qui ne change pas', () => {
   it('C prête dans une AUTRE direction : course à part, aucune offre au livreur en course', () => {
     const t = h('12:32');
