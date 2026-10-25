@@ -185,40 +185,11 @@ export class CourseActionService {
     return updated;
   }
 
-  /** Colis récupérés au resto (AT_RESTAURANT → IN_DELIVERY + Orders → PICKED_UP) */
-  async markPickedUp(courseId: string, delivererId: string) {
-    const course = await this.assertOwnedCourse(courseId, delivererId, CourseStatut.AT_RESTAURANT);
-
-    const now = new Date();
-    let [updatedCourse] = await this.prisma.$transaction([
-      this.prisma.course.update({
-        where: { id: courseId },
-        data: { statut: CourseStatut.IN_DELIVERY, picked_up_at: now },
-        include: COURSE_FULL_INCLUDE,
-      }),
-      // Propage le statut PICKED_UP + timestamp sur chaque Order (côté cuisine/client)
-      this.prisma.order.updateMany({
-        where: { delivery: { course_id: courseId } },
-        data: { status: OrderStatus.PICKED_UP, picked_up_at: now },
-      }),
-    ]);
-
-    // Fenêtre d'ajout après le retrait fermée d'office si elle ne doit pas
-    // s'ouvrir ; l'événement qui suit porte alors la course relue (partie).
-    if (await this.depart?.fermerFenetreALaValidation(courseId, now, { annoncer: false })) {
-      updatedCourse =
-        (await this.prisma.course.findUnique({ where: { id: courseId }, include: COURSE_FULL_INCLUDE })) ?? updatedCourse;
-    }
-
-    await this.courseEvent.courseStatutChanged({
-      course: updatedCourse,
-      previous_statut: CourseStatut.AT_RESTAURANT,
-      new_statut: CourseStatut.IN_DELIVERY,
-    });
-    return updatedCourse;
-  }
-
-  /** Annulation de la course par le livreur ou admin */
+  /**
+   * Annulation manuelle de la course (administration). Le livreur n'a plus
+   * de route pour annuler (relecture du 25/10) : une course qu'il abandonne
+   * est relancée par l'annulation automatique, sans annuler les commandes.
+   */
   async cancelCourse(courseId: string, cancelledBy: string, dto: CancelCourseDto) {
     const course = await this.prisma.course.findUniqueOrThrow({
       where: { id: courseId },
@@ -312,7 +283,7 @@ export class CourseActionService {
    * elle saisit le pickup_code dicté par le livreur → on enchaîne en cascade :
    *   Course ACCEPTED/AT_RESTAURANT → IN_DELIVERY
    *   Orders READY → PICKED_UP (+ picked_up_at)
-   *   Remplace l'ancienne action livreur `markPickedUp` (supprimée côté mobile).
+   *   Remplace l'ancienne action livreur « colis récupérés » (route retirée le 25/10).
    *
    * Préconditions : toutes les Orders liées doivent être READY (sinon 400).
    *
