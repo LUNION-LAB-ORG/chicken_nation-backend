@@ -87,8 +87,9 @@ export class CourseOperationsController {
     summary: 'Confirme la récupération d\'une course par la caissière, sans code',
     description:
       'Les commandes de `order_ids` passent PICKED_UP (retrait normal : toutes les commandes de la course doivent être prêtes ; ' +
-      'retrait complémentaire et sac oublié : les commandes prêtes). Mêmes refus que l\'aperçu ; 409 « La course a changé : ' +
-      'vérifiez les commandes et confirmez à nouveau. » si une commande envoyée n\'est plus dans la course ; 409 si la course ' +
+      'retrait complémentaire et sac oublié : les commandes prêtes). Mêmes refus que l\'aperçu ; 409 « Cette course ' +
+      'vient de changer : la remise n\'est pas enregistrée, vérifiez les commandes et validez à nouveau. » si une ' +
+      'commande envoyée n\'est plus dans la course ; 409 si la course ' +
       'vient d\'être remise (double confirmation). Renvoie la course remise.',
   })
   @ApiBody({ type: ConfirmerRecuperationDto })
