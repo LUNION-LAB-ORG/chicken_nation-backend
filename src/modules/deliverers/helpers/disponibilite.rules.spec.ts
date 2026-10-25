@@ -734,7 +734,7 @@ describe('en appel avec le service client (relecture du 24/10)', () => {
       etat: 'EN_APPEL',
       libelle: 'En appel',
       peut_recevoir_offre: false,
-      message_refus: 'Ce livreur est en appel avec le service client.',
+      message_refus: 'Ce livreur est en appel avec le call center.',
     });
     expect(messageRefusOffre('EN_APPEL', libre(), MAINTENANT)).not.toMatch(/—/);
   });

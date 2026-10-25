@@ -143,6 +143,10 @@ describe('Appels avec les livreurs', () => {
       expect(t.audit.record).toHaveBeenCalledWith(
         expect.objectContaining({ actor_role: 'LIVREUR', module: 'calls', entity_id: ligne.id, action: 'CREATE' }),
       );
+      // Lu par le personnel : le mot du personnel, « call center ».
+      expect(t.audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ summary: 'Livreur : appel au call center (2 poste(s) sonnent)' }),
+      );
 
       // Historique du personnel : l'appelant livreur, sa course.
       const historique = await t.calls.history(gagnant);
@@ -340,6 +344,10 @@ describe('Appels avec les livreurs', () => {
       await expect(
         t.appelsLivreur.appelerLivreur(t.awa, { targetKind: 'DELIVERER', deliverer_id: t.koffi.id }),
       ).rejects.toBeInstanceOf(ConflictException);
+      expect(
+        (await codeDuRefus(t.appelsLivreur.appelerLivreur(t.awa, { targetKind: 'DELIVERER', deliverer_id: t.koffi.id })))
+          .corps,
+      ).toMatchObject({ message: 'Ce livreur est déjà en appel.', code: 'APPEL_EN_COURS' });
       // Un autre agent ne décroche pas à la place du livreur.
       await expect(t.calls.answer(t.appels[0].id, t.yao)).rejects.toBeInstanceOf(ForbiddenException);
     });
@@ -399,7 +407,10 @@ describe('Appels avec les livreurs', () => {
       const personnel = await codeDuRefus(
         t.appelsLivreur.appelerLivreur(t.awa, { targetKind: 'DELIVERER', deliverer_id: t.koffi.id }),
       );
-      expect(personnel).toMatchObject({ statut: 403, corps: { code: 'APPELS_LIVREURS_DESACTIVES' } });
+      expect(personnel).toMatchObject({
+        statut: 403,
+        corps: { code: 'APPELS_LIVREURS_DESACTIVES', message: 'Les appels avec les livreurs sont coupés.' },
+      });
       expect(t.lunion.createRoom).not.toHaveBeenCalled();
     });
 

@@ -144,7 +144,7 @@ export class AppelsLivreurService implements OnModuleDestroy {
             telephone: TELEPHONE_SERVICE_CLIENT,
           }
         : {
-            message: 'Les appels avec les livreurs sont désactivés (réglage calls.livreurs_actif).',
+            message: 'Les appels avec les livreurs sont coupés.',
             code: CODES_APPEL_LIVREUR.DESACTIVES,
           },
     );
@@ -237,7 +237,7 @@ export class AppelsLivreurService implements OnModuleDestroy {
       callId: call.id,
       path: '/calls/deliverer',
       status: 201,
-      resume: `Livreur : appel au service client (${receveurs.length} poste(s) sonnent)`,
+      resume: `Livreur : appel au call center (${receveurs.length} poste(s) sonnent)`,
       details: { courseId: course?.id ?? null, orderId },
     });
 
@@ -276,7 +276,7 @@ export class AppelsLivreurService implements OnModuleDestroy {
     await this.balayer();
     if (await this.appelActifDuLivreur(livreur.id)) {
       throw new ConflictException({
-        message: 'Ce livreur est déjà en communication',
+        message: 'Ce livreur est déjà en appel.',
         code: CODES_APPEL_LIVREUR.EN_COURS,
       });
     }
@@ -375,7 +375,7 @@ export class AppelsLivreurService implements OnModuleDestroy {
       callId,
       path: `/calls/deliverer/${callId}/answer`,
       status: 201,
-      resume: 'Livreur : a décroché un appel du service client',
+      resume: 'Livreur : a décroché un appel du call center',
     });
 
     return {
@@ -414,7 +414,7 @@ export class AppelsLivreurService implements OnModuleDestroy {
       callId,
       path: `/calls/deliverer/${callId}/reject`,
       status: 201,
-      resume: 'Livreur : a refusé un appel du service client',
+      resume: 'Livreur : a refusé un appel du call center',
     });
     return { status: CallStatus.MISSED };
   }
@@ -459,7 +459,7 @@ export class AppelsLivreurService implements OnModuleDestroy {
         this.gateway.emitToUser(rid, 'user', CALL_EVENTS.CANCELLED, { callId: call.id });
       }
       void this.lunion.deleteRoom(call.room_slug);
-      journal('Livreur : a annulé son appel au service client avant la réponse');
+      journal('Livreur : a annulé son appel au call center avant la réponse');
       return { status: CallStatus.CANCELLED };
     }
 

@@ -584,6 +584,6 @@ export function messageRefusOffre(
     case 'INJOIGNABLE':
       return 'Ce livreur est injoignable : ni appli connectée, ni notifications.';
     case 'EN_APPEL':
-      return 'Ce livreur est en appel avec le service client.';
+      return 'Ce livreur est en appel avec le call center.';
   }
 }
