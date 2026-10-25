@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -29,6 +30,33 @@ import { RateCustomerDto } from '../dto/rate-customer.dto';
 import { CourseEvent } from '../events/course.event';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { DepartCourseService } from './depart-course.service';
+
+/** Livraison encore à faire : le livreur peut la passer en échec. */
+const LIVRAISON_A_FAIRE: DeliveryStatut[] = [DeliveryStatut.PENDING, DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED];
+
+const messageStatutAttendu = (attendus: DeliveryStatut[], actuel: DeliveryStatut) =>
+  `Statut delivery attendu ${attendus.join(' ou ')}, actuel ${actuel}`;
+
+/**
+ * Refus d'une action du livreur sur une livraison, dans l'ordre des routes :
+ * inconnue (404), livraison d'un autre livreur (403, avant tout état), course
+ * pas en livraison, statut pas attendu (400). `null` : rien à refuser.
+ */
+function refusLivraison(
+  lue: { statut: DeliveryStatut; course: { deliverer_id: string | null; statut: CourseStatut } } | null,
+  delivererId: string,
+  attendus: DeliveryStatut[],
+): HttpException | null {
+  if (!lue) return new NotFoundException('Delivery non trouvée');
+  if (lue.course.deliverer_id !== delivererId) {
+    return new ForbiddenException("Cette livraison ne vous est pas affectée");
+  }
+  if (lue.course.statut !== CourseStatut.IN_DELIVERY) {
+    return new BadRequestException('La course doit être en phase IN_DELIVERY');
+  }
+  if (!attendus.includes(lue.statut)) return new BadRequestException(messageStatutAttendu(attendus, lue.statut));
+  return null;
+}
 
 /**
  * Service : transitions de statut sur les Delivery individuelles.
@@ -252,11 +280,22 @@ export class DeliveryActionService {
       .catch(() => undefined);
   }
 
-  /** Échec de livraison (client absent, refus, etc.) */
+  /**
+   * Échec de livraison (client absent, refus, etc.).
+   *
+   * Seulement SA livraison encore à faire, dans sa course en livraison : les
+   * mêmes refus que démarrer, arrivé et confirmer. Avant le 25/10, seul le
+   * livreur était vérifié, par une lecture à part : il passait en échec une
+   * livraison déjà remise (commande terminée annulée), une livraison d'une
+   * course close, ou une livraison que le regroupement confiait au même
+   * instant à un autre livreur (commande de l'autre annulée).
+   *
+   * Écriture CONDITIONNÉE (livreur, course en livraison, livraison à faire) et
+   * d'un seul tenant avec la commande : si la livraison change entre la
+   * lecture et l'écriture, rien n'est écrit et le refus dit pourquoi.
+   */
   async failDelivery(deliveryId: string, delivererId: string, dto: FailDeliveryDto) {
-    const delivery = await this.prisma.delivery.findUnique({ where: { id: deliveryId } });
-    if (!delivery) throw new NotFoundException('Delivery non trouvée');
-    await this.assertOwnership(delivery.course_id, delivererId);
+    const delivery = await this.assertOwned(deliveryId, delivererId, LIVRAISON_A_FAIRE);
 
     // OTHER nécessite une note
     if (dto.reason === DeliveryFailureReason.OTHER && !dto.note?.trim()) {
@@ -264,19 +303,33 @@ export class DeliveryActionService {
     }
 
     const now = new Date();
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.delivery.update({
-        where: { id: deliveryId },
-        omit: { delivery_pin: true },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const echouee = await tx.delivery.updateMany({
+        where: {
+          id: deliveryId,
+          statut: { in: LIVRAISON_A_FAIRE },
+          course: { deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY },
+        },
         data: {
           statut: DeliveryStatut.FAILED,
           failed_at: now,
           failure_reason: dto.reason,
           failure_note: dto.note,
         },
-      }),
+      });
+      if (echouee.count !== 1) {
+        // Changée depuis la lecture (remise, confiée à un autre, course close).
+        const relue = await tx.delivery.findUnique({
+          where: { id: deliveryId },
+          select: { statut: true, course: { select: { deliverer_id: true, statut: true } } },
+        });
+        throw (
+          refusLivraison(relue, delivererId, LIVRAISON_A_FAIRE) ??
+          new BadRequestException(messageStatutAttendu(LIVRAISON_A_FAIRE, relue!.statut))
+        );
+      }
       // Order annulée avec traçabilité du motif (délivré au livreur)
-      this.prisma.order.update({
+      await tx.order.update({
         where: { id: delivery.order_id },
         data: {
           status: OrderStatus.CANCELLED,
@@ -284,8 +337,9 @@ export class DeliveryActionService {
           cancelled_by: 'deliverer',
           cancelled_reason: dto.note ?? `Livraison échouée : ${dto.reason}`,
         },
-      }),
-    ]);
+      });
+      return tx.delivery.findUniqueOrThrow({ where: { id: deliveryId }, omit: { delivery_pin: true } });
+    });
 
     await this.emitDeliveryStatut(updated, delivery.statut);
     await this.checkCourseCompletion(delivery.course_id);
@@ -375,26 +429,9 @@ export class DeliveryActionService {
         },
       },
     });
-    if (!delivery) throw new NotFoundException('Delivery non trouvée');
-    if (delivery.course.deliverer_id !== delivererId) {
-      throw new ForbiddenException("Cette livraison ne vous est pas affectée");
-    }
-    if (delivery.course.statut !== CourseStatut.IN_DELIVERY) {
-      throw new BadRequestException('La course doit être en phase IN_DELIVERY');
-    }
-    const attendus = Array.isArray(expected) ? expected : [expected];
-    if (!attendus.includes(delivery.statut)) {
-      throw new BadRequestException(`Statut delivery attendu ${attendus.join(' ou ')}, actuel ${delivery.statut}`);
-    }
-    return delivery;
-  }
-
-  private async assertOwnership(courseId: string, delivererId: string) {
-    const course = await this.prisma.course.findUnique({ where: { id: courseId } });
-    if (!course) throw new NotFoundException('Course non trouvée');
-    if (course.deliverer_id !== delivererId) {
-      throw new ForbiddenException("Cette livraison ne vous est pas affectée");
-    }
+    const refus = refusLivraison(delivery, delivererId, Array.isArray(expected) ? expected : [expected]);
+    if (refus) throw refus;
+    return delivery!;
   }
 
   /**
