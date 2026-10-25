@@ -119,7 +119,7 @@ describe('textes', () => {
     expect(notificationJour('WORK', jour('2026-10-26'))).toEqual({
       type: 'plan_sent',
       titre: 'Planning modifié',
-      texte: 'Lun. 26/10 : au travail, à confirmer',
+      texte: 'Lun. 26/10 : créneaux à confirmer',
     });
     expect(notificationJour('REST', jour('2026-10-26'))).toEqual({
       type: 'plan_modifie',

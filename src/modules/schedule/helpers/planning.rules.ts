@@ -20,7 +20,7 @@ export const MESSAGE_PAS_SUR_LE_PLANNING = "Ce livreur n'est pas sur ce planning
 export const MESSAGE_DEJA_SUR_LE_PLANNING = 'Ce livreur est déjà sur ce planning.';
 export const MESSAGE_LIVREUR_PAS_ACTIF = "Ce livreur n'est pas actif dans ce restaurant.";
 export const MESSAGE_JOUR_HORS_PLANNING = "Ce jour n'est pas dans le planning.";
-export const MESSAGE_JOUR_SANS_REPOS = 'Pas de repos ce jour-là.';
+export const MESSAGE_JOUR_SANS_REPOS = 'Repos interdit ce jour-là : jour de forte activité.';
 
 /** Nom d'un état dans les refus montrés à l'écran (section 3.3). */
 export const NOM_ETAT: Record<SchedulePlanStatus, string> = {
@@ -197,7 +197,7 @@ export interface NotificationPlanning {
  */
 export function notificationJour(mode: 'REST' | 'WORK', date: Date): NotificationPlanning {
   return mode === 'WORK'
-    ? { type: 'plan_sent', titre: 'Planning modifié', texte: `${jourCourt(date)} : au travail, à confirmer` }
+    ? { type: 'plan_sent', titre: 'Planning modifié', texte: `${jourCourt(date)} : créneaux à confirmer` }
     : { type: 'plan_modifie', titre: 'Planning modifié', texte: `${jourCourt(date)} : repos` };
 }
 

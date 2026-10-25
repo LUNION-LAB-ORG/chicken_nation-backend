@@ -128,7 +128,7 @@ describe.each(ETATS)('planning %s', (statut) => {
           planId: plan.id,
           type: 'plan_sent',
           titre: 'Planning modifié',
-          texte: 'Lun. 26/10 : au travail, à confirmer',
+          texte: 'Lun. 26/10 : créneaux à confirmer',
         });
       } else {
         expect(b.push.notifyPlanModifie).not.toHaveBeenCalled();
@@ -151,7 +151,7 @@ describe.each(ETATS)('planning %s', (statut) => {
     it('pas de repos un vendredi : refus avec la phrase de l’écran, rien ne change', async () => {
       await expect(
         b.controleur.setDelivererDay(b.requete(ADMIN), plan.id, KOFFI, { date: '2026-10-30', mode: 'REST' }),
-      ).rejects.toThrow(new BadRequestException('Pas de repos ce jour-là.'));
+      ).rejects.toThrow(new BadRequestException('Repos interdit ce jour-là : jour de forte activité.'));
       expect(affectations(b, plan.id, KOFFI, '2026-10-30')).toHaveLength(2);
       expect(b.push.notifyPlanModifie).not.toHaveBeenCalled();
     });
