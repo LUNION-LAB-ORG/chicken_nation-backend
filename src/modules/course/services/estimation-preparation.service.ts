@@ -4,6 +4,7 @@ import { EntityStatus, OrderStatus } from '@prisma/client';
 import type { Cache } from 'cache-manager';
 
 import { PrismaService } from 'src/database/services/prisma.service';
+import { ecrireCacheBorne, lireCacheBorne } from 'src/modules/maps/cache-borne.helper';
 
 import {
   ecartEstimationMinutes,
@@ -64,12 +65,10 @@ export class EstimationPreparationService {
 
   /** Statistique du restaurant : Redis, sinon recalculée depuis la base (et gardée). */
   async statistiques(restaurantId: string, maintenant = new Date()): Promise<StatistiquesRestaurant | null> {
-    try {
-      const gardee = await this.cache.get<StatistiquesRestaurant>(cleStatistique(restaurantId));
-      if (gardee) return gardee;
-    } catch (err) {
-      this.logger.warn(`Statistique de préparation illisible dans Redis : ${(err as Error)?.message}`);
-    }
+    // Bornée (400 ms) : Redis en reconnexion garde la commande en file, le
+    // passage du planificateur l'attendait (relecture du 25/10).
+    const gardee = await lireCacheBorne<StatistiquesRestaurant>(this.cache, cleStatistique(restaurantId));
+    if (gardee) return gardee;
     return this.recalculer(restaurantId, maintenant);
   }
 
@@ -97,11 +96,8 @@ export class EstimationPreparationService {
       this.logger.warn(`Statistique de préparation non calculée (${restaurantId.slice(0, 8)}) : ${(err as Error)?.message}`);
       return null;
     }
-    try {
-      await this.cache.set(cleStatistique(restaurantId), stats, DUREE_STATISTIQUE_MS);
-    } catch (err) {
-      this.logger.warn(`Statistique de préparation non gardée dans Redis : ${(err as Error)?.message}`);
-    }
+    const echec = await ecrireCacheBorne(this.cache, cleStatistique(restaurantId), stats, DUREE_STATISTIQUE_MS);
+    if (echec) this.logger.warn(`Statistique de préparation non gardée dans Redis : ${echec.message}`);
     return stats;
   }
 

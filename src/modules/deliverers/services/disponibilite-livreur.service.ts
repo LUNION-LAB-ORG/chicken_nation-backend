@@ -3,11 +3,13 @@ import { ConflictException, Inject, Injectable, Logger, NotFoundException } from
 import type { Cache } from 'cache-manager';
 
 import { PrismaService } from 'src/database/services/prisma.service';
+import { avantDelai } from 'src/modules/auth/helpers/file-par-cle.helper';
 import { DispatchJournalService } from 'src/modules/course/services/dispatch-journal.service';
 import {
   MotifClotureOffre,
   OffresClotureService,
 } from 'src/modules/course/services/offres-cloture.service';
+import { DELAI_CACHE_MS, ecrireCacheBorne, lireCacheBorne } from 'src/modules/maps/cache-borne.helper';
 
 import { PauseDelivererDto } from '../dto/pause-deliverer.dto';
 import { DelivererEvent } from '../events/deliverer.event';
@@ -357,30 +359,25 @@ export class DisponibiliteLivreurService {
   }
 
   /** Garde la place du livreur dans la file (écran de blocage). Sans Redis : il la perd, rien d'autre. */
+  // Accès à Redis bornés (400 ms) : en reconnexion, il garde les commandes en
+  // file et la route du livreur attendait son retour (relecture du 25/10).
   private async retenirPlace(delivererId: string, place: Date): Promise<void> {
-    try {
-      await this.cache.set(clePlaceGardee(delivererId), place.toISOString(), DUREE_PLACE_GARDEE_MS);
-    } catch (err) {
-      this.logger.warn(`Place de ${delivererId.slice(0, 8)} non gardée : ${(err as Error)?.message}`);
-    }
+    const echec = await ecrireCacheBorne(this.cache, clePlaceGardee(delivererId), place.toISOString(), DUREE_PLACE_GARDEE_MS);
+    if (echec) this.logger.warn(`Place de ${delivererId.slice(0, 8)} non gardée : ${echec.message}`);
   }
 
   /** Place gardée encore valable (jamais après maintenant), ou null. */
   private async placeGardee(delivererId: string, maintenant: Date): Promise<Date | null> {
-    try {
-      const brut = await this.cache.get<string>(clePlaceGardee(delivererId));
-      const place = brut ? new Date(brut) : null;
-      if (!place || Number.isNaN(place.getTime())) return null;
-      return place.getTime() < maintenant.getTime() ? place : maintenant;
-    } catch {
-      return null;
-    }
+    const brut = await lireCacheBorne<string>(this.cache, clePlaceGardee(delivererId));
+    const place = brut ? new Date(brut) : null;
+    if (!place || Number.isNaN(place.getTime())) return null;
+    return place.getTime() < maintenant.getTime() ? place : maintenant;
   }
 
   /** Pause, déconnexion, hors service : la place gardée est perdue. */
   private async oublierPlace(delivererId: string): Promise<void> {
     try {
-      await this.cache.del(clePlaceGardee(delivererId));
+      await avantDelai(this.cache.del(clePlaceGardee(delivererId)), DELAI_CACHE_MS);
     } catch {
       // Sans Redis, aucune place n'a pu être gardée.
     }
