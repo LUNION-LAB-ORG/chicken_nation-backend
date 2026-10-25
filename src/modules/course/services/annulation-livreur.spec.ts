@@ -155,25 +155,29 @@ describe('annulation par le livreur (PATCH /courses/deliverer/:id/cancel)', () =
     await expect(refus).rejects.toThrow('Course non trouvée');
   });
 
-  it('course confiée à B au même instant : l’écriture conditionnée refuse A, rien n’est annulé', async () => {
+  it('sa course terminée au même instant (dernière livraison confirmée) : 400, rien d’autre n’est écrit', async () => {
     const a = livreur();
-    const b = livreur();
     const { course: c, commandes, livraisons } = courseAvecCommandes(
-      { statut: CourseStatut.ACCEPTED, deliverer_id: a.id },
-      [OrderStatus.READY],
+      { statut: CourseStatut.IN_DELIVERY, deliverer_id: a.id },
+      [OrderStatus.PICKED_UP],
     );
-    const t = monter({ livreurs: [a, b], courses: [c], commandes, livraisons });
-    // La course change de livreur juste avant l'écriture (lecture déjà faite, le cas échéant).
+    livraisons[0].statut = DeliveryStatut.ARRIVED;
+    const t = monter({ livreurs: [a], courses: [c], commandes, livraisons });
+    // La course se termine juste avant l'écriture de l'annulation (le livreur
+    // d'une course ne change jamais après l'acceptation : la course qui bouge
+    // au même instant, c'est une course qui se termine).
     const transaction = t.prisma.$transaction.getMockImplementation();
     t.prisma.$transaction.mockImplementationOnce(async (arg: unknown) => {
-      c.deliverer_id = b.id;
+      livraisons[0].statut = DeliveryStatut.DELIVERED;
+      commandes[0].status = OrderStatus.COMPLETED;
+      c.statut = CourseStatut.COMPLETED;
       return transaction(arg);
     });
 
-    await expect(t.annuler(a, c.id)).rejects.toThrow(MESSAGE_COURSE_PAS_A_TOI);
-    expect(c.statut).toBe(CourseStatut.ACCEPTED);
-    expect(livraisons[0].statut).toBe(DeliveryStatut.PENDING);
-    expect(commandes[0].status).toBe(OrderStatus.READY);
+    await expect(t.annuler(a, c.id)).rejects.toThrow('Course déjà terminée');
+    expect(c).toMatchObject({ statut: CourseStatut.COMPLETED, cancelled_at: null });
+    expect(livraisons[0].statut).toBe(DeliveryStatut.DELIVERED);
+    expect(commandes[0].status).toBe(OrderStatus.COMPLETED);
     expect(t.courseEvent.courseCancelled).not.toHaveBeenCalled();
   });
 
