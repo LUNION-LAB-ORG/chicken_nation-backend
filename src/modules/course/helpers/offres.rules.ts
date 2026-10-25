@@ -23,6 +23,15 @@ import {
  */
 export const CLASSE_VERROU_OFFRE_LIVREUR = 727228;
 
+/**
+ * Classe du verrou consultatif « jamais deux livreurs sollicités pour la même
+ * course » (`hashtext(course_id)`), pris AVANT celui du livreur pendant la
+ * création d'une offre : une affectation forcée et un passage du planificateur
+ * sur la même course passent l'un après l'autre. 727229 et 727230 sont au
+ * planificateur et au suivi des applis.
+ */
+export const CLASSE_VERROU_OFFRE_COURSE = 727231;
+
 /** Refus de l'acceptation pour une course qui ne cherche plus de livreur. */
 export const MESSAGE_COURSE_PLUS_DISPONIBLE = "Cette course n'est plus disponible.";
 /** Refus de l'affectation forcée sur une course acceptée, terminée ou confiée à Turbo. */

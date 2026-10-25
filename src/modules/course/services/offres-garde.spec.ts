@@ -26,7 +26,7 @@ import { CourseAdminController } from '../controllers/course-admin.controller';
 import { CourseChannels } from '../enums/course-channels';
 import { DispatchEvenements } from '../enums/dispatch-evenements';
 import { CourseHelper } from '../helpers/course.helper';
-import { CLASSE_VERROU_OFFRE_LIVREUR } from '../helpers/offres.rules';
+import { CLASSE_VERROU_OFFRE_COURSE, CLASSE_VERROU_OFFRE_LIVREUR } from '../helpers/offres.rules';
 import {
   DonneesDispatch,
   course,
@@ -488,7 +488,10 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
     expect(t.relances()).toEqual([]);
     const nouvelle = t.offres.find((o) => o.deliverer_id === choisi.id);
     expect(nouvelle).toMatchObject({ status: CourseOfferStatus.PENDING, expires_at: apres(120) });
-    expect(t.verrous).toEqual([[CLASSE_VERROU_OFFRE_LIVREUR, choisi.id]]);
+    expect(t.verrous).toEqual([
+      [CLASSE_VERROU_OFFRE_COURSE, c.id],
+      [CLASSE_VERROU_OFFRE_LIVREUR, choisi.id],
+    ]);
     expect(t.courseEvent.offerNew).toHaveBeenCalledWith(
       expect.objectContaining({ deliverer_id: choisi.id, renvoi: false }),
     );
@@ -652,9 +655,39 @@ describe('jamais deux offres en attente pour un livreur (offerToDeliverer)', () 
 
     expect(await t.serviceOffres.offerToDeliverer(c2.id, d.id)).toBe(false);
     expect(t.offres).toHaveLength(1);
-    expect(t.verrous).toEqual([[CLASSE_VERROU_OFFRE_LIVREUR, d.id]]);
+    expect(t.verrous).toEqual([
+      [CLASSE_VERROU_OFFRE_COURSE, c2.id],
+      [CLASSE_VERROU_OFFRE_LIVREUR, d.id],
+    ]);
     expect(t.courseEvent.offerNew).not.toHaveBeenCalled();
     expect(t.push.notifyNewCourseOffer).not.toHaveBeenCalled();
+  });
+
+  it('offre déjà en attente pour CETTE course chez un autre livreur (affectation forcée pendant un passage) : pas de seconde offre, sous le verrou de la course', async () => {
+    const choisi = livreur();
+    const autre = livreur();
+    const c = course({ offer_expires_at: apres(100) });
+    const forcee = offre({ course_id: c.id, deliverer_id: choisi.id, expires_at: apres(100), forcee: true });
+    const t = monter({ livreurs: [choisi, autre], courses: [c], offres: [forcee] });
+
+    expect(await t.serviceOffres.offerToDeliverer(c.id, autre.id)).toBe(false);
+
+    expect(t.offres).toEqual([forcee]);
+    expect(forcee.status).toBe(CourseOfferStatus.PENDING);
+    expect(t.verrous[0]).toEqual([CLASSE_VERROU_OFFRE_COURSE, c.id]);
+    expect(t.courseEvent.offerNew).not.toHaveBeenCalled();
+    expect(t.push.notifyNewCourseOffer).not.toHaveBeenCalled();
+  });
+
+  it('offre échue d’un autre livreur, pas encore traitée par la tâche d’expiration : elle ne bloque pas la suivante', async () => {
+    const ancien = livreur();
+    const suivant = livreur();
+    const c = course();
+    const echue = offre({ course_id: c.id, deliverer_id: ancien.id, expires_at: avant(2) });
+    const t = monter({ livreurs: [ancien, suivant], courses: [c], offres: [echue] });
+
+    expect(await t.serviceOffres.offerToDeliverer(c.id, suivant.id)).toBe(true);
+    expect(t.offres.filter((o) => o.deliverer_id === suivant.id)).toHaveLength(1);
   });
 
   it('livreur passé en pause, en pause automatique, hors service ou en course entre la sélection et l’offre : rien', async () => {

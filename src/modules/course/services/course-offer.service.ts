@@ -36,6 +36,7 @@ import { CourseHelper } from '../helpers/course.helper';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import {
+  CLASSE_VERROU_OFFRE_COURSE,
   CLASSE_VERROU_OFFRE_LIVREUR,
   decisionCreationOffre,
   decisionExpiration,
@@ -370,6 +371,29 @@ export class CourseOfferService {
           select: { id: true },
         });
         if (!enRecherche) return null;
+
+        // JAMAIS DEUX LIVREURS SOLLICITÉS POUR LA MÊME COURSE (relecture du
+        // 25/10) : une affectation forcée pendant un passage du planificateur
+        // créait une seconde offre, et le livreur choisi par l'administrateur
+        // pouvait voir « Course perdue ». Verrou de la course pris AVANT celui
+        // du livreur (toujours dans cet ordre). Une offre échue, pas encore
+        // traitée par la tâche d'expiration, ne bloque pas la suivante.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${CLASSE_VERROU_OFFRE_COURSE}::int, hashtext(${courseId}))`;
+        const offreAutreLivreur = await tx.courseOfferAttempt.findFirst({
+          where: {
+            course_id: courseId,
+            deliverer_id: { not: delivererId },
+            status: CourseOfferStatus.PENDING,
+            expires_at: { gt: new Date() },
+          },
+          select: { id: true },
+        });
+        if (offreAutreLivreur) {
+          this.logger.warn(
+            `offerToDeliverer SKIP : la course ${courseId.slice(0, 8)} a déjà une offre en attente chez un autre livreur`,
+          );
+          return null;
+        }
 
         // JAMAIS DEUX OFFRES EN ATTENTE POUR UN LIVREUR, ni d'offre à un livreur
         // en pause, même à deux serveurs : verrou du livreur tenu jusqu'à la fin
