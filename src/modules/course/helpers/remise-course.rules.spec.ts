@@ -98,7 +98,7 @@ describe('validation par code : condition d’écriture', () => {
       "Cette course vient d'être annulée : la remise n'est pas enregistrée.",
     );
     expect(messageValidationImpossible(null)).toBe(
-      "Cette course vient de changer : la remise n'est pas enregistrée, saisissez le code à nouveau.",
+      "Cette course vient de changer : la remise n'est pas enregistrée, vérifiez les commandes et validez à nouveau.",
     );
     for (const statut of Object.values(CourseStatut)) expect(messageValidationImpossible(statut)).not.toMatch(/[—–]/);
   });

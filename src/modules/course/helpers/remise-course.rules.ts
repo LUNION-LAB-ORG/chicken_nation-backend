@@ -51,7 +51,7 @@ export function messageValidationImpossible(statut: CourseStatut | null | undefi
     case CourseStatut.EXPIRED:
       return "Cette course vient d'être annulée : la remise n'est pas enregistrée.";
     default:
-      return "Cette course vient de changer : la remise n'est pas enregistrée, saisissez le code à nouveau.";
+      return "Cette course vient de changer : la remise n'est pas enregistrée, vérifiez les commandes et validez à nouveau.";
   }
 }
 

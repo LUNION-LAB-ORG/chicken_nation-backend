@@ -25,7 +25,8 @@ import { messageValidationImpossible } from './remise-course.rules';
 export const MESSAGE_COURSE_INTROUVABLE = 'Course introuvable.';
 export const MESSAGE_COURSE_AUTRE_RESTAURANT = "Cette course n'est pas celle de votre restaurant.";
 export const MESSAGE_COURSE_SANS_LIVREUR = "Aucun livreur n'a encore accepté cette course.";
-export const MESSAGE_COURSE_CHANGEE = 'La course a changé : vérifiez les commandes et confirmez à nouveau.';
+export const MESSAGE_COURSE_CHANGEE =
+  "Cette course vient de changer : la remise n'est pas enregistrée, vérifiez les commandes et validez à nouveau.";
 
 /**
  * Cloisonnement : un compte de restaurant (par son type ou son rôle, comme la
