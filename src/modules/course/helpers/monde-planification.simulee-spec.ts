@@ -12,7 +12,8 @@
  *    restaurant, la course passe aussitôt « au restaurant », sinon il arrive
  *    après le trajet (vol d'oiseau × 1,3 à 22 km/h) ;
  *  - la caisse remet la course dès que toutes ses commandes sont prêtes et
- *    qu'aucune retenue n'est active (le livreur attend pendant la retenue) ;
+ *    qu'aucune retenue n'est active (le livreur attend pendant la retenue ;
+ *    voir `caisseRemetAuCode`) ;
  *    une commande ajoutée après le retrait est remise aussitôt ;
  *  - un livreur à la nouvelle appli part `delaiDepartS` après le retrait (et
  *    jamais avec une commande prête pas encore remise) ; l'ancienne appli
@@ -35,6 +36,12 @@
  * `positionsCommeLAppli` : les positions arrivent comme l'appli les envoie
  * aujourd'hui (rien hors course appli fermée, donc rien au retour de
  * tournée ; une position à l'ouverture de l'appli et pendant une course).
+ *
+ * `caisseRemetAuCode` : la caisse du terrain (essai du 25/10). Elle remet la
+ * course dès que le livreur présente son code (20 s après son arrivée au
+ * comptoir), retenue ou non ; le livreur obéit à son appli : il ne part pas
+ * pendant la retenue, il part `delaiDepartS` après la remise sinon. Sans
+ * cette option, la caisse attend la fin de la retenue pour remettre.
  */
 import { CourseStatut, DelivererStatus, DeliveryService, DeliveryStatut, EntityStatus, OrderStatus } from '@prisma/client';
 
@@ -304,7 +311,7 @@ export class Monde {
   constructor(
     debut: Date,
     readonly reglages: ReglagesPlanification = REGLAGES_PLANIFICATION_DEFAUT,
-    readonly options: { positionsCommeLAppli?: boolean } = {},
+    readonly options: { positionsCommeLAppli?: boolean; caisseRemetAuCode?: boolean } = {},
   ) {
     this.t = debut;
   }
@@ -583,9 +590,11 @@ export class Monde {
       }
       const retenue = k.retenue_jusqua !== null && k.retenue_jusqua.getTime() > t;
       const actives = k.livraisons.filter((x) => x.statut !== DeliveryStatut.CANCELLED);
-      // Caisse : remise dès que tout est prêt et que rien n'est attendu.
+      // Caisse : remise dès que tout est prêt et que rien n'est attendu ; la
+      // caisse du terrain remet dès le code, retenue ou non.
       const codePresente = k.au_restaurant_ms !== null && t >= k.au_restaurant_ms + DELAI_REMISE_S * 1000;
-      if (k.statut === CourseStatut.AT_RESTAURANT && codePresente && !retenue && actives.length > 0) {
+      const remetPendantLaRetenue = !!this.options.caisseRemetAuCode;
+      if (k.statut === CourseStatut.AT_RESTAURANT && codePresente && (!retenue || remetPendantLaRetenue) && actives.length > 0) {
         const toutPret = actives.every((x) => this.commandes.get(x.order_id)!.statut === OrderStatus.READY);
         if (toutPret) {
           k.statut = CourseStatut.IN_DELIVERY;
