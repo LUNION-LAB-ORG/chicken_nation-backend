@@ -247,20 +247,29 @@ describe('S4. commandes déjà en retard seules : elles ne bloquent plus la cour
     });
   });
 
-  it('S4c. deux courses sans livreur (fusion) : la règle du retard reste celle d’avant', () => {
+  describe('S4c. deux courses sans livreur (fusion), deux livreurs sur le retour', () => {
     const t = h('12:31');
-    const u = crs('u', { commandes: [cmd('a', { ready_at: h('12:30'), created_at: h('12:20'), est: 3000 })], created_at: h('12:30') });
-    const v = crs('v', { commandes: [cmd('b', { ready_at: h('12:31'), created_at: h('12:12'), est: 3800 })], created_at: h('12:31') });
-    const enRetour = (id: string, est: number) => livr(id, t, { aEst: est, etat: { en_course: true, last_available_at: null } });
-    const k1 = crs('k1', {
-      statut: CourseStatut.IN_DELIVERY,
-      deliverer_id: 'd1',
-      picked_up_at: h('12:10'),
-      parti_at: h('12:11'),
-      livraisons: [{ id: 'l1', statut: DeliveryStatut.DELIVERED, sequence_order: 1, commande: cmd('x', { statut: OrderStatus.PICKED_UP, est: -1500 }) }],
+    const plan = (creeeB: string) => {
+      const u = crs('u', { commandes: [cmd('a', { ready_at: h('12:30'), created_at: h('12:20'), est: 3000 })], created_at: h('12:30') });
+      const v = crs('v', { commandes: [cmd('b', { ready_at: h('12:31'), created_at: h(creeeB), est: 3800 })], created_at: h('12:31') });
+      const enRetour = (id: string, est: number) => livr(id, t, { aEst: est, etat: { en_course: true, last_available_at: null } });
+      const k1 = crs('k1', {
+        statut: CourseStatut.IN_DELIVERY,
+        deliverer_id: 'd1',
+        picked_up_at: h('12:10'),
+        parti_at: h('12:11'),
+        livraisons: [{ id: 'l1', statut: DeliveryStatut.DELIVERED, sequence_order: 1, commande: cmd('x', { statut: OrderStatus.PICKED_UP, est: -1500 }) }],
+      });
+      return planifier(instant(t, { courses: [u, v, k1], livreurs: [enRetour('d1', -700), enRetour('d2', -900)] }));
+    };
+    it('B passée à 12:12, déjà en retard seule : fusionnée avec A (relecture du 25/10, la même direction part ensemble)', () => {
+      expect(actionsDe(plan('12:12'), 'FUSIONNER').map((x) => [x.cible_id, x.absorbee_id])).toEqual([['u', 'v']]);
     });
-    const plan = planifier(instant(t, { courses: [u, v, k1], livreurs: [enRetour('d1', -700), enRetour('d2', -900)] }));
-    expect(actionsDe(plan, 'FUSIONNER')).toEqual([]);
+    it('B passée à 12:16, à l’heure seule et en retard avec la fusion : refusée (inchangé)', () => {
+      const p = plan('12:16');
+      expect(actionsDe(p, 'FUSIONNER')).toEqual([]);
+      expect(p.refus.some((x) => x.essai === 'FUSION' && x.refus === 'RETARD_CLIENT')).toBe(true);
+    });
   });
 });
 
@@ -424,5 +433,87 @@ describe('S7 à S9. la fenêtre au comptoir suit la retenue', () => {
       }),
     );
     expect(p2.refus.map((x) => `${x.essai}:${x.refus}`)).toEqual(['AJOUT:FIN_DE_FENETRE']);
+  });
+});
+
+describe('S15. commandes de test passées tôt, deux livreurs : le retard ne sépare plus la même direction (relecture du 25/10)', () => {
+  it('S3 mot pour mot, commandes passées à 11:50, 11:52 et 11:54 : A+B avec L1 après l’attente, C avec L2, pas de Turbo', () => {
+    const m = mondeDuTerrain(h('12:29:50'))
+      .livreur('l1', { libreDepuis: h('12:00'), protocole_appli: 4 })
+      .livreur('l2', { libreDepuis: h('12:05'), protocole_appli: 4 })
+      .commande('a', { est: 2000, creee: h('11:50'), enPreparation: h('12:18'), prete: h('12:30') })
+      .commande('b', { est: 2200, creee: h('11:52'), enPreparation: h('12:22'), prete: h('12:33'), finCuisine: h('12:33') })
+      .commande('c', { est: -2000, creee: h('11:54'), enPreparation: h('12:24'), prete: h('12:35') })
+      .jusqua(h('13:10'));
+    expect(lignes(m, 'RETENIR')).toEqual([['12:30:10', 'ATTENTE_COURTE', '12:33:00']]);
+    expect(m.courseDe('b')!.id).toBe(m.courseDe('a')!.id);
+    expect(m.courseDe('a')!.deliverer_id).toBe('l1');
+    expect(m.courseDe('c')!.deliverer_id).toBe('l2');
+    expect(m.toutes('OFFRIR').map(({ t, action }) => [hms(t), action.deliverer_id])).toEqual([
+      ['12:30:00', 'l1'],
+      ['12:35:00', 'l2'],
+    ]);
+    expect(m.toutes('CONFIER_TURBO')).toEqual([]);
+    expect(m.violations).toEqual([]);
+  });
+
+  it('A et B prêtes ensemble, déjà en retard seules, deux livreurs libres : une seule course, L2 reste libre', () => {
+    const m = mondeDuTerrain(h('12:29:50'))
+      .livreur('l1', { libreDepuis: h('12:00'), protocole_appli: 4 })
+      .livreur('l2', { libreDepuis: h('12:05'), protocole_appli: 4 })
+      .commande('a', { est: 2000, creee: h('11:50'), enPreparation: h('12:18'), prete: h('12:30') })
+      .commande('b', { est: 2200, creee: h('11:52'), enPreparation: h('12:22'), prete: h('12:30') })
+      .jusqua(h('13:00'));
+    expect(m.courseDe('b')!.id).toBe(m.courseDe('a')!.id);
+    expect(m.toutes('OFFRIR').map(({ t, action }) => [hms(t), action.deliverer_id])).toEqual([['12:30:00', 'l1']]);
+    expect(m.violations).toEqual([]);
+  });
+
+  describe('S4a avec un second livreur libre au comptoir : B prête, plus loin que A, rejoint la course de L1', () => {
+    const t = h('12:31:05');
+    const plan = (creeeA: string, creeeB: string) =>
+      planifier(
+        instant(t, {
+          commandes: [cmd('b', { est: 3000, created_at: h(creeeB), ready_at: h('12:31') })],
+          courses: [
+            crs('ka', {
+              commandes: [cmd('a', { est: 1500, created_at: h(creeeA), ready_at: h('12:30') })],
+              statut: CourseStatut.AT_RESTAURANT,
+              deliverer_id: 'l1',
+              assigned_at: h('12:30:10'),
+            }),
+          ],
+          livreurs: [enCourseAuComptoir('l1', t), libreAuComptoir('l2', t)],
+        }),
+      );
+    it('commandes passées à 11:55 et 11:56 (déjà en retard seules) : AJOUTER b, aucune course pour L2', () => {
+      const p = plan('11:55', '11:56');
+      expect(actionsDe(p, 'AJOUTER').map((x) => [x.order_id, x.course_id])).toEqual([['b', 'ka']]);
+      expect(actionsDe(p, 'CREER_COURSE')).toEqual([]);
+      expect(actionsDe(p, 'OFFRIR')).toEqual([]);
+    });
+    it('commandes à l’heure (12:15 et 12:16) : AJOUTER b, comme avant', () => {
+      expect(actionsDe(plan('12:15', '12:16'), 'AJOUTER').map((x) => [x.order_id, x.course_id])).toEqual([['b', 'ka']]);
+    });
+  });
+
+  it('retenue courte avec un second livreur libre : B (plus loin, déjà en retard seule) est attendue', () => {
+    const t = h('12:30:15');
+    const p = planifier(
+      instant(t, {
+        commandes: [enPrep('b', h('12:33'), { est: 3000, created_at: h('11:56') })],
+        courses: [
+          crs('ka', {
+            commandes: [cmd('a', { est: 1500, created_at: h('11:55'), ready_at: h('12:30') })],
+            statut: CourseStatut.AT_RESTAURANT,
+            deliverer_id: 'l1',
+            assigned_at: h('12:30:10'),
+          }),
+        ],
+        livreurs: [enCourseAuComptoir('l1', t), libreAuComptoir('l2', t)],
+      }),
+    );
+    expect(actionsDe(p, 'RETENIR').map((x) => [hms(x.jusqua), x.motif])).toEqual([['12:33:00', 'ATTENTE_COURTE']]);
+    expect(refusRetenue(p)).toEqual([]);
   });
 });

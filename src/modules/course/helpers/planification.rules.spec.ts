@@ -614,14 +614,19 @@ describe('limites dures d’un ajout (3.6)', () => {
     expect(refusDe(plan, 'q', 'k')).toEqual(['RETARD_CLIENT']);
   });
 
-  it('retard de la commande ajoutée : refusé si un livreur libre la livrerait plus tôt seule, accepté sinon', () => {
+  it('retard de la commande ajoutée : déjà en retard seule, elle rejoint la course tant que le groupe ne la retarde pas de plus du détour maximal (essai du 25/10)', () => {
     // q promise 12:35, limite 12:40 : en retard de toute façon ; seule elle arrive à 12:45:45, après o à 12:48:45
     const k = auComptoir([cmd('o', { est: 1500 })]);
     const q = cmd('q', { est: 3000, created_at: h('12:00') });
     const libre = livr('d2', M, { auComptoir: true });
+    // 3 min de plus que seule avec le livreur libre : ajoutée, le livreur libre reste libre.
     const plan = essai(k, q, REG, [libre]);
-    expect(refusDe(plan, 'q', 'k')).toEqual(['RETARD_CLIENT']);
-    expect(actionsDe(plan, 'OFFRIR')[0]).toMatchObject({ deliverer_id: 'd2', course_cle: 'nouvelle-1' });
+    expect(actionsDe(plan, 'AJOUTER')).toEqual([expect.objectContaining({ course_id: 'k', order_id: 'q' })]);
+    expect(actionsDe(plan, 'OFFRIR')).toEqual([]);
+    // Détour maximal réglé à 2 min : refusée, le livreur libre la prend seule.
+    const serre = essai(k, q, avec({ detourMaxAjoutMin: 2 }), [libre]);
+    expect(refusDe(serre, 'q', 'k')).toEqual(['DETOUR_AJOUT']);
+    expect(actionsDe(serre, 'OFFRIR')[0]).toMatchObject({ deliverer_id: 'd2', course_cle: 'nouvelle-1' });
     expect(actionsDe(essai(k, q), 'AJOUTER')).toHaveLength(1);
   });
 
@@ -1697,9 +1702,11 @@ describe('relecture du 23/10 : refus, Turbo, retard sans livreur libre, offre lo
   });
 
   it('retard toléré : avec deux livreurs sur le retour, une fusion qui met un client en retard est refusée comme avec un livreur libre', () => {
+    // B passée à 12:16 : à l'heure seule, en retard avec la fusion (passée à
+    // 12:12, déjà en retard seule : voir « S4c » de planification.regroupement.spec.ts).
     const t = h('12:31');
     const u = crs('u', { commandes: [cmd('a', { ready_at: h('12:30'), created_at: h('12:20'), est: 3000 })], created_at: h('12:30') });
-    const v = crs('v', { commandes: [cmd('b', { ready_at: h('12:31'), created_at: h('12:12'), est: 3800 })], created_at: h('12:31') });
+    const v = crs('v', { commandes: [cmd('b', { ready_at: h('12:31'), created_at: h('12:16'), est: 3800 })], created_at: h('12:31') });
     const k1 = crs('k1', {
       statut: CourseStatut.IN_DELIVERY,
       deliverer_id: 'd1',
