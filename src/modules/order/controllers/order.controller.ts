@@ -49,6 +49,7 @@ import { ReceiptsService } from '../services/receipts.service';
 import { OrderCreateDto } from '../dto/order-create.dto';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
 import { peutVoirLesBrouillons } from '../helpers/brouillons.rules';
+import { peutLireCodeClient } from '../helpers/code-client.rules';
 import { Throttle } from '@nestjs/throttler';
 import { CouponCreationThrottlerGuard, LIMITE_COUPON } from '../guards/coupon-throttler.guard';
 import { champsClientModifiables } from '../helpers/modification-client.rules';
@@ -502,6 +503,12 @@ export class OrderController {
    * compte de restaurant n'ouvre que les commandes de son restaurant. Le
    * téléphone du livreur passe par le masquage global des coordonnées
    * (clé `telephone`), comme toute réponse : aucune dérogation ici.
+   *
+   * `code_client` (demande du 26/10) : code de retrait du client
+   * (`Order.recovery_code`, `null` si absent), pour l'administrateur et le
+   * call center SEULEMENT. Pour tout autre rôle, le champ est absent de la
+   * réponse (`helpers/code-client.rules.ts`). Une lecture du call center est
+   * notée au journal d'audit.
    */
   @Get(':id/livraison')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
@@ -512,7 +519,9 @@ export class OrderController {
     description:
       "{ service: 'CHICKEN_NATION' | 'TURBO' | null, course: { id, reference, code_retrait, nombre_commandes, rang_arret, statut } | null, " +
       'livreur: { id, nom, telephone, etat } | null, etapes: { cle, heure, prevue }[], ' +
-      'durees: { vers_restaurant_s, attente_comptoir_s, vers_client_s, pret_a_livre_s } }',
+      'durees: { vers_restaurant_s, attente_comptoir_s, vers_client_s, pret_a_livre_s }, ' +
+      'code_client?: string | null } ; `code_client` (code de retrait du client) pour ADMIN et CALL_CENTER seulement, ' +
+      'absent pour les autres rôles. `course.code_retrait` reste le code de la course donné à la caisse.',
   })
   async suiviDeLivraison(@Req() req: Request, @Param('id') id: string) {
     if (!this.suiviLivraison) throw new NotFoundException('Suivi de livraison indisponible');
@@ -521,7 +530,9 @@ export class OrderController {
       inclurePanierAnnuleParClient: peutVoirLesBrouillons(user),
     });
     assertCanAccessRestaurant(user, commande.restaurant_id);
-    return this.suiviLivraison.suivi(commande);
+    const suivi = await this.suiviLivraison.suivi(commande);
+    if (!peutLireCodeClient(user)) return suivi;
+    return { ...suivi, code_client: await this.suiviLivraison.codeClient(commande, user) };
   }
 
   @Get(':id/client')

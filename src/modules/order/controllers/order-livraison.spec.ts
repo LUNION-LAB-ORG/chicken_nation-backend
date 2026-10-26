@@ -1,7 +1,9 @@
 /**
  * GET /orders/:id/livraison (section « Livraison » du tiroir de détail) :
  * mêmes gardes et même cloisonnement que le détail d'une commande, et le
- * téléphone du livreur passe par le masquage global des coordonnées.
+ * téléphone du livreur passe par le masquage global des coordonnées. Le code
+ * de retrait du client (`code_client`) n'est rendu qu'à l'administrateur et au
+ * call center (26/10).
  */
 
 import { CallHandler, ExecutionContext, ForbiddenException, NotFoundException } from '@nestjs/common';
@@ -13,6 +15,7 @@ import { lastValueFrom, of } from 'rxjs';
 import { MasquerContactsInterceptor } from 'src/common/securite/masquer-contacts.interceptor';
 import { REQUIRE_PERMISSION_KEY } from 'src/modules/auth/decorators/user-require-permission';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
+import { resolveStaffType } from 'src/modules/users/helpers/staff-type.helper';
 import type { SuiviLivraison } from '../helpers/suivi-livraison.rules';
 import { OrderController } from './order.controller';
 
@@ -43,6 +46,7 @@ function monter(restaurantDeLaCommande: string | null = RESTAURANT_A) {
   const service = {
     lire: jest.fn().mockResolvedValue({ id: 'o1', restaurant_id: restaurantDeLaCommande }),
     suivi: jest.fn().mockResolvedValue(SUIVI),
+    codeClient: jest.fn().mockResolvedValue('4821'),
   };
   const controleur = new OrderController(
     {} as never,
@@ -108,7 +112,8 @@ describe('GET /orders/:id/livraison : cloisonnement', () => {
       [UserRole.ADMIN, true],
     ] as const) {
       const { controleur, service } = monter(RESTAURANT_B);
-      await expect(controleur.suiviDeLivraison(requete(compte(role, UserType.BACKOFFICE)), 'ORD-261024-34769')).resolves.toBe(SUIVI);
+      // Le suivi, plus `code_client` pour l'administrateur et le centre d'appels (26/10).
+      await expect(controleur.suiviDeLivraison(requete(compte(role, UserType.BACKOFFICE)), 'ORD-261024-34769')).resolves.toMatchObject(SUIVI);
       expect(service.lire).toHaveBeenCalledWith('ORD-261024-34769', { inclurePanierAnnuleParClient: paniers });
     }
   });
@@ -119,6 +124,69 @@ describe('GET /orders/:id/livraison : cloisonnement', () => {
     await expect(
       controleur.suiviDeLivraison(requete(compte(UserRole.ADMIN, UserType.BACKOFFICE)), 'inconnue'),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('GET /orders/:id/livraison : code de retrait du client (26/10)', () => {
+  /** Compte du rôle, du type que lui donne le serveur, rattaché au restaurant de la commande s'il en a un. */
+  const lire = async (role: UserRole) => {
+    const { controleur, service } = monter(RESTAURANT_A);
+    const type = resolveStaffType(role);
+    const user = compte(role, type, type === UserType.RESTAURANT ? RESTAURANT_A : null);
+    const reponse = (await controleur.suiviDeLivraison(requete(user), 'o1')) as unknown as Record<string, unknown>;
+    return { reponse, service, user };
+  };
+
+  it.each([UserRole.ADMIN, UserRole.CALL_CENTER])('%s : `code_client` présent, à côté du suivi inchangé', async (role) => {
+    const { reponse, service, user } = await lire(role);
+    expect(reponse).toEqual({ ...SUIVI, code_client: '4821' });
+    expect(service.codeClient).toHaveBeenCalledTimes(1);
+    expect(service.codeClient).toHaveBeenCalledWith({ id: 'o1', restaurant_id: RESTAURANT_A }, user);
+    // Le « Code retrait » de la course (donné à la caisse) ne bouge pas.
+    expect((reponse.course as { code_retrait: string }).code_retrait).toBe('614');
+  });
+
+  it('commande sans code : `code_client` présent à null pour ces deux rôles', async () => {
+    for (const role of [UserRole.ADMIN, UserRole.CALL_CENTER]) {
+      const { controleur, service } = monter(RESTAURANT_A);
+      service.codeClient.mockResolvedValueOnce(null);
+      const reponse = (await controleur.suiviDeLivraison(
+        requete(compte(role, UserType.BACKOFFICE)),
+        'o1',
+      )) as unknown as Record<string, unknown>;
+      expect([role, 'code_client' in reponse, reponse.code_client]).toEqual([role, true, null]);
+    }
+  });
+
+  it.each([
+    UserRole.CAISSIER,
+    UserRole.MANAGER,
+    UserRole.ASSISTANT_MANAGER,
+    UserRole.LIVRAISON_OPS,
+    UserRole.MARKETING,
+    UserRole.CUISINE,
+    UserRole.COMPTABLE,
+  ])('%s : `code_client` ABSENT (pas null), et le code n’est même pas lu', async (role) => {
+    const { reponse, service } = await lire(role);
+    expect('code_client' in reponse).toBe(false);
+    expect(Object.keys(JSON.parse(JSON.stringify(reponse)))).not.toContain('code_client');
+    expect(reponse).toBe(SUIVI);
+    expect(service.codeClient).not.toHaveBeenCalled();
+  });
+
+  it('chaque rôle est couvert : présent pour ADMIN et CALL_CENTER, absent pour tous les autres', async () => {
+    for (const role of Object.values(UserRole)) {
+      const { reponse } = await lire(role);
+      expect([role, 'code_client' in reponse]).toEqual([role, role === UserRole.ADMIN || role === UserRole.CALL_CENTER]);
+    }
+  });
+
+  it("commande d'un autre restaurant : refusée avant toute lecture du code", async () => {
+    const { controleur, service } = monter(RESTAURANT_B);
+    await expect(
+      controleur.suiviDeLivraison(requete(compte(UserRole.MANAGER, UserType.RESTAURANT, RESTAURANT_A)), 'o1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(service.codeClient).not.toHaveBeenCalled();
   });
 });
 

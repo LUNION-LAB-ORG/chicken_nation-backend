@@ -197,3 +197,91 @@ describe('SuiviLivraisonService.suivi', () => {
     expect(r.course).toMatchObject({ en_retard: false });
   });
 });
+
+describe('SuiviLivraisonService.codeClient (code de retrait du client, 26/10)', () => {
+  const COMMANDE = { id: UUID, restaurant_id: 'r1' };
+  const AGENT = { id: 'agent-1', role: 'CALL_CENTER', fullname: 'Awa Koné', email: 'awa@cn.ci' } as never;
+  const ADMIN = { id: 'admin-1', role: 'ADMIN', fullname: 'Admin', email: 'admin@cn.ci' } as never;
+  const T0 = new Date('2026-10-26T10:00:00.000Z');
+  const plus = (ms: number) => new Date(T0.getTime() + ms);
+
+  function monterCode(lue: unknown, avecJournal = true) {
+    const prisma = { order: { findUnique: jest.fn().mockResolvedValue(lue) } };
+    const audit = { record: jest.fn() };
+    const service = new SuiviLivraisonService(
+      prisma as never,
+      {} as never,
+      undefined,
+      undefined,
+      avecJournal ? (audit as never) : undefined,
+    );
+    return { service, prisma, audit };
+  }
+
+  it('lit le code de la commande par son identifiant, et rien d’autre que le code et la référence', async () => {
+    const { service, prisma } = monterCode({ recovery_code: ' 4821 ', reference: 'ORD-261026-00012' });
+    await expect(service.codeClient(COMMANDE, ADMIN, T0)).resolves.toBe('4821');
+    expect(prisma.order.findUnique).toHaveBeenCalledWith({
+      where: { id: UUID },
+      select: { recovery_code: true, reference: true },
+    });
+  });
+
+  it.each([[null], [''], ['   '], [undefined]])('code absent (%p) : null, rien au journal', async (code) => {
+    const { service, audit } = monterCode({ recovery_code: code, reference: 'ORD-1' });
+    await expect(service.codeClient(COMMANDE, AGENT, T0)).resolves.toBeNull();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('commande introuvable entre-temps : null', async () => {
+    const { service } = monterCode(null);
+    await expect(service.codeClient(COMMANDE, AGENT, T0)).resolves.toBeNull();
+  });
+
+  it('lecture servie au call center : une ligne au journal, sans le code', async () => {
+    const { service, audit } = monterCode({ recovery_code: '4821', reference: 'ORD-261026-00012' });
+    await service.codeClient(COMMANDE, AGENT, T0);
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    const ligne = audit.record.mock.calls[0][0];
+    expect(ligne).toEqual({
+      actor_id: 'agent-1',
+      actor_name: 'Awa Koné',
+      actor_role: 'CALL_CENTER',
+      restaurant_id: 'r1',
+      action: 'CODE_CLIENT_LU',
+      module: 'orders',
+      entity_id: UUID,
+      method: 'GET',
+      path: `/orders/${UUID}/livraison`,
+      status_code: 200,
+      summary: 'Code de retrait du client consulté : commande ORD-261026-00012',
+    });
+    expect(JSON.stringify(ligne)).not.toContain('4821');
+  });
+
+  it("lecture de l'administrateur : rien au journal", async () => {
+    const { service, audit } = monterCode({ recovery_code: '4821', reference: 'ORD-1' });
+    await expect(service.codeClient(COMMANDE, ADMIN, T0)).resolves.toBe('4821');
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('le tiroir relit toutes les 20 s : une ligne par agent et par commande toutes les 10 minutes au plus', async () => {
+    const { service, audit } = monterCode({ recovery_code: '4821', reference: 'ORD-1' });
+    await service.codeClient(COMMANDE, AGENT, T0);
+    await service.codeClient(COMMANDE, AGENT, plus(20_000));
+    await service.codeClient(COMMANDE, AGENT, plus(9 * 60_000));
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    // Un autre agent, une autre commande : leur propre ligne.
+    await service.codeClient(COMMANDE, { id: 'agent-2', role: 'CALL_CENTER', email: 'b@cn.ci' } as never, plus(30_000));
+    await service.codeClient({ id: 'autre', restaurant_id: 'r2' }, AGENT, plus(40_000));
+    expect(audit.record).toHaveBeenCalledTimes(3);
+    // Dix minutes après la première ligne : une nouvelle.
+    await service.codeClient(COMMANDE, AGENT, plus(10 * 60_000));
+    expect(audit.record).toHaveBeenCalledTimes(4);
+  });
+
+  it('sans journal branché, le code est rendu quand même', async () => {
+    const { service } = monterCode({ recovery_code: '4821', reference: 'ORD-1' }, false);
+    await expect(service.codeClient(COMMANDE, AGENT, T0)).resolves.toBe('4821');
+  });
+});

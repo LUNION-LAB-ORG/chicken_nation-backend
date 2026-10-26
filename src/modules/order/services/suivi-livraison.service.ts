@@ -1,8 +1,9 @@
 import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
-import { CourseOfferStatus, CourseStatut, EntityStatus, Prisma } from '@prisma/client';
+import { CourseOfferStatus, CourseStatut, EntityStatus, Prisma, User } from '@prisma/client';
 
 import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { AuditService } from 'src/modules/audit/audit.service';
 import {
   CLES_REGLAGES_PLANIFICATION,
   lireReglagesPlanification,
@@ -14,6 +15,13 @@ import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { FinsSocketLivreursService } from 'src/socket-io/services/fins-socket-livreurs.service';
 
 import { PANIER_ANNULE_PAR_CLIENT_WHERE } from '../helpers/brouillons.rules';
+import {
+  ACTION_JOURNAL_CODE_CLIENT,
+  codeClientRendu,
+  FENETRE_JOURNAL_CODE_CLIENT_MS,
+  lectureCodeClientANoter,
+  resumeJournalCodeClient,
+} from '../helpers/code-client.rules';
 import { CommandeLivraisonLue, SuiviLivraison, suiviLivraison } from '../helpers/suivi-livraison.rules';
 import {
   CLE_APPLI_FERMEE_APRES_S,
@@ -25,6 +33,8 @@ import {
 /**
  * Ce que la section « Livraison » lit d'une commande, en une requête. Liste
  * blanche : ni la clé Turbo du restaurant, ni le code client de la livraison.
+ * Le code de retrait du client est lu à part (`codeClient`), pour les seuls
+ * rôles qui y ont droit.
  */
 const SELECT_SUIVI_LIVRAISON = {
   id: true,
@@ -120,12 +130,70 @@ export type CommandeSuiviLivraison = Prisma.OrderGetPayload<{ select: typeof SEL
 export class SuiviLivraisonService {
   private readonly logger = new Logger(SuiviLivraisonService.name);
 
+  /** Dernière ligne au journal par agent et par commande (`FENETRE_JOURNAL_CODE_CLIENT_MS`). */
+  private readonly lecturesNotees = new Map<string, number>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly settings: SettingsService,
     @Optional() private readonly gateway?: AppGateway,
     @Optional() private readonly fins?: FinsSocketLivreursService,
+    @Optional() private readonly audit?: AuditService,
   ) {}
+
+  /**
+   * Code de retrait du client (`Order.recovery_code`, `null` si absent), lu à
+   * part de la section. À n'appeler que pour un rôle qui y a droit
+   * (`peutLireCodeClient`) : le contrôleur décide, ce service lit.
+   *
+   * Une lecture servie au call center est notée au journal d'audit (une ligne
+   * par agent et par commande toutes les 10 minutes au plus, le tiroir relisant
+   * toutes les 20 s). Le code n'y est jamais écrit.
+   */
+  async codeClient(
+    commande: { id: string; restaurant_id: string | null },
+    compte: Pick<User, 'id' | 'role'> & Partial<Pick<User, 'fullname' | 'email'>>,
+    maintenant = new Date(),
+  ): Promise<string | null> {
+    const lue = await this.prisma.order.findUnique({
+      where: { id: commande.id },
+      select: { recovery_code: true, reference: true },
+    });
+    const code = codeClientRendu(lue?.recovery_code);
+    if (lectureCodeClientANoter(compte, code)) {
+      this.noterLectureCodeClient(commande, lue?.reference ?? null, compte, maintenant.getTime());
+    }
+    return code;
+  }
+
+  private noterLectureCodeClient(
+    commande: { id: string; restaurant_id: string | null },
+    reference: string | null,
+    compte: Pick<User, 'id' | 'role'> & Partial<Pick<User, 'fullname' | 'email'>>,
+    instant: number,
+  ): void {
+    if (!this.audit) return;
+    const cle = `${compte.id}:${commande.id}`;
+    const derniere = this.lecturesNotees.get(cle);
+    if (derniere !== undefined && instant - derniere < FENETRE_JOURNAL_CODE_CLIENT_MS) return;
+    for (const [c, t] of this.lecturesNotees) {
+      if (instant - t >= FENETRE_JOURNAL_CODE_CLIENT_MS) this.lecturesNotees.delete(c);
+    }
+    this.lecturesNotees.set(cle, instant);
+    this.audit.record({
+      actor_id: compte.id,
+      actor_name: compte.fullname ?? compte.email ?? null,
+      actor_role: compte.role,
+      restaurant_id: commande.restaurant_id,
+      action: ACTION_JOURNAL_CODE_CLIENT,
+      module: 'orders',
+      entity_id: commande.id,
+      method: 'GET',
+      path: `/orders/${commande.id}/livraison`,
+      status_code: 200,
+      summary: resumeJournalCodeClient(reference),
+    });
+  }
 
   /**
    * La commande, par identifiant ou référence, comme le détail : supprimée,
