@@ -80,17 +80,19 @@ describe('planning : garde par le droit PLANNING', () => {
     }
   });
 
-  it('administrateur, manager et assistant : toutes les routes (le restaurant est vérifié ensuite)', () => {
-    for (const role of [UserRole.ADMIN, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER]) {
+  // Le call center agit sur le planning de tous les restaurants (26/10),
+  // comme l'administrateur : le cloisonnement ne touche que les comptes de
+  // restaurant (`planning.rules.spec.ts`, `module-livraison-lecture.http.spec.ts`).
+  it('administrateur, call center, manager et assistant : toutes les routes (le restaurant est vérifié ensuite)', () => {
+    for (const role of [UserRole.ADMIN, UserRole.CALL_CENTER, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER]) {
       for (const m of TOUTES) expect([role, m, passe(m, role)]).toEqual([role, m, true]);
     }
   });
 
-  // Le call center lit le planning comme le suivi des livraisons (26/10).
   // `livreursAjoutables` est un GET, mais il sert l'ajout d'un livreur : fermé.
-  it.each([UserRole.LIVRAISON_OPS, UserRole.CALL_CENTER])('%s : les lectures seulement', (role) => {
+  it('LIVRAISON_OPS : les lectures seulement', () => {
     for (const m of TOUTES) {
-      expect([m, passe(m, role)]).toEqual([m, LECTURES.includes(m)]);
+      expect([m, passe(m, UserRole.LIVRAISON_OPS)]).toEqual([m, LECTURES.includes(m)]);
     }
   });
 

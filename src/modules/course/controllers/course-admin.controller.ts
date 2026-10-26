@@ -27,7 +27,7 @@ import { CourseActionService } from '../services/course-action.service';
 import { CourseOfferService } from '../services/course-offer.service';
 import { CourseQueryService } from '../services/course-query.service';
 import { GardeOffresService } from '../services/garde-offres.service';
-import { ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
+import { ROLES_ACTIONS_COURSES, ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
@@ -60,7 +60,11 @@ export function messageAffectationForcee(
 
 /**
  * Endpoints admin pour le module course.
- * Restreint à UserRole.ADMIN (même règle que Livreurs).
+ *
+ * La classe reste à UserRole.ADMIN (réglages du planificateur). Les lectures
+ * s'ouvrent au suivi des livraisons (`ROLES_SUIVI_LIVRAISON`), les gestes sur
+ * une course à l'administrateur et au call center (`ROLES_ACTIONS_COURSES`,
+ * 26/10). Le garde fait primer la méthode sur la classe.
  */
 @ApiTags('Courses — Admin')
 @Controller('courses')
@@ -143,6 +147,7 @@ export class CourseAdminController {
   })
   @ApiBody({ type: AssignDelivererDto })
   @Patch(':id/force-assign')
+  @UserRoles(...ROLES_ACTIONS_COURSES)
   async forceAssign(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: AssignDelivererDto,
@@ -170,9 +175,10 @@ export class CourseAdminController {
     };
   }
 
-  @ApiOperation({ summary: 'Annuler une course (admin)' })
+  @ApiOperation({ summary: 'Annuler une course (administrateur, call center)' })
   @ApiBody({ type: CancelCourseDto })
   @Patch(':id/cancel')
+  @UserRoles(...ROLES_ACTIONS_COURSES)
   async cancel(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: CancelCourseDto,
@@ -186,6 +192,7 @@ export class CourseAdminController {
       'Reset les tentatives précédentes (tous les livreurs redeviennent candidats) et relance la recherche.',
   })
   @Patch(':id/retry')
+  @UserRoles(...ROLES_ACTIONS_COURSES)
   async retry(@Param('id', new ParseUUIDPipe()) id: string) {
     await this.offerService.retryExpiredCourse(id);
     return { success: true, message: 'Course relancée — recherche de livreur en cours' };
@@ -199,6 +206,7 @@ export class CourseAdminController {
       "La référence est neuve : une referenceCourse déjà envoyée à Turbo n'est jamais réutilisée.",
   })
   @Patch(':id/relancer')
+  @UserRoles(...ROLES_ACTIONS_COURSES)
   async relancerCourseAnnulee(@Param('id', new ParseUUIDPipe()) id: string) {
     const r = await this.offerService.relancerCourseAnnulee(id);
     return { success: r.ok, message: r.message, newCourseId: r.newCourseId };
@@ -211,6 +219,7 @@ export class CourseAdminController {
       "sait qu'aucun livreur interne ne se libérera. Course en recherche uniquement.",
   })
   @Patch(':id/turbo')
+  @UserRoles(...ROLES_ACTIONS_COURSES)
   async basculerVersTurbo(@Param('id', new ParseUUIDPipe()) id: string) {
     const r = await this.offerService.basculerVersTurbo(id);
     return { success: r.ok, message: r.message };
@@ -223,6 +232,7 @@ export class CourseAdminController {
       'a déjà été affecté, pour ne pas envoyer deux livreurs sur la même commande.',
   })
   @Patch(':id/interne')
+  @UserRoles(...ROLES_ACTIONS_COURSES)
   async revenirEnInterne(@Param('id', new ParseUUIDPipe()) id: string) {
     const r = await this.offerService.revenirEnInterne(id);
     return { success: r.ok, message: r.message };

@@ -108,17 +108,23 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       // équipe, contrôlé au cas par cas côté service.
       [Modules.CRM]: [Action.READ, Action.UPDATE, Action.REPORT],
 
-      // Livraison, en LECTURE (demande du 26/10) : Carte live, Courses, Liste
-      // des livreurs, Planning, bandeau des restaurants, comme LIVRAISON_OPS.
-      // Aucun geste : ni affectation forcée, ni annulation, ni relance, ni
-      // validation de compte, ni modification de planning. Compte de siège,
-      // il voit tous les restaurants.
-      // ⚠️ LIVREURS ne fait qu'AFFICHER les entrées du menu : Courses et
-      // Livreurs sont gardés côté serveur par ROLES_SUIVI_LIVRAISON, le
-      // bandeau par ROLES_TABLEAU_LIVRAISON. PLANNING garde aussi l'API du
-      // planning. Les trois doivent bouger ensemble.
+      // Livraison (demandes du 26/10) : Carte live, Courses, Liste des
+      // livreurs, Planning, bandeau des restaurants. Compte de siège, il voit
+      // et agit sur tous les restaurants, comme l'administrateur.
+      // - Courses : il agit (forcer, annuler, relancer, Turbo, reprendre en
+      //   interne). Ces gestes sont gardés côté serveur par une liste de rôles
+      //   (ROLES_ACTIONS_COURSES), pas par ce tableau : LIVREURS reste en
+      //   lecture, car LIVREURS.UPDATE et DELETE disent la gestion des comptes
+      //   livreurs (valider, refuser, suspendre, réactiver, restaurant,
+      //   suppression), qui reste à l'administrateur seul.
+      // - Planning : il le fait, l'envoie, le change dans tous ses états et le
+      //   supprime, pour tous les restaurants (droit PLANNING, qui garde l'API).
+      // ⚠️ LIVREURS ne fait qu'AFFICHER les entrées du menu : les lectures de
+      // Courses et Livreurs sont gardées côté serveur par
+      // ROLES_SUIVI_LIVRAISON, le bandeau par ROLES_TABLEAU_LIVRAISON. Les
+      // listes et ce tableau doivent bouger ensemble.
       [Modules.LIVREURS]: [Action.READ],
-      [Modules.PLANNING]: [Action.READ],
+      [Modules.PLANNING]: [Action.READ, Action.CREATE, Action.UPDATE, Action.DELETE],
     },
   },
 

@@ -225,17 +225,19 @@ describe('droit PLANNING (conception du 24/10)', () => {
   /**
    * Administrateur : tout. Manager et assistant : lecture, création,
    * modification et suppression, sur leur restaurant (le cloisonnement est
-   * fait par le serveur). LIVRAISON_OPS et call center (26/10) : lecture. Les
+   * fait par le serveur). Call center (26/10) : les mêmes quatre gestes, sur
+   * tous les restaurants (compte de siège). LIVRAISON_OPS : lecture. Les
    * autres : rien.
    */
   it('qui a quoi sur le planning', () => {
     const gestion = new Set<string>([Action.READ, Action.CREATE, Action.UPDATE, Action.DELETE]);
+    const gestionnaires = new Set<UserRole>([UserRole.MANAGER, UserRole.ASSISTANT_MANAGER, UserRole.CALL_CENTER]);
     for (const role of Object.values(UserRole)) {
       for (const action of actions) {
         const attendu =
           role === UserRole.ADMIN ||
-          ((role === UserRole.MANAGER || role === UserRole.ASSISTANT_MANAGER) && gestion.has(action)) ||
-          ((role === UserRole.LIVRAISON_OPS || role === UserRole.CALL_CENTER) && action === Action.READ);
+          (gestionnaires.has(role) && gestion.has(action)) ||
+          (role === UserRole.LIVRAISON_OPS && action === Action.READ);
         expect([role, action, rolePeut(role, Modules.PLANNING, action)]).toEqual([role, action, attendu]);
       }
     }
@@ -256,18 +258,46 @@ describe('droit PLANNING (conception du 24/10)', () => {
   });
 });
 
-describe('call center : module Livraison en lecture (demande du 26/10)', () => {
+describe('call center : module Livraison (demandes du 26/10)', () => {
   const actions = Object.values(Action) as Action[];
   const peut = (module: Modules, action: Action) => rolePeut(UserRole.CALL_CENTER, module, action);
 
-  it('lit les courses, les livreurs et le planning, comme le suivi des livraisons', () => {
+  /**
+   * LIVREURS : lecture seulement, comme le suivi des livraisons. Ses gestes
+   * sur une course passent par une liste de rôles (`ROLES_ACTIONS_COURSES`),
+   * pas par ce droit : LIVREURS.UPDATE et DELETE disent la gestion des comptes
+   * livreurs, qui reste à l'administrateur seul.
+   */
+  it('lit les courses et les livreurs, sans gérer les comptes livreurs', () => {
+    for (const action of actions) {
+      expect([action, peut(Modules.LIVREURS, action)]).toEqual([action, action === Action.READ]);
+      expect([action, peut(Modules.LIVREURS, action)]).toEqual([
+        action,
+        rolePeut(UserRole.LIVRAISON_OPS, Modules.LIVREURS, action),
+      ]);
+    }
+  });
+
+  it('fait, envoie, change et supprime le planning, comme le manager mais pour tous les restaurants', () => {
+    for (const action of actions) {
+      expect([action, peut(Modules.PLANNING, action)]).toEqual([
+        action,
+        rolePeut(UserRole.MANAGER, Modules.PLANNING, action),
+      ]);
+    }
+    expect(peut(Modules.PLANNING, Action.CREATE)).toBe(true);
+    expect(peut(Modules.PLANNING, Action.UPDATE)).toBe(true);
+    expect(peut(Modules.PLANNING, Action.DELETE)).toBe(true);
+    expect(peut(Modules.PLANNING, Action.EXPORT)).toBe(false);
+  });
+
+  it('LIVRAISON_OPS reste en lecture seule sur la livraison', () => {
     for (const module of [Modules.LIVREURS, Modules.PLANNING]) {
       for (const action of actions) {
-        expect([module, action, peut(module, action)]).toEqual([module, action, action === Action.READ]);
-        expect([module, action, peut(module, action)]).toEqual([
+        expect([module, action, rolePeut(UserRole.LIVRAISON_OPS, module, action)]).toEqual([
           module,
           action,
-          rolePeut(UserRole.LIVRAISON_OPS, module, action),
+          action === Action.READ,
         ]);
       }
     }

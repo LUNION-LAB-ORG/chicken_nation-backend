@@ -196,6 +196,13 @@ describe('cloisonnement', () => {
     expect(() =>
       verifierPlanningDuRestaurant(compte(UserRole.LIVRAISON_OPS, UserType.BACKOFFICE, null), RESTO_B),
     ).not.toThrow();
+    // Le call center agit sur le planning de tous les restaurants (26/10).
+    expect(() =>
+      verifierPlanningDuRestaurant(compte(UserRole.CALL_CENTER, UserType.BACKOFFICE, null), RESTO_A),
+    ).not.toThrow();
+    expect(() =>
+      verifierPlanningDuRestaurant(compte(UserRole.CALL_CENTER, UserType.BACKOFFICE, null), RESTO_B),
+    ).not.toThrow();
   });
 });
 

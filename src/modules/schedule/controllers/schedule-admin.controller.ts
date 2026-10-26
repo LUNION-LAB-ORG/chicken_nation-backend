@@ -32,8 +32,9 @@ import { ScheduleQueryService } from '../services/schedule-query.service';
  * Planning des livreurs, côté backoffice.
  *
  * Gardé par le droit `Modules.PLANNING` (24/10), plus par une liste de rôles :
- * ADMIN tout, MANAGER et ASSISTANT_MANAGER tout sur LEUR restaurant,
- * LIVRAISON_OPS et CALL_CENTER (26/10) en lecture. Chaque route porte sa permission : sans elle,
+ * ADMIN et CALL_CENTER (26/10, compte de siège) tout, sur tous les
+ * restaurants, MANAGER et ASSISTANT_MANAGER tout sur LEUR restaurant,
+ * LIVRAISON_OPS en lecture. Chaque route porte sa permission : sans elle,
  * `UserPermissionsGuard` laisserait passer.
  *
  * Cloisonnement : liste et aperçu par `resolveRestaurantScope`, génération
