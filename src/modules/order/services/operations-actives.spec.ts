@@ -11,6 +11,8 @@
  *  - une seule lecture des réglages et une seule demande de présence pour
  *    toute la liste.
  */
+import { finsSocketSimulees } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
+
 import { OrderService } from './order.service';
 import { SuiviOperationsService } from './suivi-operations.service';
 
@@ -69,14 +71,24 @@ describe('SuiviOperationsService.enrichir', () => {
     { id: 'o3', status: 'READY', restaurant: null, delivery: null },
   ];
 
-  function monter(reglages: Record<string, string> | Error = {}, connectes: Set<string> | Error = new Set()) {
+  function monter(
+    reglages: Record<string, string> | Error = {},
+    connectes: Set<string> | Error = new Set(),
+    fins: Parameters<typeof finsSocketSimulees>[0] = {},
+  ) {
     const settings = {
       getMany: reglages instanceof Error ? jest.fn().mockRejectedValue(reglages) : jest.fn().mockResolvedValue(reglages),
     };
     const gateway = {
       livreursConnectes: connectes instanceof Error ? jest.fn().mockRejectedValue(connectes) : jest.fn().mockResolvedValue(connectes),
     };
-    return { service: new SuiviOperationsService(settings as never, gateway as never), settings, gateway };
+    const finsSocket = finsSocketSimulees(fins);
+    return {
+      service: new SuiviOperationsService(settings as never, gateway as never, finsSocket as never),
+      settings,
+      gateway,
+      fins: finsSocket,
+    };
   }
 
   it('tournée et appli sur chaque course, une lecture des réglages, une demande de présence pour toute la liste', async () => {
@@ -106,16 +118,35 @@ describe('SuiviOperationsService.enrichir', () => {
       appli_active: false,
       appli_vue_a: '2026-10-24T12:24:00.000Z',
       appli_connectee: false,
+      // Aucune fin de socket gardée : aucune preuve de fermeture, connexion coupée.
+      appli_etat: 'COUPURE',
     });
     expect(a.delivery.course).not.toHaveProperty('deliveries');
     expect(a.delivery.course.pickup_code).toBe('614');
     expect(c).toEqual(liste()[2]);
   });
 
+  it('écran Commandes (25/10) : « Appli fermée » seulement sur la fin du socket par l’appli, lue une fois pour la liste', async () => {
+    const fermee = monter({}, new Set(), { 'liv-koffi': { raison: 'client namespace disconnect', a: new Date('2026-10-24T12:24:05.000Z') } });
+    const [a] = (await fermee.service.enrichir(liste(), MAINTENANT)) as any[];
+    expect(a.delivery.course.deliverer).toMatchObject({ appli_active: false, appli_etat: 'FERMEE' });
+    expect(fermee.fins.lireSansSocket).toHaveBeenCalledTimes(1);
+
+    const coupee = monter({}, new Set(), { 'liv-koffi': { raison: 'ping timeout', a: new Date('2026-10-24T12:24:50.000Z') } });
+    const [b] = (await coupee.service.enrichir(liste(), MAINTENANT)) as any[];
+    expect(b.delivery.course.deliverer).toMatchObject({ appli_active: false, appli_etat: 'COUPURE' });
+
+    // Redis des fins muet : jamais FERMEE.
+    const muet = monter({}, new Set(), null);
+    const [c] = (await muet.service.enrichir(liste(), MAINTENANT)) as any[];
+    expect(c.delivery.course.deliverer).toMatchObject({ appli_etat: 'COUPURE' });
+  });
+
   it('aucun livreur dans la liste : aucune demande de présence', async () => {
-    const { service, gateway } = monter();
+    const { service, gateway, fins } = monter();
     await service.enrichir([{ id: 'o3', delivery: null }], MAINTENANT);
     expect(gateway.livreursConnectes).not.toHaveBeenCalled();
+    expect(fins.lire).not.toHaveBeenCalled();
   });
 
   it('réglages et présence illisibles : valeurs par défaut, présence inconnue, la liste part quand même', async () => {

@@ -21,6 +21,9 @@ import {
   ContexteAppli,
   EtatLivreur,
   FIN_PAUSE_INDEFINIE,
+  FinSocket,
+  MARGE_FIN_SOCKET_MS,
+  RAISON_FERMEE_PAR_L_APPLI,
   SANS_REGLE_APPLI,
   SELECT_ETAT_LIVREUR,
   STATUTS_COURSE_EN_COURS,
@@ -30,7 +33,9 @@ import {
   estAppliActive,
   estEnPause,
   estEnPauseAuto,
+  etatAppliDepuis,
   etatLivreurDepuis,
+  fermetureProuvee,
   filtreAppelsVivantsLivreurs,
   filtreLivreursPouvantRecevoirOffre,
   heureLisible,
@@ -106,11 +111,21 @@ describe('peutRecevoirOffre', () => {
     ).toEqual({ ok: false, motif: 'EN_COURSE' });
   });
 
-  it('appli fermée (24/10) : non, APPLI_FERMEE', () => {
-    expect(peutRecevoirOffre(libre({ appli_active: false }), MAINTENANT)).toEqual({
+  it('appli fermée par le livreur, prouvée par la fin de son socket (25/10) : non, APPLI_FERMEE', () => {
+    expect(peutRecevoirOffre(libre({ appli_active: false, appli_fermee_prouvee: true }), MAINTENANT)).toEqual({
       ok: false,
       motif: 'APPLI_FERMEE',
     });
+  });
+
+  it('appli qui se tait sans preuve de fermeture (réseau coupé, téléphone qui la bloque) : non, CONNEXION_COUPEE', () => {
+    expect(peutRecevoirOffre(libre({ appli_active: false }), MAINTENANT)).toEqual({ ok: false, motif: 'CONNEXION_COUPEE' });
+    expect(peutRecevoirOffre(libre({ appli_active: false, appli_fermee_prouvee: false }), MAINTENANT)).toEqual({
+      ok: false,
+      motif: 'CONNEXION_COUPEE',
+    });
+    // Appli active : la preuve d'une ancienne fermeture ne compte pas.
+    expect(peutRecevoirOffre(libre({ appli_active: true, appli_fermee_prouvee: true }), MAINTENANT)).toEqual({ ok: true });
   });
 
   it('appli fermée : dite en dernier (pause, pause automatique, course, offre et hors service d’abord)', () => {
@@ -222,11 +237,87 @@ describe('appli active ou fermée (demande du 24/10)', () => {
       protocole_appli: 4,
       _count: { courses: 0, offer_attempts: 0 },
     };
-    const ferme = etatLivreurDepuis(ligne, { appliFermeeApresS: S, connectes: new Set() }, MAINTENANT);
-    expect(ferme).toMatchObject({ appli_active: false, appli_vue_a: avantS(200) });
+    const coupe = etatLivreurDepuis(ligne, { appliFermeeApresS: S, connectes: new Set() }, MAINTENANT);
+    expect(coupe).toMatchObject({ appli_active: false, appli_vue_a: avantS(200), appli_fermee_prouvee: false });
+    expect(peutRecevoirOffre(coupe, MAINTENANT)).toEqual({ ok: false, motif: 'CONNEXION_COUPEE' });
+    // Fin du socket par l'appli elle-même, 10 s après le dernier signe de vie : fermeture prouvée.
+    const finsSocket = new Map<string, FinSocket>([['l', { raison: RAISON_FERMEE_PAR_L_APPLI, a: avantS(190) }]]);
+    const ferme = etatLivreurDepuis(ligne, { appliFermeeApresS: S, connectes: new Set(), finsSocket }, MAINTENANT);
+    expect(ferme).toMatchObject({ appli_active: false, appli_fermee_prouvee: true });
     expect(peutRecevoirOffre(ferme, MAINTENANT)).toEqual({ ok: false, motif: 'APPLI_FERMEE' });
     const enArrierePlan = etatLivreurDepuis({ ...ligne, dernier_signal_at: avantS(20) }, { appliFermeeApresS: S, connectes: new Set() }, MAINTENANT);
     expect(peutRecevoirOffre(enArrierePlan, MAINTENANT)).toEqual({ ok: true });
+  });
+});
+
+/**
+ * APPLI FERMÉE OU CONNEXION COUPÉE (retour du client du 25/10 : « Appli
+ * fermée » affiché pour une appli restée ouverte). « Appli fermée » seulement
+ * quand l'appli a fermé elle-même son socket et que rien n'est venu d'elle
+ * ensuite ; tout autre silence est une coupure.
+ */
+describe('appli fermée prouvée ou connexion coupée (25/10)', () => {
+  const S = APPLI_FERMEE_APRES_S_DEFAUT;
+  const fin = (raison: string, a: Date): FinSocket => ({ raison, a });
+
+  it('fermetureProuvee : `client namespace disconnect` et rien plus de 30 s après', () => {
+    expect(RAISON_FERMEE_PAR_L_APPLI).toBe('client namespace disconnect');
+    expect(MARGE_FIN_SOCKET_MS).toBe(30_000);
+    const a = avantS(300);
+    expect(fermetureProuvee(fin(RAISON_FERMEE_PAR_L_APPLI, a), null)).toBe(true);
+    expect(fermetureProuvee(fin(RAISON_FERMEE_PAR_L_APPLI, a), avantS(310))).toBe(true);
+    // Position partie juste avant la fermeture, arrivée 20 s après : toujours prouvée.
+    expect(fermetureProuvee(fin(RAISON_FERMEE_PAR_L_APPLI, a), avantS(280))).toBe(true);
+    expect(fermetureProuvee(fin(RAISON_FERMEE_PAR_L_APPLI, a), avantS(270))).toBe(true);
+    // Signe de vie à fin + 31 s : l'appli a revécu, la fin est périmée.
+    expect(fermetureProuvee(fin(RAISON_FERMEE_PAR_L_APPLI, a), avantS(269))).toBe(false);
+  });
+
+  it.each(['ping timeout', 'transport close', 'transport error', 'server shutting down', 'server namespace disconnect', ''])(
+    'fermetureProuvee : raison « %s » : non',
+    (raison) => {
+      expect(fermetureProuvee(fin(raison, avantS(300)), avantS(400))).toBe(false);
+    },
+  );
+
+  it('fermetureProuvee : aucune fin connue : non', () => {
+    expect(fermetureProuvee(undefined, avantS(400))).toBe(false);
+    expect(fermetureProuvee(undefined, null)).toBe(false);
+  });
+
+  const ligne = (dernierSignal: Date | null, protocole: number | null = 4) => ({
+    id: 'l',
+    dernier_signal_at: dernierSignal,
+    protocole_appli: protocole,
+  });
+  const contexte = (p: Partial<ContexteAppli> = {}): ContexteAppli => ({ appliFermeeApresS: S, connectes: new Set(), ...p });
+  const fermee = new Map([['l', fin(RAISON_FERMEE_PAR_L_APPLI, avantS(200))]]);
+  const coupee = new Map([['l', fin('ping timeout', avantS(200))]]);
+
+  it('etatAppliDepuis : socket ouvert = ACTIVE, quelle que soit la fin gardée', () => {
+    expect(etatAppliDepuis(ligne(avantS(3600)), contexte({ connectes: new Set(['l']), finsSocket: fermee }), MAINTENANT)).toBe('ACTIVE');
+  });
+
+  it('etatAppliDepuis : signe de vie de 179 s = ACTIVE ; 180 s avec fin par l’appli = FERMEE ; avec `ping timeout` = COUPURE', () => {
+    expect(etatAppliDepuis(ligne(avantS(179)), contexte({ finsSocket: fermee }), MAINTENANT)).toBe('ACTIVE');
+    expect(etatAppliDepuis(ligne(avantS(180)), contexte({ finsSocket: fermee }), MAINTENANT)).toBe('FERMEE');
+    expect(etatAppliDepuis(ligne(avantS(180)), contexte({ finsSocket: coupee }), MAINTENANT)).toBe('COUPURE');
+  });
+
+  it('etatAppliDepuis : fins illisibles (null), absentes, ou sans ligne pour ce livreur = COUPURE, jamais FERMEE', () => {
+    expect(etatAppliDepuis(ligne(avantS(600)), contexte({ finsSocket: null }), MAINTENANT)).toBe('COUPURE');
+    expect(etatAppliDepuis(ligne(avantS(600)), contexte(), MAINTENANT)).toBe('COUPURE');
+    expect(etatAppliDepuis(ligne(avantS(600)), contexte({ finsSocket: new Map() }), MAINTENANT)).toBe('COUPURE');
+  });
+
+  it('etatAppliDepuis : présence illisible et signe de vie vieux = COUPURE', () => {
+    expect(etatAppliDepuis(ligne(avantS(600)), contexte({ connectes: null }), MAINTENANT)).toBe('COUPURE');
+  });
+
+  it('etatAppliDepuis : appli d’avant le protocole 4, ou réglage à 0 = null (la règle ne vise pas ce livreur)', () => {
+    expect(etatAppliDepuis(ligne(avantS(600), 3), contexte({ finsSocket: fermee }), MAINTENANT)).toBeNull();
+    expect(etatAppliDepuis(ligne(avantS(600), null), contexte(), MAINTENANT)).toBeNull();
+    expect(etatAppliDepuis(ligne(avantS(600)), SANS_REGLE_APPLI, MAINTENANT)).toBeNull();
   });
 });
 
@@ -318,8 +409,14 @@ describe('équivalence avec le filtre Prisma de la sélection', () => {
     // socket ouvert, fermé, présence inconnue ; réglage à 180 s, coupé.
     const signaux = [null, avantS(10), avantS(179.999), avantS(180), avantS(1800)];
     const contextes: ContexteAppli[] = [];
+    // Fin du socket : aucune, ou fermée par l'appli (preuve pour un signe de vie absent ou vieux).
+    const fins: (ReadonlyMap<string, FinSocket> | null)[] = [
+      null,
+      new Map([['l', { raison: RAISON_FERMEE_PAR_L_APPLI, a: avantS(1800) }]]),
+    ];
     for (const appliFermeeApresS of [180, 0])
-      for (const connectes of [new Set(['l']), new Set<string>(), null]) contextes.push({ appliFermeeApresS, connectes });
+      for (const connectes of [new Set(['l']), new Set<string>(), null])
+        for (const finsSocket of fins) contextes.push({ appliFermeeApresS, connectes, finsSocket });
     const comptes: { status: DelivererStatus; is_operational: boolean }[] = [
       { status: DelivererStatus.ACTIVE, is_operational: true },
       { status: DelivererStatus.SUSPENDED, is_operational: true },
@@ -328,6 +425,7 @@ describe('équivalence avec le filtre Prisma de la sélection', () => {
     let essais = 0;
     let acceptes = 0;
     let refusesAppliFermee = 0;
+    let refusesConnexionCoupee = 0;
 
     for (const appli of contextes) {
       const filtre = filtreLivreursPouvantRecevoirOffre(MAINTENANT, appli);
@@ -355,14 +453,16 @@ describe('équivalence avec le filtre Prisma de la sélection', () => {
                     essais++;
                     if (decision.ok) acceptes++;
                     if (!decision.ok && decision.motif === 'APPLI_FERMEE') refusesAppliFermee++;
+                    if (!decision.ok && decision.motif === 'CONNEXION_COUPEE') refusesConnexionCoupee++;
                   }
     }
 
-    expect(essais).toBe(6 * 3 * 4 * 2 * 2 * 5 * 4 * 3 * 3);
-    // Garde-fou : acceptés, refusés, et refusés pour l'appli fermée.
+    expect(essais).toBe(12 * 3 * 4 * 2 * 2 * 5 * 4 * 3 * 3);
+    // Garde-fou : acceptés, refusés, et refusés pour l'appli fermée comme pour la connexion coupée.
     expect(acceptes).toBeGreaterThan(0);
     expect(acceptes).toBeLessThan(essais);
     expect(refusesAppliFermee).toBeGreaterThan(0);
+    expect(refusesConnexionCoupee).toBeGreaterThan(0);
   });
 
   it('réglage coupé : le filtre ne regarde ni le signe de vie ni les sockets', () => {
@@ -422,6 +522,9 @@ describe('textes', () => {
       "Ce livreur est hors service : il n'a pas repris le travail dans l'appli.",
     );
     expect(messageRefusOffre('APPLI_FERMEE', etat, MAINTENANT)).toBe("L'appli de ce livreur est fermée.");
+    expect(messageRefusOffre('CONNEXION_COUPEE', etat, MAINTENANT)).toBe(
+      'La connexion de ce livreur est coupée : son appli ne répond plus.',
+    );
   });
 
   it('« Reprendre » pendant une pause automatique', () => {
@@ -433,7 +536,18 @@ describe('textes', () => {
   it('aucun tiret cadratin dans les textes', () => {
     const etat = { pause_until: apres(5), auto_pause_until: apres(5) };
     const textes = (
-      ['INACTIF', 'EN_PAUSE', 'PAUSE_AUTO', 'EN_COURSE', 'OFFRE_EN_ATTENTE', 'HORS_SERVICE', 'APPLI_FERMEE', 'INJOIGNABLE'] as const
+      [
+        'INACTIF',
+        'EN_PAUSE',
+        'PAUSE_AUTO',
+        'EN_COURSE',
+        'OFFRE_EN_ATTENTE',
+        'HORS_SERVICE',
+        'APPLI_FERMEE',
+        'CONNEXION_COUPEE',
+        'INJOIGNABLE',
+        'EN_APPEL',
+      ] as const
     ).map((m) => messageRefusOffre(m, etat, MAINTENANT));
     textes.push(messagePauseAuto(apres(5), MAINTENANT));
     for (const t of textes) expect(t).not.toMatch(/[—–]/);
@@ -451,7 +565,8 @@ describe('disponibiliteLivreur (affichage au backoffice)', () => {
       [{ offre_en_attente: true }, 'OFFRE_EN_ATTENTE', 'Offre en attente'],
       [{ last_available_at: null }, 'HORS_SERVICE', 'Hors service'],
       [{ status: DelivererStatus.SUSPENDED }, 'INACTIF', 'Inactif'],
-      [{ appli_active: false }, 'APPLI_FERMEE', 'Appli fermée'],
+      [{ appli_active: false, appli_fermee_prouvee: true }, 'APPLI_FERMEE', 'Appli fermée'],
+      [{ appli_active: false }, 'CONNEXION_COUPEE', 'Connexion coupée'],
     ];
     for (const [surcharge, etat, libelle] of cas) {
       expect([etat, disponibiliteLivreur(libre(surcharge), MAINTENANT).libelle]).toEqual([etat, libelle]);
@@ -476,6 +591,7 @@ describe('disponibiliteLivreur (affichage au backoffice)', () => {
       offre_course_id: null,
       appli_active: true,
       appli_vue_a: null,
+      appli_etat: 'ACTIVE',
     });
     expect(disponibiliteLivreur(libre({ offre_en_attente: true }), MAINTENANT, 'c1')).toMatchObject({
       peut_recevoir_offre: false,
@@ -489,9 +605,11 @@ describe('disponibiliteLivreur (affichage au backoffice)', () => {
     });
   });
 
-  it('appli fermée (24/10) : « Appli fermée », le refus de l’affectation forcée, et l’heure du dernier signe de vie', () => {
+  it('appli fermée prouvée (24/10) : « Appli fermée », le refus de l’affectation forcée, et l’heure du dernier signe de vie', () => {
     const vue = avantS(400);
-    expect(disponibiliteLivreur(libre({ appli_active: false, appli_vue_a: vue }), MAINTENANT)).toMatchObject({
+    expect(
+      disponibiliteLivreur(libre({ appli_active: false, appli_fermee_prouvee: true, appli_vue_a: vue }), MAINTENANT),
+    ).toMatchObject({
       etat: 'APPLI_FERMEE',
       libelle: 'Appli fermée',
       peut_recevoir_offre: false,
@@ -499,7 +617,32 @@ describe('disponibiliteLivreur (affichage au backoffice)', () => {
       en_service: true,
       appli_active: false,
       appli_vue_a: vue,
+      appli_etat: 'FERMEE',
     });
+  });
+
+  it('appli silencieuse sans preuve (25/10) : « Connexion coupée », jamais « Appli fermée »', () => {
+    const vue = avantS(240);
+    expect(disponibiliteLivreur(libre({ appli_active: false, appli_vue_a: vue }), MAINTENANT)).toMatchObject({
+      etat: 'CONNEXION_COUPEE',
+      libelle: 'Connexion coupée',
+      peut_recevoir_offre: false,
+      message_refus: 'La connexion de ce livreur est coupée : son appli ne répond plus.',
+      appli_active: false,
+      appli_vue_a: vue,
+      appli_etat: 'COUPURE',
+    });
+  });
+
+  it('appli_etat : lu aussi en course ; null quand la règle ne vise pas le livreur', () => {
+    expect(disponibiliteLivreur(libre({ en_course: true, appli_active: false }), MAINTENANT)).toMatchObject({
+      etat: 'EN_COURSE',
+      appli_etat: 'COUPURE',
+    });
+    expect(
+      disponibiliteLivreur(libre({ en_course: true, appli_active: false, appli_fermee_prouvee: true }), MAINTENANT).appli_etat,
+    ).toBe('FERMEE');
+    expect(disponibiliteLivreur(libre(), MAINTENANT, null, false)).toMatchObject({ appli_active: null, appli_etat: null });
   });
 
   it('appli active en arrière-plan, en course : l’état reste celui de la règle, appli_active à vrai', () => {
@@ -552,7 +695,7 @@ describe('joignable : socket ouvert ou jeton de notification', () => {
     expect(peutRecevoirOffre(libre(), MAINTENANT)).toEqual({ ok: true });
     expect(peutRecevoirOffre(libre({ joignable: false, appli_active: false }), MAINTENANT)).toEqual({
       ok: false,
-      motif: 'APPLI_FERMEE',
+      motif: 'CONNEXION_COUPEE',
     });
     expect(peutRecevoirOffre(libre({ joignable: false, last_available_at: null }), MAINTENANT)).toEqual({
       ok: false,

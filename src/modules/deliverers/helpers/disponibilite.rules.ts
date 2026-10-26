@@ -39,7 +39,12 @@ import {
  *    glissée hors de la liste des applis, elle se tait et le livreur ne
  *    reçoit plus rien jusqu'à sa réouverture, sans pause ni pénalité. Seule
  *    l'appli au protocole 4 au moins est visée : celle d'avant se tait en
- *    arrière-plan et garde ses offres par notification ;
+ *    arrière-plan et garde ses offres par notification. Une appli qui se tait
+ *    n'est dite FERMÉE (`APPLI_FERMEE`) que sur preuve : son dernier socket a
+ *    été fermé par l'appli elle-même et rien n'est venu d'elle ensuite
+ *    (`fermetureProuvee`). Tout autre silence (réseau coupé, téléphone qui
+ *    gèle ou arrête l'appli, raison inconnue) est une CONNEXION COUPÉE
+ *    (`CONNEXION_COUPEE`, retour du client du 25/10), avec les mêmes effets ;
  *  - joignable (défaut signalé le 24/10 : « la course est proposée au livreur
  *    pourtant le livreur ne reçoit rien ») : au moins un socket ouvert dans sa
  *    salle `deliverer_{id}`, OU un jeton de notification. Sans l'un ni
@@ -75,6 +80,7 @@ export type MotifRefusOffre =
   | 'OFFRE_EN_ATTENTE'
   | 'HORS_SERVICE'
   | 'APPLI_FERMEE'
+  | 'CONNEXION_COUPEE'
   | 'INJOIGNABLE'
   | 'EN_APPEL';
 
@@ -97,6 +103,12 @@ export interface EtatLivreur {
    * Toujours vrai quand la règle est coupée (`deliverer.appli_fermee_apres_s` à 0).
    */
   appli_active: boolean;
+  /**
+   * L'appli a fermé elle-même son dernier socket et rien n'est venu d'elle
+   * ensuite (`fermetureProuvee`). Lu seulement quand l'appli n'est pas
+   * active : vrai, « Appli fermée » ; faux ou absent, « Connexion coupée ».
+   */
+  appli_fermee_prouvee?: boolean;
   /** Dernier signe de vie de l'appli (`dernier_signal_at`), pour l'affichage. */
   appli_vue_a?: Date | null;
   /**
@@ -188,6 +200,46 @@ export interface ContexteAppli {
    * vide : personne n'est réputé en appel.
    */
   enAppel?: ReadonlySet<string> | null;
+  /**
+   * Fin du dernier socket des livreurs sans socket ouvert
+   * (`FinsSocketLivreursService`). Absent ou null : fins non lues ou Redis
+   * muet, aucune preuve, donc jamais « Appli fermée ».
+   */
+  finsSocket?: ReadonlyMap<string, FinSocket> | null;
+}
+
+// ============================================================
+// APPLI FERMÉE PAR LE LIVREUR OU CONNEXION COUPÉE (25/10)
+// ============================================================
+
+/** Fin du dernier socket du livreur (FinsSocketLivreursService) : raison socket.io et heure. */
+export interface FinSocket {
+  raison: string;
+  a: Date;
+}
+
+/**
+ * Raison socket.io quand l'appli ferme elle-même son socket (appli glissée
+ * hors des récentes sur un Android d'origine, écran détruit, compte
+ * déconnecté). Une coupure du réseau ou une appli gelée donne `ping timeout`,
+ * un processus tué `transport close`.
+ */
+export const RAISON_FERMEE_PAR_L_APPLI = 'client namespace disconnect';
+
+/** Une position partie juste avant la fermeture arrive au plus 20 s après (délai d'envoi de l'appli). */
+export const MARGE_FIN_SOCKET_MS = 30_000;
+
+/** État de l'appli d'un livreur : active, fermée par lui (prouvé), ou connexion coupée. */
+export type EtatAppli = 'ACTIVE' | 'FERMEE' | 'COUPURE';
+
+/**
+ * L'appli a fermé elle-même son socket, et rien n'est venu d'elle ensuite
+ * (plus de `MARGE_FIN_SOCKET_MS` après). Toute autre fin, ou aucune fin
+ * connue : non. En cas de doute, la réponse est non (« Connexion coupée »).
+ */
+export function fermetureProuvee(fin: FinSocket | undefined, dernierSignal: Date | null): boolean {
+  if (!fin || fin.raison !== RAISON_FERMEE_PAR_L_APPLI) return false;
+  return dernierSignal === null || dernierSignal.getTime() <= fin.a.getTime() + MARGE_FIN_SOCKET_MS;
 }
 
 // ============================================================
@@ -321,6 +373,22 @@ export function appliActiveDepuis(
   );
 }
 
+/**
+ * État de l'appli d'une ligne lue en base dans ce contexte : ACTIVE (socket
+ * ouvert ou signe de vie récent), FERMEE (fermeture prouvée), sinon COUPURE.
+ * Null : la règle ne vise pas ce livreur (réglage à 0, appli d'avant le
+ * protocole 4).
+ */
+export function etatAppliDepuis(
+  ligne: { id: string; dernier_signal_at: Date | null; protocole_appli: number | null },
+  appli: ContexteAppli,
+  maintenant: Date,
+): EtatAppli | null {
+  if (!regleAppliPour(ligne.protocole_appli, appli.appliFermeeApresS)) return null;
+  if (appliActiveDepuis(ligne, appli, maintenant)) return 'ACTIVE';
+  return fermetureProuvee(appli.finsSocket?.get(ligne.id), ligne.dernier_signal_at) ? 'FERMEE' : 'COUPURE';
+}
+
 export function peutRecevoirOffre(l: EtatLivreur, maintenant: Date): DecisionOffre {
   if (
     l.status !== DelivererStatus.ACTIVE ||
@@ -334,7 +402,7 @@ export function peutRecevoirOffre(l: EtatLivreur, maintenant: Date): DecisionOff
   if (l.en_course) return { ok: false, motif: 'EN_COURSE' };
   if (l.offre_en_attente) return { ok: false, motif: 'OFFRE_EN_ATTENTE' };
   if (!estEnService(l)) return { ok: false, motif: 'HORS_SERVICE' };
-  if (!l.appli_active) return { ok: false, motif: 'APPLI_FERMEE' };
+  if (!l.appli_active) return { ok: false, motif: l.appli_fermee_prouvee ? 'APPLI_FERMEE' : 'CONNEXION_COUPEE' };
   if (l.joignable === false) return { ok: false, motif: 'INJOIGNABLE' };
   if (l.en_appel === true) return { ok: false, motif: 'EN_APPEL' };
   return { ok: true };
@@ -433,6 +501,7 @@ export function etatLivreurDepuis(
     en_course: ligne._count.courses > 0,
     offre_en_attente: ligne._count.offer_attempts > 0,
     appli_active: appliActiveDepuis(ligne, appli, maintenant),
+    appli_fermee_prouvee: fermetureProuvee(appli.finsSocket?.get(ligne.id), ligne.dernier_signal_at),
     appli_vue_a: ligne.dernier_signal_at,
     // Jugée seulement quand le contexte l'a été (règle active, jetons lus, présence connue).
     ...(appli.injoignables ? { joignable: !appli.injoignables.has(ligne.id) } : {}),
@@ -499,12 +568,20 @@ export interface DisponibiliteLivreur {
   offre_course_id: string | null;
   /**
    * Appli active : socket ouvert ou signe de vie récent. Faux : « Appli
-   * fermée », plus aucune offre jusqu'à sa réouverture. Null : règle coupée
-   * (`deliverer.appli_fermee_apres_s` à 0), état de l'appli inconnu.
+   * fermée » ou « Connexion coupée » (`appli_etat`), plus aucune offre jusqu'à
+   * son retour. Null : règle coupée (`deliverer.appli_fermee_apres_s` à 0),
+   * état de l'appli inconnu.
    */
   appli_active: boolean | null;
   /** Dernier signe de vie de l'appli (position ou requête), null si jamais vu. */
   appli_vue_a: Date | null;
+  /**
+   * État de l'appli, lu aussi quand l'état affiché est autre (en course) :
+   * ACTIVE, FERMEE (fermée par le livreur, prouvé : « Appli fermée ») ou
+   * COUPURE (silence sans preuve : « Connexion coupée »). Null : règle coupée
+   * ou appli d'avant le protocole 4.
+   */
+  appli_etat: EtatAppli | null;
 }
 
 const LIBELLES: Record<EtatAffichageLivreur, string> = {
@@ -516,6 +593,7 @@ const LIBELLES: Record<EtatAffichageLivreur, string> = {
   OFFRE_EN_ATTENTE: 'Offre en attente',
   HORS_SERVICE: 'Hors service',
   APPLI_FERMEE: 'Appli fermée',
+  CONNEXION_COUPEE: 'Connexion coupée',
   INJOIGNABLE: 'Injoignable',
   EN_APPEL: 'En appel',
 };
@@ -554,7 +632,14 @@ export function disponibiliteLivreur(
     offre_course_id: l.offre_en_attente ? offreCourseId : null,
     appli_active: regleAppli ? l.appli_active : null,
     appli_vue_a: l.appli_vue_a ?? null,
+    appli_etat: regleAppli ? etatAppliDe(l) : null,
   };
+}
+
+/** État de l'appli d'un livreur déjà jugé : active, fermée (prouvé), sinon connexion coupée. */
+function etatAppliDe(l: Pick<EtatLivreur, 'appli_active' | 'appli_fermee_prouvee'>): EtatAppli {
+  if (l.appli_active) return 'ACTIVE';
+  return l.appli_fermee_prouvee ? 'FERMEE' : 'COUPURE';
 }
 
 /**
@@ -581,6 +666,8 @@ export function messageRefusOffre(
       return "Ce livreur est hors service : il n'a pas repris le travail dans l'appli.";
     case 'APPLI_FERMEE':
       return "L'appli de ce livreur est fermée.";
+    case 'CONNEXION_COUPEE':
+      return 'La connexion de ce livreur est coupée : son appli ne répond plus.';
     case 'INJOIGNABLE':
       return 'Ce livreur est injoignable : ni appli connectée, ni notifications.';
     case 'EN_APPEL':

@@ -168,20 +168,34 @@ describe('restaurants : chiffres et liste', () => {
       'EN_PAUSE',
       'PAUSE_AUTO',
       'APPLI_FERMEE',
+      'CONNEXION_COUPEE',
       'INJOIGNABLE',
       'HORS_SERVICE',
       'HORS_SERVICE',
     ];
     const t = tableau({ livreurs: etats.map((etat) => livreur({ etat })) });
+    // « Appli fermée » du compteur : sans appli joignable (fermée, connexion coupée, injoignable).
     expect(angre(t).livreurs).toEqual({
       disponibles: 3,
       en_course: 1,
       en_pause: 2,
-      appli_fermee: 2,
-      en_service: 8,
+      appli_fermee: 3,
+      en_service: 9,
       prevus: null,
     });
     expect(marcory(t).livreurs.en_service).toBe(0);
+  });
+
+  it('liste : « Connexion coupée » rangée juste après « Appli fermée », avant « Injoignable »', () => {
+    const t = tableau({
+      livreurs: [
+        livreur({ id: 'injoignable', etat: 'INJOIGNABLE' }),
+        livreur({ id: 'coupee', etat: 'CONNEXION_COUPEE' }),
+        livreur({ id: 'fermee', etat: 'APPLI_FERMEE' }),
+        livreur({ id: 'pause', etat: 'EN_PAUSE' }),
+      ],
+    });
+    expect(angre(t).liste.map((l) => l.id)).toEqual(['pause', 'fermee', 'coupee', 'injoignable']);
   });
 
   it('liste : disponibles d’abord dans l’ordre de la file, puis les autres états ; course résumée', () => {
@@ -443,6 +457,7 @@ describe('APPLI_FERMEE_EN_COURSE et POSITION_PERDUE_EN_COURSE', () => {
       etat: 'EN_COURSE',
       active_course: enCourse,
       appli_active: false,
+      appli_etat: 'FERMEE',
       appli_vue_a: ilYA(6).toISOString(),
       location_at: ilYA(6).toISOString(),
     });
@@ -486,7 +501,13 @@ describe('APPLI_FERMEE_EN_COURSE et POSITION_PERDUE_EN_COURSE', () => {
     } as LivreurLu['active_course'];
     const t = tableau({
       livreurs: [
-        livreur({ etat: 'EN_COURSE', active_course: lue, appli_active: false, appli_vue_a: ilYA(6).toISOString() }),
+        livreur({
+          etat: 'EN_COURSE',
+          active_course: lue,
+          appli_active: false,
+          appli_etat: 'FERMEE',
+          appli_vue_a: ilYA(6).toISOString(),
+        }),
         livreur({ etat: 'EN_COURSE', active_course: lue, location_at: ilYA(6).toISOString() }),
       ],
     });
@@ -494,6 +515,28 @@ describe('APPLI_FERMEE_EN_COURSE et POSITION_PERDUE_EN_COURSE', () => {
       ['APPLI_FERMEE_EN_COURSE', { ...enCourse, expiree: false }],
       ['POSITION_PERDUE_EN_COURSE', { ...enCourse, expiree: false }],
     ]);
+  });
+
+  it('connexion coupée pendant une course (25/10) : jamais « appli fermée » ; position de 4 min : rien ; 6 min : plus de position', () => {
+    const coupee = (min: number) =>
+      livreur({
+        first_name: 'Koffi',
+        etat: 'EN_COURSE',
+        active_course: enCourse,
+        appli_active: false,
+        appli_etat: 'COUPURE',
+        appli_vue_a: ilYA(min).toISOString(),
+        location_at: ilYA(min).toISOString(),
+      });
+    expect(tableau({ livreurs: [coupee(4)] }).signaux).toEqual([]);
+    const t = tableau({ livreurs: [coupee(6)] });
+    expect(t.signaux.map((x) => x.cle)).toEqual(['POSITION_PERDUE_EN_COURSE']);
+    expect(t.signaux[0]).toMatchObject({ minutes: 6, depuis: ilYA(6).toISOString(), livreur: { prenom: 'Koffi' } });
+  });
+
+  it('appli silencieuse sans `appli_etat` (lecture incomplète) : traitée comme une coupure, pas comme une fermeture', () => {
+    const l = livreur({ etat: 'EN_COURSE', active_course: enCourse, appli_active: false, location_at: ilYA(6).toISOString() });
+    expect(tableau({ livreurs: [l] }).signaux.map((x) => x.cle)).toEqual(['POSITION_PERDUE_EN_COURSE']);
   });
 
   it('sans course : ni l’un ni l’autre ; règle de l’appli coupée (null) : pas d’appli fermée', () => {

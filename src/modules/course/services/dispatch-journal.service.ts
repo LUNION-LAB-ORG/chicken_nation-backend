@@ -31,12 +31,23 @@ export type TypeEvenementDispatch =
   /** Offre ignorée sans aucun signal depuis le seuil réglé. */
   | 'HORS_SERVICE_SANS_SIGNAL'
   /**
-   * Appli réputée fermée (ni socket ni signe de vie depuis
-   * `deliverer.appli_fermee_apres_s`) : plus d'offre jusqu'à sa réouverture.
-   * `details.appli_vue_a` : dernier signe de vie.
+   * Appli fermée par le livreur (ni socket ni signe de vie depuis
+   * `deliverer.appli_fermee_apres_s`, et son dernier socket fermé par l'appli
+   * elle-même) : plus d'offre jusqu'à sa réouverture. `details.appli_vue_a` :
+   * dernier signe de vie ; `details.raison_socket`, `details.fin_socket_a` :
+   * fin du dernier socket.
    */
   | 'APPLI_FERMEE'
-  /** Appli rouverte après un passage `APPLI_FERMEE` ; `details.fermee_a`, `details.par` (socket ou signal). */
+  /**
+   * Connexion coupée (25/10) : même silence, sans preuve de fermeture (réseau
+   * coupé, téléphone qui gèle ou arrête l'appli). Mêmes effets, mêmes
+   * `details` ; `raison_socket` : `ping timeout`, `transport close`… ou null.
+   */
+  | 'CONNEXION_COUPEE'
+  /**
+   * Appli de retour après un passage `APPLI_FERMEE` ou `CONNEXION_COUPEE` ;
+   * `details.fermee_a`, `details.par` (socket ou signal).
+   */
   | 'APPLI_ACTIVE'
   /** Remis dans la file après la perte de sa course (fusion, annulation). */
   | 'REMIS_EN_FILE'

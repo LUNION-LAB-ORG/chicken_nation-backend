@@ -32,7 +32,8 @@ type OptionsAppli = Parameters<typeof appliLivreurSimulee>[1];
 function monter(donnees: Parameters<typeof monterBaseDispatch>[0], appli: OptionsAppli = { connectes: [] }) {
   const base = monterBaseDispatch(donnees);
   const a = appliLivreurSimulee(base.prisma, appli);
-  const passages = () => base.journal.filter((l) => l.type === 'APPLI_FERMEE' || l.type === 'APPLI_ACTIVE');
+  const passages = () =>
+    base.journal.filter((l) => l.type === 'APPLI_FERMEE' || l.type === 'CONNEXION_COUPEE' || l.type === 'APPLI_ACTIVE');
   return { ...base, ...a, passages };
 }
 
@@ -43,15 +44,31 @@ afterEach(() => jest.useRealTimers());
 
 describe('passageAEcrire', () => {
   it('fermée sans passage écrit, ou après une réouverture : APPLI_FERMEE ; déjà écrit : rien', () => {
-    expect(passageAEcrire(false, null)).toBe('APPLI_FERMEE');
-    expect(passageAEcrire(false, 'APPLI_ACTIVE')).toBe('APPLI_FERMEE');
-    expect(passageAEcrire(false, 'APPLI_FERMEE')).toBeNull();
+    expect(passageAEcrire('FERMEE', null)).toBe('APPLI_FERMEE');
+    expect(passageAEcrire('FERMEE', 'APPLI_ACTIVE')).toBe('APPLI_FERMEE');
+    expect(passageAEcrire('FERMEE', 'APPLI_FERMEE')).toBeNull();
   });
 
-  it('active : APPLI_ACTIVE seulement après une fermeture écrite', () => {
-    expect(passageAEcrire(true, 'APPLI_FERMEE')).toBe('APPLI_ACTIVE');
-    expect(passageAEcrire(true, 'APPLI_ACTIVE')).toBeNull();
-    expect(passageAEcrire(true, null)).toBeNull();
+  it('coupée (25/10) : CONNEXION_COUPEE une fois ; fermée pendant la coupure : APPLI_FERMEE', () => {
+    expect(passageAEcrire('COUPURE', null)).toBe('CONNEXION_COUPEE');
+    expect(passageAEcrire('COUPURE', 'APPLI_ACTIVE')).toBe('CONNEXION_COUPEE');
+    expect(passageAEcrire('COUPURE', 'CONNEXION_COUPEE')).toBeNull();
+    expect(passageAEcrire('FERMEE', 'CONNEXION_COUPEE')).toBe('APPLI_FERMEE');
+    expect(passageAEcrire('COUPURE', 'APPLI_FERMEE')).toBe('CONNEXION_COUPEE');
+  });
+
+  it('fins de socket illisibles : rien entre FERMEE et COUPURE (Redis qui hoquette ne remplit pas le journal)', () => {
+    expect(passageAEcrire('COUPURE', 'APPLI_FERMEE', false)).toBeNull();
+    expect(passageAEcrire('COUPURE', 'CONNEXION_COUPEE', false)).toBeNull();
+    expect(passageAEcrire('COUPURE', null, false)).toBe('CONNEXION_COUPEE');
+    expect(passageAEcrire('COUPURE', 'APPLI_ACTIVE', false)).toBe('CONNEXION_COUPEE');
+  });
+
+  it('active : APPLI_ACTIVE seulement après une fermeture ou une coupure écrite', () => {
+    expect(passageAEcrire('ACTIVE', 'APPLI_FERMEE')).toBe('APPLI_ACTIVE');
+    expect(passageAEcrire('ACTIVE', 'CONNEXION_COUPEE')).toBe('APPLI_ACTIVE');
+    expect(passageAEcrire('ACTIVE', 'APPLI_ACTIVE')).toBeNull();
+    expect(passageAEcrire('ACTIVE', null)).toBeNull();
   });
 });
 
@@ -83,13 +100,40 @@ describe('idsSansSignalSuffisant (présence à demander)', () => {
 });
 
 describe('contexte de la règle unique', () => {
-  it('règle coupée (0) : aucune présence demandée, `connectes` inconnu', async () => {
+  it('règle coupée (0) : aucune présence demandée, `connectes` inconnu, aucune fin de socket lue', async () => {
     const t = monter({}, { seuilS: 0, joignablesSeulement: false });
     expect(await t.service.contexte([{ id: 'l', dernier_signal_at: null, protocole_appli: 4 }], MAINTENANT)).toEqual({
       appliFermeeApresS: 0,
       connectes: null,
     });
     expect(t.gateway.livreursConnectes).not.toHaveBeenCalled();
+    expect(t.fins.lire).not.toHaveBeenCalled();
+  });
+
+  it('fins de socket (25/10) : lues pour les seuls livreurs au signe de vie insuffisant et sans socket ouvert', async () => {
+    const fin = { raison: 'client namespace disconnect', a: avantS(890) };
+    const t = monter({}, { connectes: ['socket'], fins: { vieux: fin, socket: fin } });
+    const contexte = await t.service.contexte(
+      [
+        { id: 'frais', dernier_signal_at: avantS(20), protocole_appli: 4 },
+        { id: 'vieux', dernier_signal_at: avantS(900), protocole_appli: 4 },
+        { id: 'socket', dernier_signal_at: avantS(900), protocole_appli: 4 },
+      ],
+      MAINTENANT,
+    );
+    expect(t.fins.lire).toHaveBeenCalledWith(['vieux']);
+    expect(contexte.finsSocket).toEqual(new Map([['vieux', fin]]));
+
+    // Redis des fins muet : null, aucune preuve.
+    t.fins.etat.fins = null;
+    expect((await t.service.contexte([{ id: 'vieux', dernier_signal_at: avantS(900), protocole_appli: 4 }], MAINTENANT)).finsSocket).toBeNull();
+  });
+
+  it('signes de vie tous récents : aucune fin de socket lue', async () => {
+    const t = monter({});
+    const contexte = await t.service.contexte([{ id: 'l', dernier_signal_at: avantS(20), protocole_appli: 4 }], MAINTENANT);
+    expect(t.fins.lire).not.toHaveBeenCalled();
+    expect(contexte.finsSocket).toEqual(new Map());
   });
 
   it('signes de vie récents : aucune question au serveur temps réel', async () => {
@@ -292,10 +336,13 @@ describe('en appel avec le service client (relecture du 24/10)', () => {
 });
 
 describe('passages au journal (tâche de 10 s)', () => {
-  it('appli fermée : APPLI_FERMEE une seule fois, avec le dernier signe de vie ; rien pour l’appli active', async () => {
+  it('appli fermée par le livreur : APPLI_FERMEE une seule fois, avec le dernier signe de vie et la fin du socket ; rien pour l’appli active', async () => {
     const ferme = livreur({ dernier_signal_at: avantS(200) });
     const active = livreur({ dernier_signal_at: avantS(20) });
-    const t = monter({ livreurs: [ferme, active] });
+    const t = monter(
+      { livreurs: [ferme, active] },
+      { connectes: [], fins: { [ferme.id]: { raison: 'client namespace disconnect', a: avantS(195) } } },
+    );
 
     expect(await t.service.suivrePassages(MAINTENANT)).toBe(1);
     expect(await t.service.suivrePassages(MAINTENANT)).toBe(0);
@@ -313,15 +360,80 @@ describe('passages au journal (tâche de 10 s)', () => {
           en_pause: false,
           en_course: false,
           presence_connue: true,
+          raison_socket: 'client namespace disconnect',
+          fin_socket_a: avantS(195).toISOString(),
         },
       }),
     ]);
     expect(t.verrous).toContainEqual([CLASSE_VERROU_SUIVI_APPLIS]);
   });
 
+  it('connexion coupée (25/10) : CONNEXION_COUPEE avec la raison du socket, puis APPLI_ACTIVE au retour', async () => {
+    const l = livreur({ dernier_signal_at: avantS(300) });
+    const t = monter({ livreurs: [l] }, { connectes: [], fins: { [l.id]: { raison: 'ping timeout', a: avantS(255) } } });
+
+    expect(await t.service.suivrePassages(MAINTENANT)).toBe(1);
+    expect(await t.service.suivrePassages(MAINTENANT)).toBe(0);
+    expect(t.passages()[0]).toMatchObject({
+      type: 'CONNEXION_COUPEE',
+      source: 'serveur',
+      deliverer_id: l.id,
+      details: expect.objectContaining({
+        appli_vue_a: avantS(300).toISOString(),
+        raison_socket: 'ping timeout',
+        fin_socket_a: avantS(255).toISOString(),
+        presence_connue: true,
+      }),
+    });
+    const coupeeA = t.passages()[0].created_at as Date;
+
+    // Retour du réseau : position reçue.
+    jest.setSystemTime(apresS(60));
+    l.dernier_signal_at = apresS(60);
+    expect(await t.service.suivrePassages(apresS(60))).toBe(1);
+    expect(t.passages().map((p) => p.type)).toEqual(['CONNEXION_COUPEE', 'APPLI_ACTIVE']);
+    expect(t.passages()[1].details).toMatchObject({ fermee_a: coupeeA.toISOString(), par: 'signal' });
+  });
+
+  it('aucune fin de socket connue (serveur redémarré) : CONNEXION_COUPEE, raison null, jamais APPLI_FERMEE', async () => {
+    const l = livreur({ dernier_signal_at: avantS(300) });
+    const t = monter({ livreurs: [l] }, { connectes: [] });
+    await t.service.suivrePassages(MAINTENANT);
+    expect(t.passages()).toEqual([
+      expect.objectContaining({
+        type: 'CONNEXION_COUPEE',
+        details: expect.objectContaining({ raison_socket: null, fin_socket_a: null }),
+      }),
+    ]);
+  });
+
+  it('coupure puis fermeture de l’appli pendant la coupure : CONNEXION_COUPEE puis APPLI_FERMEE', async () => {
+    const l = livreur({ dernier_signal_at: avantS(300) });
+    const t = monter({ livreurs: [l] }, { connectes: [], fins: { [l.id]: { raison: 'ping timeout', a: avantS(255) } } });
+    await t.service.suivrePassages(MAINTENANT);
+
+    // Le réseau revient le temps de rouvrir le socket, puis l'appli est glissée hors des récentes.
+    t.fins.etat.fins = { [l.id]: { raison: 'client namespace disconnect', a: avantS(290) } };
+    jest.setSystemTime(apresS(10));
+    expect(await t.service.suivrePassages(apresS(10))).toBe(1);
+    expect(t.passages().map((p) => p.type)).toEqual(['CONNEXION_COUPEE', 'APPLI_FERMEE']);
+  });
+
+  it('fins de socket illisibles après une fermeture écrite : rien de plus au journal', async () => {
+    const l = livreur({ dernier_signal_at: avantS(300) });
+    const t = monter({ livreurs: [l] }, { connectes: [], fins: { [l.id]: { raison: 'client namespace disconnect', a: avantS(295) } } });
+    await t.service.suivrePassages(MAINTENANT);
+    expect(t.passages().map((p) => p.type)).toEqual(['APPLI_FERMEE']);
+
+    t.fins.etat.fins = null;
+    jest.setSystemTime(apresS(10));
+    expect(await t.service.suivrePassages(apresS(10))).toBe(0);
+    expect(t.passages().map((p) => p.type)).toEqual(['APPLI_FERMEE']);
+  });
+
   it('réouverture par un signe de vie : APPLI_ACTIVE avec l’heure de la fermeture, une seule fois', async () => {
     const l = livreur({ dernier_signal_at: avantS(400) });
-    const t = monter({ livreurs: [l] });
+    const t = monter({ livreurs: [l] }, { connectes: [], fins: { [l.id]: { raison: 'client namespace disconnect', a: avantS(400) } } });
     await t.service.suivrePassages(MAINTENANT);
     const fermeeA = t.passages()[0].created_at as Date;
 
@@ -352,12 +464,14 @@ describe('passages au journal (tâche de 10 s)', () => {
 
   it('fermée, rouverte, refermée : chaque passage est écrit', async () => {
     const l = livreur({ dernier_signal_at: avantS(400) });
-    const t = monter({ livreurs: [l] });
+    const t = monter({ livreurs: [l] }, { connectes: [], fins: { [l.id]: { raison: 'client namespace disconnect', a: avantS(400) } } });
     await t.service.suivrePassages(MAINTENANT);
     jest.setSystemTime(apresS(10));
     l.dernier_signal_at = apresS(10);
+    t.fins.etat.fins = {};
     await t.service.suivrePassages(apresS(10));
     jest.setSystemTime(apresS(400));
+    t.fins.etat.fins = { [l.id]: { raison: 'client namespace disconnect', a: apresS(15) } };
     await t.service.suivrePassages(apresS(400));
 
     expect(t.passages().map((p) => p.type)).toEqual(['APPLI_FERMEE', 'APPLI_ACTIVE', 'APPLI_FERMEE']);
@@ -386,12 +500,12 @@ describe('passages au journal (tâche de 10 s)', () => {
     expect(t.passages()).toEqual([]);
   });
 
-  it('présence inconnue (Redis muet) : jugée sur le signe de vie, comme la règle ; noté au journal', async () => {
+  it('présence inconnue (Redis muet) : jugée sur le signe de vie, comme la règle ; sans preuve, connexion coupée ; noté au journal', async () => {
     const l = livreur({ dernier_signal_at: avantS(300) });
     const t = monter({ livreurs: [l] }, { connectes: null });
 
     await t.service.suivrePassages(MAINTENANT);
-    expect(t.passages()[0]).toMatchObject({ type: 'APPLI_FERMEE', details: expect.objectContaining({ presence_connue: false }) });
+    expect(t.passages()[0]).toMatchObject({ type: 'CONNEXION_COUPEE', details: expect.objectContaining({ presence_connue: false }) });
   });
 
   it('deux serveurs en même temps : un seul relève (verrou), pas de doublon', async () => {

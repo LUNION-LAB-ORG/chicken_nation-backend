@@ -7,6 +7,7 @@ import {
 } from 'src/modules/course/helpers/planification.rules';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import { FinsSocketLivreursService } from 'src/socket-io/services/fins-socket-livreurs.service';
 
 import {
   CLE_APPLI_FERMEE_APRES_S,
@@ -27,6 +28,8 @@ import {
  * ailleurs ; illisibles, les valeurs par défaut s'appliquent. La présence des
  * applis (sockets ouverts) est demandée une seule fois pour tous les livreurs
  * de la liste, comme la liste des livreurs ; sans réponse, elle est inconnue.
+ * La fin du dernier socket des livreurs sans socket ouvert est lue de même,
+ * une fois (« Appli fermée » ou « Connexion coupée », 25/10).
  */
 @Injectable()
 export class SuiviOperationsService {
@@ -35,6 +38,7 @@ export class SuiviOperationsService {
   constructor(
     private readonly settings: SettingsService,
     @Optional() private readonly gateway?: AppGateway,
+    @Optional() private readonly fins?: FinsSocketLivreursService,
   ) {}
 
   async enrichir<C extends object>(commandes: C[], maintenant = new Date()): Promise<C[]> {
@@ -56,14 +60,27 @@ export class SuiviOperationsService {
     } catch (err) {
       this.logger.warn(`Réglages de l'écran Opérations illisibles : ${(err as Error)?.message ?? err}`);
     }
-    const connectes = await this.presence(livreursDesCommandes(commandes));
+    const ids = livreursDesCommandes(commandes);
+    const connectes = await this.presence(ids);
+    const finsSocket = appliFermeeApresS > 0 ? await this.finsDe(ids, connectes) : null;
     return enrichirCommandesOperations(commandes, {
       maintenant,
       fenetreMaxS,
       departRayonM,
       facteurRetard,
-      appli: { appliFermeeApresS, connectes },
+      appli: { appliFermeeApresS, connectes, finsSocket },
     });
+  }
+
+  /** Fin du dernier socket des livreurs sans socket ouvert ; null : illisible, aucune preuve. */
+  private async finsDe(ids: string[], connectes: ReadonlySet<string> | null) {
+    if (ids.length === 0) return new Map();
+    if (!this.fins) return null;
+    try {
+      return await this.fins.lireSansSocket(ids, connectes);
+    } catch {
+      return null;
+    }
   }
 
   /** Sockets ouverts parmi ces livreurs ; `null` si la présence n'a pas pu être lue. */

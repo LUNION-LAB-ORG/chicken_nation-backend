@@ -282,6 +282,31 @@ export function busSimule() {
   return { bus, emis };
 }
 
+/** Fin du dernier socket d'un livreur, telle que la garde `FinsSocketLivreursService`. */
+export interface FinSocketSimulee {
+  raison: string;
+  a: Date;
+}
+
+/**
+ * Double de `FinsSocketLivreursService` (fins des sockets gardées dans Redis) :
+ * `fins` par livreur, ou `null` (Redis muet : rien de lisible). `lireSansSocket`
+ * note les livreurs demandés.
+ */
+export function finsSocketSimulees(fins: Record<string, FinSocketSimulee> | null = {}) {
+  const etat = { fins };
+  const lire = jest.fn(async (ids: readonly string[]): Promise<Map<string, FinSocketSimulee> | null> => {
+    const connues = etat.fins;
+    if (connues === null) return null;
+    return new Map(ids.filter((id) => connues[id]).map((id) => [id, connues[id]]));
+  });
+  const lireSansSocket = jest.fn(
+    async (ids: readonly string[], connectes: ReadonlySet<string> | null): Promise<Map<string, FinSocketSimulee> | null> =>
+      lire(ids.filter((id) => !connectes?.has(id))),
+  );
+  return { lire, lireSansSocket, etat };
+}
+
 /**
  * Le VRAI service de l'appli du livreur (AppliLivreurService), branché sur une
  * base simulée :
@@ -292,12 +317,20 @@ export function busSimule() {
  *    `null` (présence inconnue, Redis muet) ;
  *  - `joignablesSeulement` : réglage `course.offre_joignables_seulement`
  *    (défaut vrai, comme en production ; les livreurs de `livreur()` ont un
- *    jeton, donc restent joignables sans socket).
+ *    jeton, donc restent joignables sans socket) ;
+ *  - `fins` : fin du dernier socket de chaque livreur (défaut : aucune, donc
+ *    jamais de fermeture prouvée : une appli qui se tait est une connexion
+ *    coupée), ou `null` (Redis des fins muet).
  * `gateway.livreursConnectes` note les livreurs dont la présence est demandée.
  */
 export function appliLivreurSimulee(
   prisma: any,
-  options: { seuilS?: number; connectes?: 'tous' | string[] | null; joignablesSeulement?: boolean } = {},
+  options: {
+    seuilS?: number;
+    connectes?: 'tous' | string[] | null;
+    joignablesSeulement?: boolean;
+    fins?: Record<string, FinSocketSimulee> | null;
+  } = {},
 ) {
   const etat = {
     seuilS: options.seuilS ?? 180,
@@ -314,6 +347,13 @@ export function appliLivreurSimulee(
   const settings = {
     load: jest.fn(async () => ({ appliFermeeApresS: etat.seuilS, offreJoignablesSeulement: etat.joignablesSeulement })),
   };
-  const service = new AppliLivreurService(prisma, gateway as never, settings as never, new DispatchJournalService(prisma));
-  return { service, gateway, settings, etat };
+  const fins = finsSocketSimulees(options.fins === undefined ? {} : options.fins);
+  const service = new AppliLivreurService(
+    prisma,
+    gateway as never,
+    settings as never,
+    new DispatchJournalService(prisma),
+    fins as never,
+  );
+  return { service, gateway, settings, etat, fins };
 }

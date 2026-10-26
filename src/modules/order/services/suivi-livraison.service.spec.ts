@@ -1,6 +1,8 @@
 import { NotFoundException } from '@nestjs/common';
 import { EntityStatus } from '@prisma/client';
 
+import { finsSocketSimulees } from 'src/modules/deliverers/services/base-livreurs.simulee-spec';
+
 import { PANIER_ANNULE_PAR_CLIENT_WHERE } from '../helpers/brouillons.rules';
 import { CommandeSuiviLivraison, SuiviLivraisonService } from './suivi-livraison.service';
 
@@ -10,6 +12,7 @@ function monter(
   commande: unknown,
   reglages: Record<string, string> | Error = {},
   connectes: Set<string> | null | Error = new Set<string>(),
+  fins: Parameters<typeof finsSocketSimulees>[0] = {},
 ) {
   const prisma = { order: { findFirst: jest.fn().mockResolvedValue(commande) } };
   const settings = {
@@ -18,11 +21,13 @@ function monter(
   const gateway = {
     livreursConnectes: connectes instanceof Error ? jest.fn().mockRejectedValue(connectes) : jest.fn().mockResolvedValue(connectes),
   };
+  const finsSocket = finsSocketSimulees(fins);
   return {
-    service: new SuiviLivraisonService(prisma as never, settings as never, gateway as never),
+    service: new SuiviLivraisonService(prisma as never, settings as never, gateway as never, finsSocket as never),
     prisma,
     settings,
     gateway,
+    fins: finsSocket,
   };
 }
 
@@ -128,10 +133,11 @@ describe('SuiviLivraisonService.suivi', () => {
     } as CommandeSuiviLivraison;
     const sansCourse = { ...AU_COMPTOIR, delivery: null } as CommandeSuiviLivraison;
     for (const commande of [terminee, sansCourse]) {
-      const { service, settings, gateway } = monter(commande);
+      const { service, settings, gateway, fins } = monter(commande);
       const r = await service.suivi(commande, MAINTENANT);
       expect(settings.getMany).not.toHaveBeenCalled();
       expect(gateway.livreursConnectes).not.toHaveBeenCalled();
+      expect(fins.lire).not.toHaveBeenCalled();
       expect(r.livreur ?? {}).not.toHaveProperty('appli_active');
     }
   });
@@ -167,8 +173,21 @@ describe('SuiviLivraisonService.suivi', () => {
     expect(gateway.livreursConnectes).toHaveBeenCalledWith(['liv-koffi']);
     // Retrait 11:40, 10 min × 2 = 20 min dépassées à 12:20 : fin prévue 11:55, 25 min de retard.
     expect(r.course).toMatchObject({ fin_prevue: '2026-10-24T11:55:00.000Z', en_retard: true, retard_min: 25 });
-    // Vu il y a 10 min, sans socket, seuil 300 s : appli fermée.
-    expect(r.livreur).toMatchObject({ appli_active: false, appli_vue_a: '2026-10-24T12:10:00.000Z', appli_connectee: false });
+    // Vu il y a 10 min, sans socket, seuil 300 s, aucune fin de socket gardée : connexion coupée.
+    expect(r.livreur).toMatchObject({
+      appli_active: false,
+      appli_vue_a: '2026-10-24T12:10:00.000Z',
+      appli_connectee: false,
+      appli_etat: 'COUPURE',
+    });
+
+    // Tiroir (25/10) : l'appli a fermé elle-même son socket, rien ensuite : « Appli fermée ».
+    const fermee = monter(partie, { 'deliverer.appli_fermee_apres_s': '300' }, new Set(), {
+      'liv-koffi': { raison: 'client namespace disconnect', a: new Date('2026-10-24T12:10:10.000Z') },
+    });
+    const f = await fermee.service.suivi(partie, MAINTENANT);
+    expect(fermee.fins.lireSansSocket).toHaveBeenCalledWith(['liv-koffi'], new Set());
+    expect(f.livreur).toMatchObject({ appli_active: false, appli_etat: 'FERMEE' });
   });
 
   it('présence illisible ou réglages illisibles : valeurs par défaut, présence inconnue, jamais d’erreur', async () => {

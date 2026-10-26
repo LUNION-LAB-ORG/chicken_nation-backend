@@ -25,13 +25,18 @@
  *    la compter sont retirées de la réponse ;
  *  - `deliverer.appli_active`, `appli_vue_a`, `appli_connectee` : calculés
  *    comme pour la liste des livreurs (règle unique de l'appli fermée). Le
- *    dernier signe de vie et le protocole lus pour les calculer sont retirés.
+ *    dernier signe de vie et le protocole lus pour les calculer sont retirés ;
+ *  - `deliverer.appli_etat` (25/10) : ACTIVE, FERMEE (fermée par le livreur,
+ *    prouvé par la fin de son socket) ou COUPURE (connexion coupée).
  */
 import { enRetard, finTourneePrevue, retardMin } from 'src/modules/course/helpers/retard-tournee.rules';
 import { attendSonSac, debutFenetreApresRetraitMs, PROLONGATION_REMISE_S } from 'src/modules/course/helpers/planification.rules';
 import {
   APPLI_FERMEE_APRES_S_DEFAUT,
+  EtatAppli,
+  FinSocket,
   appliActiveDepuis,
+  etatAppliDepuis,
   regleAppliPour,
 } from 'src/modules/deliverers/helpers/disponibilite.rules';
 import { lirePositionLivreur } from 'src/modules/deliverers/helpers/position-livreur.rules';
@@ -91,6 +96,12 @@ export interface AppliOperations {
   appli_vue_a: string | null;
   /** Socket ouvert ; faux avec une appli active : « En arrière-plan » ; null : présence inconnue. */
   appli_connectee: boolean | null;
+  /**
+   * ACTIVE ; FERMEE : « Appli fermée » (le livreur l'a fermée, prouvé) ;
+   * COUPURE : « Connexion coupée » (tout autre silence) ; null : règle coupée
+   * ou ancienne appli.
+   */
+  appli_etat: EtatAppli | null;
 }
 
 /** Réglage `course.delay_alert_factor`. */
@@ -129,10 +140,16 @@ export interface ContexteTournee {
   /** `course.delay_alert_factor` ; défaut 1,5. */
   facteurRetard?: number;
   /**
-   * `deliverer.appli_fermee_apres_s` (défaut 180, 0 : règle coupée) et sockets
-   * ouverts parmi les livreurs de la liste (`null` : présence inconnue).
+   * `deliverer.appli_fermee_apres_s` (défaut 180, 0 : règle coupée), sockets
+   * ouverts parmi les livreurs de la liste (`null` : présence inconnue) et fin
+   * du dernier socket des autres (`finsSocket` ; absent ou null : aucune
+   * preuve, jamais « Appli fermée »).
    */
-  appli?: { appliFermeeApresS: number; connectes: ReadonlySet<string> | null };
+  appli?: {
+    appliFermeeApresS: number;
+    connectes: ReadonlySet<string> | null;
+    finsSocket?: ReadonlyMap<string, FinSocket> | null;
+  };
 }
 
 const date = (v: DateLue): Date | null => {
@@ -167,12 +184,12 @@ export function appliOperations(
   const id = livreur.id ?? '';
   const vue = date(livreur.dernier_signal_at);
   const protocole = livreur.protocole_appli ?? null;
+  const ligne = { id, dernier_signal_at: vue, protocole_appli: protocole };
   return {
-    appli_active: regleAppliPour(protocole, appli.appliFermeeApresS)
-      ? appliActiveDepuis({ id, dernier_signal_at: vue, protocole_appli: protocole }, appli, maintenant)
-      : null,
+    appli_active: regleAppliPour(protocole, appli.appliFermeeApresS) ? appliActiveDepuis(ligne, appli, maintenant) : null,
     appli_vue_a: vue ? vue.toISOString() : null,
     appli_connectee: appli.connectes ? appli.connectes.has(id) : null,
+    appli_etat: etatAppliDepuis(ligne, appli, maintenant),
   };
 }
 

@@ -91,14 +91,22 @@ describe('decisionCreationOffre (sous le verrou du livreur)', () => {
   });
 
   it('appli fermée (24/10) : aucune offre, quelle qu’en soit la source', () => {
-    expect(decisionCreationOffre(etat({ appli_active: false }), false, MAINTENANT)).toEqual({
+    const fermee = { appli_active: false, appli_fermee_prouvee: true };
+    expect(decisionCreationOffre(etat(fermee), false, MAINTENANT)).toEqual({
       ok: false,
       motif: 'APPLI_FERMEE',
     });
     // Renvoi de l'offre de CETTE course par l'administrateur : refusé aussi.
-    expect(decisionCreationOffre(etat({ appli_active: false, offre_en_attente: true }), false, MAINTENANT)).toEqual({
+    expect(decisionCreationOffre(etat({ ...fermee, offre_en_attente: true }), false, MAINTENANT)).toEqual({
       ok: false,
       motif: 'APPLI_FERMEE',
+    });
+  });
+
+  it('connexion coupée (25/10) : aucune offre non plus, motif CONNEXION_COUPEE', () => {
+    expect(decisionCreationOffre(etat({ appli_active: false }), false, MAINTENANT)).toEqual({
+      ok: false,
+      motif: 'CONNEXION_COUPEE',
     });
   });
 });
@@ -138,11 +146,14 @@ describe('decisionExpiration', () => {
     });
   });
 
-  it('appli du livreur fermée (24/10) : aucune pénalité, il n’a pas pu voir l’offre', () => {
-    expect(decisionExpiration(EN_RECHERCHE, { ...libre, appli_active: false }, MAINTENANT)).toEqual({
-      penaliser: false,
-      raison: 'APPLI_FERMEE',
-    });
+  it('appli du livreur fermée (24/10) ou connexion coupée (25/10) : aucune pénalité, il n’a pas pu voir l’offre', () => {
+    for (const appli_fermee_prouvee of [true, false, undefined]) {
+      const silencieux = { ...libre, appli_active: false, appli_fermee_prouvee };
+      expect(decisionExpiration(EN_RECHERCHE, silencieux, MAINTENANT)).toEqual({
+        penaliser: false,
+        raison: 'APPLI_FERMEE',
+      });
+    }
   });
 
   it('priorités : course disparue, puis pause, puis appli fermée', () => {
@@ -187,10 +198,18 @@ describe('decisionRelance', () => {
   });
 
   it('appli du livreur fermée (24/10) : offre close avec le motif APPLI_FERMEE', () => {
-    expect(decisionRelance(EN_RECHERCHE, etat({ appli_active: false }), MAINTENANT)).toEqual({
+    expect(decisionRelance(EN_RECHERCHE, etat({ appli_active: false, appli_fermee_prouvee: true }), MAINTENANT)).toEqual({
       relancer: false,
       motif: 'APPLI_FERMEE',
       motif_livreur: 'APPLI_FERMEE',
+    });
+  });
+
+  it('connexion coupée (25/10) : offre close de la même façon (APPLI_FERMEE, sans pénalité), jamais « livreur indisponible »', () => {
+    expect(decisionRelance(EN_RECHERCHE, etat({ appli_active: false }), MAINTENANT)).toEqual({
+      relancer: false,
+      motif: 'APPLI_FERMEE',
+      motif_livreur: 'CONNEXION_COUPEE',
     });
   });
 
@@ -238,8 +257,15 @@ describe('decisionAffectationForcee', () => {
     });
   });
 
+  it('connexion coupée (25/10) : refus CONNEXION_COUPEE', () => {
+    expect(decisionAffectationForcee({ ...libre, appli_active: false }, [], 'c1', MAINTENANT)).toEqual({
+      ok: false,
+      motif: 'CONNEXION_COUPEE',
+    });
+  });
+
   it('appli fermée (24/10) : refus APPLI_FERMEE, même pour renvoyer l’offre de CETTE course', () => {
-    const ferme = { ...libre, appli_active: false };
+    const ferme = { ...libre, appli_active: false, appli_fermee_prouvee: true };
     expect(decisionAffectationForcee(ferme, [], 'c1', MAINTENANT)).toEqual({ ok: false, motif: 'APPLI_FERMEE' });
     expect(decisionAffectationForcee(ferme, [{ course_id: 'c1' }], 'c1', MAINTENANT)).toEqual({
       ok: false,

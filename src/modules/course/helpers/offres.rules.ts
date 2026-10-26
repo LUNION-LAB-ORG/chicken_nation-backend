@@ -162,8 +162,9 @@ export type DecisionRelance =
  * (sans pénalité) et la recherche repart.
  *
  * L'offre relancée est elle-même « en attente » : elle ne compte pas contre
- * son livreur (`offre_en_attente` ignoré). Appli fermée : motif de clôture
- * `APPLI_FERMEE`.
+ * son livreur (`offre_en_attente` ignoré). Appli fermée ou connexion coupée
+ * (25/10) : motif de clôture `APPLI_FERMEE` dans les deux cas, sans pénalité,
+ * le motif du livreur dit lequel.
  *
  * La joignabilité (socket ou jeton) et l'appel avec le service client ne
  * gardent que la création d'une offre : une offre déjà partie garde ses
@@ -181,7 +182,7 @@ export function decisionRelance(
   if (!d.ok) {
     return {
       relancer: false,
-      motif: d.motif === 'APPLI_FERMEE' ? 'APPLI_FERMEE' : 'LIVREUR_INDISPONIBLE',
+      motif: d.motif === 'APPLI_FERMEE' || d.motif === 'CONNEXION_COUPEE' ? 'APPLI_FERMEE' : 'LIVREUR_INDISPONIBLE',
       motif_livreur: d.motif,
     };
   }

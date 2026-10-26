@@ -582,12 +582,34 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
     });
   });
 
+  it('connexion COUPÉE (25/10) : 409 « La connexion de ce livreur est coupée », motif CONNEXION_COUPEE, aucune offre', async () => {
+    const d = livreur({ protocole_appli: 4, dernier_signal_at: avant(600) });
+    const c = course({ offer_expires_at: apres(30) });
+    const t = monter(
+      { livreurs: [d], courses: [c] },
+      { appli: { connectes: [], fins: { [d.id]: { raison: 'ping timeout', a: avant(555) } } } },
+    );
+
+    expect(await refus(forcer(t, c.id, d.id))).toEqual({
+      classe: ConflictException,
+      message: 'La connexion de ce livreur est coupée : son appli ne répond plus.',
+    });
+    expect(t.offres.filter((o) => o.deliverer_id === d.id)).toHaveLength(0);
+    expect(t.journal).toEqual([
+      expect.objectContaining({ type: 'AFFECTATION_FORCEE_REFUSEE', motif: 'CONNEXION_COUPEE', deliverer_id: d.id }),
+    ]);
+  });
+
   it('appli FERMÉE (24/10) : 409 « L’appli de ce livreur est fermée. », journal avec le dernier signe de vie, aucune offre', async () => {
     const d = livreur({ protocole_appli: 4, dernier_signal_at: avant(600) });
     const autre = livreur();
     const c = course({ offer_expires_at: apres(30) });
     const offreAutre = offre({ course_id: c.id, deliverer_id: autre.id, expires_at: apres(30) });
-    const t = monter({ livreurs: [d, autre], courses: [c], offres: [offreAutre] }, { appli: { connectes: [autre.id] } });
+    // L'appli a fermé elle-même son socket (glissée hors des récentes), rien ensuite.
+    const t = monter(
+      { livreurs: [d, autre], courses: [c], offres: [offreAutre] },
+      { appli: { connectes: [autre.id], fins: { [d.id]: { raison: 'client namespace disconnect', a: avant(595) } } } },
+    );
 
     expect(await refus(forcer(t, c.id, d.id))).toEqual({
       classe: ConflictException,
@@ -613,7 +635,7 @@ describe('affectation forcée (PATCH /courses/:id/force-assign)', () => {
     const c = course({ offer_expires_at: apres(40) });
     const t = monter(
       { livreurs: [d], courses: [c], offres: [offre({ course_id: c.id, deliverer_id: d.id, expires_at: apres(40) })] },
-      { appli: { connectes: [] } },
+      { appli: { connectes: [], fins: { [d.id]: { raison: 'client namespace disconnect', a: avant(300) } } } },
     );
 
     expect((await refus(forcer(t, c.id, d.id))).message).toBe("L'appli de ce livreur est fermée.");
@@ -1172,7 +1194,10 @@ describe('appli fermée (24/10) : plus rien ne passe, sans pause ni pénalité',
     const d = livreur(FERMEE);
     const c = course({ offer_expires_at: apres(85) });
     const o = offre({ course_id: c.id, deliverer_id: d.id, offered_at: avant(35), expires_at: apres(85) });
-    const t = monter({ livreurs: [d], courses: [c], offres: [o] }, { appli: { connectes: [] } });
+    const t = monter(
+      { livreurs: [d], courses: [c], offres: [o] },
+      { appli: { connectes: [], fins: { [d.id]: { raison: 'client namespace disconnect', a: avant(590) } } } },
+    );
 
     expect(await t.garde.relanceAutorisee(o.id, MAINTENANT)).toBe(false);
 
@@ -1183,6 +1208,28 @@ describe('appli fermée (24/10) : plus rien ne passe, sans pause ni pénalité',
       details: expect.objectContaining({ motif_livreur: 'APPLI_FERMEE' }),
     });
     expect(t.relances()).toEqual([c.id]);
+  });
+
+  it('relance d’une offre pendant une connexion coupée (25/10) : close de la même façon, sans pénalité, motif du livreur CONNEXION_COUPEE', async () => {
+    const d = livreur(FERMEE);
+    const c = course({ offer_expires_at: apres(85) });
+    const o = offre({ course_id: c.id, deliverer_id: d.id, offered_at: avant(35), expires_at: apres(85) });
+    const t = monter(
+      { livreurs: [d], courses: [c], offres: [o] },
+      { appli: { connectes: [], fins: { [d.id]: { raison: 'ping timeout', a: avant(555) } } } },
+    );
+
+    expect(await t.garde.relanceAutorisee(o.id, MAINTENANT)).toBe(false);
+
+    expect(o.status).toBe(CourseOfferStatus.CANCELLED);
+    expect(t.journal[0]).toMatchObject({
+      type: 'OFFRE_CLOSE',
+      motif: 'APPLI_FERMEE',
+      details: expect.objectContaining({ motif_livreur: 'CONNEXION_COUPEE' }),
+    });
+    expect(t.relances()).toEqual([c.id]);
+    // Ni refus compté ni pause : il reste en service.
+    expect(d).toMatchObject({ pause_until: null, auto_pause_until: null });
   });
 
   it('réglage à 0 : règle coupée, l’offre d’une appli silencieuse reste en attente et expire comme avant', async () => {

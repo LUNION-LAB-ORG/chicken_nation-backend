@@ -741,14 +741,32 @@ describe('suivi de livraison : appli du livreur (24/10)', () => {
   });
   const avec = (livreur: Record<string, unknown>) => enRoute(tourneeDeTrois({ deliverer: { ...KOFFI, ...livreur } }));
 
-  it('appli récente sans socket, vue il y a 6 min : appli fermée, heure du dernier signe de vie', () => {
+  it('appli récente sans socket, vue il y a 6 min, sans preuve de fermeture : connexion coupée, heure du dernier signe de vie', () => {
     const r = suiviLivraison(avec({ protocole_appli: 4, dernier_signal_at: d('12:14') }), { ...ctx, appli: appli([]) });
-    expect(r.livreur).toMatchObject({ appli_active: false, appli_vue_a: t('12:14'), appli_connectee: false });
+    expect(r.livreur).toMatchObject({
+      appli_active: false,
+      appli_vue_a: t('12:14'),
+      appli_connectee: false,
+      appli_etat: 'COUPURE',
+    });
+  });
+
+  it('tiroir (25/10) : « Appli fermée » seulement quand l’appli a fermé elle-même son socket', () => {
+    const fin = (raison: string) => ({
+      ...appli([]),
+      finsSocket: new Map([['liv-koffi', { raison, a: d('12:14') }]]),
+    });
+    const lu = avec({ protocole_appli: 4, dernier_signal_at: d('12:14') });
+    expect(suiviLivraison(lu, { ...ctx, appli: fin('client namespace disconnect') }).livreur).toMatchObject({
+      appli_active: false,
+      appli_etat: 'FERMEE',
+    });
+    expect(suiviLivraison(lu, { ...ctx, appli: fin('ping timeout') }).livreur).toMatchObject({ appli_etat: 'COUPURE' });
   });
 
   it('signe de vie récent sans socket : en arrière-plan (active, pas connectée)', () => {
     const r = suiviLivraison(avec({ protocole_appli: 4, dernier_signal_at: d('12:19') }), { ...ctx, appli: appli([]) });
-    expect(r.livreur).toMatchObject({ appli_active: true, appli_connectee: false });
+    expect(r.livreur).toMatchObject({ appli_active: true, appli_connectee: false, appli_etat: 'ACTIVE' });
   });
 
   it('socket ouvert : active et connectée', () => {
@@ -759,7 +777,7 @@ describe('suivi de livraison : appli du livreur (24/10)', () => {
   it('ancienne appli, ou règle coupée (réglage à 0) : état inconnu (null) ; présence inconnue : null', () => {
     expect(
       suiviLivraison(avec({ protocole_appli: 3, dernier_signal_at: d('11:00') }), { ...ctx, appli: appli([]) }).livreur,
-    ).toMatchObject({ appli_active: null, appli_connectee: false });
+    ).toMatchObject({ appli_active: null, appli_connectee: false, appli_etat: null });
     expect(
       suiviLivraison(avec({ protocole_appli: 4, dernier_signal_at: d('11:00') }), { ...ctx, appli: appli(null, 0) }).livreur,
     ).toMatchObject({ appli_active: null, appli_connectee: null });

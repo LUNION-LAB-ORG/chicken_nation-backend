@@ -15,6 +15,7 @@ import {
 } from 'src/modules/course/services/base-dispatch.simulee-spec';
 
 import { FIN_PAUSE_INDEFINIE } from '../helpers/disponibilite.rules';
+import { finsSocketSimulees } from './base-livreurs.simulee-spec';
 import { DeliverersService } from './deliverers.service';
 
 const MAINTENANT = new Date('2026-10-22T14:00:00.000Z');
@@ -55,15 +56,24 @@ function monter() {
 
 /**
  * Appli active ou fermée (24/10) : Fanta est en service mais son appli se tait
- * depuis 10 min (glissée hors de la liste des applis) ; Moussa a l'appli en
- * arrière-plan (positions toutes les 30 s, pas de socket) ; Awa a le socket.
+ * depuis 10 min (glissée hors de la liste des applis : l'appli a fermé son
+ * socket) ; Koffi aussi, mais son socket est tombé faute de réseau (25/10 :
+ * connexion coupée) ; Moussa a l'appli en arrière-plan (positions toutes les
+ * 30 s, pas de socket) ; Awa a le socket.
  */
 function monterAppli(appliFermeeApresS = 180) {
   const vue = (s: number) => new Date(MAINTENANT.getTime() - s * 1000);
   const awa = livreur({ protocole_appli: 4, first_name: 'Awa', dernier_signal_at: vue(400) });
   const fanta = livreur({ protocole_appli: 4, first_name: 'Fanta', dernier_signal_at: vue(600) });
+  const koffi = livreur({ protocole_appli: 4, first_name: 'Koffi', dernier_signal_at: vue(600) });
   const moussa = livreur({ protocole_appli: 4, first_name: 'Moussa', dernier_signal_at: vue(30) });
-  const base = monterBaseDispatch({ livreurs: [awa, fanta, moussa] });
+  const base = monterBaseDispatch({ livreurs: [awa, fanta, koffi, moussa] });
+  const fins = finsSocketSimulees({
+    [fanta.id]: { raison: 'client namespace disconnect', a: vue(598) },
+    [koffi.id]: { raison: 'ping timeout', a: vue(555) },
+    // Ancienne fin d'Awa : son socket est rouvert, elle ne compte pas.
+    [awa.id]: { raison: 'client namespace disconnect', a: vue(3000) },
+  });
   const presence = {
     livreursConnectes: jest.fn(async (ids: string[]): Promise<Set<string> | null> =>
       new Set(ids.filter((id) => id === awa.id)),
@@ -76,8 +86,10 @@ function monterAppli(appliFermeeApresS = 180) {
     { load: jest.fn(async () => ({ gpsExpirationMinutes: 5, appliFermeeApresS })) } as never,
     {} as never,
     presence as never,
+    undefined,
+    fins as never,
   );
-  return { service, vue, awa, fanta, moussa };
+  return { service, fins, vue, awa, fanta, koffi, moussa };
 }
 
 describe('GET /deliverers : état de chaque livreur', () => {
@@ -162,6 +174,7 @@ describe('appli active ou fermée (24/10) : `appli_active` et `appli_vue_a`', ()
       appli_connectee: false,
       appli_active: false,
       appli_vue_a: t.vue(600).toISOString(),
+      appli_etat: 'FERMEE',
       disponibilite: {
         etat: 'APPLI_FERMEE',
         libelle: 'Appli fermée',
@@ -169,21 +182,50 @@ describe('appli active ou fermée (24/10) : `appli_active` et `appli_vue_a`', ()
         message_refus: "L'appli de ce livreur est fermée.",
         appli_active: false,
         appli_vue_a: t.vue(600),
+        appli_etat: 'FERMEE',
+      },
+    });
+    // Même silence, mais le socket est tombé faute de réseau (25/10) : connexion coupée.
+    expect(parPrenom.Koffi).toMatchObject({
+      appli_connectee: false,
+      appli_active: false,
+      appli_etat: 'COUPURE',
+      appli_vue_a: t.vue(600).toISOString(),
+      disponibilite: {
+        etat: 'CONNEXION_COUPEE',
+        libelle: 'Connexion coupée',
+        peut_recevoir_offre: false,
+        message_refus: 'La connexion de ce livreur est coupée : son appli ne répond plus.',
+        appli_etat: 'COUPURE',
       },
     });
     // En arrière-plan : pas de socket, mais l'appli envoie ses positions.
     expect(parPrenom.Moussa).toMatchObject({
       appli_connectee: false,
       appli_active: true,
+      appli_etat: 'ACTIVE',
       appli_vue_a: t.vue(30).toISOString(),
       disponibilite: { etat: 'DISPONIBLE', peut_recevoir_offre: true },
     });
-    // Socket ouvert : active, même sans signe de vie récent.
+    // Socket ouvert : active, même sans signe de vie récent, quelle que soit une ancienne fin.
     expect(parPrenom.Awa).toMatchObject({
       appli_connectee: true,
       appli_active: true,
+      appli_etat: 'ACTIVE',
       disponibilite: { etat: 'DISPONIBLE' },
     });
+    // Fins lues en une fois, pour les seuls livreurs sans socket ouvert.
+    expect(t.fins.lireSansSocket).toHaveBeenCalledTimes(1);
+    expect(t.fins.lire.mock.calls[0][0]).not.toContain(t.awa.id);
+  });
+
+  it('fins de socket illisibles (Redis muet) : jamais « Appli fermée », connexion coupée pour les deux', async () => {
+    const t = monterAppli();
+    t.fins.etat.fins = null;
+    const { items } = await t.service.findAll({ limit: 50 } as never);
+    const parPrenom = Object.fromEntries(items.map((l: any) => [l.first_name, l]));
+    expect(parPrenom.Fanta).toMatchObject({ appli_etat: 'COUPURE', disponibilite: { etat: 'CONNEXION_COUPEE' } });
+    expect(parPrenom.Koffi).toMatchObject({ appli_etat: 'COUPURE', disponibilite: { etat: 'CONNEXION_COUPEE' } });
   });
 
   it('carte (live-locations) : mêmes champs', async () => {
@@ -193,8 +235,14 @@ describe('appli active ou fermée (24/10) : `appli_active` et `appli_vue_a`', ()
 
     expect(parId[t.fanta.id]).toMatchObject({
       appli_active: false,
+      appli_etat: 'FERMEE',
       appli_vue_a: t.vue(600).toISOString(),
       disponibilite: { etat: 'APPLI_FERMEE', libelle: 'Appli fermée' },
+    });
+    expect(parId[t.koffi.id]).toMatchObject({
+      appli_active: false,
+      appli_etat: 'COUPURE',
+      disponibilite: { etat: 'CONNEXION_COUPEE', libelle: 'Connexion coupée' },
     });
     expect(parId[t.moussa.id]).toMatchObject({ appli_connectee: false, appli_active: true });
     expect(parId[t.awa.id]).toMatchObject({ appli_connectee: true, appli_active: true });
@@ -206,7 +254,11 @@ describe('appli active ou fermée (24/10) : `appli_active` et `appli_vue_a`', ()
 
     const { items } = await t.service.findAll({ limit: 50 } as never);
     const fanta = items.find((l: any) => l.first_name === 'Fanta') as any;
-    expect(fanta).toMatchObject({ appli_active: null, disponibilite: { etat: 'DISPONIBLE', appli_active: null } });
+    expect(fanta).toMatchObject({
+      appli_active: null,
+      appli_etat: null,
+      disponibilite: { etat: 'DISPONIBLE', appli_active: null, appli_etat: null },
+    });
     const moussa = items.find((l: any) => l.first_name === 'Moussa') as any;
     expect(moussa.appli_active).toBe(true);
 
@@ -219,6 +271,7 @@ describe('appli active ou fermée (24/10) : `appli_active` et `appli_vue_a`', ()
     const { items } = await t.service.findAll({ limit: 50 } as never);
     expect(items.every((l: any) => l.disponibilite.etat === 'DISPONIBLE')).toBe(true);
     expect(items.every((l: any) => l.appli_active === null && l.disponibilite.appli_active === null)).toBe(true);
+    expect(items.every((l: any) => l.appli_etat === null)).toBe(true);
 
     const carte = await t.service.getLiveLocations({ includeOffline: true });
     expect(carte.length).toBeGreaterThan(0);

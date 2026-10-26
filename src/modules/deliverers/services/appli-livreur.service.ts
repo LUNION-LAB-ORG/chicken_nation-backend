@@ -1,14 +1,17 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { DelivererStatus, EntityStatus } from '@prisma/client';
 
 import { JournalLimite, suffixeTues } from 'src/common/utils/journal-limite.util';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { DispatchJournalService } from 'src/modules/course/services/dispatch-journal.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import { FinsSocketLivreursService } from 'src/socket-io/services/fins-socket-livreurs.service';
 
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
 import {
   ContexteAppli,
+  EtatAppli,
+  FinSocket,
   STATUTS_COURSE_EN_COURS,
   appliActiveDepuis,
   estEnPause,
@@ -17,6 +20,7 @@ import {
   idsSansJeton,
   livreursDesAppels,
   PROTOCOLE_APPLI_FERMEE,
+  etatAppliDepuis,
   regleAppliPour,
 } from '../helpers/disponibilite.rules';
 
@@ -38,8 +42,15 @@ export const MARGE_PRESENCE_MS = 10_000;
 /** Passages suivis : livreurs dont l'appli a donné signe de vie dans les 12 dernières heures. */
 export const FENETRE_SUIVI_APPLIS_MS = 12 * 3600_000;
 
-/** Lignes du journal qui marquent un passage de l'appli. */
-export type PassageAppli = 'APPLI_FERMEE' | 'APPLI_ACTIVE';
+/**
+ * Lignes du journal qui marquent un passage de l'appli : fermée par le
+ * livreur (prouvé), connexion coupée (tout autre silence, 25/10), active.
+ */
+export type PassageAppli = 'APPLI_FERMEE' | 'CONNEXION_COUPEE' | 'APPLI_ACTIVE';
+
+const PASSAGES_APPLI: PassageAppli[] = ['APPLI_FERMEE', 'CONNEXION_COUPEE', 'APPLI_ACTIVE'];
+
+const estSilence = (passage: PassageAppli | null) => passage === 'APPLI_FERMEE' || passage === 'CONNEXION_COUPEE';
 
 /** Ce que le contexte lit d'un livreur. */
 export interface LignePresence {
@@ -79,11 +90,18 @@ const SANS_JOIGNABILITE = (appliFermeeApresS: number): ReglagesPresence => ({
 /**
  * Passage à écrire au journal, d'après l'état de l'appli et le dernier passage
  * écrit. Sans passage écrit, l'appli est réputée active : seule sa fermeture
- * s'écrit.
+ * ou sa coupure s'écrit.
+ *
+ * @param finsLues  Les fins de socket ont pu être lues. Sinon une fermeture
+ *   ne peut pas être prouvée : déjà fermée ou coupée au journal, rien n'est
+ *   réécrit (Redis qui hoquette ne remplit pas le journal toutes les 10 s).
  */
-export function passageAEcrire(appliActive: boolean, dernier: PassageAppli | null): PassageAppli | null {
-  if (!appliActive) return dernier === 'APPLI_FERMEE' ? null : 'APPLI_FERMEE';
-  return dernier === 'APPLI_FERMEE' ? 'APPLI_ACTIVE' : null;
+export function passageAEcrire(etat: EtatAppli, dernier: PassageAppli | null, finsLues = true): PassageAppli | null {
+  if (etat === 'ACTIVE') return estSilence(dernier) ? 'APPLI_ACTIVE' : null;
+  const voulu: PassageAppli = etat === 'FERMEE' ? 'APPLI_FERMEE' : 'CONNEXION_COUPEE';
+  if (voulu === dernier) return null;
+  if (!finsLues && estSilence(dernier)) return null;
+  return voulu;
 }
 
 /** Livreurs dont le signe de vie ne suffit pas (ou bientôt plus) : leur présence est à demander. */
@@ -115,7 +133,16 @@ export function idsSansSignalSuffisant(
  * Ce service fournit le contexte (réglage et sockets ouverts) que la règle
  * unique lit, en ne demandant la présence au serveur temps réel que pour les
  * livreurs dont le signe de vie ne suffit pas, et relève au journal de la
- * diffusion les passages « appli fermée » et « appli active ».
+ * diffusion les passages « appli fermée », « connexion coupée » et « appli
+ * active ».
+ *
+ * APPLI FERMÉE OU CONNEXION COUPÉE (retour du client du 25/10) : pour les
+ * livreurs sans socket ouvert dont le signe de vie ne suffit pas, le contexte
+ * porte aussi la fin de leur dernier socket (`finsSocket`, une lecture
+ * Redis). « Appli fermée » seulement quand l'appli a fermé elle-même son
+ * socket et que rien n'est venu d'elle ensuite ; tout autre silence est une
+ * connexion coupée, avec les mêmes effets (aucune offre, offre en attente
+ * close sans pénalité).
  *
  * LIVREUR JOIGNABLE (défaut signalé le 24/10 : « proposée » au backoffice,
  * rien reçu par le livreur) : socket ouvert dans sa salle `deliverer_{id}`,
@@ -141,6 +168,8 @@ export class AppliLivreurService {
     private readonly gateway: AppGateway,
     private readonly settings: DelivererScoringSettingsHelper,
     private readonly journal: DispatchJournalService,
+    // Fin du dernier socket (module temps réel, global) : « Appli fermée » ou « Connexion coupée ».
+    @Optional() private readonly fins?: FinsSocketLivreursService,
   ) {}
 
   /** Réglage `deliverer.appli_fermee_apres_s` ; 0 : règle coupée. */
@@ -249,9 +278,11 @@ export class AppliLivreurService {
 
   /**
    * Relève au journal les passages de l'appli (cron, 10 s) : `APPLI_FERMEE`
-   * quand l'appli d'un livreur vient d'être réputée fermée, `APPLI_ACTIVE` à
-   * sa réouverture. Une seule instance à la fois (verrou consultatif) ; le
-   * dernier passage écrit est relu au journal : jamais deux fois le même.
+   * quand l'appli d'un livreur vient d'être fermée par lui (prouvé),
+   * `CONNEXION_COUPEE` quand elle se tait sans cette preuve (avec la raison
+   * de la fin de son socket), `APPLI_ACTIVE` à son retour. Une seule instance
+   * à la fois (verrou consultatif) ; le dernier passage écrit est relu au
+   * journal : jamais deux fois le même.
    *
    * @returns le nombre de passages écrits.
    */
@@ -348,10 +379,25 @@ export class AppliLivreurService {
     const aDemander = [...new Set([...idsAppli, ...idsSansJetonLus])];
     const presence = aDemander.length > 0 ? await this.presence(aDemander) : new Set<string>();
     const contexte: ContexteAppli = { appliFermeeApresS, connectes: appliFermeeApresS > 0 ? presence : null };
+    if (appliFermeeApresS > 0) {
+      // Fin du dernier socket des seuls livreurs qui se taisent sans socket ouvert.
+      contexte.finsSocket = await this.finsDe(idsAppli.filter((id) => !presence?.has(id)));
+    }
     if (joignablesSeulement) {
       contexte.injoignables = presence ? new Set(idsSansJetonLus.filter((id) => !presence.has(id))) : null;
     }
     return this.avecAppels(reglages, contexte, maintenant);
+  }
+
+  /** Fin du dernier socket de ces livreurs ; null : Redis muet ou service absent, aucune preuve. */
+  private async finsDe(ids: readonly string[]): Promise<ReadonlyMap<string, FinSocket> | null> {
+    if (ids.length === 0) return new Map();
+    if (!this.fins) return null;
+    try {
+      return await this.fins.lire(ids);
+    } catch {
+      return null;
+    }
   }
 
   /** Livreurs passés faute d'être joignables : visibles dans les journaux, une ligne par livreur toutes les 10 min. */
@@ -399,11 +445,13 @@ export class AppliLivreurService {
     const appli = await this.contexteAvec(SANS_JOIGNABILITE(appliFermeeApresS), livreurs, maintenant);
     const derniers = await this.derniersPassages(livreurs.map((l) => l.id));
 
+    const finsLues = appli.finsSocket !== null && appli.finsSocket !== undefined;
     let ecrits = 0;
     for (const l of livreurs) {
-      const active = appliActiveDepuis(l, appli, maintenant);
+      // Appli d'avant le protocole 4 : la règle ne la vise pas, réputée active.
+      const etat = etatAppliDepuis(l, appli, maintenant) ?? 'ACTIVE';
       const dernier = derniers.get(l.id) ?? null;
-      const passage = passageAEcrire(active, dernier?.type ?? null);
+      const passage = passageAEcrire(etat, dernier?.type ?? null, finsLues);
       if (!passage) continue;
       const details: Record<string, unknown> = {
         appli_vue_a: l.dernier_signal_at?.toISOString() ?? null,
@@ -412,10 +460,15 @@ export class AppliLivreurService {
         en_pause: estEnPause(l, maintenant) || estEnPauseAuto(l, maintenant),
         en_course: l._count.courses > 0,
       };
-      if (passage === 'APPLI_FERMEE') details.presence_connue = appli.connectes !== null;
-      else {
+      if (passage === 'APPLI_ACTIVE') {
         details.fermee_a = dernier?.a.toISOString() ?? null;
         details.par = appli.connectes?.has(l.id) ? 'socket' : 'signal';
+      } else {
+        // Fermée ou coupée : la fin du dernier socket qui l'a décidé (null : aucune connue ou illisible).
+        const fin = appli.finsSocket?.get(l.id);
+        details.presence_connue = appli.connectes !== null;
+        details.raison_socket = fin?.raison ?? null;
+        details.fin_socket_a = fin?.a.toISOString() ?? null;
       }
       await this.journal.ecrire({
         type: passage,
@@ -434,7 +487,7 @@ export class AppliLivreurService {
   private async derniersPassages(ids: string[]): Promise<Map<string, { type: PassageAppli; a: Date }>> {
     const groupes = await this.prisma.dispatchEvenement.groupBy({
       by: ['deliverer_id', 'type'],
-      where: { deliverer_id: { in: ids }, type: { in: ['APPLI_FERMEE', 'APPLI_ACTIVE'] } },
+      where: { deliverer_id: { in: ids }, type: { in: PASSAGES_APPLI } },
       _max: { created_at: true },
     });
     const derniers = new Map<string, { type: PassageAppli; a: Date }>();

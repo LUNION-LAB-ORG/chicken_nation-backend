@@ -8,7 +8,7 @@ import {
   ShiftType,
 } from '@prisma/client';
 
-import type { EtatAffichageLivreur } from 'src/modules/deliverers/helpers/disponibilite.rules';
+import type { EtatAffichageLivreur, EtatAppli } from 'src/modules/deliverers/helpers/disponibilite.rules';
 import {
   AffectationDuJour,
   PlanningDuJourLu,
@@ -41,11 +41,13 @@ import { CourseTourneeLue, departEstReel, enRetard, finTourneePrevue, retardMin 
  *    commande encore prête à relancer ;
  *  - ATTENTE_AU_RESTAURANT (ambre) : livreur au restaurant, course pas
  *    récupérée, depuis la moitié de `course.auto_cancel_at_restaurant_after_min` ;
- *  - APPLI_FERMEE_EN_COURSE (ambre) : livreur en course, appli fermée par la
- *    règle unique ;
+ *  - APPLI_FERMEE_EN_COURSE (ambre) : livreur en course, appli fermée par le
+ *    livreur (règle unique, `appli_etat` FERMEE : prouvé par la fin de son
+ *    socket) ;
  *  - POSITION_PERDUE_EN_COURSE (ambre) : livreur en course, position plus
- *    vieille que `deliverer.gps_expiration_minutes` ; pas quand l'appli est
- *    fermée, le signal d'au-dessus le dit déjà ;
+ *    vieille que `deliverer.gps_expiration_minutes`, connexion coupée
+ *    comprise (25/10 : « Koffi : plus de position depuis 6 min ») ; pas quand
+ *    l'appli est fermée, le signal d'au-dessus le dit déjà ;
  *  - A_ENCAISSER (ambre) : commandes livrées en espèces pas encaissées d'un
  *    livreur, la plus ancienne depuis 60 min ;
  *  - PREVU_PAS_EN_SERVICE (ambre) : prévu au créneau en cours commencé depuis
@@ -161,6 +163,8 @@ export interface LivreurLu {
   rang_file: number | null;
   appli_active: boolean | null;
   appli_vue_a: string | null;
+  /** FERMEE : fermée par le livreur (prouvé) ; COUPURE : connexion coupée (25/10). */
+  appli_etat?: EtatAppli | null;
   location_at: string | null;
   active_course: { id: string; reference: string; statut: CourseStatut } | null;
 }
@@ -252,6 +256,7 @@ const ORDRE_ETATS: EtatAffichageLivreur[] = [
   'EN_PAUSE',
   'PAUSE_AUTO',
   'APPLI_FERMEE',
+  'CONNEXION_COUPEE',
   'INJOIGNABLE',
   'HORS_SERVICE',
   'INACTIF',
@@ -399,7 +404,8 @@ function signauxDesLivreurs(e: EntreeTableau): SignalLivraison[] {
       livreur: { id: l.id, prenom: l.first_name },
       commandes: [] as string[],
     };
-    if (l.appli_active === false) {
+    // Vraie fermeture seulement (25/10) : une connexion coupée tombe sur la position perdue.
+    if (l.appli_active === false && l.appli_etat === 'FERMEE') {
       const vue = lireDate(l.appli_vue_a);
       signaux.push({
         ...base,
@@ -572,7 +578,7 @@ export function construireTableau(e: EntreeTableau): TableauLivraison {
         disponibles: compte('DISPONIBLE', 'OFFRE_EN_ATTENTE', 'EN_APPEL'),
         en_course: compte('EN_COURSE'),
         en_pause: compte('EN_PAUSE', 'PAUSE_AUTO'),
-        appli_fermee: compte('APPLI_FERMEE', 'INJOIGNABLE'),
+        appli_fermee: compte('APPLI_FERMEE', 'CONNEXION_COUPEE', 'INJOIGNABLE'),
         en_service: livreurs.length - compte('HORS_SERVICE', 'INACTIF'),
         prevus: prevus.get(r.id)?.size ?? null,
       },

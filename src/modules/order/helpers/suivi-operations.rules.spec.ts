@@ -5,6 +5,7 @@ import {
   lireAppliFermeeApresS,
   lireFacteurRetard,
   livreursDesCommandes,
+  type ContexteTournee,
 } from './suivi-operations.rules';
 
 const MAINTENANT = new Date('2026-10-23T12:30:00.000Z');
@@ -239,10 +240,10 @@ describe('écran Opérations : appli du livreur (24/10)', () => {
     appliFermeeApresS,
     connectes: connectes ? new Set(connectes) : null,
   });
-  const lire = (deliverer: Record<string, unknown> | null, a = appli([])) =>
+  const lire = (deliverer: Record<string, unknown> | null, a: NonNullable<ContexteTournee['appli']> = appli([])) =>
     enrichirCourseOperations(course(deliverer), { ...p, maintenant: MAINTENANT_APPLI, appli: a }).deliverer as any;
 
-  it('vue il y a 6 min, sans socket : appli fermée, dernier signe de vie ; signe de vie et protocole retirés', () => {
+  it('vue il y a 6 min, sans socket, sans preuve de fermeture : connexion coupée ; signe de vie et protocole retirés', () => {
     const d = lire(koffi());
     expect(d).toEqual({
       id: 'liv-koffi',
@@ -252,19 +253,35 @@ describe('écran Opérations : appli du livreur (24/10)', () => {
       appli_active: false,
       appli_vue_a: '2026-10-23T12:24:00.000Z',
       appli_connectee: false,
+      appli_etat: 'COUPURE',
     });
   });
 
+  it('fin du socket par l’appli elle-même, rien ensuite : appli fermée (FERMEE) ; `ping timeout` : COUPURE (25/10)', () => {
+    const fin = (raison: string) => ({
+      ...appli([]),
+      finsSocket: new Map([['liv-koffi', { raison, a: new Date('2026-10-23T12:24:10.000Z') }]]),
+    });
+    expect(lire(koffi(), fin('client namespace disconnect'))).toMatchObject({ appli_active: false, appli_etat: 'FERMEE' });
+    expect(lire(koffi(), fin('ping timeout'))).toMatchObject({ appli_active: false, appli_etat: 'COUPURE' });
+    // Fins illisibles (Redis muet) : jamais FERMEE.
+    expect(lire(koffi(), { ...appli([]), finsSocket: null })).toMatchObject({ appli_etat: 'COUPURE' });
+  });
+
   it('signe de vie de 1 min sans socket : en arrière-plan ; socket ouvert : connectée', () => {
-    expect(lire(koffi({ dernier_signal_at: '2026-10-23T12:29:00.000Z' }))).toMatchObject({ appli_active: true, appli_connectee: false });
-    expect(lire(koffi(), appli(['liv-koffi']))).toMatchObject({ appli_active: true, appli_connectee: true });
+    expect(lire(koffi({ dernier_signal_at: '2026-10-23T12:29:00.000Z' }))).toMatchObject({
+      appli_active: true,
+      appli_connectee: false,
+      appli_etat: 'ACTIVE',
+    });
+    expect(lire(koffi(), appli(['liv-koffi']))).toMatchObject({ appli_active: true, appli_connectee: true, appli_etat: 'ACTIVE' });
   });
 
   it('ancienne appli (protocole 3) ou règle coupée : état inconnu ; présence inconnue : appli jugée au signe de vie', () => {
-    expect(lire(koffi({ protocole_appli: 3 }))).toMatchObject({ appli_active: null, appli_connectee: false });
-    expect(lire(koffi({ protocole_appli: null }))).toMatchObject({ appli_active: null });
-    expect(lire(koffi(), appli([], 0))).toMatchObject({ appli_active: null });
-    expect(lire(koffi(), appli(null))).toMatchObject({ appli_active: false, appli_connectee: null });
+    expect(lire(koffi({ protocole_appli: 3 }))).toMatchObject({ appli_active: null, appli_connectee: false, appli_etat: null });
+    expect(lire(koffi({ protocole_appli: null }))).toMatchObject({ appli_active: null, appli_etat: null });
+    expect(lire(koffi(), appli([], 0))).toMatchObject({ appli_active: null, appli_etat: null });
+    expect(lire(koffi(), appli(null))).toMatchObject({ appli_active: false, appli_connectee: null, appli_etat: 'COUPURE' });
   });
 
   it('jamais vu : appli fermée, aucune heure', () => {

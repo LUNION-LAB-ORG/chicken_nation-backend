@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   CourseOfferStatus,
@@ -18,6 +19,7 @@ import {
 import { PrismaService } from 'src/database/services/prisma.service';
 import { S3Service } from 'src/s3/s3.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import { FinsSocketLivreursService } from 'src/socket-io/services/fins-socket-livreurs.service';
 import { journeeDeService } from 'src/modules/course/helpers/journee-service.rules';
 import { enRetard, finTourneePrevue, retardMin } from 'src/modules/course/helpers/retard-tournee.rules';
 
@@ -30,6 +32,8 @@ import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-set
 import { positionAEnregistrer, releveAssezPrecis } from '../helpers/position-livreur.rules';
 import {
   ContexteAppli,
+  EtatAppli,
+  FinSocket,
   STATUTS_COURSE_EN_COURS,
   disponibiliteLivreur,
   etatLivreurDepuis,
@@ -78,17 +82,20 @@ function presence(connectes: Set<string> | null, delivererId: string): boolean |
 
 /**
  * Contexte de la règle unique pour une liste du backoffice, dont la présence
- * de chaque livreur a été lue : appli (réglage, sockets), règle des
- * joignables active, livreurs sans socket ni jeton (« Injoignable »), et
- * livreurs en appel avec le service client (« En appel »).
+ * de chaque livreur a été lue : appli (réglage, sockets, fin du dernier
+ * socket des livreurs sans socket ouvert : « Appli fermée » ou « Connexion
+ * coupée »), règle des joignables active, livreurs sans socket ni jeton
+ * (« Injoignable »), et livreurs en appel avec le service client (« En
+ * appel »).
  */
 function contexteAffichage(
   reglages: { appliFermeeApresS: number; offreJoignablesSeulement?: boolean },
   connectes: Set<string> | null,
   livreurs: readonly { id: string; expo_push_token: string | null }[],
   enAppel: Set<string> | null = null,
+  finsSocket: ReadonlyMap<string, FinSocket> | null = null,
 ): ContexteAppli {
-  const appli: ContexteAppli = { appliFermeeApresS: reglages.appliFermeeApresS, connectes };
+  const appli: ContexteAppli = { appliFermeeApresS: reglages.appliFermeeApresS, connectes, finsSocket };
   if (reglages.offreJoignablesSeulement) appli.injoignables = injoignablesParmi(livreurs, connectes);
   if (enAppel && enAppel.size > 0) appli.enAppel = enAppel;
   return appli;
@@ -101,12 +108,20 @@ function contexteAffichage(
  *    fermée » (plus aucune offre jusqu'à sa réouverture). Vrai sans socket :
  *    appli en arrière-plan, les offres lui arrivent par notification ; null :
  *    règle coupée (réglage à 0), état inconnu ;
- *  - `appli_vue_a` : dernier signe de vie (position ou requête), ISO.
+ *  - `appli_vue_a` : dernier signe de vie (position ou requête), ISO ;
+ *  - `appli_etat` (25/10) : ACTIVE, FERMEE (« Appli fermée » : le livreur
+ *    l'a fermée, prouvé par la fin de son socket) ou COUPURE (« Connexion
+ *    coupée » : tout autre silence) ; null : règle coupée, ancienne appli.
  */
-function etatAppli(disponibilite: { appli_active: boolean | null; appli_vue_a: Date | null }) {
+function etatAppli(disponibilite: {
+  appli_active: boolean | null;
+  appli_vue_a: Date | null;
+  appli_etat: EtatAppli | null;
+}) {
   return {
     appli_active: disponibilite.appli_active,
     appli_vue_a: disponibilite.appli_vue_a?.toISOString() ?? null,
+    appli_etat: disponibilite.appli_etat,
   };
 }
 
@@ -131,7 +146,26 @@ export class DeliverersService {
     private readonly gateway: AppGateway,
     // Temps en ligne de la journée (vue Livreurs « Aujourd'hui », `jour=true`)
     private readonly minuteur?: MinuteurEnLigneService,
+    // Fin du dernier socket (module temps réel, global) : « Appli fermée » ou « Connexion coupée »
+    @Optional() private readonly fins?: FinsSocketLivreursService,
   ) {}
+
+  /**
+   * Fin du dernier socket des livreurs sans socket ouvert, en une lecture.
+   * Null : règle coupée, Redis muet, service absent ; aucune preuve.
+   */
+  private async finsSansSocket(
+    ids: readonly string[],
+    connectes: ReadonlySet<string> | null,
+    appliFermeeApresS: number,
+  ): Promise<ReadonlyMap<string, FinSocket> | null> {
+    if (!(appliFermeeApresS > 0) || !this.fins) return null;
+    try {
+      return await this.fins.lireSansSocket(ids, connectes);
+    } catch {
+      return null;
+    }
+  }
 
   /** Livreurs en appel avec le service client (« En appel ») ; null si les appels n'ont pas pu être lus. */
   private async livreursEnAppel(maintenant: Date): Promise<Set<string> | null> {
@@ -198,7 +232,8 @@ export class DeliverersService {
     const maintenant = new Date();
     const connectes = await this.gateway.livreursConnectes(items.map((l) => l.id));
     const reglages = await this.scoringSettings.load();
-    const appli = contexteAffichage(reglages, connectes, items, await this.livreursEnAppel(maintenant));
+    const fins = await this.finsSansSocket(items.map((l) => l.id), connectes, reglages.appliFermeeApresS);
+    const appli = contexteAffichage(reglages, connectes, items, await this.livreursEnAppel(maintenant), fins);
     return {
       items: items.map(({ offer_attempts, _count, ...livreur }) => {
         const disponibilite = disponibiliteLivreur(
@@ -765,8 +800,9 @@ export class DeliverersService {
     inQueue.forEach((d, i) => rankMap.set(d.id, i + 1));
 
     const connectes = await this.gateway.livreursConnectes(deliverers.map((d) => d.id));
-    const appli = contexteAffichage(settings, connectes, deliverers, await this.livreursEnAppel(now));
-    // État par la règle unique : « En pause », « Hors service » et « Appli fermée » visibles.
+    const fins = await this.finsSansSocket(deliverers.map((d) => d.id), connectes, settings.appliFermeeApresS);
+    const appli = contexteAffichage(settings, connectes, deliverers, await this.livreursEnAppel(now), fins);
+    // État par la règle unique : « En pause », « Hors service », « Appli fermée » et « Connexion coupée » visibles.
     const disponibilites = new Map(
       deliverers.map((d) => [
         d.id,

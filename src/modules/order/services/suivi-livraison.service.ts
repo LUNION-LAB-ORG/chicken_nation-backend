@@ -11,6 +11,7 @@ import {
 import { STATUTS_COURSE_EN_COURS } from 'src/modules/deliverers/helpers/disponibilite.rules';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
+import { FinsSocketLivreursService } from 'src/socket-io/services/fins-socket-livreurs.service';
 
 import { PANIER_ANNULE_PAR_CLIENT_WHERE } from '../helpers/brouillons.rules';
 import { CommandeLivraisonLue, SuiviLivraison, suiviLivraison } from '../helpers/suivi-livraison.rules';
@@ -111,7 +112,9 @@ export type CommandeSuiviLivraison = Prisma.OrderGetPayload<{ select: typeof SEL
  * (acceptée, au restaurant, en livraison), en une lecture : fenêtre d'ajout
  * (course récupérée et pas encore partie), facteur de retard, seuil de
  * l'appli fermée. La présence de l'appli (socket ouvert) n'est demandée que
- * pour un livreur Chicken Nation sur une course en cours.
+ * pour un livreur Chicken Nation sur une course en cours, et la fin de son
+ * dernier socket seulement s'il n'en a aucun d'ouvert (« Appli fermée » ou
+ * « Connexion coupée », 25/10).
  */
 @Injectable()
 export class SuiviLivraisonService {
@@ -121,6 +124,7 @@ export class SuiviLivraisonService {
     private readonly prisma: PrismaService,
     private readonly settings: SettingsService,
     @Optional() private readonly gateway?: AppGateway,
+    @Optional() private readonly fins?: FinsSocketLivreursService,
   ) {}
 
   /**
@@ -169,13 +173,25 @@ export class SuiviLivraisonService {
       this.logger.warn(`Réglages du suivi de la livraison illisibles : ${(err as Error)?.message ?? err}`);
     }
     const connectes = course.deliverer ? await this.presence(course.deliverer.id) : null;
+    const finsSocket =
+      course.deliverer && appliFermeeApresS > 0 ? await this.finsDe(course.deliverer.id, connectes) : null;
     return suiviLivraison(commande as CommandeLivraisonLue, {
       maintenant,
       fenetreMaxS,
       departRayonM,
       facteurRetard,
-      appli: { appliFermeeApresS, connectes },
+      appli: { appliFermeeApresS, connectes, finsSocket },
     });
+  }
+
+  /** Fin du dernier socket du livreur s'il n'en a aucun d'ouvert ; null : illisible, aucune preuve. */
+  private async finsDe(delivererId: string, connectes: ReadonlySet<string> | null) {
+    if (!this.fins) return null;
+    try {
+      return await this.fins.lireSansSocket([delivererId], connectes);
+    } catch {
+      return null;
+    }
   }
 
   /** Socket ouvert de l'appli du livreur ; `null` si la présence n'a pas pu être lue. */
