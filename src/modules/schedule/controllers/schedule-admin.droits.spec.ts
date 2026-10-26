@@ -86,9 +86,11 @@ describe('planning : garde par le droit PLANNING', () => {
     }
   });
 
-  it('LIVRAISON_OPS : les lectures seulement', () => {
+  // Le call center lit le planning comme le suivi des livraisons (26/10).
+  // `livreursAjoutables` est un GET, mais il sert l'ajout d'un livreur : fermé.
+  it.each([UserRole.LIVRAISON_OPS, UserRole.CALL_CENTER])('%s : les lectures seulement', (role) => {
     for (const m of TOUTES) {
-      expect([m, passe(m, UserRole.LIVRAISON_OPS)]).toEqual([m, LECTURES.includes(m)]);
+      expect([m, passe(m, role)]).toEqual([m, LECTURES.includes(m)]);
     }
   });
 
@@ -98,7 +100,8 @@ describe('planning : garde par le droit PLANNING', () => {
         r !== UserRole.ADMIN &&
         r !== UserRole.MANAGER &&
         r !== UserRole.ASSISTANT_MANAGER &&
-        r !== UserRole.LIVRAISON_OPS,
+        r !== UserRole.LIVRAISON_OPS &&
+        r !== UserRole.CALL_CENTER,
     );
     expect(autres.length).toBeGreaterThan(0);
     for (const role of autres) {

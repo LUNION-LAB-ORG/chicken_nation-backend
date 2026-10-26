@@ -225,7 +225,8 @@ describe('droit PLANNING (conception du 24/10)', () => {
   /**
    * Administrateur : tout. Manager et assistant : lecture, création,
    * modification et suppression, sur leur restaurant (le cloisonnement est
-   * fait par le serveur). LIVRAISON_OPS : lecture. Les autres : rien.
+   * fait par le serveur). LIVRAISON_OPS et call center (26/10) : lecture. Les
+   * autres : rien.
    */
   it('qui a quoi sur le planning', () => {
     const gestion = new Set<string>([Action.READ, Action.CREATE, Action.UPDATE, Action.DELETE]);
@@ -234,7 +235,7 @@ describe('droit PLANNING (conception du 24/10)', () => {
         const attendu =
           role === UserRole.ADMIN ||
           ((role === UserRole.MANAGER || role === UserRole.ASSISTANT_MANAGER) && gestion.has(action)) ||
-          (role === UserRole.LIVRAISON_OPS && action === Action.READ);
+          ((role === UserRole.LIVRAISON_OPS || role === UserRole.CALL_CENTER) && action === Action.READ);
         expect([role, action, rolePeut(role, Modules.PLANNING, action)]).toEqual([role, action, attendu]);
       }
     }
@@ -252,6 +253,51 @@ describe('droit PLANNING (conception du 24/10)', () => {
     expect(Object.keys(permissionsByRole[UserRole.LIVRAISON_OPS].modules)[0]).toBe(Modules.COMMANDES);
     expect(Object.keys(permissionsByRole[UserRole.MANAGER].modules)[0]).toBe(Modules.DASHBOARD);
     expect(Object.keys(permissionsByRole[UserRole.ASSISTANT_MANAGER].modules)[0]).toBe(Modules.DASHBOARD);
+  });
+});
+
+describe('call center : module Livraison en lecture (demande du 26/10)', () => {
+  const actions = Object.values(Action) as Action[];
+  const peut = (module: Modules, action: Action) => rolePeut(UserRole.CALL_CENTER, module, action);
+
+  it('lit les courses, les livreurs et le planning, comme le suivi des livraisons', () => {
+    for (const module of [Modules.LIVREURS, Modules.PLANNING]) {
+      for (const action of actions) {
+        expect([module, action, peut(module, action)]).toEqual([module, action, action === Action.READ]);
+        expect([module, action, peut(module, action)]).toEqual([
+          module,
+          action,
+          rolePeut(UserRole.LIVRAISON_OPS, module, action),
+        ]);
+      }
+    }
+  });
+
+  it('garde tout ce qu’il avait, et arrive toujours sur les Commandes', () => {
+    expect(Object.keys(permissionsByRole[UserRole.CALL_CENTER].modules)).toEqual([
+      Modules.COMMANDES,
+      Modules.DASHBOARD,
+      Modules.CLIENTS,
+      Modules.MENUS,
+      Modules.INVENTAIRE,
+      Modules.PROMOTIONS,
+      Modules.FIDELITE,
+      Modules.CARD_NATION,
+      Modules.COMMENTAIRES,
+      Modules.MESSAGES,
+      Modules.CALLS,
+      Modules.BASE_DONNEES,
+      Modules.CRM,
+      Modules.LIVREURS,
+      Modules.PLANNING,
+    ]);
+    expect(peut(Modules.COMMANDES, Action.UPDATE_FULL)).toBe(true);
+    expect(peut(Modules.CALLS, Action.READ)).toBe(true);
+  });
+
+  it('est un compte de siège : il voit tous les restaurants', () => {
+    expect(isStoreRole(UserRole.CALL_CENTER)).toBe(false);
+    expect(resolveStaffType(UserRole.CALL_CENTER)).toBe(UserType.BACKOFFICE);
   });
 });
 

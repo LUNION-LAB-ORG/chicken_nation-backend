@@ -12,13 +12,15 @@ import { TableauLivraisonService } from '../services/tableau-livraison.service';
 
 /**
  * Rôles qui lisent le tableau de la livraison : le siège (administrateur,
- * suivi des livraisons) pour tout le réseau, les comptes de restaurant
- * (manager, assistant, caissière) pour le leur : bandeau du Planning et ligne
- * Livreurs de l'écran Commandes (conception du 24/10, 4.2).
+ * suivi des livraisons, call center depuis le 26/10) pour tout le réseau, les
+ * comptes de restaurant (manager, assistant, caissière) pour le leur : bandeau
+ * du Planning et ligne Livreurs de l'écran Commandes (conception du 24/10,
+ * 4.2). Lecture seule : ce contrôleur n'a aucune route d'écriture.
  */
 export const ROLES_TABLEAU_LIVRAISON = [
   UserRole.ADMIN,
   UserRole.LIVRAISON_OPS,
+  UserRole.CALL_CENTER,
   UserRole.MANAGER,
   UserRole.ASSISTANT_MANAGER,
   UserRole.CAISSIER,

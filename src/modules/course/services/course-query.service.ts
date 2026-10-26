@@ -26,7 +26,8 @@ import {
  * Détail d'une course au backoffice : le code client de chaque livraison
  * (`delivery_pin`) n'est lu que pour l'ADMIN (support : client qui a perdu
  * son code). Le suivi des livraisons (LIVRAISON_OPS) lit le reste sans lui
- * (conception du 24/10, 11.7).
+ * (conception du 24/10, 11.7), le call center aussi (26/10) : il lit le code
+ * de retrait du client dans le tiroir de la commande (`code_client`).
  */
 export function includeCoursePour(compte: { role?: UserRole | null } | null | undefined) {
   return compte?.role === UserRole.ADMIN ? COURSE_ADMIN_INCLUDE : COURSE_FULL_INCLUDE;
@@ -171,7 +172,7 @@ export class CourseQueryService {
   }
 
   /**
-   * Liste du backoffice (ADMIN, LIVRAISON_OPS) : toutes courses avec filtres
+   * Liste du backoffice (ADMIN, LIVRAISON_OPS, CALL_CENTER) : toutes courses avec filtres
    * complets. `compte` : le code client des livraisons n'est lu que pour l'ADMIN.
    */
   async findAllAdmin(filters: QueryCoursesDto, compte?: { role?: UserRole | null } | null) {

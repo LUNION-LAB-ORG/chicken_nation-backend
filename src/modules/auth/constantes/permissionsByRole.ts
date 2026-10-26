@@ -107,6 +107,18 @@ export const permissionsByRole: Record<UserRole, RolePermissions> = {
       // gestes à la direction. Le pilote d'une campagne gère en plus son
       // équipe, contrôlé au cas par cas côté service.
       [Modules.CRM]: [Action.READ, Action.UPDATE, Action.REPORT],
+
+      // Livraison, en LECTURE (demande du 26/10) : Carte live, Courses, Liste
+      // des livreurs, Planning, bandeau des restaurants, comme LIVRAISON_OPS.
+      // Aucun geste : ni affectation forcée, ni annulation, ni relance, ni
+      // validation de compte, ni modification de planning. Compte de siège,
+      // il voit tous les restaurants.
+      // ⚠️ LIVREURS ne fait qu'AFFICHER les entrées du menu : Courses et
+      // Livreurs sont gardés côté serveur par ROLES_SUIVI_LIVRAISON, le
+      // bandeau par ROLES_TABLEAU_LIVRAISON. PLANNING garde aussi l'API du
+      // planning. Les trois doivent bouger ensemble.
+      [Modules.LIVREURS]: [Action.READ],
+      [Modules.PLANNING]: [Action.READ],
     },
   },
 

@@ -21,14 +21,28 @@ function passe(role: UserRole): boolean {
 }
 
 describe('GET /livraison/tableau : rôles', () => {
-  it('ouvert au siège (administrateur, suivi des livraisons) et aux comptes de restaurant qui en ont besoin', () => {
-    const ouverts = [UserRole.ADMIN, UserRole.LIVRAISON_OPS, UserRole.MANAGER, UserRole.ASSISTANT_MANAGER, UserRole.CAISSIER];
+  it('ouvert au siège (administrateur, suivi des livraisons, call center) et aux comptes de restaurant qui en ont besoin', () => {
+    const ouverts = [
+      UserRole.ADMIN,
+      UserRole.LIVRAISON_OPS,
+      UserRole.CALL_CENTER,
+      UserRole.MANAGER,
+      UserRole.ASSISTANT_MANAGER,
+      UserRole.CAISSIER,
+    ];
     expect(ouverts.map(passe)).toEqual(ouverts.map(() => true));
   });
 
   it('fermé aux autres rôles', () => {
-    const fermes = [UserRole.CALL_CENTER, UserRole.CUISINE, UserRole.MARKETING, UserRole.COMPTABLE];
+    const fermes = [UserRole.CUISINE, UserRole.MARKETING, UserRole.COMPTABLE];
     expect(fermes.map(passe)).toEqual(fermes.map(() => false));
+    expect(Object.values(UserRole).filter((r) => !passe(r)).sort()).toEqual([...fermes].sort());
+  });
+
+  it('aucune route d’écriture sur ce contrôleur : la liste de rôles ne garde qu’une lecture', () => {
+    const proto = LivraisonTableauController.prototype as unknown as Record<string, unknown>;
+    const methodes = Object.getOwnPropertyNames(proto).filter((m) => m !== 'constructor' && typeof proto[m] === 'function');
+    expect(methodes).toEqual(['lire']);
   });
 });
 
@@ -51,6 +65,14 @@ describe('GET /livraison/tableau : périmètre', () => {
     const admin = { type: UserType.BACKOFFICE, role: UserRole.ADMIN, restaurant_id: null };
     await t.controleur.lire({ user: admin } as never);
     await t.controleur.lire({ user: admin } as never, 'r-marcory');
+    expect(t.tableau.lire.mock.calls).toEqual([[undefined], ['r-marcory']]);
+  });
+
+  it('le call center, compte de siège, lit lui aussi tous les restaurants', async () => {
+    const t = monter();
+    const agent = { type: UserType.BACKOFFICE, role: UserRole.CALL_CENTER, restaurant_id: null };
+    await t.controleur.lire({ user: agent } as never);
+    await t.controleur.lire({ user: agent } as never, 'r-marcory');
     expect(t.tableau.lire.mock.calls).toEqual([[undefined], ['r-marcory']]);
   });
 });
