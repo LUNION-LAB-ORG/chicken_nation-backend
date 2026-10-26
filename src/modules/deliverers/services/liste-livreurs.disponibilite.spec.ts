@@ -330,3 +330,44 @@ describe('« Injoignable » : ni socket ouvert, ni jeton de notification', () =>
     expect(items.find((l: any) => l.first_name === 'Fanta')?.disponibilite.etat).toBe('DISPONIBLE');
   });
 });
+
+describe('Jeton de notification du livreur : lu pour l’état, jamais renvoyé (26/10)', () => {
+  /*
+   * La liste et la fiche sont ouvertes au suivi des livraisons et au call
+   * center. Le serveur pousse sans jeton d'accès Expo : le jeton d'un livreur
+   * suffit à envoyer une fausse offre à son téléphone.
+   */
+  it('GET /deliverers : aucun livreur ne porte `expo_push_token`, Moussa reste joignable par son jeton', async () => {
+    const awa = livreur({ first_name: 'Awa', expo_push_token: null });
+    const fanta = livreur({ first_name: 'Fanta', expo_push_token: null });
+    const moussa = livreur({ first_name: 'Moussa', expo_push_token: 'ExponentPushToken[moussa]' });
+    const base = monterBaseDispatch({ livreurs: [awa, fanta, moussa] });
+    const service = new DeliverersService(
+      base.prisma,
+      {} as never,
+      {} as never,
+      { load: jest.fn(async () => ({ gpsExpirationMinutes: 5, appliFermeeApresS: 180, offreJoignablesSeulement: true })) } as never,
+      {} as never,
+      { livreursConnectes: jest.fn(async (ids: string[]) => new Set(ids.filter((id) => id === awa.id))) } as never,
+    );
+
+    const { items } = await service.findAll({ limit: 50 } as never);
+
+    expect(items).toHaveLength(3);
+    expect(items.every((l: any) => !('expo_push_token' in l))).toBe(true);
+    expect(JSON.stringify(items)).not.toContain('ExponentPushToken');
+    const etats = Object.fromEntries(items.map((l: any) => [l.first_name, l.disponibilite.etat]));
+    expect(etats).toEqual({ Awa: 'DISPONIBLE', Fanta: 'INJOIGNABLE', Moussa: 'DISPONIBLE' });
+  });
+
+  it('GET /deliverers/:id et GET /deliverers/me : le jeton n’est pas lu, ni le mot de passe, ni le jeton de session', async () => {
+    const moussa = livreur({ first_name: 'Moussa' });
+    const base = monterBaseDispatch({ livreurs: [moussa] });
+    const service = new DeliverersService(base.prisma, {} as never, {} as never, {} as never, {} as never, {} as never);
+
+    await service.findOne(moussa.id);
+
+    const lecture = (base.prisma.deliverer.findUnique as jest.Mock).mock.calls[0][0];
+    expect(lecture.omit).toEqual({ password: true, refresh_token: true, expo_push_token: true });
+  });
+});

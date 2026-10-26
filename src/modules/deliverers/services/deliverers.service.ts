@@ -235,7 +235,11 @@ export class DeliverersService {
     const fins = await this.finsSansSocket(items.map((l) => l.id), connectes, reglages.appliFermeeApresS);
     const appli = contexteAffichage(reglages, connectes, items, await this.livreursEnAppel(maintenant), fins);
     return {
-      items: items.map(({ offer_attempts, _count, ...livreur }) => {
+      // `expo_push_token` sert au calcul ci dessus (le livreur est-il
+      // joignable ?) et ne sort jamais : le serveur pousse sans jeton d'accès
+      // Expo, ce jeton suffit à envoyer une fausse offre au téléphone du
+      // livreur. La liste est ouverte au suivi des livraisons et au call center.
+      items: items.map(({ offer_attempts, _count, expo_push_token: _jeton, ...livreur }) => {
         const disponibilite = disponibiliteLivreur(
           etatLivreurDepuis({ ...livreur, _count }, appli, maintenant),
           maintenant,
@@ -256,6 +260,11 @@ export class DeliverersService {
     };
   }
 
+  /**
+   * Fiche d'un livreur (back office) et profil du livreur lui même
+   * (`GET /deliverers/me`). Ni mot de passe, ni jeton de session, ni jeton de
+   * notification (`expo_push_token`, voir `findAll`) : aucun écran ne les lit.
+   */
   async findOne(id: string) {
     const deliverer = await this.prisma.deliverer.findUnique({
       where: { id },
@@ -272,7 +281,7 @@ export class DeliverersService {
           },
         },
       },
-      omit: { password: true, refresh_token: true },
+      omit: { password: true, refresh_token: true, expo_push_token: true },
     });
     if (!deliverer || deliverer.entity_status === EntityStatus.DELETED) {
       throw new NotFoundException('Livreur non trouvé');
