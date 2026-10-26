@@ -39,11 +39,13 @@ export class LivraisonTableauController {
   @ApiOperation({
     summary: 'Tableau de la livraison : chiffres par restaurant, livreurs, alertes',
     description:
-      'Par restaurant : livreurs disponibles, en course, en pause, appli fermée, en service, prévus au ' +
+      'Par restaurant : livreurs disponibles, en course, en pause, appli fermée (fermée, connexion coupée ou ' +
+      'injoignable), en service, prévus au ' +
       'planning du jour ; courses sans livreur ; livrées et durée moyenne de la journée de service ; ' +
       'nombre d’alertes rouges ; liste des livreurs (état, place dans la file du restaurant, course). ' +
       'Plus `signaux` : alertes calculées par le serveur (TOURNEE_EN_RETARD, SANS_LIVREUR, PARTI_SANS_SAC, ' +
-      'COURSE_ANNULEE_A_RELANCER, ATTENTE_AU_RESTAURANT, APPLI_FERMEE_EN_COURSE, POSITION_PERDUE_EN_COURSE, ' +
+      'COURSE_ANNULEE_A_RELANCER, ATTENTE_AU_RESTAURANT, APPLI_FERMEE_EN_COURSE (appli fermée par le livreur, ' +
+      'prouvé), POSITION_PERDUE_EN_COURSE (dont la connexion coupée en course), ' +
       'A_ENCAISSER, PREVU_PAS_EN_SERVICE), rouges d’abord. Un compte de restaurant ne reçoit que le sien ; ' +
       'le siège reçoit tout le réseau, ou un restaurant avec `restaurantId`. Gardé 10 s.',
   })

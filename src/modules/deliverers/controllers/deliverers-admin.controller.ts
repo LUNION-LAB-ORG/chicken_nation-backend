@@ -33,11 +33,14 @@ export class DeliverersAdminController {
     summary: 'Liste paginée des livreurs avec filtres',
     description:
       'Chaque livreur porte `disponibilite` (état par la règle unique des offres, dont ' +
-      '`APPLI_FERMEE` « Appli fermée », `INJOIGNABLE` « Injoignable » : ni socket ouvert ni jeton ' +
+      '`APPLI_FERMEE` « Appli fermée » : l\'appli a fermé elle-même son socket et se tait depuis ' +
+      '`deliverer.appli_fermee_apres_s` secondes, `CONNEXION_COUPEE` « Connexion coupée » : même silence ' +
+      'sans cette preuve (réseau coupé, téléphone qui bloque l\'appli), `INJOIGNABLE` « Injoignable » : ni socket ouvert ni jeton ' +
       'de notification, et `EN_APPEL` « En appel » avec le call center), `appli_connectee` (socket ouvert ; null : inconnu), ' +
       '`appli_active` (socket ouvert ou signe de vie de moins de `deliverer.appli_fermee_apres_s` ' +
-      'secondes ; vrai sans socket : appli en arrière-plan ; null : règle coupée, réglage à 0) et ' +
-      '`appli_vue_a` (dernier signe de vie, ISO).',
+      'secondes ; vrai sans socket : appli en arrière-plan ; null : règle coupée, réglage à 0), ' +
+      '`appli_vue_a` (dernier signe de vie, ISO) et `appli_etat` (`ACTIVE`, `FERMEE`, `COUPURE` ; ' +
+      'null : règle coupée ou ancienne appli ; lu aussi en course).',
   })
   @Get()
   @UserRoles(...ROLES_SUIVI_LIVRAISON)
@@ -51,7 +54,7 @@ export class DeliverersAdminController {
       'Retourne les livreurs ACTIVE operationnels avec GPS récent + statut ' +
       'availability + course active éventuelle. Les livreurs sans GPS récent ' +
       '(> `deliverer.gps_expiration_minutes`) sont exclus par défaut. Mêmes champs ' +
-      '`disponibilite`, `appli_connectee`, `appli_active` et `appli_vue_a` que la liste. ' +
+      '`disponibilite`, `appli_connectee`, `appli_active`, `appli_vue_a` et `appli_etat` que la liste. ' +
       '`rang_file` : place dans la file de son restaurant (`queue_rank`, gardé, range tous les ' +
       'livreurs lus ensemble). `active_course` porte aussi le code de retrait, les heures, ' +
       '`fin_prevue`, `en_retard` et `retard_min`. Avec `jour=true` (vue Livreurs « Aujourd\'hui ») : ' +
