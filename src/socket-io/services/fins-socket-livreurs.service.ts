@@ -18,8 +18,15 @@ export type ClientRedisFinsSocket = Pick<Redis, 'set' | 'del' | 'mget' | 'quit'>
 /** Clé Redis de la fin du dernier socket d'un livreur. */
 export const cleFinSocket = (delivererId: string) => `livreur:fin-socket:${delivererId}`;
 
-/** Gardée 12 h, comme le suivi des applis (`FENETRE_SUIVI_APPLIS_MS`). */
-export const DUREE_FIN_SOCKET_S = 12 * 3600;
+/**
+ * Gardée jusqu'à la prochaine connexion du livreur (effacée à chaque ouverture
+ * de socket) ; l'expiration de 30 jours ne sert qu'au ménage d'un compte qui
+ * ne revient plus. Relecture du 26/10 : à 12 h, la preuve disparaissait alors
+ * qu'une appli fermée laisse le livreur en service sans limite (rien ne le
+ * sort de la file la nuit). Le matin, le même livreur passait de « Appli
+ * fermée » à « Connexion coupée » sans rien changer chez lui.
+ */
+export const DUREE_FIN_SOCKET_S = 30 * 24 * 3600;
 
 /** Au-delà, la lecture est abandonnée : aucune preuve (même délai que la présence des sockets). */
 export const DELAI_FINS_SOCKET_MS = 1500;
@@ -57,8 +64,8 @@ function lireFin(brut: string | null): FinSocket | null {
  *
  * La passerelle reçoit la raison socket.io de chaque fin de socket
  * (`EVENEMENT_LIVREUR_DECONNECTE`) : elle est gardée ici, dans Redis (toutes
- * les instances la lisent), 12 h, et effacée dès qu'un nouveau socket du
- * livreur s'ouvre (`EVENEMENT_LIVREUR_CONNECTE`). La règle unique n'en tire
+ * les instances la lisent), jusqu'à ce qu'un nouveau socket du livreur
+ * s'ouvre (`EVENEMENT_LIVREUR_CONNECTE`), 30 jours au plus. La règle unique n'en tire
  * « Appli fermée » que pour `client namespace disconnect` (l'appli a fermé
  * elle-même son socket) suivi d'aucun signe de vie (`fermetureProuvee`) ;
  * tout autre silence est une connexion coupée.
@@ -108,7 +115,7 @@ export class FinsSocketLivreursService implements OnModuleDestroy {
 
   /**
    * Fin du dernier socket de ces livreurs, en une commande. Livreur sans fin
-   * gardée (socket rouvert, jamais connecté, plus de 12 h) : absent. Null :
+   * gardée (socket rouvert, jamais connecté, plus de 30 jours) : absent. Null :
    * Redis muet ou trop lent, aucune preuve.
    */
   async lire(ids: readonly string[]): Promise<Map<string, FinSocket> | null> {

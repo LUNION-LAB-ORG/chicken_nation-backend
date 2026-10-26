@@ -8,6 +8,8 @@
  */
 import { Logger } from '@nestjs/common';
 
+import { etatAppliDepuis } from 'src/modules/deliverers/helpers/disponibilite.rules';
+
 import { EVENEMENT_LIVREUR_CONNECTE, EVENEMENT_LIVREUR_DECONNECTE } from '../utils/evenements-connexion.util';
 import {
   DELAI_FINS_SOCKET_MS,
@@ -16,13 +18,27 @@ import {
   cleFinSocket,
 } from './fins-socket-livreurs.service';
 
-/** Double de Redis : SET avec EX, DEL, MGET ; panne et lenteur à la demande. */
+/** Double de Redis : SET avec EX (qui expire vraiment), DEL, MGET ; panne et lenteur à la demande. */
 class RedisSimule {
   readonly valeurs = new Map<string, string>();
   readonly durees = new Map<string, number>();
+  /** Heure d'expiration de chaque clé (horloge du double, en secondes). */
+  private readonly expirations = new Map<string, number>();
+  private horloge = 0;
   panne = false;
   lent = false;
   commandes = 0;
+
+  /** Le temps passe pour Redis : les clés échues disparaissent. */
+  avancer(secondes: number): void {
+    this.horloge += secondes;
+    for (const [cle, fin] of this.expirations) {
+      if (fin <= this.horloge) {
+        this.valeurs.delete(cle);
+        this.expirations.delete(cle);
+      }
+    }
+  }
 
   private async passer(): Promise<void> {
     this.commandes++;
@@ -35,6 +51,7 @@ class RedisSimule {
     expect(ex).toBe('EX');
     this.valeurs.set(cle, valeur);
     this.durees.set(cle, secondes);
+    this.expirations.set(cle, this.horloge + secondes);
     return 'OK';
   }
 
@@ -73,16 +90,42 @@ describe('FinsSocketLivreursService', () => {
     expect(EVENEMENT_LIVREUR_CONNECTE).toBe('livreur.connecte');
   });
 
-  it('déconnexion : raison et heure écrites pour 12 h sous `livreur:fin-socket:<id>`, relues en Date', async () => {
+  it('déconnexion : raison et heure écrites pour 30 jours sous `livreur:fin-socket:<id>`, relues en Date', async () => {
     const t = monter();
     await t.service.noterFin({ delivererId: 'd1', raison: 'client namespace disconnect', a: A });
 
     expect(cleFinSocket('d1')).toBe('livreur:fin-socket:d1');
-    expect(DUREE_FIN_SOCKET_S).toBe(43_200);
-    expect(t.redis.durees.get('livreur:fin-socket:d1')).toBe(43_200);
+    expect(DUREE_FIN_SOCKET_S).toBe(30 * 24 * 3600);
+    expect(t.redis.durees.get('livreur:fin-socket:d1')).toBe(30 * 24 * 3600);
     expect(await t.service.lire(['d1', 'd2'])).toEqual(
       new Map([['d1', { raison: 'client namespace disconnect', a: new Date(A) }]]),
     );
+  });
+
+  /**
+   * Relecture du 26/10 : une appli fermée laisse le livreur en service sans
+   * limite. Gardée 12 h, la preuve disparaissait la nuit : le matin, « Appli
+   * fermée » devenait « Connexion coupée » sans que rien ait changé chez lui.
+   */
+  it('appli fermée à 22 h, livreur resté en service : toujours « Appli fermée » le lendemain à 10 h, et au bout d’une semaine', async () => {
+    const t = monter();
+    const fermeture = '2026-10-25T22:00:00.000Z';
+    await t.service.noterFin({ delivererId: 'd1', raison: 'client namespace disconnect', a: fermeture });
+    const ligne = { id: 'd1', dernier_signal_at: new Date('2026-10-25T21:59:40.000Z'), protocole_appli: 4 };
+    const etat = async (heure: string) =>
+      etatAppliDepuis(
+        ligne,
+        { appliFermeeApresS: 180, connectes: new Set(), finsSocket: await t.service.lire(['d1']) },
+        new Date(heure),
+      );
+
+    t.redis.avancer(12 * 3600 + 1);
+    expect(await etat('2026-10-26T10:00:01.000Z')).toBe('FERMEE');
+    t.redis.avancer(6 * 24 * 3600);
+    expect(await etat('2026-11-01T10:00:01.000Z')).toBe('FERMEE');
+    // Il rouvre l'appli : la fin est effacée.
+    await t.service.effacer({ delivererId: 'd1' });
+    expect(await t.service.lire(['d1'])).toEqual(new Map());
   });
 
   it('nouvelle fin : remplace la précédente ; nouvelle connexion : efface la fin', async () => {
