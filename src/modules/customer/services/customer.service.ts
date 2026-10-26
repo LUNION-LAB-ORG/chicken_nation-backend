@@ -477,7 +477,12 @@ export class CustomerService {
             },
           },
         },
+        // Jamais le code de retrait du client (`recovery_code`) : la fiche
+        // part à tous les rôles qui lisent les clients (marketing, caisse,
+        // gérant), et aucun écran ne l'affiche. Il ne sort qu'à
+        // l'administrateur et au call center (order/helpers/code-client.rules.ts).
         orders: {
+          omit: { recovery_code: true },
           where: {
             OR: [
               {
