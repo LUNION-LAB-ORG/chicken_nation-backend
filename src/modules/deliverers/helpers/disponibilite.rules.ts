@@ -223,6 +223,13 @@ export interface FinSocket {
  * hors des récentes sur un Android d'origine, écran détruit, compte
  * déconnecté). Une coupure du réseau ou une appli gelée donne `ping timeout`,
  * un processus tué `transport close`.
+ *
+ * Limite connue (relecture du 26/10) : l'appli du 24/10 (APK installée, avant
+ * sa mise à jour à distance) envoie aussi cette raison quand son chien de
+ * garde relance un socket sourd (ping sans réponse, réseau faible). Si le
+ * réseau tombe juste après, ce livreur peut encore être dit « Appli fermée ».
+ * La mise à jour de l'appli relance sans ce paquet (le serveur voit alors
+ * `transport close`, une coupure).
  */
 export const RAISON_FERMEE_PAR_L_APPLI = 'client namespace disconnect';
 
