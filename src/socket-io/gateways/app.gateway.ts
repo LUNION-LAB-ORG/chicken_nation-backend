@@ -36,7 +36,11 @@ import {
   sallesLivreursARetirer,
   salleUtilisateur,
 } from '../utils/salles.util';
-import { EVENEMENT_LIVREUR_CONNECTE } from '../utils/evenements-connexion.util';
+import {
+  EVENEMENT_LIVREUR_CONNECTE,
+  EVENEMENT_LIVREUR_DECONNECTE,
+  LivreurDeconnecte,
+} from '../utils/evenements-connexion.util';
 import {
   ATTENTES_REPRISE_MS,
   BUDGET_IDENTIFICATION_MS,
@@ -272,6 +276,10 @@ export class AppGateway implements OnGatewayInit, OnGatewayConnection, OnGateway
           'deconnecte',
           `déconnecté (${raison}) après ${dureeLisible(Date.now() - depuis)}`,
         );
+        // Raison gardée (FinsSocketLivreursService) : « Appli fermée » seulement
+        // quand l'appli a fermé elle-même son socket, sinon « Connexion coupée ».
+        const fin: LivreurDeconnecte = { delivererId: identite.id, raison, a: new Date().toISOString() };
+        this.eventEmitter.emit(EVENEMENT_LIVREUR_DECONNECTE, fin);
       });
       // Check de présence matinal en attente aujourd'hui : renvoyé tout de
       // suite (reconnexion sur un autre appareil après le cron de 8 h).

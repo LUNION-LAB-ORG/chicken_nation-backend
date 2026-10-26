@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 
 import { MESSAGE_JETON_EXPIRE } from 'src/json-web-token/json-web-token.service';
 import { EVENEMENT_CONNEXION_ACCEPTEE } from '../utils/connexion-socket.util';
-import { EVENEMENT_LIVREUR_CONNECTE } from '../utils/evenements-connexion.util';
+import { EVENEMENT_LIVREUR_CONNECTE, EVENEMENT_LIVREUR_DECONNECTE } from '../utils/evenements-connexion.util';
 import { AppGateway } from './app.gateway';
 
 /**
@@ -339,6 +339,31 @@ describe('AppGateway', () => {
       expect(evenement).toBe('disconnect');
       surDeconnexion('transport close');
       expect(journal.log).toHaveBeenLastCalledWith('Livreur 5a0c0e7e déconnecté (transport close) après 0 s');
+    });
+
+    it('livreur : la raison de la fin du socket part sur le bus interne (appli fermée ou connexion coupée), même quand le journal se tait', async () => {
+      const { gateway, prisma, jwt, eventEmitter } = creerPasserelle();
+      jwt.verifyToken.mockResolvedValue({ sub: 'd1' });
+      prisma.deliverer.findUnique.mockResolvedValue({ id: 'd1', restaurant_id: 'r1' });
+      const premier = fauxClient('deliverer', 'socket-1');
+      const second = fauxClient('deliverer', 'socket-2');
+      await connecter(gateway, premier);
+      await connecter(gateway, second);
+
+      jest.useFakeTimers({ now: new Date('2026-10-25T17:31:00.000Z') });
+      try {
+        premier.once.mock.calls[0][1]('client namespace disconnect');
+        // Deuxième fin dans la même minute : pas de ligne au journal texte, mais toujours sur le bus.
+        second.once.mock.calls[0][1]('ping timeout');
+      } finally {
+        jest.useRealTimers();
+      }
+
+      const fins = eventEmitter.emit.mock.calls.filter(([nom]) => nom === EVENEMENT_LIVREUR_DECONNECTE);
+      expect(fins).toEqual([
+        [EVENEMENT_LIVREUR_DECONNECTE, { delivererId: 'd1', raison: 'client namespace disconnect', a: '2026-10-25T17:31:00.000Z' }],
+        [EVENEMENT_LIVREUR_DECONNECTE, { delivererId: 'd1', raison: 'ping timeout', a: '2026-10-25T17:31:00.000Z' }],
+      ]);
     });
 
     it('version annoncée par l\'appli : écrite avec la connexion et avec un refus', async () => {
