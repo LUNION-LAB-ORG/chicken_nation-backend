@@ -49,7 +49,7 @@ import { ReceiptsService } from '../services/receipts.service';
 import { OrderCreateDto } from '../dto/order-create.dto';
 import { OrderWebSocketService } from '../websockets/order-websocket.service';
 import { peutVoirLesBrouillons } from '../helpers/brouillons.rules';
-import { peutLireCodeClient } from '../helpers/code-client.rules';
+import { commandePourLePersonnel, peutLireCodeClient } from '../helpers/code-client.rules';
 import { Throttle } from '@nestjs/throttler';
 import { CouponCreationThrottlerGuard, LIMITE_COUPON } from '../guards/coupon-throttler.guard';
 import { champsClientModifiables } from '../helpers/modification-client.rules';
@@ -203,16 +203,20 @@ export class OrderController {
       }
       restaurant_id = user.restaurant_id;
     }
-    return this.orderService.create(req, { ...createOrderDto, user_id: user.id, restaurant_id });
+    const commande = await this.orderService.create(req, { ...createOrderDto, user_id: user.id, restaurant_id });
+    return commandePourLePersonnel(user, commande);
   }
 
   @Get()
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.READ)
   @ApiOperation({ summary: 'Rechercher toutes les commandes' })
-  findAll(@Req() req: Request, @Query() queryOrderDto: QueryOrderDto) {
+  async findAll(@Req() req: Request, @Query() queryOrderDto: QueryOrderDto) {
+    const user = req.user as User;
     // Le user du JWT pilote la visibilité PENDING (admin seul) côté service.
-    return this.orderService.findAll(queryOrderDto, req.user as User);
+    const page = await this.orderService.findAll(queryOrderDto, user);
+    // Code de retrait du client : ADMIN et CALL_CENTER seulement (code-client.rules.ts).
+    return { ...page, data: page.data.map((commande) => commandePourLePersonnel(user, commande)) };
   }
 
   /**
@@ -230,8 +234,9 @@ export class OrderController {
       'Marque Order.paied=true + paied_at=now et passe en COMPLETED. Uniquement pour payment_method=OFFLINE. Déclenche order:updated.',
   })
   @ApiBody({ type: MarkPaidCashDto })
-  markPaidCash(@Req() req: Request, @Param('id') id: string, @Body() dto: MarkPaidCashDto) {
-    return this.orderService.markPaidCash(id, dto.amount, req.user as User);
+  async markPaidCash(@Req() req: Request, @Param('id') id: string, @Body() dto: MarkPaidCashDto) {
+    const user = req.user as User;
+    return commandePourLePersonnel(user, await this.orderService.markPaidCash(id, dto.amount, user));
   }
 
   @Post(':id/confirm-payment')
@@ -488,7 +493,10 @@ export class OrderController {
       req.user as User,
       (order as { restaurant_id?: string | null })?.restaurant_id,
     );
-    return order;
+    // Le code de retrait du client (`recovery_code`, `delivery.delivery_pin`)
+    // n'en sort que pour ADMIN et CALL_CENTER : le tiroir lit cette route pour
+    // tous les rôles (code-client.rules.ts).
+    return commandePourLePersonnel(req.user as User, order);
   }
 
   /**
@@ -571,7 +579,7 @@ export class OrderController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.UPDATE_FULL)
   @ApiBody({ type: UpdateOrderDto })
-  update(
+  async update(
     @Req() req: Request,
     @Param('id') id: string,
     @Body() updateOrderDto: UpdateOrderDto,
@@ -583,7 +591,7 @@ export class OrderController {
     // annulée, qui reste annulée. Cf. order.service.ts:update().
     const user = req.user as User;
     const isAdmin = user?.role === UserRole.ADMIN;
-    return this.orderService.update(
+    const commande = await this.orderService.update(
       id,
       isAdmin ? updateOrderDto : sansChampsDePaiement(updateOrderDto),
       {
@@ -592,6 +600,7 @@ export class OrderController {
         user,
       },
     );
+    return commandePourLePersonnel(user, commande);
   }
   /**
    * ⚠️ FAILLE CRITIQUE CORRIGEE : aucun contrôle d'appartenance.
@@ -667,11 +676,12 @@ export class OrderController {
     if (!commande) throw new NotFoundException('Commande introuvable');
     assertCanAccessRestaurant(user, (commande as any).restaurant_id);
     // On transmet le rôle : seul un ADMIN pourra annuler une commande déjà avancée.
-    return this.orderService.updateStatus(id, body.status, {
+    const modifiee = await this.orderService.updateStatus(id, body.status, {
       ...body.meta,
       userId: user.id,
       role: user.role,
     });
+    return commandePourLePersonnel(user, modifiee);
   }
 
   @Patch(':id/client/status')
@@ -747,9 +757,10 @@ export class OrderController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.DELETE)
   @HttpCode(HttpStatus.OK)
-  remove(@Req() req: Request, @Param('id') id: string) {
+  async remove(@Req() req: Request, @Param('id') id: string) {
+    const user = req.user as User;
     // L'auteur signe la restitution du coupon dans le journal d'audit.
-    return this.orderService.remove(id, req.user as User);
+    return commandePourLePersonnel(user, await this.orderService.remove(id, user));
   }
 
   @Get(':id/pdf')
