@@ -28,16 +28,21 @@ export class UserScopedCacheInterceptor extends CacheInterceptor {
 
     const req = context.switchToHttp().getRequest();
     const u = req?.user as
-      | { id?: string; type?: string; restaurant_id?: string | null }
+      | { id?: string; type?: string; restaurant_id?: string | null; role?: string | null }
       | undefined;
 
     let scope = 'anon';
     if (u) {
       if (u.type === 'RESTAURANT' || u.type === 'BACKOFFICE') {
-        // Staff : le contenu ne dépend que du restaurant (et du type pour le
-        // « tout voir » BACKOFFICE) → les users du même restaurant partagent
-        // la même entrée, jamais entre restaurants.
-        scope = `staff:${u.type}:${u.restaurant_id ?? 'all'}`;
+        // Staff : le contenu dépend du restaurant (et du type pour le « tout
+        // voir » BACKOFFICE), et aussi du RÔLE : `GET /orders/:id/livraison`
+        // ne rend le code de retrait du client qu'à l'administrateur et au
+        // call center (26/10), le détail d'une commande n'ouvre le panier
+        // annulé par le client qu'à ces deux rôles. Sans le rôle dans la clé,
+        // un compte de suivi des livraisons recevait, dans la seconde, la
+        // réponse gardée pour l'administrateur. Jamais d'entrée partagée entre
+        // restaurants ni entre rôles.
+        scope = `staff:${u.type}:${u.restaurant_id ?? 'all'}:${u.role ?? 'sans-role'}`;
       } else if (u.id) {
         // Client / livreur : clé par principal.
         scope = `principal:${u.id}`;
