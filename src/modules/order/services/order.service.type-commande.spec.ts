@@ -32,10 +32,11 @@ import {
 import { CourseChannels } from 'src/modules/course/enums/course-channels';
 import {
   MESSAGE_COURSE_CHANGEE,
-  messageCoursePartie,
   messageLivreurTurboEngage,
   messageSacChezLeLivreur,
   RAISON_TURBO_SANS_CHANGEMENT,
+  raisonCourseTurboRelancee,
+  raisonRelanceImpossible,
 } from 'src/modules/course/helpers/detachement-commande.rules';
 import { DispatchListener } from 'src/modules/course/listeners/dispatch.listener';
 import { monter } from 'src/modules/course/services/banc-planificateur.simulee-spec';
@@ -98,6 +99,7 @@ function monterCas(
     ),
   });
   const push = Object.assign(h.push, { notifyCourseCancelled: jest.fn() });
+  const cloche = Object.assign(h.cloche, { sendTurboCourseCancelledBell: jest.fn(async (_p: unknown) => undefined) });
   const journal = new DispatchJournalService(h.base.prisma);
   const detachement = new DetachementCommandeService(
     h.base.prisma,
@@ -107,15 +109,18 @@ function monterCas(
     turbo as never,
     journal,
     h.courseEvent,
+    h.actionsLivraison,
+    cloche as never,
   );
 
   /** Entre la lecture et l'écriture de la commande : ce qu'un collègue, la caisse ou Turbo change en base. */
   let entreTemps: (() => void) | undefined;
   const service = Object.create(OrderService.prototype) as OrderService;
+  const lue = (id: string) => ({ ...h.base.commandes.find((o) => o.id === id)!, paiements: [], order_items: [] });
   const greffes = {
     prisma: h.base.prisma,
-    findById: jest.fn(async (id: string) => ({ ...h.base.commandes.find((o) => o.id === id)!, paiements: [], order_items: [] })),
-    recomputeOrderPaiedFlag: jest.fn(),
+    findById: jest.fn(async (id: string) => lue(id)),
+    recomputeOrderPaiedFlag: jest.fn(async (id: string) => lue(id)),
     orderHelper: {
       calculateEstimatedTime: jest.fn(() => {
         entreTemps?.();
@@ -153,6 +158,8 @@ function monterCas(
     ...h,
     turbo,
     push,
+    cloche,
+    detachement,
     service,
     greffes,
     file,
@@ -275,17 +282,155 @@ describe('Commande à livrer déjà dans une course, passée à emporter ou sur 
     expect(t.base.prisma.order.update).not.toHaveBeenCalled();
   });
 
-  it('course partie, commande encore au comptoir : refus en clair, rien n’est écrit', async () => {
+  it('course partie sans cette commande, restée au comptoir : livraison retirée, « Commande retirée » au livreur', async () => {
+    const t = monterCas(
+      { statut: CourseStatut.IN_DELIVERY, deliverer_id: LIVREUR, picked_up_at: ilYa(300), parti_at: ilYa(60) },
+      [{}, { status: OrderStatus.PICKED_UP }],
+      { livraisons: [{}, { statut: DeliveryStatut.IN_ROUTE }] },
+    );
+
+    await t.modifier({ type: OrderType.PICKUP });
+
+    expect(t.A.type).toBe(OrderType.PICKUP);
+    expect(t.A.status).toBe(OrderStatus.READY);
+    expect(t.livraisonDe(t.A)).toBeUndefined();
+    expect(t.livraisonDe(t.B)?.statut).toBe(DeliveryStatut.IN_ROUTE);
+    expect(t.course.statut).toBe(CourseStatut.IN_DELIVERY);
+    expect(t.push.notifyCommandeRetiree).toHaveBeenCalledWith(
+      expect.objectContaining({ delivererId: LIVREUR, titre: 'Commande retirée', commande: 'CMD-A', restantes: 1 }),
+    );
+  });
+
+  it('course partie, tout le reste déjà livré : la course se termine, elle n’est pas annulée', async () => {
+    const t = monterCas(
+      { statut: CourseStatut.IN_DELIVERY, deliverer_id: LIVREUR, picked_up_at: ilYa(900), parti_at: ilYa(800) },
+      [{}, { status: OrderStatus.COMPLETED }],
+      { livraisons: [{}, { statut: DeliveryStatut.DELIVERED }] },
+    );
+
+    await t.modifier({ type: OrderType.PICKUP });
+
+    expect(t.A.type).toBe(OrderType.PICKUP);
+    expect(t.A.status).toBe(OrderStatus.READY);
+    expect(t.livraisonDe(t.A)).toBeUndefined();
+    expect(t.course.statut).toBe(CourseStatut.COMPLETED);
+    expect(t.push.notifyCourseCompleted).toHaveBeenCalledWith(expect.objectContaining({ delivererId: LIVREUR }));
+    expect(t.push.notifyCourseCancelled).not.toHaveBeenCalled();
+  });
+
+  it('course partie, le livreur revient prendre le sac entre la lecture et l’écriture : refus, rien n’est écrit', async () => {
     const t = monterCas(
       { statut: CourseStatut.IN_DELIVERY, deliverer_id: LIVREUR, picked_up_at: ilYa(300), parti_at: ilYa(60) },
       [{}, { status: OrderStatus.PICKED_UP }],
     );
+    t.siEntreTemps(() => {
+      t.A.status = OrderStatus.PICKED_UP;
+    });
 
-    await expect(t.modifier({ type: OrderType.PICKUP })).rejects.toThrow(
-      new ConflictException(messageCoursePartie(OrderType.PICKUP)),
-    );
+    await expect(t.modifier({ type: OrderType.PICKUP })).rejects.toThrow(ConflictException);
     expect(t.A.type).toBe(OrderType.DELIVERY);
     expect(t.livraisonDe(t.A)).toBeDefined();
+    expect(t.push.notifyCommandeRetiree).not.toHaveBeenCalled();
+  });
+
+  it('course récupérée pas encore partie : la commande au comptoir est retirée, l’autre reste avec le livreur', async () => {
+    const t = monterCas(
+      { statut: CourseStatut.IN_DELIVERY, deliverer_id: LIVREUR, picked_up_at: ilYa(30) },
+      [{}, { status: OrderStatus.PICKED_UP }],
+    );
+
+    await t.modifier({ type: OrderType.TABLE });
+
+    expect(t.A.type).toBe(OrderType.TABLE);
+    expect(t.livraisonDe(t.A)).toBeUndefined();
+    expect(t.livraisonDe(t.B)?.course_id).toBe(t.course.id);
+    expect(t.course.statut).toBe(CourseStatut.IN_DELIVERY);
+    expect(t.push.notifyCommandeRetiree).toHaveBeenCalledWith(
+      expect.objectContaining({ delivererId: LIVREUR, commande: 'CMD-A', restantes: 1 }),
+    );
+  });
+
+  it('course expirée (aucun livreur trouvé), commande seule : course annulée, jamais la commande', async () => {
+    const t = monterCas({ statut: CourseStatut.EXPIRED }, [{}]);
+
+    await t.modifier({ type: OrderType.PICKUP });
+
+    expect(t.A.type).toBe(OrderType.PICKUP);
+    expect(t.A.status).toBe(OrderStatus.READY);
+    expect(t.livraisonDe(t.A)).toBeUndefined();
+    expect(t.course).toEqual(
+      expect.objectContaining({
+        statut: CourseStatut.CANCELLED,
+        cancelled_by: 'admin',
+        cancelled_reason: 'Plus aucune commande à livrer : CMD-A passée à emporter',
+      }),
+    );
+    expect(t.emisSur(CourseChannels.COURSE_CANCELLED)).toHaveLength(1);
+  });
+
+  it('passée à emporter en retirant son coupon : même retrait de la course', async () => {
+    const t = monterCas({}, [{ code_promo: 'PROMO10', discount: 1000, amount: 10000, paiements: [] }, {}]);
+    const orderCoupon = {
+      assertPeutChangerCoupon: jest.fn(),
+      retirerDansTransaction: jest.fn(async () => ({ remise: 1000 })),
+      signalerRetrait: jest.fn(async () => undefined),
+    };
+    Object.assign(t.service, { orderCoupon });
+
+    await t.modifier({ type: OrderType.PICKUP, retirer_coupon: true });
+
+    expect(orderCoupon.retirerDansTransaction).toHaveBeenCalled();
+    expect(t.A).toEqual(expect.objectContaining({ type: OrderType.PICKUP, code_promo: null, discount: 0, delivery_fee: 0 }));
+    expect(t.livraisonDe(t.A)).toBeUndefined();
+    expect(t.livraisonDe(t.B)?.course_id).toBe(t.course.id);
+    expect(t.journalDe('COMMANDE_DETACHEE')).toHaveLength(1);
+  });
+
+  it('écriture refusée, course interne : rien n’est retiré, annulé, relancé ni annoncé', async () => {
+    const t = monterCas({}, [{}, {}]);
+    const relance = jest.spyOn(t.offres, 'relancerCourseAnnulee');
+    // Un collègue annule la commande pendant la modification.
+    t.siEntreTemps(() => {
+      t.A.status = OrderStatus.CANCELLED;
+    });
+
+    await expect(t.modifier({ type: OrderType.PICKUP })).rejects.toThrow(ConflictException);
+    expect(t.A.type).toBe(OrderType.DELIVERY);
+    expect(t.livraisonDe(t.A)?.course_id).toBe(t.course.id);
+    expect(t.course.statut).toBe(CourseStatut.PENDING_ASSIGNMENT);
+    expect(t.base.courses).toHaveLength(1);
+    expect(relance).not.toHaveBeenCalled();
+    expect(t.journalDe('COMMANDE_DETACHEE')).toEqual([]);
+    expect(t.emis).toEqual([]);
+  });
+
+  it('pas encore en course, le planificateur l’y met pendant la modification : refus, puis retrait au second essai', async () => {
+    const t = monterCas({}, [{}]);
+    t.base.livraisons.splice(0);
+    // Le passage du planificateur crée la livraison entre la lecture et l'écriture.
+    t.siEntreTemps(() => {
+      t.base.livraisons.push(livraison({ course_id: t.course.id, order_id: t.A.id, sequence_order: 1 }));
+    });
+
+    await expect(t.modifier({ type: OrderType.PICKUP })).rejects.toThrow(new ConflictException(MESSAGE_COURSE_CHANGEE));
+    expect(t.A.type).toBe(OrderType.DELIVERY);
+    expect(t.livraisonDe(t.A)?.course_id).toBe(t.course.id);
+
+    // Rechargée, la commande est retirée de la course comme les autres.
+    await t.modifier({ type: OrderType.PICKUP });
+    expect(t.A.type).toBe(OrderType.PICKUP);
+    expect(t.livraisonDe(t.A)).toBeUndefined();
+  });
+
+  it('pas encore en course : la commande passe à emporter, sans rien d’autre', async () => {
+    const t = monterCas({}, [{}]);
+    t.base.livraisons.splice(0);
+
+    await t.modifier({ type: OrderType.PICKUP });
+
+    expect(t.A.type).toBe(OrderType.PICKUP);
+    expect(t.base.livraisons).toEqual([]);
+    expect(t.emis).toEqual([]);
   });
 
   it('remise au comptoir entre la lecture et l’écriture : refus, la course garde la livraison', async () => {
@@ -375,6 +520,72 @@ describe('Commande à livrer déjà dans une course, passée à emporter ou sur 
     const nouvelle = t.base.courses.find((c) => c.id !== t.course.id)!;
     expect(t.livraisonDe(t.B)?.course_id).toBe(nouvelle.id);
     expect(t.turbo.creerCourseGroupe).toHaveBeenCalledWith(expect.objectContaining({ courseId: nouvelle.id }));
+  });
+
+  it('course Turbo : annulée dans la transaction du retrait, une coupure juste après ne laisse pas de course morte', async () => {
+    const t = monterCas({ turbo_escalated_at: ilYa(300) }, [
+      { delivery_service: DeliveryService.TURBO },
+      { delivery_service: DeliveryService.TURBO },
+    ]);
+    // Le serveur s'arrête juste après la validation : aucune suite ne passe.
+    jest.spyOn(t.detachement, 'apresEcriture').mockResolvedValue(undefined);
+
+    await t.modifier({ type: OrderType.PICKUP });
+
+    expect(t.A.type).toBe(OrderType.PICKUP);
+    expect(t.course).toEqual(
+      expect.objectContaining({
+        statut: CourseStatut.CANCELLED,
+        cancelled_by: 'system',
+        cancelled_reason: raisonCourseTurboRelancee('CMD-A', OrderType.PICKUP),
+      }),
+    );
+    expect(t.livraisonDe(t.B)?.statut).toBe(DeliveryStatut.CANCELLED);
+    // La commande restante se relance depuis le backoffice, comme après une annulation par Turbo.
+    const relance = await t.offres.relancerCourseAnnulee(t.course.id as string);
+    expect(relance.ok).toBe(true);
+    expect(t.livraisonDe(t.B)?.course_id).toBe(relance.newCourseId);
+  });
+
+  it('course Turbo, relance des autres commandes impossible : cloche du restaurant et du siège', async () => {
+    const t = monterCas({ turbo_escalated_at: ilYa(300) }, [
+      { delivery_service: DeliveryService.TURBO },
+      { delivery_service: DeliveryService.TURBO },
+    ]);
+    jest.spyOn(t.offres, 'relancerCourseAnnulee').mockRejectedValue(new Error('base injoignable'));
+
+    await t.modifier({ type: OrderType.PICKUP });
+
+    expect(t.A.type).toBe(OrderType.PICKUP);
+    expect(t.course.statut).toBe(CourseStatut.CANCELLED);
+    expect(t.livraisonDe(t.B)).toEqual(expect.objectContaining({ course_id: t.course.id, statut: DeliveryStatut.CANCELLED }));
+    expect(t.cloche.sendTurboCourseCancelledBell).toHaveBeenCalledWith({
+      courseReference: 'CRS-1',
+      restaurantId: t.course.restaurant_id,
+      orderReferences: ['CMD-B'],
+      raison: raisonRelanceImpossible('CMD-A', OrderType.PICKUP),
+    });
+  });
+
+  it('panier de l’application confié à Turbo, repris au téléphone ET passé à emporter : la taxe tombe, sans avertissement', async () => {
+    const t = monterCas({ turbo_escalated_at: ilYa(300) }, [
+      {
+        delivery_service: DeliveryService.TURBO,
+        auto: true,
+        channel: OrderChannel.APP,
+        tax: 500,
+        amount: 11500,
+      },
+    ]);
+    Object.assign(t.service, { signalerReprise: jest.fn() });
+
+    const resultat = (await t.modifier({ type: OrderType.PICKUP, auto: false })) as Record<string, unknown>;
+
+    expect(resultat.avertissement_reprise).toBeUndefined();
+    expect(t.A).toEqual(
+      expect.objectContaining({ type: OrderType.PICKUP, auto: false, tax: 0, delivery_fee: 0, amount: 10000 }),
+    );
+    expect(t.livraisonDe(t.A)).toBeUndefined();
   });
 
   it('à emporter vers à livrer : rien de nouveau, la commande attend le planificateur', async () => {

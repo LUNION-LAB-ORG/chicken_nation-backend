@@ -11,13 +11,14 @@
  * Désormais la livraison est retirée de sa course, comme une commande
  * détachée au départ du livreur (même suppression, mêmes annonces). Ce qui
  * décide :
- *  - commande déjà remise au livreur, livraison commencée, ou course partie
- *    du restaurant : le sac est avec le livreur, le type ne change pas (409) ;
+ *  - commande déjà remise au livreur, ou livraison commencée : le sac est
+ *    avec le livreur, le type ne change pas (409) ;
  *  - course confiée à Turbo : leur groupe est d'abord annulé chez eux ; un
  *    livreur Turbo déjà engagé, ou une réponse incertaine, refuse le
  *    changement de type ;
  *  - sinon (course sans livreur, proposée, acceptée, livreur au restaurant,
- *    commande pas encore remise) : la livraison est retirée.
+ *    ou course partie sans cette commande, restée au comptoir) : la livraison
+ *    est retirée.
  * La commande n'est jamais annulée ; ses frais, son montant et ses paiements
  * suivent la règle habituelle du changement de type.
  */
@@ -45,9 +46,6 @@ export function libelleNouveauType(type: OrderType): string {
 export const messageSacChezLeLivreur = (type: OrderType): string =>
   `Le livreur a déjà récupéré cette commande : le sac est avec lui, elle ne peut plus passer ${libelleNouveauType(type)}.`;
 
-export const messageCoursePartie = (type: OrderType): string =>
-  `Le livreur est déjà parti avec cette course : la commande ne peut plus passer ${libelleNouveauType(type)}.`;
-
 export const messageLivreurTurboEngage = (type: OrderType): string =>
   `Un livreur Turbo a déjà accepté cette course : la commande ne peut plus passer ${libelleNouveauType(type)}.`;
 
@@ -69,6 +67,40 @@ export const raisonCourseTurboRelancee = (reference: string, type: OrderType): s
 /** Raison écrite quand l'annulation chez Turbo a réussi mais que la commande n'a pas été modifiée. */
 export const RAISON_TURBO_SANS_CHANGEMENT =
   'Groupe annulé chez Turbo, changement de type non enregistré : commandes relancées dans une nouvelle course';
+
+/**
+ * Cloche « Course annulée par Turbo » quand la relance des autres commandes
+ * n'a pas pu se faire : leur groupe est mort chez Turbo, personne ne viendra.
+ */
+export const raisonRelanceImpossible = (reference: string, type: OrderType): string =>
+  `groupe annulé après le passage de ${reference} ${libelleNouveauType(type)}, relance automatique impossible`;
+
+/**
+ * Ce que devient la course une fois la livraison retirée, décidé dans la
+ * transaction du retrait (la course y est verrouillée) :
+ *  - RETRAIT : il reste des commandes à livrer, la course continue ;
+ *  - ANNULEE : plus rien à livrer ni de livré, la course est annulée (jamais
+ *    la commande) ;
+ *  - TERMINEE : plus rien à livrer mais des livraisons faites (course partie
+ *    sans cette commande) : la course se termine comme après sa dernière
+ *    livraison ;
+ *  - TURBO_RELANCE : course confiée à Turbo, groupe annulé chez eux, avec
+ *    d'autres commandes : la course est annulée, ses autres commandes
+ *    repartent dans une nouvelle course.
+ */
+export type SuiteRetrait = 'RETRAIT' | 'ANNULEE' | 'TERMINEE' | 'TURBO_RELANCE';
+
+export function suiteDuRetrait(p: {
+  turbo: boolean;
+  /** Livraisons encore à faire dans la course, commandes annulées exclues. */
+  restantes: number;
+  /** Livraisons déjà livrées ou en échec dans la course. */
+  faites: number;
+}): SuiteRetrait {
+  if (p.turbo) return p.restantes > 0 ? 'TURBO_RELANCE' : 'ANNULEE';
+  if (p.restantes > 0) return 'RETRAIT';
+  return p.faites > 0 ? 'TERMINEE' : 'ANNULEE';
+}
 
 /** Ce qu'on lit de la livraison de la commande et de sa course. */
 export interface LivraisonDeLaCommande {
@@ -109,8 +141,10 @@ const STATUTS_COURSE_VIVANTE: CourseStatut[] = [
  *  - RIEN : pas de livraison, livraison terminée (livrée, échouée, annulée),
  *    course terminée, ou commande annulée (la course l'ignore déjà) ;
  *  - REFUSER : le sac est avec le livreur (commande remise, livraison
- *    commencée), la course est partie, ou un livreur Turbo est engagé ;
- *  - DETACHER : la livraison est retirée de la course.
+ *    commencée), ou un livreur Turbo est engagé ;
+ *  - DETACHER : la livraison est retirée de la course. Course partie
+ *    comprise : la commande est encore au comptoir (le livreur est parti
+ *    sans elle) et le client vient la chercher.
  */
 export function deciderDetachement(p: {
   statutCommande: OrderStatus;
@@ -139,9 +173,6 @@ export function deciderDetachement(p: {
     return { action: 'DETACHER', cas: 'TURBO' };
   }
 
-  if (course.statut === CourseStatut.IN_DELIVERY && course.parti_at) {
-    return { action: 'REFUSER', message: messageCoursePartie(typeApres) };
-  }
   if (course.deliverer_id && course.statut !== CourseStatut.PENDING_ASSIGNMENT && course.statut !== CourseStatut.EXPIRED) {
     return { action: 'DETACHER', cas: 'AVEC_LIVREUR' };
   }

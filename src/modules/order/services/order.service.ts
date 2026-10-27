@@ -78,10 +78,10 @@ import { motifRefusModification, peutModifierCommande } from '../helpers/modific
 import { heureDeLaCommande } from '../helpers/heure-commande.rules';
 import { OrderRelanceService } from './order-relance.service';
 import {
-  AuteurDetachement,
   DetachementCommandeService,
   DetachementPrevu,
 } from 'src/modules/course/services/detachement-commande.service';
+import { quitteLaLivraison } from 'src/modules/course/helpers/detachement-commande.rules';
 import {
   ajouterAuEt,
   canalDeSaisie,
@@ -2350,12 +2350,17 @@ export class OrderService {
      * COMMANDE À LIVRER PASSÉE À EMPORTER OU SUR PLACE (demande du 27/10) :
      * déjà dans une course, elle en est retirée (DetachementCommandeService).
      * Lu ici, avant tout le reste, pour refuser tout de suite, administrateur
-     * compris, quand le sac est déjà avec le livreur, que la course est partie
-     * ou qu'un livreur Turbo est engagé. Rien n'est écrit à ce stade.
+     * compris, quand le sac est déjà avec le livreur ou qu'un livreur Turbo est
+     * engagé. Rien n'est écrit à ce stade.
      */
+    const quitteUneLivraison = quitteLaLivraison(order.type, rest.type);
     const detachement =
-      (await this.detachementCommande?.examiner({ orderId: order.id, typeAvant: order.type, typeApres: rest.type })) ??
-      null;
+      (await this.detachementCommande?.examiner({
+        orderId: order.id,
+        typeAvant: order.type,
+        typeApres: rest.type,
+        auteur: options.user ?? null,
+      })) ?? null;
 
     /**
      * RETOUCHE D'UNE COMMANDE ANNULÉE (centre d'appels, demande du 01/10).
@@ -2706,12 +2711,15 @@ export class OrderService {
      *  - commande déjà PAYÉE en ligne : le client a réglé la taxe, la retirer
      *    laisserait un trop-perçu à rembourser ;
      *  - livraison déjà CONFIÉE À TURBO : Turbo ne relit jamais le montant à
-     *    encaisser qui lui a été envoyé.
+     *    encaisser qui lui a été envoyé. Sauf si la même modification la passe
+     *    à emporter ou sur place : la commande quitte Turbo (groupe annulé chez
+     *    eux, ou modification refusée) et ses frais de livraison tombent.
      */
     const confieeATurbo =
       passeEnManuel &&
       !reactivation &&
       order.type === OrderType.DELIVERY &&
+      !quitteUneLivraison &&
       !!(await this.prisma.delivery.findFirst({
         where: { order_id: order.id, course: { turbo_escalated_at: { not: null } } },
         select: { id: true },
@@ -2849,11 +2857,19 @@ export class OrderService {
      * de la commande, et en premier (la course, puis la commande : l'ordre
      * des verrous de la remise au comptoir et du planificateur). Si la course
      * ou la commande a changé entre-temps, rien n'est écrit (409).
+     *
+     * Aucune livraison lue au début : la commande est revendiquée dans cette
+     * même transaction, pour qu'un passage du planificateur qui la met en
+     * course au même instant ne laisse jamais une commande à emporter dans
+     * une course (voir `verifierHorsCourse`).
      */
     const retirerDeLaCourse = async (tx: Prisma.TransactionClient) => {
       if (detachement) await this.detachementCommande!.retirerDansTransaction(tx, detachement);
+      else if (quitteUneLivraison) {
+        await this.detachementCommande?.verifierHorsCourse(tx, { orderId: order.id, typeApres: rest.type as OrderType });
+      }
     };
-    let updatedOrder = await this.ecrireEnRetirantDeLaCourse(detachement, options.user ?? null, async () =>
+    let updatedOrder = await this.ecrireEnRetirantDeLaCourse(detachement, async () =>
       changementCoupon
       ? await this.prisma.$transaction(async (tx) => {
           await retirerDeLaCourse(tx);
@@ -2944,7 +2960,7 @@ export class OrderService {
            * rendus. L'écriture exige donc l'état lu ; sinon 409.
            */
           passeEnManuel ? { status: order.status, entity_status: order.entity_status, auto: true } : undefined,
-          detachement ? retirerDeLaCourse : undefined,
+          detachement || quitteUneLivraison ? retirerDeLaCourse : undefined,
         ),
     );
 
@@ -3107,11 +3123,7 @@ export class OrderService {
    *    avec toutes ses commandes, puis le refus remonte.
    * Sans course à quitter : l'écriture seule, comme avant.
    */
-  private async ecrireEnRetirantDeLaCourse<T>(
-    detachement: DetachementPrevu | null,
-    auteur: AuteurDetachement | null,
-    ecrire: () => Promise<T>,
-  ): Promise<T> {
+  private async ecrireEnRetirantDeLaCourse<T>(detachement: DetachementPrevu | null, ecrire: () => Promise<T>): Promise<T> {
     if (!detachement || !this.detachementCommande) return ecrire();
     await this.detachementCommande.annulerChezTurbo(detachement);
     let ecrit: T;
@@ -3121,7 +3133,7 @@ export class OrderService {
       await this.detachementCommande.apresEcriture(detachement, { ecrit: false });
       throw err;
     }
-    await this.detachementCommande.apresEcriture(detachement, { ecrit: true, auteur });
+    await this.detachementCommande.apresEcriture(detachement, { ecrit: true });
     return ecrit;
   }
 

@@ -8,11 +8,12 @@ import {
   deciderDetachement,
   LivraisonDeLaCommande,
   MESSAGE_ENVOI_TURBO_EN_COURS,
-  messageCoursePartie,
   messageLivreurTurboEngage,
   messageSacChezLeLivreur,
   quitteLaLivraison,
   raisonCourseVide,
+  raisonRelanceImpossible,
+  suiteDuRetrait,
 } from './detachement-commande.rules';
 
 const MAINTENANT = new Date('2026-10-27T12:00:00.000Z');
@@ -80,12 +81,9 @@ describe('deciderDetachement', () => {
     expect(decider(l)).toEqual({ action: 'REFUSER', message: messageSacChezLeLivreur(OrderType.PICKUP) });
   });
 
-  it('course partie, commande encore au comptoir : refus', () => {
+  it('course partie sans cette commande, restée au comptoir : livraison retirée', () => {
     const l = livraison({ statut: CourseStatut.IN_DELIVERY, deliverer_id: 'livreur-1', parti_at: ilYa(60) });
-    expect(decider(l, OrderStatus.READY, OrderType.TABLE)).toEqual({ action: 'REFUSER', message: messageCoursePartie(OrderType.TABLE) });
-    expect(messageCoursePartie(OrderType.TABLE)).toBe(
-      'Le livreur est déjà parti avec cette course : la commande ne peut plus passer sur place.',
-    );
+    expect(decider(l, OrderStatus.READY, OrderType.TABLE)).toEqual({ action: 'DETACHER', cas: 'AVEC_LIVREUR' });
   });
 
   it('course confiée à Turbo, aucun livreur Turbo : retrait par l’annulation chez Turbo', () => {
@@ -113,5 +111,28 @@ describe('deciderDetachement', () => {
 
   it('raison de la course vide, en mots d’avant', () => {
     expect(raisonCourseVide('CMD-A', OrderType.PICKUP)).toBe('Plus aucune commande à livrer : CMD-A passée à emporter');
+    expect(raisonRelanceImpossible('CMD-A', OrderType.TABLE)).toBe(
+      'groupe annulé après le passage de CMD-A sur place, relance automatique impossible',
+    );
+  });
+});
+
+describe('suiteDuRetrait', () => {
+  it('d’autres commandes à livrer : la course continue', () => {
+    expect(suiteDuRetrait({ turbo: false, restantes: 1, faites: 0 })).toBe('RETRAIT');
+    expect(suiteDuRetrait({ turbo: false, restantes: 1, faites: 2 })).toBe('RETRAIT');
+  });
+
+  it('plus rien à livrer ni de livré : course annulée', () => {
+    expect(suiteDuRetrait({ turbo: false, restantes: 0, faites: 0 })).toBe('ANNULEE');
+  });
+
+  it('plus rien à livrer, des livraisons faites (course partie sans la commande) : course terminée', () => {
+    expect(suiteDuRetrait({ turbo: false, restantes: 0, faites: 1 })).toBe('TERMINEE');
+  });
+
+  it('course Turbo : annulée, ses autres commandes relancées s’il en reste', () => {
+    expect(suiteDuRetrait({ turbo: true, restantes: 2, faites: 0 })).toBe('TURBO_RELANCE');
+    expect(suiteDuRetrait({ turbo: true, restantes: 0, faites: 0 })).toBe('ANNULEE');
   });
 });

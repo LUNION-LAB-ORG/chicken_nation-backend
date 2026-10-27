@@ -2,6 +2,7 @@ import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { CourseStatut, DeliveryStatut, OrderStatus, OrderType, Prisma } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
+import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
 import { TurboService } from 'src/turbo/services/turbo.service';
 
 import { CourseEvent } from '../events/course.event';
@@ -17,12 +18,16 @@ import {
   RAISON_TURBO_SANS_CHANGEMENT,
   raisonCourseTurboRelancee,
   raisonCourseVide,
+  raisonRelanceImpossible,
+  SuiteRetrait,
+  suiteDuRetrait,
 } from '../helpers/detachement-commande.rules';
 import { recalculerFraisCourse } from '../helpers/frais-course';
 import { STATUTS_LIVRAISON_TERMINEE } from '../helpers/remise-course.rules';
 import { ApplicationPlanService } from './application-plan.service';
 import { CourseActionService } from './course-action.service';
 import { CourseOfferService } from './course-offer.service';
+import { DeliveryActionService } from './delivery-action.service';
 import { DispatchJournalService, SourceDispatch } from './dispatch-journal.service';
 
 /** Commande encore au restaurant : la seule qu'on retire d'une course. */
@@ -36,6 +41,31 @@ const STATUTS_COMMANDE_AU_RESTAURANT: OrderStatus[] = [
 /** Même texte que « Modifier la commande » quand la commande a changé entre la lecture et l'écriture. */
 const MESSAGE_COMMANDE_CHANGEE = 'Cette commande vient de changer : rechargez-la avant de la modifier.';
 
+/** Ce qu'on lit de la commande pour décider : sa livraison et sa course. */
+const SELECTION_EXAMEN = {
+  id: true,
+  reference: true,
+  status: true,
+  delivery: {
+    select: {
+      id: true,
+      statut: true,
+      course: {
+        select: {
+          id: true,
+          reference: true,
+          restaurant_id: true,
+          statut: true,
+          deliverer_id: true,
+          parti_at: true,
+          turbo_escalated_at: true,
+          deliveries: { select: { turbo_courier_id: true } },
+        },
+      },
+    },
+  },
+} satisfies Prisma.OrderSelect;
+
 /** Livraison d'une commande à retirer de sa course, telle que lue avant l'écriture. */
 export interface DetachementPrevu {
   cas: CasDetachement;
@@ -48,8 +78,14 @@ export interface DetachementPrevu {
   restaurant_id: string;
   statut_course: CourseStatut;
   deliverer_id: string | null;
+  /** Qui change le type : un compte de restaurant, ou le siège. */
+  annulee_par: 'admin' | 'restaurant';
   /** Groupe annulé chez Turbo : la course est annulée et relancée ici, que la commande change ou non. */
   turbo_annule: boolean;
+  /** Décidée dans la transaction du retrait ; ne vaut que si elle a été validée. */
+  suite: SuiteRetrait | null;
+  /** Raison écrite sur la course annulée dans la transaction (ANNULEE, TURBO_RELANCE). */
+  raison_annulation: string | null;
 }
 
 /** Qui change le type : un compte de restaurant, ou le siège. */
@@ -68,18 +104,22 @@ export interface AuteurDetachement {
  *
  * Appelé par `OrderService.update`, en quatre temps :
  *  1. `examiner` (lecture seule, au début) : refus clair en 409 si le sac est
- *     avec le livreur, si la course est partie ou si un livreur Turbo est
- *     engagé ; rien n'est écrit ;
+ *     avec le livreur ou si un livreur Turbo est engagé ; rien n'est écrit ;
  *  2. `annulerChezTurbo` (course confiée à Turbo, juste avant l'écriture) :
  *     leur groupe est annulé chez eux (contrat `/annuler`, sans écho de
  *     webhook) ; refus de Turbo ou réponse incertaine : 409, rien n'est écrit ;
- *  3. `retirerDansTransaction` (dans la transaction du changement de type) :
- *     course et commande encore telles que lues, livraison supprimée. Si la
- *     condition ne tient plus, toute la modification est refusée (409) ;
- *  4. `apresEcriture` : annonces, et course vide annulée (jamais la
- *     commande), offre close sans pénalité, livreur remis dans la file à sa
- *     place. Course Turbo : annulée ici aussi, ses autres commandes relancées
- *     dans une nouvelle course à référence neuve (règle de la relance).
+ *  3. dans la transaction du changement de type, avant l'écriture de la
+ *     commande :
+ *     · `retirerDansTransaction` : course et commande encore telles que lues,
+ *       livraison supprimée ; course vidée ou confiée à Turbo annulée dans la
+ *       MÊME transaction (jamais une course Turbo morte laissée en recherche) ;
+ *     · `verifierHorsCourse` (aucune livraison lue au début) : la commande
+ *       est revendiquée, et une livraison créée entre-temps par le
+ *       planificateur refuse la modification (409).
+ *     Si une condition ne tient plus, toute la modification est refusée ;
+ *  4. `apresEcriture` : annonces ; course terminée ou annulée annoncée ;
+ *     course Turbo : ses autres commandes relancées dans une nouvelle course à
+ *     référence neuve (règle de la relance), cloche si la relance échoue.
  *
  * Les paiements, les encaissements, les frais et le montant de la commande
  * ne sont pas touchés ici : ils suivent la règle du changement de type.
@@ -96,6 +136,10 @@ export class DetachementCommandeService {
     private readonly turbo: TurboService,
     private readonly journal: DispatchJournalService,
     private readonly courseEvent: CourseEvent,
+    // Course partie sans la commande, plus rien d'autre à livrer : elle se termine.
+    private readonly livraisons: DeliveryActionService,
+    // Cloche du restaurant et du siège quand une relance après Turbo échoue.
+    private readonly cloche: NotificationsSenderService,
   ) {}
 
   /**
@@ -110,36 +154,12 @@ export class DetachementCommandeService {
     orderId: string;
     typeAvant: OrderType;
     typeApres?: OrderType | null;
+    auteur?: AuteurDetachement | null;
     maintenant?: Date;
   }): Promise<DetachementPrevu | null> {
     if (!quitteLaLivraison(p.typeAvant, p.typeApres)) return null;
     const typeApres = p.typeApres as OrderType;
-    const commande = await this.prisma.order.findUnique({
-      where: { id: p.orderId },
-      select: {
-        id: true,
-        reference: true,
-        status: true,
-        delivery: {
-          select: {
-            id: true,
-            statut: true,
-            course: {
-              select: {
-                id: true,
-                reference: true,
-                restaurant_id: true,
-                statut: true,
-                deliverer_id: true,
-                parti_at: true,
-                turbo_escalated_at: true,
-                deliveries: { select: { turbo_courier_id: true } },
-              },
-            },
-          },
-        },
-      },
-    });
+    const commande = await this.prisma.order.findUnique({ where: { id: p.orderId }, select: SELECTION_EXAMEN });
     if (!commande?.delivery) return null;
 
     const decision = deciderDetachement({
@@ -163,7 +183,10 @@ export class DetachementCommandeService {
       restaurant_id: course.restaurant_id,
       statut_course: course.statut,
       deliverer_id: course.deliverer_id,
+      annulee_par: p.auteur?.restaurant_id ? 'restaurant' : 'admin',
       turbo_annule: false,
+      suite: null,
+      raison_annulation: null,
     };
   }
 
@@ -200,16 +223,24 @@ export class DetachementCommandeService {
    * Dans la transaction du changement de type, AVANT l'écriture de la
    * commande (même ordre de verrous que la remise au comptoir et le
    * planificateur : la course, puis la commande) :
-   *  1. la course est encore telle que lue (même livreur, pas partie, pas
-   *     remise entre-temps) ; sa ligne reste verrouillée jusqu'à la fin ;
+   *  1. la course est encore telle que lue (même livreur, pas remise
+   *     entre-temps) ; sa ligne reste verrouillée jusqu'à la fin ;
    *  2. la commande est encore à livrer et au restaurant (pas remise) ;
-   *  3. la livraison, pas commencée, est supprimée.
+   *  3. la livraison, pas commencée, est supprimée ;
+   *  4. la suite est décidée sur la course verrouillée (`suiteDuRetrait`) :
+   *     course vidée, ou confiée à Turbo, annulée ICI, dans la même
+   *     transaction (statut, raison, livraisons restantes annulées). Une
+   *     coupure après la validation laisse donc au pire une course annulée
+   *     dont les commandes sont à relancer depuis le backoffice, jamais une
+   *     course Turbo morte qui attend un livreur.
    * Une condition qui ne tient plus : 409, la transaction entière est annulée
    * (le type ne change pas).
    */
   async retirerDansTransaction(tx: Prisma.TransactionClient, d: DetachementPrevu, maintenant = new Date()): Promise<void> {
+    d.suite = null;
+    d.raison_annulation = null;
     const course = await tx.course.updateMany({
-      where: { id: d.course_id, parti_at: null, ...courseTelleQueLue(d) },
+      where: { id: d.course_id, ...courseTelleQueLue(d) },
       data: { updated_at: maintenant },
     });
     if (course.count !== 1) throw new ConflictException(MESSAGE_COURSE_CHANGEE);
@@ -224,6 +255,79 @@ export class DetachementCommandeService {
       where: { id: d.livraison_id, course_id: d.course_id, order_id: d.order_id, statut: DeliveryStatut.PENDING },
     });
     if (count !== 1) throw new ConflictException(MESSAGE_COURSE_CHANGEE);
+
+    const restantes = await tx.delivery.count({
+      where: {
+        course_id: d.course_id,
+        statut: { notIn: STATUTS_LIVRAISON_TERMINEE },
+        order: { status: { not: OrderStatus.CANCELLED } },
+      },
+    });
+    const faites = await tx.delivery.count({
+      where: { course_id: d.course_id, statut: { in: [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED] } },
+    });
+    const suite = suiteDuRetrait({ turbo: d.cas === 'TURBO', restantes, faites });
+    if (suite === 'ANNULEE' || suite === 'TURBO_RELANCE') {
+      const raison =
+        suite === 'TURBO_RELANCE'
+          ? raisonCourseTurboRelancee(d.reference, d.type_apres)
+          : raisonCourseVide(d.reference, d.type_apres);
+      // La ligne est déjà verrouillée (étape 1) : écriture sous la même condition.
+      const annulee = await tx.course.updateMany({
+        where: { id: d.course_id, ...courseTelleQueLue(d) },
+        data: {
+          statut: CourseStatut.CANCELLED,
+          cancelled_at: maintenant,
+          // Course Turbo : annulée par le serveur, comme toute annulation chez Turbo.
+          cancelled_by: d.cas === 'TURBO' ? 'system' : d.annulee_par,
+          cancelled_reason: raison,
+          offer_expires_at: null,
+        },
+      });
+      if (annulee.count !== 1) throw new ConflictException(MESSAGE_COURSE_CHANGEE);
+      // Livraisons restantes annulées : celles que la relance reprend (Turbo),
+      // ou celles de commandes déjà annulées (course vide).
+      await tx.delivery.updateMany({
+        where: { course_id: d.course_id, statut: { notIn: STATUTS_LIVRAISON_TERMINEE } },
+        data: { statut: DeliveryStatut.CANCELLED },
+      });
+      d.raison_annulation = raison;
+    }
+    d.suite = suite;
+  }
+
+  /**
+   * Dans la transaction du changement de type, quand `examiner` n'a trouvé
+   * aucune livraison à retirer : la commande est REVENDIQUÉE (sa ligne reste
+   * verrouillée jusqu'à la fin), puis relue.
+   *
+   * Le planificateur, la création de course d'un lot et la relance
+   * revendiquent la même ligne avant de rattacher la commande à une course :
+   *  - s'ils passent d'abord, leur livraison se lit ici et la modification
+   *    est refusée (409) : rechargée, la commande en sera retirée ;
+   *  - sinon, ils attendent la fin de cette transaction et relisent une
+   *    commande à emporter : ils l'abandonnent.
+   */
+  async verifierHorsCourse(
+    tx: Prisma.TransactionClient,
+    p: { orderId: string; typeApres: OrderType; maintenant?: Date },
+  ): Promise<void> {
+    const maintenant = p.maintenant ?? new Date();
+    const tenue = await tx.order.updateMany({
+      where: { id: p.orderId, type: OrderType.DELIVERY },
+      data: { updated_at: maintenant },
+    });
+    if (tenue.count !== 1) throw new ConflictException(MESSAGE_COMMANDE_CHANGEE);
+    const commande = await tx.order.findUnique({ where: { id: p.orderId }, select: SELECTION_EXAMEN });
+    if (!commande?.delivery) return;
+    const decision = deciderDetachement({
+      statutCommande: commande.status,
+      typeApres: p.typeApres,
+      livraison: commande.delivery,
+      maintenant,
+    });
+    if (decision.action === 'REFUSER') throw new ConflictException(decision.message);
+    if (decision.action === 'DETACHER') throw new ConflictException(MESSAGE_COURSE_CHANGEE);
   }
 
   /**
@@ -233,26 +337,25 @@ export class DetachementCommandeService {
    *  - échec de l'écriture après l'annulation chez Turbo : leur groupe est
    *    mort, la course est annulée ici et toutes ses commandes encore prêtes
    *    (celle-ci comprise, toujours à livrer) repartent dans une nouvelle
-   *    course ;
+   *    course ; cloche si c'est impossible ;
    *  - sinon : frais de la course recalculés, journal `COMMANDE_DETACHEE`,
-   *    puis selon la course :
-   *     · Turbo : annulée ici aussi, ses autres commandes relancées ;
-   *     · plus aucune commande à livrer : annulée (offre close sans pénalité,
+   *    puis selon la suite décidée dans la transaction :
+   *     · RETRAIT : annonces d'un retrait (`annoncerRetrait`) et passage du
+   *       planificateur demandé ;
+   *     · ANNULEE : annonces de l'annulation (offre close sans pénalité,
    *       livreur prévenu « Course annulée » et remis dans la file à sa place) ;
-   *     · sinon : annonces d'un retrait (`annoncerRetrait`) et passage du
-   *       planificateur demandé.
+   *     · TERMINEE : la course se termine comme après sa dernière livraison ;
+   *     · TURBO_RELANCE : annonces de l'annulation, puis les autres commandes
+   *       relancées ; cloche si la relance échoue.
    */
-  async apresEcriture(
-    d: DetachementPrevu,
-    issue: { ecrit: boolean; auteur?: AuteurDetachement | null; maintenant?: Date },
-  ): Promise<void> {
+  async apresEcriture(d: DetachementPrevu, issue: { ecrit: boolean; maintenant?: Date }): Promise<void> {
     try {
       if (!issue.ecrit) {
-        if (d.turbo_annule) await this.annulerEtRelancer(d, RAISON_TURBO_SANS_CHANGEMENT);
+        if (d.turbo_annule) await this.annulerEtRelancer(d);
         return;
       }
       const maintenant = issue.maintenant ?? new Date();
-      const source: SourceDispatch = issue.auteur?.restaurant_id ? 'restaurant' : 'admin';
+      const source: SourceDispatch = d.annulee_par === 'restaurant' ? 'restaurant' : 'admin';
       await recalculerFraisCourse(this.prisma, d.course_id).catch(() => undefined);
       await this.journal.ecrire({
         type: 'COMMANDE_DETACHEE',
@@ -269,26 +372,22 @@ export class DetachementCommandeService {
         },
       });
 
-      const restantes = await this.prisma.delivery.count({
-        where: {
-          course_id: d.course_id,
-          statut: { notIn: STATUTS_LIVRAISON_TERMINEE },
-          order: { status: { not: OrderStatus.CANCELLED } },
-        },
-      });
-      if (d.cas === 'TURBO') {
-        await this.annulerEtRelancer(
-          d,
-          restantes > 0 ? raisonCourseTurboRelancee(d.reference, d.type_apres) : raisonCourseVide(d.reference, d.type_apres),
-        );
-        return;
+      switch (d.suite) {
+        case 'RETRAIT':
+          await this.plan.annoncerRetrait(d.course_id, [d.reference], maintenant);
+          this.courseEvent.demanderPlanification({ restaurant_id: d.restaurant_id, raison: 'COMMANDE_DETACHEE' });
+          return;
+        case 'TERMINEE':
+          await this.livraisons.checkCourseCompletion(d.course_id);
+          return;
+        case 'ANNULEE':
+          await this.annoncerAnnulation(d);
+          return;
+        case 'TURBO_RELANCE':
+          await this.annoncerAnnulation(d);
+          await this.relancer(d);
+          return;
       }
-      if (restantes === 0) {
-        await this.annulerCourseVide(d, source === 'restaurant' ? 'restaurant' : 'admin', maintenant);
-        return;
-      }
-      await this.plan.annoncerRetrait(d.course_id, [d.reference], maintenant);
-      this.courseEvent.demanderPlanification({ restaurant_id: d.restaurant_id, raison: 'COMMANDE_DETACHEE' });
     } catch (err) {
       this.logger.error(
         `Commande ${d.reference} retirée de la course ${d.course_reference} : suites en échec (${(err as Error)?.message ?? err}).`,
@@ -296,63 +395,73 @@ export class DetachementCommandeService {
     }
   }
 
-  /**
-   * Plus aucune commande à livrer : la course est annulée par l'annulation
-   * ordinaire (`cancelCourse`), jamais la commande. Annulée par le siège ou
-   * le restaurant : le livreur n'y est pour rien, il reprend sa place dans la
-   * file ; son offre en attente est close sans pénalité.
-   *
-   * Course expirée (aucun livreur trouvé) : l'annulation ordinaire la tient
-   * pour terminée ; elle est annulée ici, sous condition qu'elle soit
-   * toujours expirée et vide, pour qu'une relance ne propose pas une course
-   * sans commande.
-   */
-  private async annulerCourseVide(d: DetachementPrevu, annuleePar: 'admin' | 'restaurant', maintenant: Date): Promise<void> {
-    const raison = raisonCourseVide(d.reference, d.type_apres);
-    if (d.statut_course !== CourseStatut.EXPIRED) {
-      await this.actions.cancelCourse(d.course_id, annuleePar, { reason: raison }).catch((err) => {
-        this.logger.warn(`Course ${d.course_reference} vide non annulée : ${(err as Error)?.message ?? err}`);
-      });
-      return;
-    }
-    const { count } = await this.prisma.course.updateMany({
-      where: {
-        id: d.course_id,
-        statut: CourseStatut.EXPIRED,
-        deliveries: {
-          none: { statut: { notIn: STATUTS_LIVRAISON_TERMINEE }, order: { status: { not: OrderStatus.CANCELLED } } },
-        },
-      },
-      data: { statut: CourseStatut.CANCELLED, cancelled_at: maintenant, cancelled_by: annuleePar, cancelled_reason: raison },
-    });
-    if (count !== 1) return;
-    await this.prisma.delivery.updateMany({
-      where: { course_id: d.course_id, statut: { notIn: STATUTS_LIVRAISON_TERMINEE } },
-      data: { statut: DeliveryStatut.CANCELLED },
-    });
+  /** Course annulée dans la transaction du retrait : mêmes annonces que l'annulation ordinaire. */
+  private async annoncerAnnulation(d: DetachementPrevu): Promise<void> {
     const course = await this.prisma.course.findUnique({ where: { id: d.course_id }, include: COURSE_FULL_INCLUDE });
-    if (course) await this.courseEvent.courseCancelled({ course, cancelled_by: annuleePar, reason: raison });
+    if (!course) return;
+    await this.actions.annoncerAnnulation(course, course.cancelled_by ?? 'system', course.cancelled_reason ?? d.raison_annulation ?? '');
   }
 
   /**
-   * Groupe annulé chez Turbo : la course est annulée ici aussi (annulation
-   * ordinaire ; une course confiée à Turbo n'y relance rien d'office), puis
-   * ses commandes encore prêtes repartent dans une NOUVELLE course, à
-   * référence neuve (Turbo refuse en silence une référence déjà reçue),
-   * envoyée à Turbo ou proposée aux livreurs selon leur flotte.
+   * Course Turbo annulée (chez eux et ici) : ses commandes encore prêtes
+   * repartent dans une NOUVELLE course, à référence neuve (Turbo refuse en
+   * silence une référence déjà reçue), envoyée à Turbo ou proposée aux
+   * livreurs selon leur flotte. Échec : cloche du restaurant et du siège, la
+   * course reste annulée avec ses commandes à relancer depuis le backoffice.
    */
-  private async annulerEtRelancer(d: DetachementPrevu, raison: string): Promise<void> {
-    await this.actions.cancelCourse(d.course_id, 'system', { reason: raison }).catch((err) => {
-      this.logger.warn(`Course Turbo ${d.course_reference} non annulée : ${(err as Error)?.message ?? err}`);
-    });
-    const relance = await this.offres.relancerCourseAnnulee(d.course_id).catch((err) => {
-      this.logger.error(`Course Turbo ${d.course_reference} : relance impossible (${(err as Error)?.message ?? err}).`);
-      return null;
-    });
-    if (relance?.ok) {
-      await recalculerFraisCourse(this.prisma, d.course_id).catch(() => undefined);
-      this.logger.log(`Course Turbo ${d.course_reference} annulée chez Turbo : ${relance.message}`);
+  private async relancer(d: DetachementPrevu): Promise<void> {
+    let echec: string | null = null;
+    try {
+      const relance = await this.offres.relancerCourseAnnulee(d.course_id);
+      if (relance.ok) {
+        await recalculerFraisCourse(this.prisma, d.course_id).catch(() => undefined);
+        this.logger.log(`Course Turbo ${d.course_reference} annulée chez Turbo : ${relance.message}`);
+        return;
+      }
+      echec = relance.message;
+    } catch (err) {
+      echec = (err as Error)?.message ?? String(err);
     }
+    this.logger.error(`Course Turbo ${d.course_reference} : relance impossible (${echec}).`);
+    await this.sonnerRelanceImpossible(d);
+  }
+
+  /**
+   * L'écriture a échoué APRÈS l'annulation chez Turbo : leur groupe est mort.
+   * La course est annulée ici (annulation ordinaire, sous condition) et toutes
+   * ses commandes repartent, celle-ci comprise. Échec : cloche.
+   */
+  private async annulerEtRelancer(d: DetachementPrevu): Promise<void> {
+    const annulee = await this.actions
+      .cancelCourse(d.course_id, 'system', { reason: RAISON_TURBO_SANS_CHANGEMENT })
+      .then(() => true)
+      .catch((err) => {
+        this.logger.error(`Course Turbo ${d.course_reference} non annulée : ${(err as Error)?.message ?? err}`);
+        return false;
+      });
+    if (!annulee) {
+      await this.sonnerRelanceImpossible(d);
+      return;
+    }
+    await this.relancer(d);
+  }
+
+  /** Cloche « Course annulée par Turbo » : les commandes restent actives, à relancer à la main. */
+  private async sonnerRelanceImpossible(d: DetachementPrevu): Promise<void> {
+    const livraisons = await this.prisma.delivery
+      .findMany({
+        where: { course_id: d.course_id, order: { status: { not: OrderStatus.CANCELLED } } },
+        select: { order: { select: { reference: true } } },
+      })
+      .catch(() => [] as { order: { reference: string } }[]);
+    await this.cloche
+      .sendTurboCourseCancelledBell({
+        courseReference: d.course_reference,
+        restaurantId: d.restaurant_id,
+        orderReferences: livraisons.map((l) => l.order.reference),
+        raison: raisonRelanceImpossible(d.reference, d.type_apres),
+      })
+      .catch(() => undefined);
   }
 }
 
@@ -370,6 +479,8 @@ function courseTelleQueLue(d: DetachementPrevu): Prisma.CourseWhereInput {
         deliverer_id: d.deliverer_id,
         turbo_escalated_at: null,
         // Le GPS fait passer « au restaurant » à tout moment : ce n'est pas un retrait.
+        // Course partie : la commande est restée au comptoir (vérifié sur la
+        // commande et sa livraison), le retrait vaut avant comme après le départ.
         statut:
           d.statut_course === CourseStatut.IN_DELIVERY
             ? CourseStatut.IN_DELIVERY

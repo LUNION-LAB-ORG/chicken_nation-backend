@@ -500,8 +500,13 @@ export class DeliveryActionService {
   /**
    * Vérifie si toutes les Delivery de la Course sont terminées (DELIVERED/FAILED/CANCELLED).
    * Si oui → Course passe en COMPLETED + émet event.
+   *
+   * Aussi appelée quand une commande restée au comptoir après le départ passe
+   * à emporter et que plus rien d'autre n'est à livrer
+   * (`DetachementCommandeService`) : la course se termine comme après sa
+   * dernière livraison.
    */
-  private async checkCourseCompletion(courseId: string) {
+  async checkCourseCompletion(courseId: string) {
     const deliveries = await this.prisma.delivery.findMany({
       where: { course_id: courseId },
       select: { statut: true },
