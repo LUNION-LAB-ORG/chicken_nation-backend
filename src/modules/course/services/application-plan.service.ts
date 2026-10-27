@@ -381,18 +381,22 @@ export class ApplicationPlanService {
           },
         });
         if (course.count !== 1) throw new ActionAbandonnee('COURSE_CHANGEE');
-        const commande = await tx.order.findFirst({
-          where: {
-            id: a.order_id,
-            restaurant_id: p.restaurantId,
-            // Passée à emporter ou sur place depuis la lecture : plus rien à livrer.
-            type: OrderType.DELIVERY,
-            status: OrderStatus.READY,
-            delivery: null,
-            entity_status: { not: EntityStatus.DELETED },
-          },
-          select: { id: true, recovery_code: true },
-        });
+        const aRattacher: Prisma.OrderWhereInput = {
+          id: a.order_id,
+          restaurant_id: p.restaurantId,
+          // Passée à emporter ou sur place depuis la lecture : plus rien à livrer.
+          type: OrderType.DELIVERY,
+          status: OrderStatus.READY,
+          delivery: null,
+          entity_status: { not: EntityStatus.DELETED },
+        };
+        // Revendication de la commande (même valeur réécrite : sa ligne reste
+        // verrouillée jusqu'à la fin). « Modifier la commande » qui la passe à
+        // emporter au même instant revendique la même ligne : l'un attend
+        // l'autre (`DetachementCommandeService.verifierHorsCourse`).
+        const tenue = await tx.order.updateMany({ where: aRattacher, data: { type: OrderType.DELIVERY } });
+        if (tenue.count !== 1) throw new ActionAbandonnee('COMMANDE_CHANGEE');
+        const commande = await tx.order.findFirst({ where: aRattacher, select: { id: true, recovery_code: true } });
         if (!commande) throw new ActionAbandonnee('COMMANDE_CHANGEE');
         const max = await tx.delivery.aggregate({ where: { course_id: a.course_id }, _max: { sequence_order: true } });
         await tx.delivery.create({
@@ -441,16 +445,20 @@ export class ApplicationPlanService {
     for (let essai = 0; essai < 3 && !creee; essai++) {
       try {
         creee = await this.prisma.$transaction(async (tx) => {
+          const aRattacher: Prisma.OrderWhereInput = {
+            id: { in: a.order_ids },
+            restaurant_id: p.restaurantId,
+            type: OrderType.DELIVERY,
+            delivery_service: DeliveryService.CHICKEN_NATION,
+            status: OrderStatus.READY,
+            entity_status: { not: EntityStatus.DELETED },
+            delivery: null,
+          };
+          // Revendication avant la lecture (voir `ajouter`) : une commande
+          // passée à emporter au même instant n'entre pas dans la course.
+          await tx.order.updateMany({ where: aRattacher, data: { type: OrderType.DELIVERY } });
           const commandes = await tx.order.findMany({
-            where: {
-              id: { in: a.order_ids },
-              restaurant_id: p.restaurantId,
-              type: OrderType.DELIVERY,
-              delivery_service: DeliveryService.CHICKEN_NATION,
-              status: OrderStatus.READY,
-              entity_status: { not: EntityStatus.DELETED },
-              delivery: null,
-            },
+            where: aRattacher,
             select: { id: true, delivery_fee: true, recovery_code: true },
           });
           if (commandes.length === 0) throw new ActionAbandonnee('COMMANDES_CHANGEES');

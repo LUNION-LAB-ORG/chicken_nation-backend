@@ -18,6 +18,7 @@
  *    partagent la base se l'arrachent comme en vrai), rendu tout de suite
  *    hors transaction ;
  *  - `deleteMany` est un DELETE ... WHERE ;
+ *  - `course.create` crée aussi ses livraisons imbriquées (`deliveries.create`) ;
  *  - `dispatchEvenement.groupBy` (`by`, `where`, `_max`) regroupe le journal.
  *
  * Fichier de test seulement. Son nom finit par « -spec.ts » : exclu de la
@@ -256,6 +257,20 @@ export function monterBaseDispatch(donnees: DonneesDispatch = {}) {
       },
     });
 
+  /**
+   * Création imbriquée (`course.create({ data: { deliveries: { create: [...] } } })`) :
+   * les livraisons naissent dans leur table, rattachées à la course créée.
+   */
+  const enfantsDe: Record<string, Record<string, (parent: Ligne, donnees: Ligne) => Ligne>> = {
+    course: {
+      deliveries: (parent, donnees) => {
+        const ligne = livraison({ ...donnees, course_id: parent.id });
+        livraisons.push(ligne);
+        return ligne;
+      },
+    },
+  };
+
   /** Délégué Prisma générique sur une table (écritures notées si `annulation` est fourni). */
   function table(lignes: Ligne[], vue: (l: Ligne) => Ligne, prefixe: string, annulation?: Annulation) {
     const lire = (where: Ligne | undefined) => lignes.map(vue).filter((v) => evaluer(v, where));
@@ -292,12 +307,24 @@ export function monterBaseDispatch(donnees: DonneesDispatch = {}) {
         return { count: cibles.length };
       }),
       create: jest.fn(async (args: Ligne) => {
-        const ligne = { id: ident(prefixe), created_at: new Date(), ...args.data };
+        const imbriquees = enfantsDe[prefixe] ?? {};
+        const colonnes = Object.fromEntries(Object.entries(args.data).filter(([cle]) => !imbriquees[cle]));
+        const ligne = { id: ident(prefixe), created_at: new Date(), ...colonnes };
         lignes.push(ligne);
         annulation?.push(() => {
           const i = lignes.indexOf(ligne);
           if (i >= 0) lignes.splice(i, 1);
         });
+        for (const [relation, creer] of Object.entries(imbriquees)) {
+          const aCreer = (args.data[relation] as Ligne | undefined)?.create;
+          for (const donnees of aCreer ? (Array.isArray(aCreer) ? aCreer : [aCreer]) : []) {
+            const enfant = creer(ligne, donnees);
+            annulation?.push(() => {
+              const i = livraisons.indexOf(enfant);
+              if (i >= 0) livraisons.splice(i, 1);
+            });
+          }
+        }
         return projeter(vue(ligne), args);
       }),
       deleteMany: jest.fn(async (args: Ligne = {}) => {

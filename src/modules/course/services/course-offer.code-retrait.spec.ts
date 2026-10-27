@@ -75,6 +75,18 @@ function monterBase(existantes: Ligne[]) {
       delivery: {
         updateMany: async () => ({ count: 1 }),
       },
+      // Commandes revendiquées puis relues dans la transaction : toutes encore éligibles ici.
+      order: {
+        updateMany: async () => ({ count: 1 }),
+        findMany: async ({ where }: Ligne) =>
+          (where.id.in as string[]).map((id) => ({
+            id,
+            delivery_fee: 1000,
+            address: null,
+            delivery_service: DeliveryService.CHICKEN_NATION,
+            recovery_code: '1234',
+          })),
+      },
     };
     try {
       const resultat = await fn(tx);
