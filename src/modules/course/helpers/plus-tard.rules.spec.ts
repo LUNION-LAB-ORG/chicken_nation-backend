@@ -11,6 +11,7 @@ import {
   LivraisonPlusTard,
   MESSAGE_CLIENT_EN_COURS,
   MESSAGE_DEJA_REPORTEE,
+  MESSAGE_PAS_ENCORE_EN_ROUTE,
   MESSAGE_PAS_ENCORE_PARTI,
   MESSAGE_PLUS_D_AUTRE_CLIENT,
   reglePlusTard,
@@ -117,11 +118,26 @@ describe('P3 : refus, dans l’ordre du contrat', () => {
   it('livraison en attente : seulement si aucune autre n’est en route ou chez le client', () => {
     const enCours = course([liv('A', 1, DeliveryStatut.IN_ROUTE), liv('B', 2, DeliveryStatut.PENDING), liv('C', 3, DeliveryStatut.PENDING)]);
     expect(decider(enCours, 'B')).toEqual({ type: 'REFUS', code: 409, message: MESSAGE_CLIENT_EN_COURS });
-    // Personne en route : B est la prochaine ; C démarre, B va à la fin.
-    const libre = course([liv('A', 1, DeliveryStatut.DELIVERED), liv('B', 2, DeliveryStatut.PENDING), liv('C', 3, DeliveryStatut.PENDING)]);
+    // Personne en route, B déjà partie une fois vers son client (code déjà
+    // envoyé) : B est la prochaine ; C démarre, B va à la fin.
+    const libre = course([
+      liv('A', 1, DeliveryStatut.DELIVERED),
+      liv('B', 2, DeliveryStatut.PENDING, { in_route_at: PARTI }),
+      liv('C', 3, DeliveryStatut.PENDING),
+    ]);
     const d = reportee(decider(libre, 'B'));
     expect(ordre(d)).toEqual(['A', 'C', 'B']);
     expect(d.reportee.statut_avant).toBe(DeliveryStatut.PENDING);
+  });
+
+  it('livraison en attente jamais partie vers son client : 409 « Pas encore en route. » (son code WhatsApp n’est pas parti)', () => {
+    // A livrée, B et C en attente, personne en route : B ne serait jamais
+    // prévenue (le code n'est pas renvoyé au redémarrage d'une reportée).
+    const k = course([liv('A', 1, DeliveryStatut.DELIVERED), liv('B', 2, DeliveryStatut.PENDING), liv('C', 3, DeliveryStatut.PENDING)]);
+    expect(decider(k, 'B')).toEqual({ type: 'REFUS', code: 409, message: MESSAGE_PAS_ENCORE_EN_ROUTE });
+    // Pas plus pour une livraison plus loin dans la tournée.
+    expect(decider(k, 'C')).toEqual({ type: 'REFUS', code: 409, message: MESSAGE_PAS_ENCORE_EN_ROUTE });
+    expect(MESSAGE_PAS_ENCORE_EN_ROUTE).toBe('Pas encore en route.');
   });
 });
 

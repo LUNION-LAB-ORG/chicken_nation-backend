@@ -10,7 +10,7 @@ import { CourseStatut, DeliveryStatut, OrderStatus } from '@prisma/client';
 
 import { CourseDelivererController } from '../controllers/course-deliverer.controller';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
-import { MESSAGE_CLIENT_EN_COURS } from '../helpers/plus-tard.rules';
+import { MESSAGE_CLIENT_EN_COURS, MESSAGE_PAS_ENCORE_EN_ROUTE } from '../helpers/plus-tard.rules';
 import { commande, course, livraison, livreur, monterBaseDispatch } from './base-dispatch.simulee-spec';
 import { DeliveryActionService } from './delivery-action.service';
 import { DeliveryTrackingService } from './delivery-tracking.service';
@@ -196,6 +196,20 @@ describe('P10 : redémarrage de la livraison reportée', () => {
     expect(notifier).not.toHaveBeenCalled();
     await suivi.onDeliveryStatutChanged(payload(null));
     expect(notifier).toHaveBeenCalledWith('o1');
+  });
+
+  it('livraison en attente jamais partie vers son client : refusée, sinon son code WhatsApp ne partirait jamais', async () => {
+    // A livrée, personne en route : B (jamais démarrée) n'a pas reçu son code.
+    const t = tournee([DeliveryStatut.DELIVERED, DeliveryStatut.PENDING, DeliveryStatut.PENDING]);
+    await expect(t.service.reporterLivraison(t.B.id, t.a.id, MAINTENANT)).rejects.toThrow(
+      new ConflictException(MESSAGE_PAS_ENCORE_EN_ROUTE),
+    );
+    expect(t.B).toMatchObject({ statut: DeliveryStatut.PENDING, reportee_at: null, sequence_order: 2 });
+    expect(t.C).toMatchObject({ statut: DeliveryStatut.PENDING, sequence_order: 3 });
+    expect(t.courseEvent.deliveryStatutChanged).not.toHaveBeenCalled();
+    // Elle démarre normalement, et son code part au départ.
+    await t.service.startDelivery(t.B.id, t.a.id);
+    expect(t.B).toMatchObject({ statut: DeliveryStatut.IN_ROUTE, reportee_at: null });
   });
 
   it('redémarrée par le livreur : la marque « reportée » reste, l’heure de départ est réécrite', async () => {

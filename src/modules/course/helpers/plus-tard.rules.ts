@@ -26,6 +26,8 @@ export const MESSAGE_DEJA_REPORTEE = 'Déjà reportée une fois.';
 export const MESSAGE_PLUS_D_AUTRE_CLIENT = "Plus d'autre client.";
 /** Démarrer (ou passer) une livraison pendant qu'une autre est en route ou chez son client. */
 export const MESSAGE_CLIENT_EN_COURS = "Termine d'abord le client en cours.";
+/** Passer une livraison jamais partie vers son client (son code WhatsApp n'est pas encore envoyé). */
+export const MESSAGE_PAS_ENCORE_EN_ROUTE = 'Pas encore en route.';
 
 /** Livraisons qu'on peut passer à plus tard : encore à faire. */
 const A_FAIRE: DeliveryStatut[] = [DeliveryStatut.PENDING, DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED];
@@ -89,8 +91,8 @@ const refus = (code: 400 | 403 | 404 | 409, message: string): DecisionPlusTard =
 /**
  * Refus dans l'ordre des routes du livreur (inconnue, autre livreur, course
  * pas en livraison), puis « Pas encore parti. », livraison terminée, rejeu,
- * déjà reportée une fois, un autre client en cours, et plus aucun autre
- * client livrable.
+ * déjà reportée une fois, un autre client en cours, livraison en attente
+ * jamais partie vers son client, et plus aucun autre client livrable.
  */
 export function reglePlusTard(p: {
   livraisonId: string;
@@ -116,6 +118,10 @@ export function reglePlusTard(p: {
   const commencee = autres.find((l) => COMMENCEE.includes(l.statut)) ?? null;
   // En attente : seulement si c'est la prochaine (aucun autre client en cours).
   if (cible.statut === DeliveryStatut.PENDING && commencee) return refus(409, MESSAGE_CLIENT_EN_COURS);
+  // En attente et jamais partie vers son client : son code WhatsApp n'est pas
+  // encore envoyé, et il ne le serait jamais (pas renvoyé au redémarrage d'une
+  // livraison reportée). L'appli ne passe qu'un client en route ou chez lui.
+  if (cible.statut === DeliveryStatut.PENDING && !cible.in_route_at) return refus(409, MESSAGE_PAS_ENCORE_EN_ROUTE);
   // Ancien état (deux livraisons en route) : la suivante est celle déjà commencée.
   const suivante = commencee ?? autres.find((l) => livraisonLivrable(l)) ?? null;
   if (!suivante) return refus(409, MESSAGE_PLUS_D_AUTRE_CLIENT);

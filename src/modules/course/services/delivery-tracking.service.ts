@@ -351,7 +351,8 @@ export class DeliveryTrackingService {
         // Client sans application : c'est ici qu'il reçoit son code de
         // récupération, par WhatsApp. Volontairement non attendu, pour ne pas
         // retarder l'événement temps réel des clients qui, eux, ont l'app.
-        // Livraison reprise après « Plus tard » : le code a déjà été envoyé.
+        // Livraison reprise après « Plus tard » : le code a déjà été envoyé
+        // (`reglePlusTard` refuse de passer un client jamais parti vers lui).
         if (!payload.delivery?.reportee_at) void this.departNotifier.notifier(order.id);
       }
 
