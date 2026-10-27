@@ -13,6 +13,7 @@ import {
   DeliveryStatut,
   EntityStatus,
   OrderStatus,
+  OrderType,
 } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -115,6 +116,8 @@ export class CourseOfferService {
       where: {
         id: { in: input.orderIds },
         restaurant_id: input.restaurantId,
+        // Passée à emporter ou sur place pendant la fenêtre du lot : plus rien à livrer.
+        type: OrderType.DELIVERY,
         status: OrderStatus.READY,
         entity_status: { not: EntityStatus.DELETED },
         delivery: null, // pas déjà dans une Course
@@ -1360,6 +1363,7 @@ export class CourseOfferService {
               select: {
                 id: true,
                 status: true,
+                type: true,
                 delivery_fee: true,
                 delivery_service: true,
                 entity_status: true,
@@ -1375,11 +1379,13 @@ export class CourseOfferService {
     // (READY). Couvre les DEUX portées d'annulation Turbo : groupe entier
     // (course CANCELLED) ET annulation partielle (course encore vivante avec
     // une livraison annulée dedans). Les commandes annulées manuellement ou
-    // supprimées sont exclues d'office.
+    // supprimées sont exclues d'office, comme une commande passée à emporter
+    // ou sur place depuis (le client vient la chercher).
     const relancables = course.deliveries.filter(
       (d) =>
         d.statut === DeliveryStatut.CANCELLED &&
         d.order.status === OrderStatus.READY &&
+        d.order.type === OrderType.DELIVERY &&
         d.order.entity_status !== EntityStatus.DELETED,
     );
     if (relancables.length === 0) {
