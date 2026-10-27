@@ -5,6 +5,7 @@ import { CourseStatut, DeliveryStatut } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 import { DelivererChannels } from 'src/modules/deliverers/enums/deliverer-channels';
+import { lirePositionLivreur } from 'src/modules/deliverers/helpers/position-livreur.rules';
 import { MapsService } from 'src/modules/maps/maps.service';
 import type { DelivererLocationUpdatedPayload } from 'src/modules/deliverers/events/deliverer.event';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
@@ -84,6 +85,13 @@ export class DeliveryTrackingService {
    * coûterait cher chez Google pour un gain nul. Au-delà, on recalcule.
    */
   private static readonly ETA_TTL_MS = 5 * 60_000;
+
+  /**
+   * Course partie : au démarrage d'une livraison, l'heure d'arrivée part de
+   * la dernière position du livreur si elle a moins de 2 min (il est chez le
+   * client précédent, pas au restaurant).
+   */
+  private static readonly POSITION_DEPART_FRAICHE_MS = 2 * 60_000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -166,7 +174,9 @@ export class DeliveryTrackingService {
   private async calculerEtas(
     delivererId: string,
     position: { latitude: number; longitude: number },
+    options: { garder?: boolean } = {},
   ): Promise<Map<string, number>> {
+    const garder = options.garder ?? true;
     const course = await this.prisma.course.findFirst({
       where: { deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY },
       select: {
@@ -215,7 +225,7 @@ export class DeliveryTrackingService {
       })
       .catch(() => null);
     if (!directions || directions.legs.length === 0) {
-      this.retenirEtas(course.id, { calculeA: Date.now(), parCommande: new Map(), signature, echec: true });
+      if (garder) this.retenirEtas(course.id, { calculeA: Date.now(), parCommande: new Map(), signature, echec: true });
       return new Map();
     }
 
@@ -232,7 +242,7 @@ export class DeliveryTrackingService {
       parCommande.set(etape.orderId, Math.round(cumul + i * arretUnitaire));
     });
 
-    this.retenirEtas(course.id, { calculeA: Date.now(), parCommande, signature, echec: false });
+    if (garder) this.retenirEtas(course.id, { calculeA: Date.now(), parCommande, signature, echec: false });
     return parCommande;
   }
 
@@ -250,22 +260,38 @@ export class DeliveryTrackingService {
   }
 
   /**
-   * ETA d'un client au moment où la livraison démarre. Le livreur vient de
-   * récupérer les plats : on part du restaurant, ce qui est exact à cet instant
-   * et évite d'attendre le premier relevé GPS.
+   * ETA d'un client au moment où la livraison démarre, sans attendre le
+   * premier relevé GPS. Course pas encore partie : depuis le restaurant, exact
+   * à cet instant. Course partie (2e arrêt, livraison reprise après « Plus
+   * tard ») : depuis la dernière position du livreur si elle a moins de
+   * 2 min ; sinon depuis le restaurant, et ce calcul n'est pas gardé (la
+   * position suivante recalcule, au lieu de garder 5 min une heure fausse).
    */
   private async etaAuDepart(courseId: string, orderId: string): Promise<number | null> {
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
-      select: { deliverer_id: true, restaurant: { select: { latitude: true, longitude: true } } },
+      select: {
+        deliverer_id: true,
+        parti_at: true,
+        restaurant: { select: { latitude: true, longitude: true } },
+        deliverer: { select: { last_location: true, last_location_at: true } },
+      },
     });
     if (!course?.restaurant?.latitude || !course.restaurant.longitude || !course.deliverer_id) {
       return null;
     }
-    const etas = await this.calculerEtas(course.deliverer_id, {
-      latitude: course.restaurant.latitude,
-      longitude: course.restaurant.longitude,
-    });
+    let origine = { latitude: course.restaurant.latitude, longitude: course.restaurant.longitude };
+    let garder = true;
+    if (course.parti_at) {
+      const lue = lirePositionLivreur(course.deliverer?.last_location, course.deliverer?.last_location_at);
+      const fraiche =
+        !!lue.position &&
+        !!lue.position_at &&
+        Date.now() - lue.position_at.getTime() < DeliveryTrackingService.POSITION_DEPART_FRAICHE_MS;
+      if (fraiche) origine = { latitude: lue.position!.lat, longitude: lue.position!.lng };
+      else garder = false;
+    }
+    const etas = await this.calculerEtas(course.deliverer_id, origine, { garder });
     const seconds = etas.get(orderId);
     return seconds != null ? Math.max(1, Math.round(seconds / 60)) : null;
   }
@@ -325,7 +351,8 @@ export class DeliveryTrackingService {
         // Client sans application : c'est ici qu'il reçoit son code de
         // récupération, par WhatsApp. Volontairement non attendu, pour ne pas
         // retarder l'événement temps réel des clients qui, eux, ont l'app.
-        void this.departNotifier.notifier(order.id);
+        // Livraison reprise après « Plus tard » : le code a déjà été envoyé.
+        if (!payload.delivery?.reportee_at) void this.departNotifier.notifier(order.id);
       }
 
       this.appGateway.emitToUser(

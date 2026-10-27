@@ -67,7 +67,10 @@ export type TypeEvenementDispatch =
   | 'COMMANDE_AJOUTEE'
   /** Course sans livreur absorbée par une autre ; son offre close sans pénalité. */
   | 'COURSES_FUSIONNEES'
-  /** Ordre des arrêts recalculé. */
+  /**
+   * Ordre des arrêts écrit ; `motif` = AJOUT, FUSION ou MEILLEUR_ORDRE (par
+   * la route, 27/10) ; `details` : sequence, motif, base, gain_s.
+   */
   | 'ARRETS_ORDONNES'
   /** Course proposée par le planificateur ; `motif` = AU_COMPTOIR ou MINUTES. */
   | 'OFFRE_PLANIFIEE'
@@ -104,10 +107,16 @@ export type TypeEvenementDispatch =
   /** Arrivée au restaurant déduite d'une position (appli en arrière-plan). */
   | 'ARRIVEE_RESTAURANT_AUTO'
   /** Arrivée chez le client déduite d'une position (appli en arrière-plan). */
-  | 'ARRIVEE_CLIENT_AUTO';
+  | 'ARRIVEE_CLIENT_AUTO'
+  /**
+   * « Plus tard » du livreur (27/10) : livraison remise en attente, en fin de
+   * tournée ; `details` : commande, statut_avant, rang_avant, rang_apres,
+   * arrivee_avant, suivante.
+   */
+  | 'LIVRAISON_REPORTEE';
 
-/** Qui a déclenché la décision. */
-export type SourceDispatch = 'appli' | 'serveur' | 'admin' | 'caisse' | 'restaurant';
+/** Qui a déclenché la décision (`livreur` : geste du livreur dans l'appli, « Plus tard »). */
+export type SourceDispatch = 'appli' | 'serveur' | 'admin' | 'caisse' | 'restaurant' | 'livreur';
 
 export interface EvenementDispatch {
   type: TypeEvenementDispatch;

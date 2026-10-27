@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   HttpException,
   Injectable,
@@ -29,7 +30,9 @@ import { FailDeliveryDto } from '../dto/fail-delivery.dto';
 import { RateCustomerDto } from '../dto/rate-customer.dto';
 import { CourseEvent } from '../events/course.event';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
+import { DecisionPlusTard, MESSAGE_CLIENT_EN_COURS, reglePlusTard } from '../helpers/plus-tard.rules';
 import { DepartCourseService } from './depart-course.service';
+import { DispatchJournalService } from './dispatch-journal.service';
 
 /**
  * Livraison encore à faire : le livreur peut la passer en échec. PENDING
@@ -66,6 +69,51 @@ function refusLivraison(
 /** Commandes qu'un échec de livraison ne touche plus : terminée, collectée, déjà annulée. */
 const COMMANDES_CLOSES: OrderStatus[] = [OrderStatus.COMPLETED, OrderStatus.COLLECTED, OrderStatus.CANCELLED];
 
+/** Livraison commencée : en route vers son client, ou chez lui. */
+const LIVRAISON_COMMENCEE: DeliveryStatut[] = [DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED];
+
+/** Ce que « Plus tard » relit de la course, sous son verrou. */
+const SELECT_PLUS_TARD = {
+  id: true,
+  reference: true,
+  restaurant_id: true,
+  deliverer_id: true,
+  statut: true,
+  parti_at: true,
+  deliveries: {
+    select: {
+      id: true,
+      order_id: true,
+      statut: true,
+      sequence_order: true,
+      reportee_at: true,
+      arrived_at: true,
+      in_route_at: true,
+      ajoutee_apres_retrait: true,
+      order: { select: { status: true, reference: true } },
+    },
+  },
+} satisfies Prisma.CourseSelect;
+
+type CoursePlusTardLue = Prisma.CourseGetPayload<{ select: typeof SELECT_PLUS_TARD }>;
+
+/** La livraison a changé entre la règle et l'écriture (autre geste au même instant) : relue après l'annulation. */
+class ReportChange extends Error {}
+
+/** Refus de la règle « Plus tard », avec le code HTTP du contrat. */
+function exceptionPlusTard(d: Extract<DecisionPlusTard, { type: 'REFUS' }>): HttpException {
+  switch (d.code) {
+    case 404:
+      return new NotFoundException(d.message);
+    case 403:
+      return new ForbiddenException(d.message);
+    case 409:
+      return new ConflictException(d.message);
+    default:
+      return new BadRequestException(d.message);
+  }
+}
+
 /**
  * Service : transitions de statut sur les Delivery individuelles.
  * Auto-complétion de la Course parent quand toutes les Delivery sont terminées.
@@ -84,6 +132,8 @@ export class DeliveryActionService {
     private readonly notificationsSender: NotificationsSenderService,
     // Planificateur v2 : démarrer une livraison, c'est quitter le restaurant.
     private readonly depart?: DepartCourseService,
+    // Journal de la diffusion : « Plus tard » (LIVRAISON_REPORTEE).
+    private readonly journal?: DispatchJournalService,
   ) {}
 
   /**
@@ -92,6 +142,11 @@ export class DeliveryActionService {
    * répété) : rendue telle quelle, sans erreur. Commande ajoutée après le
    * retrait et pas encore remise : 409. Course pas encore partie : le départ
    * est enregistré d'abord (DepartCourseService).
+   *
+   * Jamais deux livraisons en route (27/10) : une AUTRE livraison de la course
+   * en route ou chez son client, 409 « Termine d'abord le client en cours. ».
+   * La course est verrouillée le temps du démarrage (même ligne que « Plus
+   * tard », qui démarre la suivante) : un seul des deux passe.
    */
   async startDelivery(deliveryId: string, delivererId: string) {
     const delivery = await this.assertOwned(deliveryId, delivererId, [DeliveryStatut.PENDING, DeliveryStatut.IN_ROUTE]);
@@ -99,24 +154,146 @@ export class DeliveryActionService {
 
     await this.depart?.avantDemarrageLivraison(delivery);
 
-    const updated = await this.prisma.delivery
-      .update({
-        // Conditionnée : le serveur a pu la démarrer au même instant (départ).
-        where: { id: deliveryId, statut: DeliveryStatut.PENDING },
-        // Le livreur ne doit JAMAIS lire le code : c'est le client qui le lui
-        // dicte, et c'est ce qui prouve la remise. Sans cette omission, la
-        // reponse de la route lui donnait de quoi valider sans voir personne.
-        omit: { delivery_pin: true },
-        data: { statut: DeliveryStatut.IN_ROUTE, in_route_at: new Date() },
-      })
-      .catch((err) => {
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') return null;
-        throw err;
+    const demarree = await this.prisma.$transaction(async (tx) => {
+      await tx.course.updateMany({
+        where: { id: delivery.course_id, deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY },
+        data: { updated_at: new Date() },
       });
-    if (!updated) return this.lireSansCode(deliveryId);
+      const enCours = await tx.delivery.count({
+        where: { course_id: delivery.course_id, id: { not: deliveryId }, statut: { in: LIVRAISON_COMMENCEE } },
+      });
+      if (enCours > 0) throw new ConflictException(MESSAGE_CLIENT_EN_COURS);
+      // Conditionnée : le serveur a pu la démarrer au même instant (départ).
+      const { count } = await tx.delivery.updateMany({
+        where: {
+          id: deliveryId,
+          statut: DeliveryStatut.PENDING,
+          course: { deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY },
+        },
+        data: { statut: DeliveryStatut.IN_ROUTE, in_route_at: new Date() },
+      });
+      return count === 1;
+    });
+    // Le livreur ne doit JAMAIS lire le code : c'est le client qui le lui
+    // dicte, et c'est ce qui prouve la remise.
+    const updated = await this.lireSansCode(deliveryId);
+    if (!demarree) return updated;
 
     await this.emitDeliveryStatut(updated, delivery.statut);
     return updated;
+  }
+
+  /**
+   * « PLUS TARD » (demande du 27/10) : le livreur passe ce client (absent,
+   * injoignable), livre les autres, puis revient sur lui en fin de tournée.
+   * Règle pure `reglePlusTard` (refus, rejeu, nouvel ordre), une seule
+   * transaction :
+   *  1. la course est verrouillée (mise à jour conditionnelle : ce livreur,
+   *     en livraison, partie), comme le détachement d'une commande ; sinon
+   *     elle est relue et le refus dit pourquoi ;
+   *  2. les livraisons sont relues sous ce verrou, la règle décide ;
+   *  3. la livraison repasse « en attente », son arrivée est effacée, la date
+   *     du report notée (une seule fois : `reportee_at` nul exigé) ;
+   *  4. les rangs sont renumérotés de 1 à N, en deux temps (contrainte unique) ;
+   *  5. la suivante démarre.
+   * Ensuite : journal LIVRAISON_REPORTEE, deux `deliveryStatutChanged` (la
+   * reportée, puis la suivante), et la course complète rendue, comme
+   * `me/current` (sans le code du client). Aucun appel Google, aucune
+   * notification ; l'encaissement et le code du client ne changent pas.
+   * Rejeu (déjà reportée, encore en attente) : la course telle quelle.
+   */
+  async reporterLivraison(deliveryId: string, delivererId: string, maintenant = new Date()) {
+    const lue = await this.prisma.delivery.findUnique({ where: { id: deliveryId }, select: { course_id: true } });
+    if (!lue) throw new NotFoundException('Delivery non trouvée');
+    const courseId = lue.course_id;
+
+    let issue: { decision: Extract<DecisionPlusTard, { type: 'REPORTER' }>; course: CoursePlusTardLue; demarree: boolean } | null;
+    try {
+      issue = await this.prisma.$transaction(async (tx) => {
+        const verrou = await tx.course.updateMany({
+          where: { id: courseId, deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY, parti_at: { not: null } },
+          data: { updated_at: maintenant },
+        });
+        const course = await tx.course.findUnique({ where: { id: courseId }, select: SELECT_PLUS_TARD });
+        const decision = reglePlusTard({ livraisonId: deliveryId, delivererId, course, maintenant });
+        if (decision.type === 'REFUS') throw exceptionPlusTard(decision);
+        if (decision.type === 'REJEU') return null;
+        if (verrou.count !== 1 || !course) throw new BadRequestException('La course doit être en phase IN_DELIVERY');
+
+        const reportee = await tx.delivery.updateMany({
+          where: {
+            id: deliveryId,
+            course_id: courseId,
+            statut: { in: [DeliveryStatut.PENDING, DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED] },
+            reportee_at: null,
+          },
+          data: { statut: DeliveryStatut.PENDING, arrived_at: null, reportee_at: maintenant },
+        });
+        if (reportee.count !== 1) throw new ReportChange();
+
+        const max = Math.max(0, ...course.deliveries.map((l) => l.sequence_order));
+        await tx.delivery.updateMany({ where: { course_id: courseId }, data: { sequence_order: { increment: max } } });
+        for (const [id, rang] of decision.rangs) {
+          await tx.delivery.updateMany({ where: { id, course_id: courseId }, data: { sequence_order: rang } });
+        }
+
+        let demarree = false;
+        if (decision.suivante.a_demarrer) {
+          const suivante = await tx.delivery.updateMany({
+            where: { id: decision.suivante.id, course_id: courseId, statut: DeliveryStatut.PENDING },
+            data: { statut: DeliveryStatut.IN_ROUTE, in_route_at: maintenant },
+          });
+          demarree = suivante.count === 1;
+        }
+        return { decision, course, demarree };
+      });
+    } catch (err) {
+      if (!(err instanceof ReportChange)) throw err;
+      // Un autre geste est passé au même instant (double toucher, remise) :
+      // rien n'a été écrit, la règle relit l'état et dit pourquoi.
+      const relue = await this.prisma.course.findUnique({ where: { id: courseId }, select: SELECT_PLUS_TARD });
+      const decision = reglePlusTard({ livraisonId: deliveryId, delivererId, course: relue, maintenant });
+      if (decision.type === 'REFUS') throw exceptionPlusTard(decision);
+      if (decision.type === 'REPORTER') throw new BadRequestException('Statut delivery changé entre-temps');
+      issue = null;
+    }
+
+    if (issue) await this.annoncerReport(issue.decision, issue.course, issue.demarree, delivererId);
+    return this.prisma.course.findUniqueOrThrow({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
+  }
+
+  /** Après « Plus tard » : journal, puis la reportée et la suivante à tous les écrans (sans notification). */
+  private async annoncerReport(
+    decision: Extract<DecisionPlusTard, { type: 'REPORTER' }>,
+    course: CoursePlusTardLue,
+    demarree: boolean,
+    delivererId: string,
+  ): Promise<void> {
+    const avant = new Map(course.deliveries.map((l) => [l.id, l]));
+    const reportee = avant.get(decision.reportee.id);
+    const suivante = avant.get(decision.suivante.id);
+    await this.journal?.ecrire({
+      type: 'LIVRAISON_REPORTEE',
+      source: 'livreur',
+      restaurant_id: course.restaurant_id,
+      course_id: course.id,
+      deliverer_id: delivererId,
+      order_id: reportee?.order_id ?? null,
+      details: {
+        commande: reportee?.order.reference ?? null,
+        statut_avant: decision.reportee.statut_avant,
+        rang_avant: decision.reportee.rang_avant,
+        rang_apres: decision.reportee.rang_apres,
+        arrivee_avant: decision.reportee.arrivee_avant?.toISOString() ?? null,
+        suivante: suivante?.order.reference ?? null,
+      },
+    });
+    const reporteeLue = await this.lireSansCode(decision.reportee.id);
+    await this.emitDeliveryStatut(reporteeLue, decision.reportee.statut_avant);
+    if (demarree) {
+      const suivanteLue = await this.lireSansCode(decision.suivante.id);
+      await this.emitDeliveryStatut(suivanteLue, DeliveryStatut.PENDING);
+    }
   }
 
   /** Livraison relue sans le code du client. */

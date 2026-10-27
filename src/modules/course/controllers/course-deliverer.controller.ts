@@ -141,7 +141,8 @@ export class CourseDelivererController {
     description:
       'Déjà en route (démarrée par le serveur au départ) : rendue telle quelle, sans erreur. Course ' +
       'récupérée pas encore partie : le départ est enregistré d\'abord (plus aucun ajout). 409 « Commande ' +
-      'pas encore remise. » pour une commande ajoutée après le retrait que la caisse n\'a pas remise.',
+      'pas encore remise. » pour une commande ajoutée après le retrait que la caisse n\'a pas remise. ' +
+      '409 « Termine d\'abord le client en cours. » si une autre livraison est en route ou chez son client.',
   })
   @Patch('deliveries/:deliveryId/start')
   async startDelivery(
@@ -187,6 +188,24 @@ export class CourseDelivererController {
     @Body() dto: FailDeliveryDto,
   ) {
     return this.deliveryService.failDelivery(deliveryId, deliverer.id, dto);
+  }
+
+  @ApiOperation({
+    summary: 'Plus tard : livrer d’abord les autres clients, revenir sur celui-ci à la fin',
+    description:
+      'Sans corps. La livraison repasse « en attente » (PENDING), va en fin de tournée, son arrivée chez le ' +
+      'client est effacée et `reportee_at` est posée ; la suivante démarre aussitôt (une seule transaction). ' +
+      'Une fois par livraison, jamais sur la dernière restante. Rend la course complète (même forme que ' +
+      '`me/current`). 404 livraison inconnue, 403 autre livreur, 400 course pas en livraison, 409 « Pas encore ' +
+      'parti. », 400 livraison terminée, 409 « Déjà reportée une fois. », 409 « Plus d\'autre client. ». Rejeu ' +
+      '(déjà reportée, encore en attente) : la course telle quelle.',
+  })
+  @Patch('deliveries/:deliveryId/plus-tard')
+  async plusTard(
+    @CurrentDeliverer() deliverer: Deliverer,
+    @Param('deliveryId', new ParseUUIDPipe()) deliveryId: string,
+  ) {
+    return this.deliveryService.reporterLivraison(deliveryId, deliverer.id);
   }
 
   @ApiOperation({ summary: 'Noter le client après une livraison (DELIVERED ou FAILED)' })
