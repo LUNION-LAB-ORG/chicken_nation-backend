@@ -744,6 +744,9 @@ model Delivery {
   /// Ajoutée après la validation du retrait, livreur encore au restaurant : la
   /// commande est remise avec le même code, ou détachée si le livreur part sans elle.
   ajoutee_apres_retrait Boolean   @default(false)
+  /// Livraison passée à plus tard par le livreur (une fois au plus) : en
+  /// attente, en fin de tournée, il livre d'abord les autres clients.
+  reportee_at           DateTime? @db.Timestamp(6) // livraison passée à plus tard par le livreur (une fois au plus)
 
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
