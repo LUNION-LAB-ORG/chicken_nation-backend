@@ -96,6 +96,12 @@ const clePoints = (a: ILatLng, b: ILatLng) =>
     .map((p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`)
     .sort()
     .join('|');
+/**
+ * Distance entre clients que Google n'a pas donnée : pas redemandée pendant
+ * 10 min (comme l'échec retenu des Maps, `TTL.ECHEC_TRACE`), et sans prendre
+ * une des 6 places d'un passage, pour que les autres paires partent.
+ */
+const ECHEC_ORDRE_RETENU_MS = 10 * 60 * 1000;
 
 /**
  * LECTURE DE L'INSTANTANÉ d'un restaurant pour le planificateur v2 : commandes
@@ -111,6 +117,8 @@ export class InstantanePlanificationService {
   private readonly logger = new Logger(InstantanePlanificationService.name);
   /** Distances entre clients demandées à Google et pas encore revenues (ce serveur) : jamais deux fois en vol. */
   private readonly pairesEnVol = new Set<string>();
+  /** Distances entre clients sans réponse de Google (ce serveur) : heure jusqu'à laquelle elles sont sautées. */
+  private readonly pairesEnEchec = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -369,7 +377,8 @@ export class InstantanePlanificationService {
    *
    * Les paires manquantes sont demandées à Google SANS ÊTRE ATTENDUES, si le
    * réglage le permet : 6 au plus par passage, du client le plus proche du
-   * restaurant vers le plus lointain, jamais deux fois en vol. Leur résultat
+   * restaurant vers le plus lointain, jamais deux fois en vol, une paire sans
+   * réponse de Google sautée 10 min sans prendre de place. Leur résultat
    * entre au cache et sert au passage suivant. Ne lève jamais : une panne
    * donne une matrice vide (le calcul d'aujourd'hui).
    */
@@ -400,13 +409,21 @@ export class InstantanePlanificationService {
     return matrice;
   }
 
-  /** Lance les appels Google manquants sans les attendre (6 au plus, jamais deux fois en vol). */
+  /**
+   * Lance les appels Google manquants sans les attendre (6 au plus, jamais
+   * deux fois en vol). Une paire sans réponse de Google est sautée 10 min
+   * sans compter parmi les 6 : sinon, Google lent, les mêmes paires en échec
+   * prenaient toutes les places et celles des autres courses n'étaient
+   * jamais demandées.
+   */
   private demanderDistances(paires: readonly [ILatLng, ILatLng][]): void {
+    const maintenant = Date.now();
+    for (const [cle, jusqua] of this.pairesEnEchec) if (jusqua <= maintenant) this.pairesEnEchec.delete(cle);
     let lancees = 0;
     for (const [origine, destination] of paires) {
       if (lancees >= APPELS_ORDRE_PAR_PASSAGE) return;
       const cle = clePoints(origine, destination);
-      if (this.pairesEnVol.has(cle)) continue;
+      if (this.pairesEnVol.has(cle) || this.pairesEnEchec.has(cle)) continue;
       this.pairesEnVol.add(cle);
       lancees++;
       void Promise.resolve()
@@ -417,6 +434,9 @@ export class InstantanePlanificationService {
           ),
         )
         .catch(() => null)
+        .then((itineraire) => {
+          if (!itineraire) this.pairesEnEchec.set(cle, Date.now() + ECHEC_ORDRE_RETENU_MS);
+        })
         .finally(() => this.pairesEnVol.delete(cle));
     }
   }

@@ -184,6 +184,40 @@ describe('Instantané : distances entre clients, cache seulement', () => {
     expect(new Set(toutes).size).toBe(9);
   });
 
+  it('Google lent : les paires sans réponse ne prennent plus de place 10 min, les autres courses sont demandées', async () => {
+    // 7 paires manquantes : 3 + 3 + 1.
+    const t = monterInstantane([{ metres: [1000, 2000, 3000] }, { metres: [1500, 2500, 3500] }, { metres: [1200, 2200] }]);
+    const routeNormale = t.maps.itineraireRoutier.getMockImplementation()!;
+    t.maps.itineraireRoutier.mockImplementation((p, o) => (o?.pour === 'ordre' ? Promise.resolve(null) : routeNormale(p, o)));
+    const vider = () => new Promise((r) => setImmediate(r));
+    const demandees = () => t.appelsOrdre().map(([p]) => `${p.originLng}>${p.destLng}`);
+    const debut = Date.now();
+    const horloge = jest.spyOn(Date, 'now').mockReturnValue(debut);
+    try {
+      await t.lire();
+      await vider(); // les 6 premières reviennent sans distance (délai de 2,5 s dépassé)
+      expect(demandees()).toHaveLength(6);
+
+      await t.lire();
+      await vider();
+      // La 7e part ; les 6 en échec ne sont pas redemandées.
+      expect(demandees()).toHaveLength(7);
+      expect(new Set(demandees()).size).toBe(7);
+
+      await t.lire();
+      await vider();
+      expect(demandees()).toHaveLength(7);
+
+      // 10 min plus tard : de nouveau demandées, toujours 6 au plus.
+      horloge.mockReturnValue(debut + 10 * 60 * 1000 + 1);
+      await t.lire();
+      await vider();
+      expect(demandees()).toHaveLength(13);
+    } finally {
+      horloge.mockRestore();
+    }
+  });
+
   it('Google coupé par réglage : rien n’est lu ni demandé pour l’ordre', async () => {
     const t = monterInstantane([{ metres: [1000, 2000] }]);
     const lu = await t.lire(false);
