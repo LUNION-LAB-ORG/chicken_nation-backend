@@ -5,6 +5,7 @@
  */
 import {
   CourseStatut,
+  DeliveryFailureReason,
   DeliveryService,
   DeliveryStatut,
   EntityStatus,
@@ -427,6 +428,83 @@ describe('COURSE_ANNULEE_A_RELANCER', () => {
     });
     const vide = course({ statut: CourseStatut.CANCELLED, cancelled_at: ilYA(20), deliveries: [] });
     expect(signaux(tableau({ courses: [c, vide] }), 'COURSE_ANNULEE_A_RELANCER')).toEqual([]);
+  });
+});
+
+describe('LIVRAISON_ANNULEE_PAR_LIVREUR (« Annuler » du livreur, 27/10)', () => {
+  /** Livraison annulée par le livreur : en échec, la commande toujours en livraison. */
+  const annulee = (min: number, p: Partial<LivraisonLue> = {}, order: Partial<LivraisonLue['order']> = {}) =>
+    livraison({
+      statut: DeliveryStatut.FAILED,
+      failed_at: ilYA(min),
+      failure_reason: DeliveryFailureReason.CLIENT_ABSENT,
+      ...p,
+      order: { status: OrderStatus.PICKED_UP, ...order },
+    });
+
+  it.each([CourseStatut.IN_DELIVERY, CourseStatut.COMPLETED])(
+    'course %s : rouge, prénom, commande, motif, depuis l’échec',
+    (statut) => {
+      const c = course({
+        statut,
+        deliverer: KOFFI,
+        deliveries: [annulee(12, {}, { reference: 'ORD-1' }), livraison({ statut: DeliveryStatut.DELIVERED })],
+      });
+      const [s] = signaux(tableau({ courses: [c] }), 'LIVRAISON_ANNULEE_PAR_LIVREUR');
+      expect(s).toEqual({
+        cle: 'LIVRAISON_ANNULEE_PAR_LIVREUR',
+        gravite: 'rouge',
+        restaurant_id: ANGRE.id,
+        depuis: ilYA(12).toISOString(),
+        minutes: 12,
+        course: { id: c.id, reference: c.reference, statut, expiree: false },
+        livreur: { id: KOFFI.id, prenom: 'Koffi' },
+        commandes: ['ORD-1'],
+        motif: DeliveryFailureReason.CLIENT_ABSENT,
+      });
+      // Compte dans la pastille rouge du restaurant.
+      expect(angre(tableau({ courses: [c] })).alertes).toBe(1);
+    },
+  );
+
+  it('deux commandes annulées dans la même course : une alerte, les deux références, depuis la première, sans motif', () => {
+    const c = course({
+      statut: CourseStatut.COMPLETED,
+      deliverer: KOFFI,
+      deliveries: [
+        annulee(5, { failure_reason: DeliveryFailureReason.CLIENT_REFUSED }, { reference: 'ORD-2' }),
+        annulee(20, {}, { reference: 'ORD-1' }),
+      ],
+    });
+    const liste = signaux(tableau({ courses: [c] }), 'LIVRAISON_ANNULEE_PAR_LIVREUR');
+    expect(liste).toHaveLength(1);
+    expect(liste[0]).toMatchObject({ commandes: ['ORD-2', 'ORD-1'], depuis: ilYA(20).toISOString(), minutes: 20 });
+    expect(liste[0]).not.toHaveProperty('motif');
+  });
+
+  it('absente : commande annulée par l’admin, terminée, supprimée ; ancienne livraison en échec à commande annulée', () => {
+    const courses = [
+      course({ statut: CourseStatut.COMPLETED, deliveries: [annulee(10, {}, { status: OrderStatus.CANCELLED })] }),
+      course({ statut: CourseStatut.COMPLETED, deliveries: [annulee(10, {}, { status: OrderStatus.COMPLETED })] }),
+      course({ statut: CourseStatut.IN_DELIVERY, deliveries: [annulee(10, {}, { entity_status: EntityStatus.DELETED })] }),
+    ];
+    expect(signaux(tableau({ courses }), 'LIVRAISON_ANNULEE_PAR_LIVREUR')).toEqual([]);
+  });
+
+  it('absente le lendemain (journée de service de 05 h à 05 h)', () => {
+    const veille = course({
+      statut: CourseStatut.COMPLETED,
+      deliveries: [annulee(0, { failed_at: new Date('2026-10-24T04:30:00.000Z') })],
+    });
+    expect(signaux(tableau({ courses: [veille] }), 'LIVRAISON_ANNULEE_PAR_LIVREUR')).toEqual([]);
+  });
+
+  it('sans date d’échec : rien (hors journée) ; course sans livreur : livreur nul', () => {
+    const c = course({ statut: CourseStatut.IN_DELIVERY, deliveries: [annulee(0, { failed_at: null })] });
+    expect(signaux(tableau({ courses: [c] }), 'LIVRAISON_ANNULEE_PAR_LIVREUR')).toEqual([]);
+    const sansLivreur = course({ statut: CourseStatut.IN_DELIVERY, deliveries: [annulee(3)] });
+    const [s] = signaux(tableau({ courses: [sansLivreur] }), 'LIVRAISON_ANNULEE_PAR_LIVREUR');
+    expect(s.livreur).toBeNull();
   });
 });
 

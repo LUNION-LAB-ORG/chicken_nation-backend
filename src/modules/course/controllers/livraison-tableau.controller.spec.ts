@@ -189,6 +189,27 @@ describe('TableauLivraisonService : résultat gardé 10 s par périmètre', () =
     expect(arg.select.deliveries.select.order.select).toEqual(expect.objectContaining({ delivery_service: true }));
   });
 
+  it('« Annuler » du livreur (27/10) : courses terminées du jour qui ont une livraison en échec à commande en livraison, échec et motif lus', async () => {
+    const t = monter();
+    await t.service.lire('r-angre');
+    const [arg] = t.prisma.course.findMany.mock.calls[0] as unknown as [
+      { where: { OR: Record<string, unknown>[] }; select: { deliveries: { select: Record<string, unknown> } } },
+    ];
+    const debut = new Date('2026-10-24T05:00:00.000Z');
+    expect(arg.where.OR).toContainEqual({
+      statut: 'COMPLETED',
+      completed_at: { gte: debut },
+      deliveries: {
+        some: {
+          statut: 'FAILED',
+          failed_at: { gte: debut },
+          order: { status: 'PICKED_UP', entity_status: { not: 'DELETED' } },
+        },
+      },
+    });
+    expect(arg.select.deliveries.select).toEqual(expect.objectContaining({ failed_at: true, failure_reason: true }));
+  });
+
   it('une lecture ratée n’est pas gardée', async () => {
     const t = monter();
     t.prisma.course.findMany.mockRejectedValueOnce(new Error('base injoignable'));

@@ -30,7 +30,8 @@ const STATUTS_COURSE_NON_TERMINEE: CourseStatut[] = [
  *
  * Lectures : les livreurs actifs (la même que `GET /deliverers/live-locations`,
  * donc le même état et la même file), les courses non terminées et celles de
- * la journée (expirées, annulées), les commandes livrées en espèces pas
+ * la journée (expirées, annulées, terminées avec une livraison annulée par
+ * le livreur et sa commande encore en livraison), les commandes livrées en espèces pas
  * encaissées, les livraisons du jour, le planning du jour.
  */
 @Injectable()
@@ -92,6 +93,19 @@ export class TableauLivraisonService {
             { statut: { in: STATUTS_COURSE_NON_TERMINEE } },
             { statut: CourseStatut.EXPIRED, created_at: { gte: journee.debut } },
             { statut: CourseStatut.CANCELLED, cancelled_at: { gte: journee.debut } },
+            // « Annuler » du livreur (27/10) : course terminée du jour avec une
+            // livraison en échec dont la commande est toujours en livraison.
+            {
+              statut: CourseStatut.COMPLETED,
+              completed_at: { gte: journee.debut },
+              deliveries: {
+                some: {
+                  statut: DeliveryStatut.FAILED,
+                  failed_at: { gte: journee.debut },
+                  order: { status: OrderStatus.PICKED_UP, entity_status: { not: EntityStatus.DELETED } },
+                },
+              },
+            },
           ],
         },
         select: {
@@ -115,6 +129,8 @@ export class TableauLivraisonService {
             select: {
               statut: true,
               ajoutee_apres_retrait: true,
+              failed_at: true,
+              failure_reason: true,
               order: { select: { reference: true, status: true, entity_status: true, delivery_service: true } },
             },
           },

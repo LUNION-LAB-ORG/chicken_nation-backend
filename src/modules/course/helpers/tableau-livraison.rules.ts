@@ -1,5 +1,6 @@
 import {
   CourseStatut,
+  DeliveryFailureReason,
   DeliveryService,
   DeliveryStatut,
   EntityStatus,
@@ -39,6 +40,12 @@ import { CourseTourneeLue, departEstReel, enRetard, finTourneePrevue, retardMin 
  *    prête au comptoir ;
  *  - COURSE_ANNULEE_A_RELANCER (rouge) : annulée dans la journée, une
  *    commande encore prête à relancer ;
+ *  - LIVRAISON_ANNULEE_PAR_LIVREUR (rouge, 27/10) : le livreur a annulé la
+ *    livraison d'un client dans la journée (« Annuler » de la feuille
+ *    « Problème ») et la commande est toujours en livraison : le sac est chez
+ *    lui, personne ne la reprend seul. Une alerte par course, que la course
+ *    soit encore en livraison ou terminée ; finie quand la commande n'est plus
+ *    en livraison (annulée par l'admin, terminée) ou le lendemain ;
  *  - ATTENTE_AU_RESTAURANT (ambre) : livreur au restaurant, course pas
  *    récupérée, depuis la moitié de `course.auto_cancel_at_restaurant_after_min` ;
  *  - APPLI_FERMEE_EN_COURSE (ambre) : livreur en course, appli fermée par le
@@ -67,6 +74,7 @@ export type CleSignal =
   | 'SANS_LIVREUR'
   | 'PARTI_SANS_SAC'
   | 'COURSE_ANNULEE_A_RELANCER'
+  | 'LIVRAISON_ANNULEE_PAR_LIVREUR'
   | 'ATTENTE_AU_RESTAURANT'
   | 'APPLI_FERMEE_EN_COURSE'
   | 'POSITION_PERDUE_EN_COURSE'
@@ -91,6 +99,11 @@ export interface SignalLivraison {
   creneau?: ShiftType;
   /** APPLI_FERMEE_EN_COURSE : dernier signe de vie de l'appli (ISO). */
   appli_vue_a?: string | null;
+  /**
+   * LIVRAISON_ANNULEE_PAR_LIVREUR : motif choisi par le livreur, seulement
+   * quand l'alerte porte une seule commande.
+   */
+  motif?: DeliveryFailureReason | null;
 }
 
 export interface LivreurDuTableau {
@@ -183,6 +196,9 @@ export interface CourseLue extends CourseTourneeLue {
   deliveries: Array<{
     statut: DeliveryStatut;
     ajoutee_apres_retrait: boolean;
+    /** Livraison en échec : quand, et le motif du livreur (LIVRAISON_ANNULEE_PAR_LIVREUR). */
+    failed_at?: DateLue;
+    failure_reason?: DeliveryFailureReason | null;
     order: { reference: string; status: OrderStatus; entity_status: EntityStatus; delivery_service?: DeliveryService };
   }>;
 }
@@ -246,6 +262,17 @@ const commandeVivante = (l: LivraisonLue): boolean =>
   l.order.entity_status !== EntityStatus.DELETED;
 
 const references = (livraisons: LivraisonLue[]): string[] => livraisons.map((l) => l.order.reference);
+
+/**
+ * Livraison annulée par le livreur dans la journée (en échec), commande
+ * toujours en livraison et pas supprimée. Les anciennes livraisons en échec
+ * (avant le 27/10) ont une commande annulée : elles n'en sont pas.
+ */
+const livraisonAnnuleeParLivreur = (l: LivraisonLue, journee: JourneeDeService): boolean =>
+  l.statut === DeliveryStatut.FAILED &&
+  l.order.status === OrderStatus.PICKED_UP &&
+  l.order.entity_status !== EntityStatus.DELETED &&
+  dansLaJournee(lireDate(l.failed_at), journee);
 
 /** Ordre de la liste : d'abord ceux qui peuvent partir, puis la file. */
 const ORDRE_ETATS: EtatAffichageLivreur[] = [
@@ -386,6 +413,23 @@ function signauxDesCourses(e: EntreeTableau, journee: JourneeDeService): SignalL
           commandes: references(aRelancer),
         });
       }
+    }
+
+    // « Annuler » du livreur (27/10) : aucun geste existant ne reprend la
+    // commande, l'alerte reste jusqu'à ce qu'elle quitte la livraison.
+    const annulees = c.deliveries.filter((l) => livraisonAnnuleeParLivreur(l, journee));
+    if (annulees.length > 0) {
+      const premiere = new Date(Math.min(...annulees.map((l) => lireDate(l.failed_at)!.getTime())));
+      signaux.push({
+        ...base,
+        cle: 'LIVRAISON_ANNULEE_PAR_LIVREUR',
+        gravite: 'rouge',
+        depuis: iso(premiere),
+        minutes: minutesDepuis(premiere, maintenant),
+        livreur,
+        commandes: references(annulees),
+        ...(annulees.length === 1 ? { motif: annulees[0].failure_reason ?? null } : {}),
+      });
     }
   }
   return signaux;
