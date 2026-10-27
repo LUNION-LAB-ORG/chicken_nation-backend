@@ -20,7 +20,7 @@ import { LivraisonAnnuleeListener } from '../listeners/livraison-annulee.listene
 import { SupportWebSocketService } from '../websockets/support-websocket.service';
 import { brancherTickets, CATEGORIE_LIVRAISON, CATEGORIE_PAIEMENT } from './base-tickets.simulee-spec';
 import { CategoriesTicketService } from './categories-ticket.service';
-import { DelivererTicketsService } from './deliverer-tickets.service';
+import { CLASSE_VERROU_TICKET_LIVREUR, DELAI_REJEU_TICKET_MS, DelivererTicketsService } from './deliverer-tickets.service';
 
 function monter(categories?: Record<string, unknown>[]) {
   const a = livreur({ first_name: 'Koffi', last_name: 'Yao', phone: '+2250700000001' });
@@ -121,6 +121,68 @@ describe('« Terminer » : ticket avec la commande (POST /tickets/deliverer/me)'
     await service.createTicket(a.id, corps({ orderId: o.id }) as never);
 
     expect(tickets.fils).toHaveLength(1);
+  });
+
+  it('même ticket renvoyé (réponse perdue) : rendu tel quel, un seul ticket, un seul événement', async () => {
+    const { a, k, o, base, service, tickets, crees } = monter();
+
+    const premier = await service.createTicket(a.id, corps({ courseId: k.id, orderId: o.id }) as never);
+    const second = await service.createTicket(a.id, corps({ courseId: k.id, orderId: o.id }) as never);
+
+    expect(tickets.fils).toHaveLength(1);
+    expect(tickets.messages).toHaveLength(1);
+    expect(second).toEqual(premier);
+    expect(crees()).toHaveLength(1);
+    // Sous verrou du livreur et de la commande.
+    expect(base.verrous).toContainEqual([CLASSE_VERROU_TICKET_LIVREUR, `${a.id}:${o.id}`]);
+  });
+
+  it('deux envois au même instant : un seul ticket (verrou du livreur et de la commande)', async () => {
+    const { a, o, base, service, tickets, crees } = monter();
+    // pg_advisory_xact_lock : les transactions de même clé passent l’une après l’autre.
+    const transaction = base.prisma.$transaction;
+    let file: Promise<unknown> = Promise.resolve();
+    base.prisma.$transaction = jest.fn((fn: unknown) => {
+      const suite = file.then(() => transaction(fn));
+      file = suite.catch(() => undefined);
+      return suite;
+    });
+
+    const [un, deux] = await Promise.all([
+      service.createTicket(a.id, corps({ orderId: o.id }) as never),
+      service.createTicket(a.id, corps({ orderId: o.id }) as never),
+    ]);
+
+    expect(tickets.fils).toHaveLength(1);
+    expect(deux.id).toBe(un.id);
+    expect(crees()).toHaveLength(1);
+  });
+
+  it('autre motif, plus de 2 minutes après, ou ticket fermé : un nouveau ticket', async () => {
+    const { a, o, service, tickets, crees } = monter();
+
+    await service.createTicket(a.id, corps({ orderId: o.id }) as never);
+    await service.createTicket(
+      a.id,
+      corps({ orderId: o.id, subject: 'Client a refusé, commande CMD-1' }) as never,
+    );
+    expect(tickets.fils).toHaveLength(2);
+
+    tickets.fils[0].createdAt = new Date(Date.now() - DELAI_REJEU_TICKET_MS - 1000);
+    await service.createTicket(a.id, corps({ orderId: o.id }) as never);
+    expect(tickets.fils).toHaveLength(3);
+
+    tickets.fils[2].status = 'CLOSED';
+    await service.createTicket(a.id, corps({ orderId: o.id }) as never);
+    expect(tickets.fils).toHaveLength(4);
+    expect(crees()).toHaveLength(4);
+  });
+
+  it('sans commande : comme avant, chaque envoi crée un ticket', async () => {
+    const { a, service, tickets } = monter();
+    await service.createTicket(a.id, corps() as never);
+    await service.createTicket(a.id, corps() as never);
+    expect(tickets.fils).toHaveLength(2);
   });
 
   it('code toujours pris après 3 nouveaux essais : l’erreur remonte', async () => {

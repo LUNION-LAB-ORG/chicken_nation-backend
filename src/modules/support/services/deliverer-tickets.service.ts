@@ -28,6 +28,22 @@ export const MESSAGE_COMMANDE_HORS_COURSES = 'Commande hors de tes courses.';
 /** Nouveaux essais quand le code du ticket est pris au même instant (P2002). */
 const NOUVEAUX_ESSAIS_CODE = 3;
 
+/**
+ * Même ticket renvoyé (réponse perdue sur un réseau faible, deux touchers
+ * rapprochés) : un ticket encore ouvert du même livreur, pour la même
+ * commande et avec le même sujet, créé depuis moins de 2 minutes, est rendu
+ * tel quel.
+ */
+export const DELAI_REJEU_TICKET_MS = 2 * 60 * 1000;
+
+/**
+ * Verrou consultatif de la création d'un ticket du livreur pour une commande
+ * (clé : livreur et commande) : deux envois au même instant passent l'un après
+ * l'autre, le second trouve le premier. 727224 à 727231 sont pris ailleurs
+ * (CRM, code de retrait, offres, planificateur, suivi des applis).
+ */
+export const CLASSE_VERROU_TICKET_LIVREUR = 727232;
+
 /** Ce que la création d'un ticket du livreur écrit (route de l'appli, ou ticket créé par le serveur). */
 interface TicketLivreurACreer {
     subject: string;
@@ -184,7 +200,9 @@ export class DelivererTicketsService {
      * commande). `orderId` (facultatif) doit être livrée dans une course de ce
      * livreur, sinon 403 « Commande hors de tes courses. » (commande inconnue
      * comprise) ; il est enregistré et renvoyé, et le restaurant de la
-     * commande reçoit le ticket dans sa salle.
+     * commande reçoit le ticket dans sa salle. Le même ticket renvoyé dans les
+     * 2 minutes (réponse perdue, deux touchers) est rendu tel quel : pas de
+     * doublon au centre d'appels ni au restaurant.
      */
     async createTicket(
         delivererId: string,
@@ -264,6 +282,9 @@ export class DelivererTicketsService {
      * (backoffice, attribution automatique, restaurant de la commande). Code
      * séquentiel par préfixe de catégorie ; pris au même instant par un autre
      * ticket (P2002) : relu et réessayé, jusqu'à 3 fois.
+     *
+     * Rejeu (ticket lié à une commande, voir `DELAI_REJEU_TICKET_MS`) : le
+     * ticket déjà créé est rendu tel quel, sans second `ticket.created`.
      */
     private async creer(delivererId: string, t: TicketLivreurACreer): Promise<ResponseTicketDto> {
         const ticket = await this.inserer(delivererId, t);
@@ -277,6 +298,11 @@ export class DelivererTicketsService {
 
         const dto2 = this.mapToDto(fullTicket);
 
+        if (ticket.rejeu) {
+            this.logger.log(`Ticket ${ticket.code} renvoyé par livreur ${delivererId.slice(0, 8)} : rendu tel quel.`);
+            return dto2;
+        }
+
         // Émettre l'event ticket:created → backoffice + livreur (+ restaurant de la commande)
         this.ticketEvent.emitTicketCreated(dto2);
 
@@ -285,13 +311,38 @@ export class DelivererTicketsService {
         return dto2;
     }
 
-    /** Le ticket et son 1er message, d'un seul tenant ; code pris au même instant : nouvel essai. */
-    private async inserer(delivererId: string, t: TicketLivreurACreer): Promise<{ id: string; code: string }> {
+    /**
+     * Le ticket et son 1er message, d'un seul tenant ; code pris au même
+     * instant : nouvel essai. Ticket lié à une commande : sous verrou (livreur
+     * et commande), le même ticket encore ouvert et récent est rendu
+     * (`rejeu`), rien n'est écrit.
+     */
+    private async inserer(
+        delivererId: string,
+        t: TicketLivreurACreer,
+    ): Promise<{ id: string; code: string; rejeu?: boolean }> {
         const prefixe = generateTicketPrefix(t.category.name);
         for (let essai = 0; ; essai++) {
             const code = await this.prochainCode(t.category.id, prefixe, essai > 0);
             try {
                 return await this.prisma.$transaction(async (tx) => {
+                    if (t.orderId) {
+                        const cle = `${delivererId}:${t.orderId}`;
+                        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${CLASSE_VERROU_TICKET_LIVREUR}::int, hashtext(${cle}))`;
+                        const deja = await tx.ticketThread.findFirst({
+                            where: {
+                                delivererId,
+                                orderId: t.orderId,
+                                subject: t.subject,
+                                status: { in: [TicketStatus.OPEN, TicketStatus.IN_PROGRESS] },
+                                createdAt: { gte: new Date(Date.now() - DELAI_REJEU_TICKET_MS) },
+                            },
+                            orderBy: { createdAt: 'desc' },
+                            select: { id: true, code: true },
+                        });
+                        if (deja) return { ...deja, rejeu: true };
+                    }
+
                     const created = await tx.ticketThread.create({
                         data: {
                             code,

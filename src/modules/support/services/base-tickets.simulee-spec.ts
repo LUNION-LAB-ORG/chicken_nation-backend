@@ -7,7 +7,9 @@
  *    P2002, comme Prisma ; `collisions(n)` en fait lever n de plus, pour
  *    simuler un autre serveur qui prend le même code au même instant ;
  *  - `findUnique` rend le fil avec sa catégorie, sa commande, son livreur et
- *    ses messages, comme l'`include` du service.
+ *    ses messages, comme l'`include` du service ;
+ *  - `findFirst` filtre aussi sur le sujet, le statut (`in`) et l'heure de
+ *    création (`gte`), pour le rejeu d'un même ticket.
  *
  * Fichier de test seulement (nom en « -spec.ts » : exclu de la construction,
  * pas lancé comme une suite).
@@ -43,6 +45,9 @@ function filtre(f: Ligne, where: Ligne | undefined): boolean {
   if (where.code?.startsWith !== undefined && !String(f.code).startsWith(where.code.startsWith)) return false;
   if (where.delivererId !== undefined && f.delivererId !== where.delivererId) return false;
   if (where.orderId !== undefined && f.orderId !== where.orderId) return false;
+  if (where.subject !== undefined && f.subject !== where.subject) return false;
+  if (where.status?.in !== undefined && !where.status.in.includes(f.status)) return false;
+  if (where.createdAt?.gte !== undefined && !(f.createdAt >= where.createdAt.gte)) return false;
   return true;
 }
 
@@ -97,7 +102,8 @@ export function brancherTickets(
         collisionsAVenir = Math.max(0, collisionsAVenir - 1);
         throw collision();
       }
-      horloge += 1000;
+      // Heure de création croissante, jamais avant l'heure du test (délai de rejeu).
+      horloge = Math.max(horloge + 1000, Date.now());
       const ligne = { id: `fil-${fils.length + 1}`, createdAt: new Date(horloge), updatedAt: new Date(horloge), ...data };
       fils.push(ligne);
       return { ...ligne };
