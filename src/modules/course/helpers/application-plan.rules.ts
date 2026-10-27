@@ -79,7 +79,9 @@ export function libelleRegroupement(motif: MotifDirection | null | undefined): s
  * attend au-delà de l'attente courte parce que le trajet est long ; les écrans
  * écrivent « Trajet long : attendre CMD-B, prête vers 12 h 55 ») ou
  * `ATTENTE_COURTE` (texte habituel). Absent sur une retenue d'avant le 24/10 :
- * attente courte.
+ * attente courte. `montant` (27/10) : prix de la commande en francs
+ * (`Order.amount`, TTC), montré par l'appli livreur sous le sac attendu ;
+ * omis quand il est inconnu, absent sur une retenue écrite avant.
  */
 export interface CommandeAttendueEcrite {
   order_id: string;
@@ -87,6 +89,7 @@ export interface CommandeAttendueEcrite {
   prete_vers: string;
   prete_au_plus_tard: string;
   motif: MotifRetenue;
+  montant?: number;
 }
 
 export function commandesAttenduesAEcrire(attendues: readonly CommandeAttendue[]): CommandeAttendueEcrite[] {
@@ -96,6 +99,7 @@ export function commandesAttenduesAEcrire(attendues: readonly CommandeAttendue[]
     prete_vers: a.prete_vers.toISOString(),
     prete_au_plus_tard: a.prete_au_plus_tard.toISOString(),
     motif: a.motif,
+    ...(typeof a.montant === 'number' && Number.isFinite(a.montant) && a.montant >= 0 ? { montant: a.montant } : {}),
   }));
 }
 
@@ -105,6 +109,24 @@ export function lireCommandesAttendues(valeur: unknown): string[] {
   return valeur
     .map((v) => (typeof v === 'string' ? v : v && typeof v === 'object' ? (v as { order_id?: unknown }).order_id : null))
     .filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
+/**
+ * Heure « prête vers » écrite pour chaque commande attendue, depuis la
+ * colonne JSON : le planificateur réécrit la retenue quand l'heure affichée
+ * change (27/10). `prete_vers` à `null` si elle manque ou ne se lit pas ;
+ * formes inattendues ignorées comme dans `lireCommandesAttendues`.
+ */
+export function lireAttenduesEcrites(valeur: unknown): { order_id: string; prete_vers: Date | null }[] {
+  if (!Array.isArray(valeur)) return [];
+  return valeur.flatMap((v) => {
+    if (typeof v === 'string') return v.length > 0 ? [{ order_id: v, prete_vers: null }] : [];
+    if (!v || typeof v !== 'object') return [];
+    const { order_id, prete_vers } = v as { order_id?: unknown; prete_vers?: unknown };
+    if (typeof order_id !== 'string' || order_id.length === 0) return [];
+    const date = typeof prete_vers === 'string' ? new Date(prete_vers) : null;
+    return [{ order_id, prete_vers: date && Number.isFinite(date.getTime()) ? date : null }];
+  });
 }
 
 /** Références des commandes attendues, depuis la colonne JSON (pour la notification du livreur). */

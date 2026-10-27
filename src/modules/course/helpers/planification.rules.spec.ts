@@ -688,6 +688,9 @@ describe('retenue au comptoir : une commande prête attend une commande en prép
     readyA?: Date;
     retenue?: Date | null;
     attendues?: string[];
+    /** Heures « prête vers » écrites avec la retenue (lues en base par l'instantané). */
+    ecrites?: { order_id: string; prete_vers: Date | null }[];
+    montantB?: number | null;
     autres?: ReturnType<typeof livr>[];
     coursesEnPlus?: ReturnType<typeof crs>[];
     enPlus?: ReturnType<typeof cmd>[];
@@ -704,8 +707,13 @@ describe('retenue au comptoir : une commande prête attend une commande en prép
       commandes: [a],
       retenue_jusqua: o.retenue ?? null,
       commandes_attendues: o.attendues ?? [],
+      ...(o.ecrites ? { attendues_ecrites: o.ecrites } : {}),
     });
-    const b = enPrep('b', o.finB ?? h('12:33'), { est: 2000, created_at: h('12:20') });
+    const b = enPrep('b', o.finB ?? h('12:33'), {
+      est: 2000,
+      created_at: h('12:20'),
+      ...(o.montantB !== undefined ? { montant: o.montantB } : {}),
+    });
     return planifier(
       instant(maintenant, {
         commandes: [b, ...(o.enPlus ?? [])],
@@ -728,6 +736,33 @@ describe('retenue au comptoir : une commande prête attend une commande en prép
       motif: 'ATTENTE_COURTE',
       libelle: 'Attendre CMD-B (prête vers 12 h 33), départ au plus tard 12 h 33',
     });
+  });
+
+  it('montant (27/10) : le prix de la commande attendue est donné avec elle ; inconnu, null', () => {
+    expect(actionsDe(base({ montantB: 7000 }), 'RETENIR')[0].attendues).toEqual([
+      expect.objectContaining({ order_id: 'b', montant: 7000 }),
+    ]);
+    expect(actionsDe(base(), 'RETENIR')[0].attendues).toEqual([expect.objectContaining({ order_id: 'b', montant: null })]);
+  });
+
+  it('heure « prête vers » tenue à jour (27/10) : même échéance, heure affichée qui change, réécrite ; même minute, rien', () => {
+    const posee = { retenue: h('12:33'), attendues: ['b'], maintenant: h('12:31') };
+    // Écrite à 12 h 32, B annoncée maintenant à 12 h 33 : réécrite, même échéance, nouvelle heure.
+    expect(actionsDe(base({ ...posee, ecrites: [{ order_id: 'b', prete_vers: h('12:32') }] }), 'RETENIR')).toEqual([
+      expect.objectContaining({
+        jusqua: h('12:33'),
+        attendues: [expect.objectContaining({ order_id: 'b', prete_vers: h('12:33') })],
+        reprise_de: null,
+      }),
+    ]);
+    // Même minute affichée (12 h 33 et 12 h 33 min 40 s) : rien ne change.
+    const ecrites1233 = [{ order_id: 'b', prete_vers: h('12:33') }];
+    expect(base({ ...posee, ecrites: ecrites1233 }).actions).toEqual([]);
+    expect(base({ ...posee, finB: h('12:33:40'), retenue: h('12:33:40'), ecrites: ecrites1233 }).actions).toEqual([]);
+    // Heure écrite absente ou illisible : réécrite une fois, complète.
+    expect(types(base({ ...posee, ecrites: [{ order_id: 'b', prete_vers: null }] }))).toEqual(['RETENIR']);
+    // Sans heures lues (tests, monde simulé) : la règle d'avant, rien ne change.
+    expect(base(posee).actions).toEqual([]);
   });
 
   it('horizon : pas d’attente courte d’une commande prête dans plus de 7 min', () => {
@@ -875,6 +910,8 @@ describe('retenue au comptoir : trajet long (le livreur reviendrait trop tard)',
     picked_up_at?: Date | null;
     retenue?: Date | null;
     attendues?: string[];
+    /** Heures « prête vers » écrites avec la retenue (lues en base par l'instantané). */
+    ecrites?: { order_id: string; prete_vers: Date | null }[];
     enPlus?: ReturnType<typeof cmd>[];
     autres?: ReturnType<typeof livr>[];
     coursesEnPlus?: ReturnType<typeof crs>[];
@@ -891,6 +928,7 @@ describe('retenue au comptoir : trajet long (le livreur reviendrait trop tard)',
       commandes: [a],
       retenue_jusqua: o.retenue ?? null,
       commandes_attendues: o.attendues ?? [],
+      ...(o.ecrites ? { attendues_ecrites: o.ecrites } : {}),
     });
     const b = enPrep('b', o.finB ?? h('15:40'), { est: o.estB ?? 5500, created_at: o.creeeB ?? h('15:25') });
     const inst = instant(maintenant, {
@@ -1025,6 +1063,14 @@ describe('retenue au comptoir : trajet long (le livreur reviendrait trop tard)',
     const posee = { retenue: h('15:40'), attendues: ['b'], maintenant: h('15:35') };
     // B annoncée maintenant à 15 h 44 : la retenue garde 15 h 40, rien ne change.
     expect(scene({ ...posee, finB: h('15:44') }).plan.actions).toEqual([]);
+    // Heure écrite 15 h 40 (27/10) : l'échéance reste 15 h 40, seule l'heure « prête vers » est réécrite.
+    expect(scene({ ...posee, finB: h('15:44'), ecrites: [{ order_id: 'b', prete_vers: h('15:40') }] }).plan.actions).toEqual([
+      expect.objectContaining({
+        type: 'RETENIR',
+        jusqua: h('15:40'),
+        attendues: [expect.objectContaining({ order_id: 'b', prete_vers: h('15:44') })],
+      }),
+    ]);
     // Une commande arrivée ensuite, prête plus tard, ne l'allonge pas non plus.
     const c = enPrep('c', h('15:45'), { est: 5200, created_at: h('15:26') });
     const avecC = scene({ ...posee, enPlus: [c] }).plan;

@@ -12,13 +12,17 @@
  *  - S12 : retenue reposée pour une commande entrée en préparation après sa
  *    fin, écrite seulement si la retenue n'a pas bougé depuis la lecture ;
  *  - S13 : refus du planificateur journalisés (PLAN_REFUS), une ligne par
- *    refus et par 10 min, passage sans action compris.
+ *    refus et par 10 min, passage sans action compris ;
+ *  - S14 (27/10) : chaque commande attendue est écrite avec son prix
+ *    (`montant`), et l'heure « prête vers » est tenue à jour à la minute,
+ *    même échéance, sans nouvelle annonce au livreur.
  *
  * Les VRAIS services sur la base simulée (banc-planificateur.simulee-spec.ts),
  * 15 h 30 hors pointe, restaurant Zone 4, A à 2 km à l'est, B à 4 km.
  */
 import { CourseStatut, OrderStatus, OrderType } from '@prisma/client';
 
+import { CourseChannels } from '../enums/course-channels';
 import { commande, course, DonneesDispatch, livraison, livreur, RESTO } from './base-dispatch.simulee-spec';
 import { apres, AU_COMPTOIR, avant, B, MAINTENANT, monter, O, prete } from './banc-planificateur.simulee-spec';
 
@@ -407,5 +411,58 @@ describe('S13. refus du planificateur journalisés (PLAN_REFUS)', () => {
     jest.setSystemTime(apres(10));
     await t.passer();
     expect(t.journalDe('PLAN_REFUS').map((l) => l.motif)).toEqual(['HORIZON', 'AUTRE_LIVREUR_LIBRE']);
+  });
+});
+
+describe('S14. attente montrée aux écrans (27/10) : prix de la commande attendue, heure « prête vers » à jour', () => {
+  it('même échéance, prête vers qui recule d’une minute : réécrite avec le prix, sans notification ; au passage suivant, rien', async () => {
+    const s = auComptoirRetenu();
+    s.b.amount = 7000;
+    // Écrite « prête vers 15 h 33 » ; la cuisine l'annonce maintenant à 15 h 34, l'échéance reste 15 h 34.
+    s.k.commandes_attendues = [attendue(s.b, apres(180))];
+    const t = monter(s.donnees);
+    await t.passer();
+    expect(s.k.retenue_jusqua).toEqual(apres(240));
+    expect(s.k.commandes_attendues).toEqual([
+      {
+        order_id: s.b.id,
+        reference: s.b.reference,
+        prete_vers: apres(240).toISOString(),
+        prete_au_plus_tard: apres(240).toISOString(),
+        motif: 'ATTENTE_COURTE',
+        montant: 7000,
+      },
+    ]);
+    expect(t.emisSur(CourseChannels.COURSE_STATUT_CHANGED)).toEqual([expect.objectContaining({ reason: 'RETENUE' })]);
+    expect(t.journalDe('COURSE_RETENUE')).toHaveLength(1);
+    expect(t.push.notifyCourseAttente).not.toHaveBeenCalled();
+
+    await t.passer();
+    expect(t.emisSur(CourseChannels.COURSE_STATUT_CHANGED)).toHaveLength(1);
+    expect(t.journalDe('COURSE_RETENUE')).toHaveLength(1);
+  });
+
+  it('même échéance et même heure affichée : rien n’est réécrit (comme avant)', async () => {
+    const s = auComptoirRetenu();
+    const t = monter(s.donnees);
+    await t.passer();
+    expect(s.k.commandes_attendues).toEqual([attendue(s.b, apres(240))]);
+    expect(t.emisSur(CourseChannels.COURSE_STATUT_CHANGED)).toHaveLength(0);
+    expect(t.journalDe('COURSE_RETENUE')).toHaveLength(0);
+  });
+
+  it('retenue posée : le prix écrit est celui de la commande (Order.amount) ; inconnu, la clé est omise', async () => {
+    const avecPrix = auComptoirRetenu({ retenue: false });
+    avecPrix.b.amount = 6500;
+    const t1 = monter(avecPrix.donnees);
+    await t1.passer();
+    expect(avecPrix.k.commandes_attendues).toEqual([expect.objectContaining({ order_id: avecPrix.b.id, montant: 6500 })]);
+    expect(t1.push.notifyCourseAttente).toHaveBeenCalledTimes(1);
+
+    const sansPrix = auComptoirRetenu({ retenue: false });
+    const t2 = monter(sansPrix.donnees);
+    await t2.passer();
+    expect(sansPrix.k.commandes_attendues).toEqual([expect.objectContaining({ order_id: sansPrix.b.id })]);
+    expect(Object.keys(sansPrix.k.commandes_attendues[0])).not.toContain('montant');
   });
 });

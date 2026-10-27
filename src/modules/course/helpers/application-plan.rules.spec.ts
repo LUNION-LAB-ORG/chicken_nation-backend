@@ -10,6 +10,7 @@ import {
   estRaisonDuPlanificateur,
   heureCourte,
   libelleRegroupement,
+  lireAttenduesEcrites,
   lireCommandesAttendues,
   numeroterArrets,
   referencesAttendues,
@@ -59,6 +60,7 @@ describe('commandes attendues (colonne JSON)', () => {
         prete_vers: new Date('2026-10-22T12:41:00Z'),
         prete_au_plus_tard: new Date('2026-10-22T12:44:00Z'),
         motif: 'TRAJET_LONG',
+        montant: 7000,
       },
       {
         order_id: 'c',
@@ -66,6 +68,7 @@ describe('commandes attendues (colonne JSON)', () => {
         prete_vers: new Date('2026-10-22T12:33:00Z'),
         prete_au_plus_tard: new Date('2026-10-22T12:35:00Z'),
         motif: 'ATTENTE_COURTE',
+        montant: null,
       },
     ]);
     expect(ecrites).toEqual([
@@ -75,6 +78,7 @@ describe('commandes attendues (colonne JSON)', () => {
         prete_vers: '2026-10-22T12:41:00.000Z',
         prete_au_plus_tard: '2026-10-22T12:44:00.000Z',
         motif: 'TRAJET_LONG',
+        montant: 7000,
       },
       {
         order_id: 'c',
@@ -88,6 +92,47 @@ describe('commandes attendues (colonne JSON)', () => {
     expect(referencesAttendues(ecrites)).toEqual(['CMD-B', 'CMD-C']);
     expect(lireCommandesAttendues(null)).toEqual([]);
     expect(lireCommandesAttendues([{ x: 1 }, 'c', 3])).toEqual(['c']);
+  });
+
+  it('montant (27/10) : écrit s’il est connu, fini et positif ou nul ; omis sinon (clé absente)', () => {
+    const une = (montant: number | null) =>
+      commandesAttenduesAEcrire([
+        {
+          order_id: 'b',
+          reference: 'CMD-B',
+          prete_vers: new Date('2026-10-22T12:41:00Z'),
+          prete_au_plus_tard: new Date('2026-10-22T12:44:00Z'),
+          motif: 'ATTENTE_COURTE',
+          montant,
+        },
+      ])[0];
+    expect(une(7000).montant).toBe(7000);
+    expect(une(0).montant).toBe(0);
+    for (const inconnu of [null, Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      expect(Object.keys(une(inconnu))).toEqual(['order_id', 'reference', 'prete_vers', 'prete_au_plus_tard', 'motif']);
+    }
+  });
+
+  it('heures « prête vers » écrites, relues pour la comparaison (27/10) : illisibles à null, formes inattendues ignorées', () => {
+    expect(
+      lireAttenduesEcrites([
+        { order_id: 'b', reference: 'CMD-B', prete_vers: '2026-10-22T12:41:00.000Z', montant: 7000 },
+        { order_id: 'c', prete_vers: 'pas une heure' },
+        { order_id: 'd' },
+        'e',
+        { x: 1 },
+        3,
+        null,
+        '',
+      ]),
+    ).toEqual([
+      { order_id: 'b', prete_vers: new Date('2026-10-22T12:41:00Z') },
+      { order_id: 'c', prete_vers: null },
+      { order_id: 'd', prete_vers: null },
+      { order_id: 'e', prete_vers: null },
+    ]);
+    expect(lireAttenduesEcrites(null)).toEqual([]);
+    expect(lireAttenduesEcrites('[{"order_id":"b"}]')).toEqual([]);
   });
 
   it('retenue en cours (remise pendant la retenue, 25/10) : échéance à venir et commandes attendues, sinon rien', () => {

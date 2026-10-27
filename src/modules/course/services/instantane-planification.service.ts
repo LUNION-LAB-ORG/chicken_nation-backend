@@ -17,7 +17,7 @@ import { lirePositionLivreur } from 'src/modules/deliverers/helpers/position-liv
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 import { MapsService } from 'src/modules/maps/maps.service';
 
-import { lireCommandesAttendues } from '../helpers/application-plan.rules';
+import { lireAttenduesEcrites, lireCommandesAttendues } from '../helpers/application-plan.rules';
 import { ClientDirection, VerdictPaire } from '../helpers/direction.rules';
 import { haversineMeters, ILatLng, parseOrderLatLng } from '../helpers/geo.helper';
 import { journeeDeService } from '../helpers/journee-service.rules';
@@ -60,6 +60,8 @@ const SELECT_COMMANDE = {
   estimated_preparation_time: true,
   date: true,
   time: true,
+  // Prix écrit avec une commande attendue (`commandes_attendues[].montant`, 27/10).
+  amount: true,
 } satisfies Prisma.OrderSelect;
 
 type LigneCommande = Prisma.OrderGetPayload<{ select: typeof SELECT_COMMANDE }>;
@@ -249,6 +251,7 @@ export class InstantanePlanificationService {
       heure_programmee: heureProgrammee(o.date, o.time),
       preparation: estimations.get(o.id) ?? null,
       prepared_at: o.prepared_at,
+      montant: typeof o.amount === 'number' && Number.isFinite(o.amount) ? o.amount : null,
     });
 
     const commandes = lignesCommandes.map(commandePlanif);
@@ -267,6 +270,7 @@ export class InstantanePlanificationService {
         parti_at: k.parti_at,
         retenue_jusqua: k.retenue_jusqua,
         commandes_attendues: lireCommandesAttendues(k.commandes_attendues),
+        attendues_ecrites: lireAttenduesEcrites(k.commandes_attendues),
         offre: offre
           ? { id: offre.id, deliverer_id: offre.deliverer_id, expires_at: offre.expires_at, forcee: offre.forcee }
           : null,

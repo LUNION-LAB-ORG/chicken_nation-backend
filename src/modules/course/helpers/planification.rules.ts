@@ -495,6 +495,12 @@ export interface CommandePlanif {
    * passage).
    */
   prepared_at?: Date | null;
+  /**
+   * Prix de la commande en francs (`Order.amount`, TTC), écrit avec la
+   * commande attendue d'une retenue (`commandes_attendues[].montant`, 27/10).
+   * Absent ou `null` : inconnu, non écrit.
+   */
+  montant?: number | null;
 }
 
 export interface OffrePlanif {
@@ -544,6 +550,12 @@ export interface CoursePlanif {
   retenue_jusqua: Date | null;
   /** Commandes attendues par la retenue (identifiants). */
   commandes_attendues: string[];
+  /**
+   * Heures « prête vers » écrites avec ces commandes (27/10) : la retenue
+   * est réécrite quand l'heure affichée change, même échéance et même liste.
+   * Absent : pas comparé (tests, monde simulé).
+   */
+  attendues_ecrites?: { order_id: string; prete_vers: Date | null }[];
   /** Offre en attente (PENDING), s'il y en a une. */
   offre: OffrePlanif | null;
   /**
@@ -784,6 +796,8 @@ export interface CommandeAttendue {
   prete_au_plus_tard: Date;
   /** Attente courte ou trajet long : écrit dans `Course.commandes_attendues`, lu par les écrans. */
   motif: MotifRetenue;
+  /** Prix de la commande en francs (`CommandePlanif.montant`) ; `null` : inconnu, non écrit. */
+  montant: number | null;
 }
 
 export interface ActionRetenir {
@@ -2632,11 +2646,24 @@ export function planifier(
       prete_vers: x.c.preparation!.finMediane,
       prete_au_plus_tard: x.c.preparation!.finDecision,
       motif: x.motif,
+      montant: x.c.montant ?? null,
     }));
+    // Même échéance, même liste et mêmes heures « prête vers » affichées (à
+    // la minute, 27/10) : rien à réécrire. Une estimation qui recule en
+    // cuisine réécrit la retenue au plus une fois par minute, sans nouvelle
+    // annonce au livreur (seule la première retenue en fait une).
+    const ecrites = k.source?.attendues_ecrites;
+    const memesHeures =
+      !ecrites ||
+      attendues.every((a) => {
+        const e = ecrites.find((x) => x.order_id === a.order_id);
+        return !!e?.prete_vers && minuteAffichee(e.prete_vers) === minuteAffichee(a.prete_vers);
+      });
     const memes =
       T === jusqua &&
       attenduesAvant.size === attendues.length &&
-      attendues.every((a) => attenduesAvant.has(a.order_id));
+      attendues.every((a) => attenduesAvant.has(a.order_id)) &&
+      memesHeures;
     if (memes) continue;
     const motif: MotifRetenue = attendues.some((a) => a.motif === 'TRAJET_LONG') ? 'TRAJET_LONG' : 'ATTENTE_COURTE';
     const liste = attendues.map((a) => `${a.reference} (prête vers ${heureLisible(a.prete_vers, maintenant)})`).join(', ');
@@ -2713,6 +2740,11 @@ export function planifier(
   }
 
   return { restaurant_id: instantane.restaurant.id, maintenant, actions, refus };
+}
+
+/** Minute d'une heure, telle qu'affichée (« 12 h 41 », `heureCourte`, UTC) : deux heures de la même minute s'écrivent pareil. */
+function minuteAffichee(d: Date): number {
+  return Math.floor(d.getTime() / 60_000);
 }
 
 /** Ordre lexicographique de deux clés de préférence (l'infini est égal à lui-même). */
