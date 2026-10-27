@@ -56,6 +56,17 @@
  *    livreur Chicken Nation, comme la liste des livreurs (absents pour Turbo
  *    et sans livreur).
  *
+ * Ajouts du 27/10 (« Plus tard » du livreur) :
+ *  - `tournee[].reportee` : livraison passée à plus tard par le livreur
+ *    (`Delivery.reportee_at` posée). Aucun nouvel état d'arrêt : elle reste
+ *    `a_livrer` tant qu'elle n'a pas redémarré (l'ancien écran l'aurait
+ *    sinon écartée) ;
+ *  - `livraison.reportee_a` : heure du report de la livraison de CETTE
+ *    commande (ISO), `null` sans report ; `livraison` est `null` sans
+ *    course ;
+ *  - pas d'arrivée prévue chez le client pour un arrêt reporté pas encore
+ *    livré : il hériterait de la fin de tournée figée, trop tôt.
+ *
  * Aucun appel Google, aucune lecture : tout vient de la commande lue par le
  * service (`SuiviLivraisonService`).
  */
@@ -105,6 +116,8 @@ export interface ArretTournee {
   heure: string | null;
   /** L'arrêt de la commande ouverte. */
   cette_commande: boolean;
+  /** Livraison passée à plus tard par le livreur (27/10) ; l'état reste celui de la livraison. */
+  reportee: boolean;
 }
 
 export interface EtapeLivraison {
@@ -145,6 +158,8 @@ export interface SuiviLivraison {
   } & Partial<AppliOperations>) | null;
   /** Arrêts de la course (livraisons non annulées), vide sans course. */
   tournee: ArretTournee[];
+  /** Livraison de CETTE commande (27/10) : heure du report (ISO), sinon `null` ; `null` sans course. */
+  livraison: { reportee_a: string | null } | null;
   /** Échec de la livraison de CETTE commande : motif et note du livreur. */
   echec: { motif: DeliveryFailureReason | null; note: string | null } | null;
   etapes: EtapeLivraison[];
@@ -200,6 +215,8 @@ export interface CourseLivraisonLue {
         arrived_at?: DateLue;
         delivered_at?: DateLue;
         failed_at?: DateLue;
+        /** Passée à plus tard par le livreur (27/10) ; absente d'une lecture d'avant. */
+        reportee_at?: DateLue;
         order?: { reference?: string | null; status?: string | null } | null;
       }[]
     | null;
@@ -218,6 +235,8 @@ export interface CommandeLivraisonLue {
     statut: string;
     arrived_at?: DateLue;
     delivered_at?: DateLue;
+    /** Passée à plus tard par le livreur (27/10). */
+    reportee_at?: DateLue;
     failure_reason?: DeliveryFailureReason | null;
     failure_note?: string | null;
     turbo_courier_id?: string | null;
@@ -291,6 +310,7 @@ const vide = (service: ServiceLivraison | null): SuiviLivraison => ({
   course: null,
   livreur: null,
   tournee: [],
+  livraison: null,
   echec: null,
   etapes: [],
   durees: { ...SANS_DUREE },
@@ -334,6 +354,7 @@ export function arretsTournee(
         etat,
         heure: iso(date(heure)),
         cette_commande: l.id === livraisonId,
+        reportee: !!date(l.reportee_at),
       };
     });
 }
@@ -408,6 +429,7 @@ function suiviTurboDirect(c: CommandeLivraisonLue): SuiviLivraison {
     course: null,
     livreur: { id: null, nom: null, telephone: null, etat: etatDe(avancement, annulee, false) },
     tournee: [],
+    livraison: null,
     echec: null,
     etapes: construireEtapes({ heures, prevues: {}, avancement, annulee, departDonne: false }),
     durees: durees(heures, date(c.ready_at)),
@@ -488,9 +510,11 @@ export function suiviLivraison(c: CommandeLivraisonLue, ctx: ContexteSuiviLivrai
   const rangArret = rang >= 0 ? rang + 1 : null;
 
   // Dernier arrêt d'une course partie : fin prévue de la tournée (départ +
-  // durée estimée), la même que celle des écrans de suivi.
+  // durée estimée), la même que celle des écrans de suivi. Arrêt reporté par
+  // le livreur, pas encore livré : rien (la fin figée serait trop tôt).
   const finTournee = finTourneePrevue(course);
-  if (!annulee && finTournee && rangArret !== null && rangArret === actives.length) {
+  const reporteeA = date(livraison.reportee_at);
+  if (!annulee && !(reporteeA && !livree) && finTournee && rangArret !== null && rangArret === actives.length) {
     prevues.arrivee_client = finTournee;
   }
 
@@ -562,6 +586,7 @@ export function suiviLivraison(c: CommandeLivraisonLue, ctx: ContexteSuiviLivrai
     },
     livreur,
     tournee: arretsTournee(course.deliveries ?? [], livraison.id),
+    livraison: { reportee_a: iso(reporteeA) },
     echec,
     etapes: construireEtapes({ heures, prevues, avancement, annulee, departDonne }),
     durees: durees(heures, date(c.ready_at)),

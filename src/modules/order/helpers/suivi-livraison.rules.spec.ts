@@ -110,7 +110,8 @@ describe('suivi de livraison : course interne terminée', () => {
         retard_min: null,
       },
       livreur: { id: 'liv-koffi', nom: 'Koffi Kouassi', telephone: '+2250701020304', etat: 'livree' },
-      tournee: [{ reference: 'ORD-261024-00001', rang: 1, etat: 'livree', heure: t('12:27'), cette_commande: true }],
+      tournee: [{ reference: 'ORD-261024-00001', rang: 1, etat: 'livree', heure: t('12:27'), cette_commande: true, reportee: false }],
+      livraison: { reportee_a: null },
       echec: null,
       etapes: [
         { cle: 'acceptee', heure: t('12:02'), prevue: null },
@@ -421,6 +422,7 @@ describe('suivi de livraison : sans course', () => {
       course: null,
       livreur: null,
       tournee: [],
+      livraison: null,
       echec: null,
       etapes: [],
       durees: { vers_restaurant_s: null, attente_comptoir_s: null, vers_client_s: null, pret_a_livre_s: null },
@@ -643,9 +645,9 @@ describe('suivi de livraison : tournée (24/10)', () => {
   it('un arrêt par livraison non annulée, dans l’ordre : référence, état, heure de cet état, cette commande marquée', () => {
     const r = suiviLivraison(enRoute(tourneeDeTrois()), ctx);
     expect(r.tournee).toEqual([
-      { reference: 'ORD-4818', rang: 1, etat: 'livree', heure: t('12:18'), cette_commande: false },
-      { reference: 'ORD-4819', rang: 2, etat: 'en_route', heure: t('12:18'), cette_commande: true },
-      { reference: 'ORD-4820', rang: 3, etat: 'a_livrer', heure: null, cette_commande: false },
+      { reference: 'ORD-4818', rang: 1, etat: 'livree', heure: t('12:18'), cette_commande: false, reportee: false },
+      { reference: 'ORD-4819', rang: 2, etat: 'en_route', heure: t('12:18'), cette_commande: true, reportee: false },
+      { reference: 'ORD-4820', rang: 3, etat: 'a_livrer', heure: null, cette_commande: false, reportee: false },
     ]);
     expect(r.course).toMatchObject({ nombre_commandes: 3, rang_arret: 2 });
   });
@@ -659,10 +661,12 @@ describe('suivi de livraison : tournée (24/10)', () => {
     });
     const r = suiviLivraison(enRoute(c), ctx);
     expect(r.tournee).toEqual([
-      { reference: 'ORD-4818', rang: 1, etat: 'echec', heure: t('12:17'), cette_commande: false },
-      { reference: 'ORD-4819', rang: 2, etat: 'chez_le_client', heure: t('12:19'), cette_commande: true },
+      { reference: 'ORD-4818', rang: 1, etat: 'echec', heure: t('12:17'), cette_commande: false, reportee: false },
+      { reference: 'ORD-4819', rang: 2, etat: 'chez_le_client', heure: t('12:19'), cette_commande: true, reportee: false },
     ]);
-    for (const arret of r.tournee) expect(Object.keys(arret).sort()).toEqual(['cette_commande', 'etat', 'heure', 'rang', 'reference']);
+    for (const arret of r.tournee) {
+      expect(Object.keys(arret).sort()).toEqual(['cette_commande', 'etat', 'heure', 'rang', 'reference', 'reportee']);
+    }
   });
 
   it('sans course, ou Turbo sans course chez nous : tournée vide, aucun échec', () => {
@@ -797,5 +801,56 @@ describe('suivi de livraison : appli du livreur (24/10)', () => {
     const r = suiviLivraison(avec({ protocole_appli: 4, dernier_signal_at: d('12:14') }), { ...ctx, appli: appli([]) });
     expect(r.livreur).not.toHaveProperty('dernier_signal_at');
     expect(r.livreur).not.toHaveProperty('protocole_appli');
+  });
+});
+
+// ─── Livraison passée à plus tard par le livreur (27/10) ────────────────────
+
+describe('suivi de livraison : livraison passée à plus tard (27/10)', () => {
+  const reportee = (champs: Partial<CourseLivraisonLue> = {}) =>
+    tourneeDeTrois({
+      deliveries: [
+        {
+          id: 'liv-1',
+          statut: 'DELIVERED',
+          sequence_order: 1,
+          delivered_at: d('12:18'),
+          order: { reference: 'ORD-4818', status: 'COMPLETED' },
+        },
+        { id: 'liv-3', statut: 'IN_ROUTE', sequence_order: 2, in_route_at: d('12:19'), order: { reference: 'ORD-4820', status: 'PICKED_UP' } },
+        {
+          id: 'liv-a',
+          statut: 'PENDING',
+          sequence_order: 3,
+          in_route_at: d('12:18'),
+          reportee_at: d('12:19'),
+          order: { reference: 'ORD-4819', status: 'PICKED_UP' },
+        },
+      ],
+      ...champs,
+    });
+
+  it('l’arrêt reste « à livrer » (aucun nouvel état), marqué reporté ; l’heure du report pour cette commande', () => {
+    const r = suiviLivraison(
+      commande({ status: 'PICKED_UP', picked_up_at: d('12:05') }, { id: 'liv-a', statut: 'PENDING', reportee_at: d('12:19'), course: reportee() }),
+      ctx,
+    );
+    expect(r.tournee.map((a) => [a.reference, a.rang, a.etat, a.reportee])).toEqual([
+      ['ORD-4818', 1, 'livree', false],
+      ['ORD-4820', 2, 'en_route', false],
+      ['ORD-4819', 3, 'a_livrer', true],
+    ]);
+    expect(r.livraison).toEqual({ reportee_a: t('12:19') });
+    expect(r.course).toMatchObject({ rang_arret: 3, nombre_commandes: 3 });
+    expect(r.livreur?.etat).toBe('vers_client');
+    // Dernier arrêt, mais reporté : pas d'heure prévue (la fin de tournée figée serait trop tôt).
+    expect(r.etapes.find((e) => e.cle === 'arrivee_client')).toEqual({ cle: 'arrivee_client', heure: null, prevue: null });
+  });
+
+  it('serveur ou course d’avant : rien de reporté', () => {
+    const r = suiviLivraison(enRoute(tourneeDeTrois()), ctx);
+    expect(r.tournee.every((a) => a.reportee === false)).toBe(true);
+    expect(r.livraison).toEqual({ reportee_a: null });
+    expect(suiviLivraison(commande({}, null), ctx).livraison).toBeNull();
   });
 });

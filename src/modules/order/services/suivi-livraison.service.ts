@@ -53,6 +53,8 @@ const SELECT_SUIVI_LIVRAISON = {
       statut: true,
       arrived_at: true,
       delivered_at: true,
+      // Livraison passée à plus tard par le livreur (27/10).
+      reportee_at: true,
       // Échec de CETTE livraison : motif et note du livreur.
       failure_reason: true,
       failure_note: true,
@@ -100,6 +102,7 @@ const SELECT_SUIVI_LIVRAISON = {
               arrived_at: true,
               delivered_at: true,
               failed_at: true,
+              reportee_at: true,
               order: { select: { reference: true, status: true } },
             },
           },
