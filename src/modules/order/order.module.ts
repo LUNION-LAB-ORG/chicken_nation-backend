@@ -37,6 +37,7 @@ import { OrderRelanceController } from './controllers/order-relance.controller';
 import { OrderRelanceService } from './services/order-relance.service';
 import { OrderRelanceTask } from './tasks/order-relance.task';
 import { OrderImpayeTask } from './tasks/order-impaye.task';
+import { CourseModule } from 'src/modules/course/course.module';
 
 @Module({
   imports: [
@@ -57,6 +58,10 @@ import { OrderImpayeTask } from './tasks/order-impaye.task';
     DeliveryOfferModule,
     // L'aperçu du trajet avant paiement a besoin de Directions.
     MapsModule,
+    // « Modifier la commande » : une commande à livrer passée à emporter ou
+    // sur place est retirée de sa course (DetachementCommandeService). Le
+    // module course n'importe jamais celui-ci (il écoute ses événements).
+    CourseModule,
   ],
   // OrderCouponController et OrderRelanceController AVANT OrderController :
   // `orders/coupon/...` et `orders/relances/...` ne doivent jamais être lus

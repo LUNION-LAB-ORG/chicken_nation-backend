@@ -32,6 +32,7 @@ import { DeliveryTrackingService } from './services/delivery-tracking.service';
 import { ArriveeAutoService } from './services/arrivee-auto.service';
 import { LivraisonVersLivreurListener } from './listeners/livraison-vers-livreur.listener';
 import { DepartCourseService } from './services/depart-course.service';
+import { DetachementCommandeService } from './services/detachement-commande.service';
 import { DirectionService } from './services/direction.service';
 import { EstimationPreparationService } from './services/estimation-preparation.service';
 import { GardeOffresService } from './services/garde-offres.service';
@@ -78,6 +79,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     CoursePlanificateurService, // Passages sous verrou par restaurant, regroupés (500 ms)
     LotsV2Service, // Lots sous v2 : vidés pour la flotte interne, direction pour Turbo
     DepartCourseService, // Départ du restaurant, « Je pars », retrait complémentaire
+    DetachementCommandeService, // Commande à livrer passée à emporter ou sur place : retirée de sa course
     ArriveeAutoService, // Arrivées au restaurant et chez le client déduites des positions
     TableauLivraisonService, // Tableau de la livraison : chiffres par restaurant, alertes (gardé 10 s)
     // Events + WS
@@ -106,6 +108,8 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     CourseQueryService,
     CourseGroupingService,
     DirectionService,
+    // « Modifier la commande » (module commande) : type changé, livraison retirée de sa course.
+    DetachementCommandeService,
   ],
 })
 export class CourseModule {}

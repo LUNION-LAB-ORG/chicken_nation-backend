@@ -77,7 +77,12 @@ export type TypeEvenementDispatch =
   | 'RETENUE_LEVEE'
   /** Course réputée partie du restaurant ; `motif` = POSITION, BOUTON, FENETRE_ECHUE… */
   | 'COURSE_PARTIE'
-  /** Commande ajoutée après le retrait, pas remise : retirée de la course au départ. */
+  /**
+   * Commande retirée de sa course : ajoutée après le retrait et pas remise,
+   * au départ du livreur ; ou commande à livrer passée à emporter ou sur place
+   * (`motif` PASSEE_A_EMPORTER, PASSEE_SUR_PLACE ; `details.turbo` si la
+   * course était confiée à Turbo).
+   */
   | 'COMMANDE_DETACHEE'
   /** Course partie alors qu'une commande d'origine est encore prête au comptoir ; cloche au restaurant et au siège. */
   | 'DEPART_SANS_COMMANDE'

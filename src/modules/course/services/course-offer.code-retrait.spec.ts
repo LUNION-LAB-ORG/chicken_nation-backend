@@ -10,7 +10,7 @@
  * transaction, ou sans le verrou, donne le même code à deux créations
  * simultanées : le test casse.
  */
-import { CourseStatut, DeliveryService, DeliveryStatut, OrderStatus } from '@prisma/client';
+import { CourseStatut, DeliveryService, DeliveryStatut, OrderStatus, OrderType } from '@prisma/client';
 
 import { correspond } from 'src/modules/order/relance/relance.base-simulee-spec';
 
@@ -74,6 +74,18 @@ function monterBase(existantes: Ligne[]) {
       },
       delivery: {
         updateMany: async () => ({ count: 1 }),
+      },
+      // Commandes revendiquées puis relues dans la transaction : toutes encore éligibles ici.
+      order: {
+        updateMany: async () => ({ count: 1 }),
+        findMany: async ({ where }: Ligne) =>
+          (where.id.in as string[]).map((id) => ({
+            id,
+            delivery_fee: 1000,
+            address: null,
+            delivery_service: DeliveryService.CHICKEN_NATION,
+            recovery_code: '1234',
+          })),
       },
     };
     try {
@@ -197,6 +209,8 @@ describe('Code de retrait à la création de la course', () => {
           order: {
             id: 'commande-1',
             status: OrderStatus.READY,
+            // Lu par la relance : une commande passée à emporter n'est jamais relancée.
+            type: OrderType.DELIVERY,
             delivery_fee: 1000,
             delivery_service: DeliveryService.CHICKEN_NATION,
             entity_status: 'ACTIVE',

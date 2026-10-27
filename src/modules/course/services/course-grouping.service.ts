@@ -6,6 +6,7 @@ import {
   DeliveryStatut,
   EntityStatus,
   OrderStatus,
+  OrderType,
   type CourseBatch,
   DeliveryService,
   type Order,
@@ -269,6 +270,8 @@ export class CourseGroupingService {
       include: {
         orders: {
           where: {
+            // Passée à emporter ou sur place pendant la fenêtre : plus rien à livrer.
+            type: OrderType.DELIVERY,
             status: OrderStatus.READY,
             entity_status: { not: EntityStatus.DELETED },
             delivery: null, // pas déjà dans une Course

@@ -310,6 +310,10 @@ export class TurboService {
    *   - 404 → référence inconnue chez eux (groupe jamais créé) : reprise sûre.
    * Erreur réseau / 401 / autre → issue INCERTAINE : l'appelant doit REFUSER
    * la reprise (leur course est peut-être toujours vivante).
+   *
+   * Aussi utilisée quand une commande à livrer passe à emporter ou sur place
+   * (demande du 27/10) : la personne qui modifie la commande attend la
+   * réponse. L'appel est donc borné (10 s) ; au-delà, l'issue est incertaine.
    */
   async annulerCourseGroupe(params: {
     referenceCourse: string;
@@ -322,13 +326,13 @@ export class TurboService {
   }> {
     const { referenceCourse, apikey } = params;
     try {
-      const response = await fetch(TURBO_API.ANNULATION_COURSE(referenceCourse), {
+      const { response } = await appelTurboBorne(TURBO_API.ANNULATION_COURSE(referenceCourse), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-API-KEY': apikey },
       });
 
       if (response.ok) {
-        this.logger.log(`Groupe Turbo ${referenceCourse} annulé côté Turbo (reprise en interne).`);
+        this.logger.log(`Groupe Turbo ${referenceCourse} annulé côté Turbo.`);
         return { ok: true };
       }
       if (response.status === 409) {

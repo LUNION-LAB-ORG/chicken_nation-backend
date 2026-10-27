@@ -13,6 +13,8 @@ import {
   DeliveryStatut,
   EntityStatus,
   OrderStatus,
+  OrderType,
+  Prisma,
 } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -35,6 +37,7 @@ import { seuilAlerteSansLivreurMin } from '../helpers/alerte-sans-livreur.rules'
 import { CourseHelper } from '../helpers/course.helper';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
+import { recalculerFraisCourse } from '../helpers/frais-course';
 import {
   CLASSE_VERROU_OFFRE_COURSE,
   CLASSE_VERROU_OFFRE_LIVREUR,
@@ -111,22 +114,21 @@ export class CourseOfferService {
    */
   async createFromReadyOrders(input: CreateCourseFromOrdersInput): Promise<Course> {
     // 1. Récupérer et valider les orders
-    const orders = await this.prisma.order.findMany({
-      where: {
-        id: { in: input.orderIds },
-        restaurant_id: input.restaurantId,
-        status: OrderStatus.READY,
-        entity_status: { not: EntityStatus.DELETED },
-        delivery: null, // pas déjà dans une Course
-      },
-      select: { id: true, delivery_fee: true, address: true, delivery_service: true, recovery_code: true },
-    });
+    const eligibles: Prisma.OrderWhereInput = {
+      id: { in: input.orderIds },
+      restaurant_id: input.restaurantId,
+      // Passée à emporter ou sur place pendant la fenêtre du lot : plus rien à livrer.
+      type: OrderType.DELIVERY,
+      status: OrderStatus.READY,
+      entity_status: { not: EntityStatus.DELETED },
+      delivery: null, // pas déjà dans une Course
+    };
+    const selection = { id: true, delivery_fee: true, address: true, delivery_service: true, recovery_code: true } as const;
+    let orders = await this.prisma.order.findMany({ where: eligibles, select: selection });
 
     if (orders.length === 0) {
       throw new BadRequestException('Aucune order éligible trouvée');
     }
-
-    const totalFee = orders.reduce((sum, o) => sum + o.delivery_fee, 0);
 
     // 2. Créer la Course (retry sur collision unique sur reference).
     //    Le code de retrait est tiré DANS la transaction de création, sous le
@@ -136,6 +138,13 @@ export class CourseOfferService {
     for (let attempt = 0; attempt < 3 && !course; attempt++) {
       try {
         course = await this.prisma.$transaction(async (tx) => {
+          // Revendication des commandes (même valeur réécrite : leurs lignes
+          // restent verrouillées jusqu'à la fin), puis relecture : une commande
+          // passée à emporter ou sur place depuis la lecture n'entre pas dans
+          // la course (« Modifier la commande » revendique la même ligne).
+          await tx.order.updateMany({ where: eligibles, data: { type: OrderType.DELIVERY } });
+          orders = await tx.order.findMany({ where: eligibles, select: selection });
+          if (orders.length === 0) throw new BadRequestException('Aucune order éligible trouvée');
           const pickupCode = await this.helper.genererCodeRetrait(tx, input.restaurantId);
           return tx.course.create({
             data: {
@@ -143,7 +152,7 @@ export class CourseOfferService {
               pickup_code: pickupCode,
               restaurant_id: input.restaurantId,
               statut: CourseStatut.PENDING_ASSIGNMENT,
-              total_delivery_fee: totalFee,
+              total_delivery_fee: orders.reduce((sum, o) => sum + o.delivery_fee, 0),
               deliveries: {
                 create: orders.map((order, index) => ({
                   order_id: order.id,
@@ -1360,6 +1369,7 @@ export class CourseOfferService {
               select: {
                 id: true,
                 status: true,
+                type: true,
                 delivery_fee: true,
                 delivery_service: true,
                 entity_status: true,
@@ -1375,11 +1385,13 @@ export class CourseOfferService {
     // (READY). Couvre les DEUX portées d'annulation Turbo : groupe entier
     // (course CANCELLED) ET annulation partielle (course encore vivante avec
     // une livraison annulée dedans). Les commandes annulées manuellement ou
-    // supprimées sont exclues d'office.
+    // supprimées sont exclues d'office, comme une commande passée à emporter
+    // ou sur place depuis (le client vient la chercher).
     const relancables = course.deliveries.filter(
       (d) =>
         d.statut === DeliveryStatut.CANCELLED &&
         d.order.status === OrderStatus.READY &&
+        d.order.type === OrderType.DELIVERY &&
         d.order.entity_status !== EntityStatus.DELETED,
     );
     if (relancables.length === 0) {
@@ -1425,10 +1437,28 @@ export class CourseOfferService {
     // On repart PROPRE (statut, tentatives de code, identité du livreur Turbo
     // précédent, raison d'annulation) — le PIN client est CONSERVÉ (déjà
     // communiqué au client à la création de la commande).
-    let claimPerdu = false;
+    let relancees = relancables;
     try {
-      await this.prisma.$transaction(async (tx) => {
-        for (const [index, d] of relancables.entries()) {
+      relancees = await this.prisma.$transaction(async (tx) => {
+        // Commandes revendiquées d'abord (même valeur réécrite : leurs lignes
+        // restent verrouillées jusqu'à la fin). Une commande passée à emporter
+        // ou sur place depuis la lecture reste au comptoir, dans la course
+        // annulée : « Modifier la commande » revendique la même ligne.
+        const tenues: typeof relancables = [];
+        for (const d of relancables) {
+          const tenue = await tx.order.updateMany({
+            where: {
+              id: d.order.id,
+              type: OrderType.DELIVERY,
+              status: OrderStatus.READY,
+              entity_status: { not: EntityStatus.DELETED },
+            },
+            data: { type: OrderType.DELIVERY },
+          });
+          if (tenue.count === 1) tenues.push(d);
+        }
+        if (tenues.length === 0) throw new Error('RELANCE_PLUS_RIEN');
+        for (const [index, d] of tenues.entries()) {
           const claimed = await tx.delivery.updateMany({
             where: {
               id: d.id,
@@ -1456,26 +1486,31 @@ export class CourseOfferService {
             throw new Error('RELANCE_CLAIM_PERDU');
           }
         }
+        return tenues;
       });
     } catch (err) {
-      if ((err as Error)?.message !== 'RELANCE_CLAIM_PERDU') throw err;
-      claimPerdu = true;
-    }
-
-    if (claimPerdu) {
+      const motif = (err as Error)?.message;
+      if (motif !== 'RELANCE_CLAIM_PERDU' && motif !== 'RELANCE_PLUS_RIEN') throw err;
       // La transaction a tout annulé — la course neuve est vide, on la retire.
       await this.prisma.course
         .delete({ where: { id: nouvelle.id } })
         .catch(() => undefined);
       return {
         ok: false,
-        message: 'Course déjà relancée par un autre opérateur.',
+        message:
+          motif === 'RELANCE_PLUS_RIEN'
+            ? 'Aucune commande encore à livrer sur cette course.'
+            : 'Course déjà relancée par un autre opérateur.',
       };
+    }
+    if (relancees.length < relancables.length) {
+      // Une commande est restée au comptoir : les frais de la course neuve suivent.
+      await recalculerFraisCourse(this.prisma, nouvelle.id).catch(() => undefined);
     }
 
     // Affectation selon la flotte (le batching ne mélange jamais les services,
     // donc toutes les livraisons relançables partagent celui de la première).
-    const isTurboNative = relancables.every(
+    const isTurboNative = relancees.every(
       (d) => d.order.delivery_service === DeliveryService.TURBO,
     );
     if (isTurboNative) {
@@ -1485,11 +1520,11 @@ export class CourseOfferService {
     }
 
     this.logger.log(
-      `Course ${course.reference} (annulée) relancée → nouvelle course ${nouvelle.reference} (${relancables.length} livraison(s)).`,
+      `Course ${course.reference} (annulée) relancée → nouvelle course ${nouvelle.reference} (${relancees.length} livraison(s)).`,
     );
     return {
       ok: true,
-      message: `Nouvelle course ${nouvelle.reference} créée (${relancables.length} commande(s) relancée(s)).`,
+      message: `Nouvelle course ${nouvelle.reference} créée (${relancees.length} commande(s) relancée(s)).`,
       newCourseId: nouvelle.id,
     };
   }

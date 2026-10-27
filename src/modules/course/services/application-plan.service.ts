@@ -104,17 +104,21 @@ export interface ResultatApplication {
 }
 
 /** État d'un passage : ce qui reste à annoncer une fois toutes les actions écrites. */
-interface Passage {
+interface Passage extends Annonces {
   restaurantId: string;
-  maintenant: Date;
   lu: InstantaneLu;
   options: OptionsApplication;
   cles: Map<string, string>;
+}
+
+/** Ce qu'un passage annonce une fois tout écrit (aussi un retrait fait hors du passage). */
+interface Annonces {
+  maintenant: Date;
   /** Courses modifiées sans changement de statut : `course:statut:changed` avec cette raison. */
   touchees: Map<string, RaisonPlanificateur>;
   /** Commandes ajoutées par course (ajouts et fusions). */
   ajouts: Map<string, { n: number; apresRetrait: boolean }>;
-  /** Commandes détachées au départ, par course. */
+  /** Commandes retirées de la course (détachées au départ, passées à emporter), par course. */
   retirees: Map<string, string[]>;
   /** Première retenue posée sur la course dans ce passage (le livreur est prévenu). */
   retenues: Map<string, { jusqua: Date; attendues: string[] }>;
@@ -377,16 +381,22 @@ export class ApplicationPlanService {
           },
         });
         if (course.count !== 1) throw new ActionAbandonnee('COURSE_CHANGEE');
-        const commande = await tx.order.findFirst({
-          where: {
-            id: a.order_id,
-            restaurant_id: p.restaurantId,
-            status: OrderStatus.READY,
-            delivery: null,
-            entity_status: { not: EntityStatus.DELETED },
-          },
-          select: { id: true, recovery_code: true },
-        });
+        const aRattacher: Prisma.OrderWhereInput = {
+          id: a.order_id,
+          restaurant_id: p.restaurantId,
+          // Passée à emporter ou sur place depuis la lecture : plus rien à livrer.
+          type: OrderType.DELIVERY,
+          status: OrderStatus.READY,
+          delivery: null,
+          entity_status: { not: EntityStatus.DELETED },
+        };
+        // Revendication de la commande (même valeur réécrite : sa ligne reste
+        // verrouillée jusqu'à la fin). « Modifier la commande » qui la passe à
+        // emporter au même instant revendique la même ligne : l'un attend
+        // l'autre (`DetachementCommandeService.verifierHorsCourse`).
+        const tenue = await tx.order.updateMany({ where: aRattacher, data: { type: OrderType.DELIVERY } });
+        if (tenue.count !== 1) throw new ActionAbandonnee('COMMANDE_CHANGEE');
+        const commande = await tx.order.findFirst({ where: aRattacher, select: { id: true, recovery_code: true } });
         if (!commande) throw new ActionAbandonnee('COMMANDE_CHANGEE');
         const max = await tx.delivery.aggregate({ where: { course_id: a.course_id }, _max: { sequence_order: true } });
         await tx.delivery.create({
@@ -435,16 +445,20 @@ export class ApplicationPlanService {
     for (let essai = 0; essai < 3 && !creee; essai++) {
       try {
         creee = await this.prisma.$transaction(async (tx) => {
+          const aRattacher: Prisma.OrderWhereInput = {
+            id: { in: a.order_ids },
+            restaurant_id: p.restaurantId,
+            type: OrderType.DELIVERY,
+            delivery_service: DeliveryService.CHICKEN_NATION,
+            status: OrderStatus.READY,
+            entity_status: { not: EntityStatus.DELETED },
+            delivery: null,
+          };
+          // Revendication avant la lecture (voir `ajouter`) : une commande
+          // passée à emporter au même instant n'entre pas dans la course.
+          await tx.order.updateMany({ where: aRattacher, data: { type: OrderType.DELIVERY } });
           const commandes = await tx.order.findMany({
-            where: {
-              id: { in: a.order_ids },
-              restaurant_id: p.restaurantId,
-              type: OrderType.DELIVERY,
-              delivery_service: DeliveryService.CHICKEN_NATION,
-              status: OrderStatus.READY,
-              entity_status: { not: EntityStatus.DELETED },
-              delivery: null,
-            },
+            where: aRattacher,
             select: { id: true, delivery_fee: true, recovery_code: true },
           });
           if (commandes.length === 0) throw new ActionAbandonnee('COMMANDES_CHANGEES');
@@ -820,11 +834,31 @@ export class ApplicationPlanService {
   // ─── Annonces ─────────────────────────────────────────────────────────────
 
   /**
+   * Commande retirée d'une course HORS du passage (commande à livrer passée à
+   * emporter ou sur place, demande du 27/10) : exactement les annonces d'une
+   * commande détachée par le planificateur. `course:statut:changed` raison
+   * COMMANDE_DETACHEE (livreur, restaurant, siège : la caisse relit la
+   * course), « Commande retirée » au livreur affecté, offre à jour renvoyée au
+   * livreur sollicité si la course est encore en recherche.
+   */
+  async annoncerRetrait(courseId: string, references: string[], maintenant = new Date()): Promise<void> {
+    await this.annoncer({
+      maintenant,
+      touchees: new Map([[courseId, RaisonsPlanificateur.COMMANDE_DETACHEE]]),
+      ajouts: new Map(),
+      retirees: new Map([[courseId, references]]),
+      retenues: new Map(),
+      liberations: new Map(),
+      absorbees: new Map(),
+    });
+  }
+
+  /**
    * Une fois tout écrit : `course:statut:changed` pour chaque course touchée
    * (livreur, restaurant, siège), offre en attente renvoyée à jour au livreur
    * sollicité (même échéance), notifications au livreur affecté.
    */
-  private async annoncer(p: Passage): Promise<void> {
+  private async annoncer(p: Annonces): Promise<void> {
     for (const [courseId, raison] of p.touchees) {
       try {
         const course = await this.prisma.course.findUnique({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
@@ -861,19 +895,20 @@ export class ApplicationPlanService {
    */
   private async annoncerAuLivreur(
     course: Prisma.CourseGetPayload<{ include: typeof COURSE_FULL_INCLUDE }>,
-    p: Passage,
+    p: Annonces,
   ): Promise<void> {
     const ajout = p.ajouts.get(course.id);
     const total = course.deliveries.filter((d) => !STATUTS_LIVRAISON_TERMINEE.includes(d.statut)).length;
 
+    const retirees = p.retirees.get(course.id);
     if (course.statut === CourseStatut.PENDING_ASSIGNMENT) {
-      if (ajout) await this.renvoyerOffre(course, p);
+      // Commande ajoutée ou retirée : l'offre affichée n'est plus la bonne.
+      if (ajout || retirees?.length) await this.renvoyerOffre(course, p);
       return;
     }
     const livreur = course.deliverer_id;
     if (!livreur || !STATUTS_AVEC_LIVREUR.includes(course.statut)) return;
 
-    const retirees = p.retirees.get(course.id);
     if (retirees?.length) {
       const texte = texteCommandeRetiree({ reference: retirees[0], restantes: total });
       this.push.notifyCommandeRetiree({
@@ -977,7 +1012,7 @@ export class ApplicationPlanService {
   }
 
   /** Course encore en recherche : le livreur sollicité reçoit l'offre à jour, même échéance. */
-  private async renvoyerOffre(course: Prisma.CourseGetPayload<{ include: typeof COURSE_FULL_INCLUDE }>, p: Passage): Promise<void> {
+  private async renvoyerOffre(course: Prisma.CourseGetPayload<{ include: typeof COURSE_FULL_INCLUDE }>, p: Annonces): Promise<void> {
     const offre = await this.prisma.courseOfferAttempt.findFirst({
       where: { course_id: course.id, status: CourseOfferStatus.PENDING, expires_at: { gt: p.maintenant } },
       select: { deliverer_id: true, expires_at: true },

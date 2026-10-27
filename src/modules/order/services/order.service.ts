@@ -78,6 +78,11 @@ import { motifRefusModification, peutModifierCommande } from '../helpers/modific
 import { heureDeLaCommande } from '../helpers/heure-commande.rules';
 import { OrderRelanceService } from './order-relance.service';
 import {
+  DetachementCommandeService,
+  DetachementPrevu,
+} from 'src/modules/course/services/detachement-commande.service';
+import { quitteLaLivraison } from 'src/modules/course/helpers/detachement-commande.rules';
+import {
   ajouterAuEt,
   canalDeSaisie,
   conditionsFiltreSource,
@@ -202,6 +207,8 @@ export class OrderService {
     private readonly mapsService: MapsService,
     private readonly orderCoupon: OrderCouponService,
     private readonly orderRelance: OrderRelanceService,
+    // Commande à livrer passée à emporter ou sur place : retirée de sa course (module course).
+    private readonly detachementCommande?: DetachementCommandeService,
   ) { }
 
   /** Référence `ORD-AAMMJJ-NNNNN` pas encore prise (tirage au hasard, doublons possibles dans la journée). */
@@ -2340,6 +2347,22 @@ export class OrderService {
     }
 
     /**
+     * COMMANDE À LIVRER PASSÉE À EMPORTER OU SUR PLACE (demande du 27/10) :
+     * déjà dans une course, elle en est retirée (DetachementCommandeService).
+     * Lu ici, avant tout le reste, pour refuser tout de suite, administrateur
+     * compris, quand le sac est déjà avec le livreur ou qu'un livreur Turbo est
+     * engagé. Rien n'est écrit à ce stade.
+     */
+    const quitteUneLivraison = quitteLaLivraison(order.type, rest.type);
+    const detachement =
+      (await this.detachementCommande?.examiner({
+        orderId: order.id,
+        typeAvant: order.type,
+        typeApres: rest.type,
+        auteur: options.user ?? null,
+      })) ?? null;
+
+    /**
      * RETOUCHE D'UNE COMMANDE ANNULÉE (centre d'appels, demande du 01/10).
      *
      * Elle reste annulée, et rien de ce que l'annulation a soldé ne doit
@@ -2688,12 +2711,15 @@ export class OrderService {
      *  - commande déjà PAYÉE en ligne : le client a réglé la taxe, la retirer
      *    laisserait un trop-perçu à rembourser ;
      *  - livraison déjà CONFIÉE À TURBO : Turbo ne relit jamais le montant à
-     *    encaisser qui lui a été envoyé.
+     *    encaisser qui lui a été envoyé. Sauf si la même modification la passe
+     *    à emporter ou sur place : la commande quitte Turbo (groupe annulé chez
+     *    eux, ou modification refusée) et ses frais de livraison tombent.
      */
     const confieeATurbo =
       passeEnManuel &&
       !reactivation &&
       order.type === OrderType.DELIVERY &&
+      !quitteUneLivraison &&
       !!(await this.prisma.delivery.findFirst({
         where: { order_id: order.id, course: { turbo_escalated_at: { not: null } } },
         select: { id: true },
@@ -2826,8 +2852,27 @@ export class OrderService {
     let coupon: ReconsommationCoupon | null = null;
     let retrait: RetraitCoupon | null = null;
     let consommation: ConsommationCoupon | null = null;
-    let updatedOrder = changementCoupon
+    /**
+     * Livraison retirée de sa course dans la MÊME transaction que l'écriture
+     * de la commande, et en premier (la course, puis la commande : l'ordre
+     * des verrous de la remise au comptoir et du planificateur). Si la course
+     * ou la commande a changé entre-temps, rien n'est écrit (409).
+     *
+     * Aucune livraison lue au début : la commande est revendiquée dans cette
+     * même transaction, pour qu'un passage du planificateur qui la met en
+     * course au même instant ne laisse jamais une commande à emporter dans
+     * une course (voir `verifierHorsCourse`).
+     */
+    const retirerDeLaCourse = async (tx: Prisma.TransactionClient) => {
+      if (detachement) await this.detachementCommande!.retirerDansTransaction(tx, detachement);
+      else if (quitteUneLivraison) {
+        await this.detachementCommande?.verifierHorsCourse(tx, { orderId: order.id, typeApres: rest.type as OrderType });
+      }
+    };
+    let updatedOrder = await this.ecrireEnRetirantDeLaCourse(detachement, async () =>
+      changementCoupon
       ? await this.prisma.$transaction(async (tx) => {
+          await retirerDeLaCourse(tx);
           /**
            * Revendication : l'état lu tient encore (même coupon, même statut,
            * toujours impayée). Deux agents qui appliquent un coupon en même
@@ -2874,6 +2919,7 @@ export class OrderService {
         })
       : reactivation
       ? await this.prisma.$transaction(async (tx) => {
+          await retirerDeLaCourse(tx);
           // Revendication : un seul geste réactive, et seulement un panier
           // toujours annulé par le client (ni payé, ni repris entre-temps).
           const revendique = await tx.order.updateMany({
@@ -2914,7 +2960,9 @@ export class OrderService {
            * rendus. L'écriture exige donc l'état lu ; sinon 409.
            */
           passeEnManuel ? { status: order.status, entity_status: order.entity_status, auto: true } : undefined,
-        );
+          detachement || quitteUneLivraison ? retirerDeLaCourse : undefined,
+        ),
+    );
 
     // Si le montant a changé (recalcul des items, frais de livraison, etc.),
     // re-synchroniser le flag `paied` selon la somme des paiements SUCCESS :
@@ -3065,6 +3113,31 @@ export class OrderService {
   }
 
   /**
+   * Écriture de la commande quand elle quitte une course (type changé) :
+   *  - course confiée à Turbo : leur groupe est annulé chez eux JUSTE AVANT
+   *    l'écriture, après toutes les vérifications (refus de Turbo : 409, rien
+   *    n'est écrit) ;
+   *  - après l'écriture : annonces, course vide annulée, autres commandes
+   *    d'une course Turbo relancées ;
+   *  - écriture refusée après l'annulation chez Turbo : la course est relancée
+   *    avec toutes ses commandes, puis le refus remonte.
+   * Sans course à quitter : l'écriture seule, comme avant.
+   */
+  private async ecrireEnRetirantDeLaCourse<T>(detachement: DetachementPrevu | null, ecrire: () => Promise<T>): Promise<T> {
+    if (!detachement || !this.detachementCommande) return ecrire();
+    await this.detachementCommande.annulerChezTurbo(detachement);
+    let ecrit: T;
+    try {
+      ecrit = await ecrire();
+    } catch (err) {
+      await this.detachementCommande.apresEcriture(detachement, { ecrit: false });
+      throw err;
+    }
+    await this.detachementCommande.apresEcriture(detachement, { ecrit: true });
+    return ecrit;
+  }
+
+  /**
    * Écriture d'une modification qui ne touche PAS au coupon.
    *
    * Depuis que la remise peut changer en modification (02/10), un total refait
@@ -3088,18 +3161,27 @@ export class OrderService {
     updateData: Prisma.OrderUpdateInput,
     include: I,
     etatLu?: Pick<Prisma.OrderWhereInput, 'status' | 'entity_status' | 'auto'>,
+    /** Écrit dans la même transaction, avant la commande (livraison retirée de sa course). */
+    avant?: (tx: Prisma.TransactionClient) => Promise<void>,
   ): Promise<Prisma.OrderGetPayload<{ include: I }>> {
     const totalRefait = updateData.amount !== undefined;
+    const ecriture = {
+      where: {
+        id: order.id,
+        ...(totalRefait && { code_promo: order.code_promo ?? null, discount: order.discount ?? 0 }),
+        ...etatLu,
+      },
+      data: updateData,
+      include,
+    };
     try {
-      return await this.prisma.order.update({
-        where: {
-          id: order.id,
-          ...(totalRefait && { code_promo: order.code_promo ?? null, discount: order.discount ?? 0 }),
-          ...etatLu,
-        },
-        data: updateData,
-        include,
-      });
+      if (avant) {
+        return await this.prisma.$transaction(async (tx) => {
+          await avant(tx);
+          return tx.order.update(ecriture);
+        });
+      }
+      return await this.prisma.order.update(ecriture);
     } catch (e) {
       if ((totalRefait || etatLu) && e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
         throw new ConflictException(

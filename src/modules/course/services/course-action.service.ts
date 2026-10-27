@@ -315,7 +315,29 @@ export class CourseActionService {
     }
     const { updated, confieeATurbo } = annulation;
 
-    await this.courseEvent.courseCancelled({ course: updated, cancelled_by: cancelledBy, reason: dto.reason });
+    await this.annoncerAnnulation(updated, cancelledBy, dto.reason);
+
+    if (confieeATurbo) {
+      this.logger.warn(
+        `Course ${updated.reference} confiée à Turbo, annulée (${cancelledBy}) : commandes laissées à relancer depuis le backoffice.`,
+      );
+    } else {
+      await this.relancerApresAnnulation(updated);
+    }
+
+    return updated;
+  }
+
+  /**
+   * Annonces d'une course annulée, une fois l'annulation écrite : par
+   * `cancelCourse`, ou dans la transaction d'un autre geste (commande à
+   * livrer passée à emporter qui vide sa course, `DetachementCommandeService`).
+   *  - `course:cancelled` (siège, restaurant ; l'écouteur de la diffusion
+   *    clôt l'offre en attente et remet le livreur dans la file) ;
+   *  - « Course annulée » au livreur affecté, sauf s'il a annulé lui-même.
+   */
+  async annoncerAnnulation(updated: CourseDetaillee, cancelledBy: string, reason?: string): Promise<void> {
+    await this.courseEvent.courseCancelled({ course: updated, cancelled_by: cancelledBy, reason });
 
     // P-push livreur : alerte si un livreur était assigné (course CANCELLED en cours d'exécution).
     // Le mapping `cancelled_by` → label humain pour le push :
@@ -334,16 +356,6 @@ export class CourseActionService {
         courseId: updated.id,
       });
     }
-
-    if (confieeATurbo) {
-      this.logger.warn(
-        `Course ${updated.reference} confiée à Turbo, annulée (${cancelledBy}) : commandes laissées à relancer depuis le backoffice.`,
-      );
-    } else {
-      await this.relancerApresAnnulation(updated);
-    }
-
-    return updated;
   }
 
   /**
