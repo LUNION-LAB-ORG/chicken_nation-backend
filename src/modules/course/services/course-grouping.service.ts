@@ -20,7 +20,8 @@ import { CourseEvent } from '../events/course.event';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
 import { recalculerFraisCourse } from '../helpers/frais-course';
-import { haversineMeters, nearestNeighborOrder, parseOrderLatLng, type ILatLng } from '../helpers/geo.helper';
+import { ClientDirection, ordonnerArrets } from '../helpers/direction.rules';
+import { haversineMeters, parseOrderLatLng, type ILatLng } from '../helpers/geo.helper';
 import { estCourseTurboDOrigine } from '../helpers/offres.rules';
 import { CourseOfferService } from './course-offer.service';
 import { DispatchJournalService } from './dispatch-journal.service';
@@ -677,45 +678,24 @@ export class CourseGroupingService {
   }
 
   /**
-   * Ordonne les orders pour minimiser le trajet total restaurant → clients.
-   *
-   * Heuristique :
-   *   1. **Seed** = order avec le plus grand temps d'attente (`created_at` le plus ancien)
-   *      → priorité client (qui attend depuis le plus longtemps passe en 1er)
-   *   2. Ensuite **nearest-neighbor** depuis la position courante (TSP approximé)
+   * Ordonne les orders d'un lot pour minimiser le trajet restaurant → clients :
+   * plus proche voisin EN PARTANT DU RESTAURANT (`ordonnerArrets`, même zone,
+   * sans Google), comme le planificateur v2. Avant le 27/10, la tournée
+   * partait de la commande la plus ancienne : le livreur allait d'abord au
+   * plus loin puis revenait sur ses pas (lot Port-Bouët puis Koumassi depuis
+   * Zone 4). Les commandes sans coordonnées vont en fin de liste, dans
+   * l'ordre reçu. N'utilise pas `this` (appelée seule par les tests).
    */
   private optimizeOrderSequence(
     orders: readonly Pick<Order, 'id' | 'address' | 'created_at'>[],
     restaurantCoords: ILatLng,
   ): string[] {
-    // Filtrer ceux qui ont des coords valides
-    const withCoords: { id: string; coords: ILatLng; createdAt: Date }[] = [];
-    const withoutCoords: string[] = [];
-    for (const o of orders) {
-      const coords = parseOrderLatLng(o.address);
-      if (coords) {
-        withCoords.push({ id: o.id, coords, createdAt: o.created_at });
-      } else {
-        withoutCoords.push(o.id);
-      }
-    }
-
-    if (withCoords.length === 0) {
-      // Aucune coord → on garde l'ordre d'arrivée
-      return orders.map((o) => o.id);
-    }
-
-    // Seed = le plus ancien (plus grand wait time)
-    withCoords.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-    const [seed, ...rest] = withCoords;
-
-    // Nearest-neighbor depuis le seed (pas depuis le restaurant) — car le
-    // restaurant est le point commun de départ mais le séquençage démarre sur
-    // la commande la plus prioritaire, puis on enchaîne au plus proche.
-    const remainingIds = nearestNeighborOrder(seed.coords, rest);
-    const ordered = [seed.id, ...remainingIds];
-
-    // Les orders sans coords rejoignent la fin (ordre d'arrivée)
-    return [...ordered, ...withoutCoords];
+    const clients: ClientDirection[] = orders.map((o) => ({
+      id: o.id,
+      position: parseOrderLatLng(o.address),
+      routeMetres: null,
+      trace: null,
+    }));
+    return ordonnerArrets(restaurantCoords, clients, { mode: 'zone' });
   }
 }

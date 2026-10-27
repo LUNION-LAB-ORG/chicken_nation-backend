@@ -81,6 +81,12 @@ export function attenteDepuisDerniereEntreeMin(
  * Séparé de CourseActionService pour respecter la séparation des responsabilités
  * (création/assignation vs transitions de statut une fois acceptée).
  */
+/** Lignes rangées dans l'ordre des identifiants reçus (les inconnues à la fin). */
+function dansLOrdre<T extends { id: string }>(lignes: T[], ids: readonly string[]): T[] {
+  const rang = new Map(ids.map((id, i) => [id, i]));
+  return [...lignes].sort((a, b) => (rang.get(a.id) ?? ids.length) - (rang.get(b.id) ?? ids.length));
+}
+
 @Injectable()
 export class CourseOfferService {
   private readonly logger = new Logger(CourseOfferService.name);
@@ -143,7 +149,9 @@ export class CourseOfferService {
           // passée à emporter ou sur place depuis la lecture n'entre pas dans
           // la course (« Modifier la commande » revendique la même ligne).
           await tx.order.updateMany({ where: eligibles, data: { type: OrderType.DELIVERY } });
-          orders = await tx.order.findMany({ where: eligibles, select: selection });
+          // L'ordre des arrêts est celui reçu (lot ordonné depuis le restaurant),
+          // jamais celui que la base rend pour `id IN (…)` (27/10).
+          orders = dansLOrdre(await tx.order.findMany({ where: eligibles, select: selection }), input.orderIds);
           if (orders.length === 0) throw new BadRequestException('Aucune order éligible trouvée');
           const pickupCode = await this.helper.genererCodeRetrait(tx, input.restaurantId);
           return tx.course.create({
@@ -1362,6 +1370,8 @@ export class CourseOfferService {
         statut: true,
         restaurant_id: true,
         deliveries: {
+          // Ordre de la tournée gardé par la nouvelle course (27/10).
+          orderBy: { sequence_order: 'asc' },
           select: {
             id: true,
             statut: true,
@@ -1471,6 +1481,7 @@ export class CourseOfferService {
               statut: DeliveryStatut.PENDING,
               in_route_at: null,
               arrived_at: null,
+              reportee_at: null,
               turbo_course_id: null,
               turbo_courier_id: null,
               turbo_courier_name: null,
