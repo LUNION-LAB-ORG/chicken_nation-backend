@@ -537,7 +537,14 @@ describe('commande prête : ajout à la meilleure course ouverte (3.4)', () => {
       }),
     );
     expect(types(plan)).toEqual(['AJOUTER', 'ORDONNER']);
-    expect(actionsDe(plan, 'ORDONNER')[0]).toEqual({ type: 'ORDONNER', course_id: 'k', sequence: ['q', 'a'] });
+    expect(actionsDe(plan, 'ORDONNER')[0]).toEqual({
+      type: 'ORDONNER',
+      course_id: 'k',
+      sequence: ['q', 'a'],
+      motif: 'AJOUT',
+      base: 'vol_oiseau',
+      gain_s: null,
+    });
   });
 });
 

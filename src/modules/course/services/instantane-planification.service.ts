@@ -21,6 +21,7 @@ import { lireAttenduesEcrites, lireCommandesAttendues } from '../helpers/applica
 import { ClientDirection, VerdictPaire } from '../helpers/direction.rules';
 import { haversineMeters, ILatLng, parseOrderLatLng } from '../helpers/geo.helper';
 import { journeeDeService } from '../helpers/journee-service.rules';
+import { APPELS_ORDRE_PAR_PASSAGE } from '../helpers/ordre-arrets.rules';
 import {
   clePaire,
   CommandePlanif,
@@ -30,6 +31,7 @@ import {
   LivreurPlanif,
   livreursAMesurer,
   pairesAEvaluer,
+  pairesAOrdonner,
   ReglagesPlanification,
 } from '../helpers/planification.rules';
 import { ReglagesPreparation } from '../helpers/preparation.rules';
@@ -80,7 +82,20 @@ export interface InstantaneLu {
   /** Verdicts de direction mesurés (Google compris si permis), par `clePaire`. */
   verdicts: Map<string, VerdictPaire>;
   contexte: ContexteInstantane;
+  /**
+   * Distances par la route entre les clients des courses à ordonner (mètres,
+   * par `clePaire`), lues dans le cache seulement (`matriceEntreClients`).
+   */
+  matrice?: Map<string, number>;
 }
+
+/** Même point à 11 m près (clé du cache routier arrondie à 4 décimales) : 0 m, rien à demander. */
+const memePoint = (a: ILatLng, b: ILatLng) => a.lat.toFixed(4) === b.lat.toFixed(4) && a.lng.toFixed(4) === b.lng.toFixed(4);
+const clePoints = (a: ILatLng, b: ILatLng) =>
+  [a, b]
+    .map((p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`)
+    .sort()
+    .join('|');
 
 /**
  * LECTURE DE L'INSTANTANÉ d'un restaurant pour le planificateur v2 : commandes
@@ -94,6 +109,8 @@ export interface InstantaneLu {
 @Injectable()
 export class InstantanePlanificationService {
   private readonly logger = new Logger(InstantanePlanificationService.name);
+  /** Distances entre clients demandées à Google et pas encore revenues (ce serveur) : jamais deux fois en vol. */
+  private readonly pairesEnVol = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -329,15 +346,79 @@ export class InstantanePlanificationService {
       if (v) verdicts.set(clePaire(a.id, b.id), v);
     });
 
+    // Ordre des arrêts par la route : distances entre clients, cache seulement.
+    const matrice = await this.matriceEntreClients(instantane, google);
+
     return {
       instantane,
       verdicts,
+      matrice,
       contexte: {
         restaurant: { id: restaurantId, name: restaurant?.name ?? null, position },
         codes: new Map(lignesCourses.map((k) => [k.id, k.pickup_code])),
         refus: new Map(lignesCourses.map((k) => [k.id, k.refusal_count])),
       },
     };
+  }
+
+  /**
+   * Distances PAR LA ROUTE entre les clients des courses à ordonner (ordre
+   * des arrêts, demande du 27/10 ; `pairesAOrdonner`) : lues dans le cache
+   * routier de 30 jours seulement (`trajetEnCache`, 400 ms au plus, jamais
+   * Google), dans un sens puis dans l'autre (route supposée symétrique).
+   *
+   * Les paires manquantes sont demandées à Google SANS ÊTRE ATTENDUES, si le
+   * réglage le permet : 6 au plus par passage, du client le plus proche du
+   * restaurant vers le plus lointain, jamais deux fois en vol. Leur résultat
+   * entre au cache et sert au passage suivant. Ne lève jamais : une panne
+   * donne une matrice vide (le calcul d'aujourd'hui).
+   */
+  async matriceEntreClients(instantane: InstantanePlanification, google: boolean): Promise<Map<string, number>> {
+    const matrice = new Map<string, number>();
+    const paires = pairesAOrdonner(instantane);
+    if (paires.length === 0) return matrice;
+    try {
+      const lues = await Promise.all(
+        paires.map(async ([a, b]) => {
+          const pa = a.position!;
+          const pb = b.position!;
+          if (memePoint(pa, pb)) return 0;
+          return (await this.maps.trajetEnCache(pa, pb)) ?? (await this.maps.trajetEnCache(pb, pa));
+        }),
+      );
+      const manquantes: [ILatLng, ILatLng][] = [];
+      paires.forEach(([a, b], i) => {
+        const m = lues[i];
+        if (typeof m === 'number' && Number.isFinite(m) && m >= 0) matrice.set(clePaire(a.id, b.id), m);
+        else manquantes.push([a.position!, b.position!]);
+      });
+      if (google) this.demanderDistances(manquantes);
+    } catch (err) {
+      this.logger.warn(`Distances entre clients indisponibles : ${(err as Error)?.message ?? err}`);
+      matrice.clear();
+    }
+    return matrice;
+  }
+
+  /** Lance les appels Google manquants sans les attendre (6 au plus, jamais deux fois en vol). */
+  private demanderDistances(paires: readonly [ILatLng, ILatLng][]): void {
+    let lancees = 0;
+    for (const [origine, destination] of paires) {
+      if (lancees >= APPELS_ORDRE_PAR_PASSAGE) return;
+      const cle = clePoints(origine, destination);
+      if (this.pairesEnVol.has(cle)) continue;
+      this.pairesEnVol.add(cle);
+      lancees++;
+      void Promise.resolve()
+        .then(() =>
+          this.maps.itineraireRoutier(
+            { originLat: origine.lat, originLng: origine.lng, destLat: destination.lat, destLng: destination.lng },
+            { pour: 'ordre' },
+          ),
+        )
+        .catch(() => null)
+        .finally(() => this.pairesEnVol.delete(cle));
+    }
   }
 
   /**

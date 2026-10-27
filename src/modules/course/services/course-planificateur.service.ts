@@ -222,11 +222,13 @@ export class CoursePlanificateurService implements OnModuleDestroy {
       if (version === 'v1') {
         plan = { restaurant_id: restaurantId, maintenant, actions: actionsRepliV1(lu.instantane), refus: [] };
       } else {
-        plan = planifier(lu.instantane, reglages, { verdicts: lu.verdicts });
+        // Ordre des arrêts par la route : distances entre clients lues dans le cache (27/10).
+        const options = { verdicts: lu.verdicts, matrice: lu.matrice };
+        plan = planifier(lu.instantane, reglages, options);
         // Une course est proposée : temps Google des livreurs (si le réglage
         // le permet), et nouveau calcul avec eux.
         if (plan.actions.some((a) => a.type === 'OFFRIR') && (await this.instantanes.completerTempsGoogle(lu.instantane, reglages))) {
-          plan = planifier(lu.instantane, reglages, { verdicts: lu.verdicts });
+          plan = planifier(lu.instantane, reglages, options);
         }
       }
 

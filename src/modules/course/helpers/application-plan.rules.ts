@@ -22,6 +22,12 @@ export const RaisonsPlanificateur = {
   RETENUE_LEVEE: 'RETENUE_LEVEE',
   DEPART: 'DEPART',
   RETRAIT_COMPLEMENTAIRE: 'RETRAIT_COMPLEMENTAIRE',
+  /**
+   * Seul l'ordre des arrêts a changé (meilleur ordre par la route, rangs
+   * renumérotés, 27/10) : ni notification, ni vibration, ni offre renvoyée.
+   * L'appli et le backoffice relisent la course sans rien de plus.
+   */
+  ARRETS_ORDONNES: 'ARRETS_ORDONNES',
 } as const;
 
 export type RaisonPlanificateur = (typeof RaisonsPlanificateur)[keyof typeof RaisonsPlanificateur];

@@ -64,7 +64,12 @@
  *     fusionnée (ou le livreur de la cible) en a refusé une, jamais une
  *     course dont l'offre a été forcée par l'administrateur, et jamais une
  *     course dont l'offre en attente partirait plus tôt que la cible.
- *  4. ORDRE des arrêts de chaque course modifiée.
+ *  4. ORDRE des arrêts : celui de l'ajout ou de la fusion pour une course
+ *     modifiée ; pour une course ouverte non modifiée, pas partie, pas Turbo,
+ *     sans offre en attente, d'au moins 2 arrêts en attente, le meilleur
+ *     ordre PAR LA ROUTE (matrice complète des distances, demande du 27/10)
+ *     s'il gagne plus de 60 s sur un critère, ou si les rangs ont un trou
+ *     (commande retirée). Jamais une fois le livreur parti.
  *  5. OFFRES : les courses sans livreur et sans offre sont proposées par
  *     urgence croissante, chacune au meilleur livreur libre (au comptoir
  *     d'abord, puis en minutes, 4.2). Un livreur qui a laissé expirer l'offre
@@ -136,6 +141,16 @@ import {
 } from './direction.rules';
 import { haversineMeters, ILatLng } from './geo.helper';
 import { estCourseTurboDOrigine } from './offres.rules';
+import {
+  ARRETS_MAX_PERMUTATIONS,
+  DistancesEntreClients,
+  gainNouvelOrdreS,
+  matriceComplete,
+  meilleurOrdre,
+  nouvelOrdreUtile,
+  ParametresOrdre,
+  tourneeParLaRoute,
+} from './ordre-arrets.rules';
 import { EstimationPreparation } from './preparation.rules';
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
@@ -619,6 +634,15 @@ export interface OptionsPlanification {
    * blocage). Voir `pairesAEvaluer`.
    */
   verdicts?: ReadonlyMap<string, VerdictPaire>;
+  /**
+   * Distances PAR LA ROUTE entre deux clients (mètres, clé `clePaire`), lues
+   * dans le cache routier de 30 jours par le service (`pairesAOrdonner`),
+   * jamais attendues de Google. Avec la distance routière depuis le
+   * restaurant de chaque client (`ClientDirection.routeMetres`), elles
+   * forment la matrice de la tournée (ordre-arrets.rules.ts). Une seule
+   * distance absente : le calcul d'aujourd'hui pour toute la tournée.
+   */
+  matrice?: DistancesEntreClients;
 }
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
@@ -729,11 +753,22 @@ export interface ActionFusionner {
   detour_s: number;
 }
 
+/**
+ * Pourquoi l'ordre des arrêts est écrit : ajout ou fusion (ordre accepté
+ * avec eux), ou meilleur ordre par la route d'une course non modifiée.
+ */
+export type MotifOrdre = 'AJOUT' | 'FUSION' | 'MEILLEUR_ORDRE';
+
 export interface ActionOrdonner {
   type: 'ORDONNER';
   course_id: string;
   /** Identifiants de commandes, dans l'ordre de la tournée. */
   sequence: string[];
+  motif: MotifOrdre;
+  /** Base de l'estimation qui a donné l'ordre (`route` : matrice par la route). */
+  base: ClassementDistance;
+  /** Gain du meilleur ordre sur l'ordre écrit (secondes, critère décisif) ; `null` pour un ajout ou une fusion. */
+  gain_s: number | null;
 }
 
 export interface CoutLivreur {
@@ -1363,6 +1398,31 @@ export function pairesAEvaluer(
   return paires;
 }
 
+/**
+ * Paires de clients dont la distance PAR LA ROUTE sert à ordonner les arrêts
+ * (ordre-arrets.rules.ts, demande du 27/10) : au sein de chaque course de
+ * l'instantané qui n'est ni partie ni Turbo, entre ses 2 à 5 clients placés
+ * encore à livrer, quand la distance depuis le restaurant de chacun est
+ * connue (sinon la matrice ne pourrait pas être complète). Chaque paire va
+ * du client le plus proche du restaurant vers le plus lointain : c'est le
+ * sens de l'appel à Google s'il faut la demander. Le service les lit dans le
+ * cache seulement.
+ */
+export function pairesAOrdonner(instantane: InstantanePlanification): [ClientDirection, ClientDirection][] {
+  const paires: [ClientDirection, ClientDirection][] = [];
+  for (const k of instantane.courses) {
+    if (k.parti_at || k.turbo_escalated_at) continue;
+    const actives = livraisonsActives(k.livraisons);
+    if (estCourseTurboDOrigine(actives.map((l) => ({ order: { delivery_service: l.commande.delivery_service } })))) continue;
+    const places = actives.map((l) => l.commande.client).filter((c) => c.position);
+    if (places.length < 2 || places.length > ARRETS_MAX_PERMUTATIONS) continue;
+    if (places.some((c) => !(typeof c.routeMetres === 'number' && c.routeMetres > 0))) continue;
+    places.sort((a, b) => a.routeMetres! - b.routeMetres! || (a.id < b.id ? -1 : 1));
+    for (let i = 0; i < places.length; i++) for (let j = i + 1; j < places.length; j++) paires.push([places[i], places[j]]);
+  }
+  return paires;
+}
+
 // ─── Moteur ──────────────────────────────────────────────────────────────────
 
 /** Une commande dans une tournée en cours de calcul. */
@@ -1397,8 +1457,13 @@ interface CourseTravail {
   categorie: CategorieCible | null;
   fenetreFermeMs: number | null;
   modifiee: boolean;
+  /** Ce qui a modifié la course dans ce passage (ajout, fusion) et la base de son ordre. */
+  motifOrdre?: MotifOrdre;
+  baseOrdre?: ClassementDistance;
   absorbee: boolean;
   nouvelle: boolean;
+  /** Confiée à Turbo ou Turbo d'origine : son ordre n'est jamais repris. */
+  turbo?: boolean;
   dejaSollicites: Set<string>;
 }
 
@@ -1410,6 +1475,13 @@ interface EstimationGroupe {
   arriveesMs: Map<string, number>;
   /** Restaurant → dernier client, arrêts compris. */
   dureeS: number;
+  /**
+   * Ordre choisi sur la matrice des distances par la route (2 à 5 clients
+   * placés, toutes les distances connues) ; faux : le calcul d'aujourd'hui.
+   */
+  parMatrice: boolean;
+  /** Clé de l'ordre choisi sur la matrice (`cleOrdre`), sinon `null`. */
+  cle: number[] | null;
 }
 
 type ResultatAjout =
@@ -1429,6 +1501,8 @@ interface Contexte {
   clients: Map<string, ClientDirection>;
   verdicts: Map<string, VerdictPaire>;
   verdictDe: (a: ClientDirection, b: ClientDirection) => VerdictPaire;
+  /** Distances par la route entre clients (`OptionsPlanification.matrice`), ou `null`. */
+  matrice: DistancesEntreClients | null;
   /** Retours estimés des livreurs en course, du plus proche au plus lointain (calculés une fois par passage). */
   retours?: RetourLivreur[];
 }
@@ -1470,6 +1544,7 @@ function creerContexte(inst: InstantanePlanification, r: ReglagesPlanification, 
     clients,
     verdicts,
     verdictDe,
+    matrice: options.matrice ?? null,
   };
 }
 
@@ -1496,6 +1571,33 @@ interface OptionsEstimation {
   volOiseau?: boolean;
   /** L'ordre de la direction seul, sans essayer les autres (repli de `evaluerAjout`). */
   geographique?: boolean;
+  /** Le calcul d'aujourd'hui, même si la matrice par la route est complète (comparaison de deux estimations). */
+  sansMatrice?: boolean;
+}
+
+/**
+ * Paramètres de l'ordre par la route d'un groupe (ordre-arrets.rules.ts) :
+ * 2 à 5 clients placés et toutes leurs distances par la route connues
+ * (depuis le restaurant, et deux à deux). Sinon `null` : le calcul
+ * d'aujourd'hui, sans aucun mélange.
+ */
+function parametresRoute(ctx: Contexte, arrets: readonly Arret[], departMs: number): ParametresOrdre | null {
+  if (!ctx.matrice || !ctx.restaurant) return null;
+  const places = arrets.filter((a) => a.client.position).length;
+  if (places < 2 || places > ARRETS_MAX_PERMUTATIONS) return null;
+  const matrice = matriceComplete(
+    arrets.map((a) => a.client),
+    ctx.matrice,
+  );
+  if (!matrice) return null;
+  return {
+    arrets: arrets.map((a) => ({ id: a.id, place: !!a.client.position, promesseMs: a.promesseMs, limiteMs: a.limiteMs })),
+    matrice,
+    departMs,
+    vitesseKmh: vitesseKmh(new Date(departMs), ctx.r),
+    arretClientS: ARRET_CLIENT_S,
+    arriveeSansPositionMs: departMs + ctx.r.trajetSansCoordonneesMin * 60_000,
+  };
 }
 
 /** Toutes les permutations d'une petite liste (3 éléments au plus ici). */
@@ -1520,10 +1622,19 @@ function permutations<T>(liste: readonly T[]): T[][] {
  * récent du même trajet, d'où un regroupement refusé ou un client en retard).
  * Un retard dans le délai toléré ne change pas l'ordre : revenir sur ses pas
  * allongerait la tournée pour quelques secondes.
+ *
+ * PAR LA ROUTE (demande du 27/10) : quand la matrice des distances par la
+ * route est complète pour 2 à 5 clients placés, l'ordre est le meilleur de
+ * toutes les permutations sur ces distances (retards, boucle avec le retour,
+ * client le plus proche d'abord, puis l'ordre de la direction) et les
+ * arrivées en viennent (`parMatrice`). Sinon, ou en repli (`geographique`,
+ * `volOiseau`, `sansMatrice`), exactement le calcul ci-dessus.
  */
 function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, options: OptionsEstimation = {}): EstimationGroupe {
   const arriveesMs = new Map<string, number>();
-  if (arrets.length === 0) return { valide: true, verdict: null, ordre: [], base: 'vol_oiseau', arriveesMs, dureeS: 0 };
+  if (arrets.length === 0) {
+    return { valide: true, verdict: null, ordre: [], base: 'vol_oiseau', arriveesMs, dureeS: 0, parMatrice: false, cle: null };
+  }
   const R = ctx.restaurant;
   const clients = arrets.map((a) => (options.volOiseau ? sansCarte(a.client) : a.client));
   // Client sans coordonnées (ou restaurant sans coordonnées) : trajet supposé
@@ -1532,7 +1643,16 @@ function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, opti
   const sansPositionMs = departMs + ctx.r.trajetSansCoordonneesMin * 60_000;
   if (!R) {
     for (const a of arrets) arriveesMs.set(a.id, sansPositionMs);
-    return { valide: arrets.length === 1, verdict: null, ordre: arrets.map((a) => a.id), base: 'vol_oiseau', arriveesMs, dureeS: 0 };
+    return {
+      valide: arrets.length === 1,
+      verdict: null,
+      ordre: arrets.map((a) => a.id),
+      base: 'vol_oiseau',
+      arriveesMs,
+      dureeS: 0,
+      parMatrice: false,
+      cle: null,
+    };
   }
   const verdict = evaluerGroupe(R, clients, ctx.verdictDe);
   const mode: ModeGroupe = verdict.valide && verdict.mode ? verdict.mode : clients.length === 1 ? 'seul' : 'zone';
@@ -1563,6 +1683,24 @@ function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, opti
     return { limite, promesse };
   };
 
+  const route =
+    options.volOiseau || options.geographique || options.sansMatrice ? null : parametresRoute(ctx, arrets, departMs);
+  const parLaRoute = route
+    ? meilleurOrdre({ ...route, ordreDirection, dureeTourneeMaxS: ctx.r.dureeTourneeMaxMin * 60 })?.meilleur ?? null
+    : null;
+  if (parLaRoute) {
+    return {
+      valide: verdict.valide,
+      verdict,
+      ordre: parLaRoute.ordre,
+      base: 'route',
+      arriveesMs: parLaRoute.arriveesMs,
+      dureeS: parLaRoute.dureeS,
+      parMatrice: true,
+      cle: parLaRoute.cle,
+    };
+  }
+
   const direction = tournee(ordreDirection);
   let choix = direction;
   const places = ordreDirection.filter((id) => parId.get(id)?.position);
@@ -1590,17 +1728,41 @@ function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, opti
     }
   }
   for (const [id, a] of choix.arrivees) arriveesMs.set(id, a);
-  return { valide: verdict.valide, verdict, ordre: choix.ordre, base: choix.base, arriveesMs, dureeS: choix.dureeS };
+  return {
+    valide: verdict.valide,
+    verdict,
+    ordre: choix.ordre,
+    base: choix.base,
+    arriveesMs,
+    dureeS: choix.dureeS,
+    parMatrice: false,
+    cle: null,
+  };
 }
 
-/** Comparer deux estimations sur la même base : vol d'oiseau pour les deux si elles diffèrent. */
+const clientsPlaces = (arrets: readonly Arret[]) => arrets.filter((a) => a.client.position).length;
+
+/**
+ * Comparer deux estimations sur la même base : vol d'oiseau pour les deux si
+ * elles diffèrent. Jamais une tournée ordonnée sur la matrice par la route
+ * face à une tournée du calcul d'aujourd'hui (une paire manquante pour
+ * l'une) : celle de la matrice est reprise sans elle. Un seul client placé
+ * s'estime pareil avec ou sans matrice.
+ */
 function memeBase(
   ctx: Contexte,
   a: { arrets: readonly Arret[]; departMs: number; est: EstimationGroupe },
   b: { arrets: readonly Arret[]; departMs: number; est: EstimationGroupe },
   geographique = false,
 ): [EstimationGroupe, EstimationGroupe] {
-  if (a.est.base === b.est.base || a.arrets.length === 0 || b.arrets.length === 0) return [a.est, b.est];
+  if (a.arrets.length === 0 || b.arrets.length === 0) return [a.est, b.est];
+  let ea = a.est;
+  let eb = b.est;
+  if (ea.parMatrice !== eb.parMatrice && clientsPlaces(a.arrets) >= 2 && clientsPlaces(b.arrets) >= 2) {
+    if (ea.parMatrice) ea = estimer(ctx, a.arrets, a.departMs, { sansMatrice: true, geographique });
+    else eb = estimer(ctx, b.arrets, b.departMs, { sansMatrice: true, geographique });
+  }
+  if (ea.base === eb.base) return [ea, eb];
   return [
     estimer(ctx, a.arrets, a.departMs, { volOiseau: true, geographique }),
     estimer(ctx, b.arrets, b.departMs, { volOiseau: true, geographique }),
@@ -1842,6 +2004,7 @@ function courseTravail(ctx: Contexte, k: CoursePlanif, fenetreFermeMs: number | 
     modifiee: false,
     absorbee: false,
     nouvelle: false,
+    turbo,
     dejaSollicites: exclusDeLaCourse(ctx, k),
   };
 }
@@ -2031,6 +2194,48 @@ function plusAnciennePrete(ctx: Contexte, arrets: readonly Arret[]): number {
   return t.length ? Math.min(...t) : ctx.t;
 }
 
+/** Rangs des livraisons d'une course qui ne vont pas de 1 à N (commande retirée, livraison supprimée). */
+function rangsAvecTrou(livraisons: readonly LivraisonPlanif[]): boolean {
+  const rangs = livraisons.map((l) => l.sequence_order).sort((a, b) => a - b);
+  return rangs.some((r, i) => r !== i + 1);
+}
+
+/**
+ * MEILLEUR ORDRE PAR LA ROUTE d'une course ouverte que ce passage n'a pas
+ * modifiée (demande du 27/10). Seulement si elle a un identifiant, n'est ni
+ * absorbée, ni Turbo, ni partie, n'a pas d'offre en attente (l'offre
+ * renvoyée ferait vibrer l'appli du livreur sollicité : elle sera réordonnée
+ * après l'acceptation), a au moins 2 arrêts, tous en attente, et une matrice
+ * complète. Écrit si le meilleur ordre gagne plus de 60 s sur un critère
+ * (`nouvelOrdreUtile`), ou pour renuméroter de 1 à N une course dont une
+ * commande a été retirée (l'ordre gardé). `null` sinon.
+ */
+function meilleurOrdreParLaRoute(ctx: Contexte, k: CourseTravail): ActionOrdonner | null {
+  const source = k.source;
+  if (!k.id || !source || k.absorbee || k.turbo || source.parti_at || k.offre) return null;
+  const actives = livraisonsActives(source.livraisons);
+  if (actives.length < 2 || actives.length !== k.arrets.length) return null;
+  if (actives.some((l) => l.statut !== DeliveryStatut.PENDING)) return null;
+  const depart = departOuDefaut(ctx, departCourse(ctx, k));
+  const route = parametresRoute(ctx, k.arrets, depart);
+  if (!route) return null;
+  const meilleur = estimer(ctx, k.arrets, depart);
+  if (!meilleur.parMatrice || !meilleur.cle) return null;
+  const actuel = k.arrets.map((a) => a.id);
+  const cleActuelle = tourneeParLaRoute(route, actuel).cle;
+  const change = meilleur.ordre.some((id, i) => id !== actuel[i]);
+  const utile = change && nouvelOrdreUtile(cleActuelle, meilleur.cle);
+  if (!utile && !rangsAvecTrou(source.livraisons)) return null;
+  return {
+    type: 'ORDONNER',
+    course_id: k.id,
+    sequence: utile ? meilleur.ordre : actuel,
+    motif: 'MEILLEUR_ORDRE',
+    base: 'route',
+    gain_s: utile ? gainNouvelOrdreS(cleActuelle, meilleur.cle) : 0,
+  };
+}
+
 /** Remplace l'ordre des arrêts par celui de l'estimation. */
 function reordonner(arrets: readonly Arret[], ordre: readonly string[]): Arret[] {
   const parId = new Map(arrets.map((a) => [a.id, a]));
@@ -2195,6 +2400,8 @@ export function planifier(
     const { k, res, attendue } = meilleur;
     k.arrets = reordonner([...k.arrets, q], res.estimation.ordre);
     k.modifiee = true;
+    k.motifOrdre = 'AJOUT';
+    k.baseOrdre = res.estimation.base;
     actions.push({
       type: 'AJOUTER',
       course_id: k.id!,
@@ -2279,6 +2486,8 @@ export function planifier(
     const deplacees = absorbee.arrets.map((a) => a.id);
     cible.arrets = reordonner([...cible.arrets, ...absorbee.arrets], res.estimation.ordre);
     cible.modifiee = true;
+    cible.motifOrdre = 'FUSION';
+    cible.baseOrdre = res.estimation.base;
     absorbee.absorbee = true;
     absorbee.arrets = [];
     const aClore = absorbee.offre ? [absorbee.offre] : [];
@@ -2413,10 +2622,23 @@ export function planifier(
   // ── 4. Ordre des arrêts des courses existantes modifiées : celui de la
   // dernière estimation acceptée (ajout ou fusion), qui a passé les limites.
   // Le recalculer ici pouvait donner un autre ordre (il dépend des promesses
-  // et du départ) que les limites n'avaient pas vu.
+  // et du départ) que les limites n'avaient pas vu. Les autres courses
+  // ouvertes : meilleur ordre par la route (demande du 27/10), en silence.
   for (const k of ouvertes) {
-    if (!k.modifiee || k.absorbee || !k.id) continue;
-    actions.push({ type: 'ORDONNER', course_id: k.id, sequence: k.arrets.map((a) => a.id) });
+    if (k.absorbee || !k.id) continue;
+    if (k.modifiee) {
+      actions.push({
+        type: 'ORDONNER',
+        course_id: k.id,
+        sequence: k.arrets.map((a) => a.id),
+        motif: k.motifOrdre ?? 'AJOUT',
+        base: k.baseOrdre ?? 'vol_oiseau',
+        gain_s: null,
+      });
+      continue;
+    }
+    const meilleur = meilleurOrdreParLaRoute(ctx, k);
+    if (meilleur) actions.push(meilleur);
   }
 
   // ── 5. Offres, par urgence croissante, au meilleur livreur libre.

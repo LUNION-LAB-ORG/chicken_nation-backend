@@ -81,6 +81,13 @@ export const DELAI_ENVOI_TURBO_MS = 15_000;
 
 /** Statuts d'une course dont le livreur est affecté et pas parti. */
 const STATUTS_AVEC_LIVREUR: CourseStatut[] = [CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT, CourseStatut.IN_DELIVERY];
+/** Course dont l'ordre des arrêts peut encore changer (avec `parti_at` nul). */
+const STATUTS_ORDRE_MODIFIABLE: CourseStatut[] = [
+  CourseStatut.PENDING_ASSIGNMENT,
+  CourseStatut.ACCEPTED,
+  CourseStatut.AT_RESTAURANT,
+  CourseStatut.IN_DELIVERY,
+];
 
 export interface OptionsApplication {
   /** `course.max_refusal_count` : au-delà, la course expire au lieu d'être proposée (comme aujourd'hui). */
@@ -645,10 +652,22 @@ export class ApplicationPlanService {
 
   // ─── Ordre des arrêts ─────────────────────────────────────────────────────
 
+  /**
+   * Ordre des arrêts (ajout, fusion, meilleur ordre par la route). Jamais une
+   * fois le livreur parti : la transaction commence par revendiquer la course
+   * (pas partie, encore ouverte ; sa ligne reste verrouillée jusqu'à la fin),
+   * sinon l'action est abandonnée (`COURSE_PARTIE`). Un simple changement
+   * d'ordre part avec la raison ARRETS_ORDONNES, en silence.
+   */
   private async ordonner(a: ActionOrdonner, p: Passage): Promise<void> {
     // Contrainte unique (course, rang) : on décale d'abord toutes les
     // livraisons au-delà du plus grand rang, puis on pose les rangs voulus.
     const change = await this.prisma.$transaction(async (tx) => {
+      const tenue = await tx.course.updateMany({
+        where: { id: a.course_id, parti_at: null, statut: { in: STATUTS_ORDRE_MODIFIABLE } },
+        data: { updated_at: new Date() },
+      });
+      if (tenue.count !== 1) throw new ActionAbandonnee('COURSE_PARTIE');
       const livraisons = await tx.delivery.findMany({
         where: { course_id: a.course_id },
         select: { id: true, order_id: true, statut: true, sequence_order: true },
@@ -663,13 +682,14 @@ export class ApplicationPlanService {
       return true;
     });
     if (!change) return;
-    if (!p.touchees.has(a.course_id)) p.touchees.set(a.course_id, RaisonsPlanificateur.COMMANDE_AJOUTEE);
+    if (!p.touchees.has(a.course_id)) p.touchees.set(a.course_id, RaisonsPlanificateur.ARRETS_ORDONNES);
     await this.journal.ecrire({
       type: 'ARRETS_ORDONNES',
+      motif: a.motif,
       source: 'serveur',
       restaurant_id: p.restaurantId,
       course_id: a.course_id,
-      details: { sequence: a.sequence },
+      details: { sequence: a.sequence, motif: a.motif, base: a.base, gain_s: a.gain_s },
     });
   }
 

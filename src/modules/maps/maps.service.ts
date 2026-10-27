@@ -398,7 +398,11 @@ export class MapsService {
    *    JAMAIS plafonnés (comme avant le planificateur v2) ;
    *  - `direction` : tracés du planificateur, plafonnés (`trace_direction`),
    *    et un échec de Google est retenu 10 min pour ce trajet : le passage de
-   *    10 s ne le redemande pas à chaque fois.
+   *    10 s ne le redemande pas à chaque fois ;
+   *  - `ordre` : distance entre deux clients d'une tournée, pour l'ordre des
+   *    arrêts par la route (27/10). Mêmes règles que `direction`, comptée à
+   *    part (`ordre_arrets`) dans le même plafond quotidien ; jamais attendue
+   *    par le planificateur, qui la relit au passage suivant (`trajetEnCache`).
    */
   async itineraireRoutier(
     params: {
@@ -407,12 +411,14 @@ export class MapsService {
       destLat: number;
       destLng: number;
     },
-    options: { pour?: 'frais' | 'direction' } = {},
+    options: { pour?: 'frais' | 'direction' | 'ordre' } = {},
   ): Promise<IItineraireRoutier | null> {
     const origine = { lat: params.originLat, lng: params.originLng };
     const destination = { lat: params.destLat, lng: params.destLng };
     if (![origine.lat, origine.lng, destination.lat, destination.lng].every(Number.isFinite)) return null;
-    const pourDirection = options.pour === 'direction';
+    // Planificateur (tracés, ordre des arrêts) : plafonné, échec retenu 10 min.
+    const pourDirection = options.pour === 'direction' || options.pour === 'ordre';
+    const fonction = options.pour === 'ordre' ? 'ordre_arrets' : pourDirection ? 'trace_direction' : 'itineraire';
 
     const cacheKey = this.cleTrajet('road-route', origine, destination);
     const enCache = await this.itineraireEnCache(cacheKey);
@@ -421,7 +427,7 @@ export class MapsService {
     if (!this.apiKey) return null;
     const cleEchec = this.cleTrajet('road-route-echec', origine, destination);
     if (pourDirection && (await this.lireCache<unknown>(cleEchec))) return null;
-    if (!(await this.compteur.reserver(pourDirection ? 'trace_direction' : 'itineraire'))) return null;
+    if (!(await this.compteur.reserver(fonction))) return null;
     const retenirEchec = () => (pourDirection ? this.ecrireCache(cleEchec, 1, TTL.ECHEC_TRACE) : Promise.resolve());
 
     const url = new URL(`${BASE_URL}/directions/json`);
@@ -464,6 +470,22 @@ export class MapsService {
     } catch (err) {
       this.logger.warn(`[Maps] Distance routière en échec : ${(err as Error).message}`);
       await retenirEchec();
+      return null;
+    }
+  }
+
+  /**
+   * Distance PAR LA ROUTE d'un point à un autre déjà en cache (`road-route`,
+   * 30 jours), en mètres, dans ce sens seulement : ordre des arrêts d'une
+   * tournée (27/10), sur le chemin du planificateur. N'appelle JAMAIS Google,
+   * n'attend jamais plus de 400 ms, ne lève jamais : `null` si absente.
+   */
+  async trajetEnCache(origine: { lat: number; lng: number }, destination: { lat: number; lng: number }): Promise<number | null> {
+    try {
+      if (![origine?.lat, origine?.lng, destination?.lat, destination?.lng].every(Number.isFinite)) return null;
+      const itineraire = await this.itineraireEnCache(this.cleTrajet('road-route', origine, destination));
+      return itineraire?.metres ?? null;
+    } catch {
       return null;
     }
   }
