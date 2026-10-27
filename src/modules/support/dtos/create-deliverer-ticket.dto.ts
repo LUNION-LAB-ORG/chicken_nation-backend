@@ -50,6 +50,15 @@ export class CreateDelivererTicketDto {
     courseId?: string;
 
     @ApiPropertyOptional({
+        description:
+            "UUID de la commande liée (feuille « Problème », 27/10). Doit être livrée dans une course du livreur, " +
+            'sinon 403 « Commande hors de tes courses. ». Enregistrée sur le ticket : le restaurant le reçoit.',
+    })
+    @IsUUID()
+    @IsOptional()
+    orderId?: string;
+
+    @ApiPropertyOptional({
         description: 'Priorité — par défaut MEDIUM. Le livreur peut signaler URGENT.',
         enum: TicketPriority,
     })

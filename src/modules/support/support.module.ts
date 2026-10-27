@@ -9,6 +9,7 @@ import { MessagesController } from './controllers/messages.controller';
 import { TicketsController } from './controllers/tickets.controller';
 import { TicketsConsumer } from './consumers/tickets.consumer';
 import { TicketEvent } from './events/ticket.event';
+import { LivraisonAnnuleeListener } from './listeners/livraison-annulee.listener';
 import { TicketListenerService } from './listeners/ticket-listener.service';
 import { AssignmentService } from './services/assignment.service';
 import { CategoriesTicketService } from './services/categories-ticket.service';
@@ -48,6 +49,8 @@ import { SupportWebSocketService } from './websockets/support-websocket.service'
     CategoriesTicketService,
     TicketEvent,
     TicketListenerService,
+    // « Annuler » du livreur (27/10) : ticket créé par le serveur.
+    LivraisonAnnuleeListener,
     AssignmentService,
     TicketsConsumer,
   ],
