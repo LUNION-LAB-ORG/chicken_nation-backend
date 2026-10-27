@@ -104,17 +104,21 @@ export interface ResultatApplication {
 }
 
 /** État d'un passage : ce qui reste à annoncer une fois toutes les actions écrites. */
-interface Passage {
+interface Passage extends Annonces {
   restaurantId: string;
-  maintenant: Date;
   lu: InstantaneLu;
   options: OptionsApplication;
   cles: Map<string, string>;
+}
+
+/** Ce qu'un passage annonce une fois tout écrit (aussi un retrait fait hors du passage). */
+interface Annonces {
+  maintenant: Date;
   /** Courses modifiées sans changement de statut : `course:statut:changed` avec cette raison. */
   touchees: Map<string, RaisonPlanificateur>;
   /** Commandes ajoutées par course (ajouts et fusions). */
   ajouts: Map<string, { n: number; apresRetrait: boolean }>;
-  /** Commandes détachées au départ, par course. */
+  /** Commandes retirées de la course (détachées au départ, passées à emporter), par course. */
   retirees: Map<string, string[]>;
   /** Première retenue posée sur la course dans ce passage (le livreur est prévenu). */
   retenues: Map<string, { jusqua: Date; attendues: string[] }>;
@@ -381,6 +385,8 @@ export class ApplicationPlanService {
           where: {
             id: a.order_id,
             restaurant_id: p.restaurantId,
+            // Passée à emporter ou sur place depuis la lecture : plus rien à livrer.
+            type: OrderType.DELIVERY,
             status: OrderStatus.READY,
             delivery: null,
             entity_status: { not: EntityStatus.DELETED },
@@ -820,11 +826,31 @@ export class ApplicationPlanService {
   // ─── Annonces ─────────────────────────────────────────────────────────────
 
   /**
+   * Commande retirée d'une course HORS du passage (commande à livrer passée à
+   * emporter ou sur place, demande du 27/10) : exactement les annonces d'une
+   * commande détachée par le planificateur. `course:statut:changed` raison
+   * COMMANDE_DETACHEE (livreur, restaurant, siège : la caisse relit la
+   * course), « Commande retirée » au livreur affecté, offre à jour renvoyée au
+   * livreur sollicité si la course est encore en recherche.
+   */
+  async annoncerRetrait(courseId: string, references: string[], maintenant = new Date()): Promise<void> {
+    await this.annoncer({
+      maintenant,
+      touchees: new Map([[courseId, RaisonsPlanificateur.COMMANDE_DETACHEE]]),
+      ajouts: new Map(),
+      retirees: new Map([[courseId, references]]),
+      retenues: new Map(),
+      liberations: new Map(),
+      absorbees: new Map(),
+    });
+  }
+
+  /**
    * Une fois tout écrit : `course:statut:changed` pour chaque course touchée
    * (livreur, restaurant, siège), offre en attente renvoyée à jour au livreur
    * sollicité (même échéance), notifications au livreur affecté.
    */
-  private async annoncer(p: Passage): Promise<void> {
+  private async annoncer(p: Annonces): Promise<void> {
     for (const [courseId, raison] of p.touchees) {
       try {
         const course = await this.prisma.course.findUnique({ where: { id: courseId }, include: COURSE_FULL_INCLUDE });
@@ -861,19 +887,20 @@ export class ApplicationPlanService {
    */
   private async annoncerAuLivreur(
     course: Prisma.CourseGetPayload<{ include: typeof COURSE_FULL_INCLUDE }>,
-    p: Passage,
+    p: Annonces,
   ): Promise<void> {
     const ajout = p.ajouts.get(course.id);
     const total = course.deliveries.filter((d) => !STATUTS_LIVRAISON_TERMINEE.includes(d.statut)).length;
 
+    const retirees = p.retirees.get(course.id);
     if (course.statut === CourseStatut.PENDING_ASSIGNMENT) {
-      if (ajout) await this.renvoyerOffre(course, p);
+      // Commande ajoutée ou retirée : l'offre affichée n'est plus la bonne.
+      if (ajout || retirees?.length) await this.renvoyerOffre(course, p);
       return;
     }
     const livreur = course.deliverer_id;
     if (!livreur || !STATUTS_AVEC_LIVREUR.includes(course.statut)) return;
 
-    const retirees = p.retirees.get(course.id);
     if (retirees?.length) {
       const texte = texteCommandeRetiree({ reference: retirees[0], restantes: total });
       this.push.notifyCommandeRetiree({
@@ -977,7 +1004,7 @@ export class ApplicationPlanService {
   }
 
   /** Course encore en recherche : le livreur sollicité reçoit l'offre à jour, même échéance. */
-  private async renvoyerOffre(course: Prisma.CourseGetPayload<{ include: typeof COURSE_FULL_INCLUDE }>, p: Passage): Promise<void> {
+  private async renvoyerOffre(course: Prisma.CourseGetPayload<{ include: typeof COURSE_FULL_INCLUDE }>, p: Annonces): Promise<void> {
     const offre = await this.prisma.courseOfferAttempt.findFirst({
       where: { course_id: course.id, status: CourseOfferStatus.PENDING, expires_at: { gt: p.maintenant } },
       select: { deliverer_id: true, expires_at: true },
