@@ -78,7 +78,8 @@ import { CourseModule } from 'src/modules/course/course.module';
     DeliveryFeeHelper,
     OrderEvent,
     OrderListenerService,
-    // Coupon rendu quand une course annulée ou une livraison échouée annule la commande.
+    // Coupon rendu quand une course annulée annule la commande (une livraison
+    // échouée ne l'annule plus depuis le 27/10).
     CouponRestitutionListener,
     // Points utilisés rendus sur ces mêmes annulations, plus un filet.
     PointsRestitutionListener,

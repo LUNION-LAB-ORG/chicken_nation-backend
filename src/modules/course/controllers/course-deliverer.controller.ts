@@ -173,12 +173,11 @@ export class CourseDelivererController {
   }
 
   @ApiOperation({
-    summary: 'Marquer une livraison en échec',
+    summary: 'Marquer une livraison en échec (appli déjà installée)',
     description:
-      'Seulement une livraison du livreur connecté encore à faire (PENDING, IN_ROUTE, ARRIVED), course ' +
-      'en livraison, comme démarrer, arrivé et confirmer : 403 « Cette livraison ne vous est pas ' +
-      'affectée » sinon, 400 si la course n\'est pas en livraison ou la livraison déjà terminée. ' +
-      'Rejeu (sa livraison déjà en échec : réponse perdue, double toucher) : rendue telle quelle.',
+      'Même service que `deliveries/:deliveryId/annuler` depuis le 27/10 : la livraison seule passe en ' +
+      'échec, la commande n\'est plus jamais annulée (elle reste en livraison). Mêmes refus, mêmes effets ' +
+      '(journal, ticket du livreur). Réponse inchangée : la livraison, sans le code du client.',
   })
   @ApiBody({ type: FailDeliveryDto })
   @Patch('deliveries/:deliveryId/fail')
@@ -187,7 +186,27 @@ export class CourseDelivererController {
     @Param('deliveryId', new ParseUUIDPipe()) deliveryId: string,
     @Body() dto: FailDeliveryDto,
   ) {
-    return this.deliveryService.failDelivery(deliveryId, deliverer.id, dto);
+    return this.deliveryService.annulerLivraison(deliveryId, deliverer.id, dto, 'fail');
+  }
+
+  @ApiOperation({
+    summary: 'Annuler la livraison de ce client, jamais la commande (feuille « Problème »)',
+    description:
+      'Corps de `/fail`. La livraison passe en échec (FAILED) avec son motif et sa note ; la commande reste ' +
+      'en livraison (PICKED_UP), payée ou non, rien n\'est remboursé ni rendu. La course se termine s\'il ne ' +
+      'reste rien à livrer, sinon la tournée continue. Un ticket du livreur (priorité haute, commande liée) ' +
+      'prévient le personnel. Refus : 404 livraison inconnue, 403 « Cette livraison ne vous est pas affectée », ' +
+      '400 course pas en livraison ou livraison terminée, 400 « Autre » sans note, 409 « Commande pas encore ' +
+      'remise. ». Rejeu (sa livraison déjà en échec) : rendue telle quelle, sans second ticket.',
+  })
+  @ApiBody({ type: FailDeliveryDto })
+  @Patch('deliveries/:deliveryId/annuler')
+  async annulerLivraison(
+    @CurrentDeliverer() deliverer: Deliverer,
+    @Param('deliveryId', new ParseUUIDPipe()) deliveryId: string,
+    @Body() dto: FailDeliveryDto,
+  ) {
+    return this.deliveryService.annulerLivraison(deliveryId, deliverer.id, dto, 'annuler');
   }
 
   @ApiOperation({

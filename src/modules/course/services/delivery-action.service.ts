@@ -29,7 +29,9 @@ import { ConfirmDeliveryDto } from '../dto/confirm-delivery.dto';
 import { FailDeliveryDto } from '../dto/fail-delivery.dto';
 import { RateCustomerDto } from '../dto/rate-customer.dto';
 import { CourseEvent } from '../events/course.event';
+import { LivraisonAnnuleeParLivreurPayload, OrigineAnnulationLivraison } from '../events/livraison-annulee.event';
 import { COURSE_FULL_INCLUDE } from '../helpers/course.includes';
+import { MESSAGE_DEPART_AVANT_RETRAIT } from '../helpers/depart.rules';
 import { DecisionPlusTard, MESSAGE_CLIENT_EN_COURS, reglePlusTard } from '../helpers/plus-tard.rules';
 import { DepartCourseService } from './depart-course.service';
 import { DispatchJournalService } from './dispatch-journal.service';
@@ -66,8 +68,20 @@ function refusLivraison(
   return null;
 }
 
-/** Commandes qu'un échec de livraison ne touche plus : terminée, collectée, déjà annulée. */
+/** Commandes que la remise ne réécrit plus : terminée, collectée, déjà annulée. */
 const COMMANDES_CLOSES: OrderStatus[] = [OrderStatus.COMPLETED, OrderStatus.COLLECTED, OrderStatus.CANCELLED];
+
+/**
+ * Commande pas encore remise au livreur (le sac est au comptoir, ajoutée
+ * après le retrait par exemple) : sa livraison ne peut pas être annulée par
+ * le livreur, 409 « Commande pas encore remise. ».
+ */
+const COMMANDE_PAS_REMISE: OrderStatus[] = [
+  OrderStatus.PENDING,
+  OrderStatus.ACCEPTED,
+  OrderStatus.IN_PROGRESS,
+  OrderStatus.READY,
+];
 
 /** Livraison commencée : en route vers son client, ou chez lui. */
 const LIVRAISON_COMMENCEE: DeliveryStatut[] = [DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED];
@@ -493,24 +507,46 @@ export class DeliveryActionService {
   }
 
   /**
-   * Échec de livraison (client absent, refus, etc.).
+   * « ANNULER » de la feuille « Problème » (demande du 27/10) : le livreur
+   * annule la LIVRAISON de ce client (absent, refus, adresse introuvable…),
+   * JAMAIS la commande. Une seule méthode pour la nouvelle route `/annuler`
+   * et pour `/fail`, celle de l'appli déjà installée (`origine`).
    *
-   * Seulement SA livraison encore à faire (en attente, en route, arrivé), dans
-   * sa course en livraison : les mêmes refus que démarrer, arrivé et
-   * confirmer. Avant le 25/10, seul le livreur était vérifié, par une lecture
-   * à part : il passait en échec une livraison déjà remise (commande payée et
-   * terminée annulée, points et coupon rendus), une livraison d'une course pas
-   * encore récupérée ou close, ou une livraison que le regroupement confiait
-   * au même instant à un autre livreur (commande de l'autre annulée).
+   * Avant le 27/10, `/fail` annulait aussi la commande (« cancelled_by
+   * deliverer »). Règle du client : une commande ne s'annule qu'à la main, par
+   * l'administration (remboursement ou bon, points et coupons rendus).
    *
-   * Écriture CONDITIONNÉE (livreur, course en livraison, livraison à faire) et
-   * d'un seul tenant avec la commande, qui n'est touchée que si elle n'est ni
-   * terminée, ni collectée, ni annulée : si la livraison change entre la
-   * lecture et l'écriture, rien n'est écrit et le refus dit pourquoi. Rejeu
-   * (réponse perdue, double toucher) : la livraison est rendue telle quelle,
-   * sans second événement.
+   * Refus, dans l'ordre (mêmes messages qu'avant) :
+   *  1. rejeu : sa livraison déjà en échec est rendue telle quelle (réponse
+   *     perdue, double toucher), sans événement, ticket ni journal ;
+   *  2. livraison inconnue (404), d'un autre livreur (403) ;
+   *  3. course pas en livraison, livraison pas à faire (400) ;
+   *  4. « Autre » sans note (400) ;
+   *  5. commande pas encore remise au livreur (409 « Commande pas encore
+   *     remise. »). Une commande déjà annulée par l'admin pendant la tournée
+   *     passe : le livreur doit pouvoir clore, la commande n'est pas réécrite.
+   *
+   * Écriture CONDITIONNÉE d'un seul tenant (livraison à faire, livreur de la
+   * course, course en livraison, commande remise) : la livraison seule passe
+   * en échec, avec son motif et sa note. AUCUNE écriture sur la commande : elle
+   * reste en livraison (le sac est chez le livreur), avec son heure de retrait
+   * et son drapeau « payée ». Aucun paiement écrit ; points et coupons ne sont
+   * rendus que pour une commande annulée (leurs relais ne bougent pas). Le
+   * planificateur ne la reprend jamais seul (elle a sa livraison), « Relancer
+   * la livraison » non plus (livraison en échec, pas annulée).
+   *
+   * Ensuite, seulement si l'écriture a eu lieu : `course:delivery:statut:changed`,
+   * fin de la course s'il ne reste rien à livrer (livreur remis dans la file),
+   * ligne LIVRAISON_ANNULEE au journal, et l'événement interne qui fait créer
+   * le ticket du livreur par le module support. Ni le journal ni le ticket ne
+   * font échouer le geste.
    */
-  async failDelivery(deliveryId: string, delivererId: string, dto: FailDeliveryDto) {
+  async annulerLivraison(
+    deliveryId: string,
+    delivererId: string,
+    dto: FailDeliveryDto,
+    origine: OrigineAnnulationLivraison,
+  ) {
     const deja = await this.prisma.delivery.findUnique({
       where: { id: deliveryId },
       select: { statut: true, course: { select: { deliverer_id: true } } },
@@ -526,6 +562,10 @@ export class DeliveryActionService {
       throw new BadRequestException('Une note est requise pour le motif OTHER');
     }
 
+    if (COMMANDE_PAS_REMISE.includes(delivery.order.status)) {
+      throw new ConflictException(MESSAGE_DEPART_AVANT_RETRAIT);
+    }
+
     const now = new Date();
     const issue = await this.prisma.$transaction(async (tx) => {
       const echouee = await tx.delivery.updateMany({
@@ -533,6 +573,7 @@ export class DeliveryActionService {
           id: deliveryId,
           statut: { in: LIVRAISON_A_FAIRE },
           course: { deliverer_id: delivererId, statut: CourseStatut.IN_DELIVERY },
+          order: { status: { notIn: COMMANDE_PAS_REMISE } },
         },
         data: {
           statut: DeliveryStatut.FAILED,
@@ -541,38 +582,76 @@ export class DeliveryActionService {
           failure_note: dto.note,
         },
       });
-      if (echouee.count !== 1) {
-        // Changée depuis la lecture (remise, confiée à un autre, course close).
-        const relue = await tx.delivery.findUnique({
-          where: { id: deliveryId },
-          select: { statut: true, course: { select: { deliverer_id: true, statut: true } } },
-        });
-        // Son « Problème » passé au même instant (double toucher) : rendue telle quelle.
-        if (relue?.statut === DeliveryStatut.FAILED && relue.course.deliverer_id === delivererId) return 'deja' as const;
-        throw (
-          refusLivraison(relue, delivererId, LIVRAISON_A_FAIRE) ??
-          new BadRequestException(messageStatutAttendu(LIVRAISON_A_FAIRE, relue!.statut))
-        );
-      }
-      // Order annulée avec traçabilité du motif (délivré au livreur), sauf si
-      // elle est déjà terminée, collectée ou annulée.
-      await tx.order.updateMany({
-        where: { id: delivery.order_id, status: { notIn: COMMANDES_CLOSES } },
-        data: {
-          status: OrderStatus.CANCELLED,
-          cancelled_at: now,
-          cancelled_by: 'deliverer',
-          cancelled_reason: dto.note ?? `Livraison échouée : ${dto.reason}`,
+      if (echouee.count === 1) return 'ecrite' as const;
+      // Changée depuis la lecture (remise, confiée à un autre, course close,
+      // commande rendue au comptoir) : rien n'est écrit, le refus dit pourquoi.
+      const relue = await tx.delivery.findUnique({
+        where: { id: deliveryId },
+        select: {
+          statut: true,
+          course: { select: { deliverer_id: true, statut: true } },
+          order: { select: { status: true } },
         },
       });
-      return 'ecrite' as const;
+      // Son « Annuler » passé au même instant (double toucher) : rendue telle quelle.
+      if (relue?.statut === DeliveryStatut.FAILED && relue.course.deliverer_id === delivererId) return 'deja' as const;
+      const refus = refusLivraison(relue, delivererId, LIVRAISON_A_FAIRE);
+      if (refus) throw refus;
+      if (relue && COMMANDE_PAS_REMISE.includes(relue.order.status)) {
+        throw new ConflictException(MESSAGE_DEPART_AVANT_RETRAIT);
+      }
+      throw new BadRequestException(messageStatutAttendu(LIVRAISON_A_FAIRE, relue!.statut));
     });
     const updated = await this.lireSansCode(deliveryId);
     if (issue === 'deja') return updated;
 
     await this.emitDeliveryStatut(updated, delivery.statut);
     await this.checkCourseCompletion(delivery.course_id);
+    await this.annoncerLivraisonAnnulee(
+      {
+        delivery_id: deliveryId,
+        order_id: delivery.order_id,
+        order_reference: delivery.order.reference,
+        course_id: delivery.course_id,
+        course_reference: delivery.course.reference,
+        restaurant_id: delivery.course.restaurant_id,
+        deliverer_id: delivererId,
+        reason: dto.reason,
+        note: dto.note?.trim() || null,
+        route: origine,
+      },
+    );
     return updated;
+  }
+
+  /**
+   * `/fail` de l'appli déjà installée : même service que « Annuler » (27/10),
+   * la livraison seule passe en échec, la commande n'est plus jamais annulée.
+   */
+  async failDelivery(deliveryId: string, delivererId: string, dto: FailDeliveryDto) {
+    return this.annulerLivraison(deliveryId, delivererId, dto, 'fail');
+  }
+
+  /** Après une livraison annulée par le livreur : journal, puis le ticket (module support). Jamais d'erreur. */
+  private async annoncerLivraisonAnnulee(p: LivraisonAnnuleeParLivreurPayload): Promise<void> {
+    // Le journal avale ses propres erreurs.
+    await this.journal?.ecrire({
+      type: 'LIVRAISON_ANNULEE',
+      motif: p.reason,
+      source: 'appli',
+      restaurant_id: p.restaurant_id,
+      course_id: p.course_id,
+      deliverer_id: p.deliverer_id,
+      order_id: p.order_id,
+      details: { route: p.route, note: p.note },
+    });
+    try {
+      this.courseEvent.livraisonAnnuleeParLivreur(p);
+    } catch (err) {
+      this.logger.error(
+        `Livraison ${p.order_reference} annulée, ticket non demandé : ${(err as Error)?.message ?? err}`,
+      );
+    }
   }
 
   /**

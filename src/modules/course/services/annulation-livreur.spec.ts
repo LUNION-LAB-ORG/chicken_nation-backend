@@ -266,6 +266,11 @@ describe('les autres routes d’action du livreur : la course, la livraison ou l
       'Cette livraison ne vous est pas affectée',
     ],
     [
+      'PATCH deliveries/:deliveryId/annuler',
+      (ctl, b, ids) => ctl.annulerLivraison(b, ids.livraison, { reason: 'CLIENT_ABSENT' } as never),
+      'Cette livraison ne vous est pas affectée',
+    ],
+    [
       'POST deliveries/:deliveryId/rate-customer',
       (ctl, b, ids) => ctl.rateCustomer(b, ids.livraison, { rating: 1 } as never),
       'Cette livraison ne vous est pas affectée',

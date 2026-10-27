@@ -12,6 +12,7 @@ import type {
   DeliveryStatutChangedPayload,
 } from '../interfaces/course-event.interface';
 import type { OffreExpireePayload } from '../services/offres-cloture.service';
+import { LIVRAISON_ANNULEE_PAR_LIVREUR, LivraisonAnnuleeParLivreurPayload } from './livraison-annulee.event';
 
 /**
  * Émetteur d'événements internes du module course (pattern OrderEvent).
@@ -52,6 +53,11 @@ export class CourseEvent {
 
   async courseCancelled(payload: CourseCancelledPayload) {
     this.eventEmitter.emit(CourseChannels.COURSE_CANCELLED, payload);
+  }
+
+  /** Livraison d'un client annulée par le livreur (commande intacte) : le module support crée le ticket. */
+  livraisonAnnuleeParLivreur(payload: LivraisonAnnuleeParLivreurPayload) {
+    this.eventEmitter.emit(LIVRAISON_ANNULEE_PAR_LIVREUR, payload);
   }
 
   /**

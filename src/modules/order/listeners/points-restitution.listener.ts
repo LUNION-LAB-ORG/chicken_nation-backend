@@ -25,7 +25,9 @@ const LOT_RATTRAPAGE = 50;
  * une commande en écrivant CANCELLED directement, sans cet événement : la
  * course annulée (livreur, administration, annulation automatique) et la
  * livraison échouée. Sans ce relais, une livraison payée avec des points puis
- * annulée en route coûtait ses points au client.
+ * annulée en route coûtait ses points au client. Depuis le 27/10, une
+ * livraison échouée n'annule plus la commande : son relais ne rend rien,
+ * sauf pour une commande déjà annulée à la main pendant la tournée.
  *
  * Même organisation que `CouponRestitutionListener`, qui rend les coupons de
  * ces mêmes annulations : un relais par événement, et un FILET toutes les

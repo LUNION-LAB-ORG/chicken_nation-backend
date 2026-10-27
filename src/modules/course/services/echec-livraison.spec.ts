@@ -13,9 +13,13 @@
  *
  * Règle : comme démarrer, arrivé et confirmer, seulement SA livraison encore à
  * faire (en attente, en route, arrivé) dans sa course en livraison ; écriture
- * conditionnée, d'un seul tenant avec la commande. Un rejeu (réponse perdue,
- * double toucher) rend la livraison telle quelle, sans second événement ; la
- * course ne passe terminée qu'une fois.
+ * conditionnée. Un rejeu (réponse perdue, double toucher) rend la livraison
+ * telle quelle, sans second événement ; la course ne passe terminée qu'une
+ * fois.
+ *
+ * Depuis le 27/10 (demande du client), « Problème » de l'appli installée
+ * annule la LIVRAISON, jamais la commande : elle reste en livraison
+ * (annulation-livraison.spec.ts pour « Annuler », la nouvelle route).
  *
  * Deux bancs : la route du livreur sur la base simulée du dispatch, puis les
  * VRAIS services sur la base simulée du planificateur
@@ -35,6 +39,7 @@ function monter(donnees: DonneesDispatch) {
   const courseEvent = {
     deliveryStatutChanged: jest.fn(async () => undefined),
     courseCompleted: jest.fn(async () => undefined),
+    livraisonAnnuleeParLivreur: jest.fn(),
   };
   const file = { onComplete: jest.fn(async () => undefined) };
   const push = { notifyCourseCompleted: jest.fn() };
@@ -67,7 +72,7 @@ const CLIENT_ABSENT = { reason: DeliveryFailureReason.CLIENT_ABSENT };
 
 describe('échec d’une livraison par le livreur (route)', () => {
   it.each([DeliveryStatut.PENDING, DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED])(
-    'A passe en échec SA livraison (%s) : échec, commande annulée avec le motif, course terminée, comme avant',
+    'A passe en échec SA livraison (%s) : échec, la commande reste en livraison, course terminée',
     async (statut) => {
       const a = livreur();
       const { course: c, commandes, livraisons } = courseAvecCommandes(
@@ -81,11 +86,13 @@ describe('échec d’une livraison par le livreur (route)', () => {
 
       expect(rendue).toMatchObject({ id: livraisons[0].id, statut: DeliveryStatut.FAILED });
       expect(livraisons[0]).toMatchObject({ statut: DeliveryStatut.FAILED, failure_reason: DeliveryFailureReason.CLIENT_ABSENT });
-      expect(commandes[0]).toMatchObject({
-        status: OrderStatus.CANCELLED,
-        cancelled_by: 'deliverer',
-        cancelled_reason: 'Livraison échouée : CLIENT_ABSENT',
-      });
+      // 27/10 : plus jamais d'annulation de la commande par le livreur.
+      expect(commandes[0]).toMatchObject({ status: OrderStatus.PICKED_UP, cancelled_at: null });
+      expect(commandes[0].cancelled_by).toBeUndefined();
+      expect(commandes[0].cancelled_reason).toBeUndefined();
+      expect(t.courseEvent.livraisonAnnuleeParLivreur).toHaveBeenCalledWith(
+        expect.objectContaining({ delivery_id: livraisons[0].id, order_id: commandes[0].id, route: 'fail' }),
+      );
       expect(t.courseEvent.deliveryStatutChanged).toHaveBeenCalledWith(
         expect.objectContaining({ previous_statut: statut, new_statut: DeliveryStatut.FAILED }),
       );
@@ -253,13 +260,14 @@ describe('sur le banc du planificateur', () => {
   });
 
   describe('« Problème » sur une livraison (failDelivery)', () => {
-    it('livraison arrivée : échec écrit, commande annulée par le livreur, un événement', async () => {
+    it('livraison arrivée : échec écrit, la commande reste en livraison et payée, un événement', async () => {
       const { d1, a, la, t } = enLivraison();
 
       const reponse = await t.actionsLivraison.failDelivery(la.id, d1.id, CLIENT_ABSENT_NOTE);
 
       expect(reponse).toMatchObject({ id: la.id, statut: DeliveryStatut.FAILED, failure_reason: DeliveryFailureReason.CLIENT_ABSENT });
-      expect(a).toMatchObject({ status: OrderStatus.CANCELLED, cancelled_by: 'deliverer', cancelled_reason: 'Client absent' });
+      expect(a).toMatchObject({ status: OrderStatus.PICKED_UP, cancelled_at: null, paied: true });
+      expect(a.cancelled_by).toBeUndefined();
       expect(t.emisSur(CourseChannels.DELIVERY_STATUT_CHANGED)).toEqual([
         expect.objectContaining({ previous_statut: DeliveryStatut.ARRIVED, new_statut: DeliveryStatut.FAILED }),
       ]);
@@ -368,10 +376,8 @@ describe('sur le banc du planificateur', () => {
       let appels = 0;
       t.base.prisma.delivery.findUnique.mockImplementation(async (...args: Parameters<typeof lire>) => {
         const lue = await lire(...args);
-        if (++appels === 2) {
-          la.statut = DeliveryStatut.FAILED;
-          a.status = OrderStatus.CANCELLED;
-        }
+        // « Problème » validé au même instant : la livraison seule (27/10).
+        if (++appels === 2) la.statut = DeliveryStatut.FAILED;
         return lue;
       });
 
@@ -379,7 +385,7 @@ describe('sur le banc du planificateur', () => {
         BadRequestException,
       );
       expect(la.statut).toBe(DeliveryStatut.FAILED);
-      expect(a.status).toBe(OrderStatus.CANCELLED);
+      expect(a.status).toBe(OrderStatus.PICKED_UP);
     });
   });
 });

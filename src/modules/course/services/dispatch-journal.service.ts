@@ -113,7 +113,13 @@ export type TypeEvenementDispatch =
    * tournée ; `details` : commande, statut_avant, rang_avant, rang_apres,
    * arrivee_avant, suivante.
    */
-  | 'LIVRAISON_REPORTEE';
+  | 'LIVRAISON_REPORTEE'
+  /**
+   * Livraison d'un client annulée par le livreur (27/10), commande intacte
+   * (toujours en livraison) ; `motif` = DeliveryFailureReason ; `details` :
+   * route (`annuler`, ou `fail` de l'appli déjà installée), note.
+   */
+  | 'LIVRAISON_ANNULEE';
 
 /** Qui a déclenché la décision (`livreur` : geste du livreur dans l'appli, « Plus tard »). */
 export type SourceDispatch = 'appli' | 'serveur' | 'admin' | 'caisse' | 'restaurant' | 'livreur';

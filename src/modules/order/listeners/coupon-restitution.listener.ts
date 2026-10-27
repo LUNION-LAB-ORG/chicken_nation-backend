@@ -32,7 +32,10 @@ const COURSE_ANNULEE_PAR: Record<string, string> = {
  *  - l'annulation d'une course (par le livreur, par l'administration, ou
  *    automatiquement quand la course reste bloquée) annule ses commandes
  *    encore en route ;
- *  - l'échec d'une livraison annule la commande livrée.
+ *  - l'échec d'une livraison annulait la commande livrée. Depuis le 27/10, il
+ *    ne l'annule plus (« Annuler » du livreur : la livraison, jamais la
+ *    commande) : ce relais ne rend plus rien, sauf pour une commande déjà
+ *    annulée à la main pendant la tournée (rendu idempotent).
  *
  * Le bon d'achat ou le code promo de ces commandes restait consommé (décision
  * du 25/09 : rendu à toute annulation). Les deux chemins émettent chacun un
