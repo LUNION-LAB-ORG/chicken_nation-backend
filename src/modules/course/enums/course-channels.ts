@@ -34,6 +34,14 @@ export enum CourseChannels {
   /** Rafraîchissement générique (backoffice) */
   COURSE_REFRESH = 'course:refresh',
 
+  /**
+   * « Sac rapporté » (28/10) : la caisse a reçu le sac d'une livraison que le
+   * livreur avait annulée. Socket seulement, vers `deliverer_{id}` (le premier
+   * livreur) : `{ order_id, reference }`. L'appli relit ses sacs, vibre et
+   * affiche « Sac rendu ».
+   */
+  SAC_RAPPORTE = 'deliverer:sac:rapporte',
+
   // ── Canaux CLIENT (app cliente — suivi de livraison temps réel) ──────────
   // Émis vers la room `customer_{id}` par DeliveryTrackingService. Noms courts
   // et orientés "client" (pas le préfixe `course:` interne du backoffice).

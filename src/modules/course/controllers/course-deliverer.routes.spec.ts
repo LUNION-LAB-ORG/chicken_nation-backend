@@ -36,6 +36,8 @@ it('les routes de l’appli restent : accepter, refuser, au restaurant, je pars,
       'deliveries/:deliveryId/fail',
       // « Annuler » de la feuille « Problème » (27/10) : la livraison, jamais la commande.
       'deliveries/:deliveryId/annuler',
+      // Rappel « Rapporte le sac » (28/10).
+      'me/sacs-a-rapporter',
     ]),
   );
 });

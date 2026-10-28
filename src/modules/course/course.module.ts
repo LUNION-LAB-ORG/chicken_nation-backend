@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AuthDelivererModule } from 'src/modules/auth-deliverer/auth-deliverer.module';
 import { DeliverersModule } from 'src/modules/deliverers/deliverers.module';
 import { MapsModule } from 'src/modules/maps/maps.module';
+import { OrderWebSocketService } from 'src/modules/order/websockets/order-websocket.service';
 import { TurboModule } from 'src/turbo/turbo.module';
 
 import { CourseAdminController } from './controllers/course-admin.controller';
@@ -39,6 +40,7 @@ import { GardeOffresService } from './services/garde-offres.service';
 import { InstantanePlanificationService } from './services/instantane-planification.service';
 import { LotsV2Service } from './services/lots-v2.service';
 import { OffreEnAttenteService } from './services/offre-en-attente.service';
+import { SacRapporteService } from './services/sac-rapporte.service';
 import { TableauLivraisonService } from './services/tableau-livraison.service';
 import { CourseBatchTask } from './tasks/course-batch.task';
 import { CoursePlanificateurTask } from './tasks/course-planificateur.task';
@@ -82,6 +84,10 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     DetachementCommandeService, // Commande à livrer passée à emporter ou sur place : retirée de sa course
     ArriveeAutoService, // Arrivées au restaurant et chez le client déduites des positions
     TableauLivraisonService, // Tableau de la livraison : chiffres par restaurant, alertes (gardé 10 s)
+    SacRapporteService, // « Sac rapporté » : commande d'une livraison annulée redevenue prête (28/10)
+    // Diffusion du statut d'une commande (« Sac rapporté »), même service que le module commande
+    // (sans état : il n'utilise que la passerelle) ; le module commande importe celui-ci.
+    OrderWebSocketService,
     // Events + WS
     CourseEvent,
     CourseWebSocketService,

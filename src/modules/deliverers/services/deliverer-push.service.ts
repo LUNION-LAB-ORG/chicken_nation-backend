@@ -19,6 +19,7 @@ export type DelivererPushType =
   | 'course_tout_pret' // Planificateur : plus rien à attendre, présente ton code
   | 'commande_remise' // Commande ajoutée remise avec le même code : tu peux partir
   | 'sac_oublie' // Parti du restaurant alors qu'un sac de la course y est encore noté
+  | 'sac_rendu' // La caisse a reçu le sac d'une livraison annulée (« Sac rapporté », 28/10)
   | 'course_completed' // Course terminée
   | 'course_cancelled' // Course annulée
   | 'auto_paused' // Auto-pause déclenchée
@@ -416,6 +417,22 @@ export class DelivererPushService {
       critical: true,
       channelId: 'offres_v1',
       sound: 'offre_course.wav',
+    });
+  }
+
+  /**
+   * « Sac rapporté » (28/10) : la caisse a reçu le sac d'une livraison que le
+   * livreur avait annulée ; son rappel « Rapporte le sac » s'arrête. Non
+   * critique, canal par défaut (pas la sonnerie des offres). `data.orderId`,
+   * `data.reference`.
+   */
+  notifySacRendu(input: { delivererId: string; orderId: string; reference: string }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'sac_rendu',
+      title: 'Sac rendu',
+      body: `${input.reference} · merci`,
+      data: { orderId: input.orderId, reference: input.reference },
     });
   }
 

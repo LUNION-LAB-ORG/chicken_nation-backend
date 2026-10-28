@@ -11,6 +11,7 @@ import { ConfirmerRecuperationDto } from '../dto/confirmer-recuperation.dto';
 import { QueryPickupCodeDto, ValidatePickupDto } from '../dto/validate-pickup.dto';
 import { CourseActionService } from '../services/course-action.service';
 import { CourseQueryService } from '../services/course-query.service';
+import { SacRapporteService } from '../services/sac-rapporte.service';
 
 /**
  * Endpoints dédiés au flow "Opérations" du backoffice :
@@ -42,7 +43,25 @@ export class CourseOperationsController {
   constructor(
     private readonly queryService: CourseQueryService,
     private readonly actionService: CourseActionService,
+    // « Sac rapporté » (28/10).
+    private readonly sacRapporteService?: SacRapporteService,
   ) {}
+
+  @ApiOperation({
+    summary: 'Sac rapporté : la commande dont le livreur a annulé la livraison redevient prête',
+    description:
+      'Corps vide. Commande à livrer en livraison, livraison en échec (« Annuler » du livreur), course non confiée à ' +
+      'Turbo : la commande repasse READY (claim atomique), la livraison annulée est copiée au journal (SAC_RAPPORTE) ' +
+      'puis supprimée, les frais de l\'ancienne course recalculés, dans une transaction. Le planificateur la reprend ' +
+      'au passage suivant dans une nouvelle course. Paiements, encaissements, points, coupons et ticket ne bougent pas. ' +
+      'Réponse : `{ order_id, reference, status, livreur, deja }`. Refus : 404 « Commande introuvable. », 403 « Cette ' +
+      'commande n\'est pas celle de votre restaurant. », 409 « Commande annulée. », 409 « Pas de sac à rapporter pour ' +
+      'cette commande. ». Rejeu : 200 avec `deja: true`, rien n\'est refait.',
+  })
+  @Post('commandes/:orderId/sac-rapporte')
+  async sacRapporte(@Req() req: Request, @Param('orderId', new ParseUUIDPipe()) orderId: string) {
+    return this.sacRapporteService!.sacRapporte(orderId, req.user as User);
+  }
 
   @ApiOperation({
     summary: "Récupère la course active (preview) correspondant à un code de retrait",

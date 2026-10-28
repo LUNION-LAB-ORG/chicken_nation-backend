@@ -75,6 +75,11 @@ export class CourseWebSocketService {
     this.appGateway.emitToRestaurant(payload.course.restaurant_id, CourseChannels.COURSE_STATUT_CHANGED, payload);
   }
 
+  /** « Sac rapporté » (28/10) : au premier livreur seulement, qui a gardé le sac. */
+  emitSacRapporte(delivererId: string, payload: { order_id: string; reference: string }) {
+    this.appGateway.emitToDeliverer(delivererId, CourseChannels.SAC_RAPPORTE, payload);
+  }
+
   emitDeliveryStatutChanged(payload: DeliveryStatutChangedPayload) {
     // Destinataires : backoffice + restaurant (le livreur s'en sert déjà via son action)
     this.appGateway.emitToBackoffice(CourseChannels.DELIVERY_STATUT_CHANGED, payload);

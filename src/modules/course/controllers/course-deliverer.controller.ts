@@ -16,6 +16,7 @@ import { CourseQueryService } from '../services/course-query.service';
 import { DeliveryActionService } from '../services/delivery-action.service';
 import { DepartCourseService } from '../services/depart-course.service';
 import { OffreEnAttenteService } from '../services/offre-en-attente.service';
+import { SacRapporteService } from '../services/sac-rapporte.service';
 
 /**
  * Endpoints livreur pour le module course.
@@ -41,6 +42,8 @@ export class CourseDelivererController {
     private readonly queryService: CourseQueryService,
     private readonly offreEnAttente: OffreEnAttenteService,
     private readonly depart: DepartCourseService,
+    // Rappel « Rapporte le sac » (28/10).
+    private readonly sacs?: SacRapporteService,
   ) {}
 
   // ============================================================
@@ -63,6 +66,18 @@ export class CourseDelivererController {
   @Get('me/offre')
   async getOffreEnAttente(@CurrentDeliverer() deliverer: Deliverer) {
     return this.offreEnAttente.pourLivreur(deliverer.id);
+  }
+
+  @ApiOperation({
+    summary: 'Sacs à rapporter au restaurant (rappel « Rapporte le sac »)',
+    description:
+      'Livraisons annulées par le livreur (« Annuler ») de ses courses depuis moins de 24 h, dont la commande est ' +
+      'toujours en livraison : `[{ order_id, reference, restaurant: { id, nom }, depuis }]`, les plus anciennes ' +
+      'd\'abord. Vide dès que la caisse a touché « Sac rapporté ».',
+  })
+  @Get('me/sacs-a-rapporter')
+  async sacsARapporter(@CurrentDeliverer() deliverer: Deliverer) {
+    return this.sacs!.sacsDuLivreur(deliverer.id);
   }
 
   @ApiOperation({ summary: 'Historique des courses du livreur (COMPLETED + CANCELLED + EXPIRED)' })

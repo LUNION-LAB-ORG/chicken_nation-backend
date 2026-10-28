@@ -49,6 +49,23 @@ describe('notifications du livreur', () => {
     }
   });
 
+  it('« Sac rendu » (28/10) : la caisse a reçu le sac, sans sonnerie des offres', async () => {
+    const { service, envois, attendre } = monter();
+    service.notifySacRendu({ delivererId: 'livreur-1', orderId: 'o1', reference: 'ORD-123' });
+    await attendre();
+    expect(envois).toEqual([
+      expect.objectContaining({
+        title: 'Sac rendu',
+        body: 'ORD-123 · merci',
+        priority: 'normal',
+        channelId: 'default',
+        sound: 'default',
+        data: { type: 'sac_rendu', orderId: 'o1', reference: 'ORD-123' },
+      }),
+    ]);
+    expect(`${envois[0].title} ${envois[0].body}`).not.toMatch(/—/);
+  });
+
   it('heure courte : « 9 h 05 »', () => {
     expect(heureCourteAbidjan(new Date('2026-10-23T09:05:00.000Z'))).toBe('9 h 05');
   });

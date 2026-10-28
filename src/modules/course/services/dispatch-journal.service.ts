@@ -119,7 +119,18 @@ export type TypeEvenementDispatch =
    * (toujours en livraison) ; `motif` = DeliveryFailureReason ; `details` :
    * route (`annuler`, ou `fail` de l'appli déjà installée), note.
    */
-  | 'LIVRAISON_ANNULEE';
+  | 'LIVRAISON_ANNULEE'
+  /**
+   * « Sac rapporté » (28/10) : la caisse (ou l'ADMIN) a reçu le sac d'une
+   * livraison annulée par le livreur ; la commande est redevenue prête et la
+   * livraison annulée supprimée. Ligne écrite dans la transaction du geste :
+   * c'est la copie de la livraison. `motif` = DeliveryFailureReason,
+   * `deliverer_id` = premier livreur, `course_id` = ancienne course ;
+   * `details` : commande, course_reference, failed_at, failure_note,
+   * in_route_at, arrived_at, sequence_order, customer_rating,
+   * customer_rating_note, lot, par { id, role }. Jamais le code du client.
+   */
+  | 'SAC_RAPPORTE';
 
 /** Qui a déclenché la décision (`livreur` : geste du livreur dans l'appli, « Plus tard »). */
 export type SourceDispatch = 'appli' | 'serveur' | 'admin' | 'caisse' | 'restaurant' | 'livreur';

@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
+import { OrderChannels } from 'src/modules/order/enums/order-channels';
+import type { OrderCreatedEvent } from 'src/modules/order/interfaces/order-event.interface';
+
 import { CourseChannels } from '../enums/course-channels';
 import { DemandePlanification, DispatchEvenements } from '../enums/dispatch-evenements';
 import type {
@@ -58,6 +61,15 @@ export class CourseEvent {
   /** Livraison d'un client annulée par le livreur (commande intacte) : le module support crée le ticket. */
   livraisonAnnuleeParLivreur(payload: LivraisonAnnuleeParLivreurPayload) {
     this.eventEmitter.emit(LIVRAISON_ANNULEE_PAR_LIVREUR, payload);
+  }
+
+  /**
+   * Statut d'une commande changé par le module course (« Sac rapporté », 28/10) :
+   * le même événement interne que `OrderService.updateStatus`, pour les mêmes
+   * effets (planificateur, regroupement v1, cloche du restaurant, CRM).
+   */
+  statutCommandeChange(payload: OrderCreatedEvent) {
+    this.eventEmitter.emit(OrderChannels.ORDER_STATUS_UPDATED, payload);
   }
 
   /**
