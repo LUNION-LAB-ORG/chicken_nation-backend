@@ -190,6 +190,7 @@ export class InstantanePlanificationService {
           parti_at: true,
           retenue_jusqua: true,
           commandes_attendues: true,
+          motif_regroupement: true,
           refusal_count: true,
           deliveries: {
             orderBy: { sequence_order: 'asc' },
@@ -304,6 +305,7 @@ export class InstantanePlanificationService {
         retenue_jusqua: k.retenue_jusqua,
         commandes_attendues: lireCommandesAttendues(k.commandes_attendues),
         attendues_ecrites: lireAttenduesEcrites(k.commandes_attendues),
+        motif_regroupement: k.motif_regroupement,
         offre: offre
           ? { id: offre.id, deliverer_id: offre.deliverer_id, expires_at: offre.expires_at, forcee: offre.forcee }
           : null,

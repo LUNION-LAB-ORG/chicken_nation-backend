@@ -16,19 +16,23 @@
  */
 import { createHash } from 'crypto';
 
+import { libelleDirection } from './direction.rules';
 import { cmd, crs, enPrep, instant } from './monde-planification.simulee-spec';
-import { clePaire, pairesARegrouper, PlanRestaurant, REGLAGES_PLANIFICATION_DEFAUT } from './planification.rules';
+import { clePaire, OptionsPlanification, pairesARegrouper, planifier, PlanRestaurant, REGLAGES_PLANIFICATION_DEFAUT } from './planification.rules';
 import * as regroupement from './regroupement-tournee.rules';
 
 import {
+  auComptoir,
   commande,
   creation,
   empreinte,
+  Geo,
   h,
   jouer,
   livreur,
   plus,
   refusDe,
+  reglagesScene,
   resume,
   SANS_SECOND_AVIS,
   Scene,
@@ -403,4 +407,38 @@ describe('T12. interrupteur coupé : le plan de main, à l’identique', () => {
       expect(sha(empreinte(jouer(s, SANS_SECOND_AVIS)))).toBe(EMPREINTES_MAIN[s.nom]);
     });
   }
+});
+
+/**
+ * Relecture du 28/10 : l'ordre d'une tournée groupée par le second avis,
+ * recalculé au passage suivant (meilleur ordre par la route, 27/10), garde
+ * la borne de 8 min qui protégeait la commande déjà prévue.
+ */
+describe('ordre d’une tournée groupée au passage suivant : la borne de 8 min tient', () => {
+  const t = h('12:15');
+  const auComptoirAvec = (quand: Date) => livreur(quand, 'l', { etat: { en_course: true } });
+
+  it.each([
+    ['R-A 3 000 m, R-B 2 000 m, A-B 3 000 m, B passée 11 h 45', 3000, 2000, 3000, '11:45'],
+    ['R-A 5 000 m, R-B 4 000 m, A-B 3 000 m, B passée 11 h 40', 5000, 4000, 3000, '11:40'],
+  ] as [string, number, number, number, string][])('%s', (_nom, dRA, dRB, dAB, passeeB) => {
+    const geo: Geo = { ...T1_ANGLE_DROIT, dRA, dRB, dAB };
+    const a = commande('a', geo, { prete: plus(t, -60), creee: h('11:30') });
+    const b = commande('b', geo, { prete: t, creee: h(passeeB) });
+    const o = (matrice: boolean): OptionsPlanification => ({
+      entreCandidats: new Map([[clePaire('a', 'b'), dAB]]),
+      ...(matrice ? { matrice: new Map([[clePaire('a', 'b'), dAB]]) } : {}),
+    });
+    // Passage 1 : B ajoutée, A (déjà en retard) gardée en tête par la borne.
+    const p1 = planifier(instant(t, { commandes: [b], courses: [auComptoir('k', t, [a])], livreurs: [auComptoirAvec(t)] }), reglagesScene('coupe'), o(false));
+    expect(resume(p1)).toEqual(['AJOUTER b -> k TOURNEE_ROUTE', 'ORDONNER k [a,b] AJOUT']);
+    // Passage 2, 10 s plus tard, la course écrite « tournée groupée plus rapide » : pas réordonnée.
+    const t2 = plus(t, 10);
+    const k2 = (motif: string | null) => auComptoir('k', t2, [a, b], { motif_regroupement: motif });
+    const passage2 = (motif: string | null) =>
+      resume(planifier(instant(t2, { courses: [k2(motif)], livreurs: [auComptoirAvec(t2)] }), reglagesScene('coupe'), o(true)));
+    expect(passage2(libelleDirection('TOURNEE_ROUTE'))).toEqual([]);
+    // Une course d'aujourd'hui (autre motif) : le meilleur ordre du 27/10, inchangé.
+    expect(passage2('même zone')).toEqual(['ORDONNER k [b,a] MEILLEUR_ORDRE']);
+  });
 });

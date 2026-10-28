@@ -622,6 +622,13 @@ export interface CoursePlanif {
   /** Commandes attendues par la retenue (identifiants). */
   commandes_attendues: string[];
   /**
+   * Motif du regroupement écrit sur la course (`Course.motif_regroupement`,
+   * libellé : « tournée groupée plus rapide »…). Une course groupée par le
+   * second avis garde sa borne de détour quand ses arrêts sont réordonnés
+   * (relecture du 28/10). Absent : pas lu (tests, monde simulé).
+   */
+  motif_regroupement?: string | null;
+  /**
    * Heures « prête vers » écrites avec ces commandes (27/10) : la retenue
    * est réécrite quand l'heure affichée change, même échéance et même liste.
    * Absent : pas comparé (tests, monde simulé).
@@ -2641,7 +2648,9 @@ function rangsAvecTrou(livraisons: readonly LivraisonPlanif[]): boolean {
  * après l'acceptation), a au moins 2 arrêts, tous en attente, et une matrice
  * complète. Écrit si le meilleur ordre gagne plus de 60 s sur un critère
  * (`nouvelOrdreUtile`), ou pour renuméroter de 1 à N une course dont une
- * commande a été retirée (l'ordre gardé). `null` sinon.
+ * commande a été retirée (l'ordre gardé). `null` sinon. Course groupée par
+ * le second avis (« tournée groupée plus rapide ») : jamais un ordre qui
+ * retarde une de ses commandes de plus du détour maximal (8 min).
  */
 function meilleurOrdreParLaRoute(ctx: Contexte, k: CourseTravail): ActionOrdonner | null {
   const source = k.source;
@@ -2655,9 +2664,20 @@ function meilleurOrdreParLaRoute(ctx: Contexte, k: CourseTravail): ActionOrdonne
   const meilleur = estimer(ctx, k.arrets, depart);
   if (!meilleur.parMatrice || !meilleur.cle) return null;
   const actuel = k.arrets.map((a) => a.id);
-  const cleActuelle = tourneeParLaRoute(route, actuel).cle;
+  const enPlace = tourneeParLaRoute(route, actuel);
+  const cleActuelle = enPlace.cle;
   const change = meilleur.ordre.some((id, i) => id !== actuel[i]);
-  const utile = change && nouvelOrdreUtile(cleActuelle, meilleur.cle);
+  // Course groupée par le second avis : son ordre a été choisi pour qu'aucune
+  // commande déjà prévue n'arrive plus de 8 min plus tard que si elle partait
+  // seule. Un nouvel ordre qui retarde une commande de plus que ce détour
+  // maximal la déferait (relecture du 28/10 : le passage suivant remettait
+  // devant la nouvelle commande, la plus ancienne arrivait 10 min plus tard).
+  const borne = source.motif_regroupement === LIBELLE_TOURNEE_ROUTE;
+  const nouvelle = borne && change ? tourneeParLaRoute(route, meilleur.ordre) : null;
+  const retarde =
+    !!nouvelle &&
+    actuel.some((id) => (nouvelle.arriveesMs.get(id) ?? 0) - (enPlace.arriveesMs.get(id) ?? 0) > ctx.r.detourMaxAjoutMin * 60_000);
+  const utile = change && !retarde && nouvelOrdreUtile(cleActuelle, meilleur.cle);
   if (!utile && !rangsAvecTrou(source.livraisons)) return null;
   return {
     type: 'ORDONNER',
@@ -2668,6 +2688,9 @@ function meilleurOrdreParLaRoute(ctx: Contexte, k: CourseTravail): ActionOrdonne
     gain_s: utile ? gainNouvelOrdreS(cleActuelle, meilleur.cle) : 0,
   };
 }
+
+/** `Course.motif_regroupement` d'une course groupée par le second avis (40 caractères au plus). */
+const LIBELLE_TOURNEE_ROUTE = libelleDirection('TOURNEE_ROUTE').slice(0, 40);
 
 /** Remplace l'ordre des arrêts par celui de l'estimation. */
 function reordonner(arrets: readonly Arret[], ordre: readonly string[]): Arret[] {
