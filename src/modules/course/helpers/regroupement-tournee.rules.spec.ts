@@ -51,7 +51,7 @@ function situation(
   E: ArretTournee[],
   N: ArretTournee[],
   entre: [string, string, number][],
-  o: { eAvecLivreur?: boolean; depart: string; departApres?: string; autreN?: string; autreE?: string },
+  o: { eAvecLivreur?: boolean; depart: string; departApres?: string; autreN?: string; autreE?: string; autreRevient?: boolean },
 ): SituationRegroupement {
   return {
     existants: E,
@@ -62,6 +62,8 @@ function situation(
     departApresMs: h(o.departApres ?? o.depart).getTime(),
     autrePourNMs: o.autreN ? h(o.autreN).getTime() : null,
     autrePourEMs: o.autreE ? h(o.autreE).getTime() : null,
+    autrePourNRevient: o.autreRevient,
+    autrePourERevient: o.autreRevient,
     vitesseKmh: (d) => vitesseKmh(new Date(d), REGLAGES_PLANIFICATION_DEFAUT),
   };
 }
@@ -334,9 +336,17 @@ describe('égalité et bornes', () => {
     expect([d.grouper, d.motif, d.separe.departSecond]).toEqual([true, 'TURBO_EVITE', 'TURBO']);
   });
 
-  it('à retard égal, un autre livreur la prendrait : groupé, LIVREUR_EPARGNE', () => {
+  it('à retard égal, un autre livreur qui revient d’une course la prendrait : groupé, LIVREUR_EPARGNE', () => {
+    const d = comparerPlans(
+      situation([A], [B], entre, { depart: '16:00', autreN: '16:05', autreE: '16:05', autreRevient: true }),
+      limites('coupe'),
+    );
+    expect([d.grouper, d.motif, d.separe.autreRevient]).toEqual([true, 'LIVREUR_EPARGNE', true]);
+  });
+
+  it('à retard égal, un autre livreur LIBRE maintenant la prendrait : séparé, EGAL (relecture du 28/10)', () => {
     const d = comparerPlans(situation([A], [B], entre, { depart: '16:00', autreN: '16:00', autreE: '16:00' }), limites('coupe'));
-    expect([d.grouper, d.motif]).toEqual([true, 'LIVREUR_EPARGNE']);
+    expect([d.grouper, d.motif, d.separe.departSecond, d.separe.autreRevient]).toEqual([false, 'EGAL', 'AUTRE_LIVREUR', false]);
   });
 
   it('à retard égal, le livreur revient 21 min plus tôt : groupé, LIVREUR_PLUS_TOT', () => {

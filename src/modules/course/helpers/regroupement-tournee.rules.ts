@@ -36,9 +36,10 @@
  *  4. autant ou plus : retards comparés critère par critère (au-delà des
  *     limites, puis des promesses), 60 s de tolérance : G meilleur, groupé
  *     (MEILLEUR) ; pire, séparé (PIRE) ; à égalité, groupé si S passe par
- *     Turbo (TURBO_EVITE) ou par un autre livreur (LIVREUR_EPARGNE), ou si
- *     le livreur revient au moins 5 min plus tôt (LIVREUR_PLUS_TOT), sinon
- *     séparé (EGAL).
+ *     Turbo (TURBO_EVITE) ou par un autre livreur qui REVIENT d'une course
+ *     (LIVREUR_EPARGNE ; un livreur disponible maintenant n'est épargné de
+ *     rien), ou si le livreur revient au moins 5 min plus tôt
+ *     (LIVREUR_PLUS_TOT), sinon séparé (EGAL).
  *
  * Arrivées : départ + mètres par la route cumulés / vitesse de l'heure du
  * départ + 3 min par client précédent (la formule de `estimer`). Aucun appel
@@ -115,8 +116,16 @@ export interface SituationRegroupement {
   departApresMs: number;
   /** Départ d'un AUTRE livreur que celui de E pour N (libre, ou de retour avant Turbo) ; `null` : aucun. */
   autrePourNMs: number | null;
+  /**
+   * Cet autre livreur REVIENT d'une course (retour estimé). Faux ou absent :
+   * il est disponible maintenant (libre, ou sollicité par la course de N) ;
+   * à retard égal, le groupe ne l'épargne alors de rien (relecture du 28/10).
+   */
+  autrePourNRevient?: boolean;
   /** Départ d'un autre livreur pour E quand N passerait d'abord (E sans livreur) ; `null` : aucun. */
   autrePourEMs: number | null;
+  /** Cet autre livreur pour E revient d'une course (voir `autrePourNRevient`). */
+  autrePourERevient?: boolean;
   /** Vitesse réglée à l'heure d'un départ (pointe ou non), km/h. */
   vitesseKmh: (departMs: number) => number;
 }
@@ -131,6 +140,8 @@ export interface PlanSepare {
   /** Départ du restaurant du véhicule qui porte chaque commande. */
   departsMs: Map<string, number>;
   departSecond: DepartSecond;
+  /** `AUTRE_LIVREUR` : cet autre livreur revient d'une course (sinon il est disponible maintenant). */
+  autreRevient: boolean;
   /** Retour au restaurant du livreur de la première partie (après la seconde s'il la prend aussi). */
   retourLivreurMs: number;
   /** Tournée de E seule, dans son meilleur ordre (secondes, restaurant → dernier client). */
@@ -245,7 +256,8 @@ const plusTot = (arrets: readonly ArretTournee[]) => Math.min(...arrets.map((a) 
 export function planSepare(s: SituationRegroupement, lim: LimitesRegroupement, premier: 'E' | 'N'): PlanSepare {
   const [P, Q] = premier === 'E' ? [s.existants, s.nouveaux] : [s.nouveaux, s.existants];
   const autre = premier === 'E' ? s.autrePourNMs : s.autrePourEMs;
-  const depart = premier === 'E' && s.eAvecLivreur ? s.departAvantMs : s.departApresMs;
+  const autreRevient = !!(premier === 'E' ? s.autrePourNRevient : s.autrePourERevient);
+  const depart =premier === 'E' && s.eAvecLivreur ? s.departAvantMs : s.departApresMs;
   const arriveesMs = new Map<string, number>();
   const departsMs = new Map<string, number>();
 
@@ -291,7 +303,7 @@ export function planSepare(s: SituationRegroupement, lim: LimitesRegroupement, p
     }
   }
   const dureeES = premier === 'E' ? t1.dureeS : meilleureTournee(s, lim, s.existants, d1).dureeS;
-  return { premier, arriveesMs, departsMs, departSecond, retourLivreurMs, dureeES };
+  return { premier, arriveesMs, departsMs, departSecond, autreRevient: departSecond === 'AUTRE_LIVREUR' && autreRevient, retourLivreurMs, dureeES };
 }
 
 /** Clé d'un plan : [retard au-delà des limites, au-delà des promesses], secondes. */
@@ -392,7 +404,12 @@ export function comparerPlans(s: SituationRegroupement, lim: LimitesRegroupement
     if (gain < -SEUIL_NOUVEL_ORDRE_S) return res(false, 'PIRE');
   }
   if (S.departSecond === 'TURBO') return res(true, 'TURBO_EVITE');
-  if (S.departSecond === 'AUTRE_LIVREUR') return res(true, 'LIVREUR_EPARGNE');
+  // Un autre livreur disponible MAINTENANT (libre, ou sollicité par la course
+  // de N) : le groupe ne l'épargne de rien, la seconde commande arriverait
+  // plus tard pendant qu'il attend au comptoir (relecture du 28/10 : deux
+  // livreurs libres, deux directions, une seule course). Seul un livreur qui
+  // REVIENT d'une course est épargné.
+  if (S.departSecond === 'AUTRE_LIVREUR' && S.autreRevient) return res(true, 'LIVREUR_EPARGNE');
   if (S.retourLivreurMs - retourGMs >= GAIN_RETOUR_LIVREUR_MIN * 60_000) return res(true, 'LIVREUR_PLUS_TOT');
   return res(false, 'EGAL');
 }
