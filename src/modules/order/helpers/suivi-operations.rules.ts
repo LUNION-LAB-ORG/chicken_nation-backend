@@ -28,8 +28,15 @@
  *    dernier signe de vie et le protocole lus pour les calculer sont retirés ;
  *  - `deliverer.appli_etat` (25/10) : ACTIVE, FERMEE (fermée par le livreur,
  *    prouvé par la fin de son socket) ou COUPURE (connexion coupée).
+ *
+ * Ajout du 28/10 (« Sac rapporté ») : `sac_a_rapporter { livreur, depuis,
+ * motif } | null` sur CHAQUE commande (règle `sacARapporterDe`). Rempli quand
+ * le livreur a annulé la livraison et garde le sac (commande en livraison,
+ * livraison en échec, course hors Turbo). Présent, même nul : serveur à
+ * jour ; absent : ancien serveur, les écrans cachent le geste.
  */
 import { enRetard, finTourneePrevue, retardMin } from 'src/modules/course/helpers/retard-tournee.rules';
+import { CommandeSacLue, sacARapporterDe } from 'src/modules/course/helpers/sac-rapporte.rules';
 import { attendSonSac, debutFenetreApresRetraitMs, PROLONGATION_REMISE_S } from 'src/modules/course/helpers/planification.rules';
 import {
   APPLI_FERMEE_APRES_S_DEFAUT,
@@ -294,21 +301,27 @@ export function livreursDesCommandes(commandes: readonly object[]): string[] {
   return [...ids];
 }
 
-/** Applique l'enrichissement à la course de chaque commande (commandes sans course inchangées). */
+/**
+ * Applique l'enrichissement à la course de chaque commande (commandes sans
+ * course inchangées), et `sac_a_rapporter` à chacune (28/10), lu sur la
+ * commande telle que lue.
+ */
 export function enrichirCommandesOperations<C extends object>(
   commandes: C[],
   p: { maintenant: Date; fenetreMaxS: number; departRayonM?: number } & ContexteTournee,
 ): C[] {
   const sacsAttendus = coursesQuiAttendentUnSac(commandes);
   return commandes.map((c) => {
+    const sac_a_rapporter = sacARapporterDe(c as CommandeSacLue);
     const livraison = livraisonDe(c);
-    if (!livraison || !livraison.course) return c;
+    if (!livraison || !livraison.course) return { ...c, sac_a_rapporter };
     const r = (c as { restaurant?: { latitude?: unknown; longitude?: unknown } | null }).restaurant;
     const restaurant =
       r && typeof r.latitude === 'number' && typeof r.longitude === 'number' ? { lat: r.latitude, lng: r.longitude } : null;
     return {
       ...c,
       delivery: { ...livraison, course: enrichirCourseOperations(livraison.course, { ...p, sacsAttendus, restaurant }) },
+      sac_a_rapporter,
     };
   });
 }

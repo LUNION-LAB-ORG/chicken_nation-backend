@@ -131,7 +131,8 @@ export class TableauLivraisonService {
               ajoutee_apres_retrait: true,
               failed_at: true,
               failure_reason: true,
-              order: { select: { reference: true, status: true, entity_status: true, delivery_service: true } },
+              // `id` : `commandes_ids` de l'alerte « a annulé » (« Sac rapporté », 28/10).
+              order: { select: { id: true, reference: true, status: true, entity_status: true, delivery_service: true } },
             },
           },
         },

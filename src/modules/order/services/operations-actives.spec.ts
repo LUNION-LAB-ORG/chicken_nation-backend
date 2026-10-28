@@ -123,7 +123,8 @@ describe('SuiviOperationsService.enrichir', () => {
     });
     expect(a.delivery.course).not.toHaveProperty('deliveries');
     expect(a.delivery.course.pickup_code).toBe('614');
-    expect(c).toEqual(liste()[2]);
+    // Sans livraison : inchangée, avec `sac_a_rapporter` nul (28/10).
+    expect(c).toEqual({ ...liste()[2], sac_a_rapporter: null });
   });
 
   it('écran Commandes (25/10) : « Appli fermée » seulement sur la fin du socket par l’appli, lue une fois pour la liste', async () => {

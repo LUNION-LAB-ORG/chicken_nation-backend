@@ -104,6 +104,12 @@ export interface SignalLivraison {
    * quand l'alerte porte une seule commande.
    */
   motif?: DeliveryFailureReason | null;
+  /**
+   * LIVRAISON_ANNULEE_PAR_LIVREUR seulement (« Sac rapporté », 28/10) :
+   * identifiants des commandes, même ordre que `commandes`. Le bouton « Sac
+   * rapporté » de « À traiter » s'en sert quand l'alerte porte une commande.
+   */
+  commandes_ids?: string[];
 }
 
 export interface LivreurDuTableau {
@@ -199,7 +205,8 @@ export interface CourseLue extends CourseTourneeLue {
     /** Livraison en échec : quand, et le motif du livreur (LIVRAISON_ANNULEE_PAR_LIVREUR). */
     failed_at?: DateLue;
     failure_reason?: DeliveryFailureReason | null;
-    order: { reference: string; status: OrderStatus; entity_status: EntityStatus; delivery_service?: DeliveryService };
+    /** `id` : identifiant de la commande (`commandes_ids` de LIVRAISON_ANNULEE_PAR_LIVREUR). */
+    order: { id?: string; reference: string; status: OrderStatus; entity_status: EntityStatus; delivery_service?: DeliveryService };
   }>;
 }
 
@@ -415,11 +422,14 @@ function signauxDesCourses(e: EntreeTableau, journee: JourneeDeService): SignalL
       }
     }
 
-    // « Annuler » du livreur (27/10) : aucun geste existant ne reprend la
-    // commande, l'alerte reste jusqu'à ce qu'elle quitte la livraison.
+    // « Annuler » du livreur (27/10) : l'alerte reste jusqu'à ce que la
+    // commande quitte la livraison (« Sac rapporté », 28/10 : elle redevient
+    // prête et sa livraison annulée est supprimée).
     const annulees = c.deliveries.filter((l) => livraisonAnnuleeParLivreur(l, journee));
     if (annulees.length > 0) {
       const premiere = new Date(Math.min(...annulees.map((l) => lireDate(l.failed_at)!.getTime())));
+      // Identifiants alignés sur les références, ou rien (lecture sans `id`).
+      const ids = annulees.map((l) => l.order.id).filter((id): id is string => !!id);
       signaux.push({
         ...base,
         cle: 'LIVRAISON_ANNULEE_PAR_LIVREUR',
@@ -428,6 +438,7 @@ function signauxDesCourses(e: EntreeTableau, journee: JourneeDeService): SignalL
         minutes: minutesDepuis(premiere, maintenant),
         livreur,
         commandes: references(annulees),
+        ...(ids.length === annulees.length ? { commandes_ids: ids } : {}),
         ...(annulees.length === 1 ? { motif: annulees[0].failure_reason ?? null } : {}),
       });
     }

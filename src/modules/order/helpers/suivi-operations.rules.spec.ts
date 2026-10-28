@@ -67,11 +67,11 @@ describe('écran Opérations : fin de la fenêtre d’ajout après le retrait', 
     ).toBeNull();
   });
 
-  it('liste : seules les commandes avec course changent', () => {
+  it('liste : seules les commandes avec course changent (et chacune reçoit `sac_a_rapporter`, 28/10)', () => {
     const sans = { id: 'o1', delivery: null };
     const avec = { id: 'o2', delivery: { id: 'l2', course: { statut: 'PENDING_ASSIGNMENT', offer_attempts: [] } } };
     const [a, b] = enrichirCommandesOperations([sans, avec], p);
-    expect(a).toBe(sans);
+    expect(a).toEqual({ ...sans, sac_a_rapporter: null });
     expect((b.delivery as any).course).toEqual({
       statut: 'PENDING_ASSIGNMENT',
       offre_en_cours: null,
@@ -334,5 +334,52 @@ describe('écran Opérations : lecture des réglages', () => {
     expect(lireAppliFermeeApresS('x')).toBe(180);
     expect(lireAppliFermeeApresS('0')).toBe(0);
     expect(lireAppliFermeeApresS('300')).toBe(300);
+  });
+});
+
+describe('écran Opérations : `sac_a_rapporter` (« Sac rapporté », 28/10)', () => {
+  const koffi = { id: 'liv-koffi', first_name: ' Koffi ', last_name: 'Yao', dernier_signal_at: null, protocole_appli: 4 };
+  /** Commande à livrer dont le livreur a annulé la livraison : le sac est chez lui. */
+  const annulee = (surcharge: Record<string, unknown> = {}, course: Record<string, unknown> = {}) => ({
+    id: 'o1',
+    status: 'PICKED_UP',
+    type: 'DELIVERY',
+    entity_status: 'ACTIVE',
+    delivery: {
+      id: 'l1',
+      statut: 'FAILED',
+      failed_at: new Date('2026-10-23T12:10:00.000Z'),
+      failure_reason: 'CLIENT_ABSENT',
+      course: { id: 'k', statut: 'COMPLETED', turbo_escalated_at: null, offer_attempts: [], deliveries: [], deliverer: koffi, ...course },
+    },
+    ...surcharge,
+  });
+  const champ = (c: object) => (enrichirCommandesOperations([c], p)[0] as any).sac_a_rapporter;
+
+  it('rempli : livreur (prénom, nom), depuis l’annulation, motif', () => {
+    expect(champ(annulee())).toEqual({
+      livreur: { id: 'liv-koffi', prenom: 'Koffi', nom: 'Yao' },
+      depuis: '2026-10-23T12:10:00.000Z',
+      motif: 'CLIENT_ABSENT',
+    });
+  });
+
+  it('présent sur CHAQUE commande, `null` sans sac : sans livraison, en route, commande annulée, course confiée à Turbo', () => {
+    expect(champ({ id: 'o2', status: 'READY', type: 'DELIVERY', delivery: null })).toBeNull();
+    expect(champ(annulee({}, {}))).not.toBeNull();
+    const enRoute = annulee();
+    enRoute.delivery.statut = 'IN_ROUTE';
+    expect(champ(enRoute)).toBeNull();
+    expect(champ(annulee({ status: 'CANCELLED' }))).toBeNull();
+    expect(champ(annulee({ status: 'READY' }))).toBeNull();
+    expect(champ(annulee({}, { turbo_escalated_at: '2026-10-23T12:00:00.000Z' }))).toBeNull();
+    const liste = enrichirCommandesOperations([{ id: 'a', delivery: null }, annulee({ id: 'b' })], p) as any[];
+    expect(liste.map((c) => 'sac_a_rapporter' in c)).toEqual([true, true]);
+  });
+
+  it('livreur sans prénom : `null` ; motif absent : `null`', () => {
+    const c = annulee({}, { deliverer: { id: 'liv-x', first_name: null, last_name: null } });
+    c.delivery.failure_reason = null as never;
+    expect(champ(c)).toEqual({ livreur: { id: 'liv-x', prenom: null, nom: null }, depuis: '2026-10-23T12:10:00.000Z', motif: null });
   });
 });

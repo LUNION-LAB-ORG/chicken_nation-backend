@@ -482,6 +482,26 @@ describe('LIVRAISON_ANNULEE_PAR_LIVREUR (« Annuler » du livreur, 27/10)', () =
     expect(liste[0]).not.toHaveProperty('motif');
   });
 
+  it('`commandes_ids` (« Sac rapporté », 28/10) : identifiants des commandes, même ordre que les références', () => {
+    const c = course({
+      statut: CourseStatut.COMPLETED,
+      deliverer: KOFFI,
+      deliveries: [annulee(5, {}, { reference: 'ORD-2', id: 'o-2' }), annulee(20, {}, { reference: 'ORD-1', id: 'o-1' })],
+    });
+    const [s] = signaux(tableau({ courses: [c] }), 'LIVRAISON_ANNULEE_PAR_LIVREUR');
+    expect(s).toMatchObject({ commandes: ['ORD-2', 'ORD-1'], commandes_ids: ['o-2', 'o-1'] });
+    const seule = course({ statut: CourseStatut.IN_DELIVERY, deliverer: KOFFI, deliveries: [annulee(5, {}, { reference: 'ORD-3', id: 'o-3' })] });
+    expect(signaux(tableau({ courses: [seule] }), 'LIVRAISON_ANNULEE_PAR_LIVREUR')[0]).toMatchObject({ commandes: ['ORD-3'], commandes_ids: ['o-3'] });
+  });
+
+  it('`commandes_ids` absent si un identifiant manque (jamais décalé des références) ; jamais sur les autres alertes', () => {
+    const c = course({ statut: CourseStatut.COMPLETED, deliverer: KOFFI, deliveries: [annulee(5, {}, { reference: 'ORD-1' })] });
+    const [s] = signaux(tableau({ courses: [c] }), 'LIVRAISON_ANNULEE_PAR_LIVREUR');
+    expect(s).not.toHaveProperty('commandes_ids');
+    const sansLivreur = course({ deliveries: [livraison({ order: { id: 'o-9' } })], created_at: ilYA(30) });
+    for (const autre of tableau({ courses: [sansLivreur] }).signaux) expect(autre).not.toHaveProperty('commandes_ids');
+  });
+
   it('absente : commande annulée par l’admin, terminée, supprimée ; ancienne livraison en échec à commande annulée', () => {
     const courses = [
       course({ statut: CourseStatut.COMPLETED, deliveries: [annulee(10, {}, { status: OrderStatus.CANCELLED })] }),
