@@ -3,9 +3,12 @@ import {
   ConflictException,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
+  Post,
   Query,
   Req,
   UseGuards,
@@ -27,6 +30,7 @@ import { CourseActionService } from '../services/course-action.service';
 import { CourseOfferService } from '../services/course-offer.service';
 import { CourseQueryService } from '../services/course-query.service';
 import { GardeOffresService } from '../services/garde-offres.service';
+import { RelanceLivraisonService } from '../services/relance-livraison.service';
 import { ROLES_ACTIONS_COURSES, ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
@@ -80,6 +84,8 @@ export class CourseAdminController {
     private readonly settings: CourseSettingsHelper,
     // Règle de l'appli fermée (demande du 24/10) : réglage lu pour le message.
     private readonly appliLivreur: AppliLivreurService,
+    // « Relancer la livraison » d'une livraison annulée par le livreur (28/10).
+    private readonly relanceLivraison?: RelanceLivraisonService,
   ) {}
 
   @ApiOperation({
@@ -210,6 +216,27 @@ export class CourseAdminController {
   async relancerCourseAnnulee(@Param('id', new ParseUUIDPipe()) id: string) {
     const r = await this.offerService.relancerCourseAnnulee(id);
     return { success: r.ok, message: r.message, newCourseId: r.newCourseId };
+  }
+
+  @ApiOperation({
+    summary: 'Relancer la livraison annulée par le livreur : elle lui revient, sans passage au restaurant',
+    description:
+      'Corps vide. Commande à livrer en livraison, livraison en échec (« Annuler » du livreur), course hors Turbo. ' +
+      'La même livraison (même code du client) est remise au même livreur : en fin de sa tournée s\'il est en ' +
+      'livraison (démarrée seulement si plus rien d\'autre n\'est à livrer), sinon dans une course neuve créée pour ' +
+      'lui, directement en livraison, livraison démarrée. Aucune offre, la commande n\'est jamais touchée (paiements, ' +
+      'encaissement, points, coupons, ticket). Réponse : `{ order_id, reference, course_id, course_reference, ' +
+      'nouvelle_course, rang, demarree, livreur: { id, prenom }, appli_connectee, deja }`. Refus : 404 « Commande ' +
+      'introuvable. », 409 « Commande annulée. », 409 « Sac déjà rapporté. », 409 « Aucune livraison annulée sur ' +
+      'cette commande. », 409 « Ce livreur va au restaurant pour une autre course : Sac rapporté à son arrivée. », ' +
+      '409 avec la raison si le livreur sans course est en pause, en pause automatique, hors service, injoignable, ou ' +
+      'inactif. Rejeu (double toucher) : 200 avec `deja: true`, rien n\'est refait.',
+  })
+  @Post('commandes/:orderId/relancer-livraison')
+  @HttpCode(HttpStatus.OK)
+  @UserRoles(...ROLES_ACTIONS_COURSES)
+  async relancerLivraisonCommande(@Req() req: Request, @Param('orderId', new ParseUUIDPipe()) orderId: string) {
+    return this.relanceLivraison!.relancer(orderId, req.user as User);
   }
 
   @ApiOperation({

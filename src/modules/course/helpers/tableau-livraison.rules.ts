@@ -106,8 +106,9 @@ export interface SignalLivraison {
   motif?: DeliveryFailureReason | null;
   /**
    * LIVRAISON_ANNULEE_PAR_LIVREUR seulement (« Sac rapporté », 28/10) :
-   * identifiants des commandes, même ordre que `commandes`. Le bouton « Sac
-   * rapporté » de « À traiter » s'en sert quand l'alerte porte une commande.
+   * identifiants des commandes, même ordre que `commandes`. Les boutons « Sac
+   * rapporté » et « Relancer la livraison » de « À traiter » s'en servent
+   * quand l'alerte porte une commande.
    */
   commandes_ids?: string[];
 }

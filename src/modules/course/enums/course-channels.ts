@@ -42,6 +42,15 @@ export enum CourseChannels {
    */
   SAC_RAPPORTE = 'deliverer:sac:rapporte',
 
+  /**
+   * « Relancer la livraison » (28/10) : le siège a remis au livreur la
+   * livraison qu'il avait annulée (même livreur, sans passage au restaurant).
+   * Socket seulement, vers `deliverer_{id}` : `{ order_id, delivery_id,
+   * reference, course_id, nouvelle_course, rang, demarree }`. L'appli relit sa
+   * course, retire le sac de son rappel, vibre et affiche « Livraison relancée ».
+   */
+  LIVRAISON_RELANCEE = 'deliverer:livraison:relancee',
+
   // ── Canaux CLIENT (app cliente — suivi de livraison temps réel) ──────────
   // Émis vers la room `customer_{id}` par DeliveryTrackingService. Noms courts
   // et orientés "client" (pas le préfixe `course:` interne du backoffice).

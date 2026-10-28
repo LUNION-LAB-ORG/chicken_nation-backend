@@ -19,7 +19,8 @@
  *    hors transaction ;
  *  - `deleteMany` est un DELETE ... WHERE ;
  *  - `course.create` crée aussi ses livraisons imbriquées (`deliveries.create`) ;
- *  - `dispatchEvenement.groupBy` (`by`, `where`, `_max`) regroupe le journal.
+ *  - `dispatchEvenement.groupBy` (`by`, `where`, `_max`) regroupe le journal ;
+ *  - `dispatchEvenement.findFirst` suit `orderBy` (à égalité, l'ordre d'écriture).
  *
  * Fichier de test seulement. Son nom finit par « -spec.ts » : exclu de la
  * construction sans être lancé comme une suite par jest.
@@ -393,7 +394,10 @@ export function monterBaseDispatch(donnees: DonneesDispatch = {}) {
         return { count: data.length };
       }),
       findFirst: jest.fn(async (args: Ligne = {}) => {
-        const ligne = journal.find((l) => evaluer(l, args.where));
+        const ligne = trier(
+          journal.filter((l) => evaluer(l, args.where)),
+          args.orderBy,
+        )[0];
         return ligne ? projeter(ligne, args) : null;
       }),
       groupBy: jest.fn(async (args: Ligne) => {

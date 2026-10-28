@@ -62,6 +62,21 @@ export interface DeliveryStatutChangedPayload {
   new_statut: DeliveryStatut;
 }
 
+/**
+ * `deliverer:livraison:relancee` (28/10) : la livraison annulée par le livreur
+ * lui est remise. `rang` : sa place dans la tournée (1 à N) ; `demarree` :
+ * déjà « en route » ; `nouvelle_course` : course créée pour elle.
+ */
+export interface LivraisonRelanceePayload {
+  order_id: string;
+  delivery_id: string;
+  reference: string;
+  course_id: string;
+  nouvelle_course: boolean;
+  rang: number;
+  demarree: boolean;
+}
+
 export interface CourseCompletedPayload {
   course: CourseWithDetails;
   success_count: number;

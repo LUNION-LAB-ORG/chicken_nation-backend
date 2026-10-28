@@ -11,6 +11,7 @@ import type {
   CourseOfferNewPayload,
   CourseStatutChangedPayload,
   DeliveryStatutChangedPayload,
+  LivraisonRelanceePayload,
 } from '../interfaces/course-event.interface';
 import type { OffreExpireePayload } from '../services/offres-cloture.service';
 
@@ -78,6 +79,11 @@ export class CourseWebSocketService {
   /** « Sac rapporté » (28/10) : au premier livreur seulement, qui a gardé le sac. */
   emitSacRapporte(delivererId: string, payload: { order_id: string; reference: string }) {
     this.appGateway.emitToDeliverer(delivererId, CourseChannels.SAC_RAPPORTE, payload);
+  }
+
+  /** « Relancer la livraison » (28/10) : au livreur qui reprend la livraison qu'il avait annulée. */
+  emitLivraisonRelancee(delivererId: string, payload: LivraisonRelanceePayload) {
+    this.appGateway.emitToDeliverer(delivererId, CourseChannels.LIVRAISON_RELANCEE, payload);
   }
 
   emitDeliveryStatutChanged(payload: DeliveryStatutChangedPayload) {

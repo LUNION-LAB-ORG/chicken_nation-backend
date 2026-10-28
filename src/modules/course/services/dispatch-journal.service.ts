@@ -130,7 +130,18 @@ export type TypeEvenementDispatch =
    * in_route_at, arrived_at, sequence_order, customer_rating,
    * customer_rating_note, lot, par { id, role }. Jamais le code du client.
    */
-  | 'SAC_RAPPORTE';
+  | 'SAC_RAPPORTE'
+  /**
+   * « Relancer la livraison » (28/10) : le siège (ADMIN, CALL_CENTER) a remis
+   * au même livreur la livraison qu'il avait annulée, commande intacte. Ligne
+   * écrite dans la transaction du geste. `motif` = ancien
+   * DeliveryFailureReason, `deliverer_id` = le livreur, `course_id` = ancienne
+   * course ; `details` : commande, course_avant, course_apres,
+   * nouvelle_course, rang, demarree, et ce que la relance efface (failed_at,
+   * failure_note, in_route_at, arrived_at, reportee_at, customer_rating,
+   * customer_rating_note), par { id, role }. Jamais le code du client.
+   */
+  | 'LIVRAISON_RELANCEE';
 
 /** Qui a déclenché la décision (`livreur` : geste du livreur dans l'appli, « Plus tard »). */
 export type SourceDispatch = 'appli' | 'serveur' | 'admin' | 'caisse' | 'restaurant' | 'livreur';

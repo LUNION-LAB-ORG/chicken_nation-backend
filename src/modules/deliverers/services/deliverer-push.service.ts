@@ -20,6 +20,7 @@ export type DelivererPushType =
   | 'commande_remise' // Commande ajoutée remise avec le même code : tu peux partir
   | 'sac_oublie' // Parti du restaurant alors qu'un sac de la course y est encore noté
   | 'sac_rendu' // La caisse a reçu le sac d'une livraison annulée (« Sac rapporté », 28/10)
+  | 'livraison_relancee' // Le siège t'a remis la livraison annulée : repars vers le client (28/10)
   | 'course_completed' // Course terminée
   | 'course_cancelled' // Course annulée
   | 'auto_paused' // Auto-pause déclenchée
@@ -436,6 +437,40 @@ export class DelivererPushService {
       title: 'Sac rendu',
       body: `${input.reference} · merci`,
       data: { orderId: input.orderId, reference: input.reference },
+    });
+  }
+
+  /**
+   * « Relancer la livraison » (28/10) : le siège remet au livreur la livraison
+   * qu'il avait annulée ; il repart vers le client sans passer au restaurant.
+   * Critique, canal et son des offres, comme « Commande ajoutée » : il doit
+   * repartir. Corps : la référence, et « en dernier » quand elle attend
+   * derrière d'autres clients. `data` : `courseId`, `orderId`, `deliveryId`,
+   * `reference`, `enDernier`.
+   */
+  notifyLivraisonRelancee(input: {
+    delivererId: string;
+    courseId: string;
+    orderId: string;
+    deliveryId: string;
+    reference: string;
+    enDernier: boolean;
+  }): void {
+    this.fireAndForget({
+      delivererId: input.delivererId,
+      type: 'livraison_relancee',
+      title: 'Livraison relancée',
+      body: input.enDernier ? `${input.reference} · en dernier` : input.reference,
+      data: {
+        courseId: input.courseId,
+        orderId: input.orderId,
+        deliveryId: input.deliveryId,
+        reference: input.reference,
+        enDernier: input.enDernier,
+      },
+      critical: true,
+      channelId: 'offres_v1',
+      sound: 'offre_course.wav',
     });
   }
 

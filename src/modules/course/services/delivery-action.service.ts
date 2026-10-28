@@ -533,7 +533,9 @@ export class DeliveryActionService {
    * et son drapeau « payée ». Aucun paiement écrit ; points et coupons ne sont
    * rendus que pour une commande annulée (leurs relais ne bougent pas). Le
    * planificateur ne la reprend jamais seul (elle a sa livraison), « Relancer
-   * la livraison » non plus (livraison en échec, pas annulée).
+   * la livraison » d'une course annulée non plus (livraison en échec, pas
+   * annulée). Le siège la rend au même livreur (« Relancer la livraison » de
+   * la commande, 28/10) ou la caisse reçoit le sac (« Sac rapporté »).
    *
    * Ensuite, seulement si l'écriture a eu lieu : `course:delivery:statut:changed`,
    * fin de la course s'il ne reste rien à livrer (livreur remis dans la file),

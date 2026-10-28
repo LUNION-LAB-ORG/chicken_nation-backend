@@ -6,7 +6,8 @@
  *   livreurs, Planning, bandeau des restaurants, À traiter, fiches), comme le
  *   suivi des livraisons.
  * - Il AGIT sur les courses (forcer, annuler, relancer, Turbo, reprendre en
- *   interne) et sur le planning de tous les restaurants, comme
+ *   interne, relancer la livraison annulée par le livreur, 28/10) et sur le
+ *   planning de tous les restaurants, comme
  *   l'administrateur (« oui le call center peut agir dans livraison »).
  * - La gestion des comptes livreurs et les réglages du planificateur restent
  *   à l'administrateur seul.
@@ -35,6 +36,7 @@ import { CourseActionService } from 'src/modules/course/services/course-action.s
 import { CourseOfferService } from 'src/modules/course/services/course-offer.service';
 import { CourseQueryService } from 'src/modules/course/services/course-query.service';
 import { GardeOffresService } from 'src/modules/course/services/garde-offres.service';
+import { RelanceLivraisonService } from 'src/modules/course/services/relance-livraison.service';
 import { TableauLivraisonService } from 'src/modules/course/services/tableau-livraison.service';
 import { DeliverersAdminController } from 'src/modules/deliverers/controllers/deliverers-admin.controller';
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
@@ -81,6 +83,7 @@ const GESTES_COURSES: Route[] = [
   ['PATCH', `/courses/${ID}/relancer`],
   ['PATCH', `/courses/${ID}/turbo`],
   ['PATCH', `/courses/${ID}/interne`],
+  ['POST', `/courses/commandes/${ID}/relancer-livraison`], // livraison annulée par le livreur (28/10)
 ];
 
 /**
@@ -129,8 +132,11 @@ const CORPS: Record<string, object> = {
   [`POST /schedule/plans/${ID}/regenerate`]: { periodStart: '2026-11-02' },
 };
 
-/** Statut d'un geste qui passe : 201 pour un POST, 200 sinon (aucun `@HttpCode` sur ces routes). */
-const succes = (verbe: Verbe) => (verbe === 'POST' ? 201 : 200);
+/** POST qui répondent 200 (`@HttpCode`) : « Relancer la livraison » (28/10). */
+const POST_EN_200 = new Set([`/courses/commandes/${ID}/relancer-livraison`]);
+
+/** Statut d'un geste qui passe : 201 pour un POST (sauf `POST_EN_200`), 200 sinon. */
+const succes = (verbe: Verbe, chemin = '') => (verbe === 'POST' && !POST_EN_200.has(chemin) ? 201 : 200);
 
 const CONTROLEURS = [CourseAdminController, DeliverersAdminController, ScheduleAdminController, LivraisonTableauController];
 
@@ -189,6 +195,7 @@ describe('module Livraison par HTTP : le call center lit tout et agit sur les co
       revenirEnInterne: jest.fn(async () => ({ ok: true, message: 'Course reprise en interne' })),
     },
     actions: { cancelCourse: jest.fn(async () => ({ id: ID })) },
+    relance: { relancer: jest.fn(async () => ({ order_id: ID, deja: false })) },
     gateway: { livreurConnecte: jest.fn(async () => true) },
     appliLivreur: { regleActivePour: jest.fn(async () => false) },
     planning: {
@@ -218,6 +225,7 @@ describe('module Livraison par HTTP : le call center lit tout et agit sur les co
         { provide: CourseActionService, useValue: gestes.actions },
         { provide: CourseOfferService, useValue: gestes.offres },
         { provide: GardeOffresService, useValue: gestes.garde },
+        { provide: RelanceLivraisonService, useValue: gestes.relance },
         { provide: AppGateway, useValue: gestes.gateway },
         { provide: CourseSettingsHelper, useValue: vide },
         { provide: AppliLivreurService, useValue: gestes.appliLivreur },
@@ -271,7 +279,10 @@ describe('module Livraison par HTTP : le call center lit tout et agit sur les co
       }
     }
     const gabarit = ([verbe, chemin]: Route) =>
-      `${verbe} ${chemin.replace(`/deliverers/${ID2}`, '/deliverers/:delivererId').replace(new RegExp(ID, 'g'), ':id')}`;
+      `${verbe} ${chemin
+        .replace(`/deliverers/${ID2}`, '/deliverers/:delivererId')
+        .replace(`/commandes/${ID}`, '/commandes/:orderId')
+        .replace(new RegExp(ID, 'g'), ':id')}`;
     const classees = TOUTES.map(gabarit);
     expect(new Set(classees).size).toBe(classees.length);
     expect([...declarees].sort()).toEqual([...classees].sort());
@@ -285,7 +296,7 @@ describe('module Livraison par HTTP : le call center lit tout et agit sur les co
 
     it.each(GESTES_CALL_CENTER)('%s %s : passe la garde et agit', async (verbe, chemin) => {
       const res = await appel(UserRole.CALL_CENTER, [verbe, chemin]);
-      expect([verbe, chemin, res.status]).toEqual([verbe, chemin, succes(verbe)]);
+      expect([verbe, chemin, res.status]).toEqual([verbe, chemin, succes(verbe, chemin)]);
     });
 
     it.each(ADMIN_SEUL)('%s %s : 403, reste à l’administrateur', async (verbe, chemin) => {
@@ -321,14 +332,14 @@ describe('module Livraison par HTTP : le call center lit tout et agit sur les co
     it('chaque geste est noté au journal d’audit à son nom, comme pour l’administrateur', async () => {
       for (const [verbe, chemin] of GESTES_CALL_CENTER.filter(([v]) => v !== 'GET')) {
         journal.record.mockClear();
-        await appel(UserRole.CALL_CENTER, [verbe, chemin]).expect(succes(verbe));
+        await appel(UserRole.CALL_CENTER, [verbe, chemin]).expect(succes(verbe, chemin));
         expect([verbe, chemin, journal.record.mock.calls.length]).toEqual([verbe, chemin, 1]);
         expect(journal.record.mock.calls[0][0]).toMatchObject({
           actor_id: `u-${UserRole.CALL_CENTER}`,
           actor_role: UserRole.CALL_CENTER,
           method: verbe,
           path: chemin,
-          status_code: succes(verbe),
+          status_code: succes(verbe, chemin),
         });
       }
     });
@@ -341,12 +352,19 @@ describe('module Livraison par HTTP : le call center lit tout et agit sur les co
       expect(gestes.offres.offerToDeliverer).toHaveBeenCalledWith(ID, ID2, false, true);
       expect(gestes.actions.cancelCourse).toHaveBeenCalledWith(ID, 'admin', { reason: 'Client injoignable' });
     });
+
+    it('« Relancer la livraison » arrive au service avec la commande et le compte, et répond 200', async () => {
+      gestes.relance.relancer.mockClear();
+      await appel(UserRole.CALL_CENTER, ['POST', `/courses/commandes/${ID}/relancer-livraison`]).expect(200);
+      expect(gestes.relance.relancer).toHaveBeenCalledWith(ID, expect.objectContaining({ role: UserRole.CALL_CENTER }));
+      await appel(UserRole.CALL_CENTER, ['POST', '/courses/commandes/pas-un-uuid/relancer-livraison']).expect(400);
+    });
   });
 
   describe('administrateur', () => {
     it.each(GESTES_CALL_CENTER)('%s %s : passe toujours', async (verbe, chemin) => {
       const res = await appel(UserRole.ADMIN, [verbe, chemin]);
-      expect([verbe, chemin, res.status]).toEqual([verbe, chemin, succes(verbe)]);
+      expect([verbe, chemin, res.status]).toEqual([verbe, chemin, succes(verbe, chemin)]);
     });
   });
 
@@ -369,7 +387,7 @@ describe('module Livraison par HTTP : le call center lit tout et agit sur les co
       expect(routesDuPlan.length).toBe(11);
       for (const [verbe, chemin] of routesDuPlan) {
         const sien = await appel(role, [verbe, chemin], { restaurant: RESTO_PLAN });
-        expect([verbe, chemin, sien.status]).toEqual([verbe, chemin, succes(verbe)]);
+        expect([verbe, chemin, sien.status]).toEqual([verbe, chemin, succes(verbe, chemin)]);
         const autre = await appel(role, [verbe, chemin], { restaurant: RESTO_AUTRE });
         expect([verbe, chemin, autre.status]).toEqual([verbe, chemin, 403]);
       }
