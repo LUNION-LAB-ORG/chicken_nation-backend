@@ -581,11 +581,14 @@ describe('limites dures d’un ajout (3.6)', () => {
     expect(refusDe(plan, 'q', 'k')).toEqual(['DIRECTION']);
   });
 
-  it('durée de tournée : restaurant → dernier client, arrêts compris', () => {
+  it('durée de tournée : restaurant → dernier client, arrêts compris ; au-delà, le groupe n’allonge pas le plus long trajet seul de plus du détour maximal', () => {
     const k = auComptoir([cmd('o', { est: 2000 })]);
-    // 10 min 30 + 3 min + 1 min 35 = 15 min 5 s
-    expect(refusDe(essai(k, cmd('q', { est: 2300 }), avec({ dureeTourneeMaxMin: 15 })), 'q', 'k')).toEqual(['DUREE_TOURNEE']);
-    expect(actionsDe(essai(k, cmd('q', { est: 2300 }), avec({ dureeTourneeMaxMin: 16 })), 'AJOUTER')).toHaveLength(1);
+    // 10 min 30 + 3 min + 1 min 35 = 15 min 5 s ; q seule : 12 min 5 s, allongée de 3 min.
+    const detour2 = { detourMaxAjoutMin: 2 };
+    expect(refusDe(essai(k, cmd('q', { est: 2300 }), avec({ dureeTourneeMaxMin: 15, ...detour2 })), 'q', 'k')).toEqual(['DUREE_TOURNEE']);
+    expect(actionsDe(essai(k, cmd('q', { est: 2300 }), avec({ dureeTourneeMaxMin: 16, ...detour2 })), 'AJOUTER')).toHaveLength(1);
+    // Détour maximal par défaut (8 min) : 3 min de plus que q seule, accepté au-delà des 15 min (essai du 28/10).
+    expect(actionsDe(essai(k, cmd('q', { est: 2300 }), avec({ dureeTourneeMaxMin: 15 })), 'AJOUTER')).toHaveLength(1);
   });
 
   it('détour imposé à une commande déjà prévue : au plus 8 min (ici 3 min : un arrêt de plus)', () => {

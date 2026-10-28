@@ -252,7 +252,11 @@ export interface ReglagesPlanification {
   retenueMemeSiLivreurLibre: boolean;
   /** `course.max_orders_per_course` : taille maximale d'une course (annulées non comptées). */
   maxCommandesParCourse: number;
-  /** `course.max_route_duration_min` : restaurant → dernier client, arrêts compris. */
+  /**
+   * `course.max_route_duration_min` : restaurant → dernier client, arrêts
+   * compris. Au-delà, un groupe passe encore s'il n'allonge le plus long
+   * trajet seul de ses commandes que de `detourMaxAjoutMin`.
+   */
   dureeTourneeMaxMin: number;
   /** `course.promesse_client_min` : délai promis depuis `created_at`. */
   promesseClientMin: number;
@@ -1834,7 +1838,9 @@ const minutesTexte = (ms: number) => `${Math.max(1, Math.round(ms / 60_000))} mi
  *    au comptoir plus de l'attente maximale à cause d'un regroupement quand
  *    un livreur libre pourrait partir plus tôt avec elle ;
  *  - DIRECTION : le groupe entier va dans la même direction ;
- *  - DUREE_TOURNEE : restaurant → dernier client, arrêts compris ;
+ *  - DUREE_TOURNEE : restaurant → dernier client, arrêts compris, au plus
+ *    la durée réglée, ou le plus long trajet seul des commandes + le détour
+ *    maximal (essai du 28/10 : la même adresse loin du restaurant) ;
  *  - DETOUR_AJOUT : aucune commande déjà prévue n'est retardée de plus du
  *    détour maximal par la tournée (attente au comptoir à part) ;
  *  - RETARD_CLIENT : aucune commande déjà prévue n'est poussée au-delà de
@@ -1886,6 +1892,31 @@ interface ParametresAjout {
   attendLivreur?: { retourMs: number | null } | null;
 }
 
+/**
+ * Ce que le groupe ajoute au plus long trajet SEUL de ses commandes, partant
+ * à la même heure (secondes). Essai du client du 28/10 : deux commandes à la
+ * même adresse à 11,1 km de Sococé partaient en deux courses, le trajet seul
+ * (30 min hors pointe, 42 min en pointe) dépassant déjà la durée de tournée
+ * réglée (25 min) qu'une commande seule ne connaît pas. Trajets seuls estimés
+ * sur la même base que le groupe : vol d'oiseau pour tous si une base
+ * diffère, jamais de mélange.
+ */
+function allongementTourneeS(
+  ctx: Contexte,
+  tous: readonly Arret[],
+  departMs: number,
+  groupe: EstimationGroupe,
+  opt: OptionsEstimation,
+): number {
+  let g = groupe;
+  let seuls = tous.map((a) => estimer(ctx, [a], departMs, opt));
+  if (seuls.some((s) => s.base !== g.base)) {
+    g = estimer(ctx, tous, departMs, { ...opt, volOiseau: true });
+    seuls = tous.map((a) => estimer(ctx, [a], departMs, { ...opt, volOiseau: true }));
+  }
+  return g.dureeS - Math.max(0, ...seuls.map((s) => s.dureeS));
+}
+
 function evaluerAjoutSelonOrdre(ctx: Contexte, p: ParametresAjout, geographique: boolean): ResultatAjout {
   const r = ctx.r;
   const opt: OptionsEstimation = { geographique };
@@ -1916,7 +1947,14 @@ function evaluerAjoutSelonOrdre(ctx: Contexte, p: ParametresAjout, geographique:
   if (!apres.valide) {
     return { ok: false, refus: 'DIRECTION', libelle: apres.verdict?.refus?.libelle || libelleDirection('DIRECTION_DIFFERENTE') };
   }
-  if (tous.length >= 2 && apres.dureeS > r.dureeTourneeMaxMin * 60) {
+  // Au-delà de la durée réglée, le groupe passe encore s'il n'allonge le plus
+  // long trajet seul que du détour maximal d'un ajout (8 min) : la même
+  // adresse ou le même trajet loin du restaurant part ensemble.
+  if (
+    tous.length >= 2 &&
+    apres.dureeS > r.dureeTourneeMaxMin * 60 &&
+    allongementTourneeS(ctx, tous, p.departApresMs, apres, opt) > r.detourMaxAjoutMin * 60
+  ) {
     return { ok: false, refus: 'DUREE_TOURNEE', libelle: `tournée de ${minutesTexte(apres.dureeS * 1000)}, trop longue` };
   }
 
