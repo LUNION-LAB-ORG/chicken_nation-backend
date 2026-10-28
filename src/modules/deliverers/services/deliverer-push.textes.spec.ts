@@ -49,7 +49,7 @@ describe('notifications du livreur', () => {
     }
   });
 
-  it('« Sac rendu » (28/10) : la caisse a reçu le sac, sans sonnerie des offres', async () => {
+  it('« Sac rendu » (28/10) : la caisse a reçu le sac ; non critique, son du système sur le canal par défaut, jamais la sonnerie des offres', async () => {
     const { service, envois, attendre } = monter();
     service.notifySacRendu({ delivererId: 'livreur-1', orderId: 'o1', reference: 'ORD-123' });
     await attendre();

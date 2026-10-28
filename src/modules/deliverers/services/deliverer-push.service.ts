@@ -423,7 +423,10 @@ export class DelivererPushService {
   /**
    * « Sac rapporté » (28/10) : la caisse a reçu le sac d'une livraison que le
    * livreur avait annulée ; son rappel « Rapporte le sac » s'arrête. Non
-   * critique, canal par défaut (pas la sonnerie des offres). `data.orderId`,
+   * critique : canal par défaut, son du système, comme « Course finie »,
+   * jamais la sonnerie des offres (choix du 28/10 : appli en arrière-plan, le
+   * livreur entend que la caisse a bien reçu le sac). Appli ouverte, l'appli
+   * la rend muette et cachée et joue sa propre vibration. `data.orderId`,
    * `data.reference`.
    */
   notifySacRendu(input: { delivererId: string; orderId: string; reference: string }): void {
