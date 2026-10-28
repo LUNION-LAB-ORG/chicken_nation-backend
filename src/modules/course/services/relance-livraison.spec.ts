@@ -268,6 +268,98 @@ function serialiser(t: Banc['t']) {
   });
 }
 
+/**
+ * En base, l'UPDATE d'une course tient sa ligne jusqu'à la fin de sa
+ * transaction : un autre UPDATE de la même ligne (dans une transaction ou
+ * seul) attend, puis s'applique sur la ligne validée, sa condition relue. Les
+ * lectures n'attendent jamais. `pendantVerrou` est appelé une fois, dès
+ * qu'une transaction tient la ligne ; `quelquUnAttend` se résout quand un
+ * autre UPDATE de cette ligne se met à attendre.
+ */
+function verrouLigneCourse(t: Banc['t'], courseId: string, pendantVerrou: () => Promise<void>) {
+  let tenue: { par: object; liberer: () => void; libre: Promise<void> } | null = null;
+  let arme = true;
+  let signalerAttente: () => void = () => undefined;
+  const quelquUnAttend = new Promise<void>((r) => (signalerAttente = r));
+  const concerne = (args: any) => args?.where?.id === courseId;
+  const attendre = async (par: object | null) => {
+    while (tenue && tenue.par !== par) {
+      signalerAttente();
+      await tenue.libre;
+    }
+  };
+
+  const transaction = t.base.prisma.$transaction.getMockImplementation()!;
+  t.base.prisma.$transaction.mockImplementation(async (arg: unknown) => {
+    if (typeof arg !== 'function') return transaction(arg);
+    const jeton = {};
+    try {
+      return await transaction(async (tx: any) => {
+        const updateMany = tx.course.updateMany;
+        const course = {
+          ...tx.course,
+          updateMany: jest.fn(async (args: any) => {
+            if (!concerne(args)) return updateMany(args);
+            await attendre(jeton);
+            const r = await updateMany(args);
+            // Aucune ligne touchée : aucun verrou tenu.
+            if (r.count > 0 && !tenue) {
+              let liberer!: () => void;
+              const libre = new Promise<void>((ok) => (liberer = ok));
+              tenue = { par: jeton, liberer, libre };
+              if (arme) {
+                arme = false;
+                await pendantVerrou();
+              }
+            }
+            return r;
+          }),
+        };
+        return (arg as (tx: unknown) => Promise<unknown>)({ ...tx, course });
+      });
+    } finally {
+      const fin = tenue as { par: object; liberer: () => void } | null;
+      if (fin?.par === jeton) {
+        tenue = null;
+        fin.liberer();
+      }
+    }
+  });
+  const seul = t.base.prisma.course.updateMany.getMockImplementation()!;
+  t.base.prisma.course.updateMany.mockImplementation(async (args: any) => {
+    if (concerne(args)) await attendre(null);
+    return seul(args);
+  });
+  return { quelquUnAttend };
+}
+
+/** En base, `@@unique([course_id, sequence_order])` : un rang déjà pris dans la course lève P2002. */
+function contrainteRangUnique(t: Banc['t']) {
+  const transaction = t.base.prisma.$transaction.getMockImplementation()!;
+  t.base.prisma.$transaction.mockImplementation((arg: unknown) => {
+    if (typeof arg !== 'function') return transaction(arg);
+    return transaction(async (tx: any) => {
+      const updateMany = tx.delivery.updateMany;
+      const verifiee = jest.fn(async (args: any) => {
+        const r = await updateMany(args);
+        const pris = new Set<string>();
+        for (const l of t.base.livraisons) {
+          const cle = `${l.course_id}|${l.sequence_order}`;
+          if (pris.has(cle)) {
+            throw Object.assign(new Error('Unique constraint failed on the fields: (`course_id`,`sequence_order`)'), {
+              code: 'P2002',
+              meta: { target: ['course_id', 'sequence_order'] },
+            });
+          }
+          pris.add(cle);
+        }
+        return r;
+      });
+      return (arg as (tx: unknown) => Promise<unknown>)({ ...tx, delivery: { ...tx.delivery, updateMany: verifiee } });
+    });
+  });
+}
+
 async function refus(promesse: Promise<unknown>) {
   try {
     await promesse;
@@ -859,6 +951,113 @@ describe('« Relancer la livraison » : la livraison annulée revient au même l
       expect(e.message).toBe("Cette course n'est plus disponible.");
       expect(k2.statut).toBe(CourseStatut.PENDING_ASSIGNMENT);
       expect(b.coursesActives()).toHaveLength(1);
+    });
+
+    describe('fin de course au même instant (le livreur finit son dernier autre client)', () => {
+      it.each([
+        ['valide le code de B', 'livree'],
+        ['annule aussi B', 'annulee'],
+      ] as const)(
+        'relance qui tient la course pendant que le livreur %s : la course continue, la relancée reste à livrer',
+        async (_geste, issueB) => {
+          const b = enTournee({ surchargeB: { paied: true } });
+          const { d1, a, k, la, lb, t, file, livraisons, relancer, annuler, pushLivreur } = b;
+          await annuler(la.id);
+          await livraisons.startDelivery(lb.id, d1.id);
+          await livraisons.markArrived(lb.id, d1.id);
+          file.onComplete.mockClear();
+          const finDeCourse = jest.spyOn(t.courseEvent, 'courseCompleted');
+          // Le geste du livreur arrive pendant la transaction de la relance,
+          // après le verrou de la course : il attend la ligne.
+          let geste: Promise<unknown> = Promise.resolve();
+          const verrou = verrouLigneCourse(t, k.id, async () => {
+            geste =
+              issueB === 'livree'
+                ? livraisons.confirmDelivery(lb.id, d1.id, { pin: '7733' } as never)
+                : annuler(lb.id, { reason: DeliveryFailureReason.CLIENT_REFUSED });
+            await Promise.race([verrou.quelquUnAttend, geste]);
+          });
+
+          const reponse = await relancer(a.id);
+          await geste;
+
+          expect(lb.statut).toBe(issueB === 'livree' ? DeliveryStatut.DELIVERED : DeliveryStatut.FAILED);
+          expect(reponse).toMatchObject({ course_id: k.id, nouvelle_course: false, demarree: true });
+          expect(la).toMatchObject({ course_id: k.id, statut: DeliveryStatut.IN_ROUTE });
+          // Jamais une livraison active dans une course terminée.
+          expect(k.statut).toBe(CourseStatut.IN_DELIVERY);
+          expect(k.completed_at ?? null).toBeNull();
+          expect(finDeCourse).not.toHaveBeenCalled();
+          expect(file.onComplete).not.toHaveBeenCalled();
+          expect(b.coursesActives()).toEqual([k]);
+          expect(pushLivreur.notifyLivraisonRelancee).toHaveBeenCalledTimes(1);
+
+          // Le livreur livre la relancée : la course se termine normalement.
+          await livraisons.markArrived(la.id, d1.id);
+          await livraisons.confirmDelivery(la.id, d1.id, { pin: '4821' } as never);
+          expect(k.statut).toBe(CourseStatut.COMPLETED);
+          expect(finDeCourse).toHaveBeenCalledTimes(1);
+          expect(file.onComplete).toHaveBeenCalledWith(d1.id);
+        },
+      );
+
+      it('fin de course d’abord (elle tient la course) : la relance attend, puis crée une course neuve', async () => {
+        const b = enTournee({ surchargeB: { paied: true } });
+        const { d1, a, k, la, lb, t, livraisons, relancer, annuler, neuve } = b;
+        await annuler(la.id);
+        await livraisons.startDelivery(lb.id, d1.id);
+        await livraisons.markArrived(lb.id, d1.id);
+        const pendant: { relance?: ReturnType<typeof relancer> } = {};
+        const verrou = verrouLigneCourse(t, k.id, async () => {
+          pendant.relance = relancer(a.id);
+          await Promise.race([verrou.quelquUnAttend, pendant.relance]);
+        });
+
+        await livraisons.confirmDelivery(lb.id, d1.id, { pin: '7733' } as never);
+        expect(pendant.relance).toBeDefined();
+        const reponse = await pendant.relance!;
+
+        expect(k.statut).toBe(CourseStatut.COMPLETED);
+        const n = neuve();
+        expect(reponse).toMatchObject({ course_id: n.id, nouvelle_course: true, rang: 1, demarree: true });
+        expect(la).toMatchObject({ course_id: n.id, statut: DeliveryStatut.IN_ROUTE });
+        expect(b.coursesActives()).toEqual([n]);
+        expect(t.journalDe('LIVRAISON_RELANCEE')).toHaveLength(1);
+      });
+    });
+
+    it('« Plus tard » renumérote la tournée juste avant l’écriture : rang provisoire libre, pas de 500', async () => {
+      const b = enTournee({ surchargeB: { paied: true } });
+      const { d1, a, k, la, lb, t, livraisons, relancer, annuler } = b;
+      // Troisième client C, en attente au rang 3.
+      const c = prete({ address: B, status: OrderStatus.PICKED_UP, picked_up_at: avant(600), paied: true, delivery_fee: 1000 });
+      const lc = livraison({ course_id: k.id, order_id: c.id, sequence_order: 3, delivery_pin: '1234', reportee_at: null });
+      t.base.commandes.push(c);
+      t.base.livraisons.push(lc);
+      // C annulée (en attente, encore au rang 3) ; A en route au rang 1, B en attente au rang 2.
+      await annuler(lc.id);
+      expect([la, lb, lc].map((l) => [l.sequence_order, l.statut])).toEqual([
+        [1, DeliveryStatut.IN_ROUTE],
+        [2, DeliveryStatut.PENDING],
+        [3, DeliveryStatut.FAILED],
+      ]);
+      contrainteRangUnique(t);
+      // Pendant la clôture des offres : « Plus tard » sur A, d'où C 1, B 2, A 3.
+      jest.spyOn(t.cloture, 'clorePourLivreur').mockImplementationOnce(async () => {
+        await livraisons.reporterLivraison(la.id, d1.id);
+        return [];
+      });
+
+      const reponse = await relancer(c.id);
+
+      expect(reponse).toMatchObject({ course_id: k.id, nouvelle_course: false, rang: 3, demarree: false, deja: false });
+      expect(t.livraisonsDe(k.id).map((l) => [l.id, l.sequence_order, l.statut])).toEqual([
+        [lb.id, 1, DeliveryStatut.IN_ROUTE],
+        [la.id, 2, DeliveryStatut.PENDING],
+        [lc.id, 3, DeliveryStatut.PENDING],
+      ]);
+      expect(a.status).toBe(OrderStatus.PICKED_UP);
+      expect(t.journalDe('LIVRAISON_RELANCEE')).toHaveLength(1);
     });
 
     it('acceptation puis relance : 409 (il va au restaurant), une seule course active', async () => {

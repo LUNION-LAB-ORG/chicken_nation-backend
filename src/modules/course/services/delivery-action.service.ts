@@ -86,6 +86,13 @@ const COMMANDE_PAS_REMISE: OrderStatus[] = [
 /** Livraison commencée : en route vers son client, ou chez lui. */
 const LIVRAISON_COMMENCEE: DeliveryStatut[] = [DeliveryStatut.IN_ROUTE, DeliveryStatut.ARRIVED];
 
+/** Livraison terminée : livrée, en échec ou annulée. */
+const LIVRAISON_TERMINEE: DeliveryStatut[] = [DeliveryStatut.DELIVERED, DeliveryStatut.FAILED, DeliveryStatut.CANCELLED];
+
+/** Plus rien à livrer dans la course : elle peut se terminer. */
+const toutesTerminees = (livraisons: readonly { statut: DeliveryStatut }[]) =>
+  livraisons.every((l) => LIVRAISON_TERMINEE.includes(l.statut));
+
 /** Ce que « Plus tard » relit de la course, sous son verrou. */
 const SELECT_PLUS_TARD = {
   id: true,
@@ -763,29 +770,45 @@ export class DeliveryActionService {
    * à emporter et que plus rien d'autre n'est à livrer
    * (`DetachementCommandeService`) : la course se termine comme après sa
    * dernière livraison.
+   *
+   * Course verrouillée AVANT la lecture qui décide (28/10) : « Relancer la
+   * livraison » du siège remet une livraison annulée dans cette course en
+   * tenant sa ligne jusqu'à la fin de sa transaction. Lue sans ce verrou, la
+   * fin de course voyait encore l'échec, attendait la ligne, puis terminait la
+   * course avec la livraison relancée dedans : plus personne pour la livrer.
+   * Sous le verrou, la lecture voit la livraison relancée et la course
+   * continue. Même verrou que le démarrage d'une livraison et « Plus tard ».
    */
   async checkCourseCompletion(courseId: string) {
-    const deliveries = await this.prisma.delivery.findMany({
+    // Tri sans verrou : il reste un client, sa propre fin refera ce passage.
+    const lues = await this.prisma.delivery.findMany({
       where: { course_id: courseId },
       select: { statut: true },
     });
-
-    const TERMINAL: DeliveryStatut[] = [
-      DeliveryStatut.DELIVERED,
-      DeliveryStatut.FAILED,
-      DeliveryStatut.CANCELLED,
-    ];
-    const allTerminal = deliveries.every((d) => TERMINAL.includes(d.statut));
-
-    if (!allTerminal) return;
+    if (!toutesTerminees(lues)) return;
 
     // Réservation : deux fins de livraison au même instant ne terminent la
     // course (événement, remise en file, notification) qu'une fois.
-    const { count } = await this.prisma.course.updateMany({
-      where: { id: courseId, statut: CourseStatut.IN_DELIVERY },
-      data: { statut: CourseStatut.COMPLETED, completed_at: new Date() },
+    const deliveries = await this.prisma.$transaction(async (tx) => {
+      const maintenant = new Date();
+      const tenue = await tx.course.updateMany({
+        where: { id: courseId, statut: CourseStatut.IN_DELIVERY },
+        data: { updated_at: maintenant },
+      });
+      if (tenue.count !== 1) return null;
+      // Relue sous le verrou : une relance validée entre-temps est vue ici.
+      const relues = await tx.delivery.findMany({
+        where: { course_id: courseId },
+        select: { statut: true },
+      });
+      if (!toutesTerminees(relues)) return null;
+      const { count } = await tx.course.updateMany({
+        where: { id: courseId, statut: CourseStatut.IN_DELIVERY },
+        data: { statut: CourseStatut.COMPLETED, completed_at: maintenant },
+      });
+      return count === 1 ? relues : null;
     });
-    if (count !== 1) return;
+    if (!deliveries) return;
     const completed = await this.prisma.course.findUniqueOrThrow({
       where: { id: courseId },
       include: COURSE_FULL_INCLUDE,

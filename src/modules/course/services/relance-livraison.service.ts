@@ -373,7 +373,9 @@ export class RelanceLivraisonService {
           let cibleId: string;
           if (enLivraison) {
             // Ligne de la course verrouillée (comme le démarrage d'une
-            // livraison et « Plus tard ») : jamais deux livraisons en route.
+            // livraison et « Plus tard ») : jamais deux livraisons en route,
+            // et la fin de course, qui prend ce verrou avant de relire les
+            // livraisons, voit la relancée (`checkCourseCompletion`).
             const verrou = await tx.course.updateMany({
               where: { id: enLivraison.id, deliverer_id: livreur.id, statut: CourseStatut.IN_DELIVERY },
               data: { updated_at: maintenant },
@@ -409,8 +411,11 @@ export class RelanceLivraisonService {
           const autres = cible.deliveries.filter((l) => l.id !== livraison.id);
           const demarree = aDemarrerApresRelance({ nouvelle, parti_at: cible.parti_at, autres });
           const deplacee = cible.id !== ancienne.id;
-          const maxCible = Math.max(0, ...cible.deliveries.map((l) => l.sequence_order));
-          const rangProvisoire = deplacee ? maxCible + 1 : livraison.sequence_order;
+          // Rang provisoire libre, pris dans la lecture sous le verrou : celui
+          // lu avant la transaction a pu être donné à une autre livraison
+          // (« Plus tard » renumérote la tournée), d'où la contrainte unique
+          // course + rang. La renumérotation qui suit remet les rangs de 1 à N.
+          const rangProvisoire = Math.max(0, ...cible.deliveries.map((l) => l.sequence_order)) + 1;
           const reprise = await tx.delivery.updateMany({
             where: {
               id: livraison.id,
