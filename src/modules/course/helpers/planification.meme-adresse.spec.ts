@@ -447,6 +447,18 @@ describe('plus loin sur la même route : l’ordre qui tient la promesse n’est
   });
 });
 
+describe('effet à connaître : la retenue « trajet long » atteint les courses lointaines', () => {
+  it('A déjà en retard à 11 km, B en cuisine annoncée 12, 15 ou 19 min plus tard : la course l’attend jusqu’à sa fin (20 min au plus, règle du 24/10)', () => {
+    for (const ecartMin of [12, 15, 19]) {
+      const plan = scene({ etatK: 'AU_COMPTOIR', ecartMin, bEnPreparation: true, aCreeeAvantMin: 25 });
+      const retenues = actionsDe(plan, 'RETENIR');
+      expect(retenues.map((r) => [r.motif, r.jusqua])).toEqual([['TRAJET_LONG', plus(h('16:00'), ecartMin * 60)]]);
+    }
+    // Au-delà de 20 min depuis que A est prête : pas d'attente.
+    expect(actionsDe(scene({ etatK: 'AU_COMPTOIR', ecartMin: 21, bEnPreparation: true }), 'RETENIR')).toEqual([]);
+  });
+});
+
 describe('les autres limites ne changent pas', () => {
   it('sens opposés à 11 km : deux courses (DIRECTION)', () => {
     const t = plus(h('16:00'), 5);
