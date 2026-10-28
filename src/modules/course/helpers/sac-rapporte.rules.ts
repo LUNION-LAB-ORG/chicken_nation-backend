@@ -113,6 +113,17 @@ export function assertCommandeDuRestaurant(user: ComptePersonnel | undefined, re
   }
 }
 
+/**
+ * Rejeu (double toucher, seconde caisse, réponse perdue) : la ligne
+ * SAC_RAPPORTE ne suffit pas, la commande doit être encore prête. Annulée,
+ * repartie avec un autre livreur ou livrée depuis, la caisse au bandeau
+ * périmé lisait « de nouveau prête » (relecture du 28/10) : c'est le refus
+ * qui répond, avec sa raison.
+ */
+export function rejeuSacRapporte(status: string | null | undefined): boolean {
+  return status === OrderStatus.READY;
+}
+
 /** Pas de sac à rapporter, et aucun geste déjà enregistré : 409, avec la raison. */
 export function refusSansSac(status: string | null | undefined): HttpException {
   return new ConflictException(status === OrderStatus.CANCELLED ? MESSAGE_COMMANDE_ANNULEE : MESSAGE_PAS_DE_SAC);

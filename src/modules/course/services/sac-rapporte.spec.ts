@@ -293,6 +293,55 @@ describe('« Sac rapporté » : la commande redevient prête et repart dans une 
     expect(pushLivreur.notifySacRendu).toHaveBeenCalledTimes(1);
   });
 
+  it('bandeau périmé (relecture du 28/10) : annulée depuis, 409 « Commande annulée. », jamais « deja »', async () => {
+    const { a, la, t, geste, annuler, passerelle, pushLivreur } = enTournee({ seulementA: true });
+    await annuler(la.id);
+    await geste(a.id);
+    // L'admin annule la commande à la demande du client ; une caisse sans socket montre encore le bandeau.
+    Object.assign(a, { status: OrderStatus.CANCELLED, cancelled_at: MAINTENANT, cancelled_by: 'admin' });
+    const emissions = t.emis.length;
+    const sockets = Object.values(passerelle).reduce((n, f) => n + f.mock.calls.length, 0);
+
+    const e = await refus(geste(a.id));
+
+    expect(e).toBeInstanceOf(ConflictException);
+    expect(e.message).toBe('Commande annulée.');
+    expect(a.status).toBe(OrderStatus.CANCELLED);
+    expect(t.journalDe('SAC_RAPPORTE')).toHaveLength(1);
+    expect(t.emis.length).toBe(emissions);
+    expect(Object.values(passerelle).reduce((n, f) => n + f.mock.calls.length, 0)).toBe(sockets);
+    expect(pushLivreur.notifySacRendu).toHaveBeenCalledTimes(1);
+  });
+
+  it('bandeau périmé : repartie avec un autre livreur, livrée, ou remise en préparation : 409 « Pas de sac à rapporter pour cette commande. »', async () => {
+    const { a, k, la, t, geste, annuler } = enTournee({ seulementA: true });
+    await annuler(la.id);
+    await geste(a.id);
+    await t.passer();
+    const neuve = t.coursesOuvertes().find((c) => c.id !== k.id)!;
+    const [seconde] = t.livraisonsDe(neuve.id);
+    expect(seconde).toMatchObject({ order_id: a.id, statut: DeliveryStatut.PENDING });
+
+    // Encore prête dans la course neuve : le sac est au restaurant, rejeu admis.
+    expect(await geste(a.id)).toMatchObject({ status: OrderStatus.READY, deja: true });
+
+    // Le second livreur part avec le sac.
+    Object.assign(a, { status: OrderStatus.PICKED_UP, picked_up_at: MAINTENANT });
+    seconde.statut = DeliveryStatut.IN_ROUTE;
+    const repartie = await refus(geste(a.id));
+    expect(repartie).toBeInstanceOf(ConflictException);
+    expect(repartie.message).toBe('Pas de sac à rapporter pour cette commande.');
+
+    for (const status of [OrderStatus.COMPLETED, OrderStatus.IN_PROGRESS]) {
+      a.status = status;
+      const e = await refus(geste(a.id));
+      expect(e).toBeInstanceOf(ConflictException);
+      expect(e.message).toBe('Pas de sac à rapporter pour cette commande.');
+    }
+    expect(t.journalDe('SAC_RAPPORTE')).toHaveLength(1);
+    expect(seconde.statut).toBe(DeliveryStatut.IN_ROUTE);
+  });
+
   describe('concurrence : un seul gagne', () => {
     it('double toucher (deux caisses au même instant) : une écriture, un « deja », un seul événement', async () => {
       const { a, la, t, geste, annuler, pushLivreur, socketsVers } = enTournee({ seulementA: true });

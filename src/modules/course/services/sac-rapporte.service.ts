@@ -19,6 +19,7 @@ import {
   MESSAGE_COMMANDE_INTROUVABLE,
   RAISON_SAC_RAPPORTE,
   refusSansSac,
+  rejeuSacRapporte,
   SACS_A_RAPPORTER_FENETRE_MS,
   sourceDuGeste,
 } from '../helpers/sac-rapporte.rules';
@@ -74,7 +75,10 @@ export interface ReponseSacRapporte {
   reference: string;
   status: OrderStatus;
   livreur: { id: string; prenom: string | null } | null;
-  /** `true` : geste déjà enregistré (double toucher, seconde caisse) ; rien n'est réécrit ni émis. */
+  /**
+   * `true` : geste déjà enregistré (double toucher, seconde caisse) et commande
+   * encore prête ; rien n'est réécrit ni émis. Toujours avec `status: READY`.
+   */
   deja: boolean;
 }
 
@@ -199,10 +203,12 @@ export class SacRapporteService {
   }
 
   /**
-   * Plus de sac à rapporter : geste déjà enregistré (200 « deja », rien n'est
-   * réécrit ni émis), sinon 409 avec la raison.
+   * Plus de sac à rapporter : geste déjà enregistré ET commande encore prête
+   * (200 « deja », rien n'est réécrit ni émis), sinon 409 avec la raison
+   * (annulée depuis, repartie avec un autre livreur, livrée).
    */
   private async sansSac(lue: CommandeSac): Promise<ReponseSacRapporte> {
+    if (!rejeuSacRapporte(lue.status)) throw refusSansSac(lue.status);
     const trace = await this.prisma.dispatchEvenement.findFirst({
       where: { type: 'SAC_RAPPORTE', order_id: lue.id },
       orderBy: { created_at: 'desc' },
