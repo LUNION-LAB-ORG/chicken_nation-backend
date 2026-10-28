@@ -107,6 +107,17 @@
  *     différé d'au plus 4 min quand un livreur interne revient au restaurant
  *     dans ce délai et que les promesses tiennent avec lui.
  *
+ * SECOND AVIS DU REGROUPEMENT (retour du client du 28/10,
+ * `regroupement-tournee.rules.ts`) : quand la direction, la durée de la
+ * tournée, le détour ou un retard refuse un groupe (ajout, création, deux
+ * fusions, retenue), la tournée groupée dans le meilleur ordre PAR LA ROUTE,
+ * même par un autre itinéraire plus long, est comparée aux livraisons
+ * séparées avec les livreurs vraiment disponibles (un seul livreur : la
+ * seconde attend son retour, ou part chez Turbo). Meilleure pour les
+ * clients, le groupe est accepté (motif `TOURNEE_ROUTE`). 3 commandes au
+ * plus, toutes les distances par la route connues (cache), départ connu ;
+ * sinon la règle d'aujourd'hui. Interrupteur `course.regroupement_tournee`.
+ *
  * Jamais d'ajout ni de fusion avec une course confiée à Turbo (ou Turbo
  * d'origine) ni avec la course d'un livreur en pause ; jamais d'offre à un
  * livreur qui ne peut pas la recevoir (`peutRecevoirOffre`) ; jamais de
@@ -135,6 +146,7 @@ import {
   FACTEUR_ROUTE_VOL_OISEAU,
   libelleDirection,
   lireReglagesDirection,
+  MEME_ADRESSE_M,
   ModeGroupe,
   MotifDirection,
   ordonnerArrets,
@@ -156,6 +168,16 @@ import {
   tourneeParLaRoute,
 } from './ordre-arrets.rules';
 import { EstimationPreparation } from './preparation.rules';
+import {
+  ArretTournee,
+  ARRETS_MAX_SECOND_AVIS,
+  ComparaisonRegroupement,
+  comparerPlans,
+  DecisionRegroupement,
+  LimitesRegroupement,
+  PAIRES_REGROUPEMENT_LUES_MAX,
+  resumeComparaison,
+} from './regroupement-tournee.rules';
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
 
@@ -302,6 +324,22 @@ export interface ReglagesPlanification {
   positionExpirationMin: number;
   /** `course.planificateur_tache_s` : cadence de la tâche du planificateur. */
   intervalleTacheS: number;
+  /**
+   * `course.regroupement_tournee` : second avis du regroupement (retour du
+   * client du 28/10). Quand la règle d'aujourd'hui refuse un groupe
+   * (direction, durée, détour, retard), la tournée groupée par la route est
+   * comparée aux livraisons séparées (regroupement-tournee.rules.ts). Non :
+   * la règle d'aujourd'hui, à l'identique.
+   */
+  regroupementTournee: boolean;
+  /** `course.regroupement_tournee_max_min` : plafond de la tournée groupée par ce chemin (restaurant → dernier client). */
+  regroupementTourneeMaxMin: number;
+  /** `course.regroupement_gain_min` : baisse du retard total exigée pour tenir une promesse de moins (0 = jamais). */
+  regroupementGainMin: number;
+  /** `course.regroupement_perte_max_min` : retard maximal qu'une commande à l'heure peut prendre à cause du groupe. */
+  regroupementPerteMaxMin: number;
+  /** `course.turbo_prise_en_charge_min` : délai supposé du coursier Turbo, pour la comparaison seulement. */
+  turboPriseEnChargeMin: number;
   /** Règle « même direction » (direction.rules.ts). */
   direction: ReglagesDirection;
 }
@@ -331,14 +369,19 @@ export const REGLAGES_PLANIFICATION_DEFAUT: Readonly<ReglagesPlanification> = Ob
   etaParDefautMin: 8,
   positionExpirationMin: 5,
   intervalleTacheS: 10,
+  regroupementTournee: true,
+  regroupementTourneeMaxMin: 50,
+  regroupementGainMin: 10,
+  regroupementPerteMaxMin: 20,
+  turboPriseEnChargeMin: 15,
   direction: REGLAGES_DIRECTION_DEFAUT,
 });
 
 type CleNombre = Exclude<
   keyof ReglagesPlanification,
-  'retenueMemeSiLivreurLibre' | 'ajoutApresRetrait' | 'turboActif' | 'direction'
+  'retenueMemeSiLivreurLibre' | 'ajoutApresRetrait' | 'turboActif' | 'regroupementTournee' | 'direction'
 >;
-type CleBooleen = 'retenueMemeSiLivreurLibre' | 'ajoutApresRetrait' | 'turboActif';
+type CleBooleen = 'retenueMemeSiLivreurLibre' | 'ajoutApresRetrait' | 'turboActif' | 'regroupementTournee';
 
 /** Clé du réglage, minimum (0 permis là où il a un sens), maximum, entier ou non. */
 const BORNES: Record<CleNombre, { cle: string; min: number; max: number; zero: boolean; entier?: boolean }> = {
@@ -363,12 +406,17 @@ const BORNES: Record<CleNombre, { cle: string; min: number; max: number; zero: b
   etaParDefautMin: { cle: 'deliverer.eta_par_defaut_min', min: 1, max: 120, zero: false },
   positionExpirationMin: { cle: 'deliverer.gps_expiration_minutes', min: 1, max: 240, zero: false },
   intervalleTacheS: { cle: 'course.planificateur_tache_s', min: 5, max: 300, zero: false, entier: true },
+  regroupementTourneeMaxMin: { cle: 'course.regroupement_tournee_max_min', min: 10, max: 120, zero: false },
+  regroupementGainMin: { cle: 'course.regroupement_gain_min', min: 0, max: 60, zero: true },
+  regroupementPerteMaxMin: { cle: 'course.regroupement_perte_max_min', min: 0, max: 60, zero: true },
+  turboPriseEnChargeMin: { cle: 'course.turbo_prise_en_charge_min', min: 0, max: 90, zero: true },
 };
 
 const CLES_BOOLEENS: Record<CleBooleen, string> = {
   retenueMemeSiLivreurLibre: 'course.retenue_meme_si_livreur_libre',
   ajoutApresRetrait: 'course.ajout_apres_retrait',
   turboActif: 'course.turbo_fallback_enabled',
+  regroupementTournee: 'course.regroupement_tournee',
 };
 
 /** Toutes les clés lues par `lireReglagesPlanification` (direction comprise), pour un seul `getMany`. */
@@ -651,6 +699,13 @@ export interface OptionsPlanification {
    * distance absente : le calcul d'aujourd'hui pour toute la tournée.
    */
   matrice?: DistancesEntreClients;
+  /**
+   * Distances PAR LA ROUTE entre deux commandes à regrouper (mètres, clé
+   * `clePaire`), lues dans le même cache par le service
+   * (`pairesARegrouper`), jamais attendues de Google. Seul le second avis du
+   * regroupement les lit : la règle d'aujourd'hui ne voit rien de nouveau.
+   */
+  entreCandidats?: DistancesEntreClients;
 }
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
@@ -925,6 +980,17 @@ export interface RefusPlanification {
   course_cle: string;
   refus: MotifRefusPlanification;
   libelle: string;
+  /**
+   * Création : commande graine du groupe essayé. Le journal dédoublonne sur
+   * elle, la clé `nouvelle-N` changeant d'un passage à l'autre.
+   */
+  graine_id?: string;
+  /**
+   * Second avis du regroupement mené et refusé : la comparaison des deux
+   * plans (décision, retards en minutes, départ de la seconde partie), pour
+   * le journal. Le motif du refus reste celui de la règle d'aujourd'hui.
+   */
+  comparaison?: ComparaisonRegroupement;
 }
 
 export interface PlanRestaurant {
@@ -1431,6 +1497,68 @@ export function pairesAOrdonner(instantane: InstantanePlanification): [ClientDir
   return paires;
 }
 
+/**
+ * Paires de commandes dont la distance PAR LA ROUTE sert au second avis du
+ * regroupement (retour du client du 28/10, `regroupement-tournee.rules.ts`).
+ * Parmi `pairesAEvaluer` (prêtes, en cuisine dans la fenêtre de la retenue,
+ * courses sans livreur, commandes des courses ouvertes), celles :
+ *  - dont les deux clients ont des coordonnées et une distance par la route
+ *    depuis le restaurant ;
+ *  - qui ne sont pas dans une même course (`pairesAOrdonner` les lit) ;
+ *  - à plus de 150 m l'une de l'autre (sinon même adresse : 0 m, rien à lire) ;
+ *  - que la direction ne juge pas compatibles (une paire compatible se
+ *    groupe aujourd'hui, et sa distance arrive par `pairesAOrdonner`) ;
+ *  - dont la tournée n'est pas perdue d'avance : la route étant au moins
+ *    le vol d'oiseau, (plus courte distance depuis le restaurant + vol
+ *    d'oiseau entre elles) à la vitesse la plus haute, plus 3 min, tient
+ *    sous le plafond de la tournée groupée (ce filtre ne décide rien, il
+ *    évite des appels).
+ * La plus ancienne commande prête d'abord, puis la fin de préparation la
+ * plus proche ; 60 paires au plus. Chaque paire va du client le plus proche
+ * du restaurant vers le plus lointain (sens de l'appel à Google s'il faut la
+ * demander). Le service les lit dans le cache, et demande les manquantes
+ * sans les attendre. Interrupteur coupé : aucune.
+ */
+export function pairesARegrouper(
+  instantane: InstantanePlanification,
+  verdicts: ReadonlyMap<string, VerdictPaire>,
+  r: ReglagesPlanification = REGLAGES_PLANIFICATION_DEFAUT,
+): [ClientDirection, ClientDirection][] {
+  const R = instantane.restaurant.position;
+  if (!r.regroupementTournee || !R) return [];
+  const pretAt = new Map<string, number>();
+  const courseDe = new Map<string, string>();
+  const heure = (c: CommandePlanif) => c.ready_at?.getTime() ?? c.preparation?.finDecision.getTime() ?? Number.POSITIVE_INFINITY;
+  for (const c of instantane.commandes) pretAt.set(c.id, heure(c));
+  for (const k of instantane.courses) {
+    for (const l of k.livraisons) {
+      pretAt.set(l.commande.id, heure(l.commande));
+      courseDe.set(l.commande.id, k.id);
+    }
+  }
+  const mps = Math.max(r.vitesseMoyenneKmh, r.vitessePointeKmh) / 3.6;
+  const aSaRoute = (c: ClientDirection) => typeof c.routeMetres === 'number' && Number.isFinite(c.routeMetres) && c.routeMetres > 0;
+
+  const retenues: { paire: [ClientDirection, ClientDirection]; cle: number[] }[] = [];
+  for (const [a, b] of pairesAEvaluer(instantane, r)) {
+    if (!a.position || !b.position || !aSaRoute(a) || !aSaRoute(b)) continue;
+    const ka = courseDe.get(a.id);
+    if (ka !== undefined && ka === courseDe.get(b.id)) continue;
+    const vol = haversineMeters(a.position, b.position);
+    if (vol <= MEME_ADRESSE_M) continue;
+    const v = verdicts.get(clePaire(a.id, b.id)) ?? (evaluerPaire(R, a, b, r.direction, null) as VerdictPaire);
+    if (v.compatible) continue;
+    if ((Math.min(a.routeMetres!, b.routeMetres!) + vol) / mps + ARRET_CLIENT_S > r.regroupementTourneeMaxMin * 60) continue;
+    const [ta, tb] = [pretAt.get(a.id) ?? Number.POSITIVE_INFINITY, pretAt.get(b.id) ?? Number.POSITIVE_INFINITY];
+    const paire: [ClientDirection, ClientDirection] = a.routeMetres! <= b.routeMetres! ? [a, b] : [b, a];
+    retenues.push({ paire, cle: [Math.min(ta, tb), Math.max(ta, tb)] });
+  }
+  return retenues
+    .sort((x, y) => comparerCles(x.cle, y.cle) || (clePaire(x.paire[0].id, x.paire[1].id) < clePaire(y.paire[0].id, y.paire[1].id) ? -1 : 1))
+    .slice(0, PAIRES_REGROUPEMENT_LUES_MAX)
+    .map((x) => x.paire);
+}
+
 // ─── Moteur ──────────────────────────────────────────────────────────────────
 
 /** Une commande dans une tournée en cours de calcul. */
@@ -1494,7 +1622,7 @@ interface EstimationGroupe {
 
 type ResultatAjout =
   | { ok: true; estimation: EstimationGroupe; detourS: number; motif: MotifDirection | null; libelle: string }
-  | { ok: false; refus: MotifRefusPlanification; libelle: string };
+  | { ok: false; refus: MotifRefusPlanification; libelle: string; comparaison?: ComparaisonRegroupement };
 
 interface Contexte {
   instantane: InstantanePlanification;
@@ -1511,6 +1639,8 @@ interface Contexte {
   verdictDe: (a: ClientDirection, b: ClientDirection) => VerdictPaire;
   /** Distances par la route entre clients (`OptionsPlanification.matrice`), ou `null`. */
   matrice: DistancesEntreClients | null;
+  /** Distances par la route entre commandes à regrouper (`OptionsPlanification.entreCandidats`) : second avis seulement. */
+  entreCandidats: DistancesEntreClients | null;
   /** Retours estimés des livreurs en course, du plus proche au plus lointain (calculés une fois par passage). */
   retours?: RetourLivreur[];
 }
@@ -1553,6 +1683,7 @@ function creerContexte(inst: InstantanePlanification, r: ReglagesPlanification, 
     verdicts,
     verdictDe,
     matrice: options.matrice ?? null,
+    entreCandidats: options.entreCandidats ?? null,
   };
 }
 
@@ -1863,6 +1994,9 @@ export function allerRetourCourseMs(
 
 const minutesTexte = (ms: number) => `${Math.max(1, Math.round(ms / 60_000))} min`;
 
+/** Comparaison du second avis à joindre au refus (journal), s'il a été mené. */
+const comparaisonDe = (res: Extract<ResultatAjout, { ok: false }>) => (res.comparaison ? { comparaison: res.comparaison } : {});
+
 /**
  * Le cœur des limites (3.6) : ajouter `nouveaux` à `existants`.
  *  - TAILLE : au plus `maxCommandesParCourse` ;
@@ -1893,8 +2027,42 @@ const minutesTexte = (ms: number) => `${Math.max(1, Math.round(ms / 60_000))} mi
  * celle déjà prévue, alors que l'ordre inverse tenait les limites, la
  * nouvelle n'ayant aucun autre livreur). Le premier refus est gardé si aucun
  * ordre ne passe.
+ *
+ * SECOND AVIS (retour du client du 28/10, `regroupement-tournee.rules.ts`) :
+ * un refus pour la direction, la durée de la tournée, le détour ou un
+ * retard est relu en comparant la tournée groupée par la route aux
+ * livraisons séparées avec les livreurs vraiment disponibles. S'il la trouve
+ * meilleure pour les clients, le groupe est accepté (motif `TOURNEE_ROUTE`) ;
+ * sinon le refus d'aujourd'hui reste, la comparaison jointe pour le journal.
+ * Tout ce qui est accepté aujourd'hui l'est encore, de la même façon.
  */
 function evaluerAjout(ctx: Contexte, p: ParametresAjout): ResultatAjout {
+  const res = evaluerAjoutAujourdhui(ctx, p);
+  if (res.ok || !REFUS_SECOND_AVIS.includes(res.refus)) return res;
+  const avis = secondAvis(ctx, p);
+  if (!avis) return res;
+  if (!avis.grouper || !avis.groupe) return { ...res, comparaison: resumeComparaison(avis) };
+  const g = avis.groupe;
+  return {
+    ok: true,
+    estimation: {
+      valide: true,
+      verdict: null,
+      ordre: g.ordre,
+      base: 'route',
+      arriveesMs: g.arriveesMs,
+      dureeS: g.dureeS,
+      parMatrice: true,
+      cle: g.cle,
+    },
+    detourS: p.existants.length ? avis.detourS : 0,
+    motif: 'TOURNEE_ROUTE',
+    libelle: libelleDirection('TOURNEE_ROUTE'),
+  };
+}
+
+/** La règle d'aujourd'hui : l'ordre le meilleur, puis celui de la direction, puis « à la suite ». */
+function evaluerAjoutAujourdhui(ctx: Contexte, p: ParametresAjout): ResultatAjout {
   const res = evaluerAjoutSelonOrdre(ctx, p, 'LIBRE');
   if (res.ok || !REFUS_SELON_ORDRE.includes(res.refus)) return res;
   const direction = evaluerAjoutSelonOrdre(ctx, p, 'DIRECTION');
@@ -1911,6 +2079,25 @@ function evaluerAjout(ctx: Contexte, p: ParametresAjout): ResultatAjout {
 type OrdreAjout = 'LIBRE' | 'DIRECTION' | 'A_LA_SUITE';
 
 const REFUS_SELON_ORDRE: readonly MotifRefusPlanification[] = ['DUREE_TOURNEE', 'DETOUR_AJOUT', 'RETARD_CLIENT'];
+
+/**
+ * Refus que le second avis peut relire. Les autres (taille, avance de
+ * Turbo, attente au comptoir, fenêtre, refus d'un livreur, horizon, limites
+ * de la retenue, autre livreur libre) restent absolus.
+ */
+const REFUS_SECOND_AVIS: readonly MotifRefusPlanification[] = ['DIRECTION', 'DUREE_TOURNEE', 'DETOUR_AJOUT', 'RETARD_CLIENT'];
+
+/** Ce que chaque porte sait du plan séparé, pour le second avis. */
+interface SecondAvisAjout {
+  /** Livreur qui prendrait E (affecté, sollicité, libre le plus proche, ou premier retour). */
+  livreurE: string | null;
+  /** E a déjà son livreur : E part d'abord dans le plan séparé. Sinon le meilleur des deux ordres de service. */
+  eAvecLivreur: boolean;
+  /** Heure « prête » des nouvelles commandes encore en cuisine (retenue : fin estimée retenue). */
+  pretesMs?: ReadonlyMap<string, number>;
+  /** Livreurs qui ne prendront pas ces commandes (refus de la course). */
+  exclus?: ReadonlySet<string>;
+}
 
 interface ParametresAjout {
   existants: readonly Arret[];
@@ -1937,6 +2124,98 @@ interface ParametresAjout {
    * course par commande) : le regroupement n'y gagne rien.
    */
   attendLivreur?: { retourMs: number | null } | null;
+  /** Second avis du regroupement : absent, la règle d'aujourd'hui seule. */
+  secondAvis?: SecondAvisAjout;
+}
+
+const routeConnue = (m: number | null | undefined): m is number => typeof m === 'number' && Number.isFinite(m) && m > 0;
+
+/**
+ * Distances par la route entre toutes les commandes du groupe : matrice de
+ * l'ordre des arrêts (même course), sinon distances entre candidats ; deux
+ * points à moins de 150 m (même adresse) valent 0. `null` s'il en manque une.
+ */
+function distancesDuGroupe(ctx: Contexte, arrets: readonly Arret[]): Map<string, number> | null {
+  const res = new Map<string, number>();
+  for (let i = 0; i < arrets.length; i++) {
+    for (let j = i + 1; j < arrets.length; j++) {
+      const [a, b] = [arrets[i], arrets[j]];
+      const cle = clePaire(a.id, b.id);
+      let m = ctx.matrice?.get(cle) ?? ctx.entreCandidats?.get(cle);
+      if (m === undefined && haversineMeters(a.client.position!, b.client.position!) <= MEME_ADRESSE_M) m = 0;
+      if (typeof m !== 'number' || !Number.isFinite(m) || m < 0) return null;
+      res.set(cle, m);
+    }
+  }
+  return res;
+}
+
+/** Réglages du second avis. */
+function limitesRegroupement(r: ReglagesPlanification): LimitesRegroupement {
+  return {
+    tourneeMaxMin: r.regroupementTourneeMaxMin,
+    detourMaxMin: r.detourMaxAjoutMin,
+    gainMin: r.regroupementGainMin,
+    perteMaxMin: r.regroupementPerteMaxMin,
+    turboActif: r.turboActif,
+    turboApresMin: r.turboApresMinV2,
+    turboAttenteRetourMin: r.turboAttenteRetourMaxMin,
+    turboPriseEnChargeMin: r.turboPriseEnChargeMin,
+    arretClientS: ARRET_CLIENT_S,
+  };
+}
+
+/**
+ * Le second avis, s'il peut jouer : interrupteur, 3 commandes au plus,
+ * toutes situées avec leur distance par la route depuis le restaurant,
+ * toutes les distances entre elles connues, et un départ connu. Sinon
+ * `null` : la règle d'aujourd'hui décide (la distance manquante est demandée
+ * à Google par le service, sans l'attendre ; la fusion rattrape le groupe au
+ * passage suivant).
+ */
+function secondAvis(ctx: Contexte, p: ParametresAjout): DecisionRegroupement | null {
+  const sa = p.secondAvis;
+  const r = ctx.r;
+  if (!sa || !r.regroupementTournee || !p.departConnu || !ctx.restaurant) return null;
+  const tous = [...p.existants, ...p.nouveaux];
+  if (p.existants.length === 0 || p.nouveaux.length === 0 || tous.length > ARRETS_MAX_SECOND_AVIS) return null;
+  if (tous.some((a) => !a.client.position || !routeConnue(a.client.routeMetres))) return null;
+  const entreClients = distancesDuGroupe(ctx, tous);
+  if (!entreClients) return null;
+
+  const prete = (a: Arret) => sa.pretesMs?.get(a.id) ?? a.readyMs ?? ctx.t;
+  const enTournee = (a: Arret): ArretTournee => ({
+    id: a.id,
+    promesseMs: a.promesseMs,
+    limiteMs: a.limiteMs,
+    preteMs: prete(a),
+    routeMetres: a.client.routeMetres!,
+  });
+  // Un AUTRE livreur que celui de E : libre, sinon de retour avant que ces
+  // commandes ne partent chez Turbo (comptée depuis leur heure « prête »).
+  const exclus = new Set([...(sa.exclus ?? []), ...(sa.livreurE ? [sa.livreurE] : [])]);
+  const autre = (arrets: readonly Arret[]): number | null => {
+    const libre = departLibreMs(ctx, [], exclus);
+    if (libre !== null) return libre;
+    const retour = retourEstimeMs(ctx, exclus);
+    if (retour === null) return null;
+    const bascule = Math.min(...arrets.map(prete)) + r.turboApresMinV2 * 60_000 + attenteRetourMs(ctx);
+    return r.turboActif && retour > bascule ? null : retour;
+  };
+  return comparerPlans(
+    {
+      existants: p.existants.map(enTournee),
+      nouveaux: p.nouveaux.map(enTournee),
+      entreClients,
+      eAvecLivreur: sa.eAvecLivreur,
+      departAvantMs: p.departAvantMs,
+      departApresMs: p.departApresMs,
+      autrePourNMs: autre(p.nouveaux),
+      autrePourEMs: sa.eAvecLivreur ? null : autre(p.existants),
+      vitesseKmh: (d) => vitesseKmh(new Date(d), r),
+    },
+    limitesRegroupement(r),
+  );
 }
 
 /**
@@ -2270,6 +2549,23 @@ function departCourse(ctx: Contexte, k: CourseTravail, enPlus: readonly string[]
 }
 
 /**
+ * Le livreur qui fait partir la course (`departCourse`) : le sien, celui de
+ * l'offre, le libre le plus proche qui ne l'a pas refusée (avec `enPlus`),
+ * sinon le premier qui revient. Second avis : un « autre livreur » pour la
+ * commande ajoutée, c'est un autre que lui.
+ */
+function livreurDeDepart(ctx: Contexte, k: CourseTravail, enPlus: readonly string[] = []): string | null {
+  if (k.delivererId) return k.delivererId;
+  if (k.offre) return k.offre.deliverer_id;
+  let libre: string | null = null;
+  for (const id of new Set([...ctx.libres, ...enPlus])) {
+    if (k.dejaSollicites.has(id)) continue;
+    if (libre === null || etaMs(ctx, id) < etaMs(ctx, libre)) libre = id;
+  }
+  return libre ?? retoursEstimes(ctx).find((x) => !k.dejaSollicites.has(x.id))?.id ?? null;
+}
+
+/**
  * Le livreur qui prendrait une course neuve (`graine`) : le libre le plus
  * proche, sinon le premier qui revient avant que la graine ne parte chez
  * Turbo (le départ de la création). `null` : personne.
@@ -2522,9 +2818,14 @@ export function planifier(
         attente: { premierePreteMs: q.readyMs ?? t },
         departConnu: dk !== null,
         attendLivreur: attendUnLivreur(ctx, k) ? { retourMs: retourAvantTurbo(ctx, k.arrets, k.dejaSollicites) } : null,
+        secondAvis: {
+          livreurE: livreurDeDepart(ctx, k),
+          eAvecLivreur: k.categorie !== 3,
+          exclus: k.categorie === 3 ? k.dejaSollicites : AUCUN_EXCLU,
+        },
       });
       if (!res.ok) {
-        refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: res.refus, libelle: res.libelle });
+        refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: res.refus, libelle: res.libelle, ...comparaisonDe(res) });
         continue;
       }
       const cle = [attendue ? 0 : 1, k.categorie, k.categorie === 2 ? depart : 0, res.detourS];
@@ -2579,13 +2880,23 @@ export function planifier(
         attente: null,
         departConnu: departEstime !== null,
         attendLivreur: departLibre === null ? { retourMs: retour } : null,
+        secondAvis: { livreurE: preneur, eAvecLivreur: false },
       });
       if (res.ok) {
         arrets = reordonner([...arrets, restantes[i]], res.estimation.ordre);
         derniere = res;
         restantes.splice(i, 1);
       } else {
-        refus.push({ essai: 'CREATION', order_id: restantes[i].id, source_id: null, course_cle: cle, refus: res.refus, libelle: res.libelle });
+        refus.push({
+          essai: 'CREATION',
+          order_id: restantes[i].id,
+          source_id: null,
+          course_cle: cle,
+          refus: res.refus,
+          libelle: res.libelle,
+          graine_id: graine.id,
+          ...comparaisonDe(res),
+        });
         i++;
       }
     }
@@ -2688,9 +2999,10 @@ export function planifier(
           departSeulMs: departU,
           attente: { premierePreteMs: premiere },
           departConnu: true,
+          secondAvis: { livreurE: k.delivererId, eAvecLivreur: true, exclus: u.dejaSollicites },
         });
         if (!res.ok) {
-          refus.push({ essai: 'FUSION', order_id: null, source_id: u.cle, course_cle: k.cle, refus: res.refus, libelle: res.libelle });
+          refus.push({ essai: 'FUSION', order_id: null, source_id: u.cle, course_cle: k.cle, refus: res.refus, libelle: res.libelle, ...comparaisonDe(res) });
           continue;
         }
         const cle = [k.categorie, k.categorie === 2 ? depart : 0, res.detourS];
@@ -2738,9 +3050,18 @@ export function planifier(
             attendLivreur: attendUnLivreur(ctx, cible, enPlus)
               ? { retourMs: retourAvantTurbo(ctx, cible.arrets, refusants) }
               : null,
+            secondAvis: { livreurE: livreurDeDepart(ctx, cible, enPlus), eAvecLivreur: false, exclus: refusants },
           });
           if (!res.ok) {
-            refus.push({ essai: 'FUSION', order_id: null, source_id: absorbee.cle, course_cle: cible.cle, refus: res.refus, libelle: res.libelle });
+            refus.push({
+              essai: 'FUSION',
+              order_id: null,
+              source_id: absorbee.cle,
+              course_cle: cible.cle,
+              refus: res.refus,
+              libelle: res.libelle,
+              ...comparaisonDe(res),
+            });
             continue;
           }
           const cle = [
@@ -2932,8 +3253,8 @@ export function planifier(
       // à l'échéance d'une retenue déjà posée ; elle, jamais.
       const finEstimee = c.preparation!.finDecision.getTime();
       let fin = finEstimee;
-      const noter = (motif: MotifRefusPlanification, libelle: string) =>
-        refus.push({ essai: 'RETENUE', order_id: c.id, source_id: null, course_cle: k.cle, refus: motif, libelle });
+      const noter = (motif: MotifRefusPlanification, libelle: string, comparaison?: ComparaisonRegroupement) =>
+        refus.push({ essai: 'RETENUE', order_id: c.id, source_id: null, course_cle: k.cle, refus: motif, libelle, ...(comparaison ? { comparaison } : {}) });
       const courte = (f: number) => f - t <= r.horizonPreparationS * 1000 && f <= limiteCourte;
       const attenteCourte = courte(finEstimee);
       let motif: MotifRetenue = 'ATTENTE_COURTE';
@@ -2990,9 +3311,14 @@ export function planifier(
         departSeulMs: alternative === null ? null : Math.max(alternative, fin),
         attente: null,
         departConnu: true,
+        secondAvis: {
+          livreurE: k.delivererId,
+          eAvecLivreur: true,
+          pretesMs: new Map([...choisies.map((x): [string, number] => [x.arret.id, x.fin]), [arret.id, fin]]),
+        },
       });
       if (!res.ok) {
-        noter(res.refus, res.libelle);
+        noter(res.refus, res.libelle, res.comparaison);
         continue;
       }
       choisies.push({ c, arret, fin, motif });

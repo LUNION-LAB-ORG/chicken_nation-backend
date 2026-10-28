@@ -16,6 +16,10 @@
  */
 import { createHash } from 'crypto';
 
+import { cmd, crs, enPrep, instant } from './monde-planification.simulee-spec';
+import { clePaire, pairesARegrouper, PlanRestaurant, REGLAGES_PLANIFICATION_DEFAUT } from './planification.rules';
+import * as regroupement from './regroupement-tournee.rules';
+
 import {
   commande,
   creation,
@@ -39,6 +43,7 @@ import {
   T9_MEME_ZONE,
   toutesLesScenes,
   Turbo,
+  verdictScene,
 } from './regroupement-tournee.simulee-spec';
 
 /** Une course pour les deux, proposée au seul livreur. */
@@ -171,9 +176,20 @@ describe('T8. promesse tenue cassée (géographie de T3, 12 h 15)', () => {
 });
 
 describe('T9. groupe accepté aujourd’hui : rien ne change', () => {
+  afterEach(() => jest.restoreAllMocks());
+
   it.each(['coupe', 15] as Turbo[])('Biétry, même zone (Turbo %s) : même action, même ordre, motif MEME_ZONE', (turbo) => {
     const plan = commeAujourdhui(creation(T9_MEME_ZONE, '12:15', turbo));
     expect(creees(plan)).toEqual([expect.objectContaining({ order_ids: expect.arrayContaining(['a', 'b']), motif: 'MEME_ZONE' })]);
+  });
+
+  it('le second avis n’est jamais appelé pour un groupe que la règle d’aujourd’hui accepte', () => {
+    const espion = jest.spyOn(regroupement, 'comparerPlans');
+    jouer(creation(T9_MEME_ZONE, '12:15', 15));
+    expect(espion).not.toHaveBeenCalled();
+    // Témoin : il l'est quand la direction refuse (T1).
+    jouer(creation(T1_ANGLE_DROIT, '12:15', 15));
+    expect(espion).toHaveBeenCalled();
   });
 });
 
@@ -205,6 +221,91 @@ describe('T10. distance entre les clients manquante, puis connue (géographie de
 
   it('passage 2, livreur au comptoir avec B, Turbo en 15 min : séparées (A par Turbo arrive avant la tournée B puis A)', () => {
     expect(commeAujourdhui(sceneT10(15, true)).actions.filter((x) => x.type === 'FUSIONNER')).toEqual([]);
+  });
+});
+
+/** Comparaison jointe au refus d'une commande (ou d'une course absorbée). */
+const comparaison = (plan: PlanRestaurant, id: string) =>
+  plan.refus.filter((x) => (x.order_id === id || x.source_id === id) && x.comparaison).map((x) => `${x.essai}:${x.refus}:${x.comparaison!.decision}`);
+
+describe('refus maintenu : la comparaison est jointe au refus d’aujourd’hui (journal PLAN_REFUS)', () => {
+  it.each([
+    ['T1, Turbo en 0 min', creation(T1_ANGLE_DROIT, '12:15', 0), 'b', ['CREATION:DIRECTION:PROMESSE_CASSEE']],
+    ['T3, Turbo en 0 min', creation(T3_AUTRE_ITINERAIRE, '12:15', 0), 'b', ['CREATION:DIRECTION:PIRE']],
+    ['T6 par défaut', creation(T6_SENS_OPPOSES, '12:15', 'coupe'), 'b', ['CREATION:DIRECTION:TOURNEE_MAX']],
+    ['T6 plafond 240, Turbo coupé', creation(T6_SENS_OPPOSES, '12:15', 'coupe', { autres: { regroupementTourneeMaxMin: 240 } }), 'b', ['CREATION:DIRECTION:EGAL']],
+    ['T8, gain réglé à 0', sceneT8('coupe', { regroupementGainMin: 0 }), 'b', ['RETENUE:DIRECTION:PROMESSE_CASSEE']],
+    ['T8, Turbo en 15 min', sceneT8(15), 'b', ['RETENUE:DIRECTION:PROMESSE_CASSEE']],
+    ['T10, livreur au comptoir avec B, Turbo en 15 min', sceneT10(15, true), 'ka', ['FUSION:DIRECTION:PIRE']],
+  ] as [string, Scene, string, string[]][])('%s', (_nom, s, id, attendu) => {
+    expect(comparaison(jouer(s), id)).toEqual(attendu);
+  });
+
+  it('deux livreurs libres : PROMESSE_CASSEE ou PIRE, la seconde partirait avec l’autre livreur', () => {
+    const t = h('12:15');
+    const plan = jouer(creation(T3_AUTRE_ITINERAIRE, '12:15', 15, { livreurs: [livreur(t), livreur(t, 'm')] }));
+    const x = plan.refus.find((r) => r.order_id === 'b')!;
+    expect(x.comparaison).toMatchObject({ decision: 'PROMESSE_CASSEE', depart_second: 'AUTRE_LIVREUR' });
+  });
+
+  it('création : le refus nomme la commande graine (le journal dédoublonne sur elle)', () => {
+    const plan = jouer(creation(T1_ANGLE_DROIT, '12:15', 0));
+    expect(plan.refus.find((x) => x.essai === 'CREATION')).toMatchObject({ order_id: 'b', graine_id: 'a', course_cle: 'nouvelle-1' });
+  });
+
+  it('interrupteur coupé : aucune comparaison', () => {
+    const plan = jouer(creation(T1_ANGLE_DROIT, '12:15', 0), SANS_SECOND_AVIS);
+    expect(plan.refus.filter((x) => x.comparaison)).toEqual([]);
+  });
+});
+
+describe('pairesARegrouper : les distances à lire pour le second avis', () => {
+  const t = h('12:15');
+  const g = T3_AUTRE_ITINERAIRE;
+  const verdicts = new Map([[clePaire('a', 'b'), verdictScene(g)]]);
+  const deux = () => [commande('a', g, { prete: plus(t, -60) }), commande('b', g, { prete: t })];
+  const paires = (inst: ReturnType<typeof instant>, r = REGLAGES_PLANIFICATION_DEFAUT) =>
+    pairesARegrouper(inst, verdicts, r).map(([x, y]) => `${x.id}>${y.id}`);
+
+  it('paire refusée par la direction, distances depuis le restaurant connues : lue, du plus proche vers le plus lointain', () => {
+    expect(paires(instant(t, { commandes: deux() }))).toEqual(['a>b']);
+  });
+
+  it('interrupteur coupé, restaurant sans coordonnées, ou une distance depuis le restaurant inconnue : aucune', () => {
+    expect(paires(instant(t, { commandes: deux() }), { ...REGLAGES_PLANIFICATION_DEFAUT, regroupementTournee: false })).toEqual([]);
+    expect(paires(instant(t, { commandes: deux(), position: null }))).toEqual([]);
+    const sansRoute = [commande('a', g, { prete: t }), commande('b', g, { prete: t, sansRoute: true })];
+    expect(paires(instant(t, { commandes: sansRoute }))).toEqual([]);
+  });
+
+  it('deux commandes d’une même course : lues par l’ordre des arrêts, pas ici', () => {
+    expect(paires(instant(t, { courses: [crs('k', { commandes: deux() })] }))).toEqual([]);
+  });
+
+  it('paire compatible (même zone) : jamais lue', () => {
+    const z = T9_MEME_ZONE;
+    const inst = instant(t, { commandes: [commande('a', z, { prete: t }), commande('b', z, { prete: t })] });
+    expect(pairesARegrouper(inst, new Map(), REGLAGES_PLANIFICATION_DEFAUT)).toEqual([]);
+  });
+
+  it('paire perdue d’avance (12 km de part et d’autre) : jamais lue', () => {
+    const loin = (id: string, nord: number) => ({ ...cmd(id, { nord, est: 0, ready_at: t }), client: { ...cmd(id, { nord, est: 0 }).client, routeMetres: 15_000 } });
+    const inst = instant(t, { commandes: [loin('a', 12_000), loin('b', -12_000)] });
+    expect(pairesARegrouper(inst, new Map(), REGLAGES_PLANIFICATION_DEFAUT)).toEqual([]);
+  });
+
+  it('au plus 60 paires, la plus ancienne commande prête d’abord ; une commande en cuisine compte à sa fin estimée', () => {
+    const autour = Array.from({ length: 16 }, (_, i) => {
+      const angle = (i * 2 * Math.PI) / 16;
+      const c = cmd(`c${String(i).padStart(2, '0')}`, { nord: 2500 * Math.cos(angle), est: 2500 * Math.sin(angle), ready_at: plus(t, -60 * (16 - i)) });
+      return { ...c, client: { ...c.client, routeMetres: 3500 } };
+    });
+    const enCuisine = enPrep('cuisine', plus(t, 120), { nord: -2500, est: 100 });
+    const inst = instant(t, { commandes: [...autour, { ...enCuisine, client: { ...enCuisine.client, routeMetres: 3500 } }] });
+    const lues = pairesARegrouper(inst, new Map(), REGLAGES_PLANIFICATION_DEFAUT);
+    expect(lues).toHaveLength(regroupement.PAIRES_REGROUPEMENT_LUES_MAX);
+    // c00 est la plus ancienne : ses paires passent d'abord.
+    expect(lues.slice(0, 3).every(([x, y]) => x.id === 'c00' || y.id === 'c00')).toBe(true);
   });
 });
 

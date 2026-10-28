@@ -473,8 +473,13 @@ describe('les autres limites ne changent pas', () => {
   });
 
   it('la borne tient : détour maximal réglé à 2 min, la même adresse à 11 km reste refusée (3 min de remise de plus)', () => {
-    const r = { ...REG, detourMaxAjoutMin: 2 };
+    // Règle d'aujourd'hui seule (second avis du 28/10 coupé).
+    const r = { ...REG, detourMaxAjoutMin: 2, regroupementTournee: false };
     expect(refusDe(scene({ etatK: 'AU_COMPTOIR', ecartMin: 1, reglages: r }), 'b')).toEqual(['AJOUT:DUREE_TOURNEE']);
+    // Second avis (28/10), distances par la route connues : partie seule, B attendrait
+    // l'aller-retour de 11 km ou Turbo ; la tournée groupée (moins de 50 min) passe.
+    const avecSecondAvis = scene({ etatK: 'AU_COMPTOIR', ecartMin: 1, reglages: { ...r, regroupementTournee: true } });
+    expect(actionsDe(avecSecondAvis, 'AJOUTER').map((a) => [a.course_id, a.motif])).toEqual([['k', 'TOURNEE_ROUTE']]);
     const t = plus(h('16:00'), 5);
     const plan = passage(t, {
       commandes: [
