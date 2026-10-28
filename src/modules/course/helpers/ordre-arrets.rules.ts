@@ -207,15 +207,27 @@ function permutations<T>(liste: readonly T[]): T[][] {
  * (2 à 5), la plus petite clé l'emporte ; à égalité, l'ordre de la direction
  * est gardé. Une permutation dont la tournée (sans le retour) dépasse la plus
  * longue de l'ordre de la direction et de la durée de tournée réglée
- * (25 min) est écartée, comme aujourd'hui. `null` hors de 2 à 5 arrêts placés.
+ * (25 min) est écartée, comme aujourd'hui. Avec `allongementMaxS`, le plus
+ * long trajet seul (restaurant → un client, sur la même matrice) plus cet
+ * allongement est aussi admis : la même borne que la durée de tournée du
+ * planificateur (essai du 28/10, la même adresse loin du restaurant).
+ * `null` hors de 2 à 5 arrêts placés.
  */
 export function meilleurOrdre(
-  p: ParametresOrdre & { ordreDirection: readonly string[]; dureeTourneeMaxS: number },
+  p: ParametresOrdre & { ordreDirection: readonly string[]; dureeTourneeMaxS: number; allongementMaxS?: number },
 ): { meilleur: TourneeRoute; direction: TourneeRoute } | null {
   const places = p.arrets.filter((a) => a.place).map((a) => a.id);
   if (places.length < 2 || places.length > ARRETS_MAX_PERMUTATIONS) return null;
   const direction = tourneeParLaRoute(p, p.ordreDirection);
-  const dureeMaxS = Math.max(direction.dureeS, p.dureeTourneeMaxS);
+  const plusLongSeulS =
+    p.allongementMaxS === undefined
+      ? 0
+      : Math.max(0, ...p.arrets.filter((a) => a.place).map((a) => tourneeParLaRoute({ ...p, arrets: [a] }, [a.id]).dureeS));
+  const dureeMaxS = Math.max(
+    direction.dureeS,
+    p.dureeTourneeMaxS,
+    p.allongementMaxS === undefined ? 0 : plusLongSeulS + p.allongementMaxS,
+  );
   let meilleur = direction;
   for (const ordre of permutations(places)) {
     const essai = tourneeParLaRoute(p, ordre);

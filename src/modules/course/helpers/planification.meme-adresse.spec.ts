@@ -19,6 +19,8 @@
  * création la croyait capable de partir seule avec le livreur qui prenait la
  * première (seule, elle partait en fait chez Turbo), et l'ajout ou la fusion
  * ne gardaient que l'ordre qui mettait en retard la commande déjà prévue.
+ * L'ordre des arrêts écartait aussi, à 25 min, l'ordre qui tenait la promesse
+ * loin du restaurant.
  *
  * Restaurant de Sococé (5.3735398, -3.9990328), client à Riviera Faya
  * (5.3830, -3.9290) : 7,83 km à vol d'oiseau, 11 km estimés sans Google,
@@ -396,6 +398,52 @@ describe('commandes à l’heure à la même adresse, un seul livreur au comptoi
       const plan = passage(t, { courses: [k1, k2], livreurs: [livreur('l', t, { en_course: true, last_available_at: null })] });
       expect(actionsDe(plan, 'FUSIONNER').map((f) => [f.cible_id, f.absorbee_id])).toEqual([['k1', 'k2']]);
     }
+  });
+});
+
+describe('plus loin sur la même route : l’ordre qui tient la promesse n’est plus écarté à 25 min', () => {
+  /** B sur la route de Faya, à 10 km par la route (9/10 du chemin à vol d'oiseau), programmée pour 17 h 30. */
+  const SUR_LA_ROUTE: ILatLng = { lat: SOCOCE.lat + (FAYA.lat - SOCOCE.lat) * 0.9, lng: SOCOCE.lng + (FAYA.lng - SOCOCE.lng) * 0.9 };
+  const scenario = (reglages: ReglagesPlanification, google: boolean) => {
+    const T0 = h('16:00');
+    const t = plus(T0, 20);
+    // A passée à 15 h 51 : à l'heure de justesse, seule (limite 16 h 31).
+    const a = commande('a', FAYA, { creee: h('15:51'), prete: T0, google });
+    const bBase = commande('b', SUR_LA_ROUTE, { creee: h('15:59'), prete: t, google: false });
+    const b: CommandePlanif = {
+      ...bBase,
+      heure_programmee: h('17:30'),
+      client: google ? { ...bBase.client, routeMetres: 10_000, trace: trace(SUR_LA_ROUTE, 10_000) } : bBase.client,
+    };
+    const k = crs('k', { commandes: [a], created_at: T0, statut: CourseStatut.AT_RESTAURANT, deliverer_id: 'l', assigned_at: plus(T0, 5) });
+    return passage(t, { commandes: [b], courses: [k], livreurs: [livreur('l', t, { en_course: true, last_available_at: null })], reglages });
+  };
+
+  it('25 min réglées : B ajoutée après A (A d’abord, à l’heure), comme avec 40 min', () => {
+    for (const google of [false, true]) {
+      for (const duree of [25, 40]) {
+        const plan = scenario({ ...REG, dureeTourneeMaxMin: duree }, google);
+        expect(actionsDe(plan, 'AJOUTER').map((x) => x.order_id)).toEqual(['b']);
+        expect(actionsDe(plan, 'ORDONNER').map((x) => x.sequence)).toEqual([['a', 'b']]);
+        expect(refusDe(plan, 'b')).toEqual([]);
+      }
+    }
+  });
+
+  it('course de B (à 10,5 km sur la même route) au comptoir, A ajoutée, pressée : A passe d’abord, à l’heure (avant : derrière B, en retard)', () => {
+    const PRES: ILatLng = { lat: SOCOCE.lat + (FAYA.lat - SOCOCE.lat) * 0.946, lng: SOCOCE.lng + (FAYA.lng - SOCOCE.lng) * 0.946 };
+    const T0 = h('16:00');
+    const t = plus(T0, 20);
+    const b: CommandePlanif = { ...commande('b', PRES, { creee: h('15:59'), prete: T0, google: false }), heure_programmee: h('17:30') };
+    const a = commande('a', FAYA, { creee: h('15:51'), prete: t, google: false });
+    const k = crs('k', { commandes: [b], created_at: T0, statut: CourseStatut.AT_RESTAURANT, deliverer_id: 'l', assigned_at: plus(T0, 5) });
+    const essai = (reglages: ReglagesPlanification) =>
+      passage(t, { commandes: [a], courses: [k], livreurs: [livreur('l', t, { en_course: true, last_available_at: null })], reglages });
+    const plan = essai(REG);
+    expect(actionsDe(plan, 'AJOUTER').map((x) => x.order_id)).toEqual(['a']);
+    expect(actionsDe(plan, 'ORDONNER').map((x) => x.sequence)).toEqual([['a', 'b']]);
+    // Détour maximal de 2 min : A d'abord retarderait B de 6 min ; l'ordre du trajet reste.
+    expect(actionsDe(essai({ ...REG, detourMaxAjoutMin: 2 }), 'AJOUTER')).toEqual([]);
   });
 });
 

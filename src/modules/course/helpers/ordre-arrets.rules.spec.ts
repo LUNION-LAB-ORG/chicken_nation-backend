@@ -178,6 +178,29 @@ describe('meilleurOrdre', () => {
     expect(meilleurOrdre({ ...p, ordreDirection: ['X', 'Y'], dureeTourneeMaxS: 30 * 60 })!.meilleur.ordre).toEqual(['Y', 'X']);
   });
 
+  it('loin du restaurant (essai du 28/10) : l’ordre qui tient la promesse passe s’il n’allonge le plus long trajet seul que de l’allongement permis', () => {
+    // Sococé : X à Faya (11,1 km par la route), pressée ; Y sur la même route à
+    // 10 km, à 1,1 km de X. Y puis X : 33 min 16, X en retard ; X puis Y :
+    // 36 min 16, X à l'heure, 6 min de plus que X seule (30 min 16).
+    const p: ParametresOrdre = {
+      ...parametres(),
+      arrets: [arret('X', { promesseMs: DEPART + 26 * MIN, limiteMs: DEPART + 31 * MIN }), arret('Y', { promesseMs: DEPART + 90 * MIN, limiteMs: DEPART + 95 * MIN })],
+      matrice: {
+        depuisRestaurant: new Map([
+          ['X', 11_100],
+          ['Y', 10_000],
+        ]),
+        entreClients: new Map([[clePaireArrets('X', 'Y'), 1100]]),
+      },
+    };
+    const ordre = (allongementMaxS?: number) =>
+      meilleurOrdre({ ...p, ordreDirection: ['Y', 'X'], dureeTourneeMaxS: 25 * 60, allongementMaxS })!.meilleur.ordre;
+    expect(ordre()).toEqual(['Y', 'X']);
+    expect(ordre(8 * 60)).toEqual(['X', 'Y']);
+    // Allongement permis de 2 min : 6 min de plus, écarté comme avant.
+    expect(ordre(2 * 60)).toEqual(['Y', 'X']);
+  });
+
   it(`au-delà de ${ARRETS_MAX_PERMUTATIONS} arrêts placés, ou moins de 2 : rien (le calcul d’aujourd’hui)`, () => {
     const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
     const restaurant = new Map(ids.map((id, i) => [id, 1000 + i * 100]));

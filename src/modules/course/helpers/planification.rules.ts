@@ -1631,7 +1631,8 @@ function permutations<T>(liste: readonly T[]): T[][] {
  * (promesse + retard toléré), les autres ordres des 2 ou 3 arrêts sont
  * essayés (aucun appel Google, même base) : celui qui réduit le plus le
  * retard au-delà des limites, puis au-delà des promesses, puis la tournée la
- * plus courte, sans dépasser la durée de tournée maximale, l'emporte
+ * plus courte, sans dépasser la borne de la durée de tournée (durée réglée,
+ * ou plus long trajet seul + détour maximal, essai du 28/10), l'emporte
  * (relecture du 24/10 : le client le plus pressé passait après un client plus
  * récent du même trajet, d'où un regroupement refusé ou un client en retard).
  * Un retard dans le délai toléré ne change pas l'ordre : revenir sur ses pas
@@ -1702,13 +1703,19 @@ function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, opti
     return { limite, promesse };
   };
 
+  // Plafond des ordres essayés pour éviter un retard : la borne de
+  // DUREE_TOURNEE (`evaluerAjoutSelonOrdre`), soit la durée réglée, soit le
+  // plus long trajet seul + le détour maximal (essai du 28/10 : loin du
+  // restaurant, l'ordre qui tenait les promesses était écarté à 25 min).
+  const allongementMaxS = ctx.r.detourMaxAjoutMin * 60;
   const route =
     options.volOiseau || options.geographique || options.sansMatrice ? null : parametresRoute(ctx, arrets, departMs);
   const parLaRoute = !route
     ? null
     : options.ordreDonne
       ? tourneeParLaRoute(route, ordreDirection)
-      : meilleurOrdre({ ...route, ordreDirection, dureeTourneeMaxS: ctx.r.dureeTourneeMaxMin * 60 })?.meilleur ?? null;
+      : meilleurOrdre({ ...route, ordreDirection, dureeTourneeMaxS: ctx.r.dureeTourneeMaxMin * 60, allongementMaxS })?.meilleur ??
+        null;
   if (parLaRoute) {
     return {
       valide: verdict.valide,
@@ -1734,7 +1741,9 @@ function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, opti
     places.length <= ARRETS_MAX_ORDRE_PAR_PROMESSE
   ) {
     const sansPosition = ordreDirection.filter((id) => !parId.get(id)?.position);
-    const dureeMaxS = Math.max(direction.dureeS, ctx.r.dureeTourneeMaxMin * 60);
+    // Trajet seul de chaque client, sur ses propres données (comme `estimer` d'un seul arrêt).
+    const plusLongSeulS = Math.max(0, ...places.map((id) => tournee([id]).dureeS));
+    const dureeMaxS = Math.max(direction.dureeS, ctx.r.dureeTourneeMaxMin * 60, plusLongSeulS + allongementMaxS);
     // Clé lexicographique : retard au-delà des limites, au-delà des promesses, durée (à la seconde près).
     const cle = (t: ReturnType<typeof tournee>) => {
       const r = retards(t.arrivees);
