@@ -196,10 +196,19 @@ describe('ordre des arrêts : le client qui serait en retard passe d’abord', (
     expect(actionsDe(plan, 'CREER_COURSE')).toEqual([]);
   });
 
-  it('durée de tournée maximale : l’autre ordre (20 min 36) ne la dépasse jamais ; à 20 min, refus comme avant', () => {
-    const plan = planifier(instant(t, { commandes: [P], courses: [K('12:03')], livreurs: [d1, occupe('d2', t)] }), avec({ dureeTourneeMaxMin: 20 }));
+  it('durée de tournée maximale : l’autre ordre (20 min 36, 7 min 59 de plus que Q seule) ne la dépasse jamais ; à 20 min et 6 min de détour maximal, refus comme avant', () => {
+    const plan = planifier(
+      instant(t, { commandes: [P], courses: [K('12:03')], livreurs: [d1, occupe('d2', t)] }),
+      avec({ dureeTourneeMaxMin: 20, detourMaxAjoutMin: 6 }),
+    );
     expect(actionsDe(plan, 'AJOUTER')).toEqual([]);
     expect(refusDe(plan, 'p', 'k')).toEqual(['RETARD_CLIENT']);
+  });
+
+  it('à 20 min avec le détour maximal par défaut (8 min) : l’autre ordre passe, il n’allonge Q seule que de 7 min 59 (borne du 28/10)', () => {
+    const plan = planifier(instant(t, { commandes: [P], courses: [K('12:03')], livreurs: [d1, occupe('d2', t)] }), avec({ dureeTourneeMaxMin: 20 }));
+    expect(actionsDe(plan, 'AJOUTER').map((x) => [x.order_id, x.course_id])).toEqual([['p', 'k']]);
+    expect(actionsDe(plan, 'ORDONNER').map((x) => x.sequence)).toEqual([['q', 'p']]);
   });
 
   it('retard dans le délai toléré (Q promise à 12 h 47) : l’ordre du trajet reste, sans revenir sur ses pas', () => {

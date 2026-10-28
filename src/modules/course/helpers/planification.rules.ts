@@ -56,7 +56,11 @@
  *     n'est pas retardée de plus du détour maximal (essai du 25/10 : avec un
  *     livreur libre, la même direction partait en deux courses). Même règle
  *     pour toutes les cibles : course d'un livreur, course qui cherche un
- *     livreur, création, fusions, retenue.
+ *     livreur, création, fusions, retenue. À la création, une commande
+ *     ajoutée au groupe ne partirait seule qu'avec un AUTRE livreur que
+ *     celui qui prend la première ; un groupe refusé pour un retard est
+ *     réessayé dans l'ordre « commandes déjà prévues, puis les nouvelles »
+ *     (essai du 28/10 : deux commandes à l'heure à la même adresse).
  *  3. FUSIONS (demande 4) : une course sans livreur rejoint une course ouverte
  *     avec livreur, ou une autre course sans livreur, de la même direction et
  *     dans les limites ; l'offre en attente de la course absorbée est close
@@ -1577,6 +1581,12 @@ interface OptionsEstimation {
   geographique?: boolean;
   /** Le calcul d'aujourd'hui, même si la matrice par la route est complète (comparaison de deux estimations). */
   sansMatrice?: boolean;
+  /**
+   * Les arrêts dans l'ordre de la liste, sans en essayer d'autre (sur la
+   * matrice par la route si elle est complète) : repli de `evaluerAjout`
+   * (arrêts déjà prévus, puis les nouveaux) et tournée prévue d'une course.
+   */
+  ordreDonne?: boolean;
 }
 
 /**
@@ -1632,7 +1642,8 @@ function permutations<T>(liste: readonly T[]): T[][] {
  * toutes les permutations sur ces distances (retards, boucle avec le retour,
  * client le plus proche d'abord, puis l'ordre de la direction) et les
  * arrivées en viennent (`parMatrice`). Sinon, ou en repli (`geographique`,
- * `volOiseau`, `sansMatrice`), exactement le calcul ci-dessus.
+ * `volOiseau`, `sansMatrice`), exactement le calcul ci-dessus. `ordreDonne` :
+ * l'ordre de la liste, sans autre ordre essayé (sur la matrice si complète).
  */
 function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, options: OptionsEstimation = {}): EstimationGroupe {
   const arriveesMs = new Map<string, number>();
@@ -1660,7 +1671,11 @@ function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, opti
   }
   const verdict = evaluerGroupe(R, clients, ctx.verdictDe);
   const mode: ModeGroupe = verdict.valide && verdict.mode ? verdict.mode : clients.length === 1 ? 'seul' : 'zone';
-  const ordreDirection = verdict.valide ? verdict.ordre : ordonnerArrets(R, clients, { mode });
+  const ordreDirection = options.ordreDonne
+    ? arrets.map((a) => a.id)
+    : verdict.valide
+      ? verdict.ordre
+      : ordonnerArrets(R, clients, { mode });
   const parId = new Map(clients.map((c) => [c.id, c]));
   const lointain = verdict.valide && verdict.lointainId ? parId.get(verdict.lointainId) ?? null : null;
   const vitesse = vitesseKmh(new Date(departMs), ctx.r);
@@ -1689,9 +1704,11 @@ function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, opti
 
   const route =
     options.volOiseau || options.geographique || options.sansMatrice ? null : parametresRoute(ctx, arrets, departMs);
-  const parLaRoute = route
-    ? meilleurOrdre({ ...route, ordreDirection, dureeTourneeMaxS: ctx.r.dureeTourneeMaxMin * 60 })?.meilleur ?? null
-    : null;
+  const parLaRoute = !route
+    ? null
+    : options.ordreDonne
+      ? tourneeParLaRoute(route, ordreDirection)
+      : meilleurOrdre({ ...route, ordreDirection, dureeTourneeMaxS: ctx.r.dureeTourneeMaxMin * 60 })?.meilleur ?? null;
   if (parLaRoute) {
     return {
       valide: verdict.valide,
@@ -1709,7 +1726,13 @@ function estimer(ctx: Contexte, arrets: readonly Arret[], departMs: number, opti
   let choix = direction;
   const places = ordreDirection.filter((id) => parId.get(id)?.position);
   const retardDirection = retards(direction.arrivees);
-  if (!options.geographique && retardDirection.limite > 0 && places.length >= 2 && places.length <= ARRETS_MAX_ORDRE_PAR_PROMESSE) {
+  if (
+    !options.geographique &&
+    !options.ordreDonne &&
+    retardDirection.limite > 0 &&
+    places.length >= 2 &&
+    places.length <= ARRETS_MAX_ORDRE_PAR_PROMESSE
+  ) {
     const sansPosition = ordreDirection.filter((id) => !parId.get(id)?.position);
     const dureeMaxS = Math.max(direction.dureeS, ctx.r.dureeTourneeMaxMin * 60);
     // Clé lexicographique : retard au-delà des limites, au-delà des promesses, durée (à la seconde près).
@@ -1757,19 +1780,19 @@ function memeBase(
   ctx: Contexte,
   a: { arrets: readonly Arret[]; departMs: number; est: EstimationGroupe },
   b: { arrets: readonly Arret[]; departMs: number; est: EstimationGroupe },
-  geographique = false,
+  opt: Pick<OptionsEstimation, 'geographique' | 'ordreDonne'> = {},
 ): [EstimationGroupe, EstimationGroupe] {
   if (a.arrets.length === 0 || b.arrets.length === 0) return [a.est, b.est];
   let ea = a.est;
   let eb = b.est;
   if (ea.parMatrice !== eb.parMatrice && clientsPlaces(a.arrets) >= 2 && clientsPlaces(b.arrets) >= 2) {
-    if (ea.parMatrice) ea = estimer(ctx, a.arrets, a.departMs, { sansMatrice: true, geographique });
-    else eb = estimer(ctx, b.arrets, b.departMs, { sansMatrice: true, geographique });
+    if (ea.parMatrice) ea = estimer(ctx, a.arrets, a.departMs, { ...opt, sansMatrice: true });
+    else eb = estimer(ctx, b.arrets, b.departMs, { ...opt, sansMatrice: true });
   }
   if (ea.base === eb.base) return [ea, eb];
   return [
-    estimer(ctx, a.arrets, a.departMs, { volOiseau: true, geographique }),
-    estimer(ctx, b.arrets, b.departMs, { volOiseau: true, geographique }),
+    estimer(ctx, a.arrets, a.departMs, { ...opt, volOiseau: true }),
+    estimer(ctx, b.arrets, b.departMs, { ...opt, volOiseau: true }),
   ];
 }
 
@@ -1854,14 +1877,29 @@ const minutesTexte = (ms: number) => `${Math.max(1, Math.round(ms / 60_000))} mi
  *
  * L'ordre des arrêts tient compte des promesses (`estimer`). Un refus qui
  * dépend de l'ordre (durée, détour, retard) est réessayé dans l'ordre de la
- * direction seul : tout ce qui passait avant passe encore.
+ * direction seul : tout ce qui passait avant passe encore. Refusé pour un
+ * retard (RETARD_CLIENT), il l'est encore dans l'ordre « arrêts déjà prévus
+ * dans leur ordre, puis les nouveaux » (essai du 28/10 : à la même adresse,
+ * la commande ajoutée la plus pressée passait d'abord et mettait en retard
+ * celle déjà prévue, alors que l'ordre inverse tenait les limites, la
+ * nouvelle n'ayant aucun autre livreur). Le premier refus est gardé si aucun
+ * ordre ne passe.
  */
 function evaluerAjout(ctx: Contexte, p: ParametresAjout): ResultatAjout {
-  const res = evaluerAjoutSelonOrdre(ctx, p, false);
+  const res = evaluerAjoutSelonOrdre(ctx, p, 'LIBRE');
   if (res.ok || !REFUS_SELON_ORDRE.includes(res.refus)) return res;
-  const direction = evaluerAjoutSelonOrdre(ctx, p, true);
-  return direction.ok ? direction : res;
+  const direction = evaluerAjoutSelonOrdre(ctx, p, 'DIRECTION');
+  if (direction.ok) return direction;
+  if (p.existants.length === 0 || (res.refus !== 'RETARD_CLIENT' && direction.refus !== 'RETARD_CLIENT')) return res;
+  const aLaSuite = evaluerAjoutSelonOrdre(ctx, p, 'A_LA_SUITE');
+  return aLaSuite.ok ? aLaSuite : res;
 }
+
+/**
+ * Ordre des arrêts essayé par `evaluerAjout` : le meilleur (`estimer`), celui
+ * de la direction seul, ou les arrêts déjà prévus puis les nouveaux.
+ */
+type OrdreAjout = 'LIBRE' | 'DIRECTION' | 'A_LA_SUITE';
 
 const REFUS_SELON_ORDRE: readonly MotifRefusPlanification[] = ['DUREE_TOURNEE', 'DETOUR_AJOUT', 'RETARD_CLIENT'];
 
@@ -1917,9 +1955,30 @@ function allongementTourneeS(
   return g.dureeS - Math.max(0, ...seuls.map((s) => s.dureeS));
 }
 
-function evaluerAjoutSelonOrdre(ctx: Contexte, p: ParametresAjout, geographique: boolean): ResultatAjout {
+/**
+ * Tournée PRÉVUE des commandes déjà prévues : l'ordre de leur course (celui
+ * que suit le livreur, ou celui du groupe en formation), sur la même base que
+ * `avant`. Essai du 28/10 : après un ajout « à la suite » (A puis B, à la
+ * même adresse), `estimer` remettait B devant ; A paraissait déjà en retard et
+ * la commande suivante la faisait passer en retard sans refus.
+ */
+function tourneePrevue(
+  ctx: Contexte,
+  existants: readonly Arret[],
+  departMs: number,
+  avant: EstimationGroupe,
+  opt: OptionsEstimation,
+): EstimationGroupe {
+  const ids = existants.map((a) => a.id);
+  if (opt.ordreDonne || existants.length < 2 || avant.ordre.every((id, i) => id === ids[i])) return avant;
+  const prevue = estimer(ctx, existants, departMs, { ...opt, ordreDonne: true, sansMatrice: !avant.parMatrice });
+  if (prevue.base === avant.base) return prevue;
+  return estimer(ctx, existants, departMs, { ...opt, ordreDonne: true, volOiseau: true });
+}
+
+function evaluerAjoutSelonOrdre(ctx: Contexte, p: ParametresAjout, ordre: OrdreAjout): ResultatAjout {
   const r = ctx.r;
-  const opt: OptionsEstimation = { geographique };
+  const opt: OptionsEstimation = { geographique: ordre === 'DIRECTION', ordreDonne: ordre === 'A_LA_SUITE' };
   const tous = [...p.existants, ...p.nouveaux];
   if (tous.length > r.maxCommandesParCourse) return { ok: false, refus: 'TAILLE', libelle: 'course pleine' };
   if (p.attendLivreur && r.turboActif && p.existants.length > 0 && p.nouveaux.length > 0) {
@@ -1963,8 +2022,9 @@ function evaluerAjoutSelonOrdre(ctx: Contexte, p: ParametresAjout, geographique:
     ctx,
     { arrets: p.existants, departMs: p.departAvantMs, est: avant0 },
     { arrets: tous, departMs: p.departApresMs, est: apres },
-    geographique,
+    opt,
   );
+  const prevue = tourneePrevue(ctx, p.existants, p.departAvantMs, avant, opt);
   for (const o of p.existants) {
     const a0 = avant.arriveesMs.get(o.id)!;
     const a1 = apresCmp.arriveesMs.get(o.id)!;
@@ -1974,8 +2034,11 @@ function evaluerAjoutSelonOrdre(ctx: Contexte, p: ParametresAjout, geographique:
     }
     // Déjà en retard avant l'ajout (commande passée puis traitée à la main) :
     // le détour maximal ci-dessus la protège, sa promesse ne bloque plus le
-    // groupe. Seul un ajout qui la FAIT passer en retard est refusé.
-    if (p.departConnu && a1 > o.limiteMs && a1 > a0 && a0 <= o.limiteMs) {
+    // groupe. Seul un ajout qui la FAIT passer en retard est refusé. À
+    // l'heure avant : dans l'ordre que `estimer` donne aux commandes déjà
+    // prévues, ou dans celui de leur course.
+    const aLHeure = Math.min(a0, prevue.arriveesMs.get(o.id)!) <= o.limiteMs;
+    if (p.departConnu && a1 > o.limiteMs && aLHeure) {
       return { ok: false, refus: 'RETARD_CLIENT', libelle: `${o.reference} arriverait en retard` };
     }
   }
@@ -1986,7 +2049,7 @@ function evaluerAjoutSelonOrdre(ctx: Contexte, p: ParametresAjout, geographique:
         ctx,
         { arrets: tous, departMs: p.departApresMs, est: apres },
         { arrets: [q], departMs: p.departSeulMs, est: seul0 },
-        geographique,
+        opt,
       );
       const aq = groupe.arriveesMs.get(q.id)!;
       const aSeule = seul.arriveesMs.get(q.id)!;
@@ -2195,6 +2258,33 @@ function departCourse(ctx: Contexte, k: CourseTravail, enPlus: readonly string[]
   if (k.statut === CourseStatut.ACCEPTED) return ctx.t + etaMs(ctx, k.delivererId);
   if (k.offre) return ctx.t + etaMs(ctx, k.offre.deliverer_id);
   return departLibreMs(ctx, enPlus, k.dejaSollicites) ?? retourAvantTurbo(ctx, k.arrets, k.dejaSollicites);
+}
+
+/**
+ * Le livreur qui prendrait une course neuve (`graine`) : le libre le plus
+ * proche, sinon le premier qui revient avant que la graine ne parte chez
+ * Turbo (le départ de la création). `null` : personne.
+ */
+function preneurCourseNeuve(ctx: Contexte, graine: Arret): string | null {
+  let libre: string | null = null;
+  for (const id of ctx.libres) if (libre === null || etaMs(ctx, id) < etaMs(ctx, libre)) libre = id;
+  if (libre !== null) return libre;
+  if (retourAvantTurbo(ctx, [graine]) === null) return null;
+  return retoursEstimes(ctx)[0]?.id ?? null;
+}
+
+/**
+ * Départ d'une commande ajoutée à une course neuve si elle partait SEULE :
+ * avec un AUTRE livreur que celui qui prend la graine (`preneur`), libre ou
+ * de retour avant Turbo ; `null` : aucun livreur ne pourrait la prendre seule
+ * et son retard est sans objet (3.6). Essai du 28/10 : elle était censée
+ * partir seule au même instant, avec le livreur qui prenait la graine ; deux
+ * commandes à l'heure à la même adresse partaient en deux courses, la
+ * seconde chez Turbo.
+ */
+function departSeulHors(ctx: Contexte, q: Arret, preneur: string | null): number | null {
+  const hors: ReadonlySet<string> = preneur === null ? AUCUN_EXCLU : new Set([preneur]);
+  return departLibreMs(ctx, [], hors) ?? retourAvantTurbo(ctx, [q], hors);
 }
 
 /**
@@ -2465,6 +2555,9 @@ export function planifier(
     const retour = departLibre === null ? retourAvantTurbo(ctx, [graine]) : null;
     const departEstime = departLibre ?? retour;
     const depart = departOuDefaut(ctx, departEstime);
+    // Le livreur qui prendra la graine : une commande ajoutée ne partirait
+    // seule qu'avec un autre (essai du 28/10).
+    const preneur = departEstime === null ? null : preneurCourseNeuve(ctx, graine);
     let arrets: Arret[] = [graine];
     let derniere: Extract<ResultatAjout, { ok: true }> | null = null;
     for (let i = 0; i < restantes.length && arrets.length < r.maxCommandesParCourse; ) {
@@ -2473,7 +2566,7 @@ export function planifier(
         nouveaux: [restantes[i]],
         departAvantMs: depart,
         departApresMs: depart,
-        departSeulMs: departEstime === null ? null : depart,
+        departSeulMs: departEstime === null ? null : departSeulHors(ctx, restantes[i], preneur),
         attente: null,
         departConnu: departEstime !== null,
         attendLivreur: departLibre === null ? { retourMs: retour } : null,

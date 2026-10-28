@@ -13,6 +13,13 @@
  * allonge le plus long trajet seul de ses commandes de plus du détour maximal
  * d'un ajout (8 min). Les autres limites ne changent pas.
  *
+ * Relecture du correctif : deux commandes encore À L'HEURE (passées 7 à 9 min
+ * avant d'être prêtes) partaient toujours en deux courses. La seconde arrive
+ * 3 min après la première (remise), au-delà de sa promesse + 5 min ; la
+ * création la croyait capable de partir seule avec le livreur qui prenait la
+ * première (seule, elle partait en fait chez Turbo), et l'ajout ou la fusion
+ * ne gardaient que l'ordre qui mettait en retard la commande déjà prévue.
+ *
  * Restaurant de Sococé (5.3735398, -3.9990328), client à Riviera Faya
  * (5.3830, -3.9290) : 7,83 km à vol d'oiseau, 11 km estimés sans Google,
  * tracé « Google » de 11,1 km. Livreur au comptoir, appli protocole 4.
@@ -268,33 +275,128 @@ describe('l’une après l’autre, livreur encore au restaurant : B rejoint la 
 });
 
 describe('déroulé dans le monde simulé (7,83 km à vol d’oiseau, 11 km estimés) : une course, pas de Turbo', () => {
-  const monde = (r: ReglagesPlanification = REG) =>
-    new Monde(h('15:59:50'), r).livreur('l', { libreDepuis: h('15:30'), delaiDepartS: 15 * 60, protocole_appli: 4 });
+  /** Le livreur part 60 s après la remise (défaut du monde), ou reste `delaiDepartS` au comptoir. */
+  const monde = (delaiDepartS?: number) =>
+    new Monde(h('15:59:50'), REG).livreur('l', { libreDepuis: h('15:30'), delaiDepartS, protocole_appli: 4 });
+  const deroule = (o: { ecartS: number; annoncee: boolean; creee?: string; delaiDepartS?: number }) => {
+    const finB = plus(h('16:00'), o.ecartS);
+    const creee = h(o.creee ?? '15:40');
+    return monde(o.delaiDepartS)
+      .commande('a', { est: 7830, creee, enPreparation: h('15:42'), prete: h('16:00') })
+      .commande('b', {
+        est: 7834,
+        nord: 3,
+        creee,
+        enPreparation: o.annoncee ? h('15:42') : finB,
+        prete: finB,
+        finCuisine: o.annoncee ? finB : null,
+      })
+      .jusqua(h('16:30'));
+  };
 
-  for (const [nom, ecartS, annoncee] of [
-    ['prêtes ensemble', 0, true],
-    ['B prête 20 s après A', 20, true],
-    ['B prête 8 min après A, annoncée par la cuisine', 8 * 60, true],
-    ['B prête 3 min après A, jamais annoncée (traitée à la main)', 3 * 60, false],
-  ] as [string, number, boolean][]) {
-    it(nom, () => {
-      const finB = plus(h('16:00'), ecartS);
-      const m = monde()
-        .commande('a', { est: 7830, creee: h('15:40'), enPreparation: h('15:42'), prete: h('16:00') })
-        .commande('b', {
-          est: 7834,
-          nord: 3,
-          creee: h('15:40'),
-          enPreparation: annoncee ? h('15:42') : finB,
-          prete: finB,
-          finCuisine: annoncee ? finB : null,
-        })
-        .jusqua(h('16:30'));
+  for (const [nom, ecartS, creee] of [
+    ['prêtes ensemble, passées 20 min avant (déjà en retard)', 0, '15:40'],
+    ['prêtes ensemble, passées 8 min avant (à l’heure)', 0, '15:52'],
+    ['B prête 20 s après A', 20, '15:40'],
+    ['B prête 8 min après A, annoncée par la cuisine', 8 * 60, '15:40'],
+  ] as [string, number, string][]) {
+    it(`${nom} : livreur qui part 60 s après la remise`, () => {
+      const m = deroule({ ecartS, annoncee: true, creee });
       expect(m.courseDe('a')!.id).toBe(m.courseDe('b')!.id);
       expect(m.toutes('CONFIER_TURBO')).toEqual([]);
       expect(m.violations).toEqual([]);
     });
   }
+
+  it('B prête 3 min après A, jamais annoncée (traitée à la main) : deux courses si le livreur part 60 s après la remise (fenêtre d’ajout à trancher avec le client), une s’il reste au comptoir', () => {
+    const part = deroule({ ecartS: 3 * 60, annoncee: false });
+    expect(part.courseDe('a')!.id).not.toBe(part.courseDe('b')!.id);
+    expect(part.violations).toEqual([]);
+    const reste = deroule({ ecartS: 3 * 60, annoncee: false, delaiDepartS: 15 * 60 });
+    expect(reste.courseDe('a')!.id).toBe(reste.courseDe('b')!.id);
+    expect(reste.toutes('CONFIER_TURBO')).toEqual([]);
+  });
+});
+
+/**
+ * Commandes À L'HEURE (relecture du correctif) : passées 7 à 9 min avant
+ * d'être prêtes à 16 h, la seconde arrivait 3 min après la première, au-delà
+ * de sa promesse + 5 min. La création la croyait capable de partir seule avec
+ * le livreur qui prenait la première (elle partait en fait chez Turbo), et
+ * l'ajout ou la fusion ne gardaient que l'ordre qui mettait en retard la
+ * commande déjà prévue.
+ */
+describe('commandes à l’heure à la même adresse, un seul livreur au comptoir : UNE course, la première à l’heure', () => {
+  it('prêtes ensemble, passées 5 à 12 min avant : une course, proposée au livreur du comptoir', () => {
+    for (const [, posB] of SECONDES) {
+      for (const google of [false, true]) {
+        for (const creeeAvantMin of [5, 7, 8, 9, 10, 12]) {
+          const creee = plus(h('16:00'), -creeeAvantMin * 60);
+          const plan = passage(plus(h('16:00'), 5), {
+            commandes: [commande('a', FAYA, { creee, prete: h('16:00'), google }), commande('b', posB, { creee, prete: h('16:00'), google })],
+          });
+          const creees = actionsDe(plan, 'CREER_COURSE');
+          expect(creees.map((c) => [...c.order_ids].sort())).toEqual([['a', 'b']]);
+          expect(actionsDe(plan, 'OFFRIR').map((o) => o.deliverer_id)).toEqual(['l']);
+          expect(plan.refus).toEqual([]);
+        }
+      }
+    }
+  });
+
+  it('trois commandes passées à 15 h 52 : une course, la première prête d’abord, à l’heure', () => {
+    for (const google of [false, true]) {
+      const plan = passage(plus(h('16:00'), 5), {
+        commandes: ['a', 'b', 'c'].map((id) => commande(id, FAYA, { creee: h('15:52'), prete: h('16:00'), google })),
+      });
+      expect(actionsDe(plan, 'CREER_COURSE').map((c) => c.sequence)).toEqual([['a', 'b', 'c']]);
+    }
+  });
+
+  it('deux livreurs libres au comptoir : deux courses, toutes deux à l’heure (la promesse tient ; à confirmer avec le client)', () => {
+    const t = plus(h('16:00'), 5);
+    const plan = passage(t, {
+      commandes: [
+        commande('a', FAYA, { creee: h('15:52'), prete: h('16:00'), google: true }),
+        commande('b', FAYA, { creee: h('15:52'), prete: h('16:00'), google: true }),
+      ],
+      livreurs: [livreur('l', t), livreur('l2', t)],
+    });
+    expect(actionsDe(plan, 'CREER_COURSE').map((c) => c.order_ids)).toEqual([['a'], ['b']]);
+    expect(actionsDe(plan, 'OFFRIR')).toHaveLength(2);
+    expect(plan.refus.map((x) => `${x.essai}:${x.refus}`)).toEqual(['CREATION:RETARD_CLIENT']);
+  });
+
+  it('B plus pressée que A (passée 1 min avant), prête 2 min après : ajoutée APRÈS A, qui garde sa promesse', () => {
+    for (const posB of [FAYA, FAYA_5M]) {
+      for (const google of [false, true]) {
+        const T0 = h('16:00');
+        const t = plus(T0, 120);
+        const a = commande('a', FAYA, { creee: h('15:52'), prete: T0, google });
+        const b = commande('b', posB, { creee: h('15:51'), prete: t, google });
+        const k = crs('k', { commandes: [a], created_at: T0, statut: CourseStatut.AT_RESTAURANT, deliverer_id: 'l', assigned_at: plus(T0, 10) });
+        const plan = passage(t, { commandes: [b], courses: [k], livreurs: [livreur('l', t, { en_course: true, last_available_at: null })] });
+        expect(actionsDe(plan, 'AJOUTER').map((x) => [x.course_id, x.order_id])).toEqual([['k', 'b']]);
+        expect(actionsDe(plan, 'CREER_COURSE')).toEqual([]);
+        expect(refusDe(plan, 'b')).toEqual([]);
+        // Sans Google, A seule arrive à 16 h 32 pile (sa limite) : B passe après elle.
+        if (posB === FAYA && !google) expect(actionsDe(plan, 'ORDONNER').map((x) => x.sequence)).toEqual([['a', 'b']]);
+      }
+    }
+  });
+
+  it('B dans sa propre course, la course de A acceptée : fusionnée tout de suite, sans attendre que A soit en retard', () => {
+    const T0 = h('16:00');
+    for (const s of [10, 60, 120]) {
+      const t = plus(T0, s);
+      const a = commande('a', FAYA, { creee: h('15:52'), prete: T0, google: true });
+      const b = commande('b', FAYA, { creee: h('15:52'), prete: plus(T0, 5), google: true });
+      const k1 = crs('k1', { commandes: [a], statut: CourseStatut.ACCEPTED, deliverer_id: 'l', assigned_at: plus(T0, 5), created_at: T0 });
+      const k2 = crs('k2', { commandes: [b], created_at: plus(T0, 5) });
+      const plan = passage(t, { courses: [k1, k2], livreurs: [livreur('l', t, { en_course: true, last_available_at: null })] });
+      expect(actionsDe(plan, 'FUSIONNER').map((f) => [f.cible_id, f.absorbee_id])).toEqual([['k1', 'k2']]);
+    }
+  });
 });
 
 describe('les autres limites ne changent pas', () => {

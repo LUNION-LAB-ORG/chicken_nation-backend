@@ -88,32 +88,37 @@ describe('cas du client (3.9) : un seul livreur, au comptoir ; A prête, B et C 
     expect(m.violations).toEqual([]);
   });
 
-  it('B prête vers 12 h 42 (au-delà de l’horizon) : A part seule ; B et C forment une course, Turbo en dernier recours', () => {
-    const m = monde(null).jusqua(h('12:45'));
+  it('B prête vers 12 h 42 (au-delà de l’horizon) : trajet long, A attend B en passant la première ; tout part avec D1, sans Turbo', () => {
+    const m = monde(null).jusqua(h('13:05'));
 
-    // Trajet long (A à 2,5 km, aller-retour de 29 min à 16 km/h), mais en
-    // attendant B jusqu'à 12 h 42, A arriverait après 12 h 58 (promesse + 5 min) : refusé.
-    expect(m.toutes('RETENIR')).toEqual([]);
-    expect(m.historique.some(({ plan }) => plan.refus.some((r) => r.order_id === 'b' && r.refus === 'RETARD_CLIENT'))).toBe(true);
+    // Trajet long (A à 2,5 km, aller-retour de 29 min à 16 km/h). En
+    // attendant B jusqu'à 12 h 42, A arriverait après 12 h 58 (promesse +
+    // 5 min) si B passait d'abord ; A d'abord, elle arrive vers 12 h 56 et B,
+    // qu'aucun autre livreur ne prendrait, la suit (essai du 28/10 : avant,
+    // seul l'ordre « B d'abord » était essayé, A partait seule et B et C
+    // finissaient chez Turbo).
+    expect(m.toutes('RETENIR').map((x) => [hms(x.t), x.action.motif, hms(x.action.jusqua), x.action.attendues.map((a) => a.order_id)])).toEqual([
+      ['12:30:10', 'TRAJET_LONG', '12:42:00', ['b']],
+    ]);
     // Attente courte seule : B au-delà de l'horizon, comme avant.
     const court = monde(null, 120, COURT).jusqua(h('12:31'));
     expect(court.historique.some(({ plan }) => plan.refus.some((r) => r.order_id === 'b' && r.refus === 'HORIZON'))).toBe(true);
-    const ka = m.courseDe('a')!;
-    expect(hms(m.commandes.get('a')!.remise_at!)).toBe('12:30:30'); // 20 s pour présenter le code
-    expect(hms(ka.parti_at!)).toBe('12:32:30');
 
-    // B prête à 12:34 : D1 est parti ; sa course est créée et attend. C la rejoint à 12:35.
-    expect(m.toutes('CREER_COURSE').map((x) => [hms(x.t), x.action.order_ids])).toEqual([
-      ['12:30:00', ['a']],
-      ['12:34:00', ['b']],
+    // B prête à 12:34 : ajoutée, « Tout est prêt », remise avec A ; C ajoutée après le retrait.
+    expect(m.toutes('AJOUTER').map((x) => [hms(x.t), x.action.order_id, x.action.apres_retrait])).toEqual([
+      ['12:34:00', 'b', false],
+      ['12:35:00', 'c', true],
     ]);
-    expect(m.toutes('AJOUTER').map((x) => [hms(x.t), x.action.order_id, x.action.apres_retrait])).toEqual([['12:35:00', 'c', false]]);
-    expect(m.courseDe('c')!.id).toBe(m.courseDe('b')!.id);
-
-    // Aucun livreur avant 12:54 : Turbo 6 min après la plus ancienne commande prête (12:34), pas avant.
-    expect(m.toutes('CONFIER_TURBO').map((x) => [hms(x.t), x.action.course_id, x.action.minutes])).toEqual([
-      ['12:40:00', m.courseDe('b')!.id, 6],
-    ]);
+    expect(m.toutes('CREER_COURSE').map((x) => [hms(x.t), x.action.order_ids])).toEqual([['12:30:00', ['a']]]);
+    const k = m.courseDe('a')!;
+    expect(m.courseDe('b')!.id).toBe(k.id);
+    expect(m.courseDe('c')!.id).toBe(k.id);
+    expect(hms(k.parti_at!)).toBe('12:36:00');
+    // Toutes livrées par D1 avant leur promesse + 5 min (A 12:58, B 13:00, C 13:02).
+    expect(hms(m.commandes.get('a')!.livree_at!) < '12:58:00').toBe(true);
+    expect(hms(m.commandes.get('b')!.livree_at!) < '13:00:00').toBe(true);
+    expect(hms(m.commandes.get('c')!.livree_at!) < '13:02:00').toBe(true);
+    expect(m.toutes('CONFIER_TURBO')).toEqual([]);
     expect(m.violations).toEqual([]);
   });
 });

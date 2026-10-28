@@ -600,15 +600,22 @@ describe('limites dures d’un ajout (3.6)', () => {
 
   it('retard : une commande déjà prévue n’est jamais poussée au-delà de sa promesse + 5 min', () => {
     // o promise 12:36, limite 12:41 ; seule elle arrive à 12:40:30 ; avec q avant elle, 12:43:30.
-    // q aussi pressée (créée à 12:01) : la livrer après o la mettrait en retard à son tour,
+    // q aussi pressée (créée à 12:01) : la livrer après o la met en retard à son tour,
     // aucun ordre ne sauve les deux (l'ordre selon les promesses est testé à part).
+    // Un livreur libre prendrait q seule à l'heure : refusée.
     const k = auComptoir([cmd('o', { est: 2000, created_at: h('12:01') })]);
     const q = cmd('q', { est: 1000, created_at: h('12:01') });
-    const plan = essai(k, q);
+    const libre = livr('d2', M, { auComptoir: true });
+    const plan = essai(k, q, REG, [libre]);
     expect(actionsDe(plan, 'AJOUTER')).toEqual([]);
     expect(refusDe(plan, 'q', 'k')).toEqual(['RETARD_CLIENT']);
     // retard toléré plus large : accepté
-    expect(actionsDe(essai(k, q, avec({ retardMaxClientMin: 8 })), 'AJOUTER')).toHaveLength(1);
+    expect(actionsDe(essai(k, q, avec({ retardMaxClientMin: 8 }), [libre]), 'AJOUTER')).toHaveLength(1);
+    // Personne d'autre pour q (essai du 28/10) : son retard est sans objet ; elle
+    // passe APRÈS o, qui garde sa promesse (avant : refusée, puis chez Turbo).
+    const seul = essai(k, q);
+    expect(actionsDe(seul, 'AJOUTER').map((x) => [x.order_id, x.course_id])).toEqual([['q', 'k']]);
+    expect(actionsDe(seul, 'ORDONNER').map((x) => x.sequence)).toEqual([['o', 'q']]);
   });
 
   it('personne pour partir : le retard supposé d’une commande prévue ne bloque pas le regroupement (le détour, si)', () => {
