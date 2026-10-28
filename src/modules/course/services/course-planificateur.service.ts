@@ -56,8 +56,12 @@ export const MARGE_REVEIL_RETENUE_MS = 300;
  */
 export const DELAI_REFUS_JOURNALISE_MS = 10 * 60_000;
 const REFUS_JOURNALISES_MAX = 5000;
-/** Essais dont les refus sont journalisés : ceux qui disent pourquoi une commande n'a pas rejoint une course. */
-const ESSAIS_JOURNALISES: readonly RefusPlanification['essai'][] = ['AJOUT', 'FUSION', 'RETENUE'];
+/**
+ * Essais dont les refus sont journalisés : ceux qui disent pourquoi une
+ * commande n'a pas rejoint une course. La création aussi (28/10) : le cas
+ * du client (deux commandes, un livreur) se décide dès la création.
+ */
+const ESSAIS_JOURNALISES: readonly RefusPlanification['essai'][] = ['AJOUT', 'CREATION', 'FUSION', 'RETENUE'];
 
 export interface ResultatPassage {
   restaurant_id: string;
@@ -223,7 +227,8 @@ export class CoursePlanificateurService implements OnModuleDestroy {
         plan = { restaurant_id: restaurantId, maintenant, actions: actionsRepliV1(lu.instantane), refus: [] };
       } else {
         // Ordre des arrêts par la route : distances entre clients lues dans le cache (27/10).
-        const options = { verdicts: lu.verdicts, matrice: lu.matrice };
+        // Second avis du regroupement : distances entre commandes à regrouper, cache aussi (28/10).
+        const options = { verdicts: lu.verdicts, matrice: lu.matrice, entreCandidats: lu.entreCandidats };
         plan = planifier(lu.instantane, reglages, options);
         // Une course est proposée : temps Google des livreurs (si le réglage
         // le permet), et nouveau calcul avec eux.
@@ -346,7 +351,10 @@ export class CoursePlanificateurService implements OnModuleDestroy {
    * jamais la clé d'une course du plan (`nouvelle-1`), qui reste dans
    * `details`. Lignes rendues ici, écrites après le passage en une insertion
    * (`ecrireTous`, sans l'attendre) : le journal ne retarde jamais une offre
-   * ni les passages des autres restaurants (relecture du 25/10).
+   * ni les passages des autres restaurants (relecture du 25/10). Une
+   * création se dédoublonne sur sa commande graine (la clé `nouvelle-N`
+   * change d'un passage à l'autre) ; la comparaison du second avis du
+   * regroupement, s'il a été mené, va dans `details`.
    */
   private refusAJournaliser(
     restaurantId: string,
@@ -359,7 +367,8 @@ export class CoursePlanificateurService implements OnModuleDestroy {
     const lignes: EvenementDispatch[] = [];
     for (const x of refus) {
       if (!ESSAIS_JOURNALISES.includes(x.essai)) continue;
-      const cle = [restaurantId, x.essai, x.order_id ?? x.source_id ?? '', x.course_cle, x.refus].join('|');
+      const cible = x.essai === 'CREATION' ? x.graine_id ?? x.course_cle : x.course_cle;
+      const cle = [restaurantId, x.essai, x.order_id ?? x.source_id ?? '', cible, x.refus].join('|');
       const vu = this.refusJournalises.get(cle);
       if (vu !== undefined && t - vu < DELAI_REFUS_JOURNALISE_MS) continue;
       this.retenirRefus(cle, t);
@@ -370,7 +379,14 @@ export class CoursePlanificateurService implements OnModuleDestroy {
         restaurant_id: restaurantId,
         course_id: coursesLues.has(x.course_cle) ? x.course_cle : null,
         order_id: x.order_id,
-        details: { essai: x.essai, course_cle: x.course_cle, source_id: x.source_id, libelle: x.libelle },
+        details: {
+          essai: x.essai,
+          course_cle: x.course_cle,
+          source_id: x.source_id,
+          libelle: x.libelle,
+          ...(x.graine_id ? { graine_id: x.graine_id } : {}),
+          ...(x.comparaison ? { comparaison: x.comparaison } : {}),
+        },
       });
     }
     return lignes;

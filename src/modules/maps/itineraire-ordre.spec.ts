@@ -2,7 +2,8 @@
  * MapsService, ordre des arrêts d'une tournée (demande du client du 27/10) :
  * distance entre deux clients lue dans le cache routier de 30 jours sans
  * jamais appeler Google (`trajetEnCache`), et appel borné compté à part
- * (`ordre_arrets`, plafonné avec le regroupement).
+ * (`ordre_arrets`, plafonné avec le regroupement) ; de même pour le second
+ * avis du regroupement par tournée (`regroupement_route`, 28/10).
  *
  * ⚠️ Aucun appel réel à Google : `fetch` est remplacé, tout appel non prévu
  * fait échouer le test.
@@ -11,6 +12,7 @@ import type { Cache } from 'cache-manager';
 
 import { DELAI_CACHE_MS } from './cache-borne.helper';
 import {
+  cleCompteur,
   CompteurAppelsGoogleService,
   FONCTIONS_GOOGLE,
   FONCTIONS_PLAFONNEES,
@@ -108,6 +110,43 @@ describe('itineraireRoutier pour l’ordre des arrêts', () => {
     await expect(muet.maps.itineraireRoutier(params, { pour: 'ordre' })).resolves.toBeNull();
     expect(muet.durees.get(CLE_ECHEC)).toBe(10 * 60 * 1000);
     await muet.maps.itineraireRoutier(params, { pour: 'ordre' });
+    expect(fetchEspion).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('itineraireRoutier pour le second avis du regroupement (28/10)', () => {
+  const params = { originLat: KOUMASSI.lat, originLng: KOUMASSI.lng, destLat: PORT_BOUET.lat, destLng: PORT_BOUET.lng };
+
+  it('compté sous regroupement_route (maps:appels:<jour>:regroupement_route), plafonné, gardé 30 jours sous la même clé', async () => {
+    expect(FONCTIONS_GOOGLE).toContain('regroupement_route');
+    expect(FONCTIONS_PLAFONNEES.has('regroupement_route')).toBe(true);
+    expect(cleCompteur('2026-10-28', 'regroupement_route')).toBe('maps:appels:2026-10-28:regroupement_route');
+    const { maps, valeurs, durees, compteur } = monter();
+    fetchEspion.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 'OK', routes: [{ overview_polyline: { points: '' }, legs: [{ distance: { value: 2600 }, duration: { value: 420 } }] }] }),
+    } as unknown as Response);
+    const r = await maps.itineraireRoutier(params, { pour: 'regroupement' });
+    expect(r?.metres).toBe(2600);
+    expect(compteur.reserver).toHaveBeenCalledWith('regroupement_route');
+    expect(durees.get(CLE)).toBe(30 * 24 * 60 * 60 * 1000);
+    expect(valeurs.has(CLE)).toBe(true);
+    // Partagée ensuite avec l'ordre des arrêts et les frais : aucun nouvel appel.
+    await expect(maps.itineraireRoutier(params, { pour: 'ordre' })).resolves.toMatchObject({ metres: 2600 });
+    expect(fetchEspion).toHaveBeenCalledTimes(1);
+  });
+
+  it('plafond quotidien atteint : rien n’est envoyé ; échec de Google retenu 10 min', async () => {
+    const plafonne = monter();
+    plafonne.compteur.reserver.mockResolvedValue(false);
+    await expect(plafonne.maps.itineraireRoutier(params, { pour: 'regroupement' })).resolves.toBeNull();
+    expect(fetchEspion).not.toHaveBeenCalled();
+
+    const muet = monter();
+    fetchEspion.mockResolvedValue({ ok: true, json: async () => ({ status: 'ZERO_RESULTS' }) } as unknown as Response);
+    await expect(muet.maps.itineraireRoutier(params, { pour: 'regroupement' })).resolves.toBeNull();
+    expect(muet.durees.get(CLE_ECHEC)).toBe(10 * 60 * 1000);
+    await muet.maps.itineraireRoutier(params, { pour: 'regroupement' });
     expect(fetchEspion).toHaveBeenCalledTimes(1);
   });
 });

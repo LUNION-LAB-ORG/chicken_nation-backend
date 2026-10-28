@@ -32,9 +32,11 @@ import {
   livreursAMesurer,
   pairesAEvaluer,
   pairesAOrdonner,
+  pairesARegrouper,
   ReglagesPlanification,
 } from '../helpers/planification.rules';
 import { ReglagesPreparation } from '../helpers/preparation.rules';
+import { APPELS_REGROUPEMENT_PAR_PASSAGE } from '../helpers/regroupement-tournee.rules';
 import { DirectionService } from './direction.service';
 import { EstimationPreparationService } from './estimation-preparation.service';
 
@@ -87,6 +89,12 @@ export interface InstantaneLu {
    * par `clePaire`), lues dans le cache seulement (`matriceEntreClients`).
    */
   matrice?: Map<string, number>;
+  /**
+   * Distances par la route entre commandes à regrouper (mètres, par
+   * `clePaire`), cache seulement (`distancesEntreCandidats`) : second avis
+   * du regroupement (28/10).
+   */
+  entreCandidats?: Map<string, number>;
 }
 
 /** Même point à 11 m près (clé du cache routier arrondie à 4 décimales) : 0 m, rien à demander. */
@@ -355,12 +363,17 @@ export class InstantanePlanificationService {
     });
 
     // Ordre des arrêts par la route : distances entre clients, cache seulement.
-    const matrice = await this.matriceEntreClients(instantane, google);
+    // Second avis du regroupement : distances entre commandes à regrouper, idem.
+    const [matrice, entreCandidats] = await Promise.all([
+      this.matriceEntreClients(instantane, google),
+      this.distancesEntreCandidats(instantane, verdicts, r, google),
+    ]);
 
     return {
       instantane,
       verdicts,
       matrice,
+      entreCandidats,
       contexte: {
         restaurant: { id: restaurantId, name: restaurant?.name ?? null, position },
         codes: new Map(lignesCourses.map((k) => [k.id, k.pickup_code])),
@@ -401,7 +414,7 @@ export class InstantanePlanificationService {
         if (typeof m === 'number' && Number.isFinite(m) && m >= 0) matrice.set(clePaire(a.id, b.id), m);
         else manquantes.push([a.position!, b.position!]);
       });
-      if (google) this.demanderDistances(manquantes);
+      if (google) this.demanderDistances(manquantes, 'ordre', APPELS_ORDRE_PAR_PASSAGE);
     } catch (err) {
       this.logger.warn(`Distances entre clients indisponibles : ${(err as Error)?.message ?? err}`);
       matrice.clear();
@@ -410,18 +423,64 @@ export class InstantanePlanificationService {
   }
 
   /**
-   * Lance les appels Google manquants sans les attendre (6 au plus, jamais
-   * deux fois en vol). Une paire sans réponse de Google est sautée 10 min
-   * sans compter parmi les 6 : sinon, Google lent, les mêmes paires en échec
-   * prenaient toutes les places et celles des autres courses n'étaient
-   * jamais demandées.
+   * Distances PAR LA ROUTE entre commandes à regrouper (second avis, retour
+   * du client du 28/10 ; `pairesARegrouper` : paires refusées par la
+   * direction, pas perdues d'avance, 60 au plus) : lues dans le cache routier
+   * de 30 jours seulement, dans un sens puis dans l'autre. Elles vont dans
+   * une table à part que seul le second avis lit.
+   *
+   * Les manquantes sont demandées à Google SANS ÊTRE ATTENDUES, si le réglage
+   * le permet : 6 au plus par passage (en plus des 6 de l'ordre des arrêts),
+   * comptées à part (`regroupement_route`) dans le plafond quotidien, jamais
+   * deux fois en vol, une paire sans réponse sautée 10 min sans prendre de
+   * place. Le passage suivant (10 s) les trouve en cache. Ne lève jamais.
    */
-  private demanderDistances(paires: readonly [ILatLng, ILatLng][]): void {
+  async distancesEntreCandidats(
+    instantane: InstantanePlanification,
+    verdicts: ReadonlyMap<string, VerdictPaire>,
+    r: ReglagesPlanification,
+    google: boolean,
+  ): Promise<Map<string, number>> {
+    const distances = new Map<string, number>();
+    try {
+      const paires = pairesARegrouper(instantane, verdicts, r);
+      if (paires.length === 0) return distances;
+      const lues = await Promise.all(
+        paires.map(async ([a, b]) => {
+          const pa = a.position!;
+          const pb = b.position!;
+          if (memePoint(pa, pb)) return 0;
+          return (await this.maps.trajetEnCache(pa, pb)) ?? (await this.maps.trajetEnCache(pb, pa));
+        }),
+      );
+      const manquantes: [ILatLng, ILatLng][] = [];
+      paires.forEach(([a, b], i) => {
+        const m = lues[i];
+        if (typeof m === 'number' && Number.isFinite(m) && m >= 0) distances.set(clePaire(a.id, b.id), m);
+        else manquantes.push([a.position!, b.position!]);
+      });
+      if (google) this.demanderDistances(manquantes, 'regroupement', APPELS_REGROUPEMENT_PAR_PASSAGE);
+    } catch (err) {
+      this.logger.warn(`Distances entre commandes à regrouper indisponibles : ${(err as Error)?.message ?? err}`);
+      distances.clear();
+    }
+    return distances;
+  }
+
+  /**
+   * Lance les appels Google manquants sans les attendre (`max` au plus, 6,
+   * jamais deux fois en vol). Une paire sans réponse de Google est sautée
+   * 10 min sans compter parmi les places : sinon, Google lent, les mêmes
+   * paires en échec prenaient toutes les places et celles des autres courses
+   * n'étaient jamais demandées. `pour` : la fonction comptée (`ordre_arrets`
+   * ou `regroupement_route`).
+   */
+  private demanderDistances(paires: readonly [ILatLng, ILatLng][], pour: 'ordre' | 'regroupement', max: number): void {
     const maintenant = Date.now();
     for (const [cle, jusqua] of this.pairesEnEchec) if (jusqua <= maintenant) this.pairesEnEchec.delete(cle);
     let lancees = 0;
     for (const [origine, destination] of paires) {
-      if (lancees >= APPELS_ORDRE_PAR_PASSAGE) return;
+      if (lancees >= max) return;
       const cle = clePoints(origine, destination);
       if (this.pairesEnVol.has(cle) || this.pairesEnEchec.has(cle)) continue;
       this.pairesEnVol.add(cle);
@@ -430,7 +489,7 @@ export class InstantanePlanificationService {
         .then(() =>
           this.maps.itineraireRoutier(
             { originLat: origine.lat, originLng: origine.lng, destLat: destination.lat, destLng: destination.lng },
-            { pour: 'ordre' },
+            { pour },
           ),
         )
         .catch(() => null)

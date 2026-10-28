@@ -10,7 +10,8 @@ import { ClientRedisCompteur, REDIS_COMPTEUR_GOOGLE } from './redis-compteur-goo
  * Plafonnées (`FONCTIONS_PLAFONNEES`) : celles du REGROUPEMENT, qui ont un
  * repli sans Google et dont la coupure ne bloque rien (tracés de la règle de
  * direction, détour, temps de trajet des livreurs, distances entre clients
- * pour l'ordre des arrêts). Les autres sont comptées
+ * pour l'ordre des arrêts et pour le second avis du regroupement). Les
+ * autres sont comptées
  * mais JAMAIS coupées : la distance routière des frais de livraison et de
  * l'acheminement (couper ramènerait le vol d'oiseau au travers de la lagune
  * et des frais différents pour une même adresse, relecture du 23/10), la
@@ -27,6 +28,8 @@ export type FonctionGoogle =
   | 'temps_trajet'
   /** `itineraireRoutier` entre deux clients d'une tournée : ordre des arrêts par la route (27/10). */
   | 'ordre_arrets'
+  /** `itineraireRoutier` entre deux commandes à regrouper : second avis du regroupement par tournée (28/10). */
+  | 'regroupement_route'
   /** `getDirections` : trajet avec trafic (applis, suivi du client, durée de tournée). */
   | 'trajet_trafic'
   | 'geocodage_inverse'
@@ -45,6 +48,7 @@ export const FONCTIONS_GOOGLE: readonly FonctionGoogle[] = [
   'details_lieu',
   'vignette',
   'ordre_arrets',
+  'regroupement_route',
 ];
 
 export const FONCTIONS_PLAFONNEES: ReadonlySet<FonctionGoogle> = new Set<FonctionGoogle>([
@@ -52,6 +56,7 @@ export const FONCTIONS_PLAFONNEES: ReadonlySet<FonctionGoogle> = new Set<Fonctio
   'detour',
   'temps_trajet',
   'ordre_arrets',
+  'regroupement_route',
 ]);
 
 /** Réglage : plafond quotidien des appels plafonnés. */

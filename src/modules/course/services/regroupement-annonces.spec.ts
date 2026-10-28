@@ -12,7 +12,8 @@
  *  - S12 : retenue reposée pour une commande entrée en préparation après sa
  *    fin, écrite seulement si la retenue n'a pas bougé depuis la lecture ;
  *  - S13 : refus du planificateur journalisés (PLAN_REFUS), une ligne par
- *    refus et par 10 min, passage sans action compris ;
+ *    refus et par 10 min, passage sans action compris, création comprise
+ *    (28/10) ;
  *  - S14 (27/10) : chaque commande attendue est écrite avec son prix
  *    (`montant`), et l'heure « prête vers » est tenue à jour à la minute,
  *    même échéance, sans nouvelle annonce au livreur.
@@ -398,6 +399,28 @@ describe('S13. refus du planificateur journalisés (PLAN_REFUS)', () => {
     expect(t.base.prisma.dispatchEvenement.create).not.toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ type: 'PLAN_REFUS' }) }),
     );
+  });
+
+  it('création (28/10) : le refus est écrit, dédoublonné sur la commande graine et non sur la clé « nouvelle-N »', async () => {
+    const d1 = livreur({ ...AU_COMPTOIR, last_available_at: null, protocole_appli: 4 });
+    // A à l'est, O à l'ouest : sens opposés, deux courses.
+    const a = prete({ ready_at: avant(40) });
+    const o = prete({ address: O, ready_at: avant(20) });
+    const t = monter({ commandes: [a, o], livreurs: [d1] });
+    // Rien n'est écrit : la même création est retentée au passage suivant.
+    jest.spyOn(t.application, 'appliquer').mockResolvedValue({ appliquees: [], abandonnees: [], creees: new Map() });
+    await t.passer();
+    expect(t.journalDe('PLAN_REFUS')).toEqual([
+      expect.objectContaining({
+        motif: 'DIRECTION',
+        order_id: o.id,
+        course_id: null,
+        details: expect.objectContaining({ essai: 'CREATION', course_cle: 'nouvelle-1', graine_id: a.id }),
+      }),
+    ]);
+    jest.setSystemTime(apres(10));
+    await t.passer();
+    expect(t.journalDe('PLAN_REFUS')).toHaveLength(1);
   });
 
   it('motif qui change : une nouvelle ligne', async () => {
