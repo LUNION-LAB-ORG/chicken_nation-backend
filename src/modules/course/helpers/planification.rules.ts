@@ -1513,15 +1513,18 @@ export function pairesAOrdonner(instantane: InstantanePlanification): [ClientDir
  *    depuis le restaurant ;
  *  - qui ne sont pas dans une même course (`pairesAOrdonner` les lit) ;
  *  - à plus de 150 m l'une de l'autre (sinon même adresse : 0 m, rien à lire) ;
- *  - que la direction ne juge pas compatibles (une paire compatible se
- *    groupe aujourd'hui, et sa distance arrive par `pairesAOrdonner`) ;
  *  - dont la tournée n'est pas perdue d'avance : la route étant au moins
  *    le vol d'oiseau, (plus courte distance depuis le restaurant + vol
  *    d'oiseau entre elles) à la vitesse la plus haute, plus 3 min, tient
  *    sous le plafond de la tournée groupée (ce filtre ne décide rien, il
  *    évite des appels).
- * La plus ancienne commande prête d'abord, puis la fin de préparation la
- * plus proche ; 60 paires au plus. Chaque paire va du client le plus proche
+ * Les paires que la direction refuse d'abord, puis les compatibles : une
+ * paire compatible hors d'une même course n'a de distance que par ici
+ * (relecture du 28/10 : écartée, une commande à 600 m d'un client d'une
+ * tournée groupée ne pouvait jamais la rejoindre, et un refus pour la durée
+ * estimée à vol d'oiseau n'avait jamais de second avis). Dans chaque lot, la
+ * plus ancienne commande prête d'abord, puis la fin de préparation la plus
+ * proche ; 60 paires au plus. Chaque paire va du client le plus proche
  * du restaurant vers le plus lointain (sens de l'appel à Google s'il faut la
  * demander). Le service les lit dans le cache, et demande les manquantes
  * sans les attendre. Interrupteur coupé : aucune.
@@ -1553,12 +1556,11 @@ export function pairesARegrouper(
     if (ka !== undefined && ka === courseDe.get(b.id)) continue;
     const vol = haversineMeters(a.position, b.position);
     if (vol <= MEME_ADRESSE_M) continue;
-    const v = verdicts.get(clePaire(a.id, b.id)) ?? (evaluerPaire(R, a, b, r.direction, null) as VerdictPaire);
-    if (v.compatible) continue;
     if ((Math.min(a.routeMetres!, b.routeMetres!) + vol) / mps + ARRET_CLIENT_S > r.regroupementTourneeMaxMin * 60) continue;
+    const v = verdicts.get(clePaire(a.id, b.id)) ?? (evaluerPaire(R, a, b, r.direction, null) as VerdictPaire);
     const [ta, tb] = [pretAt.get(a.id) ?? Number.POSITIVE_INFINITY, pretAt.get(b.id) ?? Number.POSITIVE_INFINITY];
     const paire: [ClientDirection, ClientDirection] = a.routeMetres! <= b.routeMetres! ? [a, b] : [b, a];
-    retenues.push({ paire, cle: [Math.min(ta, tb), Math.max(ta, tb)] });
+    retenues.push({ paire, cle: [v.compatible ? 1 : 0, Math.min(ta, tb), Math.max(ta, tb)] });
   }
   return retenues
     .sort((x, y) => comparerCles(x.cle, y.cle) || (clePaire(x.paire[0].id, x.paire[1].id) < clePaire(y.paire[0].id, y.paire[1].id) ? -1 : 1))
@@ -2001,9 +2003,6 @@ export function allerRetourCourseMs(
 
 const minutesTexte = (ms: number) => `${Math.max(1, Math.round(ms / 60_000))} min`;
 
-/** Comparaison du second avis à joindre au refus (journal), s'il a été mené. */
-const comparaisonDe = (res: Extract<ResultatAjout, { ok: false }>) => (res.comparaison ? { comparaison: res.comparaison } : {});
-
 /**
  * Le cœur des limites (3.6) : ajouter `nouveaux` à `existants`.
  *  - TAILLE : au plus `maxCommandesParCourse` ;
@@ -2035,16 +2034,35 @@ const comparaisonDe = (res: Extract<ResultatAjout, { ok: false }>) => (res.compa
  * nouvelle n'ayant aucun autre livreur). Le premier refus est gardé si aucun
  * ordre ne passe.
  *
+ * C'est la règle d'aujourd'hui, seule. Le second avis du regroupement
+ * (`relireParSecondAvis`) ne relit ses refus qu'après coup, porte par porte,
+ * quand aucune course ne l'a acceptée (relecture du 28/10).
+ */
+function evaluerAjout(ctx: Contexte, p: ParametresAjout): ResultatAjout {
+  const res = evaluerAjoutSelonOrdre(ctx, p, 'LIBRE');
+  if (res.ok || !REFUS_SELON_ORDRE.includes(res.refus)) return res;
+  const direction = evaluerAjoutSelonOrdre(ctx, p, 'DIRECTION');
+  if (direction.ok) return direction;
+  if (p.existants.length === 0 || (res.refus !== 'RETARD_CLIENT' && direction.refus !== 'RETARD_CLIENT')) return res;
+  const aLaSuite = evaluerAjoutSelonOrdre(ctx, p, 'A_LA_SUITE');
+  return aLaSuite.ok ? aLaSuite : res;
+}
+
+/**
  * SECOND AVIS (retour du client du 28/10, `regroupement-tournee.rules.ts`) :
- * un refus pour la direction, la durée de la tournée, le détour ou un
- * retard est relu en comparant la tournée groupée par la route aux
+ * un refus de la règle d'aujourd'hui (`res`, rendu par `evaluerAjout` avec
+ * les mêmes paramètres) pour la direction, la durée de la tournée, le détour
+ * ou un retard est relu en comparant la tournée groupée par la route aux
  * livraisons séparées avec les livreurs vraiment disponibles. S'il la trouve
  * meilleure pour les clients, le groupe est accepté (motif `TOURNEE_ROUTE`) ;
  * sinon le refus d'aujourd'hui reste, la comparaison jointe pour le journal.
- * Tout ce qui est accepté aujourd'hui l'est encore, de la même façon.
+ *
+ * Chaque porte ne l'appelle qu'APRÈS la règle d'aujourd'hui, et seulement
+ * si celle-ci n'a rien accepté : tout ce qui est groupé aujourd'hui l'est
+ * encore, de la même façon (relecture du 28/10 : une tournée acceptée par le
+ * second avis passait devant un groupe que la règle d'aujourd'hui acceptait).
  */
-function evaluerAjout(ctx: Contexte, p: ParametresAjout): ResultatAjout {
-  const res = evaluerAjoutAujourdhui(ctx, p);
+function relireParSecondAvis(ctx: Contexte, p: ParametresAjout, res: ResultatAjout): ResultatAjout {
   if (res.ok || !REFUS_SECOND_AVIS.includes(res.refus)) return res;
   const avis = secondAvis(ctx, p);
   if (!avis) return res;
@@ -2068,16 +2086,9 @@ function evaluerAjout(ctx: Contexte, p: ParametresAjout): ResultatAjout {
   };
 }
 
-/** La règle d'aujourd'hui : l'ordre le meilleur, puis celui de la direction, puis « à la suite ». */
-function evaluerAjoutAujourdhui(ctx: Contexte, p: ParametresAjout): ResultatAjout {
-  const res = evaluerAjoutSelonOrdre(ctx, p, 'LIBRE');
-  if (res.ok || !REFUS_SELON_ORDRE.includes(res.refus)) return res;
-  const direction = evaluerAjoutSelonOrdre(ctx, p, 'DIRECTION');
-  if (direction.ok) return direction;
-  if (p.existants.length === 0 || (res.refus !== 'RETARD_CLIENT' && direction.refus !== 'RETARD_CLIENT')) return res;
-  const aLaSuite = evaluerAjoutSelonOrdre(ctx, p, 'A_LA_SUITE');
-  return aLaSuite.ok ? aLaSuite : res;
-}
+/** Le refus d'aujourd'hui peut-il être relu par le second avis ? */
+const relisible = (ctx: Contexte, res: ResultatAjout): res is Extract<ResultatAjout, { ok: false }> =>
+  ctx.r.regroupementTournee && !res.ok && REFUS_SECOND_AVIS.includes(res.refus);
 
 /**
  * Ordre des arrêts essayé par `evaluerAjout` : le meilleur (`estimer`), celui
@@ -2104,6 +2115,14 @@ interface SecondAvisAjout {
   pretesMs?: ReadonlyMap<string, number>;
   /** Livreurs qui ne prendront pas ces commandes (refus de la course). */
   exclus?: ReadonlySet<string>;
+  /**
+   * Fusions : livreur sollicité par la course absorbée (offre en attente),
+   * qui n'est pas dans les libres. Dans le plan séparé, il emporte ces
+   * commandes s'il n'est pas `livreurE` (relecture du 28/10 : ignoré, la
+   * seconde attendait le retour du premier livreur ou Turbo, la fusion se
+   * faisait et son offre était retirée).
+   */
+  enPlus?: readonly string[];
 }
 
 interface ParametresAjout {
@@ -2198,17 +2217,20 @@ function secondAvis(ctx: Contexte, p: ParametresAjout): DecisionRegroupement | n
     preteMs: prete(a),
     routeMetres: a.client.routeMetres!,
   });
-  // Un AUTRE livreur que celui de E : libre, sinon de retour avant que ces
-  // commandes ne partent chez Turbo (comptée depuis leur heure « prête »).
+  // Un AUTRE livreur que celui de E : libre (ou sollicité par la course
+  // absorbée d'une fusion, `enPlus`), sinon de retour avant que ces commandes
+  // ne partent chez Turbo (comptée depuis leur heure « prête »).
   const exclus = new Set([...(sa.exclus ?? []), ...(sa.livreurE ? [sa.livreurE] : [])]);
-  const autre = (arrets: readonly Arret[]): number | null => {
-    const libre = departLibreMs(ctx, [], exclus);
-    if (libre !== null) return libre;
+  const autre = (arrets: readonly Arret[]): { ms: number; revient: boolean } | null => {
+    const libre = departLibreMs(ctx, sa.enPlus ?? [], exclus);
+    if (libre !== null) return { ms: libre, revient: false };
     const retour = retourEstimeMs(ctx, exclus);
     if (retour === null) return null;
     const bascule = Math.min(...arrets.map(prete)) + r.turboApresMinV2 * 60_000 + attenteRetourMs(ctx);
-    return r.turboActif && retour > bascule ? null : retour;
+    return r.turboActif && retour > bascule ? null : { ms: retour, revient: true };
   };
+  const autreN = autre(p.nouveaux);
+  const autreE = sa.eAvecLivreur ? null : autre(p.existants);
   return comparerPlans(
     {
       existants: p.existants.map(enTournee),
@@ -2217,8 +2239,10 @@ function secondAvis(ctx: Contexte, p: ParametresAjout): DecisionRegroupement | n
       eAvecLivreur: sa.eAvecLivreur,
       departAvantMs: p.departAvantMs,
       departApresMs: p.departApresMs,
-      autrePourNMs: autre(p.nouveaux),
-      autrePourEMs: sa.eAvecLivreur ? null : autre(p.existants),
+      autrePourNMs: autreN?.ms ?? null,
+      autrePourNRevient: autreN?.revient ?? false,
+      autrePourEMs: autreE?.ms ?? null,
+      autrePourERevient: autreE?.revient ?? false,
       vitesseKmh: (d) => vitesseKmh(new Date(d), r),
     },
     limitesRegroupement(r),
@@ -2742,6 +2766,19 @@ export function planifier(
   const refus: RefusPlanification[] = [];
   const parties = new Set<string>();
 
+  // Second avis du regroupement : un refus d'aujourd'hui transformé en groupe
+  // est retiré du journal (la commande a rejoint la course qui la refusait) ;
+  // refusé encore, la comparaison des deux plans s'y joint.
+  const retires = new Set<RefusPlanification>();
+  /** Le dernier refus noté pour cet essai (commande ou course essayée, course cible). */
+  const refusNote = (essai: RefusPlanification['essai'], id: string, cle: string): RefusPlanification | undefined => {
+    for (let i = refus.length - 1; i >= 0; i--) {
+      const x = refus[i];
+      if (x.essai === essai && (x.order_id === id || x.source_id === id) && x.course_cle === cle && !retires.has(x)) return x;
+    }
+    return undefined;
+  };
+
   // ── 1. Départs et détachements.
   const ouvertes: CourseTravail[] = [];
   const detachees: CommandePlanif[] = [];
@@ -2815,24 +2852,31 @@ export function planifier(
     .map((c) => arretDe(ctx, c))
     .sort((a, b) => (a.readyMs ?? t) - (b.readyMs ?? t) || (a.id < b.id ? -1 : 1));
 
-  const restantes: Arret[] = [];
-  for (const q of pretes) {
+  type ChoixAjout = { k: CourseTravail; res: Extract<ResultatAjout, { ok: true }>; cle: number[]; attendue: boolean };
+  /**
+   * Meilleure course ouverte pour la commande prête `q`, par la règle
+   * d'aujourd'hui (refus notés). `second` : second avis sur une commande que
+   * la règle d'aujourd'hui laisse seule ; ses refus, déjà notés, sont relus,
+   * et une acceptation d'aujourd'hui passe devant une tournée du second avis.
+   */
+  const meilleurAjout = (q: Arret, second: boolean): ChoixAjout | null => {
     const departSeul = departLibreMs(ctx) ?? retourAvantTurbo(ctx, [q]);
-    let meilleur: { k: CourseTravail; res: Extract<ResultatAjout, { ok: true }>; cle: number[]; attendue: boolean } | null = null;
+    let meilleur: ChoixAjout | null = null;
+    const relus: { k: CourseTravail; res: ResultatAjout }[] = [];
     for (const k of ouvertes) {
       if (k.categorie === null || k.absorbee) continue;
       if (finDeFenetreProche(ctx, k)) {
-        refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: 'FIN_DE_FENETRE', libelle: 'fenêtre d’ajout presque finie' });
+        if (!second) refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: 'FIN_DE_FENETRE', libelle: 'fenêtre d’ajout presque finie' });
         continue;
       }
       if (k.categorie === 3 && refuseeParUnDisponible(ctx, k.dejaSollicites)) {
-        refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: 'DEJA_REFUSEE', libelle: 'refusée par un livreur libre' });
+        if (!second) refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: 'DEJA_REFUSEE', libelle: 'refusée par un livreur libre' });
         continue;
       }
       const attendue = !!k.source?.commandes_attendues.includes(q.id);
       const dk = departCourse(ctx, k);
       const depart = departOuDefaut(ctx, dk);
-      const res = evaluerAjout(ctx, {
+      const p: ParametresAjout = {
         existants: k.arrets,
         nouveaux: [q],
         departAvantMs: depart,
@@ -2846,19 +2890,29 @@ export function planifier(
           eAvecLivreur: k.categorie !== 3,
           exclus: k.categorie === 3 ? k.dejaSollicites : AUCUN_EXCLU,
         },
-      });
-      if (!res.ok) {
-        refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: res.refus, libelle: res.libelle, ...comparaisonDe(res) });
-        continue;
+      };
+      let res = evaluerAjout(ctx, p);
+      if (second) {
+        res = relireParSecondAvis(ctx, p, res);
+        relus.push({ k, res });
+      } else if (!res.ok) {
+        refus.push({ essai: 'AJOUT', order_id: q.id, source_id: null, course_cle: k.cle, refus: res.refus, libelle: res.libelle });
       }
-      const cle = [attendue ? 0 : 1, k.categorie, k.categorie === 2 ? depart : 0, res.detourS];
+      if (!res.ok) continue;
+      // Second avis : toute acceptation d'aujourd'hui avant une tournée.
+      const cle = [...(second ? [res.motif === 'TOURNEE_ROUTE' ? 1 : 0] : []), attendue ? 0 : 1, k.categorie, k.categorie === 2 ? depart : 0, res.detourS];
       if (!meilleur || comparerCles(cle, meilleur.cle) < 0) meilleur = { k, res, cle, attendue };
     }
-    if (!meilleur) {
-      restantes.push(q);
-      continue;
+    for (const { k, res } of relus) {
+      const x = refusNote('AJOUT', q.id, k.cle);
+      if (!x) continue;
+      if (meilleur?.k === k) retires.add(x);
+      else if (!res.ok && res.comparaison) x.comparaison = res.comparaison;
     }
-    const { k, res, attendue } = meilleur;
+    return meilleur;
+  };
+
+  const ajouter = (q: Arret, { k, res, attendue }: ChoixAjout) => {
     k.arrets = reordonner([...k.arrets, q], res.estimation.ordre);
     k.modifiee = true;
     k.motifOrdre = 'AJOUT';
@@ -2877,60 +2931,125 @@ export function planifier(
       libelle: `Ajoutée à ${k.reference}${res.libelle ? ` : ${res.libelle}` : ''}`,
       detour_s: Math.round(res.detourS),
     });
+  };
+
+  const restantes: Arret[] = [];
+  for (const q of pretes) {
+    const choix = meilleurAjout(q, false);
+    if (choix) ajouter(q, choix);
+    else restantes.push(q);
   }
 
   // Regroupement glouton des restantes, graine la plus ancienne.
-  const nouvelles: CourseTravail[] = [];
+  interface GroupeNeuf {
+    cle: string;
+    graine: Arret;
+    arrets: Arret[];
+    derniere: Extract<ResultatAjout, { ok: true }> | null;
+    departLibre: number | null;
+    retour: number | null;
+    departEstime: number | null;
+    depart: number;
+    preneur: string | null;
+  }
+  const parametresCreation = (g: GroupeNeuf, q: Arret): ParametresAjout => ({
+    existants: g.arrets,
+    nouveaux: [q],
+    departAvantMs: g.depart,
+    departApresMs: g.depart,
+    departSeulMs: g.departEstime === null ? null : departSeulHors(ctx, q, g.preneur),
+    attente: null,
+    departConnu: g.departEstime !== null,
+    attendLivreur: g.departLibre === null ? { retourMs: g.retour } : null,
+    secondAvis: { livreurE: g.preneur, eAvecLivreur: false },
+  });
+  const groupes: GroupeNeuf[] = [];
   while (restantes.length) {
     const graine = restantes.shift()!;
-    const cle = `nouvelle-${nouvelles.length + 1}`;
     const departLibre = departLibreMs(ctx);
     const retour = departLibre === null ? retourAvantTurbo(ctx, [graine]) : null;
     const departEstime = departLibre ?? retour;
-    const depart = departOuDefaut(ctx, departEstime);
-    // Le livreur qui prendra la graine : une commande ajoutée ne partirait
-    // seule qu'avec un autre (essai du 28/10).
-    const preneur = departEstime === null ? null : preneurCourseNeuve(ctx, graine);
-    let arrets: Arret[] = [graine];
-    let derniere: Extract<ResultatAjout, { ok: true }> | null = null;
-    for (let i = 0; i < restantes.length && arrets.length < r.maxCommandesParCourse; ) {
-      const res = evaluerAjout(ctx, {
-        existants: arrets,
-        nouveaux: [restantes[i]],
-        departAvantMs: depart,
-        departApresMs: depart,
-        departSeulMs: departEstime === null ? null : departSeulHors(ctx, restantes[i], preneur),
-        attente: null,
-        departConnu: departEstime !== null,
-        attendLivreur: departLibre === null ? { retourMs: retour } : null,
-        secondAvis: { livreurE: preneur, eAvecLivreur: false },
-      });
+    const g: GroupeNeuf = {
+      cle: `nouvelle-${groupes.length + 1}`,
+      graine,
+      arrets: [graine],
+      derniere: null,
+      departLibre,
+      retour,
+      departEstime,
+      depart: departOuDefaut(ctx, departEstime),
+      // Le livreur qui prendra la graine : une commande ajoutée ne partirait
+      // seule qu'avec un autre (essai du 28/10).
+      preneur: departEstime === null ? null : preneurCourseNeuve(ctx, graine),
+    };
+    for (let i = 0; i < restantes.length && g.arrets.length < r.maxCommandesParCourse; ) {
+      const res = evaluerAjout(ctx, parametresCreation(g, restantes[i]));
       if (res.ok) {
-        arrets = reordonner([...arrets, restantes[i]], res.estimation.ordre);
-        derniere = res;
+        g.arrets = reordonner([...g.arrets, restantes[i]], res.estimation.ordre);
+        g.derniere = res;
         restantes.splice(i, 1);
       } else {
         refus.push({
           essai: 'CREATION',
           order_id: restantes[i].id,
           source_id: null,
-          course_cle: cle,
+          course_cle: g.cle,
           refus: res.refus,
           libelle: res.libelle,
           graine_id: graine.id,
-          ...comparaisonDe(res),
         });
         i++;
       }
     }
+    groupes.push(g);
+  }
+
+  // Second avis du regroupement (retour du client du 28/10), APRÈS la règle
+  // d'aujourd'hui et sur les seules commandes qu'elle laisse SEULES : chacune
+  // rejoint une course ouverte, sinon un groupe neuf plus ancien, si la
+  // tournée groupée est meilleure pour les clients. Un groupe d'aujourd'hui
+  // n'est jamais défait (relecture du 28/10 : le glouton prenait la première
+  // commande que le second avis acceptait, et la commande que la règle
+  // d'aujourd'hui groupait avec la graine partait seule).
+  if (r.regroupementTournee) {
+    for (const g of groupes) {
+      if (g.arrets.length !== 1) continue;
+      const choix = meilleurAjout(g.arrets[0], true);
+      if (!choix) continue;
+      ajouter(g.arrets[0], choix);
+      g.arrets = [];
+    }
+    groupes.forEach((g, i) => {
+      for (const h of groupes.slice(i + 1)) {
+        if (g.arrets.length === 0 || g.arrets.length >= r.maxCommandesParCourse) return;
+        if (h.arrets.length !== 1) continue;
+        const q = h.arrets[0];
+        const p = parametresCreation(g, q);
+        const res = relireParSecondAvis(ctx, p, evaluerAjout(ctx, p));
+        const x = refusNote('CREATION', q.id, g.cle);
+        if (!res.ok) {
+          if (x && res.comparaison) x.comparaison = res.comparaison;
+          continue;
+        }
+        if (x) retires.add(x);
+        g.arrets = reordonner([...g.arrets, q], res.estimation.ordre);
+        g.derniere = res;
+        h.arrets = [];
+      }
+    });
+  }
+
+  const nouvelles: CourseTravail[] = [];
+  for (const g of groupes) {
+    if (g.arrets.length === 0) continue;
     const k: CourseTravail = {
-      cle,
+      cle: g.cle,
       id: null,
-      reference: cle,
+      reference: g.cle,
       source: null,
       statut: CourseStatut.PENDING_ASSIGNMENT,
       delivererId: null,
-      arrets,
+      arrets: g.arrets,
       offre: null,
       categorie: 3,
       fenetreFermeMs: null,
@@ -2942,11 +3061,11 @@ export function planifier(
     nouvelles.push(k);
     actions.push({
       type: 'CREER_COURSE',
-      cle,
-      order_ids: arrets.map((a) => a.id),
-      sequence: arrets.map((a) => a.id),
-      motif: derniere?.motif ?? null,
-      libelle: arrets.length > 1 && derniere ? `${arrets.length} commandes : ${derniere.libelle}` : 'Commande seule',
+      cle: g.cle,
+      order_ids: g.arrets.map((a) => a.id),
+      sequence: g.arrets.map((a) => a.id),
+      motif: g.derniere?.motif ?? null,
+      libelle: g.arrets.length > 1 && g.derniere ? `${g.arrets.length} commandes : ${g.derniere.libelle}` : 'Commande seule',
     });
   }
 
@@ -2983,6 +3102,25 @@ export function planifier(
     libererOffre(ctx, aClore[0] ?? null);
   };
 
+  /** Refus d'aujourd'hui d'une fusion, que le second avis relira si aucune fusion n'est acceptée. */
+  type FusionARelire = { cible: CourseTravail; absorbee: CourseTravail; p: ParametresAjout; res: ResultatAjout; x: RefusPlanification; cle: number[] };
+  /** Second avis sur des refus d'aujourd'hui : la meilleure fusion acceptée, sa clé d'aujourd'hui ; comparaison jointe aux autres. */
+  type FusionRelue = FusionARelire & { res: Extract<ResultatAjout, { ok: true }> };
+  const relireFusions = (aRelire: readonly FusionARelire[]): FusionRelue | null => {
+    let meilleure: FusionRelue | null = null;
+    for (const y of aRelire) {
+      const res = relireParSecondAvis(ctx, y.p, y.res);
+      if (!res.ok) {
+        if (res.comparaison) y.x.comparaison = res.comparaison;
+        continue;
+      }
+      const cle = [...y.cle, res.detourS];
+      if (!meilleure || comparerCles(cle, meilleure.cle) < 0) meilleure = { ...y, res, cle };
+    }
+    if (meilleure) retires.add(meilleure.x);
+    return meilleure;
+  };
+
   let tours = 0;
   let change = true;
   while (change && tours++ < 20) {
@@ -2991,6 +3129,8 @@ export function planifier(
       if (u.absorbee) continue;
       const departU = departCourse(ctx, u);
       const premiere = plusAnciennePrete(ctx, u.arrets);
+      const aRelireA: FusionARelire[] = [];
+      const aRelireB: FusionARelire[] = [];
 
       // (a) Vers une course qui a déjà son livreur. Jamais une course dont
       // l'offre a été forcée par l'administrateur (son geste n'est pas défait).
@@ -3014,7 +3154,7 @@ export function planifier(
           refus.push({ essai: 'FUSION', order_id: null, source_id: u.cle, course_cle: k.cle, refus: 'OFFRE_EN_COURS', libelle: 'partirait plus tôt avec le livreur sollicité' });
           continue;
         }
-        const res = evaluerAjout(ctx, {
+        const p: ParametresAjout = {
           existants: k.arrets,
           nouveaux: u.arrets,
           departAvantMs: depart,
@@ -3022,10 +3162,14 @@ export function planifier(
           departSeulMs: departU,
           attente: { premierePreteMs: premiere },
           departConnu: true,
-          secondAvis: { livreurE: k.delivererId, eAvecLivreur: true, exclus: u.dejaSollicites },
-        });
+          // Le livreur sollicité par u l'emporterait seule (plan séparé).
+          secondAvis: { livreurE: k.delivererId, eAvecLivreur: true, exclus: u.dejaSollicites, enPlus: u.offre ? [u.offre.deliverer_id] : [] },
+        };
+        const res = evaluerAjout(ctx, p);
         if (!res.ok) {
-          refus.push({ essai: 'FUSION', order_id: null, source_id: u.cle, course_cle: k.cle, refus: res.refus, libelle: res.libelle, ...comparaisonDe(res) });
+          const x: RefusPlanification = { essai: 'FUSION', order_id: null, source_id: u.cle, course_cle: k.cle, refus: res.refus, libelle: res.libelle };
+          refus.push(x);
+          if (relisible(ctx, res)) aRelireA.push({ cible: k, absorbee: u, p, res, x, cle: [k.categorie, k.categorie === 2 ? depart : 0] });
           continue;
         }
         const cle = [k.categorie, k.categorie === 2 ? depart : 0, res.detourS];
@@ -3061,7 +3205,7 @@ export function planifier(
           }
           const departCible = departCourse(ctx, cible, enPlus);
           const departAvant = departOuDefaut(ctx, departCourse(ctx, cible));
-          const res = evaluerAjout(ctx, {
+          const p: ParametresAjout = {
             existants: cible.arrets,
             nouveaux: absorbee.arrets,
             departAvantMs: departAvant,
@@ -3073,31 +3217,42 @@ export function planifier(
             attendLivreur: attendUnLivreur(ctx, cible, enPlus)
               ? { retourMs: retourAvantTurbo(ctx, cible.arrets, refusants) }
               : null,
-            secondAvis: { livreurE: livreurDeDepart(ctx, cible, enPlus), eAvecLivreur: false, exclus: refusants },
-          });
+            // Le livreur sollicité par la course absorbée l'emporterait seule (plan séparé).
+            secondAvis: { livreurE: livreurDeDepart(ctx, cible, enPlus), eAvecLivreur: false, exclus: refusants, enPlus },
+          };
+          const res = evaluerAjout(ctx, p);
+          const cleSans = [departCible ?? Number.POSITIVE_INFINITY, cible.offre ? 0 : 1, cible === u ? 0 : 1];
           if (!res.ok) {
-            refus.push({
+            const x: RefusPlanification = {
               essai: 'FUSION',
               order_id: null,
               source_id: absorbee.cle,
               course_cle: cible.cle,
               refus: res.refus,
               libelle: res.libelle,
-              ...comparaisonDe(res),
-            });
+            };
+            refus.push(x);
+            if (relisible(ctx, res)) aRelireB.push({ cible, absorbee, p, res, x, cle: cleSans });
             continue;
           }
-          const cle = [
-            departCible ?? Number.POSITIVE_INFINITY,
-            cible.offre ? 0 : 1,
-            cible === u ? 0 : 1,
-            res.detourS,
-          ];
+          const cle = [...cleSans, res.detourS];
           if (!meilleureB || comparerCles(cle, meilleureB.cle) < 0) meilleureB = { cible, absorbee, res, cle };
         }
       }
       if (meilleureB) {
         fusionner(meilleureB.cible, meilleureB.absorbee, meilleureB.res);
+        change = true;
+        continue;
+      }
+
+      // (c) Second avis (retour du client du 28/10), seulement si la règle
+      // d'aujourd'hui n'accepte aucune fusion de u : vers une course qui a
+      // son livreur d'abord, puis entre courses sans livreur (relecture du
+      // 28/10 : une tournée vers la course au comptoir passait devant une
+      // fusion que la règle d'aujourd'hui acceptait).
+      const relue = relireFusions(aRelireA) ?? relireFusions(aRelireB);
+      if (relue) {
+        fusionner(relue.cible, relue.absorbee, relue.res);
         change = true;
       }
     }
@@ -3214,6 +3369,41 @@ export function planifier(
       return ra - rb || a.categorie! - b.categorie! || departOuDefaut(ctx, departCourse(ctx, a)) - departOuDefaut(ctx, departCourse(ctx, b));
     });
 
+  type Choisie = { c: CommandePlanif; arret: Arret; fin: number; motif: MotifRetenue };
+  /** Une course examinée pour une retenue : ses commandes attendues, et les refus que le second avis relira. */
+  interface RetenueExaminee {
+    k: CourseTravail;
+    T: number | null;
+    reprise: boolean;
+    limite: number;
+    dPossible: number;
+    attenduesAvant: Set<string>;
+    choisies: Choisie[];
+    mesure: { allerRetourSeulMs: number | null; retour: { attendues: number; ms: number } | null };
+    aRelire: (Choisie & { x: RefusPlanification })[];
+  }
+  /** Ajout à la course des commandes attendues et d'une de plus, prête à `fin`. */
+  const parametresRetenue = (e: Pick<RetenueExaminee, 'k' | 'dPossible' | 'choisies'>, arret: Arret, fin: number): ParametresAjout => {
+    // Un livreur libre la prendrait seule : elle n'est pas groupée si elle
+    // arrivait groupée après sa limite et plus tard que seule avec lui.
+    const alternative = departLibreMs(ctx);
+    return {
+      existants: e.k.arrets,
+      nouveaux: [...e.choisies.map((x) => x.arret), arret],
+      departAvantMs: e.dPossible,
+      departApresMs: Math.max(e.dPossible, fin, ...e.choisies.map((x) => x.fin)),
+      departSeulMs: alternative === null ? null : Math.max(alternative, fin),
+      attente: null,
+      departConnu: true,
+      secondAvis: {
+        livreurE: e.k.delivererId,
+        eAvecLivreur: true,
+        pretesMs: new Map([...e.choisies.map((x): [string, number] => [x.arret.id, x.fin]), [arret.id, fin]]),
+      },
+    };
+  };
+  const examinees: RetenueExaminee[] = [];
+
   const trajetLongActif = r.attenteMaxTrajetLongS > 0;
   for (const k of aRetenir) {
     const T = k.source?.retenue_jusqua?.getTime() ?? null;
@@ -3250,15 +3440,23 @@ export function planifier(
           Number(!attenduesAvant.has(a.id)) - Number(!attenduesAvant.has(b.id)) ||
           a.preparation!.finDecision.getTime() - b.preparation!.finDecision.getTime(),
       );
-    const choisies: { c: CommandePlanif; arret: Arret; fin: number; motif: MotifRetenue }[] = [];
+    const e: RetenueExaminee = {
+      k,
+      T,
+      reprise,
+      limite,
+      dPossible,
+      attenduesAvant,
+      choisies: [],
+      mesure: { allerRetourSeulMs: null, retour: null },
+      aRelire: [],
+    };
+    const choisies = e.choisies;
     // Retour au restaurant du livreur s'il partait sans la commande examinée :
     // départ au plus tôt avec la course et les commandes déjà attendues
     // (après la dernière d'entre elles), tournée, retour. Calculé au besoin,
     // une fois par état des commandes attendues.
-    const mesure: { allerRetourSeulMs: number | null; retour: { attendues: number; ms: number } | null } = {
-      allerRetourSeulMs: null,
-      retour: null,
-    };
+    const mesure = e.mesure;
     const retourSansAttendre = (): number => {
       mesure.allerRetourSeulMs ??= allerRetourMs(ctx, k.arrets, dPossible);
       if (!mesure.retour || mesure.retour.attendues !== choisies.length) {
@@ -3276,8 +3474,11 @@ export function planifier(
       // à l'échéance d'une retenue déjà posée ; elle, jamais.
       const finEstimee = c.preparation!.finDecision.getTime();
       let fin = finEstimee;
-      const noter = (motif: MotifRefusPlanification, libelle: string, comparaison?: ComparaisonRegroupement) =>
-        refus.push({ essai: 'RETENUE', order_id: c.id, source_id: null, course_cle: k.cle, refus: motif, libelle, ...(comparaison ? { comparaison } : {}) });
+      const noter = (motif: MotifRefusPlanification, libelle: string): RefusPlanification => {
+        const x: RefusPlanification = { essai: 'RETENUE', order_id: c.id, source_id: null, course_cle: k.cle, refus: motif, libelle };
+        refus.push(x);
+        return x;
+      };
       const courte = (f: number) => f - t <= r.horizonPreparationS * 1000 && f <= limiteCourte;
       const attenteCourte = courte(finEstimee);
       let motif: MotifRetenue = 'ATTENTE_COURTE';
@@ -3322,34 +3523,41 @@ export function planifier(
         continue;
       }
       const arret = arretDe(ctx, c);
-      const departApres = Math.max(dPossible, fin, ...choisies.map((x) => x.fin));
-      // Un livreur libre la prendrait seule : elle n'est pas groupée si elle
-      // arrivait groupée après sa limite et plus tard que seule avec lui.
-      const alternative = departLibreMs(ctx);
-      const res = evaluerAjout(ctx, {
-        existants: k.arrets,
-        nouveaux: [...choisies.map((x) => x.arret), arret],
-        departAvantMs: dPossible,
-        departApresMs: departApres,
-        departSeulMs: alternative === null ? null : Math.max(alternative, fin),
-        attente: null,
-        departConnu: true,
-        secondAvis: {
-          livreurE: k.delivererId,
-          eAvecLivreur: true,
-          pretesMs: new Map([...choisies.map((x): [string, number] => [x.arret.id, x.fin]), [arret.id, fin]]),
-        },
-      });
+      const res = evaluerAjout(ctx, parametresRetenue(e, arret, fin));
       if (!res.ok) {
-        noter(res.refus, res.libelle, res.comparaison);
+        const x = noter(res.refus, res.libelle);
+        if (relisible(ctx, res)) e.aRelire.push({ c, arret, fin, motif, x });
         continue;
       }
       choisies.push({ c, arret, fin, motif });
     }
-    if (choisies.length === 0) continue;
-
-    const jusqua = Math.min(limite, Math.max(...choisies.map((x) => x.fin)));
     for (const x of choisies) reservees.add(x.c.id);
+    examinees.push(e);
+  }
+
+  // Second avis du regroupement (retour du client du 28/10), APRÈS la règle
+  // d'aujourd'hui pour toutes les courses : une commande en cuisine qu'aucune
+  // course n'attend, refusée pour la direction, la durée, le détour ou un
+  // retard, est attendue si la tournée groupée est meilleure pour les
+  // clients. Une retenue d'aujourd'hui n'est jamais défaite.
+  for (const e of examinees) {
+    for (const y of e.aRelire) {
+      if (reservees.has(y.c.id)) continue;
+      const p = parametresRetenue(e, y.arret, y.fin);
+      const res = relireParSecondAvis(ctx, p, evaluerAjout(ctx, p));
+      if (!res.ok) {
+        if (res.comparaison) y.x.comparaison = res.comparaison;
+        continue;
+      }
+      retires.add(y.x);
+      e.choisies.push({ c: y.c, arret: y.arret, fin: y.fin, motif: y.motif });
+      reservees.add(y.c.id);
+    }
+  }
+
+  for (const { k, T, reprise, limite, attenduesAvant, choisies, mesure } of examinees) {
+    if (choisies.length === 0) continue;
+    const jusqua = Math.min(limite, Math.max(...choisies.map((x) => x.fin)));
     retenues.add(k.id!);
     const attendues: CommandeAttendue[] = choisies.map((x) => ({
       order_id: x.c.id,
@@ -3450,7 +3658,7 @@ export function planifier(
     });
   }
 
-  return { restaurant_id: instantane.restaurant.id, maintenant, actions, refus };
+  return { restaurant_id: instantane.restaurant.id, maintenant, actions, refus: refus.filter((x) => !retires.has(x)) };
 }
 
 /** Minute d'une heure, telle qu'affichée (« 12 h 41 », `heureCourte`, UTC) : deux heures de la même minute s'écrivent pareil. */

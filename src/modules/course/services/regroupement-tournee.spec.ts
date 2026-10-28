@@ -3,8 +3,9 @@
  * conception `regroupement-tournee.md`, T10 et T11) : distances entre
  * commandes à regrouper lues dans le cache routier seulement, appels Google
  * lancés sans attendre et bornés (6 par passage, jamais deux fois en vol,
- * échec sauté 10 min), jamais pour une paire compatible, perdue d'avance,
- * ou sans distance depuis le restaurant.
+ * échec sauté 10 min), les paires refusées par la direction d'abord, puis
+ * les compatibles (relecture du 28/10) ; jamais pour une même adresse, une
+ * paire perdue d'avance, ou sans distance depuis le restaurant.
  *
  * ⚠️ Aucun appel réel à Google : `MapsService` est simulé.
  */
@@ -145,7 +146,7 @@ describe('T11. coût Google borné', () => {
       return { position: polaire(km, i * 30), route: km * 1400, preteIlYa: 12 - i };
     });
 
-  it('au plus 6 appels par passage, jamais attendus, jamais deux fois la même paire en vol ; jamais une paire compatible', async () => {
+  it('au plus 6 appels par passage, jamais attendus, jamais deux fois la même paire en vol ; les paires refusées par la direction d’abord', async () => {
     const t = monter(autour());
     const lu = await t.lire();
     expect(lu.entreCandidats!.size).toBe(0);
@@ -154,7 +155,7 @@ describe('T11. coût Google borné', () => {
     expect(t.appels()).toHaveLength(2 * APPELS_REGROUPEMENT_PAR_PASSAGE);
     expect(new Set(t.demandees()).size).toBe(2 * APPELS_REGROUPEMENT_PAR_PASSAGE);
 
-    // Chaque paire demandée est refusée par la direction.
+    // Tant qu'il en reste, chaque paire demandée est refusée par la direction.
     const parPosition = new Map(t.commandes.map((c, i) => [pos(autour()[i].position), c.id]));
     for (const [p] of t.appels()) {
       const o = parPosition.get(pos({ lat: p.originLat, lng: p.originLng }))!;
@@ -207,13 +208,19 @@ describe('T11. coût Google borné', () => {
     expect(t.appels()).toEqual([]);
   });
 
-  it('même adresse ou même direction : rien à demander (la règle d’aujourd’hui les groupe)', async () => {
+  it('même adresse : rien à demander ; même direction : demandée aussi (relecture du 28/10)', async () => {
+    const [p1, p2, p3] = [polaire(2, 90), polaire(2.05, 90), polaire(3, 92)];
     const t = monter([
-      { position: polaire(2, 90), route: 2800 },
-      { position: polaire(2.05, 90), route: 2870 },
-      { position: polaire(3, 92), route: 4200 },
+      { position: p1, route: 2800 },
+      { position: p2, route: 2870 },
+      { position: p3, route: 4200 },
     ]);
-    await t.lire();
-    expect(t.appels()).toEqual([]);
+    const lu = await t.lire();
+    // Paires compatibles : hors d'une même course, leur distance n'arrive que par ici.
+    expect(new Set(t.demandees())).toEqual(new Set([cle(p1, p3), cle(p2, p3)]));
+    expect(t.demandees()).not.toContain(cle(p1, p2));
+    expect(t.demandees()).not.toContain(cle(p2, p1));
+    for (const [p] of t.appels()) expect(pos({ lat: p.destLat, lng: p.destLng })).toBe(pos(p3));
+    expect([...lu.verdicts.values()].every((v) => v.compatible)).toBe(true);
   });
 });

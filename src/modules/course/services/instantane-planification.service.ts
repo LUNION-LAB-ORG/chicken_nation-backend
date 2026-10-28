@@ -427,7 +427,8 @@ export class InstantanePlanificationService {
   /**
    * Distances PAR LA ROUTE entre commandes à regrouper (second avis, retour
    * du client du 28/10 ; `pairesARegrouper` : paires refusées par la
-   * direction, pas perdues d'avance, 60 au plus) : lues dans le cache routier
+   * direction d'abord, puis les compatibles hors d'une même course, pas
+   * perdues d'avance, 60 au plus) : lues dans le cache routier
    * de 30 jours seulement, dans un sens puis dans l'autre. Elles vont dans
    * une table à part que seul le second avis lit.
    *
