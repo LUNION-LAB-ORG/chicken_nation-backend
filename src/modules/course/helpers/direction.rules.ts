@@ -205,7 +205,13 @@ export type MotifDirection =
   | 'DETOUR_TROP_LONG'
   | 'SANS_CARTE'
   | 'DIRECTION_DIFFERENTE'
-  | 'SANS_COORDONNEES';
+  | 'SANS_COORDONNEES'
+  /**
+   * Pas un verdict de paire : groupe accepté par le second avis du
+   * planificateur (regroupement-tournee.rules.ts, 28/10), la tournée par la
+   * route étant meilleure pour les clients que les livraisons séparées.
+   */
+  | 'TOURNEE_ROUTE';
 
 /** Numéro du test qui a conclu (conception 2.3) ; 0 = coordonnées manquantes. */
 export type TestDirection = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -277,6 +283,8 @@ export function libelleDirection(motif: MotifDirection, detourSecondes?: number 
       return 'direction différente';
     case 'SANS_COORDONNEES':
       return 'adresse sans coordonnées';
+    case 'TOURNEE_ROUTE':
+      return 'tournée groupée plus rapide';
   }
 }
 

@@ -402,7 +402,10 @@ export class MapsService {
    *  - `ordre` : distance entre deux clients d'une tournée, pour l'ordre des
    *    arrêts par la route (27/10). Mêmes règles que `direction`, comptée à
    *    part (`ordre_arrets`) dans le même plafond quotidien ; jamais attendue
-   *    par le planificateur, qui la relit au passage suivant (`trajetEnCache`).
+   *    par le planificateur, qui la relit au passage suivant (`trajetEnCache`) ;
+   *  - `regroupement` : distance entre deux commandes à regrouper, pour le
+   *    second avis du regroupement par tournée (28/10). Mêmes règles, comptée
+   *    à part (`regroupement_route`) dans le même plafond quotidien.
    */
   async itineraireRoutier(
     params: {
@@ -411,14 +414,21 @@ export class MapsService {
       destLat: number;
       destLng: number;
     },
-    options: { pour?: 'frais' | 'direction' | 'ordre' } = {},
+    options: { pour?: 'frais' | 'direction' | 'ordre' | 'regroupement' } = {},
   ): Promise<IItineraireRoutier | null> {
     const origine = { lat: params.originLat, lng: params.originLng };
     const destination = { lat: params.destLat, lng: params.destLng };
     if (![origine.lat, origine.lng, destination.lat, destination.lng].every(Number.isFinite)) return null;
-    // Planificateur (tracés, ordre des arrêts) : plafonné, échec retenu 10 min.
-    const pourDirection = options.pour === 'direction' || options.pour === 'ordre';
-    const fonction = options.pour === 'ordre' ? 'ordre_arrets' : pourDirection ? 'trace_direction' : 'itineraire';
+    // Planificateur (tracés, ordre des arrêts, regroupement) : plafonné, échec retenu 10 min.
+    const pourDirection = options.pour === 'direction' || options.pour === 'ordre' || options.pour === 'regroupement';
+    const fonction =
+      options.pour === 'ordre'
+        ? 'ordre_arrets'
+        : options.pour === 'regroupement'
+          ? 'regroupement_route'
+          : pourDirection
+            ? 'trace_direction'
+            : 'itineraire';
 
     const cacheKey = this.cleTrajet('road-route', origine, destination);
     const enCache = await this.itineraireEnCache(cacheKey);
