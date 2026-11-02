@@ -72,9 +72,11 @@ export class CreateCrmCampaignDto {
   @IsDateString()
   start_date: string;
 
+  /** `null` efface la date de fin (et la durée) d'une campagne existante. */
   @IsOptional() @IsDateString()
-  end_date?: string;
+  end_date?: string | null;
 
+  /** « Après N jours » : la fin se calcule au lancement, pas depuis la date de début saisie. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(365)
   duration_days?: number;
 

@@ -101,6 +101,10 @@ export class UpdateCrmSettingsDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(7) @Max(365)
   inactive_days?: number;
 
+  /** Jours de suspension d'une campagne avant d'alerter la direction. */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(60)
+  suspension_alert_days?: number;
+
   @IsOptional() @IsString() @Matches(/^(HX[0-9a-fA-F]{32})?$/, {
     message: 'Identifiant de modèle Twilio invalide (HX suivi de 32 caractères)',
   })

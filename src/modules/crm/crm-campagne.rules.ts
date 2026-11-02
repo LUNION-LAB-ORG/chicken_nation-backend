@@ -519,3 +519,34 @@ export function versVenteCampagne(brut: LigneVenteBrute, options: { masquer: boo
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Vivier « à reprendre » (analyse du 02/11, problème 8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Publics qui attendent une campagne quand ils n'ont plus d'agent : les
+ * inscrits sans commande et les inactifs. Un Glovo/Yango sans agent a sa
+ * file commune, il n'entre jamais dans le vivier.
+ */
+export const PUBLICS_VIVIER: CrmSegment[] = [CrmSegment.JAMAIS_COMMANDE, CrmSegment.INACTIF];
+
+/**
+ * Le vivier « à reprendre » : inscrits et inactifs encore à travailler, sans
+ * agent et hors de toute campagne en cours. Personne ne les voit dans sa
+ * file : une campagne en cours de leur public, en répartition automatique,
+ * les reprend chaque jour ; sinon ils restent visibles dans Contacts (filtre
+ * « À reprendre ») et au tableau de bord.
+ *
+ * ⚠️ La même définition est écrite en SQL au tableau de bord
+ * (`population.a_reprendre`) : changer l'une, c'est changer l'autre.
+ */
+export function vivierAReprendre(): Prisma.CrmContactWhereInput {
+  return {
+    segment: { in: PUBLICS_VIVIER },
+    status: { in: STATUTS_OUVERTS },
+    assigned_to_id: null,
+    entity_status: { not: EntityStatus.DELETED },
+    OR: [{ campaign_id: null }, { campaign: { status: { notIn: CAMPAGNES_EN_COURS } } }],
+  };
+}

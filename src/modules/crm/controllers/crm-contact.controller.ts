@@ -10,6 +10,7 @@ import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.g
 import {
   AssignContactsDto,
   ExportCrmContactDto,
+  MaFileLignesQueryDto,
   QueryCrmContactDto,
   QueryExportsDto,
   RecordCallDto,
@@ -160,6 +161,13 @@ export class CrmContactController {
   @ApiOperation({ summary: "File de l'agent connecté, dans l'ordre de traitement" })
   maFile(@Req() req: Request) {
     return this.contacts.maFile(req.user as User);
+  }
+
+  @Get('my-queue/lignes')
+  @RequirePermission(Modules.CRM, Action.UPDATE)
+  @ApiOperation({ summary: "Lignes d'un dossier de « Ma file », rubrique par rubrique, page par page" })
+  lignesMaFile(@Req() req: Request, @Query() q: MaFileLignesQueryDto) {
+    return this.contacts.lignesMaFile(req.user as User, q);
   }
 
   @Get('agents')
