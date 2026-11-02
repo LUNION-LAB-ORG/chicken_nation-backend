@@ -34,7 +34,7 @@ export class CrmDormantsService {
   async reveiller(maintenant = new Date()): Promise<number> {
     const { dormant_days } = await this.config.lireReglages();
     const limite = limiteDormants(maintenant, dormant_days);
-    const condition = conditionDormants(limite);
+    const condition = conditionDormants(limite, maintenant);
 
     const dormants = await this.prisma.crmContact.findMany({
       where: condition,
@@ -49,10 +49,12 @@ export class CrmDormantsService {
         Revendication : l'écriture reste conditionnée au statut LU. Si un agent
         vient de rappeler ce client, ou si un second backend est passé avant,
         la ligne n'est plus dans l'état attendu et on n'écrit rien — ni statut,
-        ni événement en double dans le journal.
+        ni événement en double dans le journal. La condition entière est
+        rejouée : un coupon envoyé entre la lecture et l'écriture (même statut,
+        mais un coupon neuf et valable) n'est pas réveillé.
       */
       const { count } = await this.prisma.crmContact.updateMany({
-        where: { id: contact.id, status: contact.status },
+        where: { ...condition, id: contact.id, status: contact.status },
         data: { status: CrmStatus.A_APPELER },
       });
       if (count !== 1) continue;

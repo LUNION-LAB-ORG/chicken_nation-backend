@@ -58,8 +58,13 @@ export const DEFAULT_DORMANT_DAYS = 7;
  *
  * Un coupon sans date d'envoi se juge sur le dernier appel : sinon il dormirait
  * pour toujours, ce qui est exactement le défaut qu'on corrige.
+ *
+ * ⚠️ Un contact dont un coupon est ENCORE VALABLE ne dort pas : il a une offre
+ * en main, il la tient (analyse du 02/11, problème 9). Le réveiller le faisait
+ * passer « à appeler », et la clôture de sa campagne le libérait au lieu de le
+ * laisser à son agent.
  */
-export function conditionDormants(limite: Date) {
+export function conditionDormants(limite: Date, maintenant: Date = new Date()) {
   return {
     entity_status: { not: EntityStatus.DELETED },
     OR: [
@@ -71,6 +76,7 @@ export function conditionDormants(limite: Date) {
         last_call_at: { lte: limite },
       },
     ],
+    NOT: { coupons: { some: { used_at: null, expires_at: { gt: maintenant } } } },
   };
 }
 
@@ -232,14 +238,21 @@ export const STATUTS_OUVERTS: CrmStatus[] = [
  *
  * Un appel ne fait jamais reculer un contact qui a déjà reçu son coupon,
  * sauf s'il dit clairement ne pas vouloir commander. Un « pas de réponse »
- * ne change rien, sauf quand il s'ajoute à trop de tentatives sur un numéro
- * qui n'a jamais décroché : le contact passe alors injoignable, pour ne pas
- * occuper la file indéfiniment.
+ * ne change rien, sauf quand il fait atteindre le plafond de tentatives sans
+ * réponse : le contact passe alors injoignable, pour ne pas occuper la file
+ * indéfiniment.
+ *
+ * Le plafond se compte depuis le dernier appel où le client a décroché
+ * (`sansReponse` : appels « pas de réponse » d'affilée de ce passage, celui-ci
+ * compris), quel que soit le statut ouvert. Avant le 02/11, il ne valait que
+ * pour un « à appeler » jamais joint : un client joint une fois, ou « à
+ * rappeler », restait dans « À relancer » pour toujours (problème 10).
+ * `sansReponse` absent : le nombre de tentatives du passage en tient lieu.
  */
 export function statutApresAppel(
   courant: CrmStatus,
   outcome: CrmCallOutcome,
-  ctx: { dejaJoint: boolean; tentatives: number; maxTentatives: number },
+  ctx: { dejaJoint: boolean; tentatives: number; maxTentatives: number; sansReponse?: number },
 ): CrmStatus {
   /*
     Qualifier un appel sur un client de l'ANNUAIRE vaut prise en charge : il
@@ -252,11 +265,7 @@ export function statutApresAppel(
   const couponEnvoye = courant === CrmStatus.COUPON_ENVOYE;
   switch (outcome) {
     case CrmCallOutcome.NON_JOINT:
-      if (
-        courant === CrmStatus.A_APPELER &&
-        !ctx.dejaJoint &&
-        ctx.tentatives >= ctx.maxTentatives
-      ) {
+      if (STATUTS_OUVERTS.includes(courant) && (ctx.sansReponse ?? ctx.tentatives) >= ctx.maxTentatives) {
         return CrmStatus.INJOIGNABLE;
       }
       return courant;
