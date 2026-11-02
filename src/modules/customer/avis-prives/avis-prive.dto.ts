@@ -104,6 +104,13 @@ export class ListeAvisQueryDto {
   @IsOptional() @IsIn(['true', 'false'])
   en_retard?: 'true' | 'false';
 
+  /**
+   * Avis passés en Résolu depuis 7 jours (date de résolution) : la liste
+   * qu'ouvre le compteur « Résolus sur 7 jours », qui compte la même chose.
+   */
+  @IsOptional() @IsIn(['true', 'false'])
+  resolus_7j?: 'true' | 'false';
+
   /** Forcé au restaurant du compte pour un point de vente (RestaurantQueryScopeGuard). */
   @IsOptional()
   @Matches(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|aucun)$/i)
@@ -157,6 +164,12 @@ export class CommandeAvisDto {
   @ValidateIf((_o, v) => v !== null)
   @IsUUID()
   order_id: string | null;
+
+  /** Commande cochée lue à l'écran (null : aucune) ; 409 si elle a changé entre-temps. */
+  @ApiProperty({ nullable: true, description: 'Commande cochée lue à l’écran (claim)' })
+  @ValidateIf((_o, v) => v !== null)
+  @IsUUID()
+  order_id_lu: string | null;
 }
 
 export class AgentAvisDto {
@@ -164,10 +177,24 @@ export class AgentAvisDto {
   @ValidateIf((_o, v) => v !== null)
   @IsUUID()
   agent_id: string | null;
+
+  /** Agent lu à l'écran (null : Non assigné) ; 409 s'il a changé entre-temps. */
+  @ApiProperty({ nullable: true, description: 'Agent lu à l’écran (claim)' })
+  @ValidateIf((_o, v) => v !== null)
+  @IsUUID()
+  agent_lu: string | null;
 }
 
 export class TicketAvisDto {
   @ApiProperty()
   @IsUUID()
   categoryId: string;
+
+  /**
+   * Commande cochée que l'agent a vue dans la fenêtre « Créer un incident » :
+   * le ticket ne part que si c'est toujours elle (409 sinon).
+   */
+  @ApiProperty()
+  @IsUUID()
+  order_id: string;
 }

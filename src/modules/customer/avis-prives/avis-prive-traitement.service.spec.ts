@@ -18,7 +18,13 @@ import {
 } from '@prisma/client';
 import { avisParDefaut, creerBaseAvis } from './avis-prive-base-simulee-spec';
 import { AvisPriveTraitementService } from './avis-prive-traitement.service';
-import { MESSAGE_CONFLIT, MESSAGE_SANS_ACCORD, MESSAGE_SOLUTION, TEXTE_RAPPROCHEMENT } from './avis-prive.rules';
+import {
+  MESSAGE_CONFLIT,
+  MESSAGE_SANS_ACCORD,
+  MESSAGE_SOLUTION,
+  sqlResolusSurSeptJours,
+  TEXTE_RAPPROCHEMENT,
+} from './avis-prive.rules';
 import { AvisPriveService } from './avis-prive.service';
 
 const MAINTENANT = new Date('2026-11-02T10:00:00.000Z');
@@ -28,6 +34,7 @@ const CLIENT = 'c0000000-0000-4000-8000-000000000001';
 const AUTRE_CLIENT = 'c0000000-0000-4000-8000-000000000002';
 const COMMANDE = 'd0000000-0000-4000-8000-000000000001';
 const COMMANDE_AUTRE = 'd0000000-0000-4000-8000-000000000002';
+const COMMANDE_2 = 'd0000000-0000-4000-8000-000000000003';
 const CATEGORIE = 'e0000000-0000-4000-8000-000000000001';
 
 const agent = (id: string, fullname: string, role: UserRole = UserRole.CALL_CENTER) =>
@@ -57,6 +64,7 @@ function monter(champs: Record<string, unknown> = {}, depart: Parameters<typeof 
     ],
     orders: [
       { id: COMMANDE, reference: 'CN-A1B2', customer_id: CLIENT, entity_status: 'ACTIVE' },
+      { id: COMMANDE_2, reference: 'CN-C3D4', customer_id: CLIENT, entity_status: 'ACTIVE' },
       { id: COMMANDE_AUTRE, reference: 'CN-Z9Y8', customer_id: AUTRE_CLIENT, entity_status: 'ACTIVE' },
     ],
     users: [
@@ -220,30 +228,82 @@ describe('statut et clôture (3.4)', () => {
 describe('commande cochée et agent (3.7)', () => {
   it('commande d’un autre client : 400 ; avis non rapproché : 400', async () => {
     const { service } = monter({ customer_id: CLIENT });
-    await expect(service.commande(ID, { order_id: COMMANDE_AUTRE }, AWA_AGENT, MAINTENANT)).rejects.toBeInstanceOf(
+    await expect(service.commande(ID, { order_id: COMMANDE_AUTRE, order_id_lu: null }, AWA_AGENT, MAINTENANT)).rejects.toBeInstanceOf(
       BadRequestException,
     );
     const nonRapproche = monter();
     await expect(
-      nonRapproche.service.commande(ID, { order_id: COMMANDE }, AWA_AGENT, MAINTENANT),
+      nonRapproche.service.commande(ID, { order_id: COMMANDE, order_id_lu: null }, AWA_AGENT, MAINTENANT),
     ).rejects.toThrow('Client non rapproché.');
   });
 
   it('commande du client : cochée, puis décochée, chaque geste au journal', async () => {
     const { base, service } = monter({ customer_id: CLIENT });
-    await service.commande(ID, { order_id: COMMANDE }, AWA_AGENT, MAINTENANT);
+    await service.commande(ID, { order_id: COMMANDE, order_id_lu: null }, AWA_AGENT, MAINTENANT);
     expect(base.avis(ID).order_id).toBe(COMMANDE);
-    await service.commande(ID, { order_id: null }, AWA_AGENT, MAINTENANT);
+    await service.commande(ID, { order_id: null, order_id_lu: COMMANDE }, AWA_AGENT, MAINTENANT);
     expect(base.avis(ID).order_id).toBeNull();
     expect(base.suivis(ID).map((s) => s.meta)).toEqual([{ reference: 'CN-A1B2' }, null]);
   });
 
   it('agent hors de la liste de traitement : 400 ; agent valide : confié', async () => {
     const { base, service } = monter();
-    await expect(service.agent(ID, { agent_id: 'u-mkt' }, ADMIN, MAINTENANT)).rejects.toBeInstanceOf(BadRequestException);
-    await service.agent(ID, { agent_id: 'u-cc2' }, ADMIN, MAINTENANT);
+    await expect(service.agent(ID, { agent_id: 'u-mkt', agent_lu: null }, ADMIN, MAINTENANT)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    await service.agent(ID, { agent_id: 'u-cc2', agent_lu: null }, ADMIN, MAINTENANT);
     expect(base.avis(ID).agent_id).toBe('u-cc2');
     expect(base.suivis(ID)[0].meta).toEqual({ agent: 'Kouassi Ama' });
+  });
+
+  it('commande lue périmée : un collègue a coché une autre commande, 409 sans écraser', async () => {
+    const { base, service } = monter({ customer_id: CLIENT, order_id: COMMANDE_2 });
+    // L'agent voyait CN-A1B2 cochée ; le collègue a coché CN-C3D4 entre-temps.
+    await expect(
+      service.commande(ID, { order_id: null, order_id_lu: COMMANDE }, AWA_AGENT, MAINTENANT),
+    ).rejects.toThrow(MESSAGE_CONFLIT);
+    expect(base.avis(ID).order_id).toBe(COMMANDE_2);
+    expect(base.suivis(ID)).toHaveLength(0);
+  });
+
+  it('claim : deux agents cochent chacun une commande sur la même lecture, un seul aboutit', async () => {
+    const { base, service } = monter({ customer_id: CLIENT });
+    const resultats = await Promise.allSettled([
+      service.commande(ID, { order_id: COMMANDE, order_id_lu: null }, AWA_AGENT, MAINTENANT),
+      service.commande(ID, { order_id: COMMANDE_2, order_id_lu: null }, COLLEGUE, MAINTENANT),
+    ]);
+    expect(resultats.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const refus = resultats.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(refus.reason).toBeInstanceOf(ConflictException);
+    expect(base.suivis(ID)).toHaveLength(1);
+    expect(base.avis(ID).order_id).toBe(resultats[0].status === 'fulfilled' ? COMMANDE : COMMANDE_2);
+  });
+
+  it('claim : deux agents se choisissent à la même seconde, un seul l’emporte, l’autre 409', async () => {
+    const { base, service } = monter({}, {
+      users: [
+        { id: 'u-cc', fullname: 'Gbonhi Max', role: UserRole.CALL_CENTER, type: UserType.BACKOFFICE, entity_status: 'ACTIVE' },
+        { id: 'u-cc2', fullname: 'Kouassi Ama', role: UserRole.CALL_CENTER, type: UserType.BACKOFFICE, entity_status: 'ACTIVE' },
+      ],
+    });
+    const resultats = await Promise.allSettled([
+      service.agent(ID, { agent_id: 'u-cc', agent_lu: null }, AWA_AGENT, MAINTENANT),
+      service.agent(ID, { agent_id: 'u-cc2', agent_lu: null }, COLLEGUE, MAINTENANT),
+    ]);
+    expect(resultats.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const refus = resultats.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(refus.reason).toBeInstanceOf(ConflictException);
+    expect(refus.reason.message).toBe(MESSAGE_CONFLIT);
+    expect(base.avis(ID).agent_id).toBe(resultats[0].status === 'fulfilled' ? 'u-cc' : 'u-cc2');
+    expect(base.suivis(ID)).toHaveLength(1);
+  });
+
+  it('agent lu périmé : 409, l’agent posé par le collègue reste', async () => {
+    const { base, service } = monter({ agent_id: 'u-cc2' });
+    await expect(service.agent(ID, { agent_id: null, agent_lu: null }, AWA_AGENT, MAINTENANT)).rejects.toThrow(
+      MESSAGE_CONFLIT,
+    );
+    expect(base.avis(ID).agent_id).toBe('u-cc2');
   });
 });
 
@@ -251,20 +311,20 @@ describe('Créer un incident (3.7)', () => {
   const rapproche = { customer_id: CLIENT, order_id: COMMANDE };
 
   it('non rapproché : 400 ; sans commande cochée : 400 ; catégorie absente : 404', async () => {
-    await expect(monter().service.ticket(ID, { categoryId: CATEGORIE }, AWA_AGENT, MAINTENANT)).rejects.toThrow(
+    await expect(monter().service.ticket(ID, { categoryId: CATEGORIE, order_id: COMMANDE }, AWA_AGENT, MAINTENANT)).rejects.toThrow(
       'Client non rapproché.',
     );
     await expect(
-      monter({ customer_id: CLIENT }).service.ticket(ID, { categoryId: CATEGORIE }, AWA_AGENT, MAINTENANT),
+      monter({ customer_id: CLIENT }).service.ticket(ID, { categoryId: CATEGORIE, order_id: COMMANDE }, AWA_AGENT, MAINTENANT),
     ).rejects.toThrow("Cocher d'abord la commande concernée.");
     await expect(
-      monter(rapproche).service.ticket(ID, { categoryId: 'e0000000-0000-4000-8000-0000000000ff' }, AWA_AGENT, MAINTENANT),
+      monter(rapproche).service.ticket(ID, { categoryId: 'e0000000-0000-4000-8000-0000000000ff', order_id: COMMANDE }, AWA_AGENT, MAINTENANT),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('succès : ticket rattaché au client et à la commande, message interne, « Incident ouvert », ligne au journal', async () => {
     const { base, service, tickets } = monter(rapproche);
-    await service.ticket(ID, { categoryId: CATEGORIE }, AWA_AGENT, MAINTENANT);
+    await service.ticket(ID, { categoryId: CATEGORIE, order_id: COMMANDE }, AWA_AGENT, MAINTENANT);
     expect(tickets.createTicket).toHaveBeenCalledWith({
       subject: 'Avis du 02/11 · Pas content · Yopougon',
       categoryId: CATEGORIE,
@@ -286,22 +346,47 @@ describe('Créer un incident (3.7)', () => {
     expect(ligne?.meta).toMatchObject({ code: 'QUA-00012' });
   });
 
+  it('commande vue dans la fenêtre différente de la commande cochée : 409, aucun ticket', async () => {
+    const { base, service, tickets } = monter({ customer_id: CLIENT, order_id: COMMANDE_2 });
+    // La fenêtre montrait CN-A1B2 ; un collègue a coché CN-C3D4 depuis.
+    await expect(
+      service.ticket(ID, { categoryId: CATEGORIE, order_id: COMMANDE }, AWA_AGENT, MAINTENANT),
+    ).rejects.toThrow(MESSAGE_CONFLIT);
+    expect(tickets.createTicket).not.toHaveBeenCalled();
+    expect(base.avis(ID)).toMatchObject({ ticket_demande_at: null, ticket_id: null });
+  });
+
+  it('commande changée entre la lecture et la revendication : 409, aucun ticket', async () => {
+    const { base, service, tickets } = monter(rapproche);
+    const lire = base.prisma.avisPrive.findFirst.getMockImplementation()!;
+    base.prisma.avisPrive.findFirst.mockImplementationOnce(async (args) => {
+      const lu = await lire(args); // l'agent lit CN-A1B2…
+      base.avis(ID).order_id = COMMANDE_2; // …un collègue coche CN-C3D4 pendant ce temps
+      return lu;
+    });
+    await expect(
+      service.ticket(ID, { categoryId: CATEGORIE, order_id: COMMANDE }, AWA_AGENT, MAINTENANT),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tickets.createTicket).not.toHaveBeenCalled();
+    expect(base.avis(ID).ticket_demande_at ?? null).toBeNull();
+  });
+
   it('priorité moyenne hors « Pas content »', async () => {
     const { tickets, service } = monter({ ...rapproche, ressenti: AvisRessenti.PEUT_MIEUX_FAIRE });
-    await service.ticket(ID, { categoryId: CATEGORIE }, AWA_AGENT, MAINTENANT);
+    await service.ticket(ID, { categoryId: CATEGORIE, order_id: COMMANDE }, AWA_AGENT, MAINTENANT);
     expect(tickets.createTicket).toHaveBeenCalledWith(expect.objectContaining({ priority: TicketPriority.MEDIUM }));
   });
 
   it('second clic pendant la création : 409, un seul ticket', async () => {
     const { tickets, service } = monter(rapproche);
     const resultats = await Promise.allSettled([
-      service.ticket(ID, { categoryId: CATEGORIE }, AWA_AGENT, MAINTENANT),
-      service.ticket(ID, { categoryId: CATEGORIE }, AWA_AGENT, MAINTENANT),
+      service.ticket(ID, { categoryId: CATEGORIE, order_id: COMMANDE }, AWA_AGENT, MAINTENANT),
+      service.ticket(ID, { categoryId: CATEGORIE, order_id: COMMANDE }, AWA_AGENT, MAINTENANT),
     ]);
     expect(resultats.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
     expect(tickets.createTicket).toHaveBeenCalledTimes(1);
     // Ticket déjà ouvert : 409 aussi.
-    await expect(service.ticket(ID, { categoryId: CATEGORIE }, AWA_AGENT, MAINTENANT)).rejects.toBeInstanceOf(
+    await expect(service.ticket(ID, { categoryId: CATEGORIE, order_id: COMMANDE }, AWA_AGENT, MAINTENANT)).rejects.toBeInstanceOf(
       ConflictException,
     );
   });
@@ -309,11 +394,11 @@ describe('Créer un incident (3.7)', () => {
   it('échec du ticket : la demande est rendue, l’erreur remonte, un nouvel essai passe', async () => {
     const { base, service, tickets } = monter(rapproche);
     tickets.createTicket.mockRejectedValueOnce(new Error('base injoignable'));
-    await expect(service.ticket(ID, { categoryId: CATEGORIE }, AWA_AGENT, MAINTENANT)).rejects.toThrow(
+    await expect(service.ticket(ID, { categoryId: CATEGORIE, order_id: COMMANDE }, AWA_AGENT, MAINTENANT)).rejects.toThrow(
       "Le ticket n'a pas pu être créé.",
     );
     expect(base.avis(ID)).toMatchObject({ ticket_demande_at: null, ticket_id: null, statut: AvisStatut.A_RAPPELER });
-    await service.ticket(ID, { categoryId: CATEGORIE }, AWA_AGENT, MAINTENANT);
+    await service.ticket(ID, { categoryId: CATEGORIE, order_id: COMMANDE }, AWA_AGENT, MAINTENANT);
     expect(base.avis(ID).ticket_id).toBe('ticket-1');
   });
 });
@@ -366,11 +451,38 @@ describe('suppression (3.8)', () => {
       avisPrive: { findMany: jest.fn(async () => []) },
     };
     const lecture = new AvisPriveService(prisma as never);
-    await lecture.liste({}, MAINTENANT);
+    await lecture.liste({}, null, MAINTENANT);
     await lecture.compteurs(undefined, MAINTENANT);
-    await lecture.exporter({}, MAINTENANT);
+    await lecture.exporter({}, null, MAINTENANT);
     expect(requetes).toHaveLength(4);
     for (const r of requetes) expect(r.sql).toContain("a.entity_status::text <> 'DELETED'");
+  });
+
+  it('« Résolus sur 7 jours » : le compteur et la liste qu’il ouvre portent sur la même date de résolution', async () => {
+    const requetes: Prisma.Sql[] = [];
+    const prisma = {
+      $queryRaw: jest.fn(async (morceaux: TemplateStringsArray, ...valeurs: unknown[]) => {
+        requetes.push(Prisma.sql(morceaux, ...(valeurs as Prisma.Sql[])));
+        return [];
+      }),
+      avisPrive: { findMany: jest.fn(async () => []) },
+    };
+    const lecture = new AvisPriveService(prisma as never);
+    await lecture.compteurs(undefined, MAINTENANT);
+    // Le clic sur le compteur : filtre « résolus sur 7 jours », période Tout.
+    await lecture.liste({ resolus_7j: 'true', periode: 'tout' }, null, MAINTENANT);
+    const [compteurs, liste] = requetes;
+    const condition = sqlResolusSurSeptJours(MAINTENANT);
+    expect(condition.sql).toContain('a.resolu_at >=');
+    expect(compteurs.sql).toContain(condition.sql);
+    expect(liste.sql).toContain(condition.sql);
+    // Même borne : 7 jours avant maintenant, sur resolu_at.
+    const borne = new Date(MAINTENANT.getTime() - 7 * 86_400_000);
+    expect(compteurs.values).toContainEqual(borne);
+    expect(liste.values).toContainEqual(borne);
+    // Et aucune condition sur la date de réception : un avis reçu il y a 13
+    // jours et résolu hier est compté ET listé.
+    expect(liste.sql).not.toContain('a.created_at >=');
   });
 });
 

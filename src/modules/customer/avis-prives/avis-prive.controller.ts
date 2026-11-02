@@ -27,6 +27,7 @@ import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
+import { AvisPriveCleSiteGuard } from './avis-prive-cle-site.guard';
 import { AvisPriveDepotService } from './avis-prive-depot.service';
 import { AvisPriveThrottlerGuard } from './avis-prive-throttler.guard';
 import { AvisPriveTraitementService } from './avis-prive-traitement.service';
@@ -71,8 +72,10 @@ export class AvisPriveController {
 
   // ─── Route PUBLIQUE ─────────────────────────────────────────────────────────
 
-  @ApiOperation({ summary: "Envoi d'un avis depuis le site (public, sans jeton)" })
-  @UseGuards(AvisPriveThrottlerGuard)
+  // Clé du serveur du site d'abord : un appel direct à l'API est refusé avant
+  // d'être compté, écrit ou sonné (voir AvisPriveCleSiteGuard).
+  @ApiOperation({ summary: "Envoi d'un avis par le serveur du site (sans jeton, clé du site)" })
+  @UseGuards(AvisPriveCleSiteGuard, AvisPriveThrottlerGuard)
   @Throttle({ default: LIMITE_IP })
   @Post()
   async envoyer(@Body() dto: CreerAvisPriveDto) {
@@ -95,9 +98,9 @@ export class AvisPriveController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard, RestaurantQueryScopeGuard)
   @RequirePermission(Modules.COMMENTAIRES, Action.EXPORT)
   @Get('export')
-  async exporter(@Query() q: ListeAvisQueryDto, @Res() res: Response) {
+  async exporter(@Req() req: Request, @Query() q: ListeAvisQueryDto, @Res() res: Response) {
     const { page: _page, limit: _limit, ...filtres } = q;
-    const fichier = await this.avis.exporter(filtres);
+    const fichier = await this.avis.exporter(filtres, utilisateur(req));
     res.setHeader('Content-Type', fichier.type);
     res.setHeader('Content-Disposition', `attachment; filename="${fichier.nom}"`);
     res.send(fichier.contenu);
@@ -118,8 +121,8 @@ export class AvisPriveController {
   @UseGuards(JwtAuthGuard, UserPermissionsGuard, RestaurantQueryScopeGuard)
   @RequirePermission(Modules.COMMENTAIRES, Action.READ)
   @Get()
-  async liste(@Query() q: ListeAvisQueryDto) {
-    return this.avis.liste(q);
+  async liste(@Req() req: Request, @Query() q: ListeAvisQueryDto) {
+    return this.avis.liste(q, utilisateur(req));
   }
 
   @ApiBearerAuth()

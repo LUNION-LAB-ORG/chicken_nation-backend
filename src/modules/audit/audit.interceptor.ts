@@ -33,6 +33,23 @@ const REDACT_KEYS = new Set(
   ].map((k) => k.toLowerCase()),
 );
 
+/**
+ * Contenu personnel jamais copié au journal d'audit, par chemin.
+ *
+ * Retours privés « Ton avis compte » (/avis-prives) : le commentaire, le
+ * numéro, le prénom du client, les notes des agents et la recherche (un
+ * numéro). L'avis a son propre journal (AvisPriveSuivi), vidé quand
+ * l'administrateur supprime l'avis (droit à l'effacement annoncé sur le site) ;
+ * une copie dans audit_logs y survivrait. Le reste du corps (action, résultat,
+ * statut, solution) reste journalisé.
+ */
+const CLES_PERSONNELLES_PAR_CHEMIN: { motif: RegExp; cles: Set<string> }[] = [
+  {
+    motif: /\/avis-prives(\/|$)/,
+    cles: new Set(['note', 'commentaire', 'telephone', 'prenom', 'recherche']),
+  },
+];
+
 const MUTATIONS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const META_MAX = 4000;
@@ -178,17 +195,19 @@ export class AuditInterceptor implements NestInterceptor {
   /** Snapshot { body, query } redacté + tronqué (jamais de secret, jamais énorme). */
   private buildMetadata(req: any) {
     const meta: Record<string, unknown> = {};
-    let body = this.redact(req.body);
+    const url: string = req.originalUrl ?? req.url ?? '';
+    const chemin = url.split('?')[0];
+    const personnelles = CLES_PERSONNELLES_PAR_CHEMIN.find((c) => c.motif.test(chemin))?.cles;
+    let body = this.redact(req.body, 0, personnelles);
     // FAILLE FERMÉE (revue 31/07) : le masquage write-only de GET /settings
     // était contourné par CE journal — PUT /settings/<clé> journalisait
     // body.value EN CLAIR (le champ s'appelle « value », pas « password »).
     // Toute écriture d'une clé sensible est donc redactée ici aussi.
-    const url: string = req.originalUrl ?? req.url ?? '';
     const settingKey = decodeURIComponent(url.split('?')[0].split('/settings/')[1] ?? '');
     if (settingKey && SettingsService.isSensitiveKey(settingKey) && body && typeof body === 'object') {
       body = { ...body, value: '***' };
     }
-    const query = this.redact(req.query);
+    const query = this.redact(req.query, 0, personnelles);
     if (body && Object.keys(body).length) meta.body = body;
     if (query && Object.keys(query).length) meta.query = query;
 
@@ -201,15 +220,16 @@ export class AuditInterceptor implements NestInterceptor {
     }
   }
 
-  private redact(value: any, depth = 0): any {
+  private redact(value: any, depth = 0, personnelles?: Set<string>): any {
     if (value == null || depth > 4) return value;
-    if (Array.isArray(value)) return value.slice(0, 50).map((v) => this.redact(v, depth + 1));
+    if (Array.isArray(value)) return value.slice(0, 50).map((v) => this.redact(v, depth + 1, personnelles));
     if (typeof value === 'object') {
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(value)) {
-        if (REDACT_KEYS.has(k.toLowerCase())) out[k] = '***';
+        const cle = k.toLowerCase();
+        if (REDACT_KEYS.has(cle) || personnelles?.has(cle)) out[k] = '***';
         else if (typeof v === 'string' && v.length > 500) out[k] = v.slice(0, 500) + '…';
-        else out[k] = this.redact(v, depth + 1);
+        else out[k] = this.redact(v, depth + 1, personnelles);
       }
       return out;
     }

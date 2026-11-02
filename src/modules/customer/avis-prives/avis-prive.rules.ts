@@ -62,17 +62,19 @@ export const MESSAGE_PLAFOND_GLOBAL = "Trop d'avis en ce moment. Réessaie dans 
 export const MESSAGE_PLAFOND_IP = "Trop d'envois depuis cette connexion. Réessaie dans quelques minutes.";
 
 // ─── Messages du personnel ──────────────────────────────────────────────────
+// Le back-office vouvoie (« Choisissez une raison. », « Rechargez la page. ») ;
+// seuls les messages du site public tutoient.
 
-export const MESSAGE_CONFLIT = "L'avis a changé entre-temps. Recharge la fiche.";
+export const MESSAGE_CONFLIT = "L'avis a changé entre-temps. Rechargez la fiche.";
 export const MESSAGE_INTROUVABLE = 'Avis introuvable.';
 export const MESSAGE_SOLUTION = 'La solution est obligatoire pour Résolu.';
 export const MESSAGE_INCIDENT_MANUEL = 'Passer par Créer un incident.';
 export const MESSAGE_NOUVEAU_MANUEL = "Le statut « Nouveau » n'est jamais posé à la main.";
 export const MESSAGE_SANS_ACCORD = "Pas d'accord de rappel : ni appel ni WhatsApp.";
 export const MESSAGE_SANS_ACCORD_STATUT = "Pas d'accord de rappel : ce statut n'est pas possible.";
-export const MESSAGE_RESULTAT = 'Choisis le résultat.';
+export const MESSAGE_RESULTAT = 'Choisissez le résultat.';
 export const MESSAGE_RESULTAT_WHATSAPP = 'Un message WhatsApp est Joint ou Injoignable.';
-export const MESSAGE_NOTE = 'Écris la note.';
+export const MESSAGE_NOTE = 'Écrivez la note.';
 export const MESSAGE_NOTE_LONGUE = 'La note ne doit pas dépasser 2 000 caractères.';
 export const MESSAGE_NON_RAPPROCHE = 'Client non rapproché.';
 export const MESSAGE_SANS_COMMANDE = "Cocher d'abord la commande concernée.";
@@ -276,6 +278,19 @@ export function sqlEnRetard(maintenant: Date): Prisma.Sql {
   return Prisma.sql`(a.echeance_at IS NOT NULL AND a.premier_contact_at IS NULL
     AND a.statut::text IN (${Prisma.join(STATUTS_ECHEANCE)})
     AND a.echeance_at < ${maintenant})`;
+}
+
+/** Fenêtre du compteur « Résolus sur 7 jours ». */
+export const FENETRE_RESOLUS_MS = 7 * 24 * HEURE;
+
+/**
+ * Avis passés en Résolu depuis 7 jours glissants, sur la date de RÉSOLUTION
+ * (`resolu_at`), pas sur la date de réception. Une seule condition pour le
+ * compteur « Résolus sur 7 jours » et pour le filtre de liste qu'ouvre un clic
+ * dessus (`resolus_7j=true`) : le chiffre et la liste montrent les mêmes avis.
+ */
+export function sqlResolusSurSeptJours(maintenant: Date): Prisma.Sql {
+  return Prisma.sql`(a.statut::text = 'RESOLU' AND a.resolu_at >= ${new Date(maintenant.getTime() - FENETRE_RESOLUS_MS)})`;
 }
 
 // ─── Journal : saisie et effets (3.3) ───────────────────────────────────────

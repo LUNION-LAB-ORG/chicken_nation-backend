@@ -151,9 +151,14 @@ export class AvisPriveTraitementService {
 
   // ─── Commande cochée (3.7) ────────────────────────────────────────────────
 
+  /**
+   * Revendiquée sur la commande LUE (`order_id_lu`) : un collègue qui a coché
+   * une autre commande entre-temps donne un 409, jamais un écrasement muet.
+   */
   async commande(id: string, dto: CommandeAvisDto, user: User, maintenant = new Date()): Promise<AvisFiche> {
     const a = await this.avis.charger(id);
     if (a.order_id === dto.order_id) return this.avis.fiche(id, user, maintenant);
+    if (a.order_id !== dto.order_id_lu) throw new ConflictException(MESSAGE_CONFLIT);
 
     let reference: string | null = null;
     if (dto.order_id) {
@@ -168,10 +173,10 @@ export class AvisPriveTraitementService {
 
     await this.prisma.$transaction(async (tx) => {
       const pris = await tx.avisPrive.updateMany({
-        where: { id, entity_status: NON_SUPPRIME },
+        where: { id, order_id: dto.order_id_lu, entity_status: NON_SUPPRIME },
         data: { order_id: dto.order_id, updated_at: maintenant },
       });
-      if (pris.count === 0) throw new NotFoundException(MESSAGE_INTROUVABLE);
+      if (pris.count === 0) throw new ConflictException(MESSAGE_CONFLIT);
       await tx.avisPriveSuivi.create({
         data: {
           avis_id: id,
@@ -187,9 +192,14 @@ export class AvisPriveTraitementService {
 
   // ─── Agent (3.7) ──────────────────────────────────────────────────────────
 
+  /**
+   * Revendiquée sur l'agent LU (`agent_lu`) : deux agents qui se choisissent
+   * à la même seconde, un seul l'emporte, l'autre reçoit un 409.
+   */
   async agent(id: string, dto: AgentAvisDto, user: User, maintenant = new Date()): Promise<AvisFiche> {
     const a = await this.avis.charger(id);
     if (a.agent_id === dto.agent_id) return this.avis.fiche(id, user, maintenant);
+    if (a.agent_id !== dto.agent_lu) throw new ConflictException(MESSAGE_CONFLIT);
 
     let nom: string | null = null;
     if (dto.agent_id) {
@@ -208,10 +218,10 @@ export class AvisPriveTraitementService {
 
     await this.prisma.$transaction(async (tx) => {
       const pris = await tx.avisPrive.updateMany({
-        where: { id, entity_status: NON_SUPPRIME },
+        where: { id, agent_id: dto.agent_lu, entity_status: NON_SUPPRIME },
         data: { agent_id: dto.agent_id, updated_at: maintenant },
       });
-      if (pris.count === 0) throw new NotFoundException(MESSAGE_INTROUVABLE);
+      if (pris.count === 0) throw new ConflictException(MESSAGE_CONFLIT);
       await tx.avisPriveSuivi.create({
         data: {
           avis_id: id,
@@ -230,12 +240,15 @@ export class AvisPriveTraitementService {
   /**
    * Ouvre un ticket du module « Messages et tickets », rattaché au client et à
    * la commande cochée (obligatoires, règle des tickets). Un seul clic
-   * aboutit : la demande est revendiquée sur l'avis avant la création.
+   * aboutit : la demande est revendiquée sur l'avis avant la création, ET sur
+   * la commande que l'agent a vue dans la fenêtre (`dto.order_id`) : cochée
+   * autrement entre-temps par un collègue, 409, aucun ticket.
    */
   async ticket(id: string, dto: TicketAvisDto, user: User, maintenant = new Date()): Promise<AvisFiche> {
     const a = await this.avis.charger(id);
     if (a.ticket_id) throw new ConflictException(MESSAGE_CONFLIT);
     if (!a.customer_id) throw new BadRequestException(MESSAGE_NON_RAPPROCHE);
+    if (a.order_id && a.order_id !== dto.order_id) throw new ConflictException(MESSAGE_CONFLIT);
     if (!a.order_id) throw new BadRequestException(MESSAGE_SANS_COMMANDE);
 
     const categorie = await this.prisma.ticketCategory.findFirst({
@@ -247,6 +260,7 @@ export class AvisPriveTraitementService {
     const demande = await this.prisma.avisPrive.updateMany({
       where: {
         id,
+        order_id: dto.order_id,
         ticket_id: null,
         entity_status: NON_SUPPRIME,
         OR: [
@@ -267,7 +281,7 @@ export class AvisPriveTraitementService {
         priority: a.ressenti === AvisRessenti.PAS_CONTENT ? TicketPriority.HIGH : TicketPriority.MEDIUM,
         source: 'avis',
         customerId: a.customer_id,
-        orderId: a.order_id,
+        orderId: dto.order_id,
         assigneeId: user.id,
       });
     } catch (erreur) {

@@ -4,16 +4,19 @@
  * Nest déclare les routes dans l'ordre des méthodes du contrôleur : une route
  * fixe placée APRÈS `GET :id` serait prise pour un identifiant d'avis.
  * Ici, `compteurs`, `export` et `agents` doivent atteindre leur méthode, et
- * l'envoi public garde sa limite par IP et son champ piège.
+ * l'envoi public garde sa clé du site, sa limite par IP et son champ piège.
  */
 import { CanActivate, ExecutionContext, INestApplication, RequestMethod, ValidationPipe } from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { UserRole, UserType } from '@prisma/client';
 import * as request from 'supertest';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { ENTETE_CLE_SITE, MESSAGE_CLE_SITE_REFUSEE } from './avis-prive-cle-site.guard';
 import { AvisPriveDepotService } from './avis-prive-depot.service';
+import { adresseSuivie } from './avis-prive-throttler.guard';
 import { AvisPriveTraitementService } from './avis-prive-traitement.service';
 import { AvisPriveController } from './avis-prive.controller';
 import { MESSAGE_PLAFOND_IP } from './avis-prive.rules';
@@ -30,6 +33,17 @@ class AdministrateurConnecte implements CanActivate {
     return true;
   }
 }
+
+/** Clé partagée avec le serveur du site, posée dans l'environnement de l'API. */
+const CLE = 'cle-du-site-pour-les-tests-0123456789abcdef';
+const CLE_AVANT = process.env.CLE_SERVEUR_SITE;
+beforeAll(() => {
+  process.env.CLE_SERVEUR_SITE = CLE;
+});
+afterAll(() => {
+  if (CLE_AVANT === undefined) delete process.env.CLE_SERVEUR_SITE;
+  else process.env.CLE_SERVEUR_SITE = CLE_AVANT;
+});
 
 const methodes = Object.getOwnPropertyNames(AvisPriveController.prototype);
 const handler = (nom: string) => (AvisPriveController.prototype as unknown as Record<string, object>)[nom];
@@ -71,9 +85,10 @@ describe('AvisPriveController par HTTP', () => {
       .overrideGuard(JwtAuthGuard)
       .useClass(AdministrateurConnecte)
       .compile();
-    app = moduleRef.createNestApplication();
-    // Même pipe global que main.ts.
+    app = moduleRef.createNestApplication<NestExpressApplication>();
+    // Même pipe global et même confiance dans nginx que main.ts.
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+    (app as NestExpressApplication).set('trust proxy', true);
     await app.listen(0, '127.0.0.1');
   });
 
@@ -119,6 +134,7 @@ describe('AvisPriveController par HTTP', () => {
     await request(app.getHttpServer())
       .post('/avis-prives')
       .set('X-Forwarded-For', '198.51.100.20')
+      .set(ENTETE_CLE_SITE, CLE)
       .send({ ...corps, site_web: 'http://spam.example', admin: true })
       .expect(201, { ok: true });
     const recu = (depot.deposer.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
@@ -129,6 +145,8 @@ describe('AvisPriveController par HTTP', () => {
   it('envoi public : messages de validation en français', async () => {
     const res = await request(app.getHttpServer())
       .post('/avis-prives')
+      .set('X-Forwarded-For', '198.51.100.21')
+      .set(ENTETE_CLE_SITE, CLE)
       .send({ ...corps, ressenti: 'FURIEUX', canal: undefined, commentaire: ' x ' })
       .expect(400);
     expect(res.body.message).toEqual(
@@ -136,8 +154,8 @@ describe('AvisPriveController par HTTP', () => {
     );
   });
 
-  it('envoi public : 5 envois par IP en 15 minutes, le 6e refusé en français', async () => {
-    // Nouvelle application : un compteur par IP tout neuf.
+  /** Nouvelle application : un compteur par IP tout neuf, `trust proxy` comme main.ts. */
+  async function nouvelleApplication(): Promise<INestApplication> {
     const moduleRef = await Test.createTestingModule({
       imports: [ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 60 }])],
       controllers: [AvisPriveController],
@@ -147,18 +165,87 @@ describe('AvisPriveController par HTTP', () => {
         { provide: AvisPriveDepotService, useValue: depot },
       ],
     }).compile();
-    const autre = moduleRef.createNestApplication();
+    const autre = moduleRef.createNestApplication<NestExpressApplication>();
     autre.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+    (autre as NestExpressApplication).set('trust proxy', true);
     await autre.listen(0, '127.0.0.1');
+    return autre;
+  }
+
+  async function avec(test: (autre: INestApplication) => Promise<void>) {
+    const autre = await nouvelleApplication();
     try {
-      for (let i = 0; i < 5; i++) {
-        await request(autre.getHttpServer()).post('/avis-prives').send(corps).expect(201);
-      }
-      const refus = await request(autre.getHttpServer()).post('/avis-prives').send(corps).expect(429);
-      expect(refus.body.message).toBe(MESSAGE_PLAFOND_IP);
+      await test(autre);
     } finally {
       autre.getHttpServer().closeAllConnections();
       await autre.close();
     }
+  }
+
+  it('envoi par le serveur du site : 5 envois par visiteur en 15 minutes, le 6e refusé en français', async () => {
+    await avec(async (autre) => {
+      const envoi = (ip: string) =>
+        request(autre.getHttpServer()).post('/avis-prives').set('X-Forwarded-For', ip).set(ENTETE_CLE_SITE, CLE).send(corps);
+      for (let i = 0; i < 5; i++) await envoi('203.0.113.7').expect(201);
+      const refus = await envoi('203.0.113.7').expect(429);
+      expect(refus.body.message).toBe(MESSAGE_PLAFOND_IP);
+      // Un autre visiteur du site n'est pas freiné par le premier.
+      await envoi('203.0.113.8').expect(201);
+    });
+  });
+
+  it('appel direct à l’API, sans la clé du site : 403 avant toute limite, rien n’est enregistré', async () => {
+    await avec(async (autre) => {
+      depot.deposer.mockClear();
+      // Le scénario de l'attaque : une adresse inventée différente à chaque envoi.
+      for (let i = 1; i <= 6; i++) {
+        const refus = await request(autre.getHttpServer())
+          .post('/avis-prives')
+          .set('X-Forwarded-For', `203.0.113.${i}`)
+          .send(corps)
+          .expect(403);
+        expect(refus.body.message).toBe(MESSAGE_CLE_SITE_REFUSEE);
+      }
+      await request(autre.getHttpServer())
+        .post('/avis-prives')
+        .set(ENTETE_CLE_SITE, 'une-cle-inventee-de-la-meme-longueur-ou-pas')
+        .send(corps)
+        .expect(403);
+      expect(depot.deposer).not.toHaveBeenCalled();
+    });
+  });
+
+  it('clé absente de la configuration de l’API : 503, jamais d’envoi accepté', async () => {
+    await avec(async (autre) => {
+      depot.deposer.mockClear();
+      delete process.env.CLE_SERVEUR_SITE;
+      try {
+        await request(autre.getHttpServer()).post('/avis-prives').set(ENTETE_CLE_SITE, CLE).send(corps).expect(503);
+        process.env.CLE_SERVEUR_SITE = 'trop-courte';
+        await request(autre.getHttpServer()).post('/avis-prives').set(ENTETE_CLE_SITE, 'trop-courte').send(corps).expect(503);
+      } finally {
+        process.env.CLE_SERVEUR_SITE = CLE;
+      }
+      expect(depot.deposer).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('adresse comptée par la limite par IP', () => {
+  const requete = (ips: string[], cle?: string) => ({
+    headers: cle ? { [ENTETE_CLE_SITE]: cle } : {},
+    ips,
+    ip: ips[0],
+    socket: { remoteAddress: '10.0.0.1' },
+  });
+
+  it('serveur du site (clé valide) : l’adresse du visiteur, en tête de X-Forwarded-For', () => {
+    expect(adresseSuivie(requete(['203.0.113.7', '198.51.100.9'], CLE))).toBe('203.0.113.7');
+  });
+
+  it('sans la clé : l’adresse ajoutée par nginx (la dernière), jamais celle écrite par l’appelant', () => {
+    expect(adresseSuivie(requete(['203.0.113.7', '198.51.100.9']))).toBe('198.51.100.9');
+    expect(adresseSuivie(requete(['203.0.113.7', '198.51.100.9'], 'mauvaise-cle'))).toBe('198.51.100.9');
+    expect(adresseSuivie(requete([]))).toBe('10.0.0.1');
   });
 });

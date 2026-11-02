@@ -28,6 +28,15 @@ import { SANS_MASQUAGE } from './sans-masquage.decorator';
  */
 const ROLES_SANS_COORDONNEES: UserRole[] = [UserRole.MARKETING];
 
+/**
+ * Ce rôle reçoit-il les coordonnées masquées ? Pour les services qui doivent
+ * aussi fermer les chemins détournés (une recherche par numéro, par exemple,
+ * dont la réponse dirait si des chiffres figurent dans un numéro masqué).
+ */
+export function coordonneesMasquees(role: UserRole | null | undefined): boolean {
+  return !!role && ROLES_SANS_COORDONNEES.includes(role);
+}
+
 @Injectable()
 export class MasquerContactsInterceptor implements NestInterceptor {
   constructor(private readonly reflector: Reflector) { }
@@ -42,7 +51,7 @@ export class MasquerContactsInterceptor implements NestInterceptor {
     if (dispense) return suite.handle();
 
     const role = (contexte.switchToHttp().getRequest<{ user?: User }>().user)?.role;
-    if (!role || !ROLES_SANS_COORDONNEES.includes(role)) return suite.handle();
+    if (!coordonneesMasquees(role)) return suite.handle();
 
     return suite.handle().pipe(map((donnees) => masquerContacts(donnees)));
   }

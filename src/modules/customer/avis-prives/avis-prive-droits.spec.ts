@@ -12,12 +12,13 @@ import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { APP_INTERCEPTOR, Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { ThrottlerModule } from '@nestjs/throttler';
-import { AvisCanal, AvisRessenti, AvisStatut, UserRole } from '@prisma/client';
+import { AvisCanal, AvisRessenti, AvisStatut, Prisma, UserRole } from '@prisma/client';
 import * as request from 'supertest';
 import { MasquerContactsInterceptor } from 'src/common/securite/masquer-contacts.interceptor';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { resolveStaffType } from 'src/modules/users/helpers/staff-type.helper';
 import { creerBaseAvis } from './avis-prive-base-simulee-spec';
+import { AvisPriveCleSiteGuard, ENTETE_CLE_SITE } from './avis-prive-cle-site.guard';
 import { AvisPriveDepotService } from './avis-prive-depot.service';
 import { AvisPriveThrottlerGuard } from './avis-prive-throttler.guard';
 import { AvisPriveTraitementService } from './avis-prive-traitement.service';
@@ -30,6 +31,16 @@ const AVIS_A = '11111111-1111-4111-8111-11111111111a';
 const AVIS_B = '11111111-1111-4111-8111-11111111111b';
 const AVIS_SANS_STORE = '11111111-1111-4111-8111-11111111111c';
 const CLIENT = 'c0000000-0000-4000-8000-000000000001';
+const COMMANDE = 'd0000000-0000-4000-8000-000000000001';
+const CLE = 'cle-du-site-pour-les-tests-0123456789abcdef';
+const CLE_AVANT = process.env.CLE_SERVEUR_SITE;
+beforeAll(() => {
+  process.env.CLE_SERVEUR_SITE = CLE;
+});
+afterAll(() => {
+  if (CLE_AVANT === undefined) delete process.env.CLE_SERVEUR_SITE;
+  else process.env.CLE_SERVEUR_SITE = CLE_AVANT;
+});
 
 class AuthentificationSimulee implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
@@ -60,9 +71,9 @@ type Verbe = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 const TRAITEMENT: [Verbe, string, object][] = [
   ['POST', `/avis-prives/${ID}/journal`, { action: 'NOTE', note: 'Rappeler ce soir.' }],
   ['PATCH', `/avis-prives/${ID}/statut`, { statut: 'EN_COURS', statut_lu: 'A_RAPPELER' }],
-  ['PATCH', `/avis-prives/${ID}/commande`, { order_id: null }],
-  ['PATCH', `/avis-prives/${ID}/agent`, { agent_id: null }],
-  ['POST', `/avis-prives/${ID}/ticket`, { categoryId: '22222222-2222-4222-8222-222222222222' }],
+  ['PATCH', `/avis-prives/${ID}/commande`, { order_id: null, order_id_lu: COMMANDE }],
+  ['PATCH', `/avis-prives/${ID}/agent`, { agent_id: null, agent_lu: null }],
+  ['POST', `/avis-prives/${ID}/ticket`, { categoryId: '22222222-2222-4222-8222-222222222222', order_id: COMMANDE }],
   ['GET', '/avis-prives/agents', {}],
 ];
 
@@ -74,8 +85,8 @@ describe('AvisPriveController : gardes posées', () => {
   const gardes = (nom: keyof AvisPriveController) =>
     Reflect.getMetadata(GUARDS_METADATA, AvisPriveController.prototype[nom]) as unknown[];
 
-  it('envoi public : sans garde JWT, avec la garde de limite par IP (5 envois en 15 minutes)', () => {
-    expect(gardes('envoyer')).toEqual([AvisPriveThrottlerGuard]);
+  it('envoi public : sans garde JWT, clé du site d’abord, puis la limite par IP (5 envois en 15 minutes)', () => {
+    expect(gardes('envoyer')).toEqual([AvisPriveCleSiteGuard, AvisPriveThrottlerGuard]);
     expect(gardes('envoyer')).not.toContain(JwtAuthGuard);
     const handler = AvisPriveController.prototype.envoyer;
     expect(Reflect.getMetadata('THROTTLER:LIMITdefault', handler)).toBe(5);
@@ -171,14 +182,26 @@ describe('AvisPriveController par HTTP : droits par rôle', () => {
   };
   const restoDe = (role: UserRole) => (role === UserRole.MANAGER || role === UserRole.CAISSIER ? RESTO_A : undefined);
 
-  it('envoi public : répond sans jeton', async () => {
+  it('envoi public : répond sans jeton au serveur du site', async () => {
     await appel(null, 'POST', '/avis-prives', {
       ressenti: 'AU_TOP',
       canal: 'APPLI',
       commentaire: 'Très bon poulet.',
       telephone: '0707000001',
-    }).expect(201, { ok: true });
+    })
+      .set(ENTETE_CLE_SITE, CLE)
+      .expect(201, { ok: true });
     expect(depot.deposer).toHaveBeenCalled();
+  });
+
+  it('recherche : la liste et l’export reçoivent le compte qui lit (son rôle ferme la recherche par numéro au marketing)', async () => {
+    liste.mockClear();
+    exporter.mockClear();
+    await appel(UserRole.MARKETING, 'GET', '/avis-prives?periode=tout&recherche=0001').expect(200);
+    expect(liste.mock.calls[0][0]).toMatchObject({ recherche: '0001' });
+    expect(liste.mock.calls[0][1]).toMatchObject({ role: UserRole.MARKETING });
+    await appel(UserRole.CALL_CENTER, 'GET', '/avis-prives/export?recherche=0001').expect(200);
+    expect(exporter.mock.calls[0][1]).toMatchObject({ role: UserRole.CALL_CENTER });
   });
 
   it.each(LECTEURS)('%s lit la liste, les compteurs et une fiche de son périmètre', async (role) => {
@@ -267,5 +290,44 @@ describe('AvisPriveController par HTTP : droits par rôle', () => {
     const centre = await appel(UserRole.CALL_CENTER, 'GET', `/avis-prives/${AVIS_A}`).expect(200);
     expect(centre.body.telephone).toBe('+2250707000001');
     expect(centre.body.client.telephone).toBe('+2250707000001');
+  });
+});
+
+describe('recherche par chiffres et numéros masqués', () => {
+  const MAINTENANT = new Date('2026-11-02T10:00:00.000Z');
+
+  /** Requêtes SQL de la liste, pour un lecteur et une recherche. */
+  async function requetesListe(role: UserRole, recherche?: string): Promise<Prisma.Sql[]> {
+    const requetes: Prisma.Sql[] = [];
+    const prisma = {
+      $queryRaw: jest.fn(async (morceaux: TemplateStringsArray, ...valeurs: unknown[]) => {
+        requetes.push(Prisma.sql(morceaux, ...(valeurs as Prisma.Sql[])));
+        return [];
+      }),
+      avisPrive: { findMany: jest.fn(async () => []) },
+    };
+    await new AvisPriveService(prisma as never).liste({ periode: 'tout', recherche }, { role }, MAINTENANT);
+    return requetes;
+  }
+  const memes = (a: Prisma.Sql[], b: Prisma.Sql[]) =>
+    expect(a.map((r) => [r.sql, r.values])).toEqual(b.map((r) => [r.sql, r.values]));
+
+  it('marketing : « 0001 » donne exactement la liste sans recherche (rien à deviner du numéro masqué)', async () => {
+    const sans = await requetesListe(UserRole.MARKETING);
+    for (const motif of ['0001', '0101', '07 07 00 00 01', '+2250707000001']) {
+      memes(await requetesListe(UserRole.MARKETING, motif), sans);
+    }
+  });
+
+  it('call center : la recherche par chiffres porte bien sur le numéro', async () => {
+    const [compte] = await requetesListe(UserRole.CALL_CENTER, '0001');
+    expect(compte.sql).toContain("regexp_replace(coalesce(a.telephone, ''), '[^0-9]', '', 'g') LIKE");
+    expect(compte.values).toContain('%0001%');
+  });
+
+  it('marketing : la recherche par mot reste possible (prénom, commentaire)', async () => {
+    const [compte] = await requetesListe(UserRole.MARKETING, 'frites');
+    expect(compte.sql).toContain('a.commentaire ILIKE');
+    expect(compte.sql).not.toContain('a.telephone');
   });
 });

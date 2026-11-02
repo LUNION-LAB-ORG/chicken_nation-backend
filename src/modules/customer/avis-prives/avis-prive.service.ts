@@ -12,6 +12,7 @@ import {
   User,
   UserType,
 } from '@prisma/client';
+import { coordonneesMasquees } from 'src/common/securite/masquer-contacts.interceptor';
 import { customerPhoneVariants } from 'src/common/utils/customer-phone.util';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { ROLES_TRAITEMENT_AVIS } from 'src/modules/auth/constantes/roles-avis-prives';
@@ -43,6 +44,7 @@ import {
   MESSAGE_INTROUVABLE,
   prenomAffiche,
   sqlEnRetard,
+  sqlResolusSurSeptJours,
   SQL_TRI,
   STATUTS_CLOS,
   texteSuivi,
@@ -141,6 +143,9 @@ export type AvisCharge = Prisma.AvisPriveGetPayload<{ include: typeof INCLUDE_AV
 /** Filtres de la liste et de l'export (sans la pagination). */
 export type FiltresAvis = Omit<ListeAvisQueryDto, 'page' | 'limit'>;
 
+/** Qui lit la liste : son rôle décide si la recherche par numéro lui est ouverte. */
+export type LecteurAvis = Pick<User, 'role'> | null | undefined;
+
 /**
  * Lecture des retours privés : liste, compteurs, fiche, export, agents, et le
  * rapprochement d'un numéro avec un compte client (partagé avec le dépôt).
@@ -197,12 +202,22 @@ export class AvisPriveService {
     return Prisma.sql`AND a.restaurant_id = ${restaurantId}::uuid`;
   }
 
-  /** Conditions de la liste et de l'export : périmètre, store, ressenti, statut, retard, période, recherche. */
-  filtre(q: FiltresAvis, maintenant: Date): Prisma.Sql {
+  /**
+   * Conditions de la liste et de l'export : périmètre, store, ressenti,
+   * statut, retard, résolus sur 7 jours, période, recherche.
+   *
+   * Recherche par chiffres (4 ou plus) : dans le numéro de l'avis, SAUF pour
+   * un rôle qui reçoit les numéros masqués (marketing). Pour lui, la
+   * recherche est ignorée : la présence ou l'absence d'un avis dans la
+   * réponse dirait sinon si une suite de chiffres figure dans le numéro, et
+   * quelques centaines de recherches reconstitueraient un numéro masqué.
+   */
+  filtre(q: FiltresAvis, maintenant: Date, lecteur?: LecteurAvis): Prisma.Sql {
     const parties: Prisma.Sql[] = [Prisma.sql`a.entity_status::text <> 'DELETED'`, this.filtreStore(q.restaurantId)];
     if (q.ressenti) parties.push(Prisma.sql`AND a.ressenti::text = ${q.ressenti}`);
     if (q.statut) parties.push(Prisma.sql`AND a.statut::text = ${q.statut}`);
     if (q.en_retard === 'true') parties.push(Prisma.sql`AND ${sqlEnRetard(maintenant)}`);
+    if (q.resolus_7j === 'true') parties.push(Prisma.sql`AND ${sqlResolusSurSeptJours(maintenant)}`);
 
     const periode = q.periode ?? '7j';
     if (periode === 'aujourdhui') parties.push(Prisma.sql`AND a.created_at >= ${debutDuJour(maintenant)}`);
@@ -213,7 +228,9 @@ export class AvisPriveService {
     if (terme.length >= 2) {
       const numeros = chiffres(terme);
       if (/^[\d\s+.\-()]+$/.test(terme) && numeros.length >= 4) {
-        parties.push(Prisma.sql`AND regexp_replace(coalesce(a.telephone, ''), '[^0-9]', '', 'g') LIKE ${`%${numeros}%`}`);
+        if (!coordonneesMasquees(lecteur?.role)) {
+          parties.push(Prisma.sql`AND regexp_replace(coalesce(a.telephone, ''), '[^0-9]', '', 'g') LIKE ${`%${numeros}%`}`);
+        }
       } else {
         const motif = `%${terme.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
         parties.push(Prisma.sql`AND (a.prenom ILIKE ${motif} OR a.commentaire ILIKE ${motif}
@@ -235,10 +252,10 @@ export class AvisPriveService {
 
   // ─── Liste, compteurs ─────────────────────────────────────────────────────
 
-  async liste(q: ListeAvisQueryDto, maintenant = new Date()) {
+  async liste(q: ListeAvisQueryDto, lecteur?: LecteurAvis, maintenant = new Date()) {
     const page = Math.max(1, q.page ?? 1);
     const limit = Math.min(100, Math.max(1, q.limit ?? 20));
-    const filtre = this.filtre(q, maintenant);
+    const filtre = this.filtre(q, maintenant, lecteur);
     const [compte] = await this.prisma.$queryRaw<{ total: number }[]>`
       SELECT count(*)::int AS total FROM "AvisPrive" a LEFT JOIN "Customer" c ON c.id = a.customer_id
       WHERE ${filtre}`;
@@ -261,7 +278,7 @@ export class AvisPriveService {
         count(*) FILTER (WHERE a.statut::text = 'NOUVEAU')::int AS nouveaux,
         count(*) FILTER (WHERE a.statut::text = 'A_RAPPELER')::int AS a_rappeler,
         count(*) FILTER (WHERE ${sqlEnRetard(maintenant)})::int AS echeance_depassee,
-        count(*) FILTER (WHERE a.statut::text = 'RESOLU' AND a.resolu_at >= ${new Date(maintenant.getTime() - 7 * JOUR)})::int AS resolus_7j,
+        count(*) FILTER (WHERE ${sqlResolusSurSeptJours(maintenant)})::int AS resolus_7j,
         count(*) FILTER (WHERE a.statut::text NOT IN (${Prisma.join(STATUTS_CLOS)}))::int AS a_traiter
       FROM "AvisPrive" a
       WHERE a.entity_status::text <> 'DELETED' ${this.filtreStore(restaurantId)}`;
@@ -451,8 +468,8 @@ export class AvisPriveService {
   // ─── Export ───────────────────────────────────────────────────────────────
 
   /** Export CSV des avis filtrés, dans l'ordre de la liste, 5 000 lignes au plus. */
-  async exporter(q: FiltresAvis, maintenant = new Date()): Promise<FichierExport> {
-    const avis = await this.chargerDansLOrdre(await this.idsTries(this.filtre(q, maintenant), EXPORT_MAX, 0));
+  async exporter(q: FiltresAvis, lecteur?: LecteurAvis, maintenant = new Date()): Promise<FichierExport> {
+    const avis = await this.chargerDansLOrdre(await this.idsTries(this.filtre(q, maintenant, lecteur), EXPORT_MAX, 0));
     const rangees = avis.map((a) => [
       formatDateExport(a.created_at),
       LIBELLE_RESSENTI[a.ressenti],
