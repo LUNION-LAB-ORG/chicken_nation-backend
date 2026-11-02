@@ -95,7 +95,14 @@ export class CrmCouponService {
       }
       const claim = await tx.crmContact.updateMany({
         where: { id: contact.id, status: { not: CrmStatus.CONVERTI }, ...this.access.conditionAgent(user) },
-        data: { status: CrmStatus.COUPON_ENVOYE, coupon_sent_at: maintenant, callback_at: null },
+        data: {
+          status: CrmStatus.COUPON_ENVOYE,
+          coupon_sent_at: maintenant,
+          callback_at: null,
+          // Client de l'annuaire : l'offre vaut prise en charge, seule une
+          // commande passée après compte (problème 1 du 02/11).
+          ...(contact.status === CrmStatus.NON_DEMARCHE && { segment_since: maintenant }),
+        },
       });
       if (claim.count === 0) throw new BadRequestException('Ce client vient de commander : il est sorti de la liste');
       const promo = await tx.promoCode.create({

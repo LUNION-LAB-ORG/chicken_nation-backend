@@ -43,6 +43,7 @@ const SELECT_CONTACT = {
   last_order_at: true,
   abandoned_orders: true,
   last_call_outcome: true,
+  call_count: true,
   conversion_order_id: true,
   converted_at: true,
   campaign_id: true,
@@ -54,6 +55,24 @@ const SELECT_CONTACT = {
 type ContactVu = Prisma.CrmContactGetPayload<{ select: typeof SELECT_CONTACT }>;
 
 const JOUR = 86_400_000;
+
+/**
+ * Première date à laquelle une commande du compte peut faire sortir la fiche.
+ *
+ * Client de l'ANNUAIRE (segment CLIENT) : la commande doit SUIVRE la date
+ * d'entrée. À la création, cette date est sa dernière commande, qui ne peut
+ * pas être une vente du centre d'appels ; après la prise en charge, c'est la
+ * prise. Une milliseconde de plus suffit, et elle évite le piège de la
+ * précision : la base garde les microsecondes, JavaScript les tronque. Même
+ * règle en SQL (`DEBUT_VENTES_SQL`), pour que la réconciliation ne revoie pas
+ * sans fin une fiche que la synchronisation laisse en place.
+ */
+export function debutVentes(c: { segment: CrmSegment; segment_since: Date }): Date {
+  return c.segment === CrmSegment.CLIENT ? new Date(c.segment_since.getTime() + 1) : c.segment_since;
+}
+
+/** `debutVentes` en SQL, sur la fiche aliasée « x ». */
+export const DEBUT_VENTES_SQL = `(x."segment_since" + CASE WHEN x."segment" = 'CLIENT' THEN interval '1 millisecond' ELSE interval '0' END)`;
 
 /**
  * Tient les contacts du CRM en accord avec la réalité des commandes.
@@ -139,6 +158,16 @@ export class CrmSyncService {
     ]);
     if (c.customer_id) await this.entretenir(c, derniere?.created_at ?? null);
 
+    /*
+      ANNUAIRE : une fiche « non démarchée » ne se convertit JAMAIS. Personne
+      ne l'a appelée : sa commande n'est pas une vente du centre d'appels, et
+      la compter fausserait les taux de conversion. Une commande met seulement
+      à jour sa dernière commande, ci-dessus. Depuis le 24/10, elle passait
+      « Converti » par sa propre dernière commande, avec une fausse vente au
+      registre (problème 1 du 02/11).
+    */
+    if (c.status === CrmStatus.NON_DEMARCHE) return;
+
     const candidate = await this.commandeCandidate(c);
     if (c.status !== CrmStatus.CONVERTI) {
       if (candidate) await this.convertir(c, candidate);
@@ -186,7 +215,7 @@ export class CrmSyncService {
         ? this.prisma.order.findFirst({
             where: {
               ...commandeEffective(c.customer_id),
-              ...(c.segment !== CrmSegment.JAMAIS_COMMANDE && { created_at: { gte: c.segment_since } }),
+              ...(c.segment !== CrmSegment.JAMAIS_COMMANDE && { created_at: { gte: debutVentes(c) } }),
             },
             orderBy: { created_at: 'asc' },
             select: SELECT_COMMANDE,
@@ -328,20 +357,45 @@ export class CrmSyncService {
     });
   }
 
-  /** La commande qui l'avait fait sortir a disparu : il revient dans la liste. */
+  /**
+   * La commande qui l'avait fait sortir a disparu : il revient dans la liste.
+   *
+   * Un client de l'annuaire que le centre d'appels n'a jamais travaillé (ni
+   * agent, ni appel, ni coupon) revient « non démarché », dans l'annuaire :
+   * « à appeler » sans agent, il n'était dans aucune file et ne pouvait plus
+   * jamais devenir inactif (problème 16 du 02/11).
+   */
   private async retablir(c: ContactVu) {
-    const [couponActif, campagne] = await Promise.all([
+    const [couponActif, coupons] = await Promise.all([
       this.prisma.crmCoupon.count({ where: { contact_id: c.id, used_at: null, expires_at: { gt: new Date() } } }),
-      c.campaign_id ? this.prisma.crmCampaign.findUnique({ where: { id: c.campaign_id }, select: { status: true } }) : null,
+      this.prisma.crmCoupon.count({ where: { contact_id: c.id } }),
     ]);
-    // Revenu dans la liste après la fin de sa campagne : il la quitte, pour
-    // retrouver la file de son agent (ou la file commune s'il n'en a plus).
-    const campagneFinie = !!campagne && campagne.status !== 'ACTIVE' && campagne.status !== 'SUSPENDED';
+    const annuaireIntact =
+      c.segment === CrmSegment.CLIENT && !c.assigned_to_id && (c.call_count ?? 0) === 0 && coupons === 0;
+    const statut = annuaireIntact
+      ? CrmStatus.NON_DEMARCHE
+      : statutSansConversion({ coupon_actif: couponActif > 0, last_call_outcome: c.last_call_outcome });
     const retabli = await this.prisma.$transaction(async (tx) => {
+      /*
+        Revenu dans la liste après la fin de sa campagne : il la quitte, pour
+        retrouver la file de son agent (ou la file commune s'il n'en a plus).
+
+        ⚠️ La campagne est relue ICI, verrouillée en partage : lue avant la
+        transaction, une clôture glissée entre les deux laissait la fiche
+        rattachée à une campagne terminée, donc hors de toute file (problème
+        22). La clôture écrit le statut de la campagne avant de lire ses
+        contacts : soit elle attend notre fin et nous voit rouverts, soit nous
+        attendons la sienne et lisons « terminée ».
+      */
+      const [campagne] = c.campaign_id
+        ? await tx.$queryRaw<{ status: string }[]>`
+            SELECT "status"::text AS "status" FROM "ConversionCampaign" WHERE "id" = ${c.campaign_id}::uuid FOR SHARE`
+        : [];
+      const campagneFinie = !!campagne && campagne.status !== 'ACTIVE' && campagne.status !== 'SUSPENDED';
       const claim = await tx.crmContact.updateMany({
         where: { id: c.id, status: CrmStatus.CONVERTI },
         data: {
-          status: statutSansConversion({ coupon_actif: couponActif > 0, last_call_outcome: c.last_call_outcome }),
+          status: statut,
           converted_at: null,
           conversion_order_id: null,
           conversion_amount: null,
@@ -359,7 +413,15 @@ export class CrmSyncService {
         data: { released_at: null, release_reason: null, converted_at: null },
       });
       await this.events.journaliser(
-        [{ contact_id: c.id, type: CrmEventType.RETOUR, label: 'Commande supprimée : le client revient dans la liste' }],
+        [
+          {
+            contact_id: c.id,
+            type: CrmEventType.RETOUR,
+            label: annuaireIntact
+              ? "Commande supprimée : le client revient dans l'annuaire"
+              : 'Commande supprimée : le client revient dans la liste',
+          },
+        ],
         tx,
       );
       return true;

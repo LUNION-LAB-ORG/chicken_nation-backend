@@ -3,7 +3,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import { COLONNES_VENTE, COMMANDE_EFFECTIVE_SQL, COMMANDE_VALIDE_SQL, NOUVEAU_CYCLE_SQL, compter, venteManquante } from '../crm.rules';
 import { CrmConfigService } from './crm-config.service';
 import { CrmRegistreService } from './crm-registre.service';
-import { CrmSyncService } from './crm-sync.service';
+import { CrmSyncService, DEBUT_VENTES_SQL } from './crm-sync.service';
 
 const EFFECTIVE = COMMANDE_EFFECTIVE_SQL;
 
@@ -120,9 +120,14 @@ export class CrmRattrapageService {
 
     // 4. Fiches dont l'état ne correspond plus aux commandes : chacune est
     //    jugée seule, avec ou sans compte.
+    //    ⚠️ Une fiche « non démarchée » (annuaire) n'est jamais à sortir : elle
+    //    ne se convertit pas (voir `synchroniserContact`). Sans cette exclusion,
+    //    ces fiches occuperaient les places de chaque passage sans jamais
+    //    changer. Un client de l'annuaire pris en charge ne sort que par une
+    //    commande postérieure à sa date d'entrée (`DEBUT_VENTES_SQL`).
     const sortieParCompte = `x."customer_id" IS NOT NULL AND EXISTS (
       SELECT 1 FROM "Order" o WHERE o."customer_id" = x."customer_id" AND ${EFFECTIVE}
-        AND (x."segment" = 'JAMAIS_COMMANDE' OR o."created_at" >= x."segment_since"))`;
+        AND (x."segment" = 'JAMAIS_COMMANDE' OR o."created_at" >= ${DEBUT_VENTES_SQL}))`;
     const sortieParCoupon = `EXISTS (
       SELECT 1 FROM "CrmCoupon" k JOIN "Order" o ON o."id" = k."order_id"
       WHERE k."contact_id" = x."id" AND ${EFFECTIVE}
@@ -130,7 +135,7 @@ export class CrmRattrapageService {
     const aRevoir = await this.prisma.$queryRawUnsafe<{ id: string }[]>(`
       SELECT x."id" FROM "CrmContact" x
       WHERE x."entity_status" <> 'DELETED' AND (
-        (x."status" <> 'CONVERTI' AND ((${sortieParCompte}) OR ${sortieParCoupon}))
+        (x."status" NOT IN ('CONVERTI', 'NON_DEMARCHE') AND ((${sortieParCompte}) OR ${sortieParCoupon}))
         OR (x."status" = 'CONVERTI' AND NOT EXISTS (
           SELECT 1 FROM "Order" o WHERE o."id" = x."conversion_order_id" AND ${EFFECTIVE}))
         OR (x."customer_id" IS NOT NULL AND EXISTS (

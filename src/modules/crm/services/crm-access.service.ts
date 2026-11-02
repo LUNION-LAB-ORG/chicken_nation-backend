@@ -226,11 +226,23 @@ export class CrmAccessService {
   /**
    * Prise atomique, DANS la transaction d'écriture : un contact de la file
    * commune devient celui de qui agit, sauf si un collègue l'a pris
-   * entre-temps (409, sa saisie reste à l'écran). Un gestionnaire qui appelle
-   * un client de la file le prend aussi (sinon un agent le rappellerait),
-   * mais il agit sur le client d'un collègue sans le lui retirer.
+   * entre-temps (409, sa saisie reste à l'écran).
+   *
+   * Un gestionnaire (direction) ne prend le client que par le geste
+   * « Prendre » (`explicite`). Un appel ou un coupon de sa part le laisse dans
+   * la file commune : sinon le client restait « Hors campagne » chez la
+   * direction, qui ne le rappellera pas forcément, et aucune campagne ne
+   * pouvait le reprendre (problème 11 du 02/11). Il agit aussi sur le client
+   * d'un collègue sans le lui retirer.
    */
-  async prendre(tx: Client, user: User, contactId: string, maintenant = new Date()): Promise<boolean> {
+  async prendre(
+    tx: Client,
+    user: User,
+    contactId: string,
+    maintenant = new Date(),
+    { explicite = false }: { explicite?: boolean } = {},
+  ): Promise<boolean> {
+    if (this.estGestionnaire(user) && !explicite) return false;
     const pris = await tx.crmContact.updateMany({
       where: { id: contactId, ...this.fileCommune(maintenant) },
       data: { assigned_to_id: user.id, assigned_at: maintenant },

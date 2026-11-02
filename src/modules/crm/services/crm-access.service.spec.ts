@@ -197,3 +197,38 @@ describe('assertDuRestaurant', () => {
     );
   });
 });
+
+/**
+ * Problème 11 du 02/11 : la direction qui appelait un client de la file
+ * commune le gardait « Hors campagne », et aucune campagne ne pouvait plus le
+ * reprendre. Seul le geste « Prendre » le lui confie désormais.
+ */
+describe('prendre (file commune)', () => {
+  const avec = (pris: number) => {
+    const updateMany = jest.fn().mockResolvedValue({ count: pris });
+    const findUnique = jest.fn().mockResolvedValue({ assigned_to_id: null, campaign_id: null, status: 'A_APPELER' });
+    return { tx: { crmContact: { updateMany, findUnique } } as unknown as PrismaService, updateMany };
+  };
+
+  it('direction, par un appel ou un coupon : le client reste dans la file commune', async () => {
+    const { tx, updateMany } = avec(1);
+    await expect(access.prendre(tx, admin, 'f1')).resolves.toBe(false);
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('direction, par le geste « Prendre » : le client lui est confié', async () => {
+    const { tx, updateMany } = avec(1);
+    const maintenant = new Date('2026-11-02T10:00:00.000Z');
+    await expect(access.prendre(tx, admin, 'f1', maintenant, { explicite: true })).resolves.toBe(true);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'f1', ...access.fileCommune(maintenant) },
+      data: { assigned_to_id: admin.id, assigned_at: maintenant },
+    });
+  });
+
+  it('agent : un appel le lui confie toujours, comme avant', async () => {
+    const { tx, updateMany } = avec(1);
+    await expect(access.prendre(tx, callCenter, 'f1')).resolves.toBe(true);
+    expect(updateMany).toHaveBeenCalledTimes(1);
+  });
+});
