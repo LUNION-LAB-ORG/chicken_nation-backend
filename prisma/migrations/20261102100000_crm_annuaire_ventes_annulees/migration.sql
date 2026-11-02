@@ -35,11 +35,18 @@
 --      prise, agent gardé. Une commande postérieure à la prise les convertira
 --      au passage suivant de la réconciliation, comme une vraie vente.
 --   5. Fiches retombées (A ou C) : le second passage redevient le premier.
---      Statut, agent et campagne ne changent pas.
---   6. Fiches CLIENT prises en charge, encore ouvertes : date d'entrée = la prise
+--      Statut, agent et campagne ne changent pas. Les appels et coupons du
+--      passage « client actif » supprimé passent dans l'historique (passage 0) :
+--      sinon ses essais sans réponse compteraient pour l'inactif.
+--   6. Fiches de l'annuaire déjà « rétablies » par l'ancien code (commande
+--      supprimée ou annulée, vente déjà annulée) : restées « à appeler » sans
+--      agent, sans appel ni coupon, jamais prises en charge. Elles redeviennent
+--      « non démarchées » (sinon leur prochaine commande ferait une nouvelle
+--      fausse vente, et elles ne deviendraient jamais inactives).
+--   7. Fiches CLIENT prises en charge, encore ouvertes : date d'entrée = la prise
 --      quand elle est plus récente (sinon une commande d'avant la prise les
 --      convertirait).
---   7. Problème 22 : fiches non converties encore rattachées à une campagne
+--   8. Problème 22 : fiches non converties encore rattachées à une campagne
 --      terminée, détachées (comme le fait la clôture).
 --
 -- CE QU'ELLE LAISSE
@@ -52,7 +59,17 @@
 -- est annulée et ne remplit plus le critère ; chaque écriture est gardée par
 -- l'état attendu. Un second passage ne touche rien.
 -- ⚠️ Le déclencheur crm_suivre_passage recopie la date d'entrée sur le passage
--- (étapes 4 et 6) et ne crée aucun passage à l'étape 5 (la ligne existe déjà).
+-- (étapes 4 et 7) et ne crée aucun passage à l'étape 5 (la ligne existe déjà).
+--
+-- ⚠️⚠️ RETOUR À L'ANCIENNE IMAGE (:prod-rollback)
+-- La réparation ne tient qu'avec le nouveau code. L'ancien serveur reconvertit
+-- toute fiche « non démarchée » par sa dernière commande, avec une NOUVELLE
+-- fausse vente, et Prisma ne rejoue jamais une migration déjà inscrite. Après
+-- TOUT retour à l'ancienne image, même court, une fois le nouveau code remis :
+--   1. relancer à la main le bloc DO ci-dessous, recopié à l'identique dans
+--      scripts/sql/2026-11-02_crm_annuaire_reprise.sql (rejouable) :
+--        psql "$DATABASE_URL" -f scripts/sql/2026-11-02_crm_annuaire_reprise.sql
+--   2. puis lancer le CONTRÔLE APRÈS ci-dessous.
 --
 -- MESURE AVANT (lecture seule, à lancer avant le déploiement) :
 --
@@ -101,11 +118,20 @@
 -- SELECT count(*) FROM "CrmContact" x JOIN "ConversionCampaign" c ON c."id" = x."campaign_id"
 -- WHERE c."status" = 'COMPLETED' AND x."status" <> 'CONVERTI';
 --
--- CONTRÔLE APRÈS :
+-- -- Fiches de l'annuaire déjà « rétablies » par l'ancien code, jamais prises en charge (étape 6)
+-- SELECT count(*) FROM "CrmContact" x
+-- WHERE x."segment" = 'CLIENT' AND x."status" IN ('A_APPELER','A_RAPPELER','INTERESSE','COUPON_ENVOYE')
+--   AND x."assigned_to_id" IS NULL AND x."campaign_id" IS NULL AND x."call_count" = 0 AND x."entity_status" <> 'DELETED'
+--   AND NOT EXISTS (SELECT 1 FROM "CrmCoupon" k WHERE k."contact_id" = x."id")
+--   AND NOT EXISTS (SELECT 1 FROM "CrmCall" k WHERE k."contact_id" = x."id" AND k."cycle" = x."cycle")
+--   AND NOT EXISTS (SELECT 1 FROM "CrmEvent" e WHERE e."contact_id" = x."id" AND e."type" = 'ASSIGNATION'
+--                     AND e."label" <> 'Retiré de son agent');
+--
+-- CONTRÔLE APRÈS (la requête de l'étape 6 ci-dessus doit alors répondre 0) :
 --
 -- SELECT "cancel_reason", count(*), round(sum("amount")) FROM "CrmConversion" WHERE "cancel_reason" IS NOT NULL GROUP BY 1;
 -- SELECT "segment", "status", "cycle" >= 2 AS passage2, count(*) FROM "CrmContact" WHERE "segment" IN ('CLIENT','INACTIF') GROUP BY 1,2,3;
--- SELECT count(*) FROM "CrmEvent" WHERE "data"->>'reprise' = 'annuaire_0211';
+-- SELECT "data"->>'cas' AS cas, count(*) FROM "CrmEvent" WHERE "data"->>'reprise' = 'annuaire_0211' GROUP BY 1;
 
 ALTER TABLE "CrmConversion" ADD COLUMN IF NOT EXISTS "cancel_reason" VARCHAR(40);
 
@@ -204,14 +230,30 @@ BEGIN
     AND y."contact_id" = r."contact_id" AND y."cycle" = r."cycle" AND y."segment" = 'CLIENT'
     AND EXISTS (SELECT 1 FROM "CrmCycle" z WHERE z."contact_id" = r."contact_id" AND z."cycle" = r."cycle" + 1);
 
-  --    5.2 Le passage suivant prend son numéro, si aucun ne le porte plus.
+  --    5.2 Appels et coupons du passage CLIENT supprimé : rangés dans
+  --        l'historique (passage 0, comme ce qui précède le premier passage).
+  --        Restés à leur numéro, ils tomberaient dans le passage inactif
+  --        renuméroté : les « pas de réponse » faits comme client actif
+  --        compteraient pour l'inactif (sortie « injoignable » dès le premier
+  --        essai), et les chiffres par passage aussi. Avant 5.4, qui donne ce
+  --        numéro aux appels du passage suivant.
+  UPDATE "CrmCall" k SET "cycle" = 0
+  FROM crm_reprise_annuaire r, "CrmContact" x
+  WHERE r.etat = 'RECHUTE' AND x."id" = r."contact_id" AND x."cycle" = r."cycle" + 1 AND x."segment" = 'INACTIF'
+    AND k."contact_id" = r."contact_id" AND k."cycle" = r."cycle";
+  UPDATE "CrmCoupon" k SET "cycle" = 0
+  FROM crm_reprise_annuaire r, "CrmContact" x
+  WHERE r.etat = 'RECHUTE' AND x."id" = r."contact_id" AND x."cycle" = r."cycle" + 1 AND x."segment" = 'INACTIF'
+    AND k."contact_id" = r."contact_id" AND k."cycle" = r."cycle";
+
+  --    5.3 Le passage suivant prend son numéro, si aucun ne le porte plus.
   UPDATE "CrmCycle" y SET "cycle" = r."cycle"
   FROM crm_reprise_annuaire r, "CrmContact" x
   WHERE r.etat = 'RECHUTE' AND x."id" = r."contact_id" AND x."cycle" = r."cycle" + 1 AND x."segment" = 'INACTIF'
     AND y."contact_id" = r."contact_id" AND y."cycle" = r."cycle" + 1
     AND NOT EXISTS (SELECT 1 FROM "CrmCycle" z WHERE z."contact_id" = r."contact_id" AND z."cycle" = r."cycle");
 
-  --    5.3 Appels, coupons, membres de campagne et ventes du passage suivant.
+  --    5.4 Appels, coupons, membres de campagne et ventes du passage suivant.
   --        La vente fausse est déjà annulée : l'index unique partiel
   --        (fiche, cycle, ventes actives) ne bloque pas.
   UPDATE "CrmCall" k SET "cycle" = r."cycle"
@@ -231,14 +273,44 @@ BEGIN
   WHERE r.etat = 'RECHUTE' AND x."id" = r."contact_id" AND x."cycle" = r."cycle" + 1 AND x."segment" = 'INACTIF'
     AND v."contact_id" = r."contact_id" AND v."cycle" = r."cycle" + 1;
 
-  --    5.4 La fiche en dernier, seulement si son passage renuméroté est là :
+  --    5.5 La fiche en dernier, seulement si son passage renuméroté est là :
   --        le déclencheur ne crée alors rien.
   UPDATE "CrmContact" x SET "cycle" = r."cycle", "updated_at" = now()
   FROM crm_reprise_annuaire r
   WHERE r.etat = 'RECHUTE' AND x."id" = r."contact_id" AND x."cycle" = r."cycle" + 1 AND x."segment" = 'INACTIF'
     AND EXISTS (SELECT 1 FROM "CrmCycle" z WHERE z."contact_id" = x."id" AND z."cycle" = r."cycle" AND z."segment" = 'INACTIF');
 
-  -- 6. Fiches CLIENT prises en charge, encore ouvertes : date d'entrée = la
+  -- 6. Fiches de l'annuaire déjà « rétablies » par l'ancien code : leur
+  --    commande « convertissante » a été supprimée ou annulée, leur vente est
+  --    déjà annulée, mais elles sont restées « à appeler » sans agent, sans
+  --    appel, sans coupon, jamais prises en charge. Elles n'étaient dans
+  --    aucune file, ne pouvaient plus être prises en charge ni devenir
+  --    inactives, et leur prochaine commande faisait une nouvelle fausse vente
+  --    (seul « non démarché » en est protégé). Elles redeviennent « non
+  --    démarchées », comme le fait désormais le rétablissement (problème 16).
+  --    Gardé par l'état : une fois « non démarchées », elles ne sont plus visées.
+  DROP TABLE IF EXISTS pg_temp.crm_reprise_annuaire_retablies;
+  CREATE TEMP TABLE crm_reprise_annuaire_retablies ON COMMIT DROP AS
+  SELECT x."id" FROM "CrmContact" x
+  WHERE x."segment" = 'CLIENT' AND x."status" IN ('A_APPELER', 'A_RAPPELER', 'INTERESSE', 'COUPON_ENVOYE')
+    AND x."assigned_to_id" IS NULL AND x."campaign_id" IS NULL AND x."call_count" = 0 AND x."entity_status" <> 'DELETED'
+    AND NOT EXISTS (SELECT 1 FROM "CrmCoupon" k WHERE k."contact_id" = x."id")
+    AND NOT EXISTS (SELECT 1 FROM "CrmCall" k WHERE k."contact_id" = x."id" AND k."cycle" = x."cycle")
+    AND NOT EXISTS (SELECT 1 FROM "CrmEvent" e WHERE e."contact_id" = x."id" AND e."type" = 'ASSIGNATION'
+                      AND e."label" <> 'Retiré de son agent');
+
+  INSERT INTO "CrmEvent" ("id", "contact_id", "type", "label", "data")
+  SELECT gen_random_uuid(), t."id", 'RETOUR'::"CrmEventType",
+         'Remis dans l''annuaire : aucun agent ne l''avait pris en charge',
+         jsonb_build_object('reprise', 'annuaire_0211', 'cas', 'RETABLIE')
+  FROM crm_reprise_annuaire_retablies t;
+
+  UPDATE "CrmContact" x SET "status" = 'NON_DEMARCHE', "updated_at" = now()
+  FROM crm_reprise_annuaire_retablies t
+  WHERE x."id" = t."id" AND x."segment" = 'CLIENT' AND x."assigned_to_id" IS NULL
+    AND x."status" IN ('A_APPELER', 'A_RAPPELER', 'INTERESSE', 'COUPON_ENVOYE');
+
+  -- 7. Fiches CLIENT prises en charge, encore ouvertes : date d'entrée = la
   --    prise (premier ASSIGNATION hors « Retiré de son agent », ou premier
   --    appel du passage en cours) quand elle est plus récente.
   UPDATE "CrmContact" x SET "segment_since" = p.prise_le, "updated_at" = now()
@@ -254,7 +326,7 @@ BEGIN
   ) p
   WHERE x."id" = p."id" AND p.prise_le IS NOT NULL AND x."segment_since" < p.prise_le;
 
-  -- 7. Problème 22 : une fiche non convertie rattachée à une campagne terminée
+  -- 8. Problème 22 : une fiche non convertie rattachée à une campagne terminée
   --    n'est dans aucune file. Elle la quitte, comme à la clôture.
   UPDATE "CrmContact" x SET "campaign_id" = NULL, "updated_at" = now()
   FROM "ConversionCampaign" c
