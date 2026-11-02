@@ -54,5 +54,7 @@ import { SupportWebSocketService } from './websockets/support-websocket.service'
     AssignmentService,
     TicketsConsumer,
   ],
+  // « Créer un incident » des retours privés (module Customer, 02/11).
+  exports: [TicketService],
 })
 export class SupportModule { }

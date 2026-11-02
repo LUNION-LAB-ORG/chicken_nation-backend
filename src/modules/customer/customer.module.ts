@@ -12,14 +12,24 @@ import { NotificationSettingService } from './services/notification-setting.serv
 import { CustomerCleanupTask } from './tasks/customer-cleanup.task';
 import { CustomerListenerService } from './listeners/customer-listener.service';
 import { CustomerNotificationsTemplate } from './templates/customer-notifications.template';
+import { SupportModule } from '../support/support.module';
+import { AvisPriveController } from './avis-prives/avis-prive.controller';
+import { AvisPriveService } from './avis-prives/avis-prive.service';
+import { AvisPriveDepotService } from './avis-prives/avis-prive-depot.service';
+import { AvisPriveTraitementService } from './avis-prives/avis-prive-traitement.service';
+import { AvisPriveLimitesService, redisAvisPrivesProvider } from './avis-prives/avis-prive-limites.service';
+import { AvisPriveRetardTask } from './avis-prives/avis-prive-retard.task';
 
 @Module({
-  imports: [],
+  // Retours privés « Ton avis compte » : « Créer un incident » ouvre un ticket
+  // du module Messages et tickets (TicketService).
+  imports: [SupportModule],
   controllers: [
     CustomerController,
     AddressController,
     FavoriteController,
-    CommentController
+    CommentController,
+    AvisPriveController,
   ],
   providers: [
     CustomerService,
@@ -31,6 +41,12 @@ import { CustomerNotificationsTemplate } from './templates/customer-notification
     CustomerCleanupTask,
     CustomerListenerService,
     CustomerNotificationsTemplate,
+    AvisPriveService,
+    AvisPriveDepotService,
+    AvisPriveTraitementService,
+    AvisPriveLimitesService,
+    redisAvisPrivesProvider,
+    AvisPriveRetardTask,
   ],
 })
 export class CustomerModule { }
