@@ -15,6 +15,7 @@ import {
   pourcentage,
   publicsDe,
 } from '../crm.rules';
+import { PUBLICS_VIVIER } from '../crm-campagne.rules';
 import { AnalyticsQueryDto, VerbatimsQueryDto } from '../dto/analytics.dto';
 import { CrmAccessService, debutDuJour } from './crm-access.service';
 import {
@@ -34,21 +35,18 @@ import { CrmPublicsService } from './crm-publics.service';
 
 const OUVERTS = Prisma.join(STATUTS_OUVERTS.map((s) => Prisma.sql`${s}::"CrmStatus"`));
 
-/** Publics du vivier « à reprendre » : inscrits sans commande et clients inactifs. */
-const PUBLICS_A_REPRENDRE: CrmSegment[] = [CrmSegment.JAMAIS_COMMANDE, CrmSegment.INACTIF];
-
 /**
  * Vivier « à reprendre » (fiche aliasée « p ») : inscrits et inactifs encore
  * ouverts, sans agent, et dans aucune campagne en cours ou suspendue. Ils ne
  * sont dans la file de personne (problème 8 du 02/11). Même définition que
  * `vivierAReprendre()` côté Prisma ; à changer ensemble.
  */
-const A_REPRENDRE = Prisma.sql`p.segment IN (${listePublics(PUBLICS_A_REPRENDRE)}) AND p.status IN (${OUVERTS})
+const A_REPRENDRE = Prisma.sql`p.segment IN (${listePublics(PUBLICS_VIVIER)}) AND p.status IN (${OUVERTS})
   AND p.assigned_to_id IS NULL
   AND (p.campaign_id IS NULL OR NOT EXISTS (
     SELECT 1 FROM "ConversionCampaign" cv WHERE cv.id = p.campaign_id AND cv.status IN ('ACTIVE', 'SUSPENDED')))`;
 
-const n =(v: unknown) => Number(v ?? 0);
+const n = (v: unknown) => Number(v ?? 0);
 
 /** Public du passage d'un appel, d'un coupon ou d'une vente (voir `jointurePassage`). */
 const PUBLIC_K = 'coalesce(ya.segment, k.segment)';
@@ -157,7 +155,7 @@ export class CrmAnalyticsService {
         injoignables: n(population.injoignables),
         abandons: n(population.abandons),
         // Sans objet (null) quand les publics choisis n'ont ni inscrits ni inactifs.
-        a_reprendre: portee.some((p) => PUBLICS_A_REPRENDRE.includes(p)) ? n(population.a_reprendre) : null,
+        a_reprendre: portee.some((p) => PUBLICS_VIVIER.includes(p)) ? n(population.a_reprendre) : null,
       },
       entonnoir: etapesEntonnoir(total, portee),
       hors_entonnoir: { commandes: total.hors_entonnoir, sans_contact: total.sans_contact, repris: total.repris },
