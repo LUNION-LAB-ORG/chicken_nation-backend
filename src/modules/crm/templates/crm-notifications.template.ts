@@ -23,4 +23,14 @@ export class CrmNotificationsTemplate {
     iconBgColor: () => notificationIcons.ok.color,
     showChevron: true,
   };
+
+  /** Campagne suspendue depuis le délai réglé : une alerte par suspension, à la direction et au pilote. */
+  static CAMPAGNE_SUSPENDUE: NotificationTemplate<{ campagne: string; jours: number }> = {
+    title: () => 'Campagne suspendue',
+    message: (ctx) =>
+      `« ${ctx.data.campagne} » est suspendue depuis ${compter(ctx.data.jours, 'jour')} : ses contacts ne sont dans aucune file. Reprenez-la ou terminez-la.`,
+    icon: () => notificationIcons.waiting.url,
+    iconBgColor: () => notificationIcons.waiting.color,
+    showChevron: true,
+  };
 }

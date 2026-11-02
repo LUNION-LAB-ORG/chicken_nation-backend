@@ -53,6 +53,8 @@ interface Agregat {
   cibles: number;
   restants: number;
   ouverts: number;
+  /** Contacts ouverts encore dans la campagne, confiés à personne. */
+  sans_agent: number;
   inscrits_pendant: number;
   appels: number;
   traites: number;
@@ -68,6 +70,7 @@ const AGREGAT_VIDE: Agregat = {
   cibles: 0,
   restants: 0,
   ouverts: 0,
+  sans_agent: 0,
   inscrits_pendant: 0,
   appels: 0,
   traites: 0,
@@ -123,12 +126,15 @@ export class CrmCampaignStatsService {
     if (ids.length === 0) return resultat;
     const liste = Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`));
     const [membres, appels, coupons, ventes] = await Promise.all([
-      this.prisma.$queryRaw<{ campaign_id: string; segment: string | null; cibles: number; restants: number; ouverts: number; inscrits_pendant: number }[]>`
+      this.prisma.$queryRaw<{ campaign_id: string; segment: string | null; cibles: number; restants: number; ouverts: number; sans_agent: number; inscrits_pendant: number }[]>`
         SELECT m.campaign_id, m.segment::text AS segment, count(*)::int AS cibles,
                count(*) FILTER (WHERE m.released_at IS NULL AND x.status::text IN (${OUVERTS})
                                   AND x.entity_status <> 'DELETED' AND kc.contact_id IS NULL)::int AS restants,
                count(*) FILTER (WHERE m.released_at IS NULL AND x.status::text IN (${OUVERTS})
                                   AND x.entity_status <> 'DELETED')::int AS ouverts,
+               count(*) FILTER (WHERE m.released_at IS NULL AND x.status::text IN (${OUVERTS})
+                                  AND x.entity_status <> 'DELETED' AND x.campaign_id = m.campaign_id
+                                  AND x.assigned_to_id IS NULL)::int AS sans_agent,
                count(*) FILTER (WHERE m.segment IN ('GLOVO', 'YANGO') AND c.started_at IS NOT NULL
                                   AND x.registered_at >= c.started_at
                                   AND x.registered_at < coalesce(c.completed_at, now()))::int AS inscrits_pendant
@@ -169,7 +175,7 @@ export class CrmCampaignStatsService {
       if (!resultat.has(k)) resultat.set(k, { ...AGREGAT_VIDE });
       return resultat.get(k)!;
     };
-    membres.forEach((l) => Object.assign(ligne(l.campaign_id, l.segment), { cibles: l.cibles, restants: l.restants, ouverts: l.ouverts, inscrits_pendant: l.inscrits_pendant }));
+    membres.forEach((l) => Object.assign(ligne(l.campaign_id, l.segment), { cibles: l.cibles, restants: l.restants, ouverts: l.ouverts, sans_agent: l.sans_agent, inscrits_pendant: l.inscrits_pendant }));
     appels.forEach((l) => Object.assign(ligne(l.campaign_id, l.segment), { appels: l.appels, traites: l.traites, joints: l.joints }));
     coupons.forEach((l) => Object.assign(ligne(l.campaign_id, l.segment), { envoyes: l.envoyes, utilises: l.utilises, ca_coupons: l.ca }));
     ventes.forEach((l) => Object.assign(ligne(l.campaign_id, l.segment), { conversions: l.conversions, ca: l.ca }));
@@ -239,7 +245,15 @@ export class CrmCampaignStatsService {
   async resumes(ids: string[]) {
     const resultat = new Map<
       string,
-      { cibles: number; traites: number; conversions: number; coupons: number; par_public: { segment: CrmSegment; cibles: number; traites: number; conversions: number }[] }
+      {
+        cibles: number;
+        traites: number;
+        conversions: number;
+        coupons: number;
+        /** Contacts ouverts de la campagne sans agent (0 pour une campagne planifiée ou close). */
+        sans_agent: number;
+        par_public: { segment: CrmSegment; cibles: number; traites: number; conversions: number }[];
+      }
     >();
     if (ids.length === 0) return resultat;
     const agr = await this.agregats(ids);
@@ -248,7 +262,14 @@ export class CrmCampaignStatsService {
       const par_public = [...agr.entries()]
         .filter(([k]) => k.startsWith(`${id}|`) && !k.endsWith('|*'))
         .map(([k, a]) => ({ segment: k.split('|')[1] as CrmSegment, cibles: a.cibles, traites: a.traites, conversions: a.conversions }));
-      resultat.set(id, { cibles: total.cibles, traites: total.traites, conversions: total.conversions, coupons: total.envoyes, par_public });
+      resultat.set(id, {
+        cibles: total.cibles,
+        traites: total.traites,
+        conversions: total.conversions,
+        coupons: total.envoyes,
+        sans_agent: total.sans_agent,
+        par_public,
+      });
     }
     return resultat;
   }
@@ -515,6 +536,8 @@ export class CrmCampaignStatsService {
       where: {
         entity_status: { not: EntityStatus.DELETED },
         status: { not: CampaignStatus.PLANIFIED },
+        // Une campagne close sans avoir été lancée n'a rien à comparer.
+        started_at: { not: null },
         ...(q.segment && { publics: { some: { segment: q.segment } } }),
         ...portee,
       },

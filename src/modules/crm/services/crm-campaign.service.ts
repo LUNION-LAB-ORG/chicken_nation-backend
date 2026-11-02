@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   CrmSegment,
   CampaignDistributionMode,
@@ -16,6 +16,7 @@ import { Action } from 'src/modules/auth/enums/action.enum';
 import {
   BacApercu,
   CAMPAGNES_EN_COURS,
+  PUBLICS_VIVIER,
   PublicCampagne,
   bacsApercu,
   critereCampagne,
@@ -47,6 +48,10 @@ import { CrmEventsService } from './crm-events.service';
 const JOUR = 86_400_000;
 const PAQUET = 2000;
 const EN_COURS = CAMPAGNES_EN_COURS;
+/** Ajout quotidien : au plus 20 paquets de 2 000 par campagne et par passage. */
+const PAQUETS_AJOUT_MAX = 20;
+/** Panne du lancement automatique (délai dépassé, base injoignable) : plus d'essai seul. */
+const PANNE_LANCEMENT = 'Le lancement a échoué : lancez-la à la main';
 
 /** Bacs de l'aperçu, dans l'ordre où le lancement écarte les contacts. */
 const BACS: BacApercu[] = ['non_interesses', 'injoignables', 'autre_campagne', 'agent_hors_equipe', 'captes_aujourdhui'];
@@ -81,6 +86,9 @@ const SELECT_CAMPAGNE = {
   started_at: true,
   completed_at: true,
   targeted_count: true,
+  duration_days: true,
+  suspended_at: true,
+  launch_error: true,
   created_at: true,
   lead_agent: { select: { id: true, fullname: true } },
   created_by: { select: { id: true, fullname: true } },
@@ -88,6 +96,18 @@ const SELECT_CAMPAGNE = {
   assigned_agents: { select: { agent: { select: { id: true, fullname: true, role: true } } } },
   publics: { select: SELECT_PUBLIC, orderBy: { segment: 'asc' } },
 } satisfies Prisma.CrmCampaignSelect;
+
+/**
+ * Ce que la carte doit savoir en plus : une campagne planifiée dont la date de
+ * début est passée sans lancement (le lancement automatique la prendra dans
+ * l'heure, ou `launch_error` dit pourquoi il ne le peut pas).
+ */
+function avecEtat<T extends { status: CampaignStatus; start_date: Date }>(c: T, maintenant = new Date()) {
+  return { ...c, date_debut_passee: c.status === CampaignStatus.PLANIFIED && c.start_date <= maintenant };
+}
+
+/** Fin d'une campagne de N jours qui démarre ce jour-là : le dernier jour compris. */
+const finApres = (depart: Date, duree: number) => new Date(jourUTC(depart).getTime() + (duree - 1) * JOUR);
 
 function paquets<T>(liste: T[], taille = PAQUET): T[][] {
   const r: T[][] = [];
@@ -156,6 +176,8 @@ function publicsSaisis(
  */
 @Injectable()
 export class CrmCampaignService {
+  private readonly logger = new Logger(CrmCampaignService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly access: CrmAccessService,
@@ -177,7 +199,8 @@ export class CrmCampaignService {
       select: SELECT_CAMPAGNE,
     });
     const resumes = await this.stats.resumes(campagnes.map((c) => c.id));
-    return campagnes.map((c) => ({ ...c, resume: resumes.get(c.id) }));
+    const maintenant = new Date();
+    return campagnes.map((c) => ({ ...avecEtat(c, maintenant), resume: resumes.get(c.id) }));
   }
 
   async detail(user: User, id: string) {
@@ -187,7 +210,7 @@ export class CrmCampaignService {
     });
     if (!c) throw new NotFoundException('Campagne introuvable');
     const resume = (await this.stats.resumes([id])).get(id);
-    return { ...c, resume };
+    return { ...avecEtat(c), resume };
   }
 
   async statistiques(user: User, id: string) {
@@ -232,7 +255,7 @@ export class CrmCampaignService {
   }
 
   async creer(user: User, dto: CreateCrmCampaignDto) {
-    const { debut, fin } = this.dates(dto.start_date, dto.end_date, dto.duration_days);
+    const { debut, fin } = this.dates(dto.start_date, dto.end_date ?? undefined, dto.duration_days);
     const equipe = [...new Set(dto.agent_ids)];
     await this.verifierAgents([dto.lead_agent_id, ...equipe]);
     if (dto.offer_id) await this.verifierOffre(dto.offer_id);
@@ -241,12 +264,15 @@ export class CrmCampaignService {
     await this.verifierPublicsSaisis(publics);
     const lignes = publics.map(lignePublic);
 
-    return this.prisma.crmCampaign.create({
+    const c = await this.prisma.crmCampaign.create({
       data: {
         name: dto.name.trim(),
         description: dto.description?.trim() || null,
         start_date: debut,
         end_date: fin,
+        // « Après N jours » : la fin provisoire part du début saisi, la vraie
+        // se calcule au lancement. Une date saisie l'emporte sur la durée.
+        duration_days: dto.end_date ? null : (dto.duration_days ?? null),
         target_conversion_rate: dto.target_conversion_rate ?? null,
         target_contacts_count: dto.target_contacts_count ?? null,
         ...champsCompatibles(lignes),
@@ -259,6 +285,7 @@ export class CrmCampaignService {
       },
       select: SELECT_CAMPAGNE,
     });
+    return avecEtat(c);
   }
 
   async modifier(id: string, dto: UpdateCrmCampaignDto) {
@@ -281,12 +308,7 @@ export class CrmCampaignService {
       await this.verifierOffresChangees(c.publics, nouveauxPublics);
     } else if (dto.publics) await this.verifierOffresChangees(c.publics, dto.publics);
     if (dto.offer_id) await this.verifierOffre(dto.offer_id);
-    const debutSaisi = dto.start_date ?? c.start_date.toISOString();
-    const { debut, fin } = this.dates(
-      debutSaisi,
-      dto.end_date ?? (dto.duration_days ? undefined : c.end_date?.toISOString()),
-      dto.duration_days,
-    );
+    const { debut, fin, duree } = this.datesModifiees(c, dto, lancee);
     if (!lancee) {
       if (dto.lead_agent_id || dto.agent_ids) {
         await this.verifierAgents([dto.lead_agent_id ?? c.lead_agent_id, ...(dto.agent_ids ?? [])]);
@@ -321,13 +343,17 @@ export class CrmCampaignService {
           });
         }
       }
-      return tx.crmCampaign.update({
+      const modifiee = await tx.crmCampaign.update({
         where: { id },
         data: {
           ...(dto.name && { name: dto.name.trim() }),
           ...(dto.description !== undefined && { description: dto.description.trim() || null }),
           start_date: debut,
           end_date: fin,
+          duration_days: duree,
+          // La direction a revu la campagne : le lancement automatique réessaie.
+          launch_error: null,
+          launch_failed_at: null,
           ...(dto.target_conversion_rate !== undefined && { target_conversion_rate: dto.target_conversion_rate }),
           ...(dto.target_contacts_count !== undefined && { target_contacts_count: dto.target_contacts_count }),
           ...(dto.offer_id !== undefined && { offer_id: dto.offer_id }),
@@ -337,6 +363,7 @@ export class CrmCampaignService {
         },
         select: SELECT_CAMPAGNE,
       });
+      return avecEtat(modifiee);
     });
   }
 
@@ -347,10 +374,15 @@ export class CrmCampaignService {
    */
   async apercu(dto: PreviewCampaignDto) {
     await this.verifierPublicsSaisis(dto.publics, { offres: false, restaurants: false });
-    // Comme au lancement : un agent désactivé ne compte pas dans l'équipe.
+    // Comme au lancement : un agent désactivé, ou qui ne traite plus de
+    // contacts, ne compte pas dans l'équipe.
     const actifs = dto.agent_ids?.length
       ? await this.prisma.user.findMany({
-          where: { id: { in: [...new Set(dto.agent_ids)] }, entity_status: EntityStatus.ACTIVE },
+          where: {
+            id: { in: [...new Set(dto.agent_ids)] },
+            entity_status: EntityStatus.ACTIVE,
+            role: { in: this.access.rolesAgents() },
+          },
           select: { id: true },
         })
       : [];
@@ -391,13 +423,22 @@ export class CrmCampaignService {
    * Lancement (cahier §6.2) : la campagne prend, dans chacun de ses publics,
    * les contacts ouverts qui ne sont ni dans une campagne en cours, ni suivis
    * par un agent actif hors de l'équipe, ni (Glovo/Yango) captés aujourd'hui.
-   * La population est figée ici. En répartition automatique, un contact déjà
-   * suivi par un agent de l'équipe lui reste confié.
+   * La population est figée ici (seul l'ajout quotidien des inscrits et des
+   * inactifs à reprendre l'enrichit ensuite). Un contact déjà suivi par un
+   * agent actif de l'équipe lui reste confié.
+   *
+   * Répartition manuelle : les autres contacts sont confiés au PILOTE, qui les
+   * répartit. Sans lui, ils n'étaient dans la file de personne.
+   *
+   * `acteur` est null quand le lancement vient de la date de début (tâche
+   * planifiée). « Après N jours » : la fin se calcule ici, depuis le jour du
+   * lancement.
    */
-  async lancer(user: User, id: string) {
+  async lancer(acteur: User | null, id: string) {
+    const debutChrono = Date.now();
     const avant = await this.trouver(id);
     if (avant.status !== CampaignStatus.PLANIFIED) throw new BadRequestException('Cette campagne est déjà lancée');
-    if (avant.end_date && avant.end_date < jourUTC(new Date())) {
+    if (!avant.duration_days && avant.end_date && avant.end_date < jourUTC(new Date())) {
       throw new BadRequestException('La date de fin est passée : modifiez-la avant de lancer');
     }
     this.equipeActive(avant);
@@ -410,7 +451,12 @@ export class CrmCampaignService {
       async (tx) => {
         const claim = await tx.crmCampaign.updateMany({
           where: { id, status: CampaignStatus.PLANIFIED },
-          data: { status: CampaignStatus.ACTIVE, started_at: maintenant },
+          data: {
+            status: CampaignStatus.ACTIVE,
+            started_at: maintenant,
+            launch_error: null,
+            launch_failed_at: null,
+          },
         });
         if (claim.count === 0) throw new BadRequestException('Cette campagne est déjà lancée');
         const c = await this.trouverDans(tx, id);
@@ -427,10 +473,13 @@ export class CrmCampaignService {
         });
         if (eligibles.length === 0) throw new BadRequestException('Aucun contact disponible pour cette population');
 
-        const affectation =
-          c.distribution_mode === CampaignDistributionMode.AUTOMATIQUE
-            ? this.repartir(eligibles, equipe, new Map())
-            : new Map(eligibles.map((p) => [p.id, p.assigned_to_id && equipe.includes(p.assigned_to_id) ? p.assigned_to_id : null]));
+        const suiviDansEquipe = (p: { assigned_to_id: string | null }) => !!p.assigned_to_id && equipe.includes(p.assigned_to_id);
+        const manuel = c.distribution_mode === CampaignDistributionMode.MANUEL;
+        const pilote = manuel ? await this.piloteActif(tx, c.lead_agent_id) : null;
+        const affectation = manuel
+          ? new Map(eligibles.map((p) => [p.id, suiviDansEquipe(p) ? p.assigned_to_id : pilote]))
+          : this.repartir(eligibles, equipe, new Map());
+        const confiesAuPilote = new Set(pilote ? eligibles.filter((p) => !suiviDansEquipe(p)).map((p) => p.id) : []);
 
         if (c.publics.length === 0) {
           await tx.crmCampaignPublic.createMany({
@@ -476,25 +525,35 @@ export class CrmCampaignService {
         for (const [segment, nombre] of parPublic) {
           await tx.crmCampaignPublic.updateMany({ where: { campaign_id: id, segment }, data: { targeted_count: nombre } });
         }
-        await tx.crmCampaign.update({ where: { id }, data: { targeted_count: membres.length } });
+        // « Après N jours » : la fin part du jour du lancement. Lue après la
+        // bascule, la durée ne peut plus changer d'ici la fin de la transaction.
+        await tx.crmCampaign.update({
+          where: { id },
+          data: { targeted_count: membres.length, ...(c.duration_days && { end_date: finApres(maintenant, c.duration_days) }) },
+        });
         for (const lot of paquets(membres)) {
           await this.events.journaliser(
             lot.map((m) => ({
               contact_id: m.contact_id,
               type: CrmEventType.CAMPAGNE_ENTREE,
               label: `Entre dans la campagne « ${c.name} »`,
-              actor_id: user.id,
+              actor_id: acteur?.id ?? null,
               campaign_id: id,
             })),
             tx,
           );
         }
-        return { membres, publics, parPublic };
+        const auPilote = membres.filter((m) => confiesAuPilote.has(m.contact_id) && m.agent_id === pilote).length;
+        return { membres, publics, parPublic, auPilote, nom: c.name };
       },
       { timeout: 180_000, maxWait: 10_000 },
     );
 
-    const { membres, publics, parPublic } = bilan;
+    const { membres, publics, parPublic, auPilote } = bilan;
+    // Mesure en production des grosses cibles (le lancement tient en une transaction de 180 s au plus).
+    this.logger.log(
+      `Campagne « ${bilan.nom} » lancée : ${membres.length} contacts en ${Math.round((Date.now() - debutChrono) / 100) / 10} s`,
+    );
     // Un public vide ne bloque pas les autres : on lance, et on le dit.
     const avertissements = publics
       .filter((p) => parPublic.get(p.segment) === 0)
@@ -503,25 +562,131 @@ export class CrmCampaignService {
     return {
       cibles: membres.length,
       repartis: membres.filter((m) => m.agent_id).length,
+      au_pilote: auPilote,
       par_public: [...parPublic].map(([segment, cibles]) => ({ segment, cibles })),
       avertissements,
     };
   }
 
+  /**
+   * Lancement automatique (tâche horaire) : chaque campagne planifiée dont la
+   * date de début est arrivée passe par le MÊME lancement que le bouton. Un
+   * refus (équipe vide, aucun contact) est écrit sur la carte et réessayé à
+   * l'heure suivante. Une panne (délai dépassé...) arrête les essais : la
+   * direction la lance à la main, ce qui efface la panne.
+   *
+   * Sûr en double serveur : la bascule « planifiée → en cours » est un claim,
+   * et chaque écriture d'échec exige que la campagne soit encore planifiée.
+   */
+  async lancerPlanifiees(maintenant = new Date()) {
+    const dues = await this.prisma.crmCampaign.findMany({
+      where: {
+        status: CampaignStatus.PLANIFIED,
+        entity_status: { not: EntityStatus.DELETED },
+        start_date: { lte: maintenant },
+        launch_failed_at: null,
+        OR: [{ duration_days: { not: null } }, { end_date: null }, { end_date: { gte: jourUTC(maintenant) } }],
+      },
+      orderBy: { start_date: 'asc' },
+      select: { id: true, name: true, launch_error: true },
+    });
+    const bilan = { lancees: 0, refusees: 0, pannes: 0 };
+    for (const c of dues) {
+      try {
+        await this.lancer(null, c.id);
+        bilan.lancees++;
+      } catch (e) {
+        const refus = e instanceof HttpException && e.getStatus() < 500;
+        const message = refus ? (e as Error).message.slice(0, 255) : PANNE_LANCEMENT;
+        if (refus) {
+          bilan.refusees++;
+          // Écrit seulement s'il change : la tâche repasse toutes les heures.
+          if (c.launch_error !== message) {
+            await this.prisma.crmCampaign.updateMany({
+              where: { id: c.id, status: CampaignStatus.PLANIFIED, launch_failed_at: null },
+              data: { launch_error: message },
+            });
+          }
+          this.logger.warn(`Lancement automatique de « ${c.name} » refusé : ${message}`);
+        } else {
+          bilan.pannes++;
+          await this.prisma.crmCampaign.updateMany({
+            where: { id: c.id, status: CampaignStatus.PLANIFIED, launch_failed_at: null },
+            data: { launch_error: message, launch_failed_at: new Date() },
+          });
+          this.logger.error(`Lancement automatique de « ${c.name} » en panne : ${(e as Error).message}`);
+        }
+      }
+    }
+    return bilan;
+  }
+
+  /**
+   * Campagne planifiée dont la date de fin fixe est passée sans lancement :
+   * close, sans rapport ni notification. Elle n'a aucun contact à rendre, et
+   * le comparatif l'ignore (jamais lancée).
+   */
+  async cloreNonLancees(maintenant = new Date()): Promise<number> {
+    const { count } = await this.prisma.crmCampaign.updateMany({
+      where: {
+        status: CampaignStatus.PLANIFIED,
+        entity_status: { not: EntityStatus.DELETED },
+        duration_days: null,
+        end_date: { lt: jourUTC(maintenant) },
+      },
+      data: { status: CampaignStatus.COMPLETED, completed_at: maintenant },
+    });
+    return count;
+  }
+
   async suspendre(user: User, id: string) {
-    return this.changerStatut(user, id, CampaignStatus.ACTIVE, CampaignStatus.SUSPENDED, 'Seule une campagne en cours peut être suspendue');
+    const c = await this.changerStatut(user, id, CampaignStatus.ACTIVE, CampaignStatus.SUSPENDED, 'Seule une campagne en cours peut être suspendue', {
+      suspended_at: new Date(),
+      suspension_alert_sent_at: null,
+    });
+    await this.signalerCampagne(id);
+    return c;
   }
 
   async reprendre(user: User, id: string) {
-    return this.changerStatut(user, id, CampaignStatus.SUSPENDED, CampaignStatus.ACTIVE, 'Seule une campagne suspendue peut reprendre');
+    const c = await this.changerStatut(user, id, CampaignStatus.SUSPENDED, CampaignStatus.ACTIVE, 'Seule une campagne suspendue peut reprendre', {
+      suspended_at: null,
+      suspension_alert_sent_at: null,
+    });
+    await this.signalerCampagne(id);
+    return c;
   }
 
-  private async changerStatut(user: User, id: string, depuis: CampaignStatus, vers: CampaignStatus, erreur: string) {
+  private async changerStatut(
+    user: User,
+    id: string,
+    depuis: CampaignStatus,
+    vers: CampaignStatus,
+    erreur: string,
+    suivi: Pick<Prisma.CrmCampaignUpdateManyMutationInput, 'suspended_at' | 'suspension_alert_sent_at'>,
+  ) {
     await this.trouver(id);
     await this.access.assertGestionnaireOuPilote(user, id);
-    const claim = await this.prisma.crmCampaign.updateMany({ where: { id, status: depuis }, data: { status: vers } });
+    const claim = await this.prisma.crmCampaign.updateMany({ where: { id, status: depuis }, data: { status: vers, ...suivi } });
     if (claim.count === 0) throw new BadRequestException(erreur);
-    return this.prisma.crmCampaign.findUnique({ where: { id }, select: SELECT_CAMPAGNE });
+    const c = await this.prisma.crmCampaign.findUnique({ where: { id }, select: SELECT_CAMPAGNE });
+    return c && avecEtat(c);
+  }
+
+  /**
+   * Suspension et reprise changent la file de chaque agent de la campagne :
+   * leurs écrans se rafraîchissent tout de suite, pas à la minute suivante.
+   */
+  private async signalerCampagne(id: string) {
+    const ouverts = await this.prisma.crmContact.findMany({
+      where: { campaign_id: id, status: { in: STATUTS_OUVERTS }, entity_status: { not: EntityStatus.DELETED } },
+      select: { id: true },
+      take: 500,
+    });
+    this.events.signaler(
+      ouverts.map((o) => o.id),
+      'campagne',
+    );
   }
 
   /**
@@ -585,10 +750,16 @@ export class CrmCampaignService {
             libelles.set(x.id, `Fin de la campagne « ${c.name} » : reste confié à ${x.assigned_to?.fullname ?? 'son agent'}`);
           } else {
             liberes.push(x.id);
-            libelles.set(
-              x.id,
-              `Fin de la campagne « ${c.name} » : libéré${estCapte(x.segment) && STATUTS_OUVERTS.includes(x.status) ? ', retour dans la file commune' : ''}`,
-            );
+            // Où va un contact encore à travailler : la file commune pour un
+            // Glovo/Yango, le vivier « à reprendre » pour un inscrit ou un inactif.
+            const suite = !STATUTS_OUVERTS.includes(x.status)
+              ? ''
+              : estCapte(x.segment)
+                ? ', retour dans la file commune'
+                : PUBLICS_VIVIER.includes(x.segment)
+                  ? ', à reprendre'
+                  : '';
+            libelles.set(x.id, `Fin de la campagne « ${c.name} » : libéré${suite}`);
           }
         }
         for (const lot of paquets(gardes)) {
@@ -634,9 +805,10 @@ export class CrmCampaignService {
    * contacts jamais appelés sont remis en jeu aussi, pour rééquilibrer après
    * un changement d'équipe.
    */
-  async distribuer(user: User, id: string, dto: DistributeCrmDto) {
+  async distribuer(acteur: User | null, id: string, dto: DistributeCrmDto) {
     const c = await this.trouver(id);
-    await this.access.assertGestionnaireOuPilote(user, id);
+    // `acteur` null : une tâche planifiée (agent parti) redistribue.
+    if (acteur) await this.access.assertGestionnaireOuPilote(acteur, id);
     if (!EN_COURS.includes(c.status)) throw new BadRequestException("Cette campagne n'est pas en cours");
     const equipe = this.equipeActive(c);
 
@@ -673,7 +845,7 @@ export class CrmCampaignService {
               contact_id,
               type: CrmEventType.ASSIGNATION,
               label: 'Réparti automatiquement dans la campagne',
-              actor_id: user.id,
+              actor_id: acteur?.id ?? null,
               campaign_id: id,
             })),
             tx,
@@ -689,9 +861,12 @@ export class CrmCampaignService {
   }
 
   /**
-   * Équipe (cahier §9 : le pilote gère son équipe). Un agent retiré rend ses
-   * contacts ; en répartition automatique ils sont aussitôt redonnés aux
-   * agents restants.
+   * Équipe (cahier §9 : le pilote gère son équipe). Campagne en cours en
+   * répartition automatique : un agent retiré rend ses contacts, aussitôt
+   * confiés aux autres ; un agent ajouté reçoit sa part des contacts jamais
+   * appelés. Répartition manuelle : les contacts ouverts d'un agent retiré
+   * vont au pilote (sauf si c'est le pilote qu'on retire : ils restent sans
+   * agent), et un agent ajouté ne reçoit rien tout seul.
    */
   async modifierEquipe(user: User, id: string, dto: UpdateCrmTeamDto) {
     const c = await this.trouver(id);
@@ -704,14 +879,49 @@ export class CrmCampaignService {
     await this.verifierAgents([dto.lead_agent_id ?? c.lead_agent_id, ...equipe]);
     const anciens = c.assigned_agents.map((a) => a.agent_id);
     const retires = anciens.filter((a) => !equipe.includes(a));
+    const ajoutes = equipe.filter((a) => !anciens.includes(a));
+    const enCours = EN_COURS.includes(c.status);
+    const pilote = dto.lead_agent_id ?? c.lead_agent_id;
+    // Ce que le pilote reprend : les contacts ouverts des agents retirés, autres que lui.
+    const versPilote = c.distribution_mode === CampaignDistributionMode.MANUEL && enCours ? retires.filter((a) => a !== pilote) : [];
+    const maintenant = new Date();
 
-    await this.prisma.$transaction(async (tx) => {
+    const rendus = await this.prisma.$transaction(async (tx) => {
       await tx.crmCampaignAgent.deleteMany({ where: { campaign_id: id, agent_id: { in: retires } } });
       await tx.crmCampaignAgent.createMany({
-        data: equipe.filter((a) => !anciens.includes(a)).map((agent_id) => ({ campaign_id: id, agent_id })),
+        data: ajoutes.map((agent_id) => ({ campaign_id: id, agent_id })),
         skipDuplicates: true,
       });
       if (dto.lead_agent_id) await tx.crmCampaign.update({ where: { id }, data: { lead_agent_id: dto.lead_agent_id } });
+      let auPilote: string[] = [];
+      if (versPilote.length > 0) {
+        const piloteId = await this.piloteActif(tx, pilote);
+        if (piloteId) {
+          const ouverts = await tx.crmContact.findMany({
+            where: {
+              campaign_id: id,
+              assigned_to_id: { in: versPilote },
+              status: { in: STATUTS_OUVERTS },
+              entity_status: { not: EntityStatus.DELETED },
+            },
+            select: { id: true },
+          });
+          auPilote = ouverts.map((o) => o.id);
+          await this.appliquerAffectation(tx, id, new Map(auPilote.map((x) => [x, piloteId])), maintenant);
+          for (const lot of paquets(auPilote)) {
+            await this.events.journaliser(
+              lot.map((contact_id) => ({
+                contact_id,
+                type: CrmEventType.ASSIGNATION,
+                label: "Confié au pilote : son agent a quitté l'équipe",
+                actor_id: user.id,
+                campaign_id: id,
+              })),
+              tx,
+            );
+          }
+        }
+      }
       if (retires.length > 0) {
         await tx.crmCampaignMember.updateMany({
           where: { campaign_id: id, released_at: null, agent_id: { in: retires } },
@@ -722,12 +932,258 @@ export class CrmCampaignService {
           data: { assigned_to_id: null, assigned_at: null },
         });
       }
+      return auPilote;
     });
+    this.events.signaler(rendus.slice(0, 500), 'assignation');
 
-    if (retires.length > 0 && c.distribution_mode === CampaignDistributionMode.AUTOMATIQUE && EN_COURS.includes(c.status)) {
-      await this.distribuer(user, id, {});
+    if (enCours && c.distribution_mode === CampaignDistributionMode.AUTOMATIQUE && (retires.length > 0 || ajoutes.length > 0)) {
+      // Un renfort reçoit sa part des contacts que personne n'a encore appelés.
+      await this.distribuer(user, id, { inclure_non_appeles: ajoutes.length > 0 });
     }
     return this.detail(user, id);
+  }
+
+  /**
+   * Ajout quotidien (05 h 50) : chaque campagne EN COURS en répartition
+   * AUTOMATIQUE reprend, dans le vivier « à reprendre », les inscrits et les
+   * inactifs qui répondent à ses critères (libérés d'une campagne, nouveaux
+   * inactifs, nouveaux inscrits), et les répartit dans son équipe. La plus
+   * ancienne campagne se sert d'abord : un contact n'entre que dans une.
+   * Une campagne en répartition manuelle ne reçoit rien.
+   *
+   * Par paquets de 2 000, une transaction chacun, 20 paquets au plus par
+   * campagne et par passage. Chaque fiche est prise par un claim (toujours
+   * sans agent ni campagne en cours au moment d'écrire) : sûr en double
+   * serveur, et sans effet sur une campagne close entre-temps.
+   */
+  async rejoindreCampagnes(maintenant = new Date()) {
+    const campagnes = await this.prisma.crmCampaign.findMany({
+      where: {
+        status: CampaignStatus.ACTIVE,
+        distribution_mode: CampaignDistributionMode.AUTOMATIQUE,
+        entity_status: { not: EntityStatus.DELETED },
+      },
+      orderBy: { started_at: 'asc' },
+      select: { id: true },
+    });
+    const bilan: { campagne: string; entres: number }[] = [];
+    for (const { id } of campagnes) {
+      const c = await this.trouver(id);
+      let equipe: string[];
+      try {
+        equipe = this.equipeActive(c);
+      } catch {
+        this.logger.warn(`Ajout du jour : campagne « ${c.name} » sautée, aucun agent actif dans son équipe`);
+        continue;
+      }
+      const publics: PublicCampagne[] = (
+        c.publics.length > 0 ? c.publics : publicsDepuisAncienCorps(c.segments, c.registered_from, c.registered_to)
+      ).filter((p) => PUBLICS_VIVIER.includes(p.segment));
+      let entres = 0;
+      let paquetsFaits = 0;
+      for (const pub of publics) {
+        // Condition de la revendication : toujours disponible et sans agent au moment d'écrire.
+        const critere: Prisma.CrmContactWhereInput = { AND: [critereCampagne(pub, equipe, maintenant), { assigned_to_id: null }] };
+        // Déjà passé par cette campagne (converti puis retombé, par exemple) :
+        // il n'y revient pas, sa ligne de membre existe déjà.
+        const candidats: Prisma.CrmContactWhereInput = { AND: [critere, { members: { none: { campaign_id: id } } }] };
+        while (paquetsFaits < PAQUETS_AJOUT_MAX) {
+          const lot = await this.prisma.crmContact.findMany({
+            where: candidats,
+            select: { id: true, assigned_to_id: true, segment: true, cycle: true },
+            orderBy: [{ segment_since: 'desc' }, { id: 'asc' }],
+            take: PAQUET,
+          });
+          if (lot.length === 0) break;
+          paquetsFaits++;
+          const n = await this.rejoindre(id, c.name, pub.segment, equipe, lot, critere, maintenant);
+          entres += n;
+          // Rien n'est entré : les suivants seraient les mêmes, on s'arrête.
+          if (lot.length < PAQUET || n === 0) break;
+        }
+      }
+      if (entres > 0) {
+        bilan.push({ campagne: c.name, entres });
+        this.logger.log(`Ajout du jour : ${compter(entres, 'contact entré', 'contacts entrés')} dans la campagne « ${c.name} »`);
+      }
+    }
+    return bilan;
+  }
+
+  /** Un paquet de l'ajout quotidien, dans sa transaction. Renvoie le nombre de contacts réellement entrés. */
+  private async rejoindre(
+    id: string,
+    nom: string,
+    segment: CrmSegment,
+    equipe: string[],
+    lot: { id: string; assigned_to_id: string | null; segment: CrmSegment; cycle: number }[],
+    condition: Prisma.CrmContactWhereInput,
+    maintenant: Date,
+  ): Promise<number> {
+    const entres = await this.prisma.$transaction(
+      async (tx) => {
+        // La campagne doit être encore en cours : le verrou pris ici fait
+        // attendre une clôture concurrente, qui rendra alors ces contacts.
+        const enCours = await tx.crmCampaign.updateMany({
+          where: { id, status: CampaignStatus.ACTIVE },
+          data: { updated_at: maintenant },
+        });
+        if (enCours.count === 0) return [];
+        const ids = lot.map((p) => p.id);
+        await tx.crmCampaignMember.createMany({
+          data: lot.map((p) => ({ campaign_id: id, contact_id: p.id, joined_at: maintenant, segment: p.segment, cycle: p.cycle })),
+          skipDuplicates: true,
+        });
+        // Charge actuelle : contacts ouverts déjà confiés dans la campagne.
+        const charges = await tx.crmContact.groupBy({
+          by: ['assigned_to_id'],
+          where: {
+            campaign_id: id,
+            assigned_to_id: { in: equipe },
+            status: { in: STATUTS_OUVERTS },
+            entity_status: { not: EntityStatus.DELETED },
+          },
+          _count: { _all: true },
+        });
+        const charge = new Map(
+          charges.filter((g) => g.assigned_to_id).map((g) => [g.assigned_to_id as string, g._count._all] as const),
+        );
+        const affectation = this.repartir(lot, equipe, charge);
+        await this.appliquerAffectation(tx, id, affectation, maintenant, condition);
+        // Fiches prises ailleurs entre la lecture et l'écriture : leur membre créé ici disparaît.
+        await tx.crmCampaignMember.deleteMany({
+          where: {
+            campaign_id: id,
+            contact_id: { in: ids },
+            joined_at: maintenant,
+            contact: { OR: [{ campaign_id: null }, { campaign_id: { not: id } }] },
+          },
+        });
+        // Entrés par CE passage : rattachés à la campagne à cette heure-ci.
+        const entres = await tx.crmContact.findMany({
+          where: { id: { in: ids }, campaign_id: id, assigned_at: maintenant },
+          select: { id: true },
+        });
+        if (entres.length === 0) return [];
+        await tx.crmCampaign.update({ where: { id }, data: { targeted_count: { increment: entres.length } } });
+        await tx.crmCampaignPublic.updateMany({
+          where: { campaign_id: id, segment },
+          data: { targeted_count: { increment: entres.length } },
+        });
+        await this.events.journaliser(
+          entres.map((x) => ({
+            contact_id: x.id,
+            type: CrmEventType.CAMPAGNE_ENTREE,
+            label: `Entre dans la campagne « ${nom} » (ajout du jour)`,
+            actor_id: null,
+            campaign_id: id,
+          })),
+          tx,
+        );
+        return entres.map((x) => x.id);
+      },
+      { timeout: 180_000, maxWait: 10_000 },
+    );
+    this.events.signaler(entres.slice(0, 500), 'campagne');
+    return entres.length;
+  }
+
+  /**
+   * Agents partis (chaque heure) : les fiches ouvertes d'un compte désactivé,
+   * ou dont le rôle ne traite plus de contacts, ne restent pas bloquées chez
+   * lui. Hors campagne en cours, elles sont libérées (un Glovo/Yango revient
+   * dans la file commune, un inscrit ou un inactif dans le vivier « à
+   * reprendre »). Dans une campagne en cours, elles sont redonnées à l'équipe
+   * (répartition automatique) ou au pilote (répartition manuelle).
+   */
+  async libererAgentsPartis() {
+    const fiches = await this.prisma.crmContact.findMany({
+      where: {
+        status: { in: STATUTS_OUVERTS },
+        entity_status: { not: EntityStatus.DELETED },
+        assigned_to: {
+          OR: [{ entity_status: { not: EntityStatus.ACTIVE } }, { role: { notIn: this.access.rolesAgents() } }],
+        },
+      },
+      select: {
+        id: true,
+        assigned_to_id: true,
+        campaign_id: true,
+        campaign: { select: { status: true, distribution_mode: true, lead_agent_id: true } },
+      },
+      orderBy: { id: 'asc' },
+      take: PAQUET,
+    });
+    if (fiches.length === 0) return { liberes: 0, campagnes: 0 };
+
+    // Revendication fiche par fiche, conditionnée à ce qui a été lu : un
+    // second serveur passé avant, ou un geste entre-temps, et on n'écrit rien
+    // (ni agent, ni ligne de journal en double).
+    const liberes: { id: string; campaign_id: string | null }[] = [];
+    const campagnes = new Map<string, { mode: CampaignDistributionMode; pilote: string; partis: Set<string> }>();
+    for (const f of fiches) {
+      const enCampagne = !!f.campaign_id && !!f.campaign && EN_COURS.includes(f.campaign.status);
+      const { count } = await this.prisma.crmContact.updateMany({
+        where: { id: f.id, assigned_to_id: f.assigned_to_id, campaign_id: f.campaign_id, status: { in: STATUTS_OUVERTS } },
+        data: { assigned_to_id: null, assigned_at: null },
+      });
+      if (count !== 1) continue;
+      liberes.push({ id: f.id, campaign_id: f.campaign_id });
+      if (enCampagne && f.campaign_id && f.campaign) {
+        await this.prisma.crmCampaignMember.updateMany({
+          where: { campaign_id: f.campaign_id, contact_id: f.id, released_at: null },
+          data: { agent_id: null, assigned_at: null },
+        });
+        const c = campagnes.get(f.campaign_id) ?? {
+          mode: f.campaign.distribution_mode,
+          pilote: f.campaign.lead_agent_id,
+          partis: new Set<string>(),
+        };
+        if (f.assigned_to_id) c.partis.add(f.assigned_to_id);
+        campagnes.set(f.campaign_id, c);
+      }
+    }
+    for (const lot of paquets(liberes)) {
+      await this.events.journaliser(
+        lot.map((f) => ({
+          contact_id: f.id,
+          type: CrmEventType.ASSIGNATION,
+          label: "Libéré : son agent n'est plus actif",
+          actor_id: null,
+          campaign_id: f.campaign_id,
+        })),
+      );
+    }
+
+    // Dans une campagne en cours : l'équipe (automatique) ou le pilote (manuelle) reprend.
+    for (const [campagneId, c] of campagnes) {
+      if (c.mode === CampaignDistributionMode.AUTOMATIQUE) {
+        try {
+          await this.distribuer(null, campagneId, {});
+        } catch (e) {
+          // Équipe sans agent actif : les contacts restent sans agent, comptés sur la carte.
+          this.logger.warn(`Agents partis : campagne ${campagneId} non redistribuée : ${(e as Error).message}`);
+        }
+        continue;
+      }
+      if (c.partis.has(c.pilote)) continue;
+      const ids = liberes.filter((f) => f.campaign_id === campagneId).map((f) => f.id);
+      await this.prisma.$transaction(async (tx) => {
+        const pilote = await this.piloteActif(tx, c.pilote);
+        if (!pilote) return;
+        const maintenant = new Date();
+        await this.appliquerAffectation(tx, campagneId, new Map(ids.map((x) => [x, pilote])), maintenant, {
+          campaign_id: campagneId,
+          assigned_to_id: null,
+          status: { in: STATUTS_OUVERTS },
+        });
+      });
+    }
+    this.events.signaler(
+      liberes.slice(0, 500).map((f) => f.id),
+      'assignation',
+    );
+    return { liberes: liberes.length, campagnes: campagnes.size };
   }
 
   // ---------------- Outils ----------------
@@ -802,6 +1258,8 @@ export class CrmCampaignService {
         registered_from: true,
         registered_to: true,
         segments: true,
+        started_at: true,
+        duration_days: true,
         assigned_agents: { select: { agent_id: true, agent: { select: { entity_status: true, role: true } } } },
         publics: {
           select: {
@@ -842,11 +1300,46 @@ export class CrmCampaignService {
     return equipe;
   }
 
+  /**
+   * Pilote qui peut recevoir des contacts (répartition manuelle) : compte
+   * actif dont le rôle traite des contacts. Sinon null : les contacts restent
+   * sans agent, comptés sur la carte de la campagne.
+   */
+  private async piloteActif(client: Pick<Prisma.TransactionClient, 'user'>, piloteId: string): Promise<string | null> {
+    const actif = await client.user.count({
+      where: { id: piloteId, entity_status: EntityStatus.ACTIVE, role: { in: this.access.rolesAgents() } },
+    });
+    return actif > 0 ? piloteId : null;
+  }
+
   private dates(debutSaisi: string, finSaisie?: string, duree?: number) {
     const debut = jour(debutSaisi);
     const fin = finSaisie ? jour(finSaisie) : duree ? new Date(debut.getTime() + (duree - 1) * JOUR) : null;
     if (fin && fin < debut) throw new BadRequestException('La date de fin précède la date de début');
     return { debut, fin };
+  }
+
+  /**
+   * Dates d'une campagne modifiée. Une fin saisie, ou effacée (`null`),
+   * remplace la durée. Une durée (saisie ou déjà enregistrée) compte depuis
+   * le lancement d'une campagne lancée, depuis le début saisi sinon (fin
+   * provisoire). Sans rien de tout ça, la fin ne bouge pas.
+   */
+  private datesModifiees(
+    c: { start_date: Date; end_date: Date | null; started_at: Date | null; duration_days: number | null },
+    dto: Pick<UpdateCrmCampaignDto, 'start_date' | 'end_date' | 'duration_days'>,
+    lancee: boolean,
+  ) {
+    const debut = jour(dto.start_date ?? c.start_date.toISOString());
+    const finEffacee = dto.end_date === null;
+    const finSaisie = dto.end_date || undefined;
+    const duree = finEffacee || finSaisie ? null : (dto.duration_days ?? c.duration_days ?? null);
+    const depart = lancee && c.started_at ? jourUTC(c.started_at) : debut;
+    const fin = finEffacee ? null : finSaisie ? jour(finSaisie) : duree ? finApres(depart, duree) : c.end_date;
+    // Une campagne lancée avant sa date de début se juge sur son vrai départ.
+    const plancher = depart < debut ? depart : debut;
+    if (fin && fin < plancher) throw new BadRequestException('La date de fin précède la date de début');
+    return { debut, fin, duree };
   }
 
   /** Cohérence des publics, offres actives et restaurants existants. */

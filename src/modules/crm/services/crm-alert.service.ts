@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { CampaignStatus, CrmEventType, NotificationType, Prisma } from '@prisma/client';
+import { CampaignStatus, CrmEventType, EntityStatus, NotificationType, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import {
   NotificationRecipient,
@@ -10,8 +10,11 @@ import { NotificationsService } from 'src/modules/notifications/services/notific
 import { NotificationsWebSocketService } from 'src/modules/notifications/websockets/notifications-websocket.service';
 import { STATUTS_OUVERTS, VENTE_VALIDE_SQL } from '../crm.rules';
 import { CrmNotificationsTemplate } from '../templates/crm-notifications.template';
+import { CrmAccessService } from './crm-access.service';
 import { CrmConfigService } from './crm-config.service';
 import { CrmEventsService } from './crm-events.service';
+
+const JOUR = 86_400_000;
 
 /**
  * Alertes du module Contacts (cahier §8), dans la cloche du backoffice.
@@ -29,6 +32,7 @@ export class CrmAlertService {
     private readonly notifications: NotificationsService,
     private readonly recipients: NotificationRecipientService,
     private readonly ws: NotificationsWebSocketService,
+    private readonly access: CrmAccessService,
   ) {}
 
   /**
@@ -107,6 +111,48 @@ export class CrmAlertService {
       { campagne: c.name, conversions: indicateurs.conversions, cibles: indicateurs.cibles },
       { kind: 'crm', campaign_id: campagneId },
     );
+  }
+
+  /**
+   * Campagnes suspendues depuis le délai réglé (3 jours par défaut) : leurs
+   * contacts attendent la reprise et ne se travaillent pas. La direction et
+   * le pilote sont prévenus, une fois par suspension (claim sur la campagne :
+   * sûr en double serveur ; une reprise puis une nouvelle suspension
+   * réarment l'alerte).
+   */
+  async alerterSuspensions(maintenant = new Date()): Promise<number> {
+    const { suspension_alert_days: jours } = await this.config.lireReglages();
+    const campagnes = await this.prisma.crmCampaign.findMany({
+      where: {
+        status: CampaignStatus.SUSPENDED,
+        entity_status: { not: EntityStatus.DELETED },
+        suspended_at: { lte: new Date(maintenant.getTime() - jours * JOUR) },
+        suspension_alert_sent_at: null,
+      },
+      select: { id: true, name: true, lead_agent_id: true, suspended_at: true },
+    });
+    let alertees = 0;
+    for (const c of campagnes) {
+      const claim = await this.prisma.crmCampaign.updateMany({
+        where: { id: c.id, status: CampaignStatus.SUSPENDED, suspension_alert_sent_at: null },
+        data: { suspension_alert_sent_at: maintenant },
+      });
+      if (claim.count === 0) continue;
+      const direction = await this.recipients.getAllUsersByBackofficeAndRole(this.access.rolesGestionnaires());
+      const pilote = await this.destinataire(c.lead_agent_id);
+      const destinataires = [...direction, ...(pilote ? [pilote] : [])].filter(
+        (r, i, liste) => liste.findIndex((x) => x.id === r.id) === i,
+      );
+      const depuis = Math.max(1, Math.floor((maintenant.getTime() - (c.suspended_at ?? maintenant).getTime()) / JOUR));
+      await this.envoyer(
+        CrmNotificationsTemplate.CAMPAGNE_SUSPENDUE,
+        destinataires,
+        { campagne: c.name, jours: depuis },
+        { kind: 'crm', campaign_id: c.id },
+      );
+      alertees++;
+    }
+    return alertees;
   }
 
   private async destinataire(userId: string): Promise<NotificationRecipient | null> {

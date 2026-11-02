@@ -3434,6 +3434,20 @@ model CrmCampaign {
   /// bougent plus quand les prospects vivent leur vie après la campagne.
   report         Json?
 
+  /// « Après N jours » : la date de fin se calcule au lancement (jour du
+  /// lancement + N - 1). Nul quand la fin est une date saisie, ou sans fin.
+  duration_days            Int?
+  /// Début de la suspension en cours ; nul hors suspension.
+  suspended_at             DateTime? @db.Timestamp(6)
+  /// Alerte « suspendue depuis N jours » envoyée (claim) : une seule par suspension.
+  suspension_alert_sent_at DateTime? @db.Timestamp(6)
+  /// Dernier refus du lancement automatique (équipe vide, aucun contact...),
+  /// affiché sur la carte ; remis à nul au lancement et à la modification.
+  launch_error             String?   @db.VarChar(255)
+  /// Panne du lancement automatique (délai dépassé...) : plus d'essai seul,
+  /// la direction la lance à la main.
+  launch_failed_at         DateTime? @db.Timestamp(6)
+
   // Rôles
   lead_agent_id String  @db.Uuid
   lead_agent    User    @relation("CampaignLead", fields: [lead_agent_id], references: [id])

@@ -139,6 +139,53 @@ export class CrmTask implements OnApplicationBootstrap {
           this.logger.warn(`Clôture de la campagne ${c.id} impossible : ${(e as Error).message}`);
         }
       }
+      // Planifiées dont la date de fin est passée sans lancement : closes, sans contact à rendre.
+      const nonLancees = await this.campagnes.cloreNonLancees();
+      if (nonLancees > 0) this.logger.log(`${nonLancees} campagne(s) planifiée(s) close(s) sans avoir été lancée(s)`);
+    });
+  }
+
+  /**
+   * Toutes les heures : une campagne planifiée dont la date de début est
+   * arrivée se lance seule, par le même lancement que le bouton.
+   */
+  @Cron('15 * * * *')
+  async lancerPlanifiees() {
+    await this.uneFois('lancements', async () => {
+      const r = await this.campagnes.lancerPlanifiees();
+      if (r.lancees + r.refusees + r.pannes > 0) {
+        this.logger.log(`Lancements automatiques : ${r.lancees} lancée(s), ${r.refusees} refusée(s), ${r.pannes} en panne`);
+      }
+    });
+  }
+
+  /** Toutes les heures : les fiches ouvertes d'un agent désactivé ne restent pas bloquées chez lui. */
+  @Cron('25 * * * *')
+  async libererAgentsPartis() {
+    await this.uneFois('agents_partis', async () => {
+      const r = await this.campagnes.libererAgentsPartis();
+      if (r.liberes > 0) this.logger.log(`Agents partis : ${r.liberes} fiche(s) libérée(s), ${r.campagnes} campagne(s) concernée(s)`);
+    });
+  }
+
+  /** Toutes les heures : une campagne suspendue depuis trop longtemps alerte la direction. */
+  @Cron('45 * * * *')
+  async alerterSuspensions() {
+    await this.uneFois('suspensions', async () => {
+      const n = await this.alertes.alerterSuspensions();
+      if (n > 0) this.logger.log(`${n} campagne(s) suspendue(s) signalée(s) à la direction`);
+    });
+  }
+
+  /**
+   * Chaque jour à 05 h 50 : les inscrits et les inactifs à reprendre (libérés,
+   * nouveaux inactifs, nouveaux inscrits) rejoignent la campagne en cours de
+   * leur public, en répartition automatique.
+   */
+  @Cron('50 5 * * *')
+  async rejoindreCampagnes() {
+    await this.uneFois('ajout_du_jour', async () => {
+      await this.campagnes.rejoindreCampagnes();
     });
   }
 

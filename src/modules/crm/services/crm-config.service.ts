@@ -10,6 +10,7 @@ import {
   DEFAULT_INACTIVE_DAYS,
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_MESSAGE_TEMPLATE,
+  DEFAULT_SUSPENSION_ALERT_DAYS,
 } from '../crm.rules';
 import {
   CreateCallStatusDto,
@@ -27,6 +28,8 @@ export interface ReglagesCrm {
   dormant_days: number;
   alert_delay_hours: number;
   inactive_days: number;
+  /** Jours de suspension d'une campagne avant d'alerter la direction. */
+  suspension_alert_days: number;
   whatsapp_template_sid: string;
   message_template: string;
   app_link: string;
@@ -166,6 +169,7 @@ export class CrmConfigService {
       dormant_days: entier(v[CRM_SETTINGS.DORMANT_DAYS], DEFAULT_DORMANT_DAYS),
       alert_delay_hours: entier(v[CRM_SETTINGS.ALERT_DELAY_HOURS], DEFAULT_ALERT_DELAY_HOURS),
       inactive_days: entier(v[CRM_SETTINGS.INACTIVE_DAYS], DEFAULT_INACTIVE_DAYS),
+      suspension_alert_days: entier(v[CRM_SETTINGS.SUSPENSION_ALERT_DAYS], DEFAULT_SUSPENSION_ALERT_DAYS),
       whatsapp_template_sid: v[CRM_SETTINGS.WHATSAPP_TEMPLATE_SID] || '',
       message_template: v[CRM_SETTINGS.MESSAGE_TEMPLATE] || DEFAULT_MESSAGE_TEMPLATE,
       app_link: v[CRM_SETTINGS.APP_LINK] || DEFAULT_APP_LINK,
@@ -180,6 +184,7 @@ export class CrmConfigService {
       ['dormant_days', CRM_SETTINGS.DORMANT_DAYS],
       ['alert_delay_hours', CRM_SETTINGS.ALERT_DELAY_HOURS],
       ['inactive_days', CRM_SETTINGS.INACTIVE_DAYS],
+      ['suspension_alert_days', CRM_SETTINGS.SUSPENSION_ALERT_DAYS],
       ['whatsapp_template_sid', CRM_SETTINGS.WHATSAPP_TEMPLATE_SID],
       ['message_template', CRM_SETTINGS.MESSAGE_TEMPLATE],
       ['app_link', CRM_SETTINGS.APP_LINK],

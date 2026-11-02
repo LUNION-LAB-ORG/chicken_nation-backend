@@ -32,12 +32,19 @@ export const CRM_SETTINGS = {
   DORMANT_DAYS: 'crm.dormant_days',
   /** Posée au premier passage de la reprise acquisition : avant, les ventes sont « historique ». */
   BASCULE_ACQUISITION: 'crm.bascule_acquisition',
+  /** Jours de suspension d'une campagne avant d'alerter la direction. */
+  SUSPENSION_ALERT_DAYS: 'crm.suspension_alert_days',
 } as const;
 
 export const DEFAULT_MAX_ATTEMPTS = 5;
 export const DEFAULT_ALERT_DELAY_HOURS = 48;
 /** Un client qui a commandé devient « inactif » après ce nombre de jours sans commande. */
 export const DEFAULT_INACTIVE_DAYS = 30;
+/**
+ * Une campagne suspendue depuis ce nombre de jours alerte la direction : ses
+ * contacts attendent la reprise et ne se travaillent pas (analyse du 02/11).
+ */
+export const DEFAULT_SUSPENSION_ALERT_DAYS = 3;
 
 /**
  * Au bout de combien de jours un contact OUVERT mais endormi revient-il à

@@ -273,4 +273,9 @@ export class CrmAccessService {
     if (this.peut(user, Action.UPDATE) && (await this.estPilote(user, campaignId))) return;
     throw new ForbiddenException('Réservé à la direction et au pilote de la campagne');
   }
+
+  /** Rôles de la direction (droit CREATE sur le CRM) : ceux qu'on alerte d'une campagne en souffrance. */
+  rolesGestionnaires(): UserRole[] {
+    return (Object.keys(permissionsByRole) as UserRole[]).filter((role) => this.peut({ role }, Action.CREATE));
+  }
 }
