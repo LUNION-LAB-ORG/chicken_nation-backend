@@ -93,7 +93,12 @@ export class CrmCallService {
       dejaJoint: !!contact.first_reached_at,
       tentatives,
       maxTentatives: max_attempts,
+      ...(outcome === CrmCallOutcome.NON_JOINT && { sansReponse: await this.sansReponse(contact.id, contact.cycle) }),
     });
+    // Un appel sur un client de l'annuaire vaut prise en charge : sa date
+    // d'entrée devient celle de l'appel, pour que seule une commande passée
+    // après compte comme une vente (problème 1 du 02/11).
+    const priseEnCharge = contact.status === CrmStatus.NON_DEMARCHE;
     // L'appel compte pour la campagne en cours, même suspendue (il a eu lieu).
     const campagneId =
       contact.campaign_id && contact.campaign?.status !== CampaignStatus.COMPLETED
@@ -102,7 +107,8 @@ export class CrmCallService {
     const commentaire = dto.comment?.trim() || null;
 
     return this.prisma.$transaction(async (tx) => {
-      // Un contact de la file commune devient celui de l'agent qui l'appelle.
+      // Un contact de la file commune devient celui de l'agent qui l'appelle
+      // (la direction, elle, le laisse dans la file : voir `prendre`).
       await this.access.prendre(tx, user, contact.id, maintenant);
       // Claim : si le client vient de commander pendant l'appel, ou si un
       // collègue l'a pris entre-temps, on n'écrit rien.
@@ -123,6 +129,7 @@ export class CrmCallService {
             ? { loss_reason_id: raisonId }
             : outcome === CrmCallOutcome.INTERESSE && { loss_reason_id: null }),
           ...(commentaire && { last_comment: commentaire }),
+          ...(priseEnCharge && { segment_since: maintenant }),
         },
       });
       if (claim.count === 0) {
@@ -175,5 +182,27 @@ export class CrmCallService {
       this.events.signaler([contact.id], 'appel');
       return resultat;
     });
+  }
+
+  /**
+   * Appels « pas de réponse » d'affilée de ce passage, celui qu'on enregistre
+   * compris : on compte depuis le dernier appel où le client a décroché. Un
+   * client joint une fois repart donc de zéro, il n'est pas exempté à vie.
+   */
+  private async sansReponse(contactId: string, cycle: number): Promise<number> {
+    const dernierJoint = await this.prisma.crmCall.findFirst({
+      where: { contact_id: contactId, cycle, reached: true },
+      orderBy: { created_at: 'desc' },
+      select: { created_at: true },
+    });
+    const avant = await this.prisma.crmCall.count({
+      where: {
+        contact_id: contactId,
+        cycle,
+        outcome: CrmCallOutcome.NON_JOINT,
+        ...(dernierJoint && { created_at: { gt: dernierJoint.created_at } }),
+      },
+    });
+    return avant + 1;
   }
 }

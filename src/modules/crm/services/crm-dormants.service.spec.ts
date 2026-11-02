@@ -32,6 +32,15 @@ describe('conditionDormants', () => {
    * repli sur le dernier appel, il ne serait jamais réveillé, c'est-à-dire
    * exactement le défaut qu'on corrige.
    */
+  /*
+    Problème 9 du 02/11 : un coupon envoyé il y a 8 jours, valable 30, était
+    réveillé, puis libéré à la clôture de sa campagne.
+  */
+  it('ne réveille jamais un contact qui tient un coupon encore valable', () => {
+    const avecDate = conditionDormants(limiteDormants(MAINTENANT, DEFAULT_DORMANT_DAYS), MAINTENANT);
+    expect(avecDate.NOT).toEqual({ coupons: { some: { used_at: null, expires_at: { gt: MAINTENANT } } } });
+  });
+
   it('juge un coupon sans date d’envoi sur le dernier appel', () => {
     const repli = c.OR[2];
     expect(repli.coupon_sent_at).toBeNull();
@@ -62,6 +71,13 @@ describe('CrmDormantsService', () => {
     expect(await service.reveiller(MAINTENANT)).toBe(1);
     expect((prisma.crmContact.updateMany as jest.Mock).mock.calls[0][0].data).toEqual({
       status: CrmStatus.A_APPELER,
+    });
+    // La revendication rejoue toute la condition : un coupon envoyé entre la
+    // lecture et l'écriture empêche le réveil.
+    expect((prisma.crmContact.updateMany as jest.Mock).mock.calls[0][0].where).toMatchObject({
+      id: 'c1',
+      status: CrmStatus.INTERESSE,
+      NOT: { coupons: { some: { used_at: null, expires_at: { gt: MAINTENANT } } } },
     });
     expect(evenements[0]).toMatchObject({
       contact_id: 'c1',

@@ -281,9 +281,22 @@ describe('sortieFinCampagne', () => {
   });
 
   it('tous les autres statuts sont libérés, rappel ou coupon compris', () => {
-    for (const s of [S.A_APPELER, S.NON_INTERESSE, S.INJOIGNABLE, S.CONVERTI]) {
+    for (const s of [S.NON_INTERESSE, S.INJOIGNABLE, S.CONVERTI]) {
       expect(sortie(s)).toBe('LIBERER');
       expect(sortie(s, apres, true)).toBe('LIBERER');
+    }
+    expect(sortie(S.A_APPELER)).toBe('LIBERER');
+    expect(sortie(S.A_APPELER, apres)).toBe('LIBERER');
+  });
+
+  /*
+    Problème 9 du 02/11 : un coupon envoyé réveillé « à appeler » au 8e jour,
+    encore valable, était libéré à la clôture au lieu de rester à son agent.
+  */
+  it('un contact ouvert qui tient un coupon valable reste à son agent, quel que soit son statut ouvert', () => {
+    for (const s of [S.A_APPELER, S.A_RAPPELER, S.INTERESSE, S.COUPON_ENVOYE]) {
+      expect(sortie(s, null, true)).toBe('GARDER_AGENT');
+      expect(sortie(s, avant, true)).toBe('GARDER_AGENT');
     }
   });
 });

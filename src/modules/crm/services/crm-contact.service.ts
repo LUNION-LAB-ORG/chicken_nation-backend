@@ -543,7 +543,8 @@ export class CrmContactService {
     });
     if (!contact) throw new NotFoundException('Contact introuvable');
     await this.access.assertPeutTraiter(user, contact);
-    const pris = await this.prisma.$transaction((tx) => this.access.prendre(tx, user, id));
+    // Le seul geste qui confie un client de la file commune à la direction.
+    const pris = await this.prisma.$transaction((tx) => this.access.prendre(tx, user, id, new Date(), { explicite: true }));
     if (pris) {
       await this.events.journaliser([
         { contact_id: id, type: CrmEventType.ASSIGNATION, label: `Pris dans la file commune par ${user.fullname}`, actor_id: user.id },
@@ -578,6 +579,12 @@ export class CrmContactService {
    * ⚠️ `call_count` n'est PAS touché : il reste à zéro pour un client jamais
    * appelé, qui doit donc atterrir dans « Jamais appelés » et non dans « À
    * relancer ». Un client repris après un cycle garde son compteur.
+   *
+   * ⚠️ La date d'entrée (`segment_since`) devient celle de la prise, dans la
+   * même écriture : seule une commande passée APRÈS compte comme une vente du
+   * centre d'appels. Elle valait la dernière commande du client, que la
+   * réconciliation prenait aussitôt pour une conversion (problème 1 du 02/11).
+   * Le déclencheur `crm_suivre_passage` la recopie sur le passage.
    */
   async prendreEnCharge(user: User, id: string) {
     this.access.assertAgent(user);
@@ -592,12 +599,14 @@ export class CrmContactService {
     }
 
     // Revendication : deux agents qui cliquent en même temps, un seul l'obtient.
+    const maintenant = new Date();
     const { count } = await this.prisma.crmContact.updateMany({
       where: { id, status: CrmStatus.NON_DEMARCHE },
       data: {
         status: CrmStatus.A_APPELER,
         assigned_to_id: user.id,
-        assigned_at: new Date(),
+        assigned_at: maintenant,
+        segment_since: maintenant,
       },
     });
     if (count !== 1) {

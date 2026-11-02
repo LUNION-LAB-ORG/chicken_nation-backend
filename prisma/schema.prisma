@@ -3775,6 +3775,8 @@ model CrmConversion {
   agent         User?               @relation("CrmConversionAgent", fields: [agent_id], references: [id], onDelete: SetNull)
   source        CrmConversionSource @default(CRM)
   cancelled_at  DateTime?           @db.Timestamp(6)
+  /// Pourquoi la vente a été annulée hors commande supprimée : ANNUAIRE_SANS_APPEL ou COMMANDE_AVANT_PRISE (reprise du 02/11).
+  cancel_reason String?             @db.VarChar(40)
   created_at    DateTime            @default(now()) @db.Timestamp(6)
 
   @@index([converted_at])

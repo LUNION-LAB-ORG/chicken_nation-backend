@@ -176,12 +176,18 @@ export type SortieFinCampagne = 'GARDER_AGENT' | 'LIBERER';
  * un intéressé, un coupon encore valable ou un rappel promis à venir restent à
  * leur agent (hors campagne), pour que la parole donnée soit tenue. Tout le
  * reste est libéré ; un Glovo/Yango libéré revient seul dans la file commune.
+ *
+ * Un contact encore ouvert qui tient un coupon valable reste à son agent quel
+ * que soit son statut : un « coupon envoyé » remis « à appeler » (réveil des
+ * dormants, ancien comportement) ou rappelé depuis ne doit pas perdre l'agent
+ * qui lui a fait l'offre (problème 9 du 02/11).
  */
 export function sortieFinCampagne(
   contact: { status: CrmStatus; callback_at: Date | null },
   couponActif: boolean,
   maintenant: Date,
 ): SortieFinCampagne {
+  if (couponActif && STATUTS_OUVERTS.includes(contact.status)) return 'GARDER_AGENT';
   switch (contact.status) {
     case CrmStatus.INTERESSE:
       return 'GARDER_AGENT';

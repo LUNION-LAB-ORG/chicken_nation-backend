@@ -5,6 +5,7 @@ import {
   VENTE_VALIDE_SQL,
   bornesPeriode,
   ficheDuRestaurantSql,
+  porteePublics,
   publicsDe,
 } from '../crm.rules';
 
@@ -71,9 +72,14 @@ export function listePublics(publics: CrmSegment[]): Prisma.Sql {
   return Prisma.join(publics.map((p) => Prisma.sql`${p}::"CrmSegment"`));
 }
 
-/** `AND colonne IN (…)` ; rien quand tous les publics sont demandés. */
+/**
+ * `AND colonne IN (…)`. Sans public choisi, les quatre publics démarchés : les
+ * clients actifs de l'annuaire (CLIENT) ne sont pas un public du centre
+ * d'appels, et le total ne doit compter que ce que montrent ses lignes
+ * (problème 12 du 02/11 : sans filtre, le total portait leurs ventes).
+ */
 export function filtreSegments(colonne: string, publics: CrmSegment[]): Prisma.Sql {
-  return publics.length ? Prisma.sql`AND ${Prisma.raw(colonne)} IN (${listePublics(publics)})` : Prisma.empty;
+  return Prisma.sql`AND ${Prisma.raw(colonne)} IN (${listePublics(porteePublics(publics))})`;
 }
 
 /** `AND colonne = campagne` pour une action (appel, coupon, vente) portant sa campagne. */

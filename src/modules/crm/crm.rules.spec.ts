@@ -45,7 +45,7 @@ import {
 } from './crm.rules';
 import { dansPeriode, filtreCampagne, filtreSegments, plage } from './services/crm-passages.query';
 
-const ctx = (partiel: Partial<{ dejaJoint: boolean; tentatives: number; maxTentatives: number }> = {}) => ({
+const ctx = (partiel: Partial<{ dejaJoint: boolean; tentatives: number; maxTentatives: number; sansReponse: number }> = {}) => ({
   dejaJoint: false,
   tentatives: 1,
   maxTentatives: 5,
@@ -61,9 +61,33 @@ describe('statutApresAppel', () => {
     expect(statutApresAppel(S.A_APPELER, O.NON_JOINT, ctx({ tentatives: 5 }))).toBe(S.INJOIGNABLE);
   });
 
-  it("un client déjà joint une fois n'est jamais déclaré injoignable pour des non-réponses", () => {
-    expect(statutApresAppel(S.A_APPELER, O.NON_JOINT, ctx({ tentatives: 9, dejaJoint: true }))).toBe(S.A_APPELER);
-    expect(statutApresAppel(S.A_RAPPELER, O.NON_JOINT, ctx({ tentatives: 9 }))).toBe(S.A_RAPPELER);
+  /*
+    Problème 10 du 02/11 : un client joint une fois, ou « à rappeler », ne
+    sortait jamais par les essais sans réponse et « À relancer » ne faisait que
+    grossir. Le plafond se compte depuis le dernier appel joint (`sansReponse`).
+  */
+  it('le plafond sans réponse vaut aussi pour un client déjà joint', () => {
+    expect(statutApresAppel(S.A_APPELER, O.NON_JOINT, ctx({ tentatives: 9, dejaJoint: true, sansReponse: 5 }))).toBe(S.INJOIGNABLE);
+  });
+
+  it('le plafond sans réponse vaut pour tout statut ouvert : à rappeler, intéressé, coupon envoyé', () => {
+    for (const s of [S.A_RAPPELER, S.INTERESSE, S.COUPON_ENVOYE]) {
+      expect(statutApresAppel(s, O.NON_JOINT, ctx({ tentatives: 9, dejaJoint: true, sansReponse: 5 }))).toBe(S.INJOIGNABLE);
+    }
+  });
+
+  it('un appel joint remet le compte à zéro : sous le plafond, le statut ne change pas', () => {
+    expect(statutApresAppel(S.A_APPELER, O.NON_JOINT, ctx({ tentatives: 9, dejaJoint: true, sansReponse: 4 }))).toBe(S.A_APPELER);
+    expect(statutApresAppel(S.A_RAPPELER, O.NON_JOINT, ctx({ tentatives: 9, dejaJoint: true, sansReponse: 1 }))).toBe(S.A_RAPPELER);
+  });
+
+  it('un statut fermé ne bouge pas sur un « pas de réponse »', () => {
+    expect(statutApresAppel(S.NON_INTERESSE, O.NON_JOINT, ctx({ sansReponse: 9 }))).toBe(S.NON_INTERESSE);
+  });
+
+  it('sans compte depuis le dernier appel joint, les tentatives du passage en tiennent lieu', () => {
+    expect(statutApresAppel(S.A_RAPPELER, O.NON_JOINT, ctx({ tentatives: 5, dejaJoint: true }))).toBe(S.INJOIGNABLE);
+    expect(statutApresAppel(S.A_RAPPELER, O.NON_JOINT, ctx({ tentatives: 4 }))).toBe(S.A_RAPPELER);
   });
 
   it('intéressé, à rappeler, pas intéressé, numéro invalide', () => {
@@ -353,7 +377,11 @@ describe('bornes de période (UTC)', () => {
     expect(plage('k.created_at', { to: '2026-09-02' }).sql).toBe('AND (k.created_at < ?)');
   });
   it('filtres public et campagne', () => {
-    expect(filtreSegments('y.segment', []).sql).toBe('');
+    // Sans public choisi : les quatre publics démarchés, jamais l'annuaire (problème 12 du 02/11).
+    const tous = filtreSegments('y.segment', []);
+    expect(tous.sql).toBe('AND y.segment IN (?::"CrmSegment",?::"CrmSegment",?::"CrmSegment",?::"CrmSegment")');
+    expect(tous.values).toEqual(['JAMAIS_COMMANDE', 'INACTIF', 'GLOVO', 'YANGO']);
+    expect(tous.values).not.toContain(P.CLIENT);
     const f = filtreSegments('y.segment', [P.GLOVO, P.YANGO]);
     expect(f.sql).toBe('AND y.segment IN (?::"CrmSegment",?::"CrmSegment")');
     expect(f.values).toEqual(['GLOVO', 'YANGO']);

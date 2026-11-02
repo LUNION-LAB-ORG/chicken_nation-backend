@@ -15,7 +15,12 @@ const agent = { id: 'agent-1' } as User;
  * Faux Prisma : un contact à appeler, un statut de l'issue voulue, et des
  * raisons dont on choisit celles qui sont actives. On regarde ce qui est écrit.
  */
-function monter(outcome: O, raisonsActives: string[] = [RAISON]) {
+function monter(
+  outcome: O,
+  raisonsActives: string[] = [RAISON],
+  surcharge: Record<string, unknown> = {},
+  appels: { dernierJoint?: Date | null; nonJointsDepuis?: number } = {},
+) {
   const ecritContact = jest.fn().mockResolvedValue({ count: 1 });
   const ecritAppel = jest.fn().mockResolvedValue({ id: 'appel-1' });
   const chercheRaison = jest.fn(({ where }: { where: { id: string; is_active?: boolean } }) =>
@@ -39,7 +44,12 @@ function monter(outcome: O, raisonsActives: string[] = [RAISON]) {
         assigned_to_id: agent.id,
         campaign_id: null,
         campaign: null,
+        ...surcharge,
       }),
+    },
+    crmCall: {
+      findFirst: jest.fn().mockResolvedValue(appels.dernierJoint ? { created_at: appels.dernierJoint } : null),
+      count: jest.fn().mockResolvedValue(appels.nonJointsDepuis ?? 0),
     },
     crmCallStatus: { findFirst: jest.fn().mockResolvedValue({ id: STATUT, label: 'Statut', outcome }) },
     crmReason: { findFirst: chercheRaison },
@@ -57,7 +67,7 @@ function monter(outcome: O, raisonsActives: string[] = [RAISON]) {
     contact: ecritContact.mock.calls[0]?.[0]?.data as Record<string, unknown> | undefined,
     appel: ecritAppel.mock.calls[0]?.[0]?.data as Record<string, unknown> | undefined,
   });
-  return { service, chercheRaison, donnees };
+  return { service, chercheRaison, donnees, prisma };
 }
 
 describe("CrmCallService.enregistrer : la raison d'un appel", () => {
@@ -109,5 +119,66 @@ describe("CrmCallService.enregistrer : la raison d'un appel", () => {
     const { service, donnees } = monter(O.NON_INTERESSE);
     await service.enregistrer(agent, CONTACT, { call_status_id: STATUT }, { sansRaison: true });
     expect(donnees().appel?.loss_reason_id).toBeNull();
+  });
+});
+
+/**
+ * Problème 10 du 02/11 : un contact déjà joint une fois, ou « à rappeler », ne
+ * sortait jamais par les essais sans réponse. Le plafond se compte désormais
+ * depuis le dernier appel où il a décroché.
+ */
+describe('CrmCallService.enregistrer : appels sans réponse', () => {
+  const joint = new Date('2026-10-30T09:00:00.000Z');
+
+  it('compte les « pas de réponse » depuis le dernier appel joint du passage, celui-ci compris', async () => {
+    const { service, donnees, prisma } = monter(O.NON_JOINT, [RAISON], {
+      status: CrmStatus.A_RAPPELER,
+      call_count: 12,
+      first_reached_at: joint,
+    }, { dernierJoint: joint, nonJointsDepuis: 4 });
+    const { statut } = await service.enregistrer(agent, CONTACT, { call_status_id: STATUT });
+    expect(statut).toBe(CrmStatus.INJOIGNABLE);
+    expect(donnees().contact?.status).toBe(CrmStatus.INJOIGNABLE);
+    expect((prisma.crmCall.count as jest.Mock).mock.calls[0][0]).toEqual({
+      where: { contact_id: CONTACT, cycle: 1, outcome: O.NON_JOINT, created_at: { gt: joint } },
+    });
+  });
+
+  it('un appel joint remet le compte à zéro : sous le plafond, le contact reste', async () => {
+    const { service } = monter(O.NON_JOINT, [RAISON], { status: CrmStatus.A_APPELER, call_count: 9, first_reached_at: joint }, {
+      dernierJoint: joint,
+      nonJointsDepuis: 1,
+    });
+    const { statut } = await service.enregistrer(agent, CONTACT, { call_status_id: STATUT });
+    expect(statut).toBe(CrmStatus.A_APPELER);
+  });
+
+  it('un appel joint ne lit pas les appels précédents', async () => {
+    const { service, prisma } = monter(O.INTERESSE);
+    await service.enregistrer(agent, CONTACT, { call_status_id: STATUT });
+    expect(prisma.crmCall.count).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Problème 1 du 02/11 : appeler un client de l'annuaire vaut prise en charge.
+ * Sa date d'entrée devient celle de l'appel : seule une commande passée après
+ * compte comme une vente du centre d'appels.
+ */
+describe('CrmCallService.enregistrer : client de l’annuaire', () => {
+  it('un appel sur une fiche « non démarchée » fixe sa date d’entrée à l’appel', async () => {
+    const { service, donnees } = monter(O.NON_JOINT, [RAISON], { status: CrmStatus.NON_DEMARCHE, segment: CrmSegment.CLIENT });
+    const avant = Date.now();
+    await service.enregistrer(agent, CONTACT, { call_status_id: STATUT });
+    const depuis = donnees().contact?.segment_since as Date;
+    expect(depuis).toBeInstanceOf(Date);
+    expect(depuis.getTime()).toBeGreaterThanOrEqual(avant);
+    expect(donnees().contact?.status).toBe(CrmStatus.A_APPELER);
+  });
+
+  it('un appel sur un contact déjà suivi ne touche pas sa date d’entrée', async () => {
+    const { service, donnees } = monter(O.NON_JOINT);
+    await service.enregistrer(agent, CONTACT, { call_status_id: STATUT });
+    expect(donnees().contact).not.toHaveProperty('segment_since');
   });
 });
