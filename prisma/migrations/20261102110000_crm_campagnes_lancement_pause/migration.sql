@@ -21,3 +21,19 @@ ALTER TABLE "ConversionCampaign" ADD COLUMN IF NOT EXISTS "launch_failed_at" TIM
 -- les lignes encore sans date sont touchées.
 UPDATE "ConversionCampaign" SET "suspended_at" = "updated_at"
 WHERE "status" = 'SUSPENDED' AND "suspended_at" IS NULL;
+
+-- Campagnes planifiées AVANT le lancement automatique, dont la date de début
+-- est déjà passée : personne n'a décidé de les lancer (essai oublié, campagne
+-- abandonnée). Lancées seules au premier passage de la tâche, elles prendraient
+-- des contacts que des agents suivent déjà. Elles attendent un clic sur
+-- « Lancer », et leur carte le dit. Le clic, ou une modification de la
+-- campagne, efface la mention ; les campagnes à venir se lancent seules.
+-- Une campagne dont la date de fin est passée est close par la tâche des
+-- clôtures, comme les autres.
+-- Mesure avant le déploiement (lecture seule) :
+--   SELECT "id", "name", "start_date", "end_date" FROM "ConversionCampaign"
+--   WHERE "status" = 'PLANIFIED' AND "entity_status" <> 'DELETED' AND "start_date" <= now();
+UPDATE "ConversionCampaign"
+SET "launch_error" = 'Prévue avant le lancement automatique : lancez-la à la main', "launch_failed_at" = now()
+WHERE "status" = 'PLANIFIED' AND "entity_status" <> 'DELETED' AND "start_date" <= now()
+  AND "launch_failed_at" IS NULL;
