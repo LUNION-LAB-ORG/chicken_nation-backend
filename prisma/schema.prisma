@@ -366,6 +366,148 @@ model Comment {
   @@index([site_visible])
 }
 
+// ================================
+// « TON AVIS COMPTE » : RETOURS PRIVÉS (02/11)
+// ================================
+
+enum AvisRessenti {
+  PAS_CONTENT
+  PEUT_MIEUX_FAIRE
+  AU_TOP
+}
+
+enum AvisCanal {
+  APPLI
+  SITE_WEB
+  TELEPHONE // « Manuel » à l'écran du backoffice, « Téléphone » sur le site et à l'export
+  WHATSAPP
+  SUR_PLACE
+  AUTRE_PLATEFORME
+}
+
+enum AvisStatut {
+  NOUVEAU
+  A_RAPPELER
+  EN_COURS
+  INJOIGNABLE
+  INCIDENT_OUVERT
+  RESOLU
+  CLASSE
+}
+
+enum AvisSolution {
+  EXCUSES
+  GESTE_COMMERCIAL
+  REMPLACEMENT
+  REMBOURSEMENT
+  AUCUNE
+}
+
+enum AvisSuiviType {
+  SYSTEME
+  APPEL
+  WHATSAPP
+  NOTE
+  STATUT
+  COMMANDE
+  AGENT
+  INCIDENT
+  SUPPRESSION
+}
+
+enum AvisResultat {
+  JOINT
+  INJOIGNABLE
+  MESSAGERIE
+}
+
+/// Retour PRIVÉ envoyé depuis la page « Ton avis compte » (/fr/avis). Jamais
+/// publié. À ne pas confondre avec Comment (note après commande, témoignages).
+/// Règles : src/modules/customer/avis-prives/avis-prive.rules.ts.
+model AvisPrive {
+  id                 String           @id @default(uuid()) @db.Uuid
+  ressenti           AvisRessenti
+  canal              AvisCanal
+  /// null = « Je ne sais pas »
+  restaurant_id      String?          @db.Uuid
+  restaurant         Restaurant?      @relation(fields: [restaurant_id], references: [id], onDelete: SetNull)
+  /// 2 à 1 000 caractères ; vidé ('') à l'effacement
+  commentaire        String           @db.Text
+  /// Canonique +225…, null après effacement
+  telephone          String?          @db.VarChar(20)
+  prenom             String?          @db.VarChar(60)
+  accord_rappel      Boolean          @default(false)
+  /// Code de la liste blanche (marque-page, ticket, sac, site)
+  source             String           @default("site") @db.VarChar(40)
+  // Rapprochement par téléphone canonique
+  customer_id        String?          @db.Uuid
+  customer           Customer?        @relation(fields: [customer_id], references: [id], onDelete: SetNull)
+  rapproche_at       DateTime?        @db.Timestamp(6)
+  // Commande cochée et ticket
+  order_id           String?          @db.Uuid
+  order              Order?           @relation(fields: [order_id], references: [id], onDelete: SetNull)
+  ticket_id          String?          @unique @db.Uuid
+  ticket             TicketThread?    @relation(fields: [ticket_id], references: [id], onDelete: SetNull)
+  /// Claim de la création du ticket (un seul clic aboutit)
+  ticket_demande_at  DateTime?        @db.Timestamp(6)
+  // Suivi
+  statut             AvisStatut       @default(NOUVEAU)
+  /// Reçu + 24 h, seulement avec accord de rappel et un ressenti négatif
+  echeance_at        DateTime?        @db.Timestamp(6)
+  /// Premier « Joint » : échéance tenue
+  premier_contact_at DateTime?        @db.Timestamp(6)
+  /// Claim de la cloche de retard (une seule par avis)
+  alerte_retard_at   DateTime?        @db.Timestamp(6)
+  tentatives_appel   Int              @default(0)
+  solution           AvisSolution?
+  resolu_at          DateTime?        @db.Timestamp(6)
+  /// Résolu ou Classé
+  clos_at            DateTime?        @db.Timestamp(6)
+  agent_id           String?          @db.Uuid
+  agent              User?            @relation("AvisPriveAgent", fields: [agent_id], references: [id], onDelete: SetNull)
+  // Suppression logique, contenu personnel effacé
+  entity_status      EntityStatus     @default(ACTIVE)
+  supprime_at        DateTime?        @db.Timestamp(6)
+  /// Sans clé étrangère, comme TicketMessage.deletedById
+  supprime_par_id    String?          @db.Uuid
+  created_at         DateTime         @default(now()) @db.Timestamp(6)
+  updated_at         DateTime         @default(now()) @updatedAt @db.Timestamp(6)
+  suivis             AvisPriveSuivi[]
+
+  @@index([entity_status, created_at])
+  @@index([entity_status, statut])
+  @@index([restaurant_id, created_at])
+  @@index([statut, echeance_at])
+  @@index([telephone])
+  @@index([customer_id])
+  @@index([agent_id])
+  @@index([order_id])
+}
+
+/// Journal de suivi d'un avis : lignes du système et des agents, jamais
+/// modifiées (seules la note et les données sont vidées à l'effacement).
+model AvisPriveSuivi {
+  id           String        @id @default(uuid()) @db.Uuid
+  avis_id      String        @db.Uuid
+  avis         AvisPrive     @relation(fields: [avis_id], references: [id], onDelete: Cascade)
+  type         AvisSuiviType
+  resultat     AvisResultat?
+  note         String?       @db.Text
+  statut_avant AvisStatut?
+  statut_apres AvisStatut?
+  solution     AvisSolution?
+  /// null = Système
+  auteur_id    String?       @db.Uuid
+  auteur       User?         @relation("AvisPriveSuiviAuteur", fields: [auteur_id], references: [id], onDelete: SetNull)
+  /// Recopié : la trace survit au départ de la personne
+  auteur_nom   String?       @db.VarChar(255)
+  /// { reference } de commande, { code } de ticket, { agent }
+  meta         Json?
+  created_at   DateTime      @default(now()) @db.Timestamp(6)
+
+  @@index([avis_id, created_at])
+}
+
 model Customer {
   id String @id @default(uuid()) @db.Uuid
 
@@ -437,6 +579,9 @@ model Customer {
 
   /// Suivi de conversion tant que le client n'a jamais commandé (module Prospects).
   crm_contact CrmContact?
+
+  /// Retours privés « Ton avis compte » rapprochés de ce compte (02/11).
+  avis_prives AvisPrive[]
 }
 
 // -------------------- Livreurs (deliverers) ------------------------------
@@ -1100,6 +1245,9 @@ model TicketThread {
   firstResponseAt DateTime?
   resolvedAt      DateTime?
 
+  /// Retour privé « Ton avis compte » à l'origine du ticket (« Créer un incident », 02/11).
+  avis_prive AvisPrive?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1724,6 +1872,8 @@ model Order {
   relance_journal   OrderRelanceJournal[]
   /// Appels du livreur avec le service client au sujet de cette commande (24/10).
   calls             Call[]
+  /// Retours privés « Ton avis compte » qui désignent cette commande (02/11).
+  avis_prives       AvisPrive[]
 
   @@index([reference, status, entity_status, customer_id])
   // Index pour les agrégations statistiques (page Stats > Clients/Commandes) :
@@ -1829,6 +1979,8 @@ model Restaurant {
   Conversation    Conversation[]
   crm_conversions CrmConversion[]
   prospects       Prospect[]
+  /// Retours privés « Ton avis compte » (02/11).
+  avis_prives     AvisPrive[]
 }
 
 model Supplement {
@@ -1925,6 +2077,10 @@ model User {
   relances_prises   OrderRelance[]        @relation("RelancePrisPar")
   relances_ignorees OrderRelance[]        @relation("RelanceIgnorePar")
   relances_journal  OrderRelanceJournal[] @relation("RelanceJournalAuteur")
+
+  // Retours privés « Ton avis compte » (02/11)
+  avis_prives_agent AvisPrive[]      @relation("AvisPriveAgent")
+  avis_prive_suivis AvisPriveSuivi[] @relation("AvisPriveSuiviAuteur")
 
   @@index([email, type])
 }
