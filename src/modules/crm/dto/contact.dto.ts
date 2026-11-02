@@ -11,6 +11,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -135,6 +136,10 @@ export class QueryCrmContactDto {
   @IsOptional() @IsIn(['true', 'false'])
   abandoned?: string;
 
+  @ApiPropertyOptional({ description: '« true » : à reprendre, inscrits et inactifs ouverts sans agent ni campagne en cours' })
+  @IsOptional() @IsIn(['true', 'false'])
+  a_reprendre?: string;
+
   @IsOptional() @IsIn(TRIS_CONTACTS)
   sort?: (typeof TRIS_CONTACTS)[number];
 }
@@ -142,6 +147,45 @@ export class QueryCrmContactDto {
 export class ExportCrmContactDto extends QueryCrmContactDto {
   @IsOptional() @IsIn(['csv', 'xlsx'])
   format?: 'csv' | 'xlsx';
+}
+
+/**
+ * Rubriques de « Ma file ». `rappels` (dus) est la seule à courir sur tous les
+ * dossiers ; `commune` est la file commune Glovo/Yango, qui n'appartient à
+ * personne.
+ */
+export const RUBRIQUES_MA_FILE = [
+  'rappels',
+  'interesses',
+  'nouveaux',
+  'relances',
+  'coupons',
+  'rappels_planifies',
+  'commune',
+] as const;
+export type RubriqueMaFile = (typeof RUBRIQUES_MA_FILE)[number];
+
+/** Clés de dossier qui ne sont pas une campagne. */
+export const DOSSIERS_MA_FILE = ['sans-campagne', 'commune', 'toutes'] as const;
+
+/** Lignes d'un dossier de « Ma file », rubrique par rubrique, page par page. */
+export class MaFileLignesQueryDto {
+  @ApiProperty({ description: "Id de campagne, « sans-campagne », « commune » ou « toutes » (rappels dus)" })
+  @IsString()
+  @Matches(/^(sans-campagne|commune|toutes|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i, {
+    message: 'Dossier ou rubrique inconnus',
+  })
+  cle: string;
+
+  @ApiProperty({ enum: RUBRIQUES_MA_FILE })
+  @IsIn(RUBRIQUES_MA_FILE, { message: 'Dossier ou rubrique inconnus' })
+  rubrique: RubriqueMaFile;
+
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(10_000)
+  page?: number;
+
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100)
+  limit?: number;
 }
 
 export class AssignContactsDto {

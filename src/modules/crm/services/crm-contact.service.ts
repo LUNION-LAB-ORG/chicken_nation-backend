@@ -8,20 +8,41 @@ import {
   User,
 } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
-import { STATUTS_OUVERTS, cleTelephone, commandeEffective, ficheDuRestaurant } from '../crm.rules';
-import { AssignContactsDto, COMPTES_CLIENT, QueryCrmContactDto, RenommerContactDto } from '../dto/contact.dto';
+import { STATUTS_OUVERTS, cleTelephone, commandeEffective, compter, ficheDuRestaurant } from '../crm.rules';
+import {
+  AssignContactsDto,
+  COMPTES_CLIENT,
+  MaFileLignesQueryDto,
+  QueryCrmContactDto,
+  RenommerContactDto,
+} from '../dto/contact.dto';
 import { CrmAccessService } from './crm-access.service';
 import { CrmEventsService } from './crm-events.service';
 import {
+  CLE_COMMUNE,
+  CLE_SANS_CAMPAGNE,
+  ComptesDossier,
+  DossierFile,
+  RUBRIQUES_FILE,
   SELECT_LIGNE,
+  SuiviCampagne,
+  TRI_COMMUNE,
+  baseMaFile,
   codeMasque,
+  comptesDossierVides,
   etatCoupon,
   filtreContacts,
   pourAnnuaire,
   sansCodes,
   triContacts,
+  trierDossiers,
   versLigne,
 } from './crm-contact.query';
+
+type RubriqueAgent = keyof typeof RUBRIQUES_FILE;
+/** Rubriques rangées en dossiers : les rappels dus restent à l'accueil. */
+const RUBRIQUES_DOSSIER = ['interesses', 'nouveaux', 'relances', 'coupons', 'rappels_planifies'] as const;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class CrmContactService {
@@ -336,6 +357,11 @@ export class CrmContactService {
    * Affectation à un agent, à l'unité ou en masse (cahier §4.3). Le pilote
    * d'une campagne ne répartit que les contacts de SA campagne, et seulement
    * entre les agents de son équipe.
+   *
+   * Un client déjà converti est laissé de côté, sans refuser le reste du lot ;
+   * le lot n'est refusé que s'il ne contient que des convertis. La direction
+   * peut confier un contact de campagne à un agent hors de l'équipe : c'est
+   * permis, et dit dans le message.
    */
   async assigner(user: User, dto: AssignContactsDto) {
     const ids = [...new Set(dto.contact_ids)];
@@ -344,9 +370,12 @@ export class CrmContactService {
       select: { id: true, status: true, campaign_id: true, assigned_to_id: true },
     });
     if (contacts.length !== ids.length) throw new NotFoundException('Contact introuvable');
-    if (contacts.some((p) => p.status === CrmStatus.CONVERTI)) {
+    const retenus = contacts.filter((p) => p.status !== CrmStatus.CONVERTI);
+    const ecartes = contacts.length - retenus.length;
+    if (retenus.length === 0) {
       throw new BadRequestException('Un client qui a déjà commandé ne peut plus être assigné');
     }
+    const idsRetenus = retenus.map((p) => p.id);
 
     let agent: { id: string; fullname: string } | null = null;
     if (dto.agent_id) {
@@ -357,8 +386,9 @@ export class CrmContactService {
       if (!agent) throw new BadRequestException("Cet utilisateur ne peut pas traiter de contacts");
     }
 
+    let horsEquipe = 0;
     if (!this.access.estGestionnaire(user)) {
-      const campagnes = [...new Set(contacts.map((p) => p.campaign_id))];
+      const campagnes = [...new Set(retenus.map((p) => p.campaign_id))];
       if (campagnes.length !== 1 || !campagnes[0]) {
         throw new BadRequestException('Un pilote ne répartit que les contacts de sa campagne');
       }
@@ -369,12 +399,23 @@ export class CrmContactService {
         });
         if (!membre) throw new BadRequestException("Cet agent ne fait pas partie de l'équipe de la campagne");
       }
+    } else if (agent) {
+      const campagnes = [...new Set(retenus.map((p) => p.campaign_id).filter((c): c is string => !!c))];
+      if (campagnes.length > 0) {
+        const equipes = await this.prisma.crmCampaignAgent.findMany({
+          where: { agent_id: agent.id, campaign_id: { in: campagnes } },
+          select: { campaign_id: true },
+        });
+        const siennes = new Set(equipes.map((e) => e.campaign_id));
+        horsEquipe = retenus.filter((p) => p.campaign_id && !siennes.has(p.campaign_id)).length;
+      }
     }
 
     const maintenant = new Date();
-    await this.prisma.$transaction(async (tx) => {
-      await tx.crmContact.updateMany({
-        where: { id: { in: ids } },
+    const assignes = await this.prisma.$transaction(async (tx) => {
+      // Converti entre la lecture et l'écriture : laissé tel quel, comme les autres convertis.
+      const { count } = await tx.crmContact.updateMany({
+        where: { id: { in: idsRetenus }, status: { not: CrmStatus.CONVERTI } },
         data: { assigned_to_id: agent?.id ?? null, assigned_at: agent ? maintenant : null },
       });
 
@@ -386,21 +427,26 @@ export class CrmContactService {
         recevait donc sans jamais la voir. On le promeut « à appeler », comme le
         ferait le bouton de sa fiche.
 
+        La date d'entrée devient celle de la prise : seule une commande passée
+        APRÈS compte comme une vente du centre d'appels. Garder la dernière
+        commande (date de création de la fiche) la faisait « convertir » par
+        cette commande-là, sans aucun appel.
+
         Seulement quand on assigne à quelqu'un : retirer l'agent d'un contact ne
         doit pas le faire entrer dans l'entonnoir.
       */
       if (agent) {
         await tx.crmContact.updateMany({
-          where: { id: { in: ids }, status: CrmStatus.NON_DEMARCHE },
-          data: { status: CrmStatus.A_APPELER },
+          where: { id: { in: idsRetenus }, status: CrmStatus.NON_DEMARCHE },
+          data: { status: CrmStatus.A_APPELER, segment_since: maintenant },
         });
       }
       await tx.crmCampaignMember.updateMany({
-        where: { contact_id: { in: ids }, released_at: null },
+        where: { contact_id: { in: idsRetenus }, released_at: null },
         data: { agent_id: agent?.id ?? null, assigned_at: agent ? maintenant : null, alert_sent_at: null },
       });
       await this.events.journaliser(
-        contacts.map((p) => ({
+        retenus.map((p) => ({
           contact_id: p.id,
           type: CrmEventType.ASSIGNATION,
           label: agent ? `Assigné à ${agent.fullname}` : 'Retiré de son agent',
@@ -409,9 +455,14 @@ export class CrmContactService {
         })),
         tx,
       );
+      return count;
     });
-    this.events.signaler(ids, 'assignation');
-    return { count: ids.length };
+    this.events.signaler(idsRetenus, 'assignation');
+    const phrases = [
+      ecartes > 0 ? `${compter(ecartes, 'client déjà converti laissé', 'clients déjà convertis laissés')} de côté.` : null,
+      horsEquipe > 0 ? `${compter(horsEquipe, 'contact confié', 'contacts confiés')} hors de l'équipe de sa campagne.` : null,
+    ].filter((p): p is string => !!p);
+    return { count: assignes, ecartes, hors_equipe: horsEquipe, message: phrases.length > 0 ? phrases.join(' ') : null };
   }
 
   /**
@@ -419,44 +470,37 @@ export class CrmContactService {
    * d'abord, puis les intéressés qui attendent leur coupon, les inscrits jamais
    * appelés (les plus récents en tête : ils se souviennent de l'application),
    * les relances sans réponse, et enfin les coupons envoyés à relancer.
+   *
+   * Les listes restent coupées (50 lignes, 20 pour les rappels planifiés) pour
+   * l'accueil. Les VRAIS nombres viennent de `comptes` et `dossiers`, comptés
+   * en base : compter les lignes coupées faisait disparaître une campagne
+   * derrière 50 contacts plus récents, et annonçait « 50 au total » pour une
+   * file commune de 300. Un dossier charge ses lignes à l'ouverture
+   * (`lignesMaFile`). `suivi` : les campagnes en cours que l'agent pilote.
    */
   async maFile(user: User) {
     const maintenant = new Date();
     const debutJour = new Date(`${maintenant.toISOString().slice(0, 10)}T00:00:00.000Z`);
-    // Une campagne suspendue met ses contacts en pause : ils sortent de la file.
-    const base: Prisma.CrmContactWhereInput = {
-      assigned_to_id: user.id,
-      entity_status: { not: EntityStatus.DELETED },
-      OR: [{ campaign_id: null }, { campaign: { status: CampaignStatus.ACTIVE } }],
-    };
-    const prendre = (
-      where: Prisma.CrmContactWhereInput,
-      orderBy: Prisma.CrmContactOrderByWithRelationInput[],
-      take = 50,
-    ) =>
-      this.prisma.crmContact
-        .findMany({ where: { AND: [base, where] }, select: SELECT_LIGNE, orderBy, take })
+    // Une campagne suspendue met ses contacts en pause : ils sortent des listes.
+    const base = baseMaFile(user.id);
+    const prendre = (rubrique: RubriqueAgent) => {
+      const r = RUBRIQUES_FILE[rubrique];
+      return this.prisma.crmContact
+        .findMany({ where: { AND: [base, r.filtre(maintenant)] }, select: SELECT_LIGNE, orderBy: r.tri, take: r.plafond })
         .then((l) => l.map(versLigne));
+    };
 
     const [rappels, interesses, nouveaux, relances, coupons, rappelsPlanifies, commune] = await Promise.all([
-      prendre({ status: CrmStatus.A_RAPPELER, callback_at: { lte: maintenant } }, [{ callback_at: 'asc' }]),
-      prendre({ status: CrmStatus.INTERESSE }, [{ last_call_at: 'asc' }]),
-      prendre({ status: CrmStatus.A_APPELER, call_count: 0 }, [{ segment_since: 'desc' }]),
-      prendre(
-        {
-          OR: [
-            { status: CrmStatus.A_APPELER, call_count: { gt: 0 } },
-            { status: CrmStatus.A_RAPPELER, callback_at: null },
-          ],
-        },
-        [{ last_call_at: 'asc' }],
-      ),
-      prendre({ status: CrmStatus.COUPON_ENVOYE }, [{ coupon_sent_at: 'asc' }]),
-      prendre({ status: CrmStatus.A_RAPPELER, callback_at: { gt: maintenant } }, [{ callback_at: 'asc' }], 20),
+      prendre('rappels'),
+      prendre('interesses'),
+      prendre('nouveaux'),
+      prendre('relances'),
+      prendre('coupons'),
+      prendre('rappels_planifies'),
       // File commune Glovo/Yango (J+1) : les plus anciens d'abord, le premier
       // qui compose prend le contact.
       this.prisma.crmContact
-        .findMany({ where: this.access.fileCommune(maintenant), select: SELECT_LIGNE, orderBy: [{ segment_since: 'asc' }], take: 50 })
+        .findMany({ where: this.access.fileCommune(maintenant), select: SELECT_LIGNE, orderBy: TRI_COMMUNE, take: 50 })
         .then((l) => l.map(versLigne)),
     ]);
 
@@ -464,7 +508,11 @@ export class CrmContactService {
       this.prisma.crmCall.count({ where: { agent_id: user.id, created_at: { gte: debutJour } } }),
       this.prisma.crmCall.count({ where: { agent_id: user.id, reached: true, created_at: { gte: debutJour } } }),
       this.prisma.crmCoupon.count({ where: { sent_by_id: user.id, sent_at: { gte: debutJour } } }),
-      this.prisma.crmContact.count({ where: { assigned_to_id: user.id, converted_at: { gte: debutJour } } }),
+      // Une conversion de l'agent : un contact qu'il a APPELÉ. Une fiche confiée
+      // qui commande avant tout appel n'est pas son travail.
+      this.prisma.crmContact.count({
+        where: { assigned_to_id: user.id, converted_at: { gte: debutJour }, call_count: { gt: 0 } },
+      }),
       this.prisma.crmContact.count({ where: { AND: [base, { status: { in: STATUTS_OUVERTS } }] } }),
       /**
        * LE NOMBRE QUI BAISSE QUAND ON TRAVAILLE.
@@ -484,6 +532,11 @@ export class CrmContactService {
       }),
     ]);
 
+    const [{ comptes, dossiers }, suivi] = await Promise.all([
+      this.comptesMaFile(user, base, maintenant),
+      this.suiviPilote(user),
+    ]);
+
     return {
       rappels,
       interesses,
@@ -500,6 +553,215 @@ export class CrmContactService {
         portefeuille,
         jamais_appeles: jamaisAppeles,
       },
+      comptes,
+      dossiers,
+      suivi,
+    };
+  }
+
+  /**
+   * Vrais totaux de « Ma file », rubrique par rubrique et dossier par dossier,
+   * comptés en base avec les mêmes filtres que les listes. Une campagne
+   * suspendue donne un dossier « pause » : ses contacts attendent la reprise.
+   */
+  private async comptesMaFile(user: User, base: Prisma.CrmContactWhereInput, maintenant: Date) {
+    const rubriques = Object.keys(RUBRIQUES_FILE) as RubriqueAgent[];
+    const commune = this.access.fileCommune(maintenant);
+    const enPause: Prisma.CrmContactWhereInput = {
+      assigned_to_id: user.id,
+      entity_status: { not: EntityStatus.DELETED },
+      status: { in: STATUTS_OUVERTS },
+      campaign: { status: CampaignStatus.SUSPENDED },
+    };
+    const [parRubrique, communeTotal, communeJamais, pause, pauseJamais] = await Promise.all([
+      Promise.all(
+        rubriques.map((r) =>
+          this.prisma.crmContact.groupBy({
+            by: ['campaign_id'],
+            where: { AND: [base, RUBRIQUES_FILE[r].filtre(maintenant)] },
+            _count: { _all: true },
+          }),
+        ),
+      ),
+      this.prisma.crmContact.count({ where: commune }),
+      this.prisma.crmContact.count({ where: { AND: [commune, { call_count: 0 }] } }),
+      this.prisma.crmContact.groupBy({ by: ['campaign_id'], where: enPause, _count: { _all: true } }),
+      this.prisma.crmContact.groupBy({ by: ['campaign_id'], where: { AND: [enPause, { call_count: 0 }] }, _count: { _all: true } }),
+    ]);
+
+    const comptes: Record<RubriqueAgent | 'commune', number> = {
+      rappels: 0,
+      interesses: 0,
+      nouveaux: 0,
+      relances: 0,
+      coupons: 0,
+      rappels_planifies: 0,
+      commune: communeTotal,
+    };
+    const parDossier = new Map<string | null, ComptesDossier>();
+    rubriques.forEach((r, i) => {
+      for (const g of parRubrique[i]) {
+        comptes[r] += g._count._all;
+        if (r === 'rappels') continue;
+        const d = parDossier.get(g.campaign_id) ?? comptesDossierVides();
+        d[r] += g._count._all;
+        parDossier.set(g.campaign_id, d);
+      }
+    });
+
+    const ids = [...new Set([...parDossier.keys(), ...pause.map((p) => p.campaign_id)])].filter((v): v is string => !!v);
+    const noms = new Map(
+      ids.length > 0
+        ? (await this.prisma.crmCampaign.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map(
+            (c) => [c.id, c.name] as const,
+          )
+        : [],
+    );
+
+    const dossiers: DossierFile[] = [];
+    for (const [cle, c] of parDossier) {
+      c.total = RUBRIQUES_DOSSIER.reduce((n, r) => n + c[r], 0);
+      c.jamais_appeles = c.nouveaux;
+      c.a_relancer = c.relances;
+      if (c.total === 0) continue;
+      dossiers.push(
+        cle
+          ? { cle, genre: 'campagne', nom: noms.get(cle) ?? 'Campagne', campaign_id: cle, comptes: c }
+          : { cle: CLE_SANS_CAMPAGNE, genre: 'sans-campagne', nom: 'Hors campagne', campaign_id: null, comptes: c },
+      );
+    }
+    if (communeTotal > 0) {
+      dossiers.push({
+        cle: CLE_COMMUNE,
+        genre: 'commune',
+        nom: 'File commune Glovo/Yango',
+        campaign_id: null,
+        comptes: {
+          ...comptesDossierVides(),
+          commune: communeTotal,
+          total: communeTotal,
+          jamais_appeles: communeJamais,
+          a_relancer: communeTotal - communeJamais,
+        },
+      });
+    }
+    for (const p of pause) {
+      if (!p.campaign_id || p._count._all === 0) continue;
+      dossiers.push({
+        cle: p.campaign_id,
+        genre: 'pause',
+        nom: noms.get(p.campaign_id) ?? 'Campagne',
+        campaign_id: p.campaign_id,
+        comptes: {
+          ...comptesDossierVides(),
+          total: p._count._all,
+          jamais_appeles: pauseJamais.find((j) => j.campaign_id === p.campaign_id)?._count._all ?? 0,
+        },
+      });
+    }
+    return { comptes, dossiers: trierDossiers(dossiers) };
+  }
+
+  /**
+   * Le pilote suit ses campagnes en cours (ou suspendues) même sans y avoir
+   * de contact : ce qui reste, ce qui n'a jamais été appelé, et chez qui.
+   */
+  private async suiviPilote(user: User): Promise<SuiviCampagne[]> {
+    const campagnes = await this.prisma.crmCampaign.findMany({
+      where: {
+        lead_agent_id: user.id,
+        status: { in: [CampaignStatus.ACTIVE, CampaignStatus.SUSPENDED] },
+        entity_status: { not: EntityStatus.DELETED },
+      },
+      select: { id: true, name: true, status: true, distribution_mode: true },
+      orderBy: { name: 'asc' },
+    });
+    if (campagnes.length === 0) return [];
+    const ouverts: Prisma.CrmContactWhereInput = {
+      campaign_id: { in: campagnes.map((c) => c.id) },
+      status: { in: STATUTS_OUVERTS },
+      entity_status: { not: EntityStatus.DELETED },
+    };
+    const [restants, jamais] = await Promise.all([
+      this.prisma.crmContact.groupBy({ by: ['campaign_id', 'assigned_to_id'], where: ouverts, _count: { _all: true } }),
+      this.prisma.crmContact.groupBy({
+        by: ['campaign_id', 'assigned_to_id'],
+        where: { AND: [ouverts, { call_count: 0 }] },
+        _count: { _all: true },
+      }),
+    ]);
+    const agents = [...new Set(restants.map((r) => r.assigned_to_id))].filter((v): v is string => !!v);
+    const noms = new Map(
+      agents.length > 0
+        ? (await this.prisma.user.findMany({ where: { id: { in: agents } }, select: { id: true, fullname: true } })).map(
+            (u) => [u.id, u.fullname] as const,
+          )
+        : [],
+    );
+    const nombre = (liste: typeof restants, campagne: string, agent: string | null) =>
+      liste.find((l) => l.campaign_id === campagne && l.assigned_to_id === agent)?._count._all ?? 0;
+
+    return campagnes.map((c) => {
+      const lignes = restants.filter((r) => r.campaign_id === c.id);
+      const par_agent = lignes
+        .filter((l): l is typeof l & { assigned_to_id: string } => !!l.assigned_to_id)
+        .map((l) => ({
+          agent_id: l.assigned_to_id,
+          nom: noms.get(l.assigned_to_id) ?? 'Compte sans nom',
+          restants: l._count._all,
+          jamais_appeles: nombre(jamais, c.id, l.assigned_to_id),
+        }))
+        .sort((a, b) => b.restants - a.restants || a.nom.localeCompare(b.nom, 'fr'));
+      return {
+        campaign_id: c.id,
+        nom: c.name,
+        statut: c.status as SuiviCampagne['statut'],
+        mode: c.distribution_mode,
+        restants: lignes.reduce((n, l) => n + l._count._all, 0),
+        jamais_appeles: jamais.filter((j) => j.campaign_id === c.id).reduce((n, j) => n + j._count._all, 0),
+        sans_agent: nombre(restants, c.id, null),
+        par_agent,
+      };
+    });
+  }
+
+  /**
+   * Lignes d'un dossier de « Ma file », une rubrique à la fois, page par page :
+   * le dossier ouvert montre tout ce qu'il annonce, pas les 50 premières
+   * lignes de toute la file. Mêmes filtres et même ordre que l'accueil.
+   * `toutes` ne sert qu'aux rappels dus (toutes campagnes confondues), et la
+   * file commune n'a que sa rubrique.
+   */
+  async lignesMaFile(user: User, q: MaFileLignesQueryDto) {
+    const { cle, rubrique } = q;
+    const page = q.page ?? 1;
+    const limit = q.limit ?? 50;
+    const valide =
+      (cle === 'toutes') === (rubrique === 'rappels') &&
+      (cle === CLE_COMMUNE) === (rubrique === 'commune') &&
+      (cle === 'toutes' || cle === CLE_COMMUNE || cle === CLE_SANS_CAMPAGNE || UUID.test(cle));
+    if (!valide) throw new BadRequestException('Dossier ou rubrique inconnus');
+
+    const maintenant = new Date();
+    let where: Prisma.CrmContactWhereInput;
+    let orderBy: Prisma.CrmContactOrderByWithRelationInput[];
+    if (rubrique === 'commune') {
+      where = this.access.fileCommune(maintenant);
+      orderBy = TRI_COMMUNE;
+    } else {
+      const r = RUBRIQUES_FILE[rubrique];
+      const dossier: Prisma.CrmContactWhereInput =
+        cle === 'toutes' ? {} : cle === CLE_SANS_CAMPAGNE ? { campaign_id: null } : { campaign_id: cle };
+      where = { AND: [baseMaFile(user.id), dossier, r.filtre(maintenant)] };
+      orderBy = r.tri;
+    }
+    const [lignes, total] = await Promise.all([
+      this.prisma.crmContact.findMany({ where, select: SELECT_LIGNE, orderBy, skip: (page - 1) * limit, take: limit }),
+      this.prisma.crmContact.count({ where }),
+    ]);
+    return {
+      data: lignes.map(versLigne),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
 

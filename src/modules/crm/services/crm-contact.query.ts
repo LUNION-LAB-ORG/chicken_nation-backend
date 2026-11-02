@@ -1,10 +1,12 @@
 import {
+  CampaignStatus,
   CrmStatus,
   EntityStatus,
   Prisma,
 } from '@prisma/client';
+import { vivierAReprendre } from '../crm-campagne.rules';
 import { identiteContact } from '../crm.rules';
-import { EtatCoupon, QueryCrmContactDto } from '../dto/contact.dto';
+import { EtatCoupon, QueryCrmContactDto, RubriqueMaFile } from '../dto/contact.dto';
 
 /**
  * Construction des filtres et du format de ligne de la liste des contacts,
@@ -139,6 +141,8 @@ export function filtreContacts(
   if (q.loss_reason_id) et.push({ loss_reason_id: q.loss_reason_id });
   if (q.never_called === 'true') et.push({ call_count: 0 });
   if (q.abandoned === 'true') et.push({ abandoned_orders: { gt: 0 } });
+  // Inscrits et inactifs qu'aucune file ne montre : ils attendent une campagne.
+  if (q.a_reprendre === 'true') et.push(vivierAReprendre());
 
   const couponFiltre = filtreCoupon(q.coupon, maintenant);
   if (couponFiltre) et.push(couponFiltre);
@@ -249,6 +253,139 @@ function filtreRecherche(search?: string): Prisma.CrmContactWhereInput | null {
       ],
     })),
   };
+}
+
+/** Une rubrique de « Ma file » : qui y entre, dans quel ordre, combien à l'accueil. */
+export interface RubriqueFile {
+  filtre: (maintenant: Date) => Prisma.CrmContactWhereInput;
+  tri: Prisma.CrmContactOrderByWithRelationInput[];
+  /** Lignes renvoyées à l'accueil ; le reste se charge dossier par dossier. */
+  plafond: number;
+}
+
+/**
+ * Rubriques de « Ma file » parmi les contacts CONFIÉS à l'agent, dans l'ordre
+ * où il doit les traiter. La liste d'accueil, les comptes et les lignes d'un
+ * dossier lisent cette seule définition : les nombres annoncés et les lignes
+ * chargées ne peuvent pas diverger. L'id départage les égalités, pour que les
+ * pages se suivent sans doublon ni trou.
+ */
+export const RUBRIQUES_FILE: Record<Exclude<RubriqueMaFile, 'commune'>, RubriqueFile> = {
+  // Rappels promis et dus : en tête de l'accueil, toutes campagnes confondues.
+  rappels: {
+    filtre: (maintenant) => ({ status: CrmStatus.A_RAPPELER, callback_at: { lte: maintenant } }),
+    tri: [{ callback_at: 'asc' }, { id: 'asc' }],
+    plafond: 50,
+  },
+  interesses: {
+    filtre: () => ({ status: CrmStatus.INTERESSE }),
+    tri: [{ last_call_at: 'asc' }, { id: 'asc' }],
+    plafond: 50,
+  },
+  // Les plus récents en tête : ils se souviennent de l'application.
+  nouveaux: {
+    filtre: () => ({ status: CrmStatus.A_APPELER, call_count: 0 }),
+    tri: [{ segment_since: 'desc' }, { id: 'asc' }],
+    plafond: 50,
+  },
+  relances: {
+    filtre: () => ({
+      OR: [
+        { status: CrmStatus.A_APPELER, call_count: { gt: 0 } },
+        { status: CrmStatus.A_RAPPELER, callback_at: null },
+      ],
+    }),
+    tri: [{ last_call_at: 'asc' }, { id: 'asc' }],
+    plafond: 50,
+  },
+  coupons: {
+    filtre: () => ({ status: CrmStatus.COUPON_ENVOYE }),
+    tri: [{ coupon_sent_at: 'asc' }, { id: 'asc' }],
+    plafond: 50,
+  },
+  rappels_planifies: {
+    filtre: (maintenant) => ({ status: CrmStatus.A_RAPPELER, callback_at: { gt: maintenant } }),
+    tri: [{ callback_at: 'asc' }, { id: 'asc' }],
+    plafond: 20,
+  },
+};
+
+/** File commune Glovo/Yango (J+1) : les plus anciens d'abord, le premier qui compose prend le contact. */
+export const TRI_COMMUNE: Prisma.CrmContactOrderByWithRelationInput[] = [{ segment_since: 'asc' }, { id: 'asc' }];
+
+/**
+ * Contacts confiés à l'agent que « Ma file » montre : hors campagne, ou dans
+ * une campagne EN COURS. Une campagne suspendue met les siens en pause : ils
+ * n'apparaissent qu'en dossier grisé, sans ligne.
+ */
+export function baseMaFile(agentId: string): Prisma.CrmContactWhereInput {
+  return {
+    assigned_to_id: agentId,
+    entity_status: { not: EntityStatus.DELETED },
+    OR: [{ campaign_id: null }, { campaign: { status: CampaignStatus.ACTIVE } }],
+  };
+}
+
+export const CLE_SANS_CAMPAGNE = 'sans-campagne';
+export const CLE_COMMUNE = 'commune';
+
+/** Comptes d'un dossier de « Ma file », faits en base (jamais sur les lignes coupées). */
+export interface ComptesDossier {
+  interesses: number;
+  nouveaux: number;
+  relances: number;
+  coupons: number;
+  rappels_planifies: number;
+  commune: number;
+  /** Somme des rubriques du dossier ; les rappels dus restent à l'accueil. */
+  total: number;
+  /** = nouveaux ; file commune : jamais appelés. */
+  jamais_appeles: number;
+  /** = relances ; file commune : déjà appelés. */
+  a_relancer: number;
+}
+
+export const comptesDossierVides = (): ComptesDossier => ({
+  interesses: 0,
+  nouveaux: 0,
+  relances: 0,
+  coupons: 0,
+  rappels_planifies: 0,
+  commune: 0,
+  total: 0,
+  jamais_appeles: 0,
+  a_relancer: 0,
+});
+
+export type GenreDossierFile = 'campagne' | 'sans-campagne' | 'commune' | 'pause';
+
+export interface DossierFile {
+  /** Id de campagne, « sans-campagne » ou « commune ». */
+  cle: string;
+  genre: GenreDossierFile;
+  nom: string;
+  campaign_id: string | null;
+  comptes: ComptesDossier;
+}
+
+/** Où en est l'équipe d'une campagne que l'agent pilote. */
+export interface SuiviCampagne {
+  campaign_id: string;
+  nom: string;
+  statut: 'ACTIVE' | 'SUSPENDED';
+  mode: 'AUTOMATIQUE' | 'MANUEL';
+  /** Contacts ouverts de la campagne. */
+  restants: number;
+  jamais_appeles: number;
+  sans_agent: number;
+  par_agent: { agent_id: string; nom: string; restants: number; jamais_appeles: number }[];
+}
+
+/** Ordre des dossiers : les campagnes, la file commune (périssable), « Hors campagne », puis les campagnes en pause. */
+const RANG_DOSSIER: Record<GenreDossierFile, number> = { campagne: 0, commune: 1, 'sans-campagne': 2, pause: 3 };
+
+export function trierDossiers(dossiers: DossierFile[]): DossierFile[] {
+  return [...dossiers].sort((a, b) => RANG_DOSSIER[a.genre] - RANG_DOSSIER[b.genre] || a.nom.localeCompare(b.nom, 'fr'));
 }
 
 export function triContacts(sort?: QueryCrmContactDto['sort']): Prisma.CrmContactOrderByWithRelationInput[] {
