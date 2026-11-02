@@ -127,7 +127,7 @@ export class UpdateCrmTeamDto {
 }
 
 export class DistributeCrmDto {
-  /** true : redistribue aussi les contacts déjà assignés mais jamais appelés. */
+  /** true : redistribue aussi les contacts déjà assignés mais jamais appelés (« à appeler », aucun appel). */
   @IsOptional() @IsBoolean()
   inclure_non_appeles?: boolean;
 }

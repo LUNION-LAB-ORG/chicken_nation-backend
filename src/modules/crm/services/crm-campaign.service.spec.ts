@@ -90,6 +90,57 @@ describe('Mode manuel : les contacts non répartis vont au pilote (problème 2)'
     expect(m.evenements.filter((e) => e.label === "Confié au pilote : son agent a quitté l'équipe")).toHaveLength(3);
   });
 
+  it('pilote et agent retirés ensemble : les contacts de l’agent vont au pilote, ceux du pilote restent sans agent', async () => {
+    const chezAwa = inactifs(3, { campaign_id: 'C1', assigned_to_id: AWA.id });
+    const chezPilote = inactifs(2, { campaign_id: 'C1', assigned_to_id: PILOTE.id });
+    const m = monter({
+      campagnes: [campagne('C1', { status: 'ACTIVE', distribution_mode: 'MANUEL', lead_agent_id: PILOTE.id, started_at: ilYA(2) })],
+      equipes: equipe('C1', PILOTE, AWA, YAO),
+      contacts: [...chezAwa, ...chezPilote],
+      membres: [...chezAwa, ...chezPilote].map((c) => ({
+        campaign_id: 'C1',
+        contact_id: c.id,
+        agent_id: c.assigned_to_id,
+        released_at: null,
+        segment: 'INACTIF',
+        cycle: 1,
+      })),
+    });
+    await m.service.modifierEquipe(DIRECTION, 'C1', { agent_ids: [YAO.id] });
+    const fiche = (id: string) => m.contacts.find((c) => c.id === id)!;
+    const membre = (id: string) => m.membres.find((x) => x.contact_id === id)!;
+    expect(chezAwa.map((c) => fiche(c.id).assigned_to_id)).toEqual([PILOTE.id, PILOTE.id, PILOTE.id]);
+    expect(chezAwa.map((c) => membre(c.id).agent_id)).toEqual([PILOTE.id, PILOTE.id, PILOTE.id]);
+    expect(chezPilote.map((c) => fiche(c.id).assigned_to_id)).toEqual([null, null]);
+    // Le journal dit vrai : trois contacts confiés au pilote, et ils y sont.
+    expect(m.evenements.filter((e) => e.label === "Confié au pilote : son agent a quitté l'équipe")).toHaveLength(3);
+  });
+
+  it('« Répartir équitablement » répartit ce que tient le pilote dans l’équipe, sauf ce qu’il a déjà travaillé', async () => {
+    const auPilote = inactifs(6, { campaign_id: 'C1', assigned_to_id: PILOTE.id });
+    const appele = contact({ segment: 'INACTIF', campaign_id: 'C1', assigned_to_id: PILOTE.id, call_count: 1, last_call_at: ilYA(1) });
+    const coupon = contact({ segment: 'INACTIF', campaign_id: 'C1', assigned_to_id: PILOTE.id, status: 'COUPON_ENVOYE', coupon_sent_at: ilYA(1) });
+    const tous = [...auPilote, appele, coupon];
+    const m = monter({
+      campagnes: [campagne('C1', { status: 'ACTIVE', distribution_mode: 'MANUEL', lead_agent_id: PILOTE.id, started_at: ilYA(1) })],
+      // Case « Le pilote fait partie de l'équipe » cochée (défaut).
+      equipes: equipe('C1', PILOTE, AWA, YAO),
+      contacts: tous,
+      membres: tous.map((c) => ({ campaign_id: 'C1', contact_id: c.id, agent_id: PILOTE.id, released_at: null, segment: 'INACTIF', cycle: 1 })),
+    });
+    const r = await m.service.distribuer(PILOTE, 'C1', {});
+    // Le pilote garde ses deux contacts travaillés et reçoit sa part comme les autres.
+    expect(r).toEqual({ repartis: 5, par_agent: { [AWA.id]: 3, [YAO.id]: 2 } });
+    expect(m.contactsDe(AWA, 'C1')).toHaveLength(3);
+    expect(m.contactsDe(YAO, 'C1')).toHaveLength(2);
+    expect(m.contactsDe(PILOTE, 'C1').map((c) => c.id)).toEqual(expect.arrayContaining([appele.id, coupon.id]));
+    expect(m.contactsDe(PILOTE, 'C1')).toHaveLength(3);
+    for (const x of m.membres) expect(x.agent_id).toBe(m.contacts.find((c) => c.id === x.contact_id)!.assigned_to_id);
+    // Un second clic ne bouge rien et n'écrit rien au journal.
+    expect(await m.service.distribuer(PILOTE, 'C1', {})).toEqual({ repartis: 0, par_agent: {} });
+    expect(m.evenements.filter((e) => e.label === 'Réparti automatiquement dans la campagne')).toHaveLength(5);
+  });
+
   it('le pilote retiré de l’équipe ne se rend pas ses contacts : ils restent sans agent', async () => {
     const siens = inactifs(2, { campaign_id: 'C1', assigned_to_id: PILOTE.id });
     const m = monter({
@@ -288,6 +339,31 @@ describe('Agent ajouté à une campagne en cours (problème 6)', () => {
     expect(m.contacts.find((c) => c.id === appele.id)?.assigned_to_id).toBe(AWA.id);
   });
 
+  it('un coupon envoyé sans appel reste à son agent : seul un contact « à appeler » jamais appelé change de main', async () => {
+    const jamais = inactifs(4, { campaign_id: 'C1', assigned_to_id: AWA.id });
+    // Trié juste après le premier : avant la correction, il partait chez Koffi.
+    const coupon = contact({
+      segment: 'INACTIF',
+      segment_since: ilYA(40.5),
+      campaign_id: 'C1',
+      assigned_to_id: AWA.id,
+      status: 'COUPON_ENVOYE',
+      coupon_sent_at: ilYA(1),
+    });
+    const m = monter({
+      campagnes: [campagne('C1', { status: 'ACTIVE', lead_agent_id: PILOTE.id, started_at: ilYA(3) })],
+      equipes: equipe('C1', AWA),
+      contacts: [...jamais, coupon],
+      membres: [...jamais, coupon].map((c) => ({ campaign_id: 'C1', contact_id: c.id, agent_id: AWA.id, released_at: null, segment: 'INACTIF', cycle: 1 })),
+    });
+    await m.service.modifierEquipe(DIRECTION, 'C1', { agent_ids: [AWA.id, KOFFI.id] });
+    expect(m.contacts.find((c) => c.id === coupon.id)?.assigned_to_id).toBe(AWA.id);
+    expect(m.contactsDe(KOFFI, 'C1')).toHaveLength(2);
+    expect(m.contactsDe(AWA, 'C1')).toHaveLength(3);
+    // Seuls les contacts qui ont vraiment changé d'agent sont au journal.
+    expect(m.evenements.filter((e) => e.label === 'Réparti automatiquement dans la campagne')).toHaveLength(2);
+  });
+
   it('répartition manuelle : l’agent ajouté ne reçoit rien tout seul', async () => {
     const siens = inactifs(4, { campaign_id: 'C1', assigned_to_id: AWA.id });
     const m = monter({
@@ -362,6 +438,34 @@ describe('Ajout quotidien du vivier « à reprendre » (problème 8)', () => {
     }
     // Un second passage (second serveur, ou le lendemain) ne reprend rien de plus.
     expect(await m.service.rejoindreCampagnes()).toEqual([]);
+  });
+
+  it('deux serveurs : le second, qui avait lu le même paquet, ne réécrit pas les membres pris par le premier', async () => {
+    const dejaChezAwa = inactifs(1, { campaign_id: 'C1', assigned_to_id: AWA.id });
+    const libres = inactifs(3);
+    const m = monter({
+      campagnes: [campagne('C1', { status: 'ACTIVE', lead_agent_id: PILOTE.id, started_at: ilYA(5) })],
+      equipes: equipe('C1', AWA, YAO),
+      publics: [publicDe('C1', 'INACTIF')],
+      contacts: [...dejaChezAwa, ...libres],
+      membres: dejaChezAwa.map((c) => ({ campaign_id: 'C1', contact_id: c.id, agent_id: AWA.id, released_at: null, segment: 'INACTIF', cycle: 1 })),
+    });
+    // Le paquet que le second serveur a lu avant que le premier écrive.
+    const luParLeSecond = libres.map((c) => ({ id: c.id, assigned_to_id: null, segment: 'INACTIF', cycle: 1 }));
+    expect(await m.service.rejoindreCampagnes()).toEqual([{ campagne: 'Campagne C1', entres: 3 }]);
+    // Le second passe après le verrou du premier : les charges ont changé, sa répartition aussi.
+    const second = (m.service as any).rejoindre(
+      'C1',
+      'Campagne C1',
+      'INACTIF',
+      [AWA.id, YAO.id],
+      luParLeSecond,
+      { assigned_to_id: null },
+      new Date(Date.now() + 1_000),
+    );
+    expect(await second).toBe(0);
+    for (const x of m.membres) expect(x.agent_id).toBe(m.contacts.find((c) => c.id === x.contact_id)!.assigned_to_id);
+    expect(m.evenements.filter((e) => e.label === 'Entre dans la campagne « Campagne C1 » (ajout du jour)')).toHaveLength(3);
   });
 
   it('un contact déjà passé par la campagne n’y revient pas', async () => {
@@ -439,10 +543,32 @@ describe('Agents partis : leurs fiches ouvertes sont libérées (problème 8)', 
     expect(auto.every((c) => fiche(c.id).assigned_to_id === YAO.id)).toBe(true);
     expect(manuel.every((c) => fiche(c.id).assigned_to_id === PILOTE.id)).toBe(true);
     expect(m.evenements.filter((e) => e.label === "Libéré : son agent n'est plus actif")).toHaveLength(6);
+    // Le journal dit où sont les fiches : chez le pilote (manuelle), réparties (automatique).
+    const auPilote = m.evenements.filter((e) => e.label === "Confié au pilote : son agent n'est plus actif");
+    expect(auPilote.map((e) => e.contact_id).sort()).toEqual(manuel.map((c) => c.id).sort());
+    expect(auPilote.every((e) => e.actor_id === null && e.campaign_id === 'MANU')).toBe(true);
+    expect(m.evenements.filter((e) => e.label === 'Réparti automatiquement dans la campagne')).toHaveLength(2);
+    for (const x of m.membres) expect(x.agent_id).toBe(fiche(x.contact_id).assigned_to_id);
 
     // Second passage (ou second serveur) : rien à faire, rien au journal.
     expect(await m.service.libererAgentsPartis()).toEqual({ liberes: 0, campagnes: 0 });
     expect(m.evenements.filter((e) => e.label === "Libéré : son agent n'est plus actif")).toHaveLength(6);
+  });
+
+  it('deux serveurs répartissent la même campagne en même temps : chaque contact est confié et journalisé une fois', async () => {
+    const sansAgent = inactifs(4, { campaign_id: 'C1' });
+    const m = monter({
+      campagnes: [campagne('C1', { status: 'ACTIVE', lead_agent_id: PILOTE.id, started_at: ilYA(5) })],
+      equipes: equipe('C1', AWA, YAO),
+      contacts: sansAgent,
+      membres: sansAgent.map((c) => ({ campaign_id: 'C1', contact_id: c.id, agent_id: null, released_at: null, segment: 'INACTIF', cycle: 1 })),
+    });
+    // Les deux lisent la campagne avant que l'un d'eux écrive.
+    const [a, b] = await Promise.all([m.service.distribuer(null, 'C1', {}), m.service.distribuer(null, 'C1', {})]);
+    expect(a.repartis + b.repartis).toBe(4);
+    expect(m.evenements.filter((e) => e.label === 'Réparti automatiquement dans la campagne')).toHaveLength(4);
+    expect(m.contactsDe(AWA, 'C1').length + m.contactsDe(YAO, 'C1').length).toBe(4);
+    for (const x of m.membres) expect(x.agent_id).toBe(m.contacts.find((c) => c.id === x.contact_id)!.assigned_to_id);
   });
 
   it('un agent passé à un rôle qui ne traite plus de contacts est traité comme parti', async () => {

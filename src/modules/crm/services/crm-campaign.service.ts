@@ -804,6 +804,16 @@ export class CrmCampaignService {
    * l'agent de l'équipe qui en a le moins. Avec `inclure_non_appeles`, les
    * contacts jamais appelés sont remis en jeu aussi, pour rééquilibrer après
    * un changement d'équipe.
+   *
+   * « Jamais appelé » : à appeler, sans aucun appel (la rubrique « Jamais
+   * appelés » de Ma file). Un coupon envoyé sans appel n'en est pas un : il
+   * changerait d'agent, et la vente faite avec ce coupon irait au nouveau.
+   *
+   * Répartition manuelle : les contacts confiés au pilote au lancement (ou
+   * quand leur agent est parti), qu'il n'a pas encore appelés, sont à
+   * répartir eux aussi, même quand le pilote fait partie de l'équipe. Sans
+   * cela, « Répartir équitablement » répondait « tout le monde a son agent »
+   * et les agents n'avaient rien.
    */
   async distribuer(acteur: User | null, id: string, dto: DistributeCrmDto) {
     const c = await this.trouver(id);
@@ -811,6 +821,7 @@ export class CrmCampaignService {
     if (acteur) await this.access.assertGestionnaireOuPilote(acteur, id);
     if (!EN_COURS.includes(c.status)) throw new BadRequestException("Cette campagne n'est pas en cours");
     const equipe = this.equipeActive(c);
+    const manuel = c.distribution_mode === CampaignDistributionMode.MANUEL;
 
     const membres = await this.prisma.crmCampaignMember.findMany({
       where: {
@@ -818,30 +829,59 @@ export class CrmCampaignService {
         released_at: null,
         contact: { status: { in: STATUTS_OUVERTS }, entity_status: { not: EntityStatus.DELETED } },
       },
-      select: { contact_id: true, agent_id: true, contact: { select: { call_count: true } } },
+      select: {
+        contact_id: true,
+        agent_id: true,
+        contact: { select: { call_count: true, status: true, assigned_to_id: true } },
+      },
       // Les plus récemment entrés dans leur public d'abord : trier sur
       // l'inscription mettait en tête les fiches sans compte (date nulle).
       orderBy: { contact: { segment_since: 'desc' } },
     });
+    const jamaisAppele = (x: { status: CrmStatus; call_count: number }) => x.status === CrmStatus.A_APPELER && x.call_count === 0;
     const aRepartir = membres.filter(
-      (m) => !m.agent_id || !equipe.includes(m.agent_id) || (dto.inclure_non_appeles && m.contact.call_count === 0),
+      (m) =>
+        !m.agent_id ||
+        !equipe.includes(m.agent_id) ||
+        (jamaisAppele(m.contact) && (!!dto.inclure_non_appeles || (manuel && m.agent_id === c.lead_agent_id))),
     );
+    const enJeu = new Set(aRepartir);
     const charge = new Map<string, number>(equipe.map((a) => [a, 0]));
     for (const m of membres) {
-      if (m.agent_id && charge.has(m.agent_id) && !aRepartir.includes(m)) charge.set(m.agent_id, charge.get(m.agent_id)! + 1);
+      if (m.agent_id && charge.has(m.agent_id) && !enJeu.has(m)) charge.set(m.agent_id, charge.get(m.agent_id)! + 1);
     }
-    const affectation = this.repartir(
+    const proposee = this.repartir(
       aRepartir.map((m) => ({ id: m.contact_id, assigned_to_id: null })),
       equipe,
       charge,
     );
+    // Un contact qui reste chez le même agent n'est ni réécrit ni journalisé.
+    const actuel = new Map(aRepartir.map((m) => [m.contact_id, m.contact.assigned_to_id]));
+    const affectation = new Map<string, string>();
+    proposee.forEach((agent, contactId) => {
+      if (agent && agent !== actuel.get(contactId)) affectation.set(contactId, agent);
+    });
+    // Revendication : la fiche est encore à répartir au moment d'écrire
+    // (même règle que ci-dessus, sur la fiche).
+    const nonAppele: Prisma.CrmContactWhereInput = { status: CrmStatus.A_APPELER, call_count: 0 };
+    const aRepartirEncore: Prisma.CrmContactWhereInput = {
+      campaign_id: id,
+      status: { in: STATUTS_OUVERTS },
+      entity_status: { not: EntityStatus.DELETED },
+      OR: [
+        { assigned_to_id: null },
+        { assigned_to_id: { notIn: equipe } },
+        ...(dto.inclure_non_appeles ? [nonAppele] : []),
+        ...(manuel ? [{ ...nonAppele, assigned_to_id: c.lead_agent_id }] : []),
+      ],
+    };
     const maintenant = new Date();
-    await this.prisma.$transaction(
+    const pris = await this.prisma.$transaction(
       async (tx) => {
-        await this.appliquerAffectation(tx, id, affectation, maintenant);
-        for (const lot of paquets([...affectation.entries()])) {
+        const pris = await this.revendiquer(tx, id, affectation, maintenant, aRepartirEncore);
+        for (const lot of paquets(pris)) {
           await this.events.journaliser(
-            lot.map(([contact_id]) => ({
+            lot.map((contact_id) => ({
               contact_id,
               type: CrmEventType.ASSIGNATION,
               label: 'Réparti automatiquement dans la campagne',
@@ -851,13 +891,17 @@ export class CrmCampaignService {
             tx,
           );
         }
+        return pris;
       },
       { timeout: 180_000, maxWait: 10_000 },
     );
-    this.events.signaler([...affectation.keys()].slice(0, 500), 'assignation');
+    this.events.signaler(pris.slice(0, 500), 'assignation');
     const parAgent: Record<string, number> = {};
-    affectation.forEach((agent) => agent && (parAgent[agent] = (parAgent[agent] ?? 0) + 1));
-    return { repartis: affectation.size, par_agent: parAgent };
+    for (const contactId of pris) {
+      const agent = affectation.get(contactId)!;
+      parAgent[agent] = (parAgent[agent] ?? 0) + 1;
+    }
+    return { repartis: pris.length, par_agent: parAgent };
   }
 
   /**
@@ -893,35 +937,21 @@ export class CrmCampaignService {
         skipDuplicates: true,
       });
       if (dto.lead_agent_id) await tx.crmCampaign.update({ where: { id }, data: { lead_agent_id: dto.lead_agent_id } });
-      let auPilote: string[] = [];
-      if (versPilote.length > 0) {
-        const piloteId = await this.piloteActif(tx, pilote);
-        if (piloteId) {
-          const ouverts = await tx.crmContact.findMany({
-            where: {
-              campaign_id: id,
-              assigned_to_id: { in: versPilote },
-              status: { in: STATUTS_OUVERTS },
-              entity_status: { not: EntityStatus.DELETED },
-            },
-            select: { id: true },
-          });
-          auPilote = ouverts.map((o) => o.id);
-          await this.appliquerAffectation(tx, id, new Map(auPilote.map((x) => [x, piloteId])), maintenant);
-          for (const lot of paquets(auPilote)) {
-            await this.events.journaliser(
-              lot.map((contact_id) => ({
-                contact_id,
-                type: CrmEventType.ASSIGNATION,
-                label: "Confié au pilote : son agent a quitté l'équipe",
-                actor_id: user.id,
+      // Ce que le pilote reprendra, lu AVANT de libérer les retirés.
+      const piloteId = versPilote.length > 0 ? await this.piloteActif(tx, pilote) : null;
+      const auPilote = piloteId
+        ? (
+            await tx.crmContact.findMany({
+              where: {
                 campaign_id: id,
-              })),
-              tx,
-            );
-          }
-        }
-      }
+                assigned_to_id: { in: versPilote },
+                status: { in: STATUTS_OUVERTS },
+                entity_status: { not: EntityStatus.DELETED },
+              },
+              select: { id: true },
+            })
+          ).map((o) => o.id)
+        : [];
       if (retires.length > 0) {
         await tx.crmCampaignMember.updateMany({
           where: { campaign_id: id, released_at: null, agent_id: { in: retires } },
@@ -931,6 +961,27 @@ export class CrmCampaignService {
           where: { campaign_id: id, assigned_to_id: { in: retires }, status: { not: CrmStatus.CONVERTI } },
           data: { assigned_to_id: null, assigned_at: null },
         });
+      }
+      /*
+        Le pilote reçoit APRÈS la libération des retirés : quand le pilote est
+        retiré en même temps qu'un agent, la libération (qui vise aussi le
+        pilote) défaisait sinon ce qui venait de lui être confié, et le
+        journal disait « confié au pilote » pour des contacts restés sans agent.
+      */
+      if (piloteId && auPilote.length > 0) {
+        await this.appliquerAffectation(tx, id, new Map(auPilote.map((x) => [x, piloteId])), maintenant);
+        for (const lot of paquets(auPilote)) {
+          await this.events.journaliser(
+            lot.map((contact_id) => ({
+              contact_id,
+              type: CrmEventType.ASSIGNATION,
+              label: "Confié au pilote : son agent a quitté l'équipe",
+              actor_id: user.id,
+              campaign_id: id,
+            })),
+            tx,
+          );
+        }
       }
       return auPilote;
     });
@@ -1172,11 +1223,24 @@ export class CrmCampaignService {
         const pilote = await this.piloteActif(tx, c.pilote);
         if (!pilote) return;
         const maintenant = new Date();
-        await this.appliquerAffectation(tx, campagneId, new Map(ids.map((x) => [x, pilote])), maintenant, {
+        const pris = await this.revendiquer(tx, campagneId, new Map(ids.map((x) => [x, pilote])), maintenant, {
           campaign_id: campagneId,
           assigned_to_id: null,
           status: { in: STATUTS_OUVERTS },
         });
+        // Le journal dit où est la fiche : chez le pilote, pas seulement « libérée ».
+        for (const lot of paquets(pris)) {
+          await this.events.journaliser(
+            lot.map((contact_id) => ({
+              contact_id,
+              type: CrmEventType.ASSIGNATION,
+              label: "Confié au pilote : son agent n'est plus actif",
+              actor_id: null,
+              campaign_id: campagneId,
+            })),
+            tx,
+          );
+        }
       });
     }
     this.events.signaler(
@@ -1213,9 +1277,15 @@ export class CrmCampaignService {
   }
 
   /**
-   * `condition` (lancement) : la fiche n'est prise que si elle répond encore à
-   * la population au moment d'écrire. Un contact pris entre-temps dans la
-   * file commune, ou par une autre campagne, reste où il est.
+   * `condition` (lancement, ajout du jour) : la fiche n'est prise que si elle
+   * répond encore à la population au moment d'écrire. Un contact pris
+   * entre-temps dans la file commune, ou par une autre campagne, reste où il est.
+   *
+   * Le membre ne suit que les fiches qui portent bien cette affectation. Sans
+   * ce filtre, un second serveur qui avait lu le même paquet, et dont la
+   * revendication a échoué, réécrivait l'agent des membres pris par le
+   * premier : l'agent du membre (alerte « pas appelé », rapport, charge)
+   * n'était plus celui de la fiche.
    */
   private async appliquerAffectation(
     tx: Prisma.TransactionClient,
@@ -1224,20 +1294,62 @@ export class CrmCampaignService {
     maintenant: Date,
     condition?: Prisma.CrmContactWhereInput,
   ) {
-    const parAgent = new Map<string | null, string[]>();
-    affectation.forEach((agent, contact) => parAgent.set(agent, [...(parAgent.get(agent) ?? []), contact]));
-    for (const [agent, ids] of parAgent) {
+    for (const [agent, ids] of this.grouperParAgent(affectation)) {
       for (const lot of paquets(ids)) {
         await tx.crmContact.updateMany({
           where: condition ? { AND: [{ id: { in: lot } }, condition] } : { id: { in: lot } },
           data: { campaign_id: campagneId, assigned_to_id: agent, assigned_at: agent ? maintenant : null },
         });
         await tx.crmCampaignMember.updateMany({
-          where: { campaign_id: campagneId, contact_id: { in: lot } },
+          where: { campaign_id: campagneId, contact_id: { in: lot }, contact: { campaign_id: campagneId, assigned_to_id: agent } },
           data: { agent_id: agent, assigned_at: agent ? maintenant : null, alert_sent_at: null },
         });
       }
     }
+  }
+
+  /**
+   * Revendication EXACTE (répartition, agents partis) : chaque fiche n'est
+   * écrite que si elle répond encore à `condition`, et seules les fiches
+   * vraiment écrites ICI sont rendues, pour leur membre et le journal. Deux
+   * serveurs qui répartissent la même campagne n'écrivent donc chacun que ce
+   * qu'ils ont pris : pas d'agent réécrit, pas de ligne de journal en double.
+   */
+  private async revendiquer(
+    tx: Prisma.TransactionClient,
+    campagneId: string,
+    affectation: Map<string, string>,
+    maintenant: Date,
+    condition: Prisma.CrmContactWhereInput,
+  ): Promise<string[]> {
+    const pris: string[] = [];
+    for (const [agent, ids] of this.grouperParAgent(affectation)) {
+      for (const lot of paquets(ids)) {
+        const ecrits = await tx.crmContact.updateManyAndReturn({
+          where: { AND: [{ id: { in: lot } }, condition] },
+          data: { campaign_id: campagneId, assigned_to_id: agent, assigned_at: maintenant },
+          select: { id: true },
+        });
+        if (ecrits.length === 0) continue;
+        const faits = ecrits.map((x) => x.id);
+        await tx.crmCampaignMember.updateMany({
+          where: { campaign_id: campagneId, contact_id: { in: faits } },
+          data: { agent_id: agent, assigned_at: maintenant, alert_sent_at: null },
+        });
+        pris.push(...faits);
+      }
+    }
+    return pris;
+  }
+
+  private grouperParAgent<A extends string | null>(affectation: Map<string, A>): Map<A, string[]> {
+    const parAgent = new Map<A, string[]>();
+    affectation.forEach((agent, contact) => {
+      const liste = parAgent.get(agent);
+      if (liste) liste.push(contact);
+      else parAgent.set(agent, [contact]);
+    });
+    return parAgent;
   }
 
   private trouver(id: string) {

@@ -282,6 +282,12 @@ export function monterBase(d: Donnees) {
         visees.forEach((l) => appliquer(l, data));
         return { count: visees.length };
       },
+      /** Comme UPDATE ... RETURNING : seules les lignes écrites par CET appel reviennent. */
+      updateManyAndReturn: async ({ where, data }: Ligne) => {
+        const visees = filtrer(where);
+        visees.forEach((l) => appliquer(l, data));
+        return visees.map(vue);
+      },
       update: async ({ where, data }: Ligne) => {
         const l = filtrer(where)[0];
         if (!l) throw new Error('Ligne introuvable');
