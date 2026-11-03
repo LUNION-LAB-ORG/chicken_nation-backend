@@ -22,6 +22,7 @@ import {
   buildRestaurantFilter,
   formatCurrency,
   buildDateFilter,
+  FILTRE_VENTE,
 } from '../helpers/statistics.helper';
 import {
   ajouterAuCanal,
@@ -125,16 +126,15 @@ export class StatisticsOrdersService {
       ...(query.type && { type: query.type }),
     };
 
+    // Même règle de vente que le tableau de bord (FILTRE_VENTE).
     const paidCompletedWhere: Prisma.OrderWhereInput = {
       ...baseWhere,
-      paied: true,
-      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+      ...FILTRE_VENTE,
     };
 
     const prevPaidCompletedWhere: Prisma.OrderWhereInput = {
       ...restaurantFilter,
-      paied: true,
-      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+      ...FILTRE_VENTE,
       created_at: { gte: prevPeriod.start, lte: prevPeriod.end },
     };
 

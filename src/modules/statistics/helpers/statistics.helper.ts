@@ -16,7 +16,22 @@ import {
   subMonths,
   subWeeks,
 } from 'date-fns';
-import { Prisma } from '@prisma/client';
+import { OrderStatus, Prisma } from '@prisma/client';
+
+/**
+ * Commande comptée comme une VENTE dans toutes les statistiques, tableau de
+ * bord compris : terminée (livrée, ou retirée au comptoir / servie sur place)
+ * et payée. Le chiffre d'affaires est la somme de son `net_amount`.
+ *
+ * Une seule règle pour tous les écrans : le tableau de bord ne comptait que
+ * les commandes livrées (COMPLETED) et oubliait les retraits (COLLECTED), d'où
+ * un « Revenu mensuel total » plus bas que le chiffre d'affaires des
+ * Statistiques Commandes.
+ */
+export const FILTRE_VENTE = {
+  paied: true,
+  status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+} satisfies Prisma.OrderWhereInput;
 
 export interface DateRange {
   startDate: Date;

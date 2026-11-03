@@ -38,6 +38,7 @@ import {
 } from '../dto/dashboard.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { statisticsIcons } from '../constantes/statistics.constante';
+import { FILTRE_VENTE } from '../helpers/statistics.helper';
 
 interface DateRange {
   startDate: Date;
@@ -225,13 +226,12 @@ export class StatisticsService {
 
     // Période actuelle
     const [revenue, menusSold, totalOrders, totalCustomers] = await Promise.all([
-      // MODIFICATION : Utilisation de net_amount et paied: true pour le revenu
+      // Revenu : net_amount des ventes, la même règle que les Statistiques (FILTRE_VENTE)
       this.prisma.order.aggregate({
         _sum: { net_amount: true },
         where: {
           ...restaurantFilter,
-          status: OrderStatus.COMPLETED,
-          paied: true, // Seules les commandes payées
+          ...FILTRE_VENTE,
           created_at: { gte: startDate, lte: endDate },
         },
       }),
@@ -240,8 +240,7 @@ export class StatisticsService {
         where: {
           order: {
             ...restaurantFilter,
-            status: OrderStatus.COMPLETED,
-            paied: true, // Seules les commandes payées qui ont des menus vendus
+            ...FILTRE_VENTE,
             created_at: { gte: startDate, lte: endDate },
           },
         },
@@ -249,8 +248,7 @@ export class StatisticsService {
       this.prisma.order.count({
         where: {
           ...restaurantFilter,
-          status: OrderStatus.COMPLETED,
-          paied: true, // Compter uniquement les commandes terminées et payées
+          ...FILTRE_VENTE,
           created_at: { gte: startDate, lte: endDate },
         },
       }),
@@ -260,8 +258,7 @@ export class StatisticsService {
           orders: {
             some: {
               ...restaurantFilter,
-              status: OrderStatus.COMPLETED,
-              paied: true, // Compter les clients ayant au moins une commande complétée et payée
+              ...FILTRE_VENTE,
             }
           },
         },
@@ -270,13 +267,12 @@ export class StatisticsService {
 
     // Période précédente
     const [prevRevenue, prevMenusSold, prevTotalOrders] = await Promise.all([
-      // MODIFICATION : Utilisation de net_amount et paied: true pour le revenu précédent
+      // Revenu précédent : même règle de vente (FILTRE_VENTE)
       this.prisma.order.aggregate({
         _sum: { net_amount: true },
         where: {
           ...restaurantFilter,
-          status: OrderStatus.COMPLETED,
-          paied: true, // Seules les commandes payées
+          ...FILTRE_VENTE,
           created_at: { gte: prevPeriod.start, lte: prevPeriod.end },
         },
       }),
@@ -285,8 +281,7 @@ export class StatisticsService {
         where: {
           order: {
             ...restaurantFilter,
-            status: OrderStatus.COMPLETED,
-            paied: true, // Seules les commandes payées
+            ...FILTRE_VENTE,
             created_at: { gte: prevPeriod.start, lte: prevPeriod.end },
           },
         },
@@ -294,8 +289,7 @@ export class StatisticsService {
       this.prisma.order.count({
         where: {
           ...restaurantFilter,
-          status: OrderStatus.COMPLETED,
-          paied: true, // Compter uniquement les commandes terminées et payées
+          ...FILTRE_VENTE,
           created_at: { gte: prevPeriod.start, lte: prevPeriod.end },
         },
       }),
@@ -420,13 +414,12 @@ export class StatisticsService {
     end: Date,
     restaurantFilter: Prisma.OrderWhereInput
   ): Promise<{ total: number; hourlyValues: HourlyValue[] }> {
-    // MODIFICATION : Utilisation de net_amount et paied: true
+    // net_amount des ventes (FILTRE_VENTE)
     const totalRevenue = await this.prisma.order.aggregate({
       _sum: { net_amount: true },
       where: {
         ...restaurantFilter,
-        status: OrderStatus.COMPLETED,
-        paied: true,
+        ...FILTRE_VENTE,
         created_at: { gte: start, lte: end },
       },
     });
@@ -440,13 +433,12 @@ export class StatisticsService {
         const hourEnd = new Date(hour);
         hourEnd.setHours(hour.getHours() + 1, 0, 0, 0);
 
-        // MODIFICATION : Utilisation de net_amount et paied: true
+        // net_amount des ventes (FILTRE_VENTE)
         const revenue = await this.prisma.order.aggregate({
           _sum: { net_amount: true },
           where: {
             ...restaurantFilter,
-            status: OrderStatus.COMPLETED,
-            paied: true,
+            ...FILTRE_VENTE,
             created_at: { gte: hourStart, lt: hourEnd },
           },
         });
@@ -476,13 +468,12 @@ export class StatisticsService {
         const intervalStart = period === 'year' ? startOfMonth(date) : startOfDay(date);
         const intervalEnd = period === 'year' ? endOfMonth(date) : endOfDay(date);
 
-        // MODIFICATION : Utilisation de net_amount et paied: true
+        // net_amount des ventes (FILTRE_VENTE)
         const revenue = await this.prisma.order.aggregate({
           _sum: { net_amount: true },
           where: {
             ...restaurantFilter,
-            status: OrderStatus.COMPLETED,
-            paied: true,
+            ...FILTRE_VENTE,
             created_at: { gte: intervalStart, lte: intervalEnd },
           },
         });
@@ -522,8 +513,7 @@ export class StatisticsService {
         const count = await this.prisma.order.count({
           where: {
             ...restaurantFilter,
-            status: OrderStatus.COMPLETED,
-            paied: true, // Si vous voulez compter uniquement les commandes payées
+            ...FILTRE_VENTE,
             created_at: { gte: dayStart, lte: dayEnd },
           },
         });
@@ -554,8 +544,7 @@ export class StatisticsService {
       where: {
         order: {
           ...restaurantFilter,
-          status: OrderStatus.COMPLETED,
-          paied: true, // Inclure uniquement les menus vendus dans des commandes payées
+          ...FILTRE_VENTE,
           created_at: { gte: startDate, lte: endDate },
         },
       },
@@ -609,8 +598,7 @@ export class StatisticsService {
       where: {
         order: { // Filtre par restaurant sur la commande associée au paiement
           ...restaurantFilter,
-          paied: true, // Ne considérer que les paiements liés à des commandes marquées comme payées
-          status: OrderStatus.COMPLETED // S'assurer que la commande est aussi complétée
+          ...FILTRE_VENTE,
         },
         status: PaiementStatus.SUCCESS,
         created_at: { gte: startDate, lte: endDate },
