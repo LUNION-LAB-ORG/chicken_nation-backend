@@ -18,7 +18,7 @@ const CLIENT = '44444444-4444-4444-8444-444444444444';
 const RESTAURANT_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const RECU_LE = new Date('2026-10-01T10:00:00.000Z');
 
-function monter(statut: OrderStatus, compteClaim: number, compteRetablie = 0) {
+function monter(statut: OrderStatus, compteClaim: number, compteRetablie = 0, compteTerminee = 0) {
   const prisma = {
     order: {
       findUnique: jest.fn().mockResolvedValue({ restaurant_id: RESTAURANT_A }),
@@ -26,8 +26,10 @@ function monter(statut: OrderStatus, compteClaim: number, compteRetablie = 0) {
         .fn()
         .mockResolvedValueOnce({ count: compteClaim })
         .mockResolvedValueOnce({ count: 1 })
-        .mockResolvedValue({ count: compteRetablie }),
+        .mockResolvedValueOnce({ count: compteRetablie })
+        .mockResolvedValue({ count: compteTerminee }),
     },
+    notificationSetting: { findUnique: jest.fn().mockResolvedValue({ expo_push_token: 'ExponentPushToken[x]' }) },
     paiement: { findMany: jest.fn().mockResolvedValue([{ amount: 10000, total: 10000 }]) },
   };
   const kkiapay = {
@@ -46,13 +48,15 @@ function monter(statut: OrderStatus, compteClaim: number, compteRetablie = 0) {
   };
   const promoCodeService = { activateUsageForOrder: jest.fn().mockResolvedValue(undefined) };
   const alertes = { signaler: jest.fn() };
+  const appGateway = { emitToUser: jest.fn(), emitToBackoffice: jest.fn(), emitToRestaurant: jest.fn() };
+  const eventEmitter = { emit: jest.fn() };
   const service = new PaiementsService(
     prisma as never,
     kkiapay as never,
     {} as never,
     promoCodeService as never,
-    {} as never,
-    { emit: jest.fn() } as never,
+    appGateway as never,
+    eventEmitter as never,
     alertes as never,
   );
   jest.spyOn(service, 'create').mockResolvedValue({
@@ -69,7 +73,7 @@ function monter(statut: OrderStatus, compteClaim: number, compteRetablie = 0) {
       created_at: RECU_LE,
     },
   } as never);
-  return { service, prisma, promoCodeService, alertes };
+  return { service, prisma, promoCodeService, alertes, appGateway, eventEmitter };
 }
 
 const donnees = { transactionId: 'kk-1', orderId: COMMANDE, customer_id: CLIENT } as never;
@@ -84,7 +88,7 @@ describe('PaiementsService.linkPaiementToOrder : paiement tardif', () => {
     expect(resultat.justPaid).toBe(false);
     // L'appelant prévient les écrans ouverts : rien d'autre ne part sur ce chemin.
     expect(resultat.payeApresCoup).toBe(true);
-    expect(prisma.order.updateMany).toHaveBeenCalledTimes(3);
+    expect(prisma.order.updateMany).toHaveBeenCalledTimes(4);
     expect(prisma.order.updateMany.mock.calls[1][0]).toEqual({
       where: { id: COMMANDE, paied: false },
       data: { paied: true, paied_at: RECU_LE },
@@ -97,6 +101,31 @@ describe('PaiementsService.linkPaiementToOrder : paiement tardif', () => {
     // Ce paiement solde la commande : plus personne ne l'encaissera, le code
     // promo doit être compté ici.
     expect(promoCodeService.activateUsageForOrder).toHaveBeenCalledTimes(1);
+    // Pas encore remise au client : elle ne se termine pas.
+    expect(prisma.order.updateMany.mock.calls[3][0].where).toEqual({
+      id: COMMANDE, status: OrderStatus.COLLECTED, paied: true,
+    });
+  });
+
+  it('commande déjà remise au client (Récupérée) puis payée en ligne : terminée et annoncée', async () => {
+    const { service, prisma, appGateway, eventEmitter } = monter(OrderStatus.COLLECTED, 0, 0, 1);
+    const terminee = { id: COMMANDE, customer_id: CLIENT, restaurant_id: RESTAURANT_A, status: OrderStatus.COMPLETED };
+    prisma.order.findUnique.mockResolvedValue(terminee);
+
+    const resultat = await service.linkPaiementToOrder(donnees);
+
+    expect(resultat.payeApresCoup).toBe(true);
+    expect(prisma.order.updateMany.mock.calls[3][0]).toEqual({
+      where: { id: COMMANDE, status: OrderStatus.COLLECTED, paied: true },
+      data: { status: OrderStatus.COMPLETED, completed_at: expect.any(Date) },
+    });
+    // Mêmes annonces qu'une clôture à la caisse : écrans et événement métier.
+    expect(appGateway.emitToBackoffice).toHaveBeenCalledTimes(1);
+    expect(appGateway.emitToRestaurant).toHaveBeenCalledTimes(1);
+    expect(eventEmitter.emit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ order: terminee, expo_token: 'ExponentPushToken[x]' }),
+    );
   });
 
   it("ne compte rien deux fois quand la commande était déjà payée", async () => {

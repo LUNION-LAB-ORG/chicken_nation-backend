@@ -1360,6 +1360,29 @@ export class OrderService {
       }
     }
 
+    /**
+     * RÉCUPÉRÉE ET DÉJÀ PAYÉE : elle se termine (03/11).
+     *
+     * La caisse encaisse souvent AVANT la remise (au comptoir, ou quand le
+     * livreur rapporte l'argent). L'encaissement ne termine que ce qui est
+     * déjà récupéré, et la remise ne regardait pas le paiement : la commande
+     * restait « Récupérée » pour toujours. Même règle que l'appli du livreur
+     * et Turbo : payée, elle est terminée. Revendication sur l'état écrit, si
+     * bien qu'un encaissement arrivé entre la lecture et l'écriture compte.
+     */
+    if (updatedOrder.status === OrderStatus.COLLECTED) {
+      const { count } = await this.prisma.order.updateMany({
+        where: { id: order.id, status: OrderStatus.COLLECTED, paied: true },
+        data: { status: OrderStatus.COMPLETED, completed_at: new Date() },
+      });
+      if (count === 1) {
+        updatedOrder = await this.prisma.order.findUniqueOrThrow({
+          where: { id: order.id },
+          include: includeStatut,
+        });
+      }
+    }
+
     // Destinataire de la notification « statut de commande » : lu ici, jamais
     // rangé dans la commande qui repart. Le statut est déjà enregistré : un
     // échec de cette lecture coûte la notification, pas la transition.
@@ -2745,8 +2768,26 @@ export class OrderService {
        * attente, que le centre d'appels reprend et confirme.
        */
       if (order.status === OrderStatus.PENDING || reactivation) {
+        const repriseLe = new Date();
         updateData.status = OrderStatus.ACCEPTED;
-        updateData.accepted_at = new Date();
+        updateData.accepted_at = repriseLe;
+        /**
+         * PANIER RATTRAPÉ (03/11) : la commande naît au moment de la reprise.
+         *
+         * Un panier resté dans « À relancer » n'était pas une commande : ni
+         * le restaurant ni la cuisine ne l'avaient. Garder la création du
+         * panier comptait tout ce temps comme « Attente acceptation » dans
+         * les statistiques, et rangeait la commande à l'heure du panier.
+         * Même geste que le paiement en ligne différé : `created_at` prend
+         * l'instant de la reprise, `submitted_at` garde celui du panier.
+         * Seulement pour un brouillon (même critère que le journal de la
+         * relance) : une commande déjà payée ou déjà chez le restaurant
+         * garde sa date.
+         */
+        if (estBrouillon(order) || reactivation) {
+          updateData.submitted_at = order.submitted_at ?? order.created_at;
+          updateData.created_at = repriseLe;
+        }
       }
       if (reactivation) {
         // L'historique de l'annulation reste au journal de la relance

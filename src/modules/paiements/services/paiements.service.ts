@@ -10,6 +10,7 @@ import { PrismaService } from 'src/database/services/prisma.service';
 import {
   Customer,
   EntityStatus,
+  Order,
   OrderStatus,
   OrderType,
   PaiementMode,
@@ -209,7 +210,7 @@ export class PaiementsService {
         // reste PENDING jusqu'au webhook (dont linkPaiementToOrder claim désormais bien
         // sur status:PENDING) ou au cron de réconciliation. Laissé tel quel volontairement
         // (unifier ici change la valeur de retour de l'endpoint /paiements/pay — risqué).
-        await this.prisma.order.updateMany({
+        const paye = await this.prisma.order.updateMany({
           where: { id: result.order.id, paied: false }, // claim atomique anti-rejeu
           data: {
             paied_at: paymentAt,
@@ -218,6 +219,8 @@ export class PaiementsService {
             ...this.buildPaymentDateAlignment(result.order, paymentAt),
           },
         });
+        // Déjà remise au client (commande reprise, payée après coup) : terminée.
+        if (paye.count === 1) await this.terminerSiRecuperee(result.order.id, 'payWithKkiapay');
         // Panier annulé par le client entre-temps : visible de nouveau, et
         // remboursement signalé. Isolé : la réponse au client ne doit pas
         // échouer, et le webhook du même paiement rejoue ce geste.
@@ -506,45 +509,7 @@ export class PaiementsService {
     // La commande vient de se TERMINER : mêmes sockets et effets métier
     // (fidélité, notifications) qu'une transition COMPLETED normale.
     if (shouldComplete) {
-      const statusData = {
-        // Filet : aucun identifiant de notification ne part sur un socket.
-        order: sansIdentifiantsPush(updatedOrder),
-        message: 'Commande terminée',
-        previousStatus,
-      };
-      this.appGateway.emitToUser(
-        updatedOrder.customer_id,
-        'customer',
-        OrderChannels.ORDER_STATUS_UPDATED,
-        statusData,
-      );
-      // Sans le code de récupération : la room du restaurant est aussi écoutée
-      // par ses livreurs, à qui ce code doit rester inconnu.
-      const statusDataDiffusion = { ...statusData, order: sanitizeOrderForBroadcast(statusData.order) };
-      this.appGateway.emitToBackoffice(OrderChannels.ORDER_STATUS_UPDATED, statusDataDiffusion);
-      this.appGateway.emitToRestaurant(
-        updatedOrder.restaurant_id,
-        OrderChannels.ORDER_STATUS_UPDATED,
-        statusDataDiffusion,
-      );
-      // Destinataire de la notification « commande terminée » : lu ici, jamais
-      // rangé dans la commande. Un échec coûte la notification, pas la
-      // confirmation, déjà enregistrée.
-      const reglagesPush = await this.prisma.notificationSetting
-        .findUnique({
-          where: { customer_id: updatedOrder.customer_id },
-          select: { expo_push_token: true },
-        })
-        .catch((e) => {
-          console.error(
-            `Jeton de notification illisible (confirmerEncaissement) pour ${order.id}: ${(e as Error)?.message}`,
-          );
-          return null;
-        });
-      this.eventEmitter.emit(OrderChannels.ORDER_STATUS_UPDATED, {
-        order: updatedOrder,
-        expo_token: reglagesPush?.expo_push_token ?? null,
-      });
+      await this.annoncerTerminee(updatedOrder, previousStatus, 'confirmerEncaissement');
     }
 
     return {
@@ -558,20 +523,94 @@ export class PaiementsService {
   }
 
   /**
+   * Une commande vient de passer TERMINÉE hors de `OrderService.updateStatus` :
+   * mêmes sockets (client, back-office, restaurant) et même événement, donc
+   * mêmes effets (cloche, points, notification « Merci »), qu'une clôture
+   * ordinaire.
+   */
+  private async annoncerTerminee(updatedOrder: Order, previousStatus: OrderStatus, contexte: string): Promise<void> {
+    const statusData = {
+      // Filet : aucun identifiant de notification ne part sur un socket.
+      order: sansIdentifiantsPush(updatedOrder),
+      message: 'Commande terminée',
+      previousStatus,
+    };
+    this.appGateway.emitToUser(
+      updatedOrder.customer_id,
+      'customer',
+      OrderChannels.ORDER_STATUS_UPDATED,
+      statusData,
+    );
+    // Sans le code de récupération : la room du restaurant est aussi écoutée
+    // par ses livreurs, à qui ce code doit rester inconnu.
+    const statusDataDiffusion = { ...statusData, order: sanitizeOrderForBroadcast(statusData.order) };
+    this.appGateway.emitToBackoffice(OrderChannels.ORDER_STATUS_UPDATED, statusDataDiffusion);
+    this.appGateway.emitToRestaurant(
+      updatedOrder.restaurant_id,
+      OrderChannels.ORDER_STATUS_UPDATED,
+      statusDataDiffusion,
+    );
+    // Destinataire de la notification « commande terminée » : lu ici, jamais
+    // rangé dans la commande. Un échec coûte la notification, pas la
+    // confirmation, déjà enregistrée.
+    const reglagesPush = await this.prisma.notificationSetting
+      .findUnique({
+        where: { customer_id: updatedOrder.customer_id },
+        select: { expo_push_token: true },
+      })
+      .catch((e) => {
+        console.error(
+          `Jeton de notification illisible (${contexte}) pour ${updatedOrder.id}: ${(e as Error)?.message}`,
+        );
+        return null;
+      });
+    this.eventEmitter.emit(OrderChannels.ORDER_STATUS_UPDATED, {
+      order: updatedOrder,
+      expo_token: reglagesPush?.expo_push_token ?? null,
+    });
+  }
+
+  /**
+   * Paiement en ligne arrivé APRÈS la remise au client (« Récupérée ») : la
+   * commande est remise et soldée, elle se termine, comme quand la caisse
+   * encaisse une commande récupérée (03/11). Revendication atomique : rien si
+   * elle n'est plus récupérée ou pas soldée. Ne lève jamais, le paiement est
+   * déjà enregistré.
+   */
+  private async terminerSiRecuperee(orderId: string, contexte: string): Promise<void> {
+    try {
+      const { count } = await this.prisma.order.updateMany({
+        where: { id: orderId, status: OrderStatus.COLLECTED, paied: true },
+        data: { status: OrderStatus.COMPLETED, completed_at: new Date() },
+      });
+      if (count !== 1) return;
+      const commande = await this.prisma.order.findUnique({ where: { id: orderId } });
+      if (commande) await this.annoncerTerminee(commande, OrderStatus.COLLECTED, contexte);
+    } catch (e) {
+      console.error(`Clôture après paiement tardif (${contexte}) échouée pour ${orderId}: ${(e as Error)?.message}`);
+    }
+  }
+
+  /**
    * Aligne `created_at` sur l'instant du PAIEMENT lorsqu'une commande encore NON
    * payée est payée (paiement différé : créée un jour, payée un autre). La commande
    * remonte ainsi en tête de liste et tombe dans la bonne période de filtrage, car
    * tout le tri/filtrage des commandes s'appuie sur `created_at`.
    *
    * L'instant de soumission initiale est préservé dans `submitted_at` (jamais écrasé).
-   * Renvoie un patch VIDE si la commande était déjà payée → idempotent (le webhook
+   * Seulement pour une commande encore hors du circuit (en attente, ou panier
+   * annulé par le client). Renvoie un patch VIDE si la commande était déjà payée → idempotent (le webhook
    * KKiaPay et le retour de l'app peuvent tirer plusieurs fois pour la même transaction).
    */
   private buildPaymentDateAlignment(
-    order: { paied: boolean; created_at: Date; submitted_at: Date | null },
+    order: { paied: boolean; status: OrderStatus; created_at: Date; submitted_at: Date | null },
     paymentAt: Date,
   ): { created_at?: Date; submitted_at?: Date } {
     if (order.paied) return {};
+    // Déjà dans le circuit (reprise au téléphone, acceptée, en cuisine…) :
+    // elle y est entrée à sa date, que le paiement ne déplace plus. Sinon
+    // l'acceptation tomberait AVANT la création dans les statistiques (03/11).
+    if (order.status !== OrderStatus.PENDING && order.status !== OrderStatus.CANCELLED) return {};
     return {
       submitted_at: order.submitted_at ?? order.created_at,
       created_at: paymentAt,
@@ -723,6 +762,9 @@ export class PaiementsService {
             console.error(`Sync usage promo (paiement KKiaPay tardif) échoué pour ${result.order.id}: ${(e as any)?.message}`);
           }
         }
+        // Déjà remise au client (reprise, payée après coup) : la commande
+        // soldée se termine (03/11).
+        if (payeApresCoup) await this.terminerSiRecuperee(result.order.id, 'paiement KKiaPay tardif');
 
         // Paiement confirmé (1re fois) → comptabiliser l'usage du code promo (usage_count++).
         // Isolé pour ne jamais casser la confirmation du paiement.

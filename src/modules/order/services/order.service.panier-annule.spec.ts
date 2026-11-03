@@ -1199,3 +1199,60 @@ describe('Commande du site à payer à la livraison, annulée par le client', ()
     );
   });
 });
+
+// ===========================================================================
+// Panier rattrapé : la commande naît au moment de la reprise (03/11)
+// ===========================================================================
+
+describe('OrderService.update : un panier rattrapé naît au moment de la reprise', () => {
+  const PANIER_LE = new Date('2026-11-02T09:00:00.000Z');
+  const PAYE_LE = new Date('2026-11-02T09:05:00.000Z');
+
+  it('panier en attente repris : création = acceptation = reprise, la date du panier reste dans submitted_at', async () => {
+    const m = monterReprise(panier({ created_at: PANIER_LE, submitted_at: null }));
+
+    await reprendre(m.service);
+    await attendre();
+
+    const base = m.base();
+    expect(base.status).toBe(OrderStatus.ACCEPTED);
+    expect(base.created_at).toBeInstanceOf(Date);
+    // Aucune « attente d'acceptation » comptée pour le temps passé dans « À relancer ».
+    expect(base.created_at).toEqual(base.accepted_at);
+    expect(base.created_at.getTime()).toBeGreaterThan(PANIER_LE.getTime());
+    expect(base.submitted_at).toEqual(PANIER_LE);
+  });
+
+  it('panier annulé par le client puis réactivé : même règle', async () => {
+    const m = monterReprise(panierAnnule({ created_at: PANIER_LE, submitted_at: null }));
+
+    await reprendre(m.service);
+    await attendre();
+
+    const base = m.base();
+    expect(base.created_at).toEqual(base.accepted_at);
+    expect(base.submitted_at).toEqual(PANIER_LE);
+  });
+
+  it('une date de panier déjà gardée (paiement différé raté) n’est jamais écrasée', async () => {
+    const DEJA = new Date('2026-11-01T20:00:00.000Z');
+    const m = monterReprise(panier({ created_at: PANIER_LE, submitted_at: DEJA }));
+
+    await reprendre(m.service);
+    await attendre();
+
+    expect(m.base().submitted_at).toEqual(DEJA);
+  });
+
+  it('déjà payée en ligne, encore en attente : la reprise ne touche pas à sa date', async () => {
+    const m = monterReprise(panier({ paied: true, created_at: PAYE_LE, submitted_at: PANIER_LE }));
+
+    await reprendre(m.service);
+    await attendre();
+
+    const base = m.base();
+    expect(base.status).toBe(OrderStatus.ACCEPTED);
+    expect(base.created_at).toEqual(PAYE_LE);
+    expect(base.submitted_at).toEqual(PANIER_LE);
+  });
+});
