@@ -1,4 +1,16 @@
-import { Body, Controller, Get, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Put,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { User } from '@prisma/client';
@@ -14,10 +26,18 @@ import {
   MarkPaidDto,
   MarkPayableDto,
 } from './dto/referral-earning-admin.dto';
+import {
+  ChangerCodeParrainDto,
+  ChercherClientsQueryDto,
+  CreerParrainDto,
+  ListeParrainsQueryDto,
+  RattacherFilleulDto,
+  VerserParrainDto,
+} from './dto/referral-parrain-admin.dto';
 
 /**
- * Parrainage — back office (staff). Réservé au module Fidélité : stats globales +
- * configuration (récompense parrain, bon de bienvenue, créateur système).
+ * Parrainage — back office (staff). Réservé au module Fidélité : stats globales,
+ * configuration, et gestion des parrains (liste, fiche, code, filleuls, versements).
  */
 @ApiTags('Referral Admin')
 @Controller('referral/admin')
@@ -50,9 +70,75 @@ export class ReferralAdminController {
 
   @Get('ambassadors')
   @RequirePermission(Modules.FIDELITE, Action.READ)
-  @ApiOperation({ summary: 'Ambassadeurs avec solde à verser (trié par solde décroissant)' })
-  ambassadors() {
-    return this.referralService.adminListAmbassadors();
+  @ApiOperation({ summary: 'Tous les parrains (les plus de filleuls en tête), recherche et pages' })
+  ambassadors(@Req() req: Request, @Query() query: ListeParrainsQueryDto) {
+    return this.referralService.adminListAmbassadors(query, (req.user as User)?.role);
+  }
+
+  @Post('ambassadors')
+  @RequirePermission(Modules.FIDELITE, Action.UPDATE)
+  @ApiOperation({ summary: 'Faire d’un client un parrain (code choisi, sinon CN-PRENOM)' })
+  creerParrain(@Body() dto: CreerParrainDto) {
+    return this.referralService.adminCreerParrain(dto);
+  }
+
+  @Get('clients')
+  @RequirePermission(Modules.FIDELITE, Action.UPDATE)
+  @ApiOperation({ summary: 'Clients à faire parrain ou filleul, avec ce qui l’empêcherait' })
+  chercherClients(@Req() req: Request, @Query() query: ChercherClientsQueryDto) {
+    return this.referralService.adminChercherClients(query.search, (req.user as User)?.role);
+  }
+
+  @Get('ambassadors/:customerId')
+  @RequirePermission(Modules.FIDELITE, Action.READ)
+  @ApiOperation({ summary: 'Fiche d’un parrain : filleuls, gains, versements' })
+  ambassador(@Param('customerId', ParseUUIDPipe) customerId: string) {
+    return this.referralService.adminAmbassadorDetail(customerId);
+  }
+
+  @Patch('ambassadors/:customerId/code')
+  @RequirePermission(Modules.FIDELITE, Action.UPDATE)
+  @ApiOperation({ summary: 'Changer le code d’un parrain' })
+  changerCode(
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+    @Body() dto: ChangerCodeParrainDto,
+  ) {
+    return this.referralService.adminChangerCode(customerId, dto.code);
+  }
+
+  @Post('ambassadors/:customerId/filleuls')
+  @RequirePermission(Modules.FIDELITE, Action.UPDATE)
+  @ApiOperation({ summary: 'Rattacher un filleul qui a oublié le code' })
+  rattacherFilleul(
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+    @Body() dto: RattacherFilleulDto,
+  ) {
+    return this.referralService.adminRattacherFilleul(customerId, dto.customer_id);
+  }
+
+  @Post('ambassadors/:customerId/mark-payable')
+  @RequirePermission(Modules.FIDELITE, Action.UPDATE)
+  @ApiOperation({ summary: 'Passer en payable les gains en attente du parrain' })
+  passerPayable(@Param('customerId', ParseUUIDPipe) customerId: string) {
+    return this.referralService.adminPasserPayable(customerId);
+  }
+
+  @Post('ambassadors/:customerId/pay')
+  @RequirePermission(Modules.FIDELITE, Action.UPDATE)
+  @ApiOperation({ summary: 'Marquer payé tout le solde payable du parrain' })
+  verser(
+    @Req() req: Request,
+    @Param('customerId', ParseUUIDPipe) customerId: string,
+    @Body() dto: VerserParrainDto,
+  ) {
+    return this.referralService.adminVerser(customerId, dto, (req.user as User).id);
+  }
+
+  @Post('referrals/:referralId/annuler')
+  @RequirePermission(Modules.FIDELITE, Action.UPDATE)
+  @ApiOperation({ summary: 'Annuler un parrainage (gains non versés annulés)' })
+  annulerParrainage(@Param('referralId', ParseUUIDPipe) referralId: string) {
+    return this.referralService.adminAnnulerParrainage(referralId);
   }
 
   @Get('earnings')

@@ -547,6 +547,7 @@ model Customer {
   loyalty_level_history LoyaltyLevelHistory[]
   rewards               Reward[]
   referral_code         String?               @unique @db.VarChar // code de parrainage partageable
+  referral_code_ancien  String?               @unique @db.VarChar // code d'avant le 03/11 (CNABC23), toujours valable
   referrals_made        Referral[]            @relation("Referrer") // filleuls parrainés
   referral_received     Referral?             @relation("Referee") // parrainage reçu (1 max)
 

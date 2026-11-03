@@ -9,12 +9,44 @@ import {
   ReferralStatus,
   RewardStatus,
   RewardType,
+  UserRole,
 } from '@prisma/client';
 import { notificationIcons } from 'src/modules/notifications/constantes/notifications.constante';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
 import { ExpoPushService } from 'src/expo-push/expo-push.service';
+import { FILTRE_VENTE } from 'src/modules/statistics/helpers/statistics.helper';
+import { coordonneesMasquees } from 'src/common/securite/masquer-contacts.interceptor';
+import { codesPossibles, formeDeCarte, lireCodeChoisi, lireSaisie } from './referral-code.rules';
+
+/** Client vu comme parrain au backoffice. */
+const CLIENT_PARRAIN = {
+  id: true,
+  first_name: true,
+  last_name: true,
+  phone: true,
+  referral_code: true,
+  referral_code_ancien: true,
+} satisfies Prisma.CustomerSelect;
+
+type ClientParrain = Prisma.CustomerGetPayload<{ select: typeof CLIENT_PARRAIN }>;
+
+const nomComplet = (c: { first_name?: string | null; last_name?: string | null } | null | undefined) =>
+  [c?.first_name, c?.last_name].filter((p) => p && p.trim()).join(' ') || null;
+
+const fcfa = (n: number) => `${n.toLocaleString('fr-FR')} FCFA`;
+
+/** Les `n` éléments suivants d'une suite. */
+function prendre<T>(suite: Iterator<T>, n: number): T[] {
+  const lot: T[] = [];
+  while (lot.length < n) {
+    const suivant = suite.next();
+    if (suivant.done) break;
+    lot.push(suivant.value);
+  }
+  return lot;
+}
 
 /** Un cadeau possible (carte à gratter) : bon d'achat, plat offert… */
 export interface ReferralGiftItem {
@@ -59,26 +91,98 @@ export class ReferralService {
     private readonly expoPushService: ExpoPushService,
   ) {}
 
-  /** Code de parrainage du client (généré à la 1ère demande, unique). */
+  /** Code de parrainage du client (attribué à la 1ère demande, unique). */
   async getOrCreateReferralCode(customerId: string): Promise<string> {
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
-      select: { referral_code: true },
+      select: { referral_code: true, first_name: true, last_name: true, phone: true },
     });
     if (!customer) throw new NotFoundException('Client introuvable.');
     if (customer.referral_code) return customer.referral_code;
+    return this.attribuerCode(customerId, customer);
+  }
 
-    for (let i = 0; i < 5; i++) {
-      const code = this.generateCode();
+  /**
+   * Donne au client le premier code libre : CN-PRENOM, CN-NOM, puis CN-PRENOM2…
+   * (referral-code.rules.ts). Un code posé entre-temps par un autre écran est
+   * gardé ; un code pris à l'instant par un autre client fait relire le lot.
+   */
+  private async attribuerCode(
+    customerId: string,
+    client: { first_name?: string | null; last_name?: string | null; phone?: string | null },
+  ): Promise<string> {
+    const suite = codesPossibles(client);
+    let lot = prendre(suite, 50);
+    for (let essai = 0; essai < 25 && lot.length; essai++) {
+      const code = await this.premierCodeLibre(lot);
+      if (!code) {
+        lot = prendre(suite, 50);
+        continue;
+      }
       try {
-        await this.prisma.customer.update({ where: { id: customerId }, data: { referral_code: code } });
-        return code;
+        const pose = await this.prisma.customer.updateMany({
+          where: { id: customerId, referral_code: null },
+          data: { referral_code: code },
+        });
+        if (pose.count === 1) return code;
+        const actuel = await this.prisma.customer.findUnique({
+          where: { id: customerId },
+          select: { referral_code: true },
+        });
+        if (actuel?.referral_code) return actuel.referral_code;
+        throw new NotFoundException('Client introuvable.');
       } catch (e: any) {
-        if (e?.code === 'P2002') continue; // collision improbable → retry
-        throw e;
+        if (e?.code !== 'P2002') throw e;
       }
     }
     throw new BadRequestException('Impossible de générer un code de parrainage, réessayez.');
+  }
+
+  /**
+   * Premier code de la liste que personne ne porte : ni un autre parrain (code
+   * actuel, ou ancien code qui s'écrit pareil sans le tiret), ni un code promo,
+   * et qui n'a pas la forme d'un numéro de carte.
+   */
+  private async premierCodeLibre(candidats: string[], saufClientId?: string): Promise<string | null> {
+    const possibles = candidats.filter((c) => !formeDeCarte(c));
+    if (!possibles.length) return null;
+    const autre: Prisma.CustomerWhereInput = saufClientId ? { id: { not: saufClientId } } : {};
+    const [codes, anciens, promos] = await Promise.all([
+      this.prisma.customer.findMany({
+        where: { referral_code: { in: possibles }, ...autre },
+        select: { referral_code: true },
+      }),
+      this.prisma.customer.findMany({
+        where: { referral_code_ancien: { in: possibles.map((c) => c.replace('-', '')) }, ...autre },
+        select: { referral_code_ancien: true },
+      }),
+      this.prisma.promoCode.findMany({ where: { code: { in: possibles } }, select: { code: true } }),
+    ]);
+    const pris = new Set<string>([
+      ...codes.map((c) => c.referral_code ?? ''),
+      ...anciens.map((c) => `CN-${(c.referral_code_ancien ?? '').slice(2)}`),
+      ...promos.map((p) => p.code),
+    ]);
+    return possibles.find((c) => !pris.has(c)) ?? null;
+  }
+
+  /**
+   * Parrain d'un code saisi par le client : « cn-awa », « CNAWA » ou « awa »
+   * trouvent `CN-AWA`, et un code d'avant le 03/11 (`CNABC23`) reste valable.
+   */
+  private async trouverParrainParCode(saisie: string) {
+    const { nouveaux, ancien } = lireSaisie(saisie);
+    if (!ancien) return null;
+    const trouves = await this.prisma.customer.findMany({
+      where: { OR: [{ referral_code: { in: nouveaux } }, { referral_code_ancien: ancien }] },
+      select: { id: true, referral_code: true, referral_code_ancien: true },
+    });
+    for (const code of nouveaux) {
+      const c = trouves.find((t) => t.referral_code === code);
+      if (c) return { id: c.id, code };
+    }
+    const c = trouves.find((t) => t.referral_code_ancien === ancien);
+    return c ? { id: c.id, code: ancien } : null;
   }
 
   /**
@@ -88,17 +192,14 @@ export class ReferralService {
    * NOUVEAU client (aucune commande payée).
    */
   async applyReferralCode(refereeId: string, rawCode: string) {
-    const code = (rawCode ?? '').trim().toUpperCase();
-    if (!code) throw new BadRequestException('Code de parrainage requis.');
+    if (!(rawCode ?? '').trim()) throw new BadRequestException('Code de parrainage requis.');
 
     const already = await this.prisma.referral.findUnique({ where: { referee_id: refereeId } });
     if (already) throw new BadRequestException('Vous avez déjà utilisé un code de parrainage.');
 
-    const referrer = await this.prisma.customer.findFirst({
-      where: { referral_code: code },
-      select: { id: true },
-    });
+    const referrer = await this.trouverParrainParCode(rawCode);
     if (!referrer) throw new BadRequestException('Code de parrainage invalide.');
+    const code = referrer.code;
     if (referrer.id === refereeId) {
       throw new BadRequestException('Vous ne pouvez pas utiliser votre propre code.');
     }
@@ -132,7 +233,7 @@ export class ReferralService {
       const reward = await this.createGiftReward(
         refereeId,
         cfg,
-        'Cadeau de bienvenue — parrainage 🎁',
+        'Cadeau de bienvenue du parrainage 🎁',
       );
       if (reward) {
         await this.prisma.referral.update({
@@ -291,7 +392,7 @@ export class ReferralService {
           void this.pushToCustomer(
             referral.referrer_id,
             '💛 Ton filleul a utilisé son cadeau !',
-            `Ta prime ambassadeur de ${credite.toLocaleString('fr-FR')} F est créditée — retrouve-la dans « Inviter un ami ».`,
+            `Ta prime ambassadeur de ${credite.toLocaleString('fr-FR')} F est créditée. Retrouve-la dans « Inviter un ami ».`,
           );
           void this.notifyInApp(
             referral.referrer_id,
@@ -656,57 +757,397 @@ export class ReferralService {
 
   // ── Admin (back office) ───────────────────────────────────────────────────
 
-  /** Liste des ambassadeurs avec un solde (PENDING/PAYABLE) ou déjà payé, triée par
-   *  solde à verser décroissant. `over_threshold` = éligible au passage PAYABLE. */
-  async adminListAmbassadors() {
-    const { payout_threshold } = await this.getEarningConfig();
+  /**
+   * Tous les parrains : chaque client qui a un code, ceux qui ont le plus de
+   * filleuls en tête. Recherche par nom, code ou téléphone (pas par téléphone
+   * pour un rôle qui reçoit les numéros masqués : la réponse dirait quels
+   * chiffres figurent dans un numéro caché).
+   *
+   * L'ancienne liste ne montrait que les parrains déjà rémunérés, sous une
+   * forme que l'écran ne lisait pas : elle restait vide (03/11).
+   */
+  async adminListAmbassadors(
+    q: { page?: number; limit?: number; search?: string },
+    role?: UserRole | null,
+  ) {
+    const page = Math.max(1, Math.floor(Number(q.page) || 1));
+    const limit = Math.min(Math.max(1, Math.floor(Number(q.limit) || 10)), 50);
+    const where: Prisma.CustomerWhereInput = {
+      referral_code: { not: null },
+      entity_status: { not: EntityStatus.DELETED },
+      ...this.filtreRecherche(q.search, role),
+    };
+    const [clients, total, { payout_threshold }] = await Promise.all([
+      this.prisma.customer.findMany({
+        where,
+        orderBy: [{ referrals_made: { _count: 'desc' } }, { created_at: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        select: CLIENT_PARRAIN,
+      }),
+      this.prisma.customer.count({ where }),
+      this.getEarningConfig(),
+    ]);
+    return {
+      items: await this.lignesParrains(clients),
+      total,
+      page,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      payout_threshold,
+    };
+  }
 
-    const grouped = await this.prisma.referralEarning.groupBy({
-      by: ['referrer_id', 'status'],
-      _sum: { amount: true },
-      where: { status: { not: ReferralEarningStatus.CANCELLED } },
+  /** Recherche d'un client par nom (chaque mot), code ou téléphone. */
+  private filtreRecherche(search: string | undefined, role?: UserRole | null): Prisma.CustomerWhereInput {
+    const s = (search ?? '').trim();
+    if (!s) return {};
+    const mots = s.split(/\s+/).filter(Boolean);
+    const ou: Prisma.CustomerWhereInput[] = [
+      {
+        AND: mots.map((m) => ({
+          OR: [
+            { first_name: { contains: m, mode: 'insensitive' as const } },
+            { last_name: { contains: m, mode: 'insensitive' as const } },
+          ],
+        })),
+      },
+    ];
+    // « CN AWA », « cn-awa » ou « awa » : le morceau après CN-.
+    const { nouveaux, ancien } = lireSaisie(s);
+    const morceau = nouveaux[0]?.slice(3);
+    if (morceau) ou.push({ referral_code: { contains: morceau, mode: 'insensitive' } });
+    if (ancien.length >= 3) ou.push({ referral_code_ancien: { contains: ancien } });
+    const chiffres = s.replace(/\D/g, '');
+    if (chiffres.length >= 3 && !coordonneesMasquees(role)) ou.push({ phone: { contains: chiffres } });
+    return { OR: ou };
+  }
+
+  /** Chiffres d'une page de parrains : filleuls, ventes générées, gains par état. */
+  private async lignesParrains(clients: ClientParrain[]) {
+    const ids = clients.map((c) => c.id);
+    if (!ids.length) return [];
+    const [parrainages, gains] = await Promise.all([
+      this.prisma.referral.findMany({
+        where: { referrer_id: { in: ids }, status: { not: ReferralStatus.CANCELLED } },
+        select: { referrer_id: true, referee_id: true, status: true },
+      }),
+      this.prisma.referralEarning.groupBy({
+        by: ['referrer_id', 'status'],
+        where: { referrer_id: { in: ids } },
+        _sum: { amount: true },
+      }),
+    ]);
+    const ventes = await this.ventesParClient(parrainages.map((p) => p.referee_id));
+
+    return clients.map((c) => {
+      const siens = parrainages.filter((p) => p.referrer_id === c.id);
+      const somme = (statut: ReferralEarningStatus) =>
+        gains.find((g) => g.referrer_id === c.id && g.status === statut)?._sum.amount ?? 0;
+      const pending = somme(ReferralEarningStatus.PENDING);
+      const payable = somme(ReferralEarningStatus.PAYABLE);
+      const paid = somme(ReferralEarningStatus.PAID);
+      return {
+        customer_id: c.id,
+        fullname: nomComplet(c),
+        phone: c.phone,
+        referral_code: c.referral_code,
+        referral_code_ancien: c.referral_code_ancien,
+        referees_count: siens.length,
+        qualified_referees_count: siens.filter((p) => p.status === ReferralStatus.REWARDED).length,
+        generated_sales: siens.reduce((t, p) => t + (ventes.get(p.referee_id)?.montant ?? 0), 0),
+        total_earned: pending + payable + paid,
+        pending_amount: pending,
+        payable_amount: payable,
+        paid_amount: paid,
+      };
     });
+  }
 
-    const map = new Map<string, { pending: number; payable: number; paid: number }>();
-    for (const g of grouped) {
-      const acc = map.get(g.referrer_id) ?? { pending: 0, payable: 0, paid: 0 };
-      const sum = g._sum.amount ?? 0;
-      if (g.status === ReferralEarningStatus.PENDING) acc.pending += sum;
-      else if (g.status === ReferralEarningStatus.PAYABLE) acc.payable += sum;
-      else if (g.status === ReferralEarningStatus.PAID) acc.paid += sum;
-      map.set(g.referrer_id, acc);
+  /** Ventes des clients (même règle que les statistiques : FILTRE_VENTE). */
+  private async ventesParClient(ids: string[]) {
+    const ventes = new Map<string, { montant: number; commandes: number }>();
+    if (!ids.length) return ventes;
+    const groupes = await this.prisma.order.groupBy({
+      by: ['customer_id'],
+      where: { customer_id: { in: ids }, ...FILTRE_VENTE },
+      _sum: { net_amount: true },
+      _count: { _all: true },
+    });
+    for (const g of groupes) {
+      ventes.set(g.customer_id, { montant: g._sum.net_amount ?? 0, commandes: g._count._all });
+    }
+    return ventes;
+  }
+
+  /** Fiche d'un parrain : chiffres, filleuls, gains et versements. */
+  async adminAmbassadorDetail(customerId: string) {
+    const client = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      select: CLIENT_PARRAIN,
+    });
+    if (!client) throw new NotFoundException('Client introuvable.');
+
+    const [[ligne], parrainages, gains] = await Promise.all([
+      this.lignesParrains([client]),
+      this.prisma.referral.findMany({
+        where: { referrer_id: customerId },
+        orderBy: { created_at: 'desc' },
+        select: {
+          id: true,
+          status: true,
+          created_at: true,
+          qualified_at: true,
+          referee: { select: { id: true, first_name: true, last_name: true, phone: true } },
+        },
+      }),
+      this.prisma.referralEarning.findMany({
+        where: { referrer_id: customerId },
+        orderBy: { created_at: 'desc' },
+      }),
+    ]);
+
+    const idsCommandes = gains.map((g) => g.source_order_id).filter((id): id is string => !!id);
+    const idsVerseurs = [...new Set(gains.map((g) => g.paid_by).filter((id): id is string => !!id))];
+    const [ventes, commandes, verseurs] = await Promise.all([
+      this.ventesParClient(parrainages.map((p) => p.referee.id)),
+      this.prisma.order.findMany({
+        where: { id: { in: idsCommandes } },
+        select: { id: true, reference: true, net_amount: true },
+      }),
+      this.prisma.user.findMany({ where: { id: { in: idsVerseurs } }, select: { id: true, fullname: true } }),
+    ]);
+    const nomFilleul = new Map(parrainages.map((p) => [p.referee.id, nomComplet(p.referee)]));
+
+    // Un versement = les gains soldés ensemble : même date, même auteur, même note.
+    const versements = new Map<string, { paid_at: Date; paid_by: string | null; note: string | null; amount: number }>();
+    for (const g of gains) {
+      if (g.status !== ReferralEarningStatus.PAID || !g.paid_at) continue;
+      const cle = `${g.paid_at.toISOString()}|${g.paid_by ?? ''}|${g.note ?? ''}`;
+      const v = versements.get(cle) ?? { paid_at: g.paid_at, paid_by: g.paid_by, note: g.note, amount: 0 };
+      v.amount += g.amount;
+      versements.set(cle, v);
     }
 
-    const ids = [...map.keys()];
-    if (!ids.length) return { payout_threshold, ambassadors: [] as any[] };
-
-    const customers = await this.prisma.customer.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, first_name: true, last_name: true, phone: true, referral_code: true },
-    });
-    const byId = new Map(customers.map((c) => [c.id, c]));
-
-    const ambassadors = ids
-      .map((id) => {
-        const a = map.get(id)!;
-        const c = byId.get(id);
-        const solde_payable = a.pending + a.payable;
+    return {
+      ...ligne,
+      filleuls: parrainages.map((p) => ({
+        id: p.id,
+        customer_id: p.referee.id,
+        fullname: nomComplet(p.referee),
+        phone: p.referee.phone,
+        status: p.status,
+        joined_at: p.created_at,
+        qualified_at: p.qualified_at,
+        sales: ventes.get(p.referee.id)?.montant ?? 0,
+        orders_count: ventes.get(p.referee.id)?.commandes ?? 0,
+      })),
+      earnings: gains.map((g) => {
+        const commande = commandes.find((c) => c.id === g.source_order_id);
         return {
-          referrer_id: id,
-          first_name: c?.first_name ?? null,
-          last_name: c?.last_name ?? null,
-          phone: c?.phone ?? null,
-          referral_code: c?.referral_code ?? null,
-          pending: a.pending,
-          payable: a.payable,
-          paid: a.paid,
-          solde_payable,
-          over_threshold: a.pending >= payout_threshold,
+          id: g.id,
+          kind: g.type,
+          status: g.status,
+          amount: g.amount,
+          referee_id: g.referee_id,
+          referee_name: nomFilleul.get(g.referee_id) ?? null,
+          order_id: g.source_order_id,
+          order_number: commande?.reference ?? null,
+          order_amount: commande?.net_amount ?? null,
+          created_at: g.created_at,
         };
-      })
-      .sort((x, y) => y.solde_payable - x.solde_payable);
+      }),
+      payouts: [...versements.values()]
+        .sort((a, b) => b.paid_at.getTime() - a.paid_at.getTime())
+        .map((v) => ({
+          id: v.paid_at.toISOString(),
+          ambassador_id: customerId,
+          amount: v.amount,
+          note: v.note,
+          paid_by: v.paid_by,
+          paid_by_name: verseurs.find((u) => u.id === v.paid_by)?.fullname ?? null,
+          created_at: v.paid_at,
+        })),
+    };
+  }
 
-    return { payout_threshold, ambassadors };
+  /** Fait d'un client un parrain : code choisi, sinon CN-PRENOM. */
+  async adminCreerParrain(dto: { customer_id: string; code?: string }) {
+    const client = await this.prisma.customer.findUnique({
+      where: { id: dto.customer_id },
+      select: { referral_code: true, first_name: true, last_name: true, phone: true },
+    });
+    if (!client) throw new NotFoundException('Client introuvable.');
+    if (client.referral_code) {
+      throw new BadRequestException(`Ce client est déjà parrain, avec le code ${client.referral_code}.`);
+    }
+    if (dto.code?.trim()) await this.poserCode(dto.customer_id, dto.code);
+    else await this.attribuerCode(dto.customer_id, client);
+    return this.adminAmbassadorDetail(dto.customer_id);
+  }
+
+  /** Change le code d'un parrain. L'ancien cesse de marcher, sauf le code d'avant le 03/11. */
+  async adminChangerCode(customerId: string, saisie: string) {
+    await this.poserCode(customerId, saisie);
+    return this.adminAmbassadorDetail(customerId);
+  }
+
+  private async poserCode(customerId: string, saisie: string) {
+    const lu = lireCodeChoisi(saisie);
+    if ('erreur' in lu) throw new BadRequestException(lu.erreur);
+    const client = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { referral_code: true },
+    });
+    if (!client) throw new NotFoundException('Client introuvable.');
+    if (client.referral_code === lu.code) return;
+    const pris = new BadRequestException(`Le code ${lu.code} est déjà pris. Choisissez-en un autre.`);
+    if (!(await this.premierCodeLibre([lu.code], customerId))) throw pris;
+    try {
+      await this.prisma.customer.update({ where: { id: customerId }, data: { referral_code: lu.code } });
+    } catch (e: any) {
+      if (e?.code === 'P2002') throw pris;
+      throw e;
+    }
+  }
+
+  /**
+   * Rattache un filleul qui a oublié le code à l'inscription. Mêmes règles que
+   * dans l'application : nouveau client, jamais parrainé. Il reçoit son cadeau.
+   */
+  async adminRattacherFilleul(parrainId: string, filleulId: string) {
+    if (parrainId === filleulId) {
+      throw new BadRequestException('Un client ne peut pas être son propre filleul.');
+    }
+    const [filleul, dejaParraine, commandePayee] = await Promise.all([
+      this.prisma.customer.findUnique({ where: { id: filleulId }, select: { id: true } }),
+      this.prisma.referral.findUnique({ where: { referee_id: filleulId }, select: { referral_code: true } }),
+      this.prisma.order.findFirst({ where: { customer_id: filleulId, paied: true }, select: { id: true } }),
+    ]);
+    if (!filleul) throw new NotFoundException('Client introuvable.');
+    if (dejaParraine) {
+      throw new BadRequestException(`Ce client est déjà filleul (code ${dejaParraine.referral_code}).`);
+    }
+    if (commandePayee) {
+      throw new BadRequestException(
+        'Ce client a déjà une commande payée : le parrainage est réservé aux nouveaux clients.',
+      );
+    }
+    const code = await this.getOrCreateReferralCode(parrainId);
+    await this.applyReferralCode(filleulId, code);
+    return this.adminAmbassadorDetail(parrainId);
+  }
+
+  /**
+   * Annule un parrainage (fraude, erreur) : plus de prime ni de commission pour
+   * ce filleul, les gains non versés sont annulés. Un gain déjà versé reste.
+   * Le filleul ne peut plus être rattaché à un autre parrain.
+   */
+  async adminAnnulerParrainage(referralId: string) {
+    const parrainage = await this.prisma.referral.findUnique({
+      where: { id: referralId },
+      select: { id: true, referrer_id: true, status: true },
+    });
+    if (!parrainage) throw new NotFoundException('Parrainage introuvable.');
+    if (parrainage.status !== ReferralStatus.CANCELLED) {
+      const maintenant = new Date();
+      await this.prisma.$transaction([
+        this.prisma.referral.update({
+          where: { id: referralId },
+          data: { status: ReferralStatus.CANCELLED, updated_at: maintenant },
+        }),
+        this.prisma.referralEarning.updateMany({
+          where: {
+            referral_id: referralId,
+            status: { in: [ReferralEarningStatus.PENDING, ReferralEarningStatus.PAYABLE] },
+          },
+          data: {
+            status: ReferralEarningStatus.CANCELLED,
+            note: 'Parrainage annulé au backoffice',
+            updated_at: maintenant,
+          },
+        }),
+      ]);
+    }
+    return this.adminAmbassadorDetail(parrainage.referrer_id);
+  }
+
+  /** « Passer en payable » : tous les gains en attente du parrain. */
+  async adminPasserPayable(customerId: string) {
+    await this.adminMarkPayable({ referrer_id: customerId });
+    return this.adminAmbassadorDetail(customerId);
+  }
+
+  /**
+   * « Marquer payé » : solde tout le payable du parrain, versé hors du système
+   * (Wave, espèces). Le montant envoyé doit être ce solde : un écran resté
+   * ouvert pendant qu'un gain changeait ne verse pas un autre montant.
+   */
+  async adminVerser(customerId: string, dto: { amount: number; note?: string }, adminId: string) {
+    const dus = await this.prisma.referralEarning.findMany({
+      where: { referrer_id: customerId, status: ReferralEarningStatus.PAYABLE },
+      select: { id: true, amount: true },
+    });
+    const solde = dus.reduce((t, g) => t + g.amount, 0);
+    if (solde <= 0) throw new BadRequestException('Aucun gain payable à verser.');
+    if (Math.round(Number(dto.amount)) !== solde) {
+      throw new BadRequestException(`Le solde payable est de ${fcfa(solde)}. Rechargez la fiche.`);
+    }
+    const paidAt = new Date();
+    const note = dto.note?.trim() || null;
+    await this.prisma.referralEarning.updateMany({
+      where: { id: { in: dus.map((g) => g.id) }, status: ReferralEarningStatus.PAYABLE },
+      data: { status: ReferralEarningStatus.PAID, paid_by: adminId, paid_at: paidAt, note, updated_at: paidAt },
+    });
+    const verse = await this.prisma.referralEarning.aggregate({
+      where: { referrer_id: customerId, status: ReferralEarningStatus.PAID, paid_at: paidAt },
+      _sum: { amount: true },
+    });
+    const auteur = await this.prisma.user.findUnique({ where: { id: adminId }, select: { fullname: true } });
+    return {
+      id: paidAt.toISOString(),
+      ambassador_id: customerId,
+      amount: verse._sum.amount ?? 0,
+      note,
+      paid_by: adminId,
+      paid_by_name: auteur?.fullname ?? null,
+      created_at: paidAt,
+    };
+  }
+
+  /**
+   * Clients proposés pour devenir parrain ou filleul, avec ce qui empêcherait
+   * de les choisir : déjà parrain, déjà filleul, déjà une commande payée.
+   */
+  async adminChercherClients(search: string | undefined, role?: UserRole | null) {
+    if ((search ?? '').trim().length < 2) return [];
+    const clients = await this.prisma.customer.findMany({
+      where: { entity_status: { not: EntityStatus.DELETED }, ...this.filtreRecherche(search, role) },
+      orderBy: { created_at: 'desc' },
+      take: 8,
+      select: {
+        id: true,
+        first_name: true,
+        last_name: true,
+        phone: true,
+        referral_code: true,
+        referral_received: { select: { referral_code: true } },
+      },
+    });
+    const payees = clients.length
+      ? await this.prisma.order.groupBy({
+          by: ['customer_id'],
+          where: { customer_id: { in: clients.map((c) => c.id) }, paied: true },
+          _count: { _all: true },
+        })
+      : [];
+    return clients.map((c) => ({
+      customer_id: c.id,
+      fullname: nomComplet(c),
+      phone: c.phone,
+      referral_code: c.referral_code,
+      sponsor_code: c.referral_received?.referral_code ?? null,
+      has_paid_order: payees.some((p) => p.customer_id === c.id),
+    }));
   }
 
   /** Passe des earnings PENDING→PAYABLE. Manuel : par `earning_ids` OU tout le PENDING
@@ -1173,14 +1614,5 @@ export class ReferralService {
       select: { id: true },
     });
     return first?.id ?? null;
-  }
-
-  /** Code alphanumérique SANS ambiguïté (ni 0/O/1/I) et non purement numérique
-   *  (évite l'auto-cast du deep-link `?ref=`). Ex: CNABC23. */
-  private generateCode(): string {
-    const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-    let s = '';
-    for (let i = 0; i < 6; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
-    return `CN${s}`;
   }
 }
