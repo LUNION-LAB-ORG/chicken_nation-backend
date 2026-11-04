@@ -20,6 +20,7 @@ import { RequirePermission } from 'src/modules/auth/decorators/user-require-perm
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { ReferralService } from './referral.service';
+import { ReferralPilotageService } from './referral-pilotage.service';
 import { SetReferralConfigDto } from './dto/set-referral-config.dto';
 import {
   EarningsHistoryQueryDto,
@@ -30,7 +31,9 @@ import {
   ChangerCodeParrainDto,
   ChercherClientsQueryDto,
   CreerParrainDto,
+  ListeFilleulsQueryDto,
   ListeParrainsQueryDto,
+  PeriodeParrainageQueryDto,
   RattacherFilleulDto,
   VerserParrainDto,
 } from './dto/referral-parrain-admin.dto';
@@ -43,13 +46,23 @@ import {
 @Controller('referral/admin')
 @UseGuards(JwtAuthGuard, UserPermissionsGuard)
 export class ReferralAdminController {
-  constructor(private readonly referralService: ReferralService) {}
+  constructor(
+    private readonly referralService: ReferralService,
+    private readonly pilotage: ReferralPilotageService,
+  ) {}
 
   @Get('stats')
   @RequirePermission(Modules.FIDELITE, Action.READ)
   @ApiOperation({ summary: 'Stats globales de parrainage' })
   stats() {
     return this.referralService.getGlobalStats();
+  }
+
+  @Get('tableau')
+  @RequirePermission(Modules.FIDELITE, Action.READ)
+  @ApiOperation({ summary: 'Chiffres du programme sur la période, soldes à ce jour, courbes' })
+  tableau(@Query() query: PeriodeParrainageQueryDto) {
+    return this.pilotage.tableau(query);
   }
 
   @Get('config')
@@ -70,9 +83,16 @@ export class ReferralAdminController {
 
   @Get('ambassadors')
   @RequirePermission(Modules.FIDELITE, Action.READ)
-  @ApiOperation({ summary: 'Tous les parrains (les plus de filleuls en tête), recherche et pages' })
+  @ApiOperation({ summary: 'Tous les parrains : recherche, état, tri, période, pages' })
   ambassadors(@Req() req: Request, @Query() query: ListeParrainsQueryDto) {
-    return this.referralService.adminListAmbassadors(query, (req.user as User)?.role);
+    return this.pilotage.parrains(query, (req.user as User)?.role);
+  }
+
+  @Get('filleuls')
+  @RequirePermission(Modules.FIDELITE, Action.READ)
+  @ApiOperation({ summary: 'Tous les filleuls : recherche, état, période, pages' })
+  filleuls(@Req() req: Request, @Query() query: ListeFilleulsQueryDto) {
+    return this.pilotage.filleuls(query, (req.user as User)?.role);
   }
 
   @Post('ambassadors')
@@ -143,9 +163,9 @@ export class ReferralAdminController {
 
   @Get('earnings')
   @RequirePermission(Modules.FIDELITE, Action.READ)
-  @ApiOperation({ summary: 'Historique paginé des gains (filtres : referrer_id, status)' })
-  earnings(@Query() query: EarningsHistoryQueryDto) {
-    return this.referralService.adminEarningsHistory(query);
+  @ApiOperation({ summary: 'Tous les gains : recherche, statut, type, période, pages' })
+  earnings(@Req() req: Request, @Query() query: EarningsHistoryQueryDto) {
+    return this.pilotage.gains(query, (req.user as User)?.role);
   }
 
   @Post('earnings/mark-payable')

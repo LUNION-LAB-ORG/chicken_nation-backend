@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { ReferralEarningStatus } from '@prisma/client';
+import { ReferralEarningStatus, ReferralEarningType } from '@prisma/client';
 import {
   ArrayNotEmpty,
   IsArray,
@@ -8,9 +8,11 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { PeriodeParrainageQueryDto } from './referral-parrain-admin.dto';
 
 /** Passe des earnings PENDING→PAYABLE : par ids OU tout le PENDING d'un parrain. */
 export class MarkPayableDto {
@@ -41,7 +43,7 @@ export class MarkPaidDto {
 }
 
 /** Filtres de l'historique des earnings. */
-export class EarningsHistoryQueryDto {
+export class EarningsHistoryQueryDto extends PeriodeParrainageQueryDto {
   @ApiPropertyOptional({ description: 'Filtrer par parrain' })
   @IsOptional()
   @IsUUID('4')
@@ -52,6 +54,17 @@ export class EarningsHistoryQueryDto {
   @IsEnum(ReferralEarningStatus)
   status?: ReferralEarningStatus;
 
+  @ApiPropertyOptional({ enum: ReferralEarningType, description: 'Prime ou commission' })
+  @IsOptional()
+  @IsEnum(ReferralEarningType)
+  type?: ReferralEarningType;
+
+  @ApiPropertyOptional({ description: 'Nom, code ou téléphone du parrain ou du filleul' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  search?: string;
+
   @ApiPropertyOptional({ description: 'Page (défaut 1)' })
   @IsOptional()
   @Type(() => Number)
@@ -59,7 +72,7 @@ export class EarningsHistoryQueryDto {
   @Min(1)
   page?: number;
 
-  @ApiPropertyOptional({ description: 'Taille de page (défaut 20, max 100)' })
+  @ApiPropertyOptional({ description: 'Taille de page (défaut 10, max 50)' })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ReferralService } from './referral.service';
+import { ReferralPilotageService } from './referral-pilotage.service';
 import { ReferralController } from './referral.controller';
 import { ReferralAdminController } from './referral-admin.controller';
 import { VoucherModule } from '../voucher/voucher.module';
@@ -14,7 +15,7 @@ import { ExpoPushModule } from 'src/expo-push/expo-push.module';
 @Module({
   imports: [VoucherModule, ExpoPushModule],
   controllers: [ReferralController, ReferralAdminController],
-  providers: [ReferralService],
+  providers: [ReferralService, ReferralPilotageService],
   exports: [ReferralService],
 })
 export class ReferralModule {}

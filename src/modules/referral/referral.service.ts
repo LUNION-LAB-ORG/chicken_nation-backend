@@ -32,7 +32,7 @@ const CLIENT_PARRAIN = {
 
 type ClientParrain = Prisma.CustomerGetPayload<{ select: typeof CLIENT_PARRAIN }>;
 
-const nomComplet = (c: { first_name?: string | null; last_name?: string | null } | null | undefined) =>
+export const nomComplet = (c: { first_name?: string | null; last_name?: string | null } | null | undefined) =>
   [c?.first_name, c?.last_name].filter((p) => p && p.trim()).join(' ') || null;
 
 const fcfa = (n: number) => `${n.toLocaleString('fr-FR')} FCFA`;
@@ -758,47 +758,11 @@ export class ReferralService {
   // ── Admin (back office) ───────────────────────────────────────────────────
 
   /**
-   * Tous les parrains : chaque client qui a un code, ceux qui ont le plus de
-   * filleuls en tête. Recherche par nom, code ou téléphone (pas par téléphone
-   * pour un rôle qui reçoit les numéros masqués : la réponse dirait quels
-   * chiffres figurent dans un numéro caché).
-   *
-   * L'ancienne liste ne montrait que les parrains déjà rémunérés, sous une
-   * forme que l'écran ne lisait pas : elle restait vide (03/11).
+   * Recherche d'un client par nom (chaque mot), code ou téléphone. Pas par
+   * téléphone pour un rôle qui reçoit les numéros masqués : la réponse dirait
+   * quels chiffres figurent dans un numéro caché.
    */
-  async adminListAmbassadors(
-    q: { page?: number; limit?: number; search?: string },
-    role?: UserRole | null,
-  ) {
-    const page = Math.max(1, Math.floor(Number(q.page) || 1));
-    const limit = Math.min(Math.max(1, Math.floor(Number(q.limit) || 10)), 50);
-    const where: Prisma.CustomerWhereInput = {
-      referral_code: { not: null },
-      entity_status: { not: EntityStatus.DELETED },
-      ...this.filtreRecherche(q.search, role),
-    };
-    const [clients, total, { payout_threshold }] = await Promise.all([
-      this.prisma.customer.findMany({
-        where,
-        orderBy: [{ referrals_made: { _count: 'desc' } }, { created_at: 'desc' }],
-        skip: (page - 1) * limit,
-        take: limit,
-        select: CLIENT_PARRAIN,
-      }),
-      this.prisma.customer.count({ where }),
-      this.getEarningConfig(),
-    ]);
-    return {
-      items: await this.lignesParrains(clients),
-      total,
-      page,
-      totalPages: Math.max(1, Math.ceil(total / limit)),
-      payout_threshold,
-    };
-  }
-
-  /** Recherche d'un client par nom (chaque mot), code ou téléphone. */
-  private filtreRecherche(search: string | undefined, role?: UserRole | null): Prisma.CustomerWhereInput {
+  filtreRecherche(search: string | undefined, role?: UserRole | null): Prisma.CustomerWhereInput {
     const s = (search ?? '').trim();
     if (!s) return {};
     const mots = s.split(/\s+/).filter(Boolean);
@@ -864,7 +828,7 @@ export class ReferralService {
   }
 
   /** Ventes des clients (même règle que les statistiques : FILTRE_VENTE). */
-  private async ventesParClient(ids: string[]) {
+  async ventesParClient(ids: string[]) {
     const ventes = new Map<string, { montant: number; commandes: number }>();
     if (!ids.length) return ventes;
     const groupes = await this.prisma.order.groupBy({
@@ -1206,31 +1170,6 @@ export class ReferralService {
       },
     });
     return { paid: r.count };
-  }
-
-  /** Historique paginé des earnings (filtres : referrer_id, status). */
-  async adminEarningsHistory(q: {
-    referrer_id?: string;
-    status?: ReferralEarningStatus;
-    page?: number;
-    limit?: number;
-  }) {
-    const page = q.page && q.page > 0 ? q.page : 1;
-    const limit = Math.min(q.limit && q.limit > 0 ? q.limit : 20, 100);
-    const where: Prisma.ReferralEarningWhereInput = {
-      ...(q.referrer_id ? { referrer_id: q.referrer_id } : {}),
-      ...(q.status ? { status: q.status } : {}),
-    };
-    const [data, total] = await this.prisma.$transaction([
-      this.prisma.referralEarning.findMany({
-        where,
-        orderBy: { created_at: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.prisma.referralEarning.count({ where }),
-    ]);
-    return { data, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
   }
 
   /** Stats globales de parrainage (tous clients confondus). */
