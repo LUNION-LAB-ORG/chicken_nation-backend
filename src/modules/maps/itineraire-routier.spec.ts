@@ -10,7 +10,7 @@ import type { Cache } from 'cache-manager';
 
 import { DELAI_CACHE_MS } from './cache-borne.helper';
 import { CompteurAppelsGoogleService } from './compteur-appels-google.service';
-import { MapsService } from './maps.service';
+import { ITINERAIRES_EN_MEMOIRE_MAX, MapsService } from './maps.service';
 
 const TRENTE_JOURS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -183,6 +183,64 @@ describe('itineraireRoutier', () => {
       secondes: 500,
       polyligne: '',
     });
+  });
+});
+
+describe('itinéraire déjà connu : Google n’est pas repayé si Redis ne répond pas', () => {
+  const redisMuet = () => {
+    const c = monter();
+    c.espions.get.mockImplementation(async () => {
+      throw new Error('Redis trop lent');
+    });
+    return c;
+  };
+
+  it('reçu de Google puis redemandé : un seul appel, un seul compté', async () => {
+    const { maps, compteur } = redisMuet();
+    appelsGoogle.mockResolvedValueOnce(reponseDirections([{ metres: 4800, secondes: 720 }]));
+
+    const premier = await maps.itineraireRoutier({ ...ZONE_4, ...PORT_BOUET }, { pour: 'direction' });
+    const second = await maps.itineraireRoutier({ ...ZONE_4, ...PORT_BOUET }, { pour: 'direction' });
+
+    expect(second).toEqual(premier);
+    expect(appelsGoogle).toHaveBeenCalledTimes(1);
+    expect(compteur.reserver).toHaveBeenCalledTimes(1);
+  });
+
+  it('lu une fois dans Redis, puis Redis muet : toujours servi, frais de livraison compris', async () => {
+    const { maps, valeurs, espions } = monter();
+    valeurs.set(CLE_ROUTE, { metres: 4800, secondes: 720, polyligne: '' });
+    await expect(maps.distanceRoutiereMetres({ ...ZONE_4, ...PORT_BOUET })).resolves.toBe(4800);
+
+    espions.get.mockImplementation(async () => {
+      throw new Error('Redis trop lent');
+    });
+    await expect(maps.distanceRoutiereMetres({ ...ZONE_4, ...PORT_BOUET })).resolves.toBe(4800);
+    expect(appelsGoogle).not.toHaveBeenCalled();
+  });
+
+  it('Google en échec : rien n’est retenu, le trajet reste à redemander', async () => {
+    const { maps } = monter();
+    appelsGoogle.mockResolvedValue({ ok: true, json: async () => ({ status: 'ZERO_RESULTS' }) } as unknown as Response);
+
+    await maps.itineraireRoutier({ ...ZONE_4, ...PORT_BOUET });
+    await maps.itineraireRoutier({ ...ZONE_4, ...PORT_BOUET });
+
+    expect(appelsGoogle).toHaveBeenCalledTimes(2);
+  });
+
+  it('mémoire bornée : au-delà du maximum, le plus ancien sort', async () => {
+    const { maps } = redisMuet();
+    appelsGoogle.mockImplementation(async () => reponseDirections([{ metres: 4800, secondes: 720 }]));
+    const trajet = (i: number) => ({ ...ZONE_4, destLat: 5, destLng: -3 - i / 10000 });
+
+    for (let i = 0; i <= ITINERAIRES_EN_MEMOIRE_MAX; i++) await maps.itineraireRoutier(trajet(i));
+    expect(appelsGoogle).toHaveBeenCalledTimes(ITINERAIRES_EN_MEMOIRE_MAX + 1);
+
+    await maps.itineraireRoutier(trajet(ITINERAIRES_EN_MEMOIRE_MAX)); // le dernier : encore là
+    expect(appelsGoogle).toHaveBeenCalledTimes(ITINERAIRES_EN_MEMOIRE_MAX + 1);
+    await maps.itineraireRoutier(trajet(0)); // le premier : sorti
+    expect(appelsGoogle).toHaveBeenCalledTimes(ITINERAIRES_EN_MEMOIRE_MAX + 2);
   });
 });
 

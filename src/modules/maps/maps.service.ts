@@ -151,12 +151,23 @@ function delaiGoogleMs(env: Record<string, string | undefined> = process.env): n
 }
 const GOOGLE_TIMEOUT_MS = delaiGoogleMs();
 
+/** Itinéraires routiers gardés en mémoire ; au-delà, les plus anciens sortent. */
+export const ITINERAIRES_EN_MEMOIRE_MAX = 2000;
+
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
 export class MapsService {
   private readonly logger = new Logger(MapsService.name);
   private readonly apiKey: string;
+  /**
+   * Itinéraires déjà lus ou reçus. Le planificateur relit le tracé de chaque
+   * commande toutes les 10 s, et une lecture de Redis lente (plus de 400 ms) ou
+   * en erreur vaut « absent ». Du 27/10 au 04/11, au moins 37 % des appels à
+   * Google ont redemandé un trajet déjà obtenu, cause exacte non établie. En
+   * mémoire, il n'est plus redemandé, quoi que réponde Redis.
+   */
+  private readonly itinerairesConnus = new Map<string, IItineraireRoutier>();
 
   constructor(
     @Inject(CACHE_MANAGER) private readonly cache: Cache,
@@ -392,6 +403,9 @@ export class MapsService {
 
   /** Itinéraire routier déjà en cache, sans jamais appeler Google. */
   private async itineraireEnCache(cle: string): Promise<IItineraireRoutier | null> {
+    const connu = this.itinerairesConnus.get(cle);
+    if (connu) return connu;
+
     let brut: unknown = await this.lireCache<unknown>(cle);
     if (typeof brut === 'string') {
       try {
@@ -404,11 +418,20 @@ export class MapsService {
     const metres = Number(v?.metres);
     if (!v || !Number.isFinite(metres) || metres <= 0) return null;
     const secondes = Number(v.secondes);
-    return {
+    const itineraire: IItineraireRoutier = {
       metres,
       secondes: Number.isFinite(secondes) && secondes > 0 ? secondes : 0,
       polyligne: typeof v.polyligne === 'string' ? v.polyligne : '',
     };
+    this.retenirItineraire(cle, itineraire);
+    return itineraire;
+  }
+
+  private retenirItineraire(cle: string, itineraire: IItineraireRoutier): void {
+    this.itinerairesConnus.set(cle, itineraire);
+    if (this.itinerairesConnus.size <= ITINERAIRES_EN_MEMOIRE_MAX) return;
+    const plusAncien = this.itinerairesConnus.keys().next().value;
+    if (plusAncien !== undefined) this.itinerairesConnus.delete(plusAncien);
   }
 
   /**
@@ -508,6 +531,7 @@ export class MapsService {
         secondes: Number.isFinite(secondes) && secondes > 0 ? secondes : 0,
         polyligne: route.overview_polyline?.points ?? '',
       };
+      this.retenirItineraire(cacheKey, itineraire);
       await this.ecrireCache(cacheKey, itineraire, TTL.ROAD_DISTANCE);
       return itineraire;
     } catch (err) {
