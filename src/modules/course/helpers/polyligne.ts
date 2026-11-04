@@ -110,7 +110,7 @@ function planCentreSur(origine: ILatLng): (p: ILatLng) => [number, number] {
 }
 
 /** Retire les points répétés d'affilée (segments de longueur nulle). */
-function sansDoublons(trace: readonly ILatLng[]): ILatLng[] {
+export function sansDoublons(trace: readonly ILatLng[]): ILatLng[] {
   const sortie: ILatLng[] = [];
   for (const p of trace) {
     if (!Number.isFinite(p?.lat) || !Number.isFinite(p?.lng)) continue;

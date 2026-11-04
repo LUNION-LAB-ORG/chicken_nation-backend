@@ -39,7 +39,7 @@ export class MapsController {
    * GET /maps/directions
    *
    * Calcule un itinéraire routier entre origin et destination (+ waypoints optionnels).
-   * Cache 10 min.
+   * Un livreur en route reprend le tracé récent vers sa destination (5 min, `trajet-vif.rules.ts`).
    *
    * @example
    *   GET /maps/directions?originLat=5.36&originLng=-4.01&destLat=5.38&destLng=-3.99

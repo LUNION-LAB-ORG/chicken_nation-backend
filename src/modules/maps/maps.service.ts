@@ -5,6 +5,7 @@ import type { Cache } from 'cache-manager';
 
 import { ecrireCacheBorne, lireCacheBorne } from './cache-borne.helper';
 import { CompteurAppelsGoogleService } from './compteur-appels-google.service';
+import { ajouterTrajet, DUREE_TRAJET_VIF_MS, reprendreTrajet, TrajetVif } from './trajet-vif.rules';
 
 // ─── Types partagés ──────────────────────────────────────────────────────────
 
@@ -86,10 +87,10 @@ export interface IPlaceDetailsResult {
 // ─── TTLs (millisecondes) ────────────────────────────────────────────────────
 
 const TTL = {
-  // 3 min (et non 10) : la durée est calculée AVEC le trafic temps réel. La
-  // mettre en cache trop longtemps reviendrait à servir un temps périmé, ce qui
-  // annulerait l'intérêt de la demander. Compromis entre fraîcheur et coût.
-  DIRECTIONS:        3 * 60 * 1000,         //   3 min  — durée avec trafic, doit rester fraîche
+  // 30 min. Cette clé contient l'origine au mètre près : seuls les trajets à
+  // point de départ fixe (restaurant → client) la retrouvent. Le livreur en route
+  // passe par `reprendreTrajet`, dont le trafic a au plus 5 minutes.
+  DIRECTIONS:       30 * 60 * 1000,         //  30 min  — trajet avec trafic, point de départ fixe
   // 30 jours. La distance ROUTIÈRE entre deux points fixes ne bouge pas d'un
   // jour à l'autre : contrairement à la durée, elle ne dépend pas du trafic.
   // Un cache long est ici gratuit en fraîcheur et décisif sur la facture
@@ -256,6 +257,18 @@ export class MapsService {
       return cached;
     }
 
+    // Sans étape : un tracé récent vers cette destination suffit tant que
+    // l'origine reste dessus, et il sert au livreur comme au client qui le suit.
+    const cleVifs = waypointsStr
+      ? null
+      : this.key('trajets-vifs', params.destLat.toFixed(4), params.destLng.toFixed(4));
+    const vifs = cleVifs ? await this.lireTrajetsVifs(cleVifs) : [];
+    const repris = reprendreTrajet({ latitude: params.originLat, longitude: params.originLng }, vifs, Date.now());
+    if (repris) {
+      this.compteur.compter('trajet_reutilise');
+      return repris;
+    }
+
     const url = new URL(`${BASE_URL}/directions/json`);
     url.searchParams.set('origin', `${params.originLat},${params.originLng}`);
     url.searchParams.set('destination', `${params.destLat},${params.destLng}`);
@@ -266,8 +279,8 @@ export class MapsService {
     // annoncé 12 min en prend 25 aux heures de pointe, et le livreur comme le
     // client se fient à un chiffre faux. Avec ces deux paramètres, la réponse
     // porte `duration_in_traffic`.
-    // ⚠️ Cet appel est facturé au tarif Directions Advanced (plus cher) : le
-    // cache court ci-dessus est ce qui garde la facture raisonnable.
+    // ⚠️ Cet appel est facturé au tarif Directions Advanced (plus cher) : les
+    // deux caches ci-dessus sont ce qui garde la facture raisonnable.
     url.searchParams.set('departure_time', 'now');
     url.searchParams.set('traffic_model', 'best_guess');
     url.searchParams.set('key', this.apiKey);
@@ -327,7 +340,21 @@ export class MapsService {
         legs,
       };
 
-      await this.ecrireCache(cacheKey, result, TTL.DIRECTIONS);
+      await Promise.all([
+        this.ecrireCache(cacheKey, result, TTL.DIRECTIONS),
+        cleVifs
+          ? this.ecrireCache(
+              cleVifs,
+              ajouterTrajet(vifs, {
+                calculeA: Date.now(),
+                coordinates: result.coordinates,
+                metres: result.totalDistanceMeters,
+                secondes: result.totalDurationSeconds,
+              }),
+              DUREE_TRAJET_VIF_MS,
+            )
+          : undefined,
+      ]);
       return result;
     } catch (err) {
       this.logger.warn(`[Maps] Directions error: ${(err as Error).message}`);
@@ -349,6 +376,12 @@ export class MapsService {
    */
   private lireCache<T>(cle: string): Promise<T | undefined> {
     return lireCacheBorne<T>(this.cache, cle);
+  }
+
+  /** Tracés récents vers une destination. */
+  private async lireTrajetsVifs(cle: string): Promise<TrajetVif[]> {
+    const lus = await this.lireCache<TrajetVif[]>(cle);
+    return Array.isArray(lus) ? lus : [];
   }
 
   /** Écriture du cache, bornée de même ; un échec est seulement noté. */
@@ -879,12 +912,10 @@ export class MapsService {
     const cached = await this.lireCache<string>(cacheKey);
     if (cached) return Buffer.from(cached, 'base64');
 
-    const itineraire = await this.getDirections({
-      originLat,
-      originLng,
-      destLat,
-      destLng,
-    });
+    // Seul le tracé sert ici : sans trafic, et le plus souvent déjà en cache,
+    // puisque c'est l'appel des frais de livraison.
+    const itineraire = await this.itineraireRoutier({ originLat, originLng, destLat, destLng });
+    const points = this.decodePolyline(itineraire?.polyligne ?? '');
 
     const construireUrl = (avecPastilles: boolean) => {
       const url = new URL(`${BASE_URL}/staticmap`);
@@ -947,10 +978,9 @@ export class MapsService {
         );
       }
 
-      if (itineraire?.coordinates?.length) {
+      if (points.length) {
         // On échantillonne : l'URL d'une Static Map est plafonnée à 8192
         // caractères, et une trace urbaine compte plusieurs centaines de points.
-        const points = itineraire.coordinates;
         const pas = Math.max(1, Math.ceil(points.length / 70));
         const retenus = points.filter((_, i) => i % pas === 0);
         const dernier = points[points.length - 1];
@@ -975,8 +1005,8 @@ export class MapsService {
        * l'emprise réelle du trajet, élargie d'une marge sur les quatre côtés,
        * plus la bande demandée en haut par l'écran.
        */
-      const lats = [originLat, destLat, ...(itineraire?.coordinates ?? []).map((c) => c.latitude)];
-      const lngs = [originLng, destLng, ...(itineraire?.coordinates ?? []).map((c) => c.longitude)];
+      const lats = [originLat, destLat, ...points.map((c) => c.latitude)];
+      const lngs = [originLng, destLng, ...points.map((c) => c.longitude)];
       const nord = Math.max(...lats);
       const sud = Math.min(...lats);
       const est = Math.max(...lngs);

@@ -32,6 +32,8 @@ export type FonctionGoogle =
   | 'regroupement_route'
   /** `getDirections` : trajet avec trafic (applis, suivi du client, durée de tournée). */
   | 'trajet_trafic'
+  /** Trajet servi SANS Google à partir d'un tracé récent (04/11) : ce qu'on n'a pas payé. */
+  | 'trajet_reutilise'
   | 'geocodage_inverse'
   | 'saisie_adresse'
   | 'details_lieu'
@@ -43,6 +45,7 @@ export const FONCTIONS_GOOGLE: readonly FonctionGoogle[] = [
   'detour',
   'temps_trajet',
   'trajet_trafic',
+  'trajet_reutilise',
   'geocodage_inverse',
   'saisie_adresse',
   'details_lieu',
@@ -119,7 +122,8 @@ function avantDelai<T>(promesse: Promise<T>, ms: number): Promise<T> {
  * plafonnées passent au repli sans Google jusqu'à minuit.
  *
  * Seuls les appels réellement envoyés sont comptés : une réponse servie par
- * le cache ne coûte rien et ne passe pas ici.
+ * le cache ne coûte rien et ne passe pas ici (sauf `trajet_reutilise`, qui
+ * mesure justement ces appels évités).
  */
 @Injectable()
 export class CompteurAppelsGoogleService implements OnModuleDestroy {

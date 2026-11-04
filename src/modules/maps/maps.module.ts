@@ -10,7 +10,7 @@ import { redisCompteurGoogleProvider } from './redis-compteur-google.provider';
  * Module Maps — proxy sécurisé vers Google Maps APIs avec cache Redis.
  *
  * Expose 4 endpoints :
- *  - GET /maps/directions           → Directions API (cache 3 min, trafic compris)
+ *  - GET /maps/directions           → Directions API (trafic compris, tracé récent réutilisé 5 min)
  *  - GET /maps/geocode/reverse      → Geocoding API (cache 24h)
  *  - GET /maps/places/autocomplete  → Places Autocomplete API (cache 5 min)
  *  - GET /maps/places/details/:id   → Places Details API (cache 7 jours)
