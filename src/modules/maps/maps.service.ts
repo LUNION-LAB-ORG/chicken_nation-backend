@@ -97,6 +97,10 @@ const TTL = {
   // Google, puisque cet appel est sur le chemin de CHAQUE commande livrée.
   ROAD_DISTANCE:    30 * 24 * 60 * 60 * 1000, // 30 jours — la route entre deux points est stable
   ECHEC_TRACE:      10 * 60 * 1000,         //  10 min  : tracé ou détour du planificateur que Google n'a pas donné
+  // 24 h : Google dit qu'il n'y a pas de route, la réponse ne changera pas dans
+  // 10 minutes. Un seul trajet sans route était redemandé de nuit comme de jour :
+  // 88 appels en 14 h 55 relevés le 05/11, soit environ 140 par jour.
+  SANS_ROUTE:       24 * 60 * 60 * 1000,    //  24 h    : aucune route entre ces deux points
   REVERSE_GEOCODE:  24 * 60 * 60 * 1000,    //  24h     — l'adresse d'un point reste stable
   AUTOCOMPLETE:      5 * 60 * 1000,         //   5 min  — suggestions fraîches
   PLACE_DETAILS:     7 * 24 * 60 * 60 * 1000, // 7 jours — les détails d'un lieu sont immuables
@@ -105,6 +109,11 @@ const TTL = {
   // la panne multipliée par la durée du cache.
   STATIC_ROUTE:     12 * 60 * 60 * 1000,    //  12h     — image d'itinéraire
 } as const;
+
+/** Combien de temps retenir une réponse de Google sans itinéraire. */
+function dureeEchec(status: string): number {
+  return status === 'ZERO_RESULTS' || status === 'NOT_FOUND' ? TTL.SANS_ROUTE : TTL.ECHEC_TRACE;
+}
 
 /** Adresse de l'API Google Maps en production. */
 export const GOOGLE_MAPS_API_PRODUCTION = 'https://maps.googleapis.com/maps/api';
@@ -494,7 +503,8 @@ export class MapsService {
     const cleEchec = this.cleTrajet('road-route-echec', origine, destination);
     if (pourDirection && (await this.lireCache<unknown>(cleEchec))) return null;
     if (!(await this.compteur.reserver(fonction))) return null;
-    const retenirEchec = () => (pourDirection ? this.ecrireCache(cleEchec, 1, TTL.ECHEC_TRACE) : Promise.resolve());
+    const retenirEchec = (duree: number = TTL.ECHEC_TRACE) =>
+      pourDirection ? this.ecrireCache(cleEchec, 1, duree) : Promise.resolve();
 
     const url = new URL(`${BASE_URL}/directions/json`);
     url.searchParams.set('origin', `${params.originLat},${params.originLng}`);
@@ -513,7 +523,7 @@ export class MapsService {
 
       if (data.status !== 'OK' || !data.routes?.[0]?.legs?.length) {
         this.logger.warn(`[Maps] Distance routière indisponible (status=${data.status})`);
-        await retenirEchec();
+        await retenirEchec(dureeEchec(data.status));
         return null;
       }
 
@@ -645,7 +655,7 @@ export class MapsService {
     const cleEchec = this.cleTrajet('detour-echec', r, p, l);
     if (await this.lireCache<unknown>(cleEchec)) return null;
     if (!(await this.compteur.reserver('detour'))) return null;
-    const retenirEchec = () => this.ecrireCache(cleEchec, 1, TTL.ECHEC_TRACE);
+    const retenirEchec = (duree: number = TTL.ECHEC_TRACE) => this.ecrireCache(cleEchec, 1, duree);
 
     const url = new URL(`${BASE_URL}/directions/json`);
     url.searchParams.set('origin', `${r.lat},${r.lng}`);
@@ -662,7 +672,7 @@ export class MapsService {
 
       if (data.status !== 'OK' || !data.routes?.[0]?.legs?.length) {
         this.logger.warn(`[Maps] Détour indisponible (status=${data.status})`);
-        await retenirEchec();
+        await retenirEchec(dureeEchec(data.status));
         return null;
       }
       const avecEtape = data.routes[0].legs.reduce((somme, leg) => somme + (leg.duration?.value ?? 0), 0);

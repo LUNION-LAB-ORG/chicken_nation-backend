@@ -141,14 +141,14 @@ describe('itineraireRoutier', () => {
     expect(valeurs.size).toBe(0);
   });
 
-  it('tracé du planificateur : échec de Google retenu 10 min, pas redemandé à chaque passage ; les frais redemandent (relecture)', async () => {
+  it('tracé du planificateur : aucune route retenue 24 h, pas redemandée à chaque passage ; les frais redemandent (relecture)', async () => {
     const { maps, valeurs, durees, compteur } = monter();
     appelsGoogle.mockResolvedValue({ ok: true, json: async () => ({ status: 'ZERO_RESULTS' }) } as unknown as Response);
     await expect(maps.itineraireRoutier({ ...ZONE_4, ...PORT_BOUET }, { pour: 'direction' })).resolves.toBeNull();
     expect(compteur.reserver).toHaveBeenCalledWith('trace_direction');
     const cleEchec = 'maps:road-route-echec:5.2860_-3.9737_5.2600_-3.9420';
     expect(valeurs.has(cleEchec)).toBe(true);
-    expect(durees.get(cleEchec)).toBe(10 * 60 * 1000);
+    expect(durees.get(cleEchec)).toBe(24 * 60 * 60 * 1000);
     expect(valeurs.has(CLE_ROUTE)).toBe(false);
 
     for (let i = 0; i < 5; i++) await maps.itineraireRoutier({ ...ZONE_4, ...PORT_BOUET }, { pour: 'direction' });
@@ -158,6 +158,29 @@ describe('itineraireRoutier', () => {
     // Frais de livraison : jamais bloqués par cet échec retenu.
     await expect(maps.distanceRoutiereMetres({ ...ZONE_4, ...PORT_BOUET })).resolves.toBeNull();
     expect(appelsGoogle).toHaveBeenCalledTimes(2);
+  });
+
+  it('tracé du planificateur : panne passagère de Google retenue 10 min seulement', async () => {
+    const cleEchec = 'maps:road-route-echec:5.2860_-3.9737_5.2600_-3.9420';
+    const pannes: (() => void)[] = [
+      () => appelsGoogle.mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'UNKNOWN_ERROR' }) } as unknown as Response),
+      () => appelsGoogle.mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'OVER_QUERY_LIMIT' }) } as unknown as Response),
+      () => appelsGoogle.mockRejectedValueOnce(new Error('réseau coupé')),
+    ];
+    for (const panne of pannes) {
+      const { maps, durees } = monter();
+      panne();
+      await maps.itineraireRoutier({ ...ZONE_4, ...PORT_BOUET }, { pour: 'direction' });
+      expect(durees.get(cleEchec)).toBe(10 * 60 * 1000);
+    }
+  });
+
+  it('une route trouvée par les frais passe avant l’échec retenu', async () => {
+    const { maps, valeurs } = monter();
+    valeurs.set('maps:road-route-echec:5.2860_-3.9737_5.2600_-3.9420', 1);
+    valeurs.set(CLE_ROUTE, { metres: 4800, secondes: 720, polyligne: '' });
+    await expect(maps.itineraireRoutier({ ...ZONE_4, ...PORT_BOUET }, { pour: 'direction' })).resolves.toMatchObject({ metres: 4800 });
+    expect(appelsGoogle).not.toHaveBeenCalled();
   });
 
   it('Google lent : abandon au bout de 2,5 s, repli', async () => {
@@ -328,7 +351,7 @@ describe('detourSansTrafic', () => {
     expect(appelsGoogle).not.toHaveBeenCalled();
   });
 
-  it('Google sans réponse utile pour l’étape : échec retenu 10 min, pas redemandé à chaque passage (relecture)', async () => {
+  it('aucune route pour l’étape : retenue 24 h, pas redemandée à chaque passage (relecture)', async () => {
     const { maps, valeurs, durees, compteur } = monter();
     valeurs.set(CLE_ROUTE, { metres: 4800, secondes: 720, polyligne: '' });
     appelsGoogle.mockResolvedValue({ ok: true, json: async () => ({ status: 'ZERO_RESULTS' }) } as unknown as Response);
@@ -336,14 +359,14 @@ describe('detourSansTrafic', () => {
     await expect(maps.detourSansTrafic({ restaurant: R, proche: P, lointain: L })).resolves.toBeNull();
     const cleEchec = 'maps:detour-echec:5.2860_-3.9737_5.2830_-3.9550_5.2600_-3.9420';
     expect(valeurs.has(cleEchec)).toBe(true);
-    expect(durees.get(cleEchec)).toBe(10 * 60 * 1000);
+    expect(durees.get(cleEchec)).toBe(24 * 60 * 60 * 1000);
     expect(valeurs.has(CLE_DETOUR)).toBe(false);
 
     for (let i = 0; i < 5; i++) await maps.detourSansTrafic({ restaurant: R, proche: P, lointain: L });
     expect(appelsGoogle).toHaveBeenCalledTimes(1);
     expect(compteur.reserver).toHaveBeenCalledTimes(1);
 
-    // Passé les 10 min (entrée effacée par le cache) : redemandé.
+    // Passé ce délai (entrée effacée par le cache) : redemandé.
     valeurs.delete(cleEchec);
     await maps.detourSansTrafic({ restaurant: R, proche: P, lointain: L });
     expect(appelsGoogle).toHaveBeenCalledTimes(2);

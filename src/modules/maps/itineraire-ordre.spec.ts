@@ -98,7 +98,7 @@ describe('itineraireRoutier pour l’ordre des arrêts', () => {
     await expect(maps.trajetEnCache(KOUMASSI, PORT_BOUET)).resolves.toBe(2600);
   });
 
-  it('plafond atteint : rien n’est envoyé ; échec de Google retenu 10 min', async () => {
+  it('plafond atteint : rien n’est envoyé ; aucune route retenue 24 h', async () => {
     const plafonne = monter();
     plafonne.compteur.reserver.mockResolvedValue(false);
     const params = { originLat: KOUMASSI.lat, originLng: KOUMASSI.lng, destLat: PORT_BOUET.lat, destLng: PORT_BOUET.lng };
@@ -108,7 +108,7 @@ describe('itineraireRoutier pour l’ordre des arrêts', () => {
     const muet = monter();
     fetchEspion.mockResolvedValue({ ok: true, json: async () => ({ status: 'ZERO_RESULTS' }) } as unknown as Response);
     await expect(muet.maps.itineraireRoutier(params, { pour: 'ordre' })).resolves.toBeNull();
-    expect(muet.durees.get(CLE_ECHEC)).toBe(10 * 60 * 1000);
+    expect(muet.durees.get(CLE_ECHEC)).toBe(24 * 60 * 60 * 1000);
     await muet.maps.itineraireRoutier(params, { pour: 'ordre' });
     expect(fetchEspion).toHaveBeenCalledTimes(1);
   });
@@ -136,7 +136,7 @@ describe('itineraireRoutier pour le second avis du regroupement (28/10)', () => 
     expect(fetchEspion).toHaveBeenCalledTimes(1);
   });
 
-  it('plafond quotidien atteint : rien n’est envoyé ; échec de Google retenu 10 min', async () => {
+  it('plafond quotidien atteint : rien n’est envoyé ; aucune route retenue 24 h', async () => {
     const plafonne = monter();
     plafonne.compteur.reserver.mockResolvedValue(false);
     await expect(plafonne.maps.itineraireRoutier(params, { pour: 'regroupement' })).resolves.toBeNull();
@@ -145,7 +145,7 @@ describe('itineraireRoutier pour le second avis du regroupement (28/10)', () => 
     const muet = monter();
     fetchEspion.mockResolvedValue({ ok: true, json: async () => ({ status: 'ZERO_RESULTS' }) } as unknown as Response);
     await expect(muet.maps.itineraireRoutier(params, { pour: 'regroupement' })).resolves.toBeNull();
-    expect(muet.durees.get(CLE_ECHEC)).toBe(10 * 60 * 1000);
+    expect(muet.durees.get(CLE_ECHEC)).toBe(24 * 60 * 60 * 1000);
     await muet.maps.itineraireRoutier(params, { pour: 'regroupement' });
     expect(fetchEspion).toHaveBeenCalledTimes(1);
   });
