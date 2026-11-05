@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsArray, ValidateNested, Max, Min } from 'class-validator';
+import { IsIn, IsNumber, IsOptional, IsArray, ValidateNested, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class LatLngDto {
@@ -44,4 +44,13 @@ export class DirectionsQueryDto {
    */
   @IsOptional()
   waypoints?: string;
+
+  /**
+   * `1` : départ d'un point fixe (restaurant), sans livreur à suivre. Tracé sans
+   * trafic, deux fois moins cher et le plus souvent déjà en cache. Ignoré avec
+   * des waypoints.
+   */
+  @IsOptional()
+  @IsIn(['1'])
+  sans_trafic?: string;
 }

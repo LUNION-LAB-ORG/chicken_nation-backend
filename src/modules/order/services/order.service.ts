@@ -4402,7 +4402,7 @@ export class OrderService {
       typeof restaurant?.latitude === 'number' &&
       typeof restaurant?.longitude === 'number'
     ) {
-      const trajet = await this.mapsService.getDirections({
+      const trajet = await this.mapsService.trajetSansTrafic({
         originLat: restaurant.latitude,
         originLng: restaurant.longitude,
         destLat: body.lat,

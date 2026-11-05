@@ -552,6 +552,31 @@ export class MapsService {
   }
 
   /**
+   * Trajet affiché depuis un point fixe (restaurant vers client), sans livreur
+   * à suivre : le trafic en direct n'y apporte que la durée, et coûte deux fois
+   * plus cher. Même tracé que les frais de livraison, donc le plus souvent déjà
+   * en cache. La durée rendue est celle sans trafic. `null` sans tracé.
+   */
+  async trajetSansTrafic(params: {
+    originLat: number;
+    originLng: number;
+    destLat: number;
+    destLng: number;
+  }): Promise<IDirectionsResult | null> {
+    const itineraire = await this.itineraireRoutier(params);
+    const coordinates = this.decodePolyline(itineraire?.polyligne ?? '');
+    if (!itineraire || coordinates.length === 0) return null;
+    return {
+      coordinates,
+      totalDistanceMeters: itineraire.metres,
+      totalDurationSeconds: itineraire.secondes,
+      totalDurationWithStopsSeconds: itineraire.secondes,
+      stopsSeconds: 0,
+      legs: [],
+    };
+  }
+
+  /**
    * Distance PAR LA ROUTE d'un point à un autre déjà en cache (`road-route`,
    * 30 jours), en mètres, dans ce sens seulement : ordre des arrêts d'une
    * tournée (27/10), sur le chemin du planificateur. N'appelle JAMAIS Google,

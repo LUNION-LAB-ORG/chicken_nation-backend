@@ -88,13 +88,16 @@ export class MapsController {
       }
     }
 
-    const result = await this.mapsService.getDirections({
+    const trajet = {
       originLat: query.originLat,
       originLng: query.originLng,
       destLat: query.destLat,
       destLng: query.destLng,
-      waypoints,
-    });
+    };
+    const result =
+      query.sans_trafic === '1' && !waypoints?.length
+        ? await this.mapsService.trajetSansTrafic(trajet)
+        : await this.mapsService.getDirections({ ...trajet, waypoints });
 
     if (!result) {
       throw new NotFoundException('Itinéraire introuvable ou API indisponible');

@@ -209,6 +209,54 @@ describe('itineraireRoutier', () => {
   });
 });
 
+describe('trajetSansTrafic : carte qui part du restaurant, sans livreur à suivre', () => {
+  it('appel au tarif de base, compté « itineraire », rendu comme un trajet', async () => {
+    const { maps, compteur } = monter();
+    appelsGoogle.mockResolvedValueOnce(reponseDirections([{ metres: 4800, secondes: 720 }]));
+
+    const trajet = await maps.trajetSansTrafic({ ...ZONE_4, ...PORT_BOUET });
+
+    expect(String(appelsGoogle.mock.calls[0][0])).not.toContain('departure_time');
+    expect(compteur.reserver).toHaveBeenCalledWith('itineraire');
+    expect(compteur.compter).not.toHaveBeenCalledWith('trajet_trafic');
+    expect(trajet).toMatchObject({
+      totalDistanceMeters: 4800,
+      totalDurationSeconds: 720,
+      totalDurationWithStopsSeconds: 720,
+      stopsSeconds: 0,
+      legs: [],
+    });
+    expect(trajet!.coordinates.length).toBeGreaterThan(1);
+  });
+
+  it('tracé déjà gardé pour les frais de livraison : aucun appel à Google', async () => {
+    const { maps, compteur } = monter();
+    appelsGoogle.mockResolvedValueOnce(reponseDirections([{ metres: 4800, secondes: 720 }]));
+    await maps.itineraireRoutier({ ...ZONE_4, ...PORT_BOUET });
+    appelsGoogle.mockClear();
+    compteur.reserver.mockClear();
+
+    const trajet = await maps.trajetSansTrafic({ ...ZONE_4, ...PORT_BOUET });
+
+    expect(trajet?.totalDistanceMeters).toBe(4800);
+    expect(appelsGoogle).not.toHaveBeenCalled();
+    expect(compteur.reserver).not.toHaveBeenCalled();
+  });
+
+  it('pas de tracé ou pas de route : null, pour que l’écran garde son repli', async () => {
+    const sansTrace = monter();
+    appelsGoogle.mockResolvedValueOnce(reponseDirections([{ metres: 4800, secondes: 720 }], ''));
+    expect(await sansTrace.maps.trajetSansTrafic({ ...ZONE_4, ...PORT_BOUET })).toBeNull();
+
+    const sansRoute = monter();
+    appelsGoogle.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 'ZERO_RESULTS' }),
+    } as unknown as Response);
+    expect(await sansRoute.maps.trajetSansTrafic({ ...ZONE_4, ...PORT_BOUET })).toBeNull();
+  });
+});
+
 describe('itinéraire déjà connu : Google n’est pas repayé si Redis ne répond pas', () => {
   const redisMuet = () => {
     const c = monter();
