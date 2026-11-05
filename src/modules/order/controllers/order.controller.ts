@@ -32,6 +32,7 @@ import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { JwtCustomerOrStaffOptionalAuthGuard } from 'src/modules/auth/guards/jwt-customer-or-staff-optional-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
 import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
@@ -422,8 +423,9 @@ export class OrderController {
    */
   @Get('/itineraire-livraison')
   @ApiOperation({ summary: "Itinéraire du restaurant retenu jusqu'à l'adresse" })
-  async obtenirItineraireLivraison(@Query() params: FraisLivraisonDto) {
-    return this.orderService.obtenirItineraireLivraison(params);
+  @UseGuards(JwtCustomerOrStaffOptionalAuthGuard)
+  async obtenirItineraireLivraison(@Req() req: Request, @Query() params: FraisLivraisonDto) {
+    return this.orderService.obtenirItineraireLivraison(params, req.user as Customer | User | undefined);
   }
 
   @Get('/frais-livraison')
@@ -433,8 +435,9 @@ export class OrderController {
     description: 'Frais de livraison obtenus avec succès',
   })
   @ApiBody({ type: FraisLivraisonDto })
-  async obtenirFraisLivraison(@Query() params: FraisLivraisonDto) {
-    return this.orderService.obtenirFraisLivraison(params);
+  @UseGuards(JwtCustomerOrStaffOptionalAuthGuard)
+  async obtenirFraisLivraison(@Req() req: Request, @Query() params: FraisLivraisonDto) {
+    return this.orderService.obtenirFraisLivraison(params, req.user as Customer | User | undefined);
   }
 
   /**

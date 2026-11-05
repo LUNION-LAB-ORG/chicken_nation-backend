@@ -407,6 +407,7 @@ export class DeliveryFeeHelper {
     orderAmount,
     loyaltyLevel,
     customerId,
+    dishIds,
   }: {
     lat: number;
     long: number;
@@ -425,6 +426,7 @@ export class DeliveryFeeHelper {
     orderAmount?: number;
     loyaltyLevel?: LoyaltyLevel | null;
     customerId?: string | null;
+    dishIds?: string[];
   }): Promise<DeliveryFeeResult> {
     if (!restaurant) {
       throw new BadRequestException('Aucun restaurant disponible');
@@ -511,6 +513,7 @@ export class DeliveryFeeHelper {
         orderAmount,
         loyaltyLevel,
         customerId: customerId ?? null,
+        dishIds,
       });
       if (applicable) {
         result = {

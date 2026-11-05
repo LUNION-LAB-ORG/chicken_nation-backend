@@ -4,6 +4,7 @@ import {
   DeliveryOfferType,
   EntityStatus,
   LoyaltyLevel,
+  NationCardStatus,
   Prisma,
   PromoCodeUsageStatus,
   User,
@@ -30,6 +31,11 @@ export interface DeliveryOfferContext {
   orderAmount: number;
   loyaltyLevel?: LoyaltyLevel | null;
   customerId?: string | null;
+  /**
+   * Plats du panier. Absents, une offre limitée à des menus ou des catégories
+   * ne s'applique pas, comme une offre à paliers sans distance.
+   */
+  dishIds?: string[];
   now?: Date;
 }
 
@@ -264,6 +270,9 @@ export class DeliveryOfferService {
       'target_standard',
       'target_premium',
       'target_gold',
+      'target_etudiant',
+      'dish_ids',
+      'category_ids',
       'days_of_week',
       'time_start',
       'time_end',
@@ -340,6 +349,36 @@ export class DeliveryOfferService {
       return loyaltyResolved;
     };
 
+    // Carte étudiante et plats du panier : lus seulement si une offre les demande.
+    let etudiantResolu: boolean | undefined;
+    const resolveEtudiant = async (): Promise<boolean> => {
+      if (etudiantResolu !== undefined) return etudiantResolu;
+      const carte = ctx.customerId
+        ? await this.prisma.nationCard.findFirst({
+            where: {
+              customer_id: ctx.customerId,
+              is_student: true,
+              status: NationCardStatus.ACTIVE,
+            },
+            select: { id: true },
+          })
+        : null;
+      etudiantResolu = !!carte;
+      return etudiantResolu;
+    };
+
+    let platsResolus: { id: string; category_id: string }[] | undefined;
+    const resolvePlats = async () => {
+      if (platsResolus) return platsResolus;
+      platsResolus = ctx.dishIds?.length
+        ? await this.prisma.dish.findMany({
+            where: { id: { in: ctx.dishIds } },
+            select: { id: true, category_id: true },
+          })
+        : [];
+      return platsResolus;
+    };
+
     const weekday = WEEKDAYS[now.getDay()];
     const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(
       now.getMinutes(),
@@ -359,15 +398,24 @@ export class DeliveryOfferService {
       if (offer.min_order_amount && ctx.orderAmount < offer.min_order_amount) {
         continue;
       }
-      // Ciblage fidélité (si au moins un niveau coché)
+      // Menus et catégories : un seul plat concerné suffit.
+      if (offer.dish_ids.length > 0 || offer.category_ids.length > 0) {
+        const plats = await resolvePlats();
+        const concerne = plats.some(
+          (p) => offer.dish_ids.includes(p.id) || offer.category_ids.includes(p.category_id),
+        );
+        if (!concerne) continue;
+      }
+      // Ciblage clients (si au moins une case cochée) : l'une d'elles suffit.
       const anyLevel =
         offer.target_standard || offer.target_premium || offer.target_gold;
-      if (anyLevel) {
-        const lvl = await resolveLoyalty();
+      if (anyLevel || offer.target_etudiant) {
+        const lvl = anyLevel ? await resolveLoyalty() : null;
         const ok =
           (lvl === LoyaltyLevel.STANDARD && offer.target_standard) ||
           (lvl === LoyaltyLevel.VIP && offer.target_premium) ||
-          (lvl === LoyaltyLevel.VVIP && offer.target_gold);
+          (lvl === LoyaltyLevel.VVIP && offer.target_gold) ||
+          (offer.target_etudiant && (await resolveEtudiant()));
         if (!ok) continue;
       }
       // Jours de la semaine

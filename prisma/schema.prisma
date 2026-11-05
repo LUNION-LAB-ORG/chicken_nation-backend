@@ -3318,6 +3318,14 @@ model DeliveryOffer {
   target_standard Boolean @default(false)
   target_premium  Boolean @default(false)
   target_gold     Boolean @default(false)
+  // Client dont la Carte de la Nation ACTIVE est étudiante. S'ajoute aux niveaux
+  // cochés : il suffit de remplir l'une des cases.
+  target_etudiant Boolean @default(false)
+
+  // Menus et catégories concernés (tous deux vides = tout le menu) : il suffit
+  // d'un plat du panier parmi eux.
+  dish_ids     String[] @default([])
+  category_ids String[] @default([])
 
   // Jours / créneaux (vide = tous les jours / toute la journée)
   days_of_week String[] @default([]) // ex: ["saturday","sunday"] (minuscules)

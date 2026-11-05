@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsNumber, IsOptional, IsString, IsUUID } from "class-validator";
+import { ArrayMaxSize, IsArray, IsNumber, IsOptional, IsString, IsUUID } from "class-validator";
 import { Transform } from "class-transformer";
 
 export class FraisLivraisonDto {
@@ -23,4 +23,17 @@ export class FraisLivraisonDto {
     @IsNumber()
     @Transform(({ value }) => (value === undefined || value === '' ? undefined : Number(value)))
     order_amount?: number;
+
+    @ApiPropertyOptional({ description: "Plats du panier, séparés par des virgules : pour les offres limitées à des menus ou des catégories" })
+    @IsOptional()
+    @Transform(({ value }) => (typeof value === 'string' ? value.split(',').filter(Boolean) : value))
+    @IsArray()
+    @ArrayMaxSize(100)
+    @IsUUID('all', { each: true })
+    dish_ids?: string[];
+
+    @ApiPropertyOptional({ description: "Client de la commande en cours de saisie (personnel seulement, ignoré sinon)" })
+    @IsOptional()
+    @IsUUID()
+    customer_id?: string;
 }

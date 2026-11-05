@@ -18,6 +18,7 @@ import * as request from 'supertest';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { KkiapayService } from 'src/kkiapay/kkiapay.service';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
+import { JwtCustomerOrStaffOptionalAuthGuard } from 'src/modules/auth/guards/jwt-customer-or-staff-optional-auth.guard';
 import { JwtStrategy } from 'src/modules/auth/strategies/jwt.strategy';
 import { DELIVERY_FEE_DEFAULT_GRID } from '../helpers/delivery-fee.helper';
 import { KkiapayOrderListenerService } from '../listeners/kkiapay-order.listener.service';
@@ -44,8 +45,11 @@ describe('Routes publiques de commande', () => {
     expect(methodes.indexOf(nom)).toBeLessThan(methodes.indexOf('findOne'));
   });
 
+  // Frais et itinéraire reconnaissent le client s'il est connecté (offres
+  // réservées aux étudiants ou à un niveau), sans jamais le demander.
   it.each(ROUTES_PUBLIQUES)('GET %s ne demande aucune connexion', (_chemin, nom) => {
-    expect(Reflect.getMetadata(GUARDS_METADATA, handler(nom))).toBeUndefined();
+    const gardes = Reflect.getMetadata(GUARDS_METADATA, handler(nom)) ?? [];
+    expect(gardes.filter((g: unknown) => g !== JwtCustomerOrStaffOptionalAuthGuard)).toEqual([]);
   });
 
   it('GET :id reste réservée au personnel connecté', () => {
@@ -154,6 +158,7 @@ describe('GET /orders/conditions-commande, chaîne HTTP', () => {
   };
   const service = {
     obtenirConditionsCommande: jest.fn(),
+    obtenirFraisLivraison: jest.fn(),
     findById: jest.fn(),
   };
 
@@ -198,6 +203,19 @@ describe('GET /orders/conditions-commande, chaîne HTTP', () => {
       .get('/orders/conditions-commande')
       .set('Authorization', 'Bearer jeton-invalide')
       .expect(200);
+  });
+
+  it('frais de livraison : 200 sans jeton et avec un jeton invalide, traité en invité', async () => {
+    service.obtenirFraisLivraison.mockResolvedValue({ montant: 1500 });
+
+    await request(app.getHttpServer()).get('/orders/frais-livraison?lat=5.3&long=-4').expect(200);
+    await request(app.getHttpServer())
+      .get('/orders/frais-livraison?lat=5.4&long=-4')
+      .set('Authorization', 'Bearer jeton-invalide')
+      .expect(200);
+
+    expect(service.obtenirFraisLivraison).toHaveBeenCalledTimes(2);
+    for (const [, principal] of service.obtenirFraisLivraison.mock.calls) expect(principal).toBeUndefined();
   });
 
   it('GET /orders/:id répond toujours 401 sans jeton, sans lire la commande', async () => {

@@ -76,6 +76,7 @@ import {
 } from '../helpers/brouillons.rules';
 import { motifRefusModification, peutModifierCommande } from '../helpers/modification-commande.rules';
 import { heureDeLaCommande } from '../helpers/heure-commande.rules';
+import { clientDeLApercu } from '../helpers/client-apercu-frais.rules';
 import { OrderRelanceService } from './order-relance.service';
 import {
   DetachementCommandeService,
@@ -349,6 +350,7 @@ export class OrderService {
         channel: 'APP',
         orderAmount: netAmount,
         customerId: customerData.customer_id,
+        dishIds,
       });
       finalDeliveryFee = delivery.montant;
       deliveryFeeBase = delivery.original_montant ?? delivery.montant;
@@ -852,6 +854,7 @@ export class OrderService {
         channel: 'CALL_CENTER',
         orderAmount: netAmount,
         customerId: customerData.customer_id,
+        dishIds: items.map((item) => item.dish_id),
       });
     } else {
       restaurant = await this.orderHelper.getClosestRestaurant({
@@ -4371,7 +4374,7 @@ export class OrderService {
    * rien montrer. C'est le serveur qui tranche, c'est donc à lui de dire
    * d'où part la course.
    */
-  async obtenirItineraireLivraison(body: FraisLivraisonDto) {
+  async obtenirItineraireLivraison(body: FraisLivraisonDto, principal?: Customer | User) {
     const restaurant = await this.orderHelper.getClosestRestaurant({
       restaurant_id: body.restaurant_id,
       address: JSON.stringify({ latitude: body.lat, longitude: body.long }),
@@ -4383,6 +4386,8 @@ export class OrderService {
       restaurant,
       channel: 'APP',
       orderAmount: body.order_amount ?? 0,
+      customerId: clientDeLApercu(principal, body.customer_id),
+      dishIds: body.dish_ids,
     });
 
     // Le trajet n'est pas indispensable : sans lui la page montre quand même
@@ -4426,7 +4431,7 @@ export class OrderService {
     };
   }
 
-  async obtenirFraisLivraison(body: FraisLivraisonDto): Promise<{
+  async obtenirFraisLivraison(body: FraisLivraisonDto, principal?: Customer | User): Promise<{
     montant: number;
     zone: string;
     distance: number;
@@ -4445,6 +4450,8 @@ export class OrderService {
       restaurant,
       channel: 'APP',
       orderAmount: body.order_amount ?? 0,
+      customerId: clientDeLApercu(principal, body.customer_id),
+      dishIds: body.dish_ids,
     });
   }
 

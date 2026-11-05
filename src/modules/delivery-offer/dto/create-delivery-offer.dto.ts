@@ -8,6 +8,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   MaxLength,
   Min,
@@ -102,6 +103,23 @@ export class CreateDeliveryOfferDto {
   @IsOptional()
   @IsBoolean()
   target_gold?: boolean;
+
+  @ApiPropertyOptional({ description: 'Clients avec une Carte de la Nation étudiante active' })
+  @IsOptional()
+  @IsBoolean()
+  target_etudiant?: boolean;
+
+  @ApiPropertyOptional({ type: [String], description: 'Menus concernés (vide avec category_ids vide = tout le menu)' })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  dish_ids?: string[];
+
+  @ApiPropertyOptional({ type: [String], description: 'Catégories concernées (vide avec dish_ids vide = tout le menu)' })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  category_ids?: string[];
 
   @ApiPropertyOptional({ type: [String], description: 'Jours (minuscules en anglais), vide = tous' })
   @IsOptional()
