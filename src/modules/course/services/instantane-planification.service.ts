@@ -52,6 +52,8 @@ export const STATUTS_COURSE_OUVERTES: CourseStatut[] = [
 /** Une course en livraison plus vieille que ça n'est plus du service en cours (oubliée). */
 export const FRAICHEUR_COURSE_EN_LIVRAISON_MS = 12 * 60 * 60 * 1000;
 
+const STATUTS_COMMANDE_FINIE: OrderStatus[] = [OrderStatus.COLLECTED, OrderStatus.COMPLETED, OrderStatus.CANCELLED];
+
 const SELECT_COMMANDE = {
   id: true,
   reference: true,
@@ -170,6 +172,12 @@ export class InstantanePlanificationService {
       this.prisma.course.findMany({
         where: {
           restaurant_id: restaurantId,
+          // Confiée à Turbo et toutes ses commandes finies : rien à planifier,
+          // et chaque passage redemandait ses trajets à Google.
+          NOT: {
+            turbo_escalated_at: { not: null },
+            deliveries: { none: { order: { status: { notIn: STATUTS_COMMANDE_FINIE } } } },
+          },
           OR: [
             { statut: { in: STATUTS_COURSE_OUVERTES } },
             // En livraison : celles du service en cours seulement (retour des livreurs, départ).

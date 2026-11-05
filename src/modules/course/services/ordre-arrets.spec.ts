@@ -154,8 +154,24 @@ function monterInstantane(groupes: { statut?: CourseStatut; metres: number[] }[]
   );
   const lire = (google = true) => instantanes.lire(RESTO, MAINTENANT, REGLAGES_PLANIFICATION_DEFAUT, google);
   const appelsOrdre = () => maps.itineraireRoutier.mock.calls.filter(([, o]) => o?.pour === 'ordre');
-  return { base, maps, lire, appelsOrdre, commandes, cle };
+  return { base, maps, lire, appelsOrdre, commandes, courses, cle };
 }
+
+describe('Instantané : courses confiées à Turbo', () => {
+  it('toutes ses commandes finies : hors du passage ; une commande en cours ou une course interne : gardées', async () => {
+    const t = monterInstantane([{ metres: [2600] }, { metres: [3000, 3400] }, { metres: [3800] }]);
+    const [finie, enCours, interne] = t.courses;
+    Object.assign(finie, { turbo_escalated_at: MAINTENANT });
+    Object.assign(t.commandes[0], { status: OrderStatus.COMPLETED });
+    Object.assign(enCours, { turbo_escalated_at: MAINTENANT });
+    Object.assign(t.commandes[1], { status: OrderStatus.COMPLETED });
+    Object.assign(t.commandes[3], { status: OrderStatus.COMPLETED });
+
+    const lu = await t.lire();
+
+    expect(lu.instantane.courses.map((k) => k.id)).toEqual([enCours.id, interne.id]);
+  });
+});
 
 describe('Instantané : distances entre clients, cache seulement', () => {
   it('O12 : paire en cache, aucun appel Google ; la distance entre dans la matrice du passage', async () => {

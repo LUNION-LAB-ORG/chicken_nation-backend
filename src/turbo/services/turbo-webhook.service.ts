@@ -16,6 +16,12 @@ import {
   normaliserEncaissements,
 } from '../constantes/turbo.constante';
 
+const LIVRAISON_FINIE: DeliveryStatut[] = [
+  DeliveryStatut.DELIVERED,
+  DeliveryStatut.FAILED,
+  DeliveryStatut.CANCELLED,
+];
+
 /**
  * Réception des webhooks de suivi de livraison Turbo (Turbo → CN).
  *
@@ -777,11 +783,67 @@ export class TurboWebhookService {
   }
 
   /**
+   * COMMANDE FINIE AU COMPTOIR : sa livraison et sa course se ferment aussi.
+   *
+   * Pour une commande confiée à Turbo, la caisse suit l'ancien fonctionnement
+   * (« Récupérée », « Terminée » à la main) et Turbo n'envoie presque jamais ses
+   * étapes : sur 798 courses du 22/10 au 05/11, 6 ont eu un livreur annoncé et
+   * les autres restaient ouvertes pour toujours, relues par le planificateur.
+   *
+   * Pas d'heure de livraison : personne n'a validé la livraison à cet instant.
+   * Une heure de fermeture fausserait la durée moyenne du tableau de la
+   * livraison. Sans appel à Turbo. Idempotent : déjà fermée par son webhook, ou
+   * course d'un livreur Chicken Nation, rien ne change.
+   */
+  async fermerSuiviCommandeFinie(orderId: string, annulee: boolean): Promise<void> {
+    const delivery = await this.prisma.delivery.findFirst({
+      where: {
+        order_id: orderId,
+        statut: { notIn: LIVRAISON_FINIE },
+        course: {
+          turbo_escalated_at: { not: null },
+          statut: { notIn: [CourseStatut.COMPLETED, CourseStatut.CANCELLED, CourseStatut.EXPIRED] },
+        },
+      },
+      select: { id: true, course_id: true },
+    });
+    if (!delivery) return;
+
+    const { count } = await this.prisma.delivery.updateMany({
+      where: { id: delivery.id, statut: { notIn: LIVRAISON_FINIE } },
+      data: { statut: annulee ? DeliveryStatut.CANCELLED : DeliveryStatut.DELIVERED },
+    });
+    if (count !== 1) return;
+
+    const restantes = await this.prisma.delivery.count({
+      where: { course_id: delivery.course_id, statut: { notIn: LIVRAISON_FINIE } },
+    });
+    if (restantes > 0) return; // une autre commande de la course est encore en cours
+
+    const livrees = await this.prisma.delivery.count({
+      where: { course_id: delivery.course_id, statut: DeliveryStatut.DELIVERED },
+    });
+    if (livrees > 0) {
+      await this.advanceCourse(delivery.course_id, CourseStatut.COMPLETED);
+    } else {
+      await this.cancelCourseIfNoDeliveryLeft(
+        delivery.course_id,
+        'Plus aucune commande à livrer : toutes ses commandes ont été annulées',
+        'system',
+      );
+    }
+  }
+
+  /**
    * Passe la Course CN en CANCELLED (raison Turbo) s'il ne lui reste plus
    * aucune livraison active. Claim conditionné : jamais de régression depuis
    * COMPLETED, idempotent, sûr avec 2 backends.
    */
-  private async cancelCourseIfNoDeliveryLeft(courseId: string, raison: string): Promise<void> {
+  private async cancelCourseIfNoDeliveryLeft(
+    courseId: string,
+    raison: string,
+    par: 'turbo' | 'system' = 'turbo',
+  ): Promise<void> {
     const actives = await this.prisma.delivery.count({
       where: {
         course_id: courseId,
@@ -798,7 +860,7 @@ export class TurboWebhookService {
       data: {
         statut: CourseStatut.CANCELLED,
         cancelled_at: new Date(),
-        cancelled_by: 'turbo',
+        cancelled_by: par,
         cancelled_reason: raison,
       },
     });
