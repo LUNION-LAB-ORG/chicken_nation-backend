@@ -22,7 +22,11 @@ import {
   buildRestaurantFilter,
   formatCurrency,
   buildDateFilter,
+  estVente,
+  FILTRE_COMMANDE_ACCEPTEE,
   FILTRE_VENTE,
+  filtreVolume,
+  VolumeCommandes,
 } from '../helpers/statistics.helper';
 import {
   ajouterAuCanal,
@@ -78,6 +82,10 @@ export class StatisticsOrdersService {
    * sous-stats partageant les mêmes filtres et renvoie un seul objet.
    * → le backoffice fait 1 requête au lieu de 7. (Courbes à granularité et carte
    * restent des requêtes séparées car pilotées par d'autres contrôles / lazy.)
+   *
+   * Les volumes comptent les commandes dès leur acceptation. Temps de traitement
+   * et ponctualité restent sur les commandes terminées : les autres n'ont pas
+   * encore ces mesures.
    */
   async getOrdersDashboard(
     query: OrdersStatsQueryDto,
@@ -91,13 +99,13 @@ export class StatisticsOrdersService {
       byRestaurantAndType,
       byRestaurantAndSource,
     ] = await Promise.all([
-      this.getOrdersOverview(query),
-      this.getOrdersByChannel(query),
+      this.getOrdersOverview(query, 'acceptees'),
+      this.getOrdersByChannel(query, 'acceptees'),
       this.getOrdersProcessingTime(query),
       this.getLateOrders(query),
       this.getRestaurantPunctuality(query),
-      this.getOrdersByRestaurantAndType(query),
-      this.getOrdersByRestaurantAndSource(query),
+      this.getOrdersByRestaurantAndType(query, 'acceptees'),
+      this.getOrdersByRestaurantAndSource(query, 'acceptees'),
     ]);
 
     return {
@@ -115,7 +123,10 @@ export class StatisticsOrdersService {
    * Vue globale commandes : total, CA, panier moyen, annulations, répartition statut/type.
    * Migré et enrichi depuis OrderService.getOrderStatistics()
    */
-  async getOrdersOverview(query: OrdersStatsQueryDto): Promise<OrdersOverviewResponse> {
+  async getOrdersOverview(
+    query: OrdersStatsQueryDto,
+    volume: VolumeCommandes = 'ventes',
+  ): Promise<OrdersOverviewResponse> {
     const dateRange = parseDateRange(query);
     const prevPeriod = getPreviousPeriod(dateRange.startDate, dateRange.endDate);
     const restaurantFilter = buildRestaurantFilter(query.restaurantId);
@@ -138,7 +149,21 @@ export class StatisticsOrdersService {
       created_at: { gte: prevPeriod.start, lte: prevPeriod.end },
     };
 
-    const [totalOrders, revenueAgg, prevRevenue, cancelledCount, byStatus, byType] =
+    const acceptedWhere: Prisma.OrderWhereInput = {
+      ...baseWhere,
+      ...FILTRE_COMMANDE_ACCEPTEE,
+    };
+
+    const [
+      completedOrders,
+      revenueAgg,
+      prevRevenue,
+      cancelledCount,
+      byStatus,
+      byType,
+      acceptees,
+      prevAcceptedOrders,
+    ] =
       await Promise.all([
         this.prisma.order.count({ where: paidCompletedWhere }),
         this.prisma.order.aggregate({
@@ -162,10 +187,22 @@ export class StatisticsOrdersService {
           by: ['type'],
           _count: true,
           _sum: { net_amount: true },
-          where: paidCompletedWhere,
+          where: volume === 'acceptees' ? acceptedWhere : paidCompletedWhere,
+        }),
+        this.prisma.order.aggregate({
+          _count: true,
+          _sum: { net_amount: true },
+          where: acceptedWhere,
+        }),
+        this.prisma.order.count({
+          where: {
+            ...acceptedWhere,
+            created_at: { gte: prevPeriod.start, lte: prevPeriod.end },
+          },
         }),
       ]);
 
+    const totalOrders = volume === 'acceptees' ? acceptees._count : completedOrders;
     const totalRevenue = revenueAgg._sum.net_amount ?? 0;
     const prevTotalRevenue = prevRevenue._sum.net_amount ?? 0;
     const averageBasket = revenueAgg._avg.net_amount ?? 0;
@@ -175,6 +212,10 @@ export class StatisticsOrdersService {
 
     return {
       totalOrders,
+      completedOrders,
+      acceptedOrders: acceptees._count,
+      expectedRevenue: acceptees._sum.net_amount ?? 0,
+      acceptedEvolution: calculateTrend(acceptees._count, prevAcceptedOrders),
       totalRevenue,
       totalRevenueFormatted: formatCurrency(totalRevenue),
       averageBasket,
@@ -206,14 +247,16 @@ export class StatisticsOrdersService {
    * Nouveaux clients = première commande sur la période.
    * Récurrents = avaient déjà commandé avant la période.
    */
-  async getOrdersByChannel(query: OrdersStatsQueryDto): Promise<OrdersByChannelResponse> {
+  async getOrdersByChannel(
+    query: OrdersStatsQueryDto,
+    volume: VolumeCommandes = 'ventes',
+  ): Promise<OrdersByChannelResponse> {
     const dateRange = parseDateRange(query);
     const restaurantFilter = buildRestaurantFilter(query.restaurantId);
 
     const baseOrderWhere: Prisma.OrderWhereInput = {
       ...restaurantFilter,
-      paied: true,
-      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+      ...filtreVolume(volume),
       created_at: buildDateFilter(dateRange),
     };
 
@@ -226,6 +269,8 @@ export class StatisticsOrdersService {
         auto: true,
         channel: true,
         net_amount: true,
+        paied: true,
+        status: true,
         created_at: true,
       },
       orderBy: { created_at: 'asc' },
@@ -262,10 +307,15 @@ export class StatisticsOrdersService {
     const nouveaux = compteParCanalVide();
     const recurrents = compteParCanalVide();
     const chiffre = compteParCanalVide();
+    const ventes = compteParCanalVide();
 
     for (const order of orders) {
       const cle = CLE_CANAL[canalDeCommande(order)];
-      chiffre[cle] += order.net_amount ?? 0;
+      // CA et panier moyen : les ventes seulement, quel que soit le volume compté.
+      if (volume === 'ventes' || estVente(order)) {
+        chiffre[cle] += order.net_amount ?? 0;
+        ventes[cle]++;
+      }
       if (isNew(order.customer_id)) nouveaux[cle]++;
       else recurrents[cle]++;
     }
@@ -275,7 +325,7 @@ export class StatisticsOrdersService {
       return {
         totalOrders: total,
         revenue: chiffre[cle],
-        averageBasket: total > 0 ? chiffre[cle] / total : 0,
+        averageBasket: ventes[cle] > 0 ? chiffre[cle] / ventes[cle] : 0,
         newClientsOrders: nouveaux[cle],
         recurringClientsOrders: recurrents[cle],
         newClientsRate: total > 0 ? Math.round((nouveaux[cle] / total) * 100) : 0,
@@ -656,12 +706,12 @@ export class StatisticsOrdersService {
    */
   async getOrdersByRestaurantAndType(
     query: OrdersStatsQueryDto,
+    volume: VolumeCommandes = 'ventes',
   ): Promise<OrdersByRestaurantAndTypeResponse> {
     const dateRange = parseDateRange(query);
 
     const baseWhere: Prisma.OrderWhereInput = {
-      paied: true,
-      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+      ...filtreVolume(volume),
       created_at: buildDateFilter(dateRange),
     };
 
@@ -723,12 +773,12 @@ export class StatisticsOrdersService {
    */
   async getOrdersByRestaurantAndSource(
     query: OrdersStatsQueryDto,
+    volume: VolumeCommandes = 'ventes',
   ): Promise<OrdersByRestaurantAndSourceResponse> {
     const dateRange = parseDateRange(query);
 
     const baseWhere: Prisma.OrderWhereInput = {
-      paied: true,
-      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+      ...filtreVolume(volume),
       created_at: buildDateFilter(dateRange),
     };
 
@@ -861,7 +911,8 @@ export class StatisticsOrdersService {
 
   /**
    * Tendance journalière par restaurant : chaque période contient le détail par restaurant
-   * (count, revenue, avgBasket, onTimeRate) pour alimenter l'histogramme empilé.
+   * pour alimenter l'histogramme empilé. `count` et `expectedRevenue` : commandes acceptées
+   * et non annulées. `revenue`, `avgBasket` et `onTimeRate` : ventes.
    */
   async getDailyTrendByRestaurant(
     query: OrdersStatsQueryDto,
@@ -870,8 +921,7 @@ export class StatisticsOrdersService {
     const granularity = query.granularity ?? 'day';
 
     const baseWhere: Prisma.OrderWhereInput = {
-      paied: true,
-      status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
+      ...FILTRE_COMMANDE_ACCEPTEE,
       created_at: buildDateFilter(dateRange),
     };
 
@@ -881,6 +931,8 @@ export class StatisticsOrdersService {
         restaurant_id: true,
         created_at: true,
         net_amount: true,
+        paied: true,
+        status: true,
         type: true,
         ready_at: true,
         collected_at: true,
@@ -938,16 +990,34 @@ export class StatisticsOrdersService {
       // Agréger par restaurant
       const byRestoRaw = new Map<
         string,
-        { count: number; revenue: number; deliveries: number; onTime: number }
+        {
+          count: number;
+          expectedRevenue: number;
+          sales: number;
+          revenue: number;
+          deliveries: number;
+          onTime: number;
+        }
       >();
 
       for (const o of periodOrders) {
         const rid = o.restaurant_id ?? 'unknown';
         if (!byRestoRaw.has(rid)) {
-          byRestoRaw.set(rid, { count: 0, revenue: 0, deliveries: 0, onTime: 0 });
+          byRestoRaw.set(rid, {
+            count: 0,
+            expectedRevenue: 0,
+            sales: 0,
+            revenue: 0,
+            deliveries: 0,
+            onTime: 0,
+          });
         }
         const entry = byRestoRaw.get(rid)!;
         entry.count++;
+        entry.expectedRevenue += o.net_amount ?? 0;
+        if (!estVente(o)) continue;
+
+        entry.sales++;
         entry.revenue += o.net_amount ?? 0;
 
         if (o.type === OrderType.DELIVERY && o.ready_at && o.collected_at) {
@@ -959,6 +1029,8 @@ export class StatisticsOrdersService {
 
       const byRestaurant: Record<string, RestaurantMetrics> = {};
       let totalCount = 0,
+        totalExpectedRevenue = 0,
+        totalSales = 0,
         totalRevenue = 0,
         totalDeliveries = 0,
         totalOnTime = 0;
@@ -967,13 +1039,16 @@ export class StatisticsOrdersService {
         byRestaurant[rid] = {
           count: stats.count,
           revenue: stats.revenue,
-          avgBasket: stats.count > 0 ? Math.round(stats.revenue / stats.count) : 0,
+          expectedRevenue: stats.expectedRevenue,
+          avgBasket: stats.sales > 0 ? Math.round(stats.revenue / stats.sales) : 0,
           onTimeRate:
             stats.deliveries > 0
               ? Math.round((stats.onTime / stats.deliveries) * 100)
               : 100,
         };
         totalCount += stats.count;
+        totalExpectedRevenue += stats.expectedRevenue;
+        totalSales += stats.sales;
         totalRevenue += stats.revenue;
         totalDeliveries += stats.deliveries;
         totalOnTime += stats.onTime;
@@ -986,7 +1061,8 @@ export class StatisticsOrdersService {
         total: {
           count: totalCount,
           revenue: totalRevenue,
-          avgBasket: totalCount > 0 ? Math.round(totalRevenue / totalCount) : 0,
+          expectedRevenue: totalExpectedRevenue,
+          avgBasket: totalSales > 0 ? Math.round(totalRevenue / totalSales) : 0,
           onTimeRate:
             totalDeliveries > 0
               ? Math.round((totalOnTime / totalDeliveries) * 100)

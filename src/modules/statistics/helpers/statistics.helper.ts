@@ -16,7 +16,7 @@ import {
   subMonths,
   subWeeks,
 } from 'date-fns';
-import { OrderStatus, Prisma } from '@prisma/client';
+import { EntityStatus, OrderStatus, Prisma } from '@prisma/client';
 
 /**
  * Commande comptée comme une VENTE dans toutes les statistiques, tableau de
@@ -32,6 +32,44 @@ export const FILTRE_VENTE = {
   paied: true,
   status: { in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED] },
 } satisfies Prisma.OrderWhereInput;
+
+/**
+ * Commande comptée dès son ACCEPTATION, même pas encore terminée ni payée.
+ * Annulée, elle sort du compte ; un panier en attente (PENDING) n'y entre pas.
+ * La somme de son `net_amount` est le chiffre d'affaires ESCOMPTÉ. Le chiffre
+ * d'affaires, lui, reste celui des ventes (FILTRE_VENTE).
+ */
+export const FILTRE_COMMANDE_ACCEPTEE = {
+  status: {
+    in: [
+      OrderStatus.ACCEPTED,
+      OrderStatus.IN_PROGRESS,
+      OrderStatus.READY,
+      OrderStatus.PICKED_UP,
+      OrderStatus.COLLECTED,
+      OrderStatus.COMPLETED,
+    ],
+  },
+  entity_status: { not: EntityStatus.DELETED },
+} satisfies Prisma.OrderWhereInput;
+
+/**
+ * Ce que compte un volume de commandes. `acceptees` : écran Statistiques
+ * Commandes. `ventes` : tous les autres lecteurs (rapport marketing, caisse).
+ */
+export type VolumeCommandes = 'ventes' | 'acceptees';
+
+export function filtreVolume(volume: VolumeCommandes): Prisma.OrderWhereInput {
+  return volume === 'acceptees' ? FILTRE_COMMANDE_ACCEPTEE : FILTRE_VENTE;
+}
+
+/** FILTRE_VENTE appliqué à une commande déjà lue. */
+export function estVente(commande: { paied: boolean; status: OrderStatus }): boolean {
+  return (
+    commande.paied === FILTRE_VENTE.paied &&
+    (FILTRE_VENTE.status.in as OrderStatus[]).includes(commande.status)
+  );
+}
 
 export interface DateRange {
   startDate: Date;

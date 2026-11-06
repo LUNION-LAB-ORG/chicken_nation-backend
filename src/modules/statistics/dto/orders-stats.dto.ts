@@ -66,8 +66,20 @@ export class OrderByTypeItem {
 }
 
 export class OrdersOverviewResponse {
-  @ApiProperty()
+  @ApiProperty({ description: 'Ventes, ou commandes acceptées sur le tableau de bord' })
   totalOrders: number;
+
+  @ApiProperty({ description: 'Commandes terminées et payées (ventes)' })
+  completedOrders: number;
+
+  @ApiProperty({ description: 'Commandes acceptées et non annulées' })
+  acceptedOrders: number;
+
+  @ApiProperty({ description: 'CA escompté : somme des commandes acceptées et non annulées' })
+  expectedRevenue: number;
+
+  @ApiProperty({ description: 'Évolution des commandes acceptées vs période précédente' })
+  acceptedEvolution: string;
 
   @ApiProperty()
   totalRevenue: number;
@@ -402,11 +414,14 @@ export class OrdersDailyTrendResponse {
 // ─── Tendance par Restaurant (histogramme empilé) ──────────────────────────────
 
 export class RestaurantMetrics {
-  @ApiProperty()
+  @ApiProperty({ description: 'Commandes acceptées et non annulées' })
   count: number;
 
-  @ApiProperty()
+  @ApiProperty({ description: 'Chiffre d\'affaires des ventes' })
   revenue: number;
+
+  @ApiProperty({ description: 'CA escompté : somme des commandes acceptées et non annulées' })
+  expectedRevenue: number;
 
   @ApiProperty()
   avgBasket: number;
