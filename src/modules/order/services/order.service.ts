@@ -1182,11 +1182,40 @@ export class OrderService {
    *   collègue qui la reprend au téléphone pendant ce temps l'emporte, au lieu
    *   de voir annulée une commande qu'il vient de transmettre au restaurant.
    */
+  /**
+   * « TERMINER LA COMMANDE » par l'administrateur (demande du 06/11), quelle que
+   * soit l'étape depuis son acceptation.
+   *
+   * Payée, elle est terminée. Pas encore payée, elle passe « Récupérée » et
+   * reste à encaisser : jamais une commande terminée sans paiement, elle se
+   * termine d'elle-même à l'encaissement. Sa livraison et sa course se ferment
+   * (livreur prévenu, course Turbo par `CommandeFinieListener`).
+   */
+  async terminerParAdmin(id: string, user: { id: string; role: UserRole }) {
+    const order = await this.findById(id);
+    const { COMPLETED, COLLECTED, PENDING } = OrderStatus;
+    if (order.status === COMPLETED) throw new ConflictException('Cette commande est déjà terminée.');
+    if (order.status === PENDING) {
+      throw new ConflictException("Cette commande n'a pas encore été acceptée.");
+    }
+    if (order.status === COLLECTED && !order.paied) {
+      throw new ConflictException("Cette commande reste à encaisser : elle se terminera à l'encaissement.");
+    }
+    const modifiee = await this.updateStatus(
+      id,
+      order.paied ? COMPLETED : COLLECTED,
+      { userId: user.id, role: user.role },
+      { sauterEtapes: true },
+    );
+    await this.detachementCommande?.fermerLivraisonTerminee({ orderId: id, reference: order.reference });
+    return modifiee;
+  }
+
   async updateStatus(
     id: string,
     status: OrderStatus,
     meta?: Record<string, any>,
-    options: { parLeClient?: boolean; conditionEcriture?: Prisma.OrderWhereInput } = {},
+    options: { parLeClient?: boolean; conditionEcriture?: Prisma.OrderWhereInput; sauterEtapes?: boolean } = {},
   ) {
     const order = await this.findById(id);
     //Meta peut contenir estimated_delivery_time, estimated_preparation_time, deliveryDriverId, role
@@ -1197,6 +1226,7 @@ export class OrderService {
     const isAdmin = meta?.role === UserRole.ADMIN;
     this.orderHelper.validateStatusTransition(order.type, order.status, status, {
       allowCancelFromAnyStatus: isAdmin,
+      sauterEtapes: options.sauterEtapes,
     });
     // Déjà remise au livreur (code de retrait, autre caisse) : rien à refaire,
     // ni second événement, ni seconde annonce au livreur (relecture du 23/10).

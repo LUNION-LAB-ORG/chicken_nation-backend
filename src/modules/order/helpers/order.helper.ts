@@ -703,7 +703,7 @@ export class OrderHelper {
     orderType: OrderType,
     currentStatus: OrderStatus,
     newStatus: OrderStatus,
-    options?: { allowCancelFromAnyStatus?: boolean },
+    options?: { allowCancelFromAnyStatus?: boolean; sauterEtapes?: boolean },
   ) {
     /**
      * Une commande annulée est close, pour tout le monde, administrateur
@@ -788,7 +788,7 @@ export class OrderHelper {
     }
 
     // Vérifier que l'on ne saute pas d'étapes (sauf pour COMPLETED qui peut être atteint depuis plusieurs états)
-    if (newStatus !== OrderStatus.COMPLETED && newIndex > currentIndex + 1) {
+    if (!options?.sauterEtapes && newStatus !== OrderStatus.COMPLETED && newIndex > currentIndex + 1) {
       throw new ConflictException(
         'Impossible de sauter des étapes dans le processus de commande',
       );

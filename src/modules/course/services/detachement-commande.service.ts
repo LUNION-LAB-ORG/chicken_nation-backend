@@ -1,5 +1,5 @@
-import { ConflictException, Injectable, Logger } from '@nestjs/common';
-import { CourseStatut, DeliveryStatut, OrderStatus, OrderType, Prisma } from '@prisma/client';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { CourseStatut, DeliveryService, DeliveryStatut, EntityStatus, OrderStatus, OrderType, Prisma } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
 import { NotificationsSenderService } from 'src/modules/notifications/services/notifications-sender.service';
@@ -24,6 +24,7 @@ import {
 } from '../helpers/detachement-commande.rules';
 import { recalculerFraisCourse } from '../helpers/frais-course';
 import { STATUTS_LIVRAISON_TERMINEE } from '../helpers/remise-course.rules';
+import { MESSAGE_COMMANDE_INTROUVABLE } from '../helpers/sac-rapporte.rules';
 import { ApplicationPlanService } from './application-plan.service';
 import { CourseActionService } from './course-action.service';
 import { CourseOfferService } from './course-offer.service';
@@ -37,6 +38,8 @@ const STATUTS_COMMANDE_AU_RESTAURANT: OrderStatus[] = [
   OrderStatus.IN_PROGRESS,
   OrderStatus.READY,
 ];
+
+const MESSAGE_AUCUNE_COURSE_EN_COURS = "Cette commande n'est dans aucune course en cours.";
 
 /** Même texte que « Modifier la commande » quand la commande a changé entre la lecture et l'écriture. */
 const MESSAGE_COMMANDE_CHANGEE = 'Cette commande vient de changer : rechargez-la avant de la modifier.';
@@ -71,7 +74,8 @@ export interface DetachementPrevu {
   cas: CasDetachement;
   order_id: string;
   reference: string;
-  type_apres: OrderType;
+  /** Nul : retrait demandé par le siège, la commande reste à livrer. */
+  type_apres: OrderType | null;
   livraison_id: string;
   course_id: string;
   course_reference: string;
@@ -171,23 +175,126 @@ export class DetachementCommandeService {
     if (decision.action === 'RIEN') return null;
     if (decision.action === 'REFUSER') throw new ConflictException(decision.message);
 
-    const course = commande.delivery.course;
+    return detachementPrevu(commande, decision.cas, typeApres, p.auteur?.restaurant_id ? 'restaurant' : 'admin');
+  }
+
+  /**
+   * Retrait demandé par le siège, sans changement de type (« Retirer de la
+   * course », « Affecter à un livreur », demande du 06/11). Mêmes refus que le
+   * changement de type.
+   *
+   * @returns `null` si la commande n'est dans aucune course en cours.
+   */
+  async examinerRetrait(orderId: string, maintenant = new Date()): Promise<DetachementPrevu | null> {
+    const commande = await this.prisma.order.findUnique({ where: { id: orderId }, select: SELECTION_EXAMEN });
+    if (!commande?.delivery) return null;
+    const decision = deciderDetachement({
+      statutCommande: commande.status,
+      typeApres: null,
+      livraison: commande.delivery,
+      maintenant,
+    });
+    if (decision.action === 'RIEN') return null;
+    if (decision.action === 'REFUSER') throw new ConflictException(decision.message);
+    return detachementPrevu(commande, decision.cas, null, 'admin');
+  }
+
+  /**
+   * « RETIRER DE LA COURSE » (demande du 06/11) : la commande reste à livrer et
+   * repart dans le circuit normal. Sortie de Turbo, elle passe aux livreurs
+   * Chicken Nation : leur groupe est annulé chez eux, personne d'autre ne
+   * viendrait la chercher.
+   */
+  async retirerDeLaCourse(orderId: string, maintenant = new Date()): Promise<{
+    order_id: string;
+    reference: string;
+    course_reference: string;
+    message: string;
+  }> {
+    const commande = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { entity_status: true },
+    });
+    if (!commande || commande.entity_status === EntityStatus.DELETED) {
+      throw new NotFoundException(MESSAGE_COMMANDE_INTROUVABLE);
+    }
+    const d = await this.examinerRetrait(orderId, maintenant);
+    if (!d) throw new ConflictException(MESSAGE_AUCUNE_COURSE_EN_COURS);
+
+    await this.annulerChezTurbo(d);
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await this.retirerDansTransaction(tx, d, maintenant);
+        if (d.cas === 'TURBO') {
+          await tx.order.updateMany({
+            where: { id: d.order_id },
+            data: { delivery_service: DeliveryService.CHICKEN_NATION },
+          });
+        }
+      });
+    } catch (err) {
+      await this.apresEcriture(d, { ecrit: false });
+      throw err;
+    }
+    await this.apresEcriture(d, { ecrit: true, maintenant });
+    this.courseEvent.demanderPlanification({ restaurant_id: d.restaurant_id, raison: 'COMMANDE_DETACHEE' });
     return {
-      cas: decision.cas,
-      order_id: commande.id,
-      reference: commande.reference,
-      type_apres: typeApres,
-      livraison_id: commande.delivery.id,
-      course_id: course.id,
-      course_reference: course.reference,
-      restaurant_id: course.restaurant_id,
-      statut_course: course.statut,
-      deliverer_id: course.deliverer_id,
-      annulee_par: p.auteur?.restaurant_id ? 'restaurant' : 'admin',
-      turbo_annule: false,
-      suite: null,
-      raison_annulation: null,
+      order_id: d.order_id,
+      reference: d.reference,
+      course_reference: d.course_reference,
+      message: `${d.reference} retirée de la course ${d.course_reference}.`,
     };
+  }
+
+  /**
+   * Commande terminée par l'administrateur (demande du 06/11) : sa livraison
+   * interne se ferme et le livreur est prévenu ; il n'a plus ce client à livrer.
+   * Sans heure de livraison : personne ne l'a validée, et elle fausserait la
+   * durée moyenne du tableau de la livraison. Dernière commande de la course :
+   * la course se termine et le livreur retourne dans la file. Chez Turbo :
+   * `TurboWebhookService.fermerSuiviCommandeFinie`. Ne lève jamais : la commande
+   * est déjà terminée.
+   */
+  async fermerLivraisonTerminee(p: { orderId: string; reference: string }, maintenant = new Date()): Promise<void> {
+    try {
+      const livraison = await this.prisma.delivery.findFirst({
+        where: {
+          order_id: p.orderId,
+          statut: { notIn: STATUTS_LIVRAISON_TERMINEE },
+          course: { turbo_escalated_at: null },
+        },
+        select: { id: true, course_id: true, course: { select: { statut: true } } },
+      });
+      if (!livraison) return;
+      const { count } = await this.prisma.delivery.updateMany({
+        where: { id: livraison.id, statut: { notIn: STATUTS_LIVRAISON_TERMINEE } },
+        data: { statut: DeliveryStatut.DELIVERED },
+      });
+      if (count !== 1) return;
+
+      const courseId = livraison.course_id;
+      const restantes = await this.prisma.delivery.count({
+        where: { course_id: courseId, statut: { notIn: STATUTS_LIVRAISON_TERMINEE } },
+      });
+      if (restantes > 0) {
+        await this.plan.annoncerRetrait(courseId, [p.reference], maintenant);
+        return;
+      }
+      if (livraison.course.statut === CourseStatut.PENDING_ASSIGNMENT) {
+        // Personne ne l'a acceptée : elle s'annule, ses offres se ferment.
+        await this.actions.cancelCourse(courseId, 'system', {
+          reason: `Plus aucune commande à livrer : ${p.reference} terminée`,
+        });
+        return;
+      }
+      await this.prisma.course.updateMany({
+        where: { id: courseId, statut: { in: [CourseStatut.ACCEPTED, CourseStatut.AT_RESTAURANT] } },
+        data: { statut: CourseStatut.IN_DELIVERY, picked_up_at: maintenant },
+      });
+      await this.livraisons.checkCourseCompletion(courseId);
+    } catch (err) {
+      this.logger.error(`Commande ${p.reference} terminée : course non fermée (${(err as Error)?.message ?? err}).`);
+    }
   }
 
   /**
@@ -359,7 +466,11 @@ export class DetachementCommandeService {
       await recalculerFraisCourse(this.prisma, d.course_id).catch(() => undefined);
       await this.journal.ecrire({
         type: 'COMMANDE_DETACHEE',
-        motif: d.type_apres === OrderType.TABLE ? 'PASSEE_SUR_PLACE' : 'PASSEE_A_EMPORTER',
+        motif: !d.type_apres
+          ? 'RETIREE_PAR_LE_SIEGE'
+          : d.type_apres === OrderType.TABLE
+            ? 'PASSEE_SUR_PLACE'
+            : 'PASSEE_A_EMPORTER',
         source,
         restaurant_id: d.restaurant_id,
         course_id: d.course_id,
@@ -367,7 +478,9 @@ export class DetachementCommandeService {
         order_id: d.order_id,
         details: {
           commande: d.reference,
-          libelle: `${d.reference} passée ${libelleNouveauType(d.type_apres)} : retirée de la course`,
+          libelle: d.type_apres
+            ? `${d.reference} passée ${libelleNouveauType(d.type_apres)} : retirée de la course`
+            : `${d.reference} retirée de la course par le siège`,
           ...(d.cas === 'TURBO' ? { turbo: true } : {}),
         },
       });
@@ -463,6 +576,33 @@ export class DetachementCommandeService {
       })
       .catch(() => undefined);
   }
+}
+
+/** Le retrait prévu, tel que lu avant l'écriture. */
+function detachementPrevu(
+  commande: Prisma.OrderGetPayload<{ select: typeof SELECTION_EXAMEN }>,
+  cas: CasDetachement,
+  typeApres: OrderType | null,
+  annuleePar: DetachementPrevu['annulee_par'],
+): DetachementPrevu {
+  const livraison = commande.delivery!;
+  const course = livraison.course;
+  return {
+    cas,
+    order_id: commande.id,
+    reference: commande.reference,
+    type_apres: typeApres,
+    livraison_id: livraison.id,
+    course_id: course.id,
+    course_reference: course.reference,
+    restaurant_id: course.restaurant_id,
+    statut_course: course.statut,
+    deliverer_id: course.deliverer_id,
+    annulee_par: annuleePar,
+    turbo_annule: false,
+    suite: null,
+    raison_annulation: null,
+  };
 }
 
 /** Condition d'écriture : la course est encore dans l'état qui a décidé du retrait. */

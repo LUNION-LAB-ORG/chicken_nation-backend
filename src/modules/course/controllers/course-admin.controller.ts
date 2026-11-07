@@ -30,6 +30,8 @@ import { CourseActionService } from '../services/course-action.service';
 import { CourseOfferService } from '../services/course-offer.service';
 import { CourseQueryService } from '../services/course-query.service';
 import { GardeOffresService } from '../services/garde-offres.service';
+import { AffectationCommandeService } from '../services/affectation-commande.service';
+import { DetachementCommandeService } from '../services/detachement-commande.service';
 import { RelanceLivraisonService } from '../services/relance-livraison.service';
 import { ROLES_ACTIONS_COURSES, ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
@@ -86,6 +88,9 @@ export class CourseAdminController {
     private readonly appliLivreur: AppliLivreurService,
     // « Relancer la livraison » d'une livraison annulée par le livreur (28/10).
     private readonly relanceLivraison?: RelanceLivraisonService,
+    // « Retirer de la course » et « Affecter à un livreur » (06/11).
+    private readonly detachement?: DetachementCommandeService,
+    private readonly affectation?: AffectationCommandeService,
   ) {}
 
   @ApiOperation({
@@ -237,6 +242,41 @@ export class CourseAdminController {
   @UserRoles(...ROLES_ACTIONS_COURSES)
   async relancerLivraisonCommande(@Req() req: Request, @Param('orderId', new ParseUUIDPipe()) orderId: string) {
     return this.relanceLivraison!.relancer(orderId, req.user as User);
+  }
+
+  @ApiOperation({
+    summary: 'Retirer une commande de sa course',
+    description:
+      "La commande reste à livrer et repart dans le circuit normal. Course confiée à Turbo : leur groupe est " +
+      'annulé chez eux et la commande passe aux livreurs Chicken Nation. 404 si la commande est inconnue, 409 ' +
+      "si elle n'est dans aucune course en cours, si le sac est déjà avec le livreur ou si un livreur Turbo est engagé.",
+  })
+  @Post('commandes/:orderId/retirer')
+  @HttpCode(HttpStatus.OK)
+  @UserRoles(...ROLES_ACTIONS_COURSES)
+  async retirerCommande(@Param('orderId', new ParseUUIDPipe()) orderId: string) {
+    return this.detachement!.retirerDeLaCourse(orderId);
+  }
+
+  @ApiOperation({
+    summary: 'Affecter une commande prête à un livreur précis, même en course',
+    description:
+      "Sans offre : la commande lui est donnée d'office. Sans course, une course est créée pour lui, déjà acceptée. " +
+      'En course : la commande rejoint sa course ; déjà parti, il la récupère au restaurant avec le même code. ' +
+      "Elle quitte sa course d'origine, chez Turbo compris. 409 avec la raison : commande pas prête, sac déjà " +
+      'remis, livreur Turbo engagé, livreur inactif ou d\'un autre restaurant ; sans course, livreur en pause, hors ' +
+      'service ou injoignable.',
+  })
+  @ApiBody({ type: AssignDelivererDto })
+  @Post('commandes/:orderId/affecter')
+  @HttpCode(HttpStatus.OK)
+  @UserRoles(...ROLES_ACTIONS_COURSES)
+  async affecterCommande(
+    @Req() req: Request,
+    @Param('orderId', new ParseUUIDPipe()) orderId: string,
+    @Body() dto: AssignDelivererDto,
+  ) {
+    return this.affectation!.affecter(orderId, dto.deliverer_id, req.user as User);
   }
 
   @ApiOperation({

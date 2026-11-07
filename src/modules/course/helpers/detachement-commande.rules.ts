@@ -43,11 +43,23 @@ export function libelleNouveauType(type: OrderType): string {
   return type === OrderType.TABLE ? 'sur place' : 'à emporter';
 }
 
-export const messageSacChezLeLivreur = (type: OrderType): string =>
-  `Le livreur a déjà récupéré cette commande : le sac est avec lui, elle ne peut plus passer ${libelleNouveauType(type)}.`;
+/**
+ * `type` nul : retrait demandé par le siège (« Retirer de la course », « Affecter
+ * à un livreur », 06/11), la commande reste à livrer.
+ */
+export const messageSacChezLeLivreur = (type: OrderType | null): string =>
+  type
+    ? `Le livreur a déjà récupéré cette commande : le sac est avec lui, elle ne peut plus passer ${libelleNouveauType(type)}.`
+    : 'Le livreur a déjà récupéré cette commande : le sac est avec lui.';
 
-export const messageLivreurTurboEngage = (type: OrderType): string =>
-  `Un livreur Turbo a déjà accepté cette course : la commande ne peut plus passer ${libelleNouveauType(type)}.`;
+export const messageLivreurTurboEngage = (type: OrderType | null): string =>
+  type
+    ? `Un livreur Turbo a déjà accepté cette course : la commande ne peut plus passer ${libelleNouveauType(type)}.`
+    : 'Un livreur Turbo a déjà accepté cette course : la commande ne peut plus en être retirée.';
+
+/** Ce qui arrive à la commande, pour les raisons écrites sur la course. */
+const devenir = (type: OrderType | null): string =>
+  type ? `passée ${libelleNouveauType(type)}` : 'retirée de la course';
 
 export const MESSAGE_ENVOI_TURBO_EN_COURS = "La course vient d'être confiée à Turbo : réessayez dans un instant.";
 
@@ -57,12 +69,12 @@ export const MESSAGE_TURBO_INCERTAIN =
 export const MESSAGE_COURSE_CHANGEE = 'La course de cette commande vient de changer : rechargez la commande et réessayez.';
 
 /** Raison écrite sur la course vide annulée. */
-export const raisonCourseVide = (reference: string, type: OrderType): string =>
-  `Plus aucune commande à livrer : ${reference} passée ${libelleNouveauType(type)}`;
+export const raisonCourseVide = (reference: string, type: OrderType | null): string =>
+  `Plus aucune commande à livrer : ${reference} ${devenir(type)}`;
 
 /** Raison écrite sur la course Turbo annulée quand il lui reste d'autres commandes, relancées. */
-export const raisonCourseTurboRelancee = (reference: string, type: OrderType): string =>
-  `${reference} passée ${libelleNouveauType(type)} : groupe annulé chez Turbo, les autres commandes repartent dans une nouvelle course`;
+export const raisonCourseTurboRelancee = (reference: string, type: OrderType | null): string =>
+  `${reference} ${devenir(type)} : groupe annulé chez Turbo, les autres commandes repartent dans une nouvelle course`;
 
 /** Raison écrite quand l'annulation chez Turbo a réussi mais que la commande n'a pas été modifiée. */
 export const RAISON_TURBO_SANS_CHANGEMENT =
@@ -72,8 +84,10 @@ export const RAISON_TURBO_SANS_CHANGEMENT =
  * Cloche « Course annulée par Turbo » quand la relance des autres commandes
  * n'a pas pu se faire : leur groupe est mort chez Turbo, personne ne viendra.
  */
-export const raisonRelanceImpossible = (reference: string, type: OrderType): string =>
-  `groupe annulé après le passage de ${reference} ${libelleNouveauType(type)}, relance automatique impossible`;
+export const raisonRelanceImpossible = (reference: string, type: OrderType | null): string =>
+  type
+    ? `groupe annulé après le passage de ${reference} ${libelleNouveauType(type)}, relance automatique impossible`
+    : `groupe annulé après le retrait de ${reference}, relance automatique impossible`;
 
 /**
  * Ce que devient la course une fois la livraison retirée, décidé dans la
@@ -148,7 +162,7 @@ const STATUTS_COURSE_VIVANTE: CourseStatut[] = [
  */
 export function deciderDetachement(p: {
   statutCommande: OrderStatus;
-  typeApres: OrderType;
+  typeApres: OrderType | null;
   livraison: LivraisonDeLaCommande | null;
   maintenant: Date;
 }): DecisionDetachement {

@@ -33,6 +33,7 @@ import { DeliveryTrackingService } from './services/delivery-tracking.service';
 import { ArriveeAutoService } from './services/arrivee-auto.service';
 import { LivraisonVersLivreurListener } from './listeners/livraison-vers-livreur.listener';
 import { DepartCourseService } from './services/depart-course.service';
+import { AffectationCommandeService } from './services/affectation-commande.service';
 import { DetachementCommandeService } from './services/detachement-commande.service';
 import { DirectionService } from './services/direction.service';
 import { EstimationPreparationService } from './services/estimation-preparation.service';
@@ -86,6 +87,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     ArriveeAutoService, // Arrivées au restaurant et chez le client déduites des positions
     TableauLivraisonService, // Tableau de la livraison : chiffres par restaurant, alertes (gardé 10 s)
     SacRapporteService, // « Sac rapporté » : commande d'une livraison annulée redevenue prête (28/10)
+    AffectationCommandeService, // « Affecter à un livreur » : le siège donne une commande prête à un livreur précis, même en course (06/11)
     RelanceLivraisonService, // « Relancer la livraison » : la livraison annulée revient au même livreur (28/10)
     // Diffusion du statut d'une commande (« Sac rapporté »), même service que le module commande
     // (sans état : il n'utilise que la passerelle) ; le module commande importe celui-ci.

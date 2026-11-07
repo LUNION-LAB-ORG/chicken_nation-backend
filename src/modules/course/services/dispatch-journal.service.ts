@@ -141,7 +141,9 @@ export type TypeEvenementDispatch =
    * failure_note, in_route_at, arrived_at, reportee_at, customer_rating,
    * customer_rating_note), par { id, role }. Jamais le code du client.
    */
-  | 'LIVRAISON_RELANCEE';
+  | 'LIVRAISON_RELANCEE'
+  /** « Affecter à un livreur » : le siège donne la commande à un livreur précis (06/11). */
+  | 'COMMANDE_AFFECTEE';
 
 /** Qui a déclenché la décision (`livreur` : geste du livreur dans l'appli, « Plus tard »). */
 export type SourceDispatch = 'appli' | 'serveur' | 'admin' | 'caisse' | 'restaurant' | 'livreur';

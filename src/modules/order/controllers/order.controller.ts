@@ -650,6 +650,20 @@ export class OrderController {
     return this.orderService.updateClient(id, champsClient as OrderUpdatedDto);
   }
 
+  @Patch(':id/terminer')
+  @UseGuards(JwtAuthGuard, UserRolesGuard)
+  @UserRoles(UserRole.ADMIN)
+  @ApiOperation({
+    summary: "Terminer une commande, à n'importe quelle étape depuis son acceptation (administrateur)",
+    description:
+      "Payée : terminée. Pas encore payée : « Récupérée », à encaisser, et terminée à l'encaissement. " +
+      'Sa livraison et sa course se ferment.',
+  })
+  async terminer(@Req() req: Request, @Param('id') id: string) {
+    const user = req.user as User;
+    return commandePourLePersonnel(user, await this.orderService.terminerParAdmin(id, user));
+  }
+
   @Patch(':id/status')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.COMMANDES, Action.UPDATE)
