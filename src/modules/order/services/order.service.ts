@@ -1189,7 +1189,8 @@ export class OrderService {
    * Payée, elle est terminée. Pas encore payée, elle passe « Récupérée » et
    * reste à encaisser : jamais une commande terminée sans paiement, elle se
    * termine d'elle-même à l'encaissement. Sa livraison et sa course se ferment
-   * (livreur prévenu, course Turbo par `CommandeFinieListener`).
+   * comme pour tout changement de statut vers « Récupérée » ou « Terminée »
+   * (`CommandeFinieCourseListener`, course Turbo : `CommandeFinieListener`).
    */
   async terminerParAdmin(id: string, user: { id: string; role: UserRole }) {
     const order = await this.findById(id);
@@ -1201,14 +1202,12 @@ export class OrderService {
     if (order.status === COLLECTED && !order.paied) {
       throw new ConflictException("Cette commande reste à encaisser : elle se terminera à l'encaissement.");
     }
-    const modifiee = await this.updateStatus(
+    return this.updateStatus(
       id,
       order.paied ? COMPLETED : COLLECTED,
       { userId: user.id, role: user.role },
       { sauterEtapes: true },
     );
-    await this.detachementCommande?.fermerLivraisonTerminee({ orderId: id, reference: order.reference });
-    return modifiee;
   }
 
   async updateStatus(

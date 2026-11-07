@@ -33,6 +33,7 @@ import { CourseHelper } from '../helpers/course.helper';
 import { messageSacChezLeLivreur } from '../helpers/detachement-commande.rules';
 import { journeeDeService } from '../helpers/journee-service.rules';
 import { MESSAGE_COMMANDE_ANNULEE } from '../helpers/sac-rapporte.rules';
+import { CommandeFinieCourseListener } from '../listeners/commande-finie-course.listener';
 import { AffectationCommandeService } from './affectation-commande.service';
 import { AU_COMPTOIR, avant, MAINTENANT, monter, prete } from './banc-planificateur.simulee-spec';
 import { course, livraison, livreur, offre, RESTO } from './base-dispatch.simulee-spec';
@@ -473,21 +474,97 @@ describe('Commande terminée par l’administrateur : sa livraison se ferme', ()
   });
 });
 
+describe('Terminer une commande termine sa course, quel que soit le geste', () => {
+  const finie = (t: ReturnType<typeof monterCas>, order: unknown) =>
+    new CommandeFinieCourseListener(t.detachement).onStatutCommande({ order } as never);
+
+  it.each([
+    ['terminée', OrderStatus.COMPLETED],
+    ['récupérée, à encaisser', OrderStatus.COLLECTED],
+  ])('%s à la caisse : la course du livreur se termine, la commande ne bouge pas', async (_nom, status) => {
+    const d = koffi({ last_available_at: null });
+    const k = coursDe(d, { statut: CourseStatut.IN_DELIVERY, parti_at: avant(30) });
+    const a = prete({ status, reference: 'CMD-A' });
+    const t = monterCas({
+      courses: [k],
+      commandes: [a],
+      livraisons: [livraison({ course_id: k.id, order_id: a.id, statut: DeliveryStatut.IN_ROUTE })],
+      livreurs: [d],
+    });
+
+    await finie(t, a);
+
+    expect(t.livraisonDe(a.id)?.statut).toBe(DeliveryStatut.DELIVERED);
+    expect(k.statut).toBe(CourseStatut.COMPLETED);
+    expect(a.status).toBe(status);
+  });
+
+  it.each([OrderStatus.READY, OrderStatus.PICKED_UP, OrderStatus.CANCELLED])('%s : la course continue', async (status) => {
+    const d = koffi({ last_available_at: null });
+    const k = coursDe(d, { statut: CourseStatut.IN_DELIVERY, parti_at: avant(30) });
+    const a = prete({ status });
+    const t = monterCas({
+      courses: [k],
+      commandes: [a],
+      livraisons: [livraison({ course_id: k.id, order_id: a.id, statut: DeliveryStatut.IN_ROUTE })],
+      livreurs: [d],
+    });
+
+    await finie(t, a);
+
+    expect(t.livraisonDe(a.id)?.statut).toBe(DeliveryStatut.IN_ROUTE);
+    expect(k.statut).toBe(CourseStatut.IN_DELIVERY);
+  });
+
+  it('commande à emporter : aucune course à fermer', async () => {
+    const d = koffi({ last_available_at: null });
+    const k = coursDe(d, { statut: CourseStatut.IN_DELIVERY, parti_at: avant(30) });
+    const a = prete({ status: OrderStatus.COMPLETED, type: OrderType.PICKUP });
+    const t = monterCas({
+      courses: [k],
+      commandes: [a],
+      livraisons: [livraison({ course_id: k.id, order_id: a.id, statut: DeliveryStatut.IN_ROUTE })],
+      livreurs: [d],
+    });
+
+    await finie(t, a);
+
+    expect(k.statut).toBe(CourseStatut.IN_DELIVERY);
+  });
+});
+
+describe('La fin d’une course ne termine jamais une commande', () => {
+  it.each([true, false])('remise, payée = %s : la commande reste en livraison', async (paied) => {
+    const d = koffi({ last_available_at: null });
+    const k = coursDe(d, { statut: CourseStatut.IN_DELIVERY, parti_at: avant(30) });
+    const a = prete({ status: OrderStatus.PICKED_UP, paied });
+    const t = monterCas({
+      courses: [k],
+      commandes: [a],
+      livraisons: [livraison({ course_id: k.id, order_id: a.id, statut: DeliveryStatut.FAILED })],
+      livreurs: [d],
+    });
+
+    await t.h.actionsLivraison.checkCourseCompletion(k.id);
+
+    expect(k.statut).toBe(CourseStatut.COMPLETED);
+    expect(a.status).toBe(OrderStatus.PICKED_UP);
+  });
+});
+
 describe('Terminer une commande : la règle du statut', () => {
   function monterService(commande: Record<string, unknown>) {
     const service = Object.create(OrderService.prototype) as OrderService;
     const updateStatus = jest.fn(async () => ({ ...commande, status: 'X' }));
-    const fermerLivraisonTerminee = jest.fn(async () => undefined);
     Object.assign(service, {
       findById: jest.fn(async () => ({ id: 'o1', reference: 'CMD-A', ...commande })),
       updateStatus,
-      detachementCommande: { fermerLivraisonTerminee },
     });
-    return { service, updateStatus, fermerLivraisonTerminee };
+    return { service, updateStatus };
   }
   const user = { id: 'u-admin', role: 'ADMIN' } as never;
 
-  it('payée : terminée, même en préparation, et sa livraison se ferme', async () => {
+  it('payée : terminée, même en préparation', async () => {
     const t = monterService({ status: OrderStatus.IN_PROGRESS, paied: true });
 
     await t.service.terminerParAdmin('o1', user);
@@ -495,7 +572,6 @@ describe('Terminer une commande : la règle du statut', () => {
     expect(t.updateStatus).toHaveBeenCalledWith('o1', OrderStatus.COMPLETED, expect.objectContaining({ role: 'ADMIN' }), {
       sauterEtapes: true,
     });
-    expect(t.fermerLivraisonTerminee).toHaveBeenCalledWith({ orderId: 'o1', reference: 'CMD-A' });
   });
 
   it('pas encore payée : récupérée, à encaisser, jamais terminée sans paiement', async () => {

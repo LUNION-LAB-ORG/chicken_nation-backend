@@ -247,13 +247,13 @@ export class DetachementCommandeService {
   }
 
   /**
-   * Commande terminée par l'administrateur (demande du 06/11) : sa livraison
+   * Commande récupérée ou terminée (`CommandeFinieCourseListener`) : sa livraison
    * interne se ferme et le livreur est prévenu ; il n'a plus ce client à livrer.
    * Sans heure de livraison : personne ne l'a validée, et elle fausserait la
    * durée moyenne du tableau de la livraison. Dernière commande de la course :
    * la course se termine et le livreur retourne dans la file. Chez Turbo :
    * `TurboWebhookService.fermerSuiviCommandeFinie`. Ne lève jamais : la commande
-   * est déjà terminée.
+   * est déjà enregistrée.
    */
   async fermerLivraisonTerminee(p: { orderId: string; reference: string }, maintenant = new Date()): Promise<void> {
     try {

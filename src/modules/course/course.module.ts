@@ -13,6 +13,7 @@ import { LivraisonTableauController } from './controllers/livraison-tableau.cont
 import { CourseEvent } from './events/course.event';
 import { CourseHelper } from './helpers/course.helper';
 import { CourseSettingsHelper } from './helpers/course-settings.helper';
+import { CommandeFinieCourseListener } from './listeners/commande-finie-course.listener';
 import { CourseListenerService } from './listeners/course.listener.service';
 import { DispatchListener } from './listeners/dispatch.listener';
 import { OrderBridgeListenerService } from './listeners/order-bridge.listener.service';
@@ -102,6 +103,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     // à la connexion. Le journal et la clôture eux-mêmes : DispatchCommunModule (global).
     DispatchListener,
     RemiseCaisseListener, // Commande passée PICKED_UP hors code → course en livraison
+    CommandeFinieCourseListener, // Commande récupérée ou terminée → sa livraison et sa course se ferment
     PlanificateurListener, // Événements qui demandent un passage du planificateur v2
     LivraisonVersLivreurListener, // Livraison changée : `course:statut:changed` au livreur
     RetenueALArriveeListener, // Retenue d'une course acceptée annoncée à l'arrivée au comptoir
