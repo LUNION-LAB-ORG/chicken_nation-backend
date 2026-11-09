@@ -68,6 +68,14 @@ export interface DelivererSignalPayload {
   etat: Pick<Deliverer, 'pause_until' | 'auto_pause_until' | 'last_available_at'>;
 }
 
+/** Livreur rattaché à un autre restaurant (`DelivererChannels.DELIVERER_RESTAURANT_CHANGED`, 09/11). */
+export interface DelivererRestaurantChangedPayload {
+  delivererId: string;
+  /** Restaurant d'avant, null pour un premier rattachement. */
+  ancienRestaurantId: string | null;
+  nouveauRestaurantId: string;
+}
+
 /**
  * Émetteur d'événements internes pour le cycle de vie du livreur.
  * Les listeners (WebSocket / notifications) sont déclarés en Phase 4.
@@ -114,5 +122,18 @@ export class DelivererEvent {
    */
   locationUpdated(payload: DelivererLocationUpdatedPayload) {
     this.eventEmitter.emit(DelivererChannels.DELIVERER_LOCATION_UPDATED, payload);
+  }
+
+  /**
+   * Livreur rattaché à un autre restaurant : ATTEND les écouteurs et rend
+   * leurs réponses (le planning dit ce qu'il a déplacé). Ne lève jamais :
+   * une erreur d'écouteur donne une liste vide, le rattachement reste fait.
+   */
+  async restaurantChange(payload: DelivererRestaurantChangedPayload): Promise<unknown[]> {
+    try {
+      return await this.eventEmitter.emitAsync(DelivererChannels.DELIVERER_RESTAURANT_CHANGED, payload);
+    } catch {
+      return [];
+    }
   }
 }

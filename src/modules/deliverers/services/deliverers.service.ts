@@ -22,6 +22,15 @@ import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { FinsSocketLivreursService } from 'src/socket-io/services/fins-socket-livreurs.service';
 import { journeeDeService } from 'src/modules/course/helpers/journee-service.rules';
 import { enRetard, finTourneePrevue, retardMin } from 'src/modules/course/helpers/retard-tournee.rules';
+import { lireReglagesPlanification } from 'src/modules/course/helpers/planification.rules';
+import {
+  CLE_RENFORT,
+  CLE_RENFORT_RAYON_M,
+  CLE_SERVICE_PAR_DEFAUT,
+  CLE_SERVICE_PAR_RESTAURANT,
+  livreParNosLivreurs,
+  restaurantsDeRenfort,
+} from 'src/modules/course/helpers/renfort.rules';
 
 import { AssignRestaurantDto } from '../dto/assign-restaurant.dto';
 import { QueryDeliverersDto } from '../dto/query-deliverers.dto';
@@ -29,7 +38,7 @@ import { UpdateDelivererLocationDto } from '../dto/update-location.dto';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { DelivererEvent } from '../events/deliverer.event';
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
-import { positionAEnregistrer, releveAssezPrecis } from '../helpers/position-livreur.rules';
+import { lirePositionLivreur, positionAEnregistrer, releveAssezPrecis } from '../helpers/position-livreur.rules';
 import {
   ContexteAppli,
   EtatAppli,
@@ -131,6 +140,15 @@ function etatAppli(disponibilite: {
  * Règle métier centrale : `is_operational = (status == ACTIVE && restaurant_id != null)`.
  * Chaque transition de statut ou affectation recalcule ce flag et émet un événement.
  */
+/**
+ * Réponse du planning à un changement de restaurant (09/11) : plannings
+ * quittés et rejoints, créneaux retirés ou ajoutés.
+ */
+export interface DeplacementPlanningLu {
+  retire_de: { plan_id: string; restaurant_id: string; creneaux: number }[];
+  ajoute_a: { plan_id: string; restaurant_id: string; creneaux: number }[];
+}
+
 @Injectable()
 export class DeliverersService {
   private readonly logger = new Logger(DeliverersService.name);
@@ -297,7 +315,7 @@ export class DeliverersService {
    * Valide un livreur en attente : passe PENDING → ACTIVE.
    * Recalcule is_operational selon l'affectation à un restaurant.
    */
-  async validate(id: string) {
+  async validate(id: string, restaurantId?: string) {
     const deliverer = await this.getNonDeleted(id);
 
     if (
@@ -311,8 +329,9 @@ export class DeliverersService {
     if (!deliverer.piece_identite || !deliverer.permis_conduire) {
       throw new BadRequestException('Documents obligatoires manquants');
     }
+    if (restaurantId) await this.restaurantActif(restaurantId);
 
-    const activated = await this.transitionStatus(deliverer, DelivererStatus.ACTIVE);
+    const activated = await this.transitionStatus(deliverer, DelivererStatus.ACTIVE, undefined, restaurantId);
 
     // P-push livreur : alerte CRITIQUE — le livreur attendait peut-être depuis
     // plusieurs jours, il doit savoir tout de suite qu'il peut commencer à bosser.
@@ -328,7 +347,11 @@ export class DeliverersService {
       restaurantName: restaurant?.name,
     });
 
-    return activated;
+    // Validé avec son restaurant : il rejoint ses plannings (09/11).
+    const plannings = activated.restaurant_id
+      ? await this.suivreLesPlannings(activated.id, null, activated.restaurant_id)
+      : null;
+    return { ...activated, plannings };
   }
 
   async reject(id: string, reason: string) {
@@ -408,15 +431,16 @@ export class DeliverersService {
    * Réservé à l'admin — à utiliser quand le livreur n'a pas pu uploader ses docs
    * via l'app mobile mais doit être opérationnel immédiatement.
    */
-  async forceActivate(id: string) {
+  async forceActivate(id: string, restaurantId?: string) {
     const deliverer = await this.getNonDeleted(id);
 
     if (deliverer.status !== DelivererStatus.PENDING_VALIDATION) {
       throw new BadRequestException('Seuls les comptes en attente peuvent être activés');
     }
+    if (restaurantId) await this.restaurantActif(restaurantId);
 
     // Bypass du check document — l'admin prend la responsabilité
-    const activated = await this.transitionStatus(deliverer, DelivererStatus.ACTIVE);
+    const activated = await this.transitionStatus(deliverer, DelivererStatus.ACTIVE, undefined, restaurantId);
 
     const restaurant = activated.restaurant_id
       ? await this.prisma.restaurant.findUnique({
@@ -429,18 +453,16 @@ export class DeliverersService {
       restaurantName: restaurant?.name,
     });
 
-    return activated;
+    // Validé avec son restaurant : il rejoint ses plannings (09/11).
+    const plannings = activated.restaurant_id
+      ? await this.suivreLesPlannings(activated.id, null, activated.restaurant_id)
+      : null;
+    return { ...activated, plannings };
   }
 
   async assignRestaurant(id: string, dto: AssignRestaurantDto) {
     const deliverer = await this.getNonDeleted(id);
-
-    const restaurant = await this.prisma.restaurant.findUnique({
-      where: { id: dto.restaurant_id, entity_status: EntityStatus.ACTIVE },
-    });
-    if (!restaurant) {
-      throw new NotFoundException('Restaurant non trouvé ou inactif');
-    }
+    await this.restaurantActif(dto.restaurant_id);
 
     const previousStatus = deliverer.status;
     const updated = await this.prisma.deliverer.update({
@@ -459,7 +481,44 @@ export class DeliverersService {
       is_operational: updated.is_operational,
     });
 
-    return updated;
+    // Ses plannings suivent (09/11, « changer en un geste ») : livreur actif
+    // qui change vraiment de restaurant. Le rattachement reste fait même si
+    // le planning ne répond pas (`plannings` nul).
+    const plannings =
+      updated.status === DelivererStatus.ACTIVE && deliverer.restaurant_id !== dto.restaurant_id
+        ? await this.suivreLesPlannings(id, deliverer.restaurant_id, dto.restaurant_id)
+        : null;
+
+    return { ...updated, plannings };
+  }
+
+  /** Restaurant actif, sinon 404 (affectation et validation avec restaurant). */
+  private async restaurantActif(restaurantId: string) {
+    const restaurant = await this.prisma.restaurant.findUnique({
+      where: { id: restaurantId, entity_status: EntityStatus.ACTIVE },
+    });
+    if (!restaurant) {
+      throw new NotFoundException('Restaurant non trouvé ou inactif');
+    }
+    return restaurant;
+  }
+
+  /**
+   * Déplace le livreur d'un planning à l'autre (module du planning, par
+   * l'événement attendu `DELIVERER_RESTAURANT_CHANGED`). Rend ce que le
+   * planning a fait, ou null s'il n'a pas répondu.
+   */
+  private async suivreLesPlannings(
+    delivererId: string,
+    ancienRestaurantId: string | null,
+    nouveauRestaurantId: string,
+  ): Promise<DeplacementPlanningLu | null> {
+    const reponses = await this.delivererEvent.restaurantChange({ delivererId, ancienRestaurantId, nouveauRestaurantId });
+    const reponse = reponses.find(
+      (r): r is DeplacementPlanningLu =>
+        !!r && typeof r === 'object' && Array.isArray((r as DeplacementPlanningLu).ajoute_a),
+    );
+    return reponse ?? null;
   }
 
   async softDelete(id: string) {
@@ -581,16 +640,19 @@ export class DeliverersService {
     deliverer: Deliverer,
     newStatus: DelivererStatus,
     reason?: string,
+    restaurantId?: string,
   ): Promise<SafeDeliverer> {
     const previousStatus = deliverer.status;
     const willBeOperational =
-      newStatus === DelivererStatus.ACTIVE && !!deliverer.restaurant_id;
+      newStatus === DelivererStatus.ACTIVE && !!(restaurantId ?? deliverer.restaurant_id);
 
     const updated = await this.prisma.deliverer.update({
       where: { id: deliverer.id },
       data: {
         status: newStatus,
         is_operational: willBeOperational,
+        // Restaurant choisi dans la fenêtre de validation (09/11).
+        ...(restaurantId ? { restaurant_id: restaurantId } : {}),
         // Révoque les sessions si suspendu/refusé
         ...(newStatus !== DelivererStatus.ACTIVE && { refresh_token: null }),
         // Motif de refus : persisté sur REJECTED, effacé sur toute autre transition
@@ -832,6 +894,7 @@ export class DeliverersService {
       })),
     );
     const duJour = params.jour ? await this.lireLeJour(deliverers, params.restaurantId, settings.appliFermeeApresS, now) : null;
+    const renforts = await this.renfortsAffiches(deliverers, disponibilites, now, settings.gpsExpirationMinutes);
 
     const result = deliverers
       .map((d) => {
@@ -871,6 +934,8 @@ export class DeliverersService {
           pause_until: d.pause_until?.toISOString() ?? null,
           auto_pause_until: d.auto_pause_until?.toISOString() ?? null,
           disponibilite,
+          // Libre près d'un autre restaurant qui livre avec nos livreurs : il en reçoit aussi les courses (09/11).
+          renfort: renforts.get(d.id) ?? null,
           appli_connectee: presence(connectes, d.id),
           ...etatAppli(disponibilite),
           active_course: activeCourse
@@ -907,6 +972,53 @@ export class DeliverersService {
       .filter((d) => params.includeOffline || d.location_fresh);
 
     return result;
+  }
+
+  /**
+   * « En renfort près de … » (demande du 09/11) : livreur qui peut recevoir
+   * une offre, position de moins de `expirationMin`, plus près d'un autre
+   * restaurant que du sien et à la distance réglée au plus. Même règle que
+   * le planificateur (`renfort.rules.ts`), limitée aux restaurants qui
+   * livrent avec nos livreurs : un restaurant confié à Turbo n'en reçoit
+   * pas. Réglage coupé ou lecture impossible : aucun.
+   */
+  private async renfortsAffiches(
+    livreurs: readonly { id: string; restaurant_id: string | null; last_location: unknown; last_location_at: Date | null }[],
+    disponibilites: ReadonlyMap<string, { peut_recevoir_offre: boolean }>,
+    maintenant: Date,
+    expirationMin: number,
+  ): Promise<Map<string, { restaurant_id: string; restaurant_name: string | null }>> {
+    const res = new Map<string, { restaurant_id: string; restaurant_name: string | null }>();
+    const fraiche = (at: Date | null) => !!at && maintenant.getTime() - at.getTime() <= expirationMin * 60_000;
+    const libres = livreurs.filter(
+      (l) => l.restaurant_id && disponibilites.get(l.id)?.peut_recevoir_offre && fraiche(l.last_location_at),
+    );
+    if (libres.length === 0 || typeof this.scoringSettings.lireValeurs !== 'function') return res;
+    try {
+      const valeurs = await this.scoringSettings.lireValeurs([
+        CLE_RENFORT,
+        CLE_RENFORT_RAYON_M,
+        CLE_SERVICE_PAR_DEFAUT,
+        CLE_SERVICE_PAR_RESTAURANT,
+      ]);
+      const { reglages } = lireReglagesPlanification(valeurs);
+      if (!reglages.renfort) return res;
+      const restaurants = await this.prisma.restaurant.findMany({
+        where: { entity_status: EntityStatus.ACTIVE, latitude: { not: null }, longitude: { not: null } },
+        select: { id: true, name: true, latitude: true, longitude: true },
+      });
+      const situes = restaurants.map((r) => ({ id: r.id, name: r.name, position: { lat: r.latitude!, lng: r.longitude! } }));
+      for (const l of libres) {
+        const position = lirePositionLivreur(l.last_location, l.last_location_at).position;
+        const proche = restaurantsDeRenfort(position, l.restaurant_id, situes, reglages.renfortRayonM).find((r) =>
+          livreParNosLivreurs(valeurs, r.id),
+        );
+        if (proche) res.set(l.id, { restaurant_id: proche.id, restaurant_name: proche.name });
+      }
+    } catch (err) {
+      this.logger.warn(`Renforts illisibles : ${(err as Error).message}`);
+    }
+    return res;
   }
 
   /**

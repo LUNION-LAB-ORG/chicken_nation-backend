@@ -9,6 +9,7 @@ import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
 import { AssignRestaurantDto } from '../dto/assign-restaurant.dto';
 import { QueryDeliverersDto } from '../dto/query-deliverers.dto';
 import { RejectDelivererDto, SuspendDelivererDto } from '../dto/reject-deliverer.dto';
+import { ValidateDelivererDto } from '../dto/validate-deliverer.dto';
 import { DelivererInfoService } from '../services/deliverer-info.service';
 import { DeliverersService } from '../services/deliverers.service';
 import { ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
@@ -94,10 +95,16 @@ export class DeliverersAdminController {
     return this.delivererInfoService.getScoringInfo(id);
   }
 
-  @ApiOperation({ summary: 'Valider un livreur en attente (PENDING → ACTIVE)' })
+  @ApiOperation({
+    summary: 'Valider un livreur en attente (PENDING → ACTIVE)',
+    description:
+      'Avec `restaurant_id` (09/11) : rattaché à ce restaurant dans le même geste. Avec ou sans, il rejoint ' +
+      'les plannings non archivés de son restaurant à partir du prochain créneau (`plannings` dans la réponse).',
+  })
+  @ApiBody({ type: ValidateDelivererDto, required: false })
   @Patch(':id/validate')
-  async validate(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.deliverersService.validate(id);
+  async validate(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto?: ValidateDelivererDto) {
+    return this.deliverersService.validate(id, dto?.restaurant_id);
   }
 
   @ApiOperation({ summary: 'Refuser un livreur' })
@@ -127,12 +134,18 @@ export class DeliverersAdminController {
   }
 
   @ApiOperation({ summary: 'Forcer l\'activation sans documents (PENDING → ACTIVE, admin override)' })
+  @ApiBody({ type: ValidateDelivererDto, required: false })
   @Patch(':id/force-activate')
-  async forceActivate(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.deliverersService.forceActivate(id);
+  async forceActivate(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto?: ValidateDelivererDto) {
+    return this.deliverersService.forceActivate(id, dto?.restaurant_id);
   }
 
-  @ApiOperation({ summary: 'Affecter / réaffecter un restaurant au livreur' })
+  @ApiOperation({
+    summary: 'Affecter / réaffecter un restaurant au livreur',
+    description:
+      'Livreur actif qui change de restaurant (09/11) : ses créneaux pas encore commencés quittent les plannings ' +
+      "de l'ancien restaurant et il rejoint ceux du nouveau (`plannings` dans la réponse, nul si le planning n'a pas répondu).",
+  })
   @ApiBody({ type: AssignRestaurantDto })
   @Patch(':id/assign-restaurant')
   async assignRestaurant(

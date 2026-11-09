@@ -24,12 +24,16 @@ import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-
 import {
   lireMembresDuPlanning,
   lireReposDuPlanning,
+  SOURCES_REPOS_DU_PLANNING,
   planningQuiCouvre,
   plansEnCoursQuiChevauchent,
 } from '../helpers/membres-planning';
 import {
   actionAuJournal,
+  debutCreneau,
   type GestePlanning,
+  jourAVenir,
+  premiersDebutsParJour,
   MESSAGE_CONFIRMATION_HORS_ENVOYE,
   MESSAGE_DEJA_SUR_LE_PLANNING,
   MESSAGE_ENVOI_HORS_BROUILLON,
@@ -95,6 +99,12 @@ const SELECT_PLANNING = {
 } satisfies Prisma.SchedulePlanSelect;
 
 type PlanningAvantGeste = Prisma.SchedulePlanGetPayload<{ select: typeof SELECT_PLANNING }>;
+
+/** Ce que le changement de restaurant a fait aux plannings (09/11). */
+export interface DeplacementPlanning {
+  retire_de: { plan_id: string; restaurant_id: string; creneaux: number }[];
+  ajoute_a: { plan_id: string; restaurant_id: string; creneaux: number }[];
+}
 
 const SELECT_LIVREUR_NOMME = {
   id: true,
@@ -344,12 +354,18 @@ export class SchedulePlanningService {
    * Permis dans les quatre états (24/10). Envoyé ou confirmé : le livreur
    * reçoit « Nouveau planning ». Archivé : ligne au journal, et aucun repos
    * posé sur les jours d'un planning en cours du restaurant (ils sont à lui).
+   *
+   * `aPartirDe` (changement de restaurant, 09/11) : seulement les créneaux
+   * qui commencent à cette heure ou après, et les repos des jours dont le
+   * premier créneau n'a pas commencé (`jourAVenir`).
    */
   async addDelivererToPlan(
     planId: string,
     delivererId: string,
     acteur?: ActeurPlanning,
+    options: { aPartirDe?: Date } = {},
   ): Promise<{ added: number }> {
+    const { aPartirDe } = options;
     const plan = await this.lirePlanning(planId);
 
     // Le livreur doit être ACTIVE et rattaché au restaurant du plan.
@@ -372,10 +388,14 @@ export class SchedulePlanningService {
 
     // Shifts du plan + jours de repos du NOUVEAU livreur (rotation calculée pour lui
     // seul → n'altère pas la distribution des livreurs déjà planifiés).
-    const shifts = await this.prisma.shift.findMany({
+    const lus = await this.prisma.shift.findMany({
       where: { plan_id: planId },
-      select: { id: true, date: true },
+      select: { id: true, date: true, ...(aPartirDe ? { start_time: true } : {}) },
     });
+    const premiersDebuts = aPartirDe ? premiersDebutsParJour(lus as { date: Date; start_time: string }[]) : null;
+    const shifts = aPartirDe
+      ? lus.filter((s) => debutCreneau(s.date, (s as { start_time?: string }).start_time ?? '').getTime() >= aPartirDe.getTime())
+      : lus;
     const settings = await this.settings.load();
     const days = this.enumerateDays(plan.period_start, plan.period_end);
     const restSet =
@@ -396,7 +416,8 @@ export class SchedulePlanningService {
         date: this.parseKey(key),
         source: RestDaySource.AUTO,
       }))
-      .filter((r) => !planningQuiCouvre(enCours, r.date));
+      .filter((r) => !planningQuiCouvre(enCours, r.date))
+      .filter((r) => !premiersDebuts || !aPartirDe || jourAVenir(this.dateKey(r.date), premiersDebuts, aPartirDe));
 
     await this.prisma.$transaction(async (tx) => {
       if (assignments.length > 0) {
@@ -469,6 +490,97 @@ export class SchedulePlanningService {
         `${affectations.count} affectation(s), ${repos.count} repos.`,
     );
     return { removed: affectations.count };
+  }
+
+  /**
+   * Livreur passé à un autre restaurant (demande du 09/11, « changer en un
+   * geste ») : ses plannings suivent, sans passer par l'écran Planning.
+   *
+   *  - plannings non archivés de l'ancien restaurant : ses créneaux qui n'ont
+   *    pas commencé sont retirés, avec les repos du planning (`AUTO`,
+   *    `MANUAL_ADMIN`) des jours qui n'ont pas commencé. Le passé reste ;
+   *  - plannings non archivés du nouveau restaurant qui ne sont pas finis :
+   *    il y est ajouté à partir du prochain créneau, repos calculés pour lui
+   *    seul (« Ajouter un livreur »). Il y est déjà : rien.
+   *
+   * Prévenu « Nouveau planning » par l'ajout ; « Planning modifié » par le
+   * retrait seulement s'il n'est ajouté nulle part. Ne lève jamais pour un
+   * planning : le résultat dit ce qui a été fait, planning par planning.
+   */
+  async deplacerLivreur(p: {
+    delivererId: string;
+    ancienRestaurantId: string | null;
+    nouveauRestaurantId: string;
+    maintenant?: Date;
+  }): Promise<DeplacementPlanning> {
+    const maintenant = p.maintenant ?? new Date();
+    const resultat: DeplacementPlanning = { retire_de: [], ajoute_a: [] };
+    const nonArchives = (restaurantId: string) =>
+      this.prisma.schedulePlan.findMany({
+        where: {
+          restaurant_id: restaurantId,
+          status: { not: SchedulePlanStatus.ARCHIVED },
+          // Fini avant aujourd'hui : plus aucun créneau à venir.
+          period_end: { gte: new Date(Date.UTC(maintenant.getUTCFullYear(), maintenant.getUTCMonth(), maintenant.getUTCDate())) },
+        },
+        select: SELECT_PLANNING,
+        orderBy: { period_start: 'asc' },
+      });
+
+    const retires: PlanningAvantGeste[] = [];
+    if (p.ancienRestaurantId && p.ancienRestaurantId !== p.nouveauRestaurantId) {
+      for (const plan of await nonArchives(p.ancienRestaurantId)) {
+        try {
+          const shifts = await this.prisma.shift.findMany({
+            where: { plan_id: plan.id },
+            select: { id: true, date: true, start_time: true },
+          });
+          const premiersDebuts = premiersDebutsParJour(shifts);
+          const aVenir = shifts.filter((x) => debutCreneau(x.date, x.start_time).getTime() >= maintenant.getTime());
+          const repos = await this.prisma.restDay.findMany({
+            where: {
+              deliverer_id: p.delivererId,
+              date: { gte: plan.period_start, lte: plan.period_end },
+              source: { in: SOURCES_REPOS_DU_PLANNING },
+            },
+            select: { id: true, date: true },
+          });
+          const reposAVenir = repos.filter((r) => jourAVenir(this.dateKey(r.date), premiersDebuts, maintenant));
+          const [affectations, reposEfface] = await this.prisma.$transaction([
+            this.prisma.shiftAssignment.deleteMany({
+              where: { deliverer_id: p.delivererId, shift_id: { in: aVenir.map((x) => x.id) } },
+            }),
+            this.prisma.restDay.deleteMany({ where: { id: { in: reposAVenir.map((r) => r.id) } } }),
+          ]);
+          if (affectations.count === 0 && reposEfface.count === 0) continue;
+          retires.push(plan);
+          resultat.retire_de.push({ plan_id: plan.id, restaurant_id: plan.restaurant_id, creneaux: affectations.count });
+        } catch (err) {
+          this.logger.warn(`Retrait du plan ${plan.id.slice(0, 8)} impossible : ${(err as Error).message}`);
+        }
+      }
+    }
+
+    for (const plan of await nonArchives(p.nouveauRestaurantId)) {
+      try {
+        const { added } = await this.addDelivererToPlan(plan.id, p.delivererId, undefined, { aPartirDe: maintenant });
+        resultat.ajoute_a.push({ plan_id: plan.id, restaurant_id: plan.restaurant_id, creneaux: added });
+      } catch (err) {
+        // Déjà sur ce planning (retour dans un restaurant quitté) : rien à faire.
+        if (!(err instanceof BadRequestException && err.message === MESSAGE_DEJA_SUR_LE_PLANNING)) {
+          this.logger.warn(`Ajout au plan ${plan.id.slice(0, 8)} impossible : ${(err as Error).message}`);
+        }
+      }
+    }
+
+    if (resultat.ajoute_a.length === 0) {
+      for (const plan of retires) this.prevenir(plan, [p.delivererId], notificationRetrait(plan));
+    }
+    this.logger.log(
+      `Livreur ${p.delivererId.slice(0, 8)} changé de restaurant : retiré de ${resultat.retire_de.length} planning(s), ` +
+        `ajouté à ${resultat.ajoute_a.length}.`,
+    );
+    return resultat;
   }
 
   /**

@@ -340,6 +340,15 @@ export interface ReglagesPlanification {
   regroupementPerteMaxMin: number;
   /** `course.turbo_prise_en_charge_min` : délai supposé du coursier Turbo, pour la comparaison seulement. */
   turboPriseEnChargeMin: number;
+  /**
+   * `course.renfort` (demande du 09/11) : un livreur libre d'un autre
+   * restaurant, plus près de celui-ci que du sien et à `renfortRayonM` au
+   * plus, reçoit aussi ses courses (renfort.rules.ts). Non : chaque
+   * restaurant ne sollicite que ses livreurs, comme avant.
+   */
+  renfort: boolean;
+  /** `course.renfort_rayon_m` : distance maximale, à vol d'oiseau, entre le livreur en renfort et le restaurant. */
+  renfortRayonM: number;
   /** Règle « même direction » (direction.rules.ts). */
   direction: ReglagesDirection;
 }
@@ -374,14 +383,16 @@ export const REGLAGES_PLANIFICATION_DEFAUT: Readonly<ReglagesPlanification> = Ob
   regroupementGainMin: 10,
   regroupementPerteMaxMin: 20,
   turboPriseEnChargeMin: 15,
+  renfort: true,
+  renfortRayonM: 3000,
   direction: REGLAGES_DIRECTION_DEFAUT,
 });
 
 type CleNombre = Exclude<
   keyof ReglagesPlanification,
-  'retenueMemeSiLivreurLibre' | 'ajoutApresRetrait' | 'turboActif' | 'regroupementTournee' | 'direction'
+  'retenueMemeSiLivreurLibre' | 'ajoutApresRetrait' | 'turboActif' | 'regroupementTournee' | 'renfort' | 'direction'
 >;
-type CleBooleen = 'retenueMemeSiLivreurLibre' | 'ajoutApresRetrait' | 'turboActif' | 'regroupementTournee';
+type CleBooleen = 'retenueMemeSiLivreurLibre' | 'ajoutApresRetrait' | 'turboActif' | 'regroupementTournee' | 'renfort';
 
 /** Clé du réglage, minimum (0 permis là où il a un sens), maximum, entier ou non. */
 const BORNES: Record<CleNombre, { cle: string; min: number; max: number; zero: boolean; entier?: boolean }> = {
@@ -410,6 +421,7 @@ const BORNES: Record<CleNombre, { cle: string; min: number; max: number; zero: b
   regroupementGainMin: { cle: 'course.regroupement_gain_min', min: 0, max: 60, zero: true },
   regroupementPerteMaxMin: { cle: 'course.regroupement_perte_max_min', min: 0, max: 60, zero: true },
   turboPriseEnChargeMin: { cle: 'course.turbo_prise_en_charge_min', min: 0, max: 90, zero: true },
+  renfortRayonM: { cle: 'course.renfort_rayon_m', min: 100, max: 20000, zero: false },
 };
 
 const CLES_BOOLEENS: Record<CleBooleen, string> = {
@@ -417,6 +429,7 @@ const CLES_BOOLEENS: Record<CleBooleen, string> = {
   ajoutApresRetrait: 'course.ajout_apres_retrait',
   turboActif: 'course.turbo_fallback_enabled',
   regroupementTournee: 'course.regroupement_tournee',
+  renfort: 'course.renfort',
 };
 
 /** Toutes les clés lues par `lireReglagesPlanification` (direction comprise), pour un seul `getMany`. */
@@ -677,6 +690,12 @@ export interface LivreurPlanif {
   secondes_google?: number | null;
   /** Dernier signe de vie de l'appli (requête authentifiée ou position), écrit au plus une fois par minute. */
   dernier_signal_at?: Date | null;
+  /**
+   * Livreur d'un autre restaurant, libre près de celui-ci (renfort, demande
+   * du 09/11) : candidat comme les autres, classé par son temps jusqu'au
+   * comptoir. Absent : livreur du restaurant.
+   */
+  renfort?: boolean;
 }
 
 export interface InstantanePlanification {

@@ -204,6 +204,8 @@ export interface DonneesDispatch {
   livraisons?: Ligne[];
   commandes?: Ligne[];
   offres?: Ligne[];
+  /** Autres restaurants (renfort, 09/11) : `RESTO` (Zone 4) existe toujours. */
+  restaurants?: Ligne[];
 }
 
 export function monterBaseDispatch(donnees: DonneesDispatch = {}) {
@@ -381,7 +383,15 @@ export function monterBaseDispatch(donnees: DonneesDispatch = {}) {
 
   const prisma: any = {
     ...tables(),
-    restaurant: { findUnique: jest.fn(async () => restaurant) },
+    restaurant: {
+      findUnique: jest.fn(async () => restaurant),
+      findMany: jest.fn(async (args: Ligne = {}) =>
+        [restaurant, ...(donnees.restaurants ?? [])]
+          .map((r) => ({ entity_status: EntityStatus.ACTIVE, ...r }))
+          .filter((r) => evaluer(r, args.where))
+          .map((r) => projeter(r, args)),
+      ),
+    },
     $queryRaw: jest.fn(async (_sql: TemplateStringsArray, ...valeurs: unknown[]) => essayerVerrou(valeurs, null)),
     dispatchEvenement: {
       create: jest.fn(async ({ data }: Ligne) => {

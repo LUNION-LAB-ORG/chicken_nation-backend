@@ -136,6 +136,15 @@ export class DelivererScoringSettingsHelper {
 
   constructor(private readonly settingsService: SettingsService) {}
 
+  /**
+   * Valeurs brutes de quelques réglages, en une lecture : le renfort entre
+   * restaurants de la liste des livreurs (09/11) les lit avec les règles du
+   * planificateur, pour dire la même chose que lui.
+   */
+  async lireValeurs(cles: readonly string[]): Promise<Record<string, string>> {
+    return this.settingsService.getMany([...cles]);
+  }
+
   /** Charge toutes les clés d'un coup (optimal — 1 query DB). */
   async load(): Promise<IDelivererScoringSettings> {
     const map = await this.settingsService.getMany([

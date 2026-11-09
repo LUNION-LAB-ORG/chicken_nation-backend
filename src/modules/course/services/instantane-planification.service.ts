@@ -11,7 +11,12 @@ import {
 } from '@prisma/client';
 
 import { PrismaService } from 'src/database/services/prisma.service';
-import { SELECT_ETAT_LIVREUR, etatLivreurDepuis, peutRecevoirOffre } from 'src/modules/deliverers/helpers/disponibilite.rules';
+import {
+  SELECT_ETAT_LIVREUR,
+  STATUTS_COURSE_EN_COURS,
+  etatLivreurDepuis,
+  peutRecevoirOffre,
+} from 'src/modules/deliverers/helpers/disponibilite.rules';
 import { DelivererScoringSettingsHelper } from 'src/modules/deliverers/helpers/deliverer-scoring-settings.helper';
 import { lirePositionLivreur } from 'src/modules/deliverers/helpers/position-livreur.rules';
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
@@ -37,6 +42,7 @@ import {
 } from '../helpers/planification.rules';
 import { ReglagesPreparation } from '../helpers/preparation.rules';
 import { APPELS_REGROUPEMENT_PAR_PASSAGE } from '../helpers/regroupement-tournee.rules';
+import { restaurantsDeRenfort } from '../helpers/renfort.rules';
 import { DirectionService } from './direction.service';
 import { EstimationPreparationService } from './estimation-preparation.service';
 
@@ -53,6 +59,22 @@ export const STATUTS_COURSE_OUVERTES: CourseStatut[] = [
 export const FRAICHEUR_COURSE_EN_LIVRAISON_MS = 12 * 60 * 60 * 1000;
 
 const STATUTS_COMMANDE_FINIE: OrderStatus[] = [OrderStatus.COLLECTED, OrderStatus.COMPLETED, OrderStatus.CANCELLED];
+
+/** Ce que le planificateur lit d'un livreur, du restaurant ou en renfort. */
+const SELECT_LIVREUR_PLANIF = {
+  ...SELECT_ETAT_LIVREUR,
+  last_location: true,
+  last_location_at: true,
+  dernier_signal_at: true,
+  protocole_appli: true,
+  queue_penalty_until: true,
+  queue_penalty_positions: true,
+  // Joignable (socket ou jeton) : sans jeton ni socket, jamais d'offre.
+  expo_push_token: true,
+} satisfies Prisma.DelivererSelect;
+
+/** Renforts lus au plus par passage : bien au-delà d'une flotte de quelques dizaines de livreurs. */
+const RENFORTS_LUS_MAX = 50;
 
 const SELECT_COMMANDE = {
   id: true,
@@ -219,27 +241,23 @@ export class InstantanePlanificationService {
       }),
       this.prisma.deliverer.findMany({
         where: { restaurant_id: restaurantId, status: DelivererStatus.ACTIVE, entity_status: EntityStatus.ACTIVE },
-        select: {
-          ...SELECT_ETAT_LIVREUR,
-          last_location: true,
-          last_location_at: true,
-          dernier_signal_at: true,
-          protocole_appli: true,
-          queue_penalty_until: true,
-          queue_penalty_positions: true,
-          // Joignable (socket ou jeton) : sans jeton ni socket, jamais d'offre.
-          expo_push_token: true,
-        },
+        select: SELECT_LIVREUR_PLANIF,
       }),
     ]);
 
+    // Renfort (demande du 09/11) : livreurs libres d'autres restaurants, près
+    // de celui-ci. Candidats comme les autres, classés par leur temps jusqu'au comptoir.
+    const renforts = await this.lireRenforts(restaurantId, maintenant, r);
+    const idsRenfort = new Set(renforts.map((l) => l.id));
+    const tousLesLivreurs = [...lignesLivreurs, ...renforts];
+
     // Appli de chaque livreur (socket, signe de vie) et joignabilité (socket ou
     // jeton) : l'état de la règle unique en dépend.
-    const appli = await this.appliLivreur.contexte(lignesLivreurs, maintenant);
+    const appli = await this.appliLivreur.contexte(tousLesLivreurs, maintenant);
 
     // Courses du jour de chaque livreur (équité, 4.2).
     const journee = journeeDeService(maintenant);
-    const ids = lignesLivreurs.map((l) => l.id);
+    const ids = tousLesLivreurs.map((l) => l.id);
     const coursesDuJour = new Map<string, number>();
     if (ids.length > 0) {
       const affectees = await this.prisma.course.findMany({
@@ -334,7 +352,7 @@ export class InstantanePlanificationService {
       };
     });
 
-    const livreurs: LivreurPlanif[] = lignesLivreurs.map((l) => {
+    const livreurs: LivreurPlanif[] = tousLesLivreurs.map((l) => {
       // Dernière position (temps de trajet) et dernière position précise
       // (seule à décider départ, comptoir et sac attendu).
       const lue = lirePositionLivreur(l.last_location, l.last_location_at);
@@ -349,6 +367,7 @@ export class InstantanePlanificationService {
         queue_penalty_until: l.queue_penalty_until,
         queue_penalty_positions: l.queue_penalty_positions,
         courses_du_jour: coursesDuJour.get(l.id) ?? 0,
+        ...(idsRenfort.has(l.id) ? { renfort: true } : {}),
       };
     });
 
@@ -390,6 +409,52 @@ export class InstantanePlanificationService {
         refus: new Map(lignesCourses.map((k) => [k.id, k.refusal_count])),
       },
     };
+  }
+
+  /**
+   * Livreurs en renfort pour ce restaurant (demande du 09/11, `renfort.rules.ts`) :
+   * d'un autre restaurant, actifs, sans course en cours ni offre en attente
+   * (leur restaurant les verrait occupés de toute façon), position de moins
+   * de `positionExpirationMin`, à `renfortRayonM` au plus de ce restaurant et
+   * plus près de lui que du leur. Réglage coupé : aucun, comme avant.
+   * Ne lève jamais : une erreur de lecture laisse le passage sans renfort.
+   */
+  private async lireRenforts(restaurantId: string, maintenant: Date, r: ReglagesPlanification) {
+    if (!r.renfort) return [];
+    try {
+      const candidats = await this.prisma.deliverer.findMany({
+        where: {
+          NOT: { restaurant_id: null },
+          restaurant_id: { not: restaurantId },
+          status: DelivererStatus.ACTIVE,
+          is_operational: true,
+          entity_status: EntityStatus.ACTIVE,
+          last_location_at: { gte: new Date(maintenant.getTime() - r.positionExpirationMin * 60_000) },
+          courses: { none: { statut: { in: STATUTS_COURSE_EN_COURS } } },
+          offer_attempts: { none: { status: CourseOfferStatus.PENDING } },
+        },
+        select: SELECT_LIVREUR_PLANIF,
+        orderBy: { last_location_at: 'desc' },
+        take: RENFORTS_LUS_MAX,
+      });
+      if (candidats.length === 0) return [];
+      const restaurants = await this.prisma.restaurant.findMany({
+        where: { entity_status: EntityStatus.ACTIVE, latitude: { not: null }, longitude: { not: null } },
+        select: { id: true, latitude: true, longitude: true },
+      });
+      const situes = restaurants.map((x) => ({ id: x.id, position: { lat: x.latitude!, lng: x.longitude! } }));
+      return candidats.filter((l) =>
+        restaurantsDeRenfort(
+          lirePositionLivreur(l.last_location, l.last_location_at).position,
+          l.restaurant_id,
+          situes,
+          r.renfortRayonM,
+        ).some((x) => x.id === restaurantId),
+      );
+    } catch (err) {
+      this.logger.warn(`Renforts illisibles (${restaurantId.slice(0, 8)}) : ${(err as Error).message}`);
+      return [];
+    }
   }
 
   /**

@@ -87,6 +87,45 @@ export function verifierPlanningDuRestaurant(
   }
 }
 
+// ============================================================
+// CHANGEMENT DE RESTAURANT (09/11, « changer en un geste »)
+// ============================================================
+
+/**
+ * Début d'un créneau : son jour (date seule, UTC) et son heure de début
+ * (« 09:00 »), heure d'Abidjan = UTC. Heure illisible : minuit du jour.
+ */
+export function debutCreneau(jour: Date, heure: string): Date {
+  const debut = new Date(Date.UTC(jour.getUTCFullYear(), jour.getUTCMonth(), jour.getUTCDate()));
+  const m = /^(\d{1,2}):(\d{2})$/.exec(heure?.trim() ?? '');
+  if (m) debut.setUTCHours(Number(m[1]), Number(m[2]), 0, 0);
+  return debut;
+}
+
+/**
+ * Un jour passe au nouveau restaurant si son premier créneau n'a pas encore
+ * commencé : un changement à 7 h emmène la journée entière, un changement
+ * à 10 h laisse la journée (et son repos) à l'ancien restaurant. Jour sans
+ * créneau dans le planning : à partir du lendemain du changement.
+ */
+export function jourAVenir(cle: string, premiersDebuts: ReadonlyMap<string, Date>, aPartirDe: Date): boolean {
+  const debut = premiersDebuts.get(cle);
+  if (debut) return debut.getTime() >= aPartirDe.getTime();
+  return cle > aPartirDe.toISOString().substring(0, 10);
+}
+
+/** Premier début de créneau de chaque jour (clé AAAA-MM-JJ). */
+export function premiersDebutsParJour(shifts: readonly { date: Date; start_time: string }[]): Map<string, Date> {
+  const res = new Map<string, Date>();
+  for (const s of shifts) {
+    const cle = s.date.toISOString().substring(0, 10);
+    const debut = debutCreneau(s.date, s.start_time);
+    const avant = res.get(cle);
+    if (!avant || debut.getTime() < avant.getTime()) res.set(cle, debut);
+  }
+  return res;
+}
+
 /** Un geste sur le planning, pour savoir qui prévenir et quoi noter. */
 export type GestePlanning = 'jour' | 'ajout' | 'retrait' | 'dates' | 'suppression';
 

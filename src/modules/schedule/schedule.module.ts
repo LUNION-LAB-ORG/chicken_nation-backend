@@ -10,6 +10,7 @@ import { ScheduleAdminController } from './controllers/schedule-admin.controller
 import { ScheduleSelfController } from './controllers/schedule-self.controller';
 import { ScheduleEvent } from './events/schedule.event';
 import { ScheduleSettingsHelper } from './helpers/schedule-settings.helper';
+import { ChangementRestaurantListener } from './listeners/changement-restaurant.listener';
 import { ScheduleListenerService } from './listeners/schedule.listener.service';
 import { SchedulePlanningService } from './services/schedule-planning.service';
 import { ScheduleQueryService } from './services/schedule-query.service';
@@ -40,6 +41,8 @@ import { ScheduleWebSocketService } from './websockets/schedule-websocket.servic
     ScheduleSelfService,
     ScheduleEvent,
     ScheduleListenerService,
+    // Changement de restaurant d'un livreur : ses plannings suivent (09/11).
+    ChangementRestaurantListener,
     ScheduleWebSocketService,
     ScheduleTask,
   ],

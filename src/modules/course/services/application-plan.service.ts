@@ -726,6 +726,8 @@ export class ApplicationPlanService {
         eta_s: Math.round(a.cout.eta_s),
         source_eta: a.cout.source_eta,
         rang_file: a.cout.rang_file,
+        // Livreur d'un autre restaurant, libre près de celui-ci (renfort, 09/11).
+        ...(p.lu.instantane.livreurs.find((l) => l.id === a.deliverer_id)?.renfort ? { renfort: true } : {}),
       },
     });
   }

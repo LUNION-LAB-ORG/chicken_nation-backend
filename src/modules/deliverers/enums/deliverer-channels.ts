@@ -55,4 +55,10 @@ export enum DelivererChannels {
   // JwtDelivererStrategy (module d'authentification, qui ne peut pas importer
   // le module des livreurs), écouté par MinuteurEnLigneListener.
   DELIVERER_SIGNAL = 'deliverer:signal',
+
+  // ÉVÉNEMENT INTERNE : livreur rattaché à un autre restaurant (changement
+  // ou validation avec restaurant, 09/11). Émis et ATTENDU par
+  // DeliverersService (`emitAsync`) ; le module du planning, qui importe
+  // celui des livreurs, y déplace le livreur d'un planning à l'autre.
+  DELIVERER_RESTAURANT_CHANGED = 'deliverer:restaurant:changed',
 }
