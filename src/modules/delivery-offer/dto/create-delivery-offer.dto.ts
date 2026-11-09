@@ -104,7 +104,7 @@ export class CreateDeliveryOfferDto {
   @IsBoolean()
   target_gold?: boolean;
 
-  @ApiPropertyOptional({ description: 'Clients avec une Carte de la Nation étudiante active' })
+  @ApiPropertyOptional({ description: 'Clients étudiants, quel que soit leur niveau (même règle que les menus)' })
   @IsOptional()
   @IsBoolean()
   target_etudiant?: boolean;

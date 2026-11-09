@@ -83,6 +83,36 @@ export function customerAudiences(customer: AudienceCustomer): DishAudience[] {
   return set;
 }
 
+const AUDIENCES_CONNUES = new Set<string>(Object.values(DishAudience));
+
+/**
+ * Audiences lues d'une valeur libre (filtres d'un segment enregistrés en Json,
+ * corps d'une requête) : les valeurs inconnues et les doublons sont écartés.
+ */
+export function lireAudiences(brut: unknown): DishAudience[] {
+  if (!Array.isArray(brut)) return [];
+  return [...new Set(brut.filter((a): a is DishAudience => typeof a === 'string' && AUDIENCES_CONNUES.has(a)))];
+}
+
+/**
+ * Le miroir de {@link customerAudiences} : les clients qu'une liste d'audiences
+ * désigne, pour cibler un segment avec la MÊME règle que les menus (09/11).
+ * L'une des audiences suffit. Étudiant : le profil étudiant, quel que soit le
+ * niveau. Standard : aussi le client dont le niveau n'a jamais été calculé.
+ * Liste vide : `null`, aucun ciblage.
+ */
+export function clauseClientsDesAudiences(audiences: readonly DishAudience[]): Prisma.CustomerWhereInput | null {
+  const ou: Prisma.CustomerWhereInput[] = [];
+  for (const audience of new Set(audiences)) {
+    if (audience === DishAudience.ETUDIANT) ou.push({ profile_type: ProfileType.ETUDIANT });
+    else if (audience === DishAudience.STANDARD) {
+      ou.push({ loyalty_level: LoyaltyLevel.STANDARD }, { loyalty_level: null });
+    } else if (audience === DishAudience.VIP) ou.push({ loyalty_level: LoyaltyLevel.VIP });
+    else if (audience === DishAudience.VVIP) ou.push({ loyalty_level: LoyaltyLevel.VVIP });
+  }
+  return ou.length > 0 ? { OR: ou } : null;
+}
+
 /**
  * MENUS COMPOSABLES — verrou de visibilité.
  *

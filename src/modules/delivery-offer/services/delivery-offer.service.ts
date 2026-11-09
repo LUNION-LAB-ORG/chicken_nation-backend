@@ -2,15 +2,16 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import {
   DeliveryOffer,
   DeliveryOfferType,
+  DishAudience,
   EntityStatus,
   LoyaltyLevel,
-  NationCardStatus,
   Prisma,
   PromoCodeUsageStatus,
   User,
 } from '@prisma/client';
 import type { Request } from 'express';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { customerAudiences } from 'src/modules/menu/utils/dish-audience.util';
 import { CreateDeliveryOfferDto } from '../dto/create-delivery-offer.dto';
 import { UpdateDeliveryOfferDto } from '../dto/update-delivery-offer.dto';
 import { QueryDeliveryOfferDto } from '../dto/query-delivery-offer.dto';
@@ -107,6 +108,22 @@ export function prixImpose(
   }
   const palier = paliers.find((p) => distanceKm <= p.max_km);
   return palier ? palier.price : null;
+}
+
+/**
+ * Clients visés par une offre, dans les mots des menus : Standard, VIP
+ * (`target_premium`), VVIP (`target_gold`), Étudiant (« Carte étudiante »).
+ * Vide : tous les clients.
+ */
+export function audiencesDeLOffre(
+  offre: Pick<DeliveryOffer, 'target_standard' | 'target_premium' | 'target_gold' | 'target_etudiant'>,
+): DishAudience[] {
+  const cibles: DishAudience[] = [];
+  if (offre.target_standard) cibles.push(DishAudience.STANDARD);
+  if (offre.target_premium) cibles.push(DishAudience.VIP);
+  if (offre.target_gold) cibles.push(DishAudience.VVIP);
+  if (offre.target_etudiant) cibles.push(DishAudience.ETUDIANT);
+  return cibles;
 }
 
 const WEEKDAYS = [
@@ -333,40 +350,32 @@ export class DeliveryOfferService {
       orderBy: [{ priority: 'desc' }, { created_at: 'desc' }],
     });
 
-    // Niveau de fidélité résolu paresseusement (seulement si une offre le cible).
-    let loyaltyResolved: LoyaltyLevel | null | undefined = ctx.loyaltyLevel;
-    const resolveLoyalty = async (): Promise<LoyaltyLevel | null> => {
-      if (loyaltyResolved !== undefined) return loyaltyResolved;
-      if (ctx.customerId) {
-        const c = await this.prisma.customer.findUnique({
-          where: { id: ctx.customerId },
-          select: { loyalty_level: true },
-        });
-        loyaltyResolved = c?.loyalty_level ?? null;
-      } else {
-        loyaltyResolved = null;
-      }
-      return loyaltyResolved;
-    };
-
-    // Carte étudiante et plats du panier : lus seulement si une offre les demande.
-    let etudiantResolu: boolean | undefined;
-    const resolveEtudiant = async (): Promise<boolean> => {
-      if (etudiantResolu !== undefined) return etudiantResolu;
-      const carte = ctx.customerId
-        ? await this.prisma.nationCard.findFirst({
-            where: {
-              customer_id: ctx.customerId,
-              is_student: true,
-              status: NationCardStatus.ACTIVE,
-            },
-            select: { id: true },
+    /**
+     * Audiences du client, lues seulement si une offre cible des clients :
+     * MÊME règle que les menus (`customerAudiences`, 09/11). Étudiant = profil
+     * étudiant, quel que soit le niveau ; niveau jamais calculé = Standard.
+     * Invité ou client inconnu : aucune audience, donc aucune offre ciblée.
+     */
+    let audiencesResolues: DishAudience[] | undefined;
+    const resolveAudiences = async (): Promise<DishAudience[]> => {
+      if (audiencesResolues) return audiencesResolues;
+      const client = ctx.customerId
+        ? await this.prisma.customer.findUnique({
+            where: { id: ctx.customerId },
+            select: { profile_type: true, loyalty_level: true },
           })
         : null;
-      etudiantResolu = !!carte;
-      return etudiantResolu;
+      audiencesResolues =
+        client || ctx.loyaltyLevel !== undefined
+          ? customerAudiences({
+              profile_type: client?.profile_type ?? null,
+              loyalty_level: ctx.loyaltyLevel !== undefined ? ctx.loyaltyLevel : (client?.loyalty_level ?? null),
+            })
+          : [];
+      return audiencesResolues;
     };
 
+    // Plats du panier : lus seulement si une offre les demande.
     let platsResolus: { id: string; category_id: string }[] | undefined;
     const resolvePlats = async () => {
       if (platsResolus) return platsResolus;
@@ -407,16 +416,10 @@ export class DeliveryOfferService {
         if (!concerne) continue;
       }
       // Ciblage clients (si au moins une case cochée) : l'une d'elles suffit.
-      const anyLevel =
-        offer.target_standard || offer.target_premium || offer.target_gold;
-      if (anyLevel || offer.target_etudiant) {
-        const lvl = anyLevel ? await resolveLoyalty() : null;
-        const ok =
-          (lvl === LoyaltyLevel.STANDARD && offer.target_standard) ||
-          (lvl === LoyaltyLevel.VIP && offer.target_premium) ||
-          (lvl === LoyaltyLevel.VVIP && offer.target_gold) ||
-          (offer.target_etudiant && (await resolveEtudiant()));
-        if (!ok) continue;
+      const cibles = audiencesDeLOffre(offer);
+      if (cibles.length > 0) {
+        const audiences = await resolveAudiences();
+        if (!audiences.some((a) => cibles.includes(a))) continue;
       }
       // Jours de la semaine
       if (offer.days_of_week.length > 0 && !offer.days_of_week.includes(weekday)) {

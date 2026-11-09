@@ -1,20 +1,23 @@
 /**
- * Offres de livraison : étudiants, menus et catégories (05/11).
+ * Offres de livraison : étudiants, menus et catégories (05/11, règle de
+ * l'étudiant alignée sur les menus le 09/11).
  *
- *  - étudiant = Carte de la Nation ACTIVE et étudiante, pas le profil déclaré à
- *    l'adhésion ni une carte suspendue ;
+ *  - clients visés : MÊME règle que les menus (`customerAudiences`) ; étudiant
+ *    = profil étudiant, quel que soit le niveau ; niveau jamais calculé =
+ *    Standard ;
  *  - il suffit de remplir l'une des cases de clients cochées ;
  *  - il suffit d'un plat du panier parmi les menus ou catégories choisis ;
  *  - l'aperçu ne révèle rien à un invité sur le client qu'il indique.
  */
-import { DeliveryOfferType, LoyaltyLevel, NationCardStatus } from '@prisma/client';
+import { DeliveryOfferType, DishAudience, LoyaltyLevel, ProfileType } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 
+import { customerAudiences } from 'src/modules/menu/utils/dish-audience.util';
 import { FraisLivraisonDto } from 'src/modules/order/dto/frais-livrasion.dto';
 import { clientDeLApercu } from 'src/modules/order/helpers/client-apercu-frais.rules';
 
-import { DeliveryOfferService } from './delivery-offer.service';
+import { audiencesDeLOffre, DeliveryOfferService } from './delivery-offer.service';
 
 const MENU = '11111111-1111-4111-8111-111111111111';
 const AUTRE_MENU = '22222222-2222-4222-8222-222222222222';
@@ -48,13 +51,23 @@ const offre = (surcharge: Record<string, unknown> = {}) => ({
 
 function monter(
   offres: Record<string, unknown>[],
-  base: { carte?: boolean; niveau?: LoyaltyLevel | null; plats?: { id: string; category_id: string }[] } = {},
+  base: {
+    etudiant?: boolean;
+    niveau?: LoyaltyLevel | null;
+    inconnu?: boolean;
+    plats?: { id: string; category_id: string }[];
+  } = {},
 ) {
   const prisma = {
     deliveryOffer: { findMany: jest.fn(async () => offres) },
     deliveryOfferUsage: { count: jest.fn(async () => 0) },
-    customer: { findUnique: jest.fn(async () => ({ loyalty_level: base.niveau ?? null })) },
-    nationCard: { findFirst: jest.fn(async () => (base.carte ? { id: 'carte-1' } : null)) },
+    customer: {
+      findUnique: jest.fn(async () =>
+        base.inconnu
+          ? null
+          : { loyalty_level: base.niveau ?? null, profile_type: base.etudiant ? ProfileType.ETUDIANT : null },
+      ),
+    },
     dish: { findMany: jest.fn(async () => base.plats ?? []) },
   };
   return { prisma, service: new DeliveryOfferService(prisma as never) };
@@ -68,58 +81,93 @@ const contexte = (surcharge: Record<string, unknown> = {}) => ({
   ...surcharge,
 });
 
-describe('offre réservée aux étudiants', () => {
+describe('offre réservée aux étudiants : la règle des menus', () => {
   const pourEtudiants = offre({ target_etudiant: true });
 
-  it('client avec une carte étudiante active : offre appliquée', async () => {
-    const t = monter([pourEtudiants], { carte: true });
+  it.each([LoyaltyLevel.STANDARD, LoyaltyLevel.VIP, LoyaltyLevel.VVIP, null])(
+    'étudiant de niveau %s : offre appliquée',
+    async (niveau) => {
+      const t = monter([pourEtudiants], { etudiant: true, niveau });
 
-    const r = await t.service.findApplicableOffer(contexte());
+      expect((await t.service.findApplicableOffer(contexte()))?.newFee).toBe(0);
+      expect(t.prisma.customer.findUnique).toHaveBeenCalledWith({
+        where: { id: CLIENT },
+        select: { profile_type: true, loyalty_level: true },
+      });
+    },
+  );
 
-    expect(r?.newFee).toBe(0);
-    expect(t.prisma.nationCard.findFirst).toHaveBeenCalledWith({
-      where: { customer_id: CLIENT, is_student: true, status: NationCardStatus.ACTIVE },
-      select: { id: true },
-    });
-  });
-
-  it('sans carte étudiante active : pas d’offre', async () => {
-    const t = monter([pourEtudiants], { carte: false });
+  it('client qui n’est pas étudiant : pas d’offre', async () => {
+    const t = monter([pourEtudiants], { etudiant: false, niveau: LoyaltyLevel.VVIP });
     expect(await t.service.findApplicableOffer(contexte())).toBeNull();
   });
 
-  it('invité : pas d’offre, sans lecture de carte', async () => {
-    const t = monter([pourEtudiants], { carte: true });
+  it('invité : pas d’offre, sans lecture du client', async () => {
+    const t = monter([pourEtudiants], { etudiant: true });
 
     expect(await t.service.findApplicableOffer(contexte({ customerId: null }))).toBeNull();
-    expect(t.prisma.nationCard.findFirst).not.toHaveBeenCalled();
+    expect(t.prisma.customer.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('client introuvable : aucune offre ciblée, pas même Standard', async () => {
+    const t = monter([offre({ target_standard: true })], { inconnu: true });
+    expect(await t.service.findApplicableOffer(contexte())).toBeNull();
+  });
+
+  it('Standard coché : le client dont le niveau n’a jamais été calculé y a droit, comme dans les menus', async () => {
+    const t = monter([offre({ target_standard: true })], { niveau: null });
+    expect((await t.service.findApplicableOffer(contexte()))?.newFee).toBe(0);
   });
 
   it('étudiant et VIP cochés : l’un ou l’autre suffit', async () => {
     const lesDeux = offre({ target_etudiant: true, target_premium: true });
 
-    const vip = monter([lesDeux], { niveau: LoyaltyLevel.VIP, carte: false });
+    const vip = monter([lesDeux], { niveau: LoyaltyLevel.VIP, etudiant: false });
     expect((await vip.service.findApplicableOffer(contexte()))?.newFee).toBe(0);
 
-    const etudiant = monter([lesDeux], { niveau: LoyaltyLevel.STANDARD, carte: true });
+    const etudiant = monter([lesDeux], { niveau: LoyaltyLevel.STANDARD, etudiant: true });
     expect((await etudiant.service.findApplicableOffer(contexte()))?.newFee).toBe(0);
 
-    const niLUnNiLAutre = monter([lesDeux], { niveau: LoyaltyLevel.STANDARD, carte: false });
+    const niLUnNiLAutre = monter([lesDeux], { niveau: LoyaltyLevel.STANDARD, etudiant: false });
     expect(await niLUnNiLAutre.service.findApplicableOffer(contexte())).toBeNull();
   });
 
   it('niveau seul coché : un étudiant d’un autre niveau n’y a pas droit', async () => {
-    const t = monter([offre({ target_premium: true })], { niveau: LoyaltyLevel.STANDARD, carte: true });
-
+    const t = monter([offre({ target_premium: true })], { niveau: LoyaltyLevel.STANDARD, etudiant: true });
     expect(await t.service.findApplicableOffer(contexte())).toBeNull();
-    expect(t.prisma.nationCard.findFirst).not.toHaveBeenCalled();
   });
 
-  it('aucune case cochée : tous les clients, sans lire la carte', async () => {
+  it('aucune case cochée : tous les clients, sans lire le client', async () => {
     const t = monter([offre()]);
 
     expect((await t.service.findApplicableOffer(contexte()))?.newFee).toBe(0);
-    expect(t.prisma.nationCard.findFirst).not.toHaveBeenCalled();
+    expect(t.prisma.customer.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('même verdict que les menus pour chaque client et chaque case', async () => {
+    const cases = ['target_standard', 'target_premium', 'target_gold', 'target_etudiant'] as const;
+    const niveaux = [LoyaltyLevel.STANDARD, LoyaltyLevel.VIP, LoyaltyLevel.VVIP, null];
+    for (const cle of cases) {
+      const o = offre({ [cle]: true });
+      const [cible] = audiencesDeLOffre(o as never);
+      for (const niveau of niveaux) {
+        for (const etudiant of [false, true]) {
+          const t = monter([o], { niveau, etudiant });
+          const menus = customerAudiences({
+            loyalty_level: niveau,
+            profile_type: etudiant ? ProfileType.ETUDIANT : null,
+          }).includes(cible);
+          const r = await t.service.findApplicableOffer(contexte());
+          expect({ cle, niveau, etudiant, offre: r !== null }).toEqual({ cle, niveau, etudiant, offre: menus });
+        }
+      }
+    }
+  });
+
+  it('les cases de l’offre dans les mots des menus', () => {
+    expect(
+      audiencesDeLOffre({ target_standard: true, target_premium: true, target_gold: true, target_etudiant: true }),
+    ).toEqual([DishAudience.STANDARD, DishAudience.VIP, DishAudience.VVIP, DishAudience.ETUDIANT]);
   });
 });
 
@@ -176,13 +224,13 @@ describe('offre limitée à des menus ou des catégories', () => {
   it('étudiant et menu demandés ensemble : il faut les deux', async () => {
     const lesDeux = offre({ target_etudiant: true, dish_ids: [MENU] });
 
-    const sansMenu = monter([lesDeux], { carte: true, plats: [plats[1]] });
+    const sansMenu = monter([lesDeux], { etudiant: true, plats: [plats[1]] });
     expect(await sansMenu.service.findApplicableOffer(contexte({ dishIds: [AUTRE_MENU] }))).toBeNull();
 
-    const sansCarte = monter([lesDeux], { carte: false, plats: [plats[0]] });
-    expect(await sansCarte.service.findApplicableOffer(contexte({ dishIds: [MENU] }))).toBeNull();
+    const pasEtudiant = monter([lesDeux], { etudiant: false, plats: [plats[0]] });
+    expect(await pasEtudiant.service.findApplicableOffer(contexte({ dishIds: [MENU] }))).toBeNull();
 
-    const lesDeuxOk = monter([lesDeux], { carte: true, plats: [plats[0]] });
+    const lesDeuxOk = monter([lesDeux], { etudiant: true, plats: [plats[0]] });
     expect((await lesDeuxOk.service.findApplicableOffer(contexte({ dishIds: [MENU] })))?.newFee).toBe(0);
   });
 });

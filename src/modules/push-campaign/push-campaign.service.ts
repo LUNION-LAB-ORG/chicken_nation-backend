@@ -19,6 +19,8 @@ import {
   SegmentFiltersDto,
 } from './dto/create-segment.dto';
 import { subDays } from 'date-fns';
+import { DishAudience } from '@prisma/client';
+import { clauseClientsDesAudiences, lireAudiences } from 'src/modules/menu/utils/dish-audience.util';
 
 @Injectable()
 export class PushCampaignService {
@@ -853,8 +855,23 @@ export class PushCampaignService {
   }
 
   private async getCustomerIdsByLoyalty(level: string): Promise<string[]> {
+    // Niveau connu : la règle des menus (Standard compte aussi le niveau jamais
+    // calculé). Valeur inconnue : comparaison telle quelle, comme avant.
+    const [audience] = lireAudiences([level]);
+    if (audience && audience !== DishAudience.ETUDIANT) return this.getCustomerIdsByAudiences([audience]);
     const customers = await this.prisma.customer.findMany({
       where: { entity_status: 'ACTIVE', loyalty_level: level as any },
+      select: { id: true },
+    });
+    return customers.map((c) => c.id);
+  }
+
+  /** Clients des audiences choisies (étudiant, Standard, VIP, VVIP), comme les menus. */
+  private async getCustomerIdsByAudiences(audiences: DishAudience[]): Promise<string[]> {
+    const clause = clauseClientsDesAudiences(audiences);
+    if (!clause) return [];
+    const customers = await this.prisma.customer.findMany({
+      where: { AND: [{ entity_status: 'ACTIVE' }, clause] },
       select: { id: true },
     });
     return customers.map((c) => c.id);
@@ -1320,9 +1337,15 @@ export class PushCampaignService {
       intersect(result.map((r) => r.customer_id));
     }
 
-    // loyalty_level
+    // loyalty_level : ancien critère à un seul niveau (segments déjà enregistrés)
     if (filters.loyalty_level) {
       intersect(await this.getCustomerIdsByLoyalty(filters.loyalty_level));
+    }
+
+    // audiences : niveaux visés, même règle que les menus ; l'un d'eux suffit
+    const audiences = lireAudiences(filters.audiences);
+    if (audiences.length > 0) {
+      intersect(await this.getCustomerIdsByAudiences(audiences));
     }
 
     // city
