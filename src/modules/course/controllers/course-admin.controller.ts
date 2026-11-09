@@ -14,7 +14,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { User, UserRole } from '@prisma/client';
+import { DelivererStatus, User, UserRole } from '@prisma/client';
 import type { Request } from 'express';
 
 import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
@@ -25,6 +25,7 @@ import { AssignDelivererDto } from '../dto/assign-deliverer.dto';
 import { CancelCourseDto } from '../dto/cancel-course.dto';
 import { QueryCourseStatsDto } from '../dto/query-course-stats.dto';
 import { QueryCoursesDto } from '../dto/query-courses.dto';
+import { livreurPourAffectation } from '../helpers/affectation-commande.rules';
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { CourseActionService } from '../services/course-action.service';
 import { CourseOfferService } from '../services/course-offer.service';
@@ -33,8 +34,14 @@ import { GardeOffresService } from '../services/garde-offres.service';
 import { AffectationCommandeService } from '../services/affectation-commande.service';
 import { DetachementCommandeService } from '../services/detachement-commande.service';
 import { RelanceLivraisonService } from '../services/relance-livraison.service';
-import { ROLES_ACTIONS_COURSES, ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
+import {
+  ROLES_ACTIONS_COURSES,
+  ROLES_GESTES_COMMANDE_A_LIVRER,
+  ROLES_SUIVI_LIVRAISON,
+} from 'src/modules/auth/constantes/roles-suivi-livraison';
+import { QueryDeliverersDto } from 'src/modules/deliverers/dto/query-deliverers.dto';
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
+import { DeliverersService } from 'src/modules/deliverers/services/deliverers.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
 /**
@@ -91,6 +98,8 @@ export class CourseAdminController {
     // « Retirer de la course » et « Affecter à un livreur » (06/11).
     private readonly detachement?: DetachementCommandeService,
     private readonly affectation?: AffectationCommandeService,
+    // Livreurs proposés dans « Affecter à un livreur », pour le manager aussi (09/11).
+    private readonly livreurs?: DeliverersService,
   ) {}
 
   @ApiOperation({
@@ -249,13 +258,34 @@ export class CourseAdminController {
     description:
       "La commande reste à livrer et repart dans le circuit normal. Course confiée à Turbo : leur groupe est " +
       'annulé chez eux et la commande passe aux livreurs Chicken Nation. 404 si la commande est inconnue, 409 ' +
-      "si elle n'est dans aucune course en cours, si le sac est déjà avec le livreur ou si un livreur Turbo est engagé.",
+      "si elle n'est dans aucune course en cours, si le sac est déjà avec le livreur ou si un livreur Turbo est engagé. " +
+      "Manager et assistant manager : commandes de leur restaurant seulement (403 sinon).",
   })
   @Post('commandes/:orderId/retirer')
   @HttpCode(HttpStatus.OK)
-  @UserRoles(...ROLES_ACTIONS_COURSES)
-  async retirerCommande(@Param('orderId', new ParseUUIDPipe()) orderId: string) {
+  @UserRoles(...ROLES_GESTES_COMMANDE_A_LIVRER)
+  async retirerCommande(@Req() req: Request, @Param('orderId', new ParseUUIDPipe()) orderId: string) {
+    await this.affectation!.restaurantPourGeste(orderId, req.user as User);
     return this.detachement!.retirerDeLaCourse(orderId);
+  }
+
+  @ApiOperation({
+    summary: 'Livreurs proposés pour « Affecter à un livreur »',
+    description:
+      'Livreurs actifs du restaurant de la commande, avec leur état (`disponibilite`) et celui de leur appli. ' +
+      'Seulement le nom, le téléphone et ces états. Manager et assistant manager : commandes de leur restaurant ' +
+      'seulement (403 sinon).',
+  })
+  @Get('commandes/:orderId/livreurs')
+  @UserRoles(...ROLES_GESTES_COMMANDE_A_LIVRER)
+  async livreursPourAffectation(@Req() req: Request, @Param('orderId', new ParseUUIDPipe()) orderId: string) {
+    const restaurantId = await this.affectation!.restaurantPourGeste(orderId, req.user as User);
+    const { items } = await this.livreurs!.findAll({
+      status: DelivererStatus.ACTIVE,
+      restaurant_id: restaurantId,
+      limit: 50,
+    } as QueryDeliverersDto);
+    return { items: items.map((l) => livreurPourAffectation(l as Record<string, unknown>)) };
   }
 
   @ApiOperation({
@@ -265,17 +295,18 @@ export class CourseAdminController {
       'En course : la commande rejoint sa course ; déjà parti, il la récupère au restaurant avec le même code. ' +
       "Elle quitte sa course d'origine, chez Turbo compris. 409 avec la raison : commande pas prête, sac déjà " +
       'remis, livreur Turbo engagé, livreur inactif ou d\'un autre restaurant ; sans course, livreur en pause, hors ' +
-      'service ou injoignable.',
+      'service ou injoignable. Manager et assistant manager : commandes de leur restaurant seulement (403 sinon).',
   })
   @ApiBody({ type: AssignDelivererDto })
   @Post('commandes/:orderId/affecter')
   @HttpCode(HttpStatus.OK)
-  @UserRoles(...ROLES_ACTIONS_COURSES)
+  @UserRoles(...ROLES_GESTES_COMMANDE_A_LIVRER)
   async affecterCommande(
     @Req() req: Request,
     @Param('orderId', new ParseUUIDPipe()) orderId: string,
     @Body() dto: AssignDelivererDto,
   ) {
+    await this.affectation!.restaurantPourGeste(orderId, req.user as User);
     return this.affectation!.affecter(orderId, dto.deliverer_id, req.user as User);
   }
 

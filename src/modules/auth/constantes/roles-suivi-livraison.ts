@@ -38,3 +38,15 @@ export const ROLES_SUIVI_LIVRAISON = [UserRole.ADMIN, UserRole.LIVRAISON_OPS, Us
  * (`AuditInterceptor`, toutes les modifications du personnel).
  */
 export const ROLES_ACTIONS_COURSES = [UserRole.ADMIN, UserRole.CALL_CENTER] as const;
+
+/**
+ * Rôles des gestes sur une commande à livrer (« Affecter à un livreur »,
+ * « Retirer de la course », demande du 06/11) : ceux qui agissent sur les
+ * courses, et depuis le 09/11 le manager et l'assistant manager, sur les
+ * commandes de LEUR restaurant seulement (`peutAgirSurCommande`).
+ */
+export const ROLES_GESTES_COMMANDE_A_LIVRER = [
+  ...ROLES_ACTIONS_COURSES,
+  UserRole.MANAGER,
+  UserRole.ASSISTANT_MANAGER,
+] as const;

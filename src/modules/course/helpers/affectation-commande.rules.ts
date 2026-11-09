@@ -1,5 +1,6 @@
 import { CourseStatut, DeliveryStatut, OrderStatus, OrderType } from '@prisma/client';
 
+import { ROLES_ACTIONS_COURSES } from 'src/modules/auth/constantes/roles-suivi-livraison';
 import { EtatLivreur } from 'src/modules/deliverers/helpers/disponibilite.rules';
 
 import { messageSacChezLeLivreur } from './detachement-commande.rules';
@@ -24,6 +25,48 @@ export const MESSAGE_PAS_ENCORE_PRETE = "Cette commande n'est pas encore prête 
 export const MESSAGE_DEJA_CHEZ_CE_LIVREUR = 'Cette commande est déjà dans la course de ce livreur.';
 export const MESSAGE_AUTRE_RESTAURANT_LIVREUR = "Ce livreur n'est pas rattaché au restaurant de cette commande.";
 export const MESSAGE_LIVREUR_AUTRE_RESTAURANT_EN_COURSE = 'Ce livreur est en course pour un autre restaurant.';
+
+export const MESSAGE_COMMANDE_AUTRE_RESTAURANT = "Cette commande n'appartient pas à votre restaurant.";
+
+/** Rôles de restaurant qui ont les gestes, sur leur restaurant seulement (09/11). */
+const ROLES_GESTES_DU_RESTAURANT: readonly string[] = ['MANAGER', 'ASSISTANT_MANAGER'];
+
+/**
+ * Ce compte peut-il affecter ou retirer cette commande ? Siège (administrateur,
+ * call center) : tous les restaurants. Manager et assistant manager : la
+ * commande de leur restaurant seulement, quel que soit le type du compte.
+ * Livreurs proposés : ceux du restaurant de la commande (`refusLivreurAffectation`).
+ */
+export function peutAgirSurCommande(
+  compte: { role?: string | null; restaurant_id?: string | null } | null | undefined,
+  restaurantId: string | null | undefined,
+): boolean {
+  const role = compte?.role ?? '';
+  if ((ROLES_ACTIONS_COURSES as readonly string[]).includes(role)) return true;
+  return ROLES_GESTES_DU_RESTAURANT.includes(role) && !!restaurantId && compte?.restaurant_id === restaurantId;
+}
+
+/**
+ * Livreurs proposés dans « Affecter à un livreur » : de quoi les nommer, les
+ * appeler et lire leur état. Rien d'autre ne sort (pièces, adresse, véhicule) :
+ * le manager n'a pas accès à la gestion des livreurs.
+ */
+const CHAMPS_LIVREUR_AFFECTATION = [
+  'id',
+  'first_name',
+  'last_name',
+  'phone',
+  'restaurant_id',
+  'disponibilite',
+  'appli_connectee',
+  'appli_active',
+  'appli_vue_a',
+  'appli_etat',
+] as const;
+
+export function livreurPourAffectation(livreur: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(CHAMPS_LIVREUR_AFFECTATION.filter((c) => c in livreur).map((c) => [c, livreur[c]]));
+}
 
 /** Raison de la clôture de l'offre en attente chez le livreur choisi, sans pénalité. */
 export const RAISON_COMMANDE_AFFECTEE = 'COMMANDE_AFFECTEE';

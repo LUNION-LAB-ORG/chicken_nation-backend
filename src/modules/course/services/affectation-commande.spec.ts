@@ -5,7 +5,7 @@
  *
  * Vrais services, base simulée, aucun appel sortant.
  */
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import {
   CourseOfferStatus,
   CourseStatut,
@@ -16,16 +16,20 @@ import {
   OrderType,
 } from '@prisma/client';
 
+import { USER_ROLES_KEY } from 'src/modules/auth/decorators/user-roles.decorator';
 import { OrderHelper } from 'src/modules/order/helpers/order.helper';
 import { OrderService } from 'src/modules/order/services/order.service';
 
+import { CourseAdminController } from '../controllers/course-admin.controller';
 import { CourseChannels } from '../enums/course-channels';
 import {
+  livreurPourAffectation,
   MESSAGE_AUTRE_RESTAURANT_LIVREUR,
   MESSAGE_DEJA_CHEZ_CE_LIVREUR,
   MESSAGE_PAS_A_LIVRER,
   MESSAGE_PAS_ENCORE_PRETE,
   messageAffectation,
+  peutAgirSurCommande,
   refusCommandeAAffecter,
 } from '../helpers/affectation-commande.rules';
 import { whereCoursesARemettre } from '../helpers/code-retrait.rules';
@@ -83,7 +87,7 @@ function monterCas(donnees: Parameters<typeof monter>[0]) {
   );
   const affecter = (orderId: string, livreurId: string) => service.affecter(orderId, livreurId, ADMIN as never, MAINTENANT);
   const livraisonDe = (orderId: string) => h.base.livraisons.find((l) => l.order_id === orderId);
-  return { h, turbo, push, detachement, passerelle, duree, affecter, livraisonDe };
+  return { h, turbo, push, detachement, passerelle, duree, service, affecter, livraisonDe };
 }
 
 const koffi = (s: Record<string, unknown> = {}) =>
@@ -471,6 +475,76 @@ describe('Commande terminée par l’administrateur : sa livraison se ferme', ()
 
     expect(t.livraisonDe(a.id)?.statut).toBe(DeliveryStatut.PENDING);
     expect(k.statut).toBe(CourseStatut.PENDING_ASSIGNMENT);
+  });
+});
+
+describe('Qui peut affecter ou retirer une commande (09/11)', () => {
+  const AUTRE = '00000000-0000-4000-8000-0000000000ff';
+
+  it.each([
+    ['administrateur', { role: 'ADMIN', restaurant_id: null }, true],
+    ['call center', { role: 'CALL_CENTER', restaurant_id: null }, true],
+    ['manager de ce restaurant', { role: 'MANAGER', restaurant_id: RESTO }, true],
+    ['assistant manager de ce restaurant', { role: 'ASSISTANT_MANAGER', restaurant_id: RESTO }, true],
+    ["manager d'un autre restaurant", { role: 'MANAGER', restaurant_id: AUTRE }, false],
+    ['manager sans restaurant', { role: 'MANAGER', restaurant_id: null }, false],
+    ['caissière de ce restaurant', { role: 'CAISSIER', restaurant_id: RESTO }, false],
+    ['suivi des livraisons', { role: 'LIVRAISON_OPS', restaurant_id: null }, false],
+  ])('%s : %s', (_nom, compte, permis) => {
+    expect(peutAgirSurCommande(compte, RESTO)).toBe(permis);
+  });
+
+  it('les rôles des routes : le siège, puis le manager et son assistant', () => {
+    const roles = (methode: keyof CourseAdminController) =>
+      Reflect.getMetadata(USER_ROLES_KEY, CourseAdminController.prototype[methode]);
+    for (const methode of ['affecterCommande', 'retirerCommande', 'livreursPourAffectation'] as const) {
+      expect(roles(methode)).toEqual(['ADMIN', 'CALL_CENTER', 'MANAGER', 'ASSISTANT_MANAGER']);
+    }
+  });
+
+  it("garde du serveur : la commande d'un autre restaurant est refusée au manager, rien n'est écrit", async () => {
+    const d = koffi();
+    const a = prete();
+    const t = monterCas({ commandes: [a], livreurs: [d] });
+
+    await expect(t.service.restaurantPourGeste(a.id, { id: 'm1', role: 'MANAGER', restaurant_id: AUTRE } as never))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    await expect(t.service.restaurantPourGeste(a.id, { id: 'm2', role: 'MANAGER', restaurant_id: RESTO } as never))
+      .resolves.toBe(RESTO);
+    await expect(t.service.restaurantPourGeste('inconnue', ADMIN as never)).rejects.toBeInstanceOf(NotFoundException);
+    expect(t.livraisonDe(a.id)).toBeUndefined();
+  });
+
+  it('livreurs proposés : nom, téléphone et états, rien d’autre', () => {
+    const complet = {
+      id: 'l1',
+      first_name: 'Koffi',
+      last_name: 'K.',
+      phone: '+2250700000000',
+      restaurant_id: RESTO,
+      disponibilite: { etat: 'DISPONIBLE', en_course: false },
+      appli_connectee: true,
+      appli_active: true,
+      appli_vue_a: null,
+      appli_etat: 'ACTIVE',
+      id_card_url: 'https://pieces/cni.jpg',
+      address: 'Cocody',
+      vehicle_plate: 'AB-123',
+    };
+    expect(Object.keys(livreurPourAffectation(complet)).sort()).toEqual(
+      [
+        'appli_active',
+        'appli_connectee',
+        'appli_etat',
+        'appli_vue_a',
+        'disponibilite',
+        'first_name',
+        'id',
+        'last_name',
+        'phone',
+        'restaurant_id',
+      ].sort(),
+    );
   });
 });
 

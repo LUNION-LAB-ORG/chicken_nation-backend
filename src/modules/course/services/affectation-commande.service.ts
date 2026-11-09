@@ -1,4 +1,11 @@
-import { ConflictException, HttpException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   CourseOfferStatus,
   CourseStatut,
@@ -26,7 +33,9 @@ import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { CourseEvent } from '../events/course.event';
 import {
   messageAffectation,
+  MESSAGE_COMMANDE_AUTRE_RESTAURANT,
   MESSAGE_LIVREUR_AUTRE_RESTAURANT_EN_COURSE,
+  peutAgirSurCommande,
   RAISON_COMMANDE_AFFECTEE,
   refusCommandeAAffecter,
   refusLivreurAffectation,
@@ -99,6 +108,26 @@ export class AffectationCommandeService {
     private readonly actions: CourseActionService,
     private readonly detachement: DetachementCommandeService,
   ) {}
+
+  /**
+   * Garde des gestes sur une commande à livrer (affecter, retirer, liste des
+   * livreurs proposés) : rend le restaurant de la commande si ce compte peut y
+   * agir (`peutAgirSurCommande`). 404 inconnue ou supprimée, 403 commande d'un
+   * autre restaurant pour le manager et l'assistant manager (09/11).
+   */
+  async restaurantPourGeste(orderId: string, compte: ComptePersonnel | undefined): Promise<string> {
+    const commande = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { restaurant_id: true, entity_status: true },
+    });
+    if (!commande || commande.entity_status === EntityStatus.DELETED) {
+      throw new NotFoundException(MESSAGE_COMMANDE_INTROUVABLE);
+    }
+    if (!peutAgirSurCommande(compte, commande.restaurant_id)) {
+      throw new ForbiddenException(MESSAGE_COMMANDE_AUTRE_RESTAURANT);
+    }
+    return commande.restaurant_id;
+  }
 
   async affecter(
     orderId: string,

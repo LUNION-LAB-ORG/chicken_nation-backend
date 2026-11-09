@@ -31,6 +31,9 @@ function passe(controleur: object, methode: string, role: UserRole): boolean {
 /**
  * `lectures` : ouvertes au suivi des livraisons et au call center.
  * `gestesCallCenter` : gestes sur une course, ouverts au call center (26/10).
+ * `gestesCommande` : affecter ou retirer une commande à livrer (06/11), ouverts
+ *   au call center, et le 09/11 au manager et à l'assistant manager (leur
+ *   restaurant seulement, vérifié par `peutAgirSurCommande`).
  * `actions` : gestion des comptes livreurs, administrateur seul.
  * `reservees` : lectures qui ne servent pas les écrans du module Livraison
  * (réglages du planificateur, lus par les Paramètres) : administrateur seul.
@@ -40,6 +43,7 @@ const ECRANS: {
   proto: object;
   lectures: string[];
   gestesCallCenter: string[];
+  gestesCommande: string[];
   actions: string[];
   reservees: string[];
 }[] = [
@@ -56,6 +60,7 @@ const ECRANS: {
       'revenirEnInterne',
       'relancerLivraisonCommande',
     ],
+    gestesCommande: ['affecterCommande', 'retirerCommande', 'livreursPourAffectation'],
     actions: [],
     reservees: ['reglagesPlanificateur'],
   },
@@ -64,6 +69,7 @@ const ECRANS: {
     proto: DeliverersAdminController.prototype,
     lectures: ['findAll', 'getLiveLocations', 'findOne', 'getScoringInfo'],
     gestesCallCenter: [],
+    gestesCommande: [],
     actions: ['validate', 'reject', 'suspend', 'reactivate', 'forceActivate', 'assignRestaurant', 'remove'],
     reservees: [],
   },
@@ -72,10 +78,19 @@ const ECRANS: {
 /** Rôles qui consultent le module Livraison. */
 const LECTEURS: UserRole[] = [UserRole.LIVRAISON_OPS, UserRole.CALL_CENTER];
 
+/** Rôles de restaurant qui affectent et retirent une commande (09/11). */
+const MANAGERS: UserRole[] = [UserRole.MANAGER, UserRole.ASSISTANT_MANAGER];
+
 describe('suivi des livraisons : LIVRAISON_OPS lit, le call center lit et agit sur les courses', () => {
   for (const ecran of ECRANS) {
     describe(ecran.nom, () => {
-      const toutes = [...ecran.lectures, ...ecran.gestesCallCenter, ...ecran.actions, ...ecran.reservees];
+      const toutes = [
+        ...ecran.lectures,
+        ...ecran.gestesCallCenter,
+        ...ecran.gestesCommande,
+        ...ecran.actions,
+        ...ecran.reservees,
+      ];
 
       it('les méthodes nommées ici existent vraiment', () => {
         for (const m of toutes) {
@@ -102,13 +117,13 @@ describe('suivi des livraisons : LIVRAISON_OPS lit, le call center lit et agit s
       });
 
       it('ferme TOUS ses gestes au suivi des livraisons', () => {
-        for (const m of [...ecran.gestesCallCenter, ...ecran.actions, ...ecran.reservees]) {
+        for (const m of [...ecran.gestesCallCenter, ...ecran.gestesCommande, ...ecran.actions, ...ecran.reservees]) {
           expect([m, passe(ecran.proto, m, UserRole.LIVRAISON_OPS)]).toEqual([m, false]);
         }
       });
 
       it('ouvre au call center les gestes sur une course, et rien de plus', () => {
-        for (const m of ecran.gestesCallCenter) {
+        for (const m of [...ecran.gestesCallCenter, ...ecran.gestesCommande]) {
           expect([m, passe(ecran.proto, m, UserRole.CALL_CENTER)]).toEqual([m, true]);
         }
         for (const m of [...ecran.actions, ...ecran.reservees]) {
@@ -122,9 +137,15 @@ describe('suivi des livraisons : LIVRAISON_OPS lit, le call center lit et agit s
         }
       });
 
+      it.each(MANAGERS)('ouvre à %s les gestes sur une commande, et rien de plus', (role) => {
+        for (const m of toutes) {
+          expect([m, passe(ecran.proto, m, role)]).toEqual([m, ecran.gestesCommande.includes(m)]);
+        }
+      });
+
       it('n’ouvre rien aux autres rôles', () => {
         const autres = Object.values(UserRole).filter(
-          (r) => r !== UserRole.ADMIN && !LECTEURS.includes(r),
+          (r) => r !== UserRole.ADMIN && !LECTEURS.includes(r) && !MANAGERS.includes(r),
         );
         expect(autres.length).toBeGreaterThan(0);
         for (const role of autres) {
