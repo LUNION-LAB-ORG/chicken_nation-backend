@@ -34,6 +34,7 @@ import { GardeOffresService } from '../services/garde-offres.service';
 import { AffectationCommandeService } from '../services/affectation-commande.service';
 import { DetachementCommandeService } from '../services/detachement-commande.service';
 import { RelanceLivraisonService } from '../services/relance-livraison.service';
+import { CoursesAnciennesService } from '../services/courses-anciennes.service';
 import {
   ROLES_ACTIONS_COURSES,
   ROLES_GESTES_COMMANDE_A_LIVRER,
@@ -99,6 +100,8 @@ export class CourseAdminController {
     private readonly affectation?: AffectationCommandeService,
     // Livreurs proposés dans « Affecter à un livreur », pour le manager aussi (09/11).
     private readonly livreurs?: DeliverersService,
+    // « Les fermer » : courses restées ouvertes d'une journée passée (10/11).
+    private readonly anciennes?: CoursesAnciennesService,
   ) {}
 
   @ApiOperation({
@@ -119,6 +122,25 @@ export class CourseAdminController {
       preparation: lue.preparation.reglages,
       refusees: lue.refusees,
     };
+  }
+
+  @ApiOperation({
+    summary: 'Fermer les courses restées ouvertes d’une journée passée (administrateur)',
+    description:
+      'Courses pas terminées créées avant 5 h ce matin (journée de service), de tout le réseau ou du restaurant ' +
+      '`restaurantId`. Fermées seulement si toutes leurs commandes sont servies (récupérée, terminée) ou ' +
+      'annulées : livraison fermée comme livrée sans heure de livraison, ou annulée ; course terminée, ou ' +
+      'annulée si personne n’a été servi. Les autres sont gardées. Aucune commande écrite, aucun appel à Turbo, ' +
+      'aucune notification sur le téléphone des livreurs. Réponse : `{ fermees, gardees, message }`.',
+  })
+  @Post('anciennes/fermer')
+  @HttpCode(HttpStatus.OK)
+  @UserRoles(UserRole.ADMIN)
+  async fermerAnciennes(
+    @Req() req: Request,
+    @Query('restaurantId', new ParseUUIDPipe({ optional: true })) restaurantId?: string,
+  ) {
+    return this.anciennes!.fermer(restaurantId, req.user as User);
   }
 
   @ApiOperation({

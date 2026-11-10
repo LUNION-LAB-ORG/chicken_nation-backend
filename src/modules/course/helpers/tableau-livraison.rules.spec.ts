@@ -155,9 +155,11 @@ describe('restaurants : chiffres et liste', () => {
       sans_livreur: { courses: 0, plus_ancienne_depuis: null },
       jour: { livrees: 0, duree_moyenne_s: null },
       alertes: 0,
+      courses_anciennes: 0,
       liste: [],
     });
     expect(t.signaux).toEqual([]);
+    expect(t.courses_anciennes).toBe(0);
   });
 
   it('compte chaque état dans son chiffre ; en service : tous sauf hors service et inactif', () => {
@@ -308,6 +310,69 @@ describe('TOURNEE_EN_RETARD (course.delay_alert_factor)', () => {
 
   it('compte dans les alertes rouges du restaurant', () => {
     expect(angre(tableau({ courses: [enLivraison(60, 55)] })).alertes).toBe(1);
+  });
+});
+
+describe('courses restées ouvertes d’une journée passée (10/11)', () => {
+  // M : 24/10 à 12 h ; journée de service commencée à 5 h.
+  const enLivraisonDepuis = (creee: Date, p: Partial<CourseLue> = {}) =>
+    course({
+      statut: CourseStatut.IN_DELIVERY,
+      deliverer: KOFFI,
+      created_at: creee,
+      picked_up_at: creee,
+      parti_at: creee,
+      motif_depart: 'POSITION',
+      estimated_duration_min: 30,
+      deliveries: [livraison({ statut: DeliveryStatut.IN_ROUTE, order: { status: OrderStatus.COMPLETED } })],
+      ...p,
+    });
+  const avant5h = new Date('2026-10-24T04:59:00.000Z');
+  const ilYA14Jours = new Date('2026-10-10T19:00:00.000Z');
+
+  it('« en retard de 341 h » : plus une alerte, comptée à part, sans pastille rouge', () => {
+    const vieille = enLivraisonDepuis(ilYA14Jours);
+    const t = tableau({ courses: [vieille, enLivraisonDepuis(avant5h, { restaurant_id: MARCORY.id })] });
+
+    expect(t.signaux).toEqual([]);
+    expect(angre(t)).toMatchObject({ alertes: 0, courses_anciennes: 1 });
+    expect(marcory(t)).toMatchObject({ alertes: 0, courses_anciennes: 1 });
+    expect(t.courses_anciennes).toBe(2);
+  });
+
+  it('course du jour en retard : toujours une alerte rouge, jamais comptée à part', () => {
+    const t = tableau({ courses: [enLivraisonDepuis(new Date('2026-10-24T05:00:00.000Z'))] });
+    expect(signaux(t, 'TOURNEE_EN_RETARD')).toHaveLength(1);
+    expect(t.courses_anciennes).toBe(0);
+  });
+
+  it('recherche sans livreur d’une journée passée : ni « Sans livreur », ni chiffre du bandeau', () => {
+    const t = tableau({ courses: [course({ created_at: ilYA14Jours })] });
+    expect(signaux(t, 'SANS_LIVREUR')).toEqual([]);
+    expect(angre(t)).toMatchObject({ sans_livreur: { courses: 0, plus_ancienne_depuis: null }, courses_anciennes: 1 });
+  });
+
+  it('livreur resté « en course » sur une course d’une journée passée : ni appli fermée, ni position perdue', () => {
+    const vieille = enLivraisonDepuis(ilYA14Jours);
+    const l = livreur({
+      etat: 'EN_COURSE',
+      active_course: { id: vieille.id, reference: vieille.reference, statut: CourseStatut.IN_DELIVERY },
+      appli_active: false,
+      appli_etat: 'FERMEE',
+      location_at: null,
+    });
+    expect(tableau({ courses: [vieille], livreurs: [l] }).signaux).toEqual([]);
+  });
+
+  it('terminée, annulée ou expirée : jamais comptée', () => {
+    const t = tableau({
+      courses: [
+        enLivraisonDepuis(ilYA14Jours, { statut: CourseStatut.COMPLETED }),
+        enLivraisonDepuis(ilYA14Jours, { statut: CourseStatut.CANCELLED }),
+        enLivraisonDepuis(ilYA14Jours, { statut: CourseStatut.EXPIRED }),
+      ],
+    });
+    expect(t.courses_anciennes).toBe(0);
   });
 });
 

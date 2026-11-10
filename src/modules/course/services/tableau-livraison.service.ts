@@ -9,19 +9,12 @@ import { seuilAlerteSansLivreurMin } from '../helpers/alerte-sans-livreur.rules'
 import { CourseSettingsHelper } from '../helpers/course-settings.helper';
 import { journeeDeService } from '../helpers/journee-service.rules';
 import { planificateurDuRestaurant } from '../helpers/planification.rules';
-import { TableauLivraison, construireTableau } from '../helpers/tableau-livraison.rules';
+import { STATUTS_COURSE_NON_TERMINEE, TableauLivraison, construireTableau } from '../helpers/tableau-livraison.rules';
 
 /** Résultat gardé en mémoire, par périmètre (un restaurant, ou tout le réseau). */
 const DUREE_CACHE_MS = 10_000;
 /** Au-delà, les périmètres échus sont oubliés (le siège peut demander chaque restaurant). */
 const TAILLE_MAX_CACHE = 50;
-
-const STATUTS_COURSE_NON_TERMINEE: CourseStatut[] = [
-  CourseStatut.PENDING_ASSIGNMENT,
-  CourseStatut.ACCEPTED,
-  CourseStatut.AT_RESTAURANT,
-  CourseStatut.IN_DELIVERY,
-];
 
 /**
  * `GET /livraison/tableau` (conception du 24/10, 11.4) : chiffres par
@@ -45,6 +38,11 @@ export class TableauLivraisonService {
     private readonly reglagesCourse: CourseSettingsHelper,
     private readonly reglagesLivreur: DelivererScoringSettingsHelper,
   ) {}
+
+  /** Oublie les tableaux gardés : après un geste qui les change d'un coup (courses des jours passés fermées). */
+  oublier(): void {
+    this.cache.clear();
+  }
 
   /**
    * @param restaurantId  Périmètre déjà résolu (`resolveRestaurantScope`) :

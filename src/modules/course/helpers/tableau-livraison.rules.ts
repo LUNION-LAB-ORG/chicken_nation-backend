@@ -62,6 +62,10 @@ import { CourseTourneeLue, departEstReel, enRetard, finTourneePrevue, retardMin 
  *
  * Journée de service de 05 h à 05 h (journee-service.rules.ts) : livrées,
  * courses expirées ou annulées et planning du jour la suivent.
+ *
+ * Course restée ouverte d'une journée passée (10/11, « en retard de 341 h ») :
+ * ni alerte, ni pastille. Elle est seulement comptée (`courses_anciennes`),
+ * et l'administrateur peut la fermer (courses-anciennes.rules.ts).
  */
 
 /** Le livreur doit rapporter l'argent : même seuil que l'écran Commandes (`OVERDUE_COLLECTED_UNPAID_MIN`). */
@@ -82,6 +86,14 @@ export type CleSignal =
   | 'PREVU_PAS_EN_SERVICE';
 
 export type GraviteSignal = 'rouge' | 'ambre';
+
+/** Course pas encore terminée : en recherche, acceptée, au restaurant ou en livraison. */
+export const STATUTS_COURSE_NON_TERMINEE: CourseStatut[] = [
+  CourseStatut.PENDING_ASSIGNMENT,
+  CourseStatut.ACCEPTED,
+  CourseStatut.AT_RESTAURANT,
+  CourseStatut.IN_DELIVERY,
+];
 
 export interface SignalLivraison {
   cle: CleSignal;
@@ -142,6 +154,8 @@ export interface RestaurantDuTableau {
   jour: { livrees: number; duree_moyenne_s: number | null };
   /** Signaux rouges du restaurant. */
   alertes: number;
+  /** Courses restées ouvertes d'une journée de service passée : ni alerte, ni pastille (10/11). */
+  courses_anciennes: number;
   liste: LivreurDuTableau[];
 }
 
@@ -149,6 +163,8 @@ export interface TableauLivraison {
   genere_a: string;
   restaurants: RestaurantDuTableau[];
   signaux: SignalLivraison[];
+  /** Total des `courses_anciennes` des restaurants du tableau. */
+  courses_anciennes: number;
 }
 
 // ============================================================
@@ -302,6 +318,16 @@ const ORDRE_ETATS: EtatAffichageLivreur[] = [
 // ============================================================
 
 /**
+ * Course restée ouverte d'une journée de service passée (10/11) : pas
+ * terminée et créée avant 5 h ce matin. Plus personne ne la livre : les
+ * restaurants ferment vers 1 h et rien n'est en cours à 5 h.
+ */
+export function estCourseAncienne(c: { statut: CourseStatut; created_at: DateLue }, journee: JourneeDeService): boolean {
+  const creee = lireDate(c.created_at);
+  return STATUTS_COURSE_NON_TERMINEE.includes(c.statut) && !!creee && creee.getTime() < journee.debut.getTime();
+}
+
+/**
  * Course sans livreur : recherche en cours sans livreur ni Turbo, ou expirée
  * (aucun livreur trouvé) dans la journée de service ; avec au moins une
  * commande vivante (une course vidée par un regroupement ne compte pas).
@@ -447,11 +473,13 @@ function signauxDesCourses(e: EntreeTableau, journee: JourneeDeService): SignalL
   return signaux;
 }
 
-function signauxDesLivreurs(e: EntreeTableau): SignalLivraison[] {
+function signauxDesLivreurs(e: EntreeTableau, anciennes: ReadonlySet<string>): SignalLivraison[] {
   const { maintenant, reglages } = e;
   const signaux: SignalLivraison[] = [];
   for (const l of e.livreurs) {
     if (!l.active_course || !l.restaurant) continue;
+    // Course d'une journée passée : comptée à part, jamais une alerte.
+    if (anciennes.has(l.active_course.id)) continue;
     const base = {
       restaurant_id: l.restaurant.id,
       // Champ par champ : la lecture du livreur porte aussi le code de retrait
@@ -613,10 +641,16 @@ function chiffresDuJour(livrees: LivraisonLivreeLue[], journee: JourneeDeService
 export function construireTableau(e: EntreeTableau): TableauLivraison {
   const journee = journeeDeService(e.maintenant);
   const restaurantsVus = new Set(e.restaurants.map((r) => r.id));
+  const anciennes = e.courses.filter((c) => estCourseAncienne(c, journee));
+  const idsAnciennes = new Set(anciennes.map((c) => c.id));
+  const duJour: EntreeTableau = { ...e, courses: e.courses.filter((c) => !idsAnciennes.has(c.id)) };
   const signaux = trierSignaux(
-    [...signauxDesCourses(e, journee), ...signauxDesLivreurs(e), ...signauxAEncaisser(e), ...signauxPrevus(e)].filter(
-      (s) => restaurantsVus.has(s.restaurant_id),
-    ),
+    [
+      ...signauxDesCourses(duJour, journee),
+      ...signauxDesLivreurs(e, idsAnciennes),
+      ...signauxAEncaisser(e),
+      ...signauxPrevus(e),
+    ].filter((s) => restaurantsVus.has(s.restaurant_id)),
   );
   const prevus = prevusParRestaurant(e.planning);
 
@@ -644,9 +678,15 @@ export function construireTableau(e: EntreeTableau): TableauLivraison {
         journee,
       ),
       alertes: signaux.filter((s) => s.restaurant_id === r.id && s.gravite === 'rouge').length,
+      courses_anciennes: anciennes.filter((c) => c.restaurant_id === r.id).length,
       liste: listeDuRestaurant(livreurs),
     };
   });
 
-  return { genere_a: e.maintenant.toISOString(), restaurants, signaux };
+  return {
+    genere_a: e.maintenant.toISOString(),
+    restaurants,
+    signaux,
+    courses_anciennes: anciennes.filter((c) => restaurantsVus.has(c.restaurant_id)).length,
+  };
 }
