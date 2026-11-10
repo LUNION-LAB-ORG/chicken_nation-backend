@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   CourseOfferStatus,
@@ -27,6 +28,7 @@ import {
 } from 'src/modules/deliverers/helpers/disponibilite.rules';
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
+import { DeliverersService } from 'src/modules/deliverers/services/deliverers.service';
 import { ComptePersonnel } from 'src/modules/users/helpers/personnel-scope.helper';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 
@@ -107,6 +109,8 @@ export class AffectationCommandeService {
     private readonly gateway: AppGateway,
     private readonly actions: CourseActionService,
     private readonly detachement: DetachementCommandeService,
+    // Renfort (10/11) : un livreur d'un autre restaurant détecté près de celui de la commande.
+    @Optional() private readonly livreurs?: DeliverersService,
   ) {}
 
   /**
@@ -142,7 +146,7 @@ export class AffectationCommandeService {
     const refus = refusCommandeAAffecter(commande, delivererId);
     if (refus) throw new ConflictException(refus);
 
-    const appli = await this.verifierLivreur(delivererId, commande.restaurant_id, maintenant);
+    const { appli, renfort } = await this.verifierLivreur(delivererId, commande.restaurant_id, maintenant);
     // Refus clair avant tout geste : sac remis, livreur Turbo déjà engagé.
     const retrait = await this.detachement.examinerRetrait(orderId, maintenant);
     // Offre en attente chez ce livreur : close sans pénalité, sa recherche repart.
@@ -154,7 +158,7 @@ export class AffectationCommandeService {
 
     let ecrite: AffectationEcrite;
     try {
-      ecrite = await this.ecrire(commande, delivererId, appli, retrait, user, maintenant);
+      ecrite = await this.ecrire(commande, delivererId, appli, renfort, retrait, user, maintenant);
     } catch (err) {
       if (retrait) await this.detachement.apresEcriture(retrait, { ecrit: false });
       throw err;
@@ -163,22 +167,51 @@ export class AffectationCommandeService {
     return this.annoncer(commande, delivererId, ecrite);
   }
 
-  /** Le livreur existe et peut recevoir la commande ; rend le contexte de son appli, relu sous le verrou. */
-  private async verifierLivreur(delivererId: string, restaurantId: string, maintenant: Date): Promise<ContexteAppli> {
+  /**
+   * Le livreur existe et peut recevoir la commande ; rend le contexte de son
+   * appli, relu sous le verrou, et s'il vient d'un autre restaurant en renfort.
+   */
+  private async verifierLivreur(
+    delivererId: string,
+    restaurantId: string,
+    maintenant: Date,
+  ): Promise<{ appli: ContexteAppli; renfort: boolean }> {
     const ligne = await this.prisma.deliverer.findUnique({
       where: { id: delivererId },
       select: { ...SELECT_ETAT_LIVREUR, expo_push_token: true },
     });
     if (!ligne) throw new NotFoundException('Livreur non trouvé');
     const appli = await this.appliLivreur.contexte([ligne], maintenant);
+    const renfort = ligne.restaurant_id !== restaurantId && (await this.permisEnRenfort(delivererId, restaurantId, maintenant));
     const refus = refusLivreurAffectation(
       { ...etatLivreurDepuis(ligne, appli, maintenant), restaurant_id: ligne.restaurant_id },
       ligne._count.courses > 0,
       restaurantId,
       maintenant,
+      renfort,
     );
     if (refus) throw new ConflictException(refus);
-    return appli ?? SANS_REGLE_APPLI;
+    return { appli: appli ?? SANS_REGLE_APPLI, renfort };
+  }
+
+  /**
+   * Livreur d'un autre restaurant (demande du 10/11) : déjà en course pour
+   * celui de la commande (elle rejoint sa course), ou libre et détecté près
+   * de lui, par la règle du planificateur (`DeliverersService.renfortsPour`).
+   */
+  private async permisEnRenfort(delivererId: string, restaurantId: string, maintenant: Date): Promise<boolean> {
+    const ici = await this.prisma.course.findFirst({
+      where: {
+        deliverer_id: delivererId,
+        restaurant_id: restaurantId,
+        statut: { in: STATUTS_COURSE_DU_LIVREUR },
+        turbo_escalated_at: null,
+      },
+      select: { id: true },
+    });
+    if (ici) return true;
+    if (!this.livreurs) return false;
+    return (await this.livreurs.renfortsPour(restaurantId, maintenant, [delivererId])).has(delivererId);
   }
 
   /**
@@ -190,6 +223,7 @@ export class AffectationCommandeService {
     commande: CommandeLue,
     delivererId: string,
     appli: ContexteAppli,
+    renfort: boolean,
     retrait: DetachementPrevu | null,
     user: ComptePersonnel | undefined,
     maintenant: Date,
@@ -217,11 +251,14 @@ export class AffectationCommandeService {
             orderBy: { assigned_at: 'desc' },
             select: { id: true, statut: true, restaurant_id: true, reference: true },
           });
+          // Renfort : vu libre et proche avant le verrou, ou en course ici sous le verrou.
+          const enRenfort = renfort || courses.some((c) => c.restaurant_id === commande.restaurant_id);
           const refus = refusLivreurAffectation(
             ligne && { ...etatLivreurDepuis(ligne, appli, maintenant), restaurant_id: ligne.restaurant_id },
             courses.length > 0,
             commande.restaurant_id,
             maintenant,
+            enRenfort,
           );
           if (refus) throw new ConflictException(refus);
           const existante = courses.find((c) => c.restaurant_id === commande.restaurant_id) ?? null;
@@ -312,6 +349,8 @@ export class AffectationCommandeService {
               course_apres: cible.reference,
               course_avant: retrait?.course_reference ?? null,
               chez_turbo_avant: retrait?.cas === 'TURBO',
+              // Livreur d'un autre restaurant (10/11).
+              ...(ligne && ligne.restaurant_id !== commande.restaurant_id ? { renfort: true } : {}),
               par: { id: user?.id ?? null, role: user?.role ?? null },
             },
           };

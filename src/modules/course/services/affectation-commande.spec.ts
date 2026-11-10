@@ -26,6 +26,7 @@ import {
   livreurPourAffectation,
   MESSAGE_AUTRE_RESTAURANT_LIVREUR,
   MESSAGE_DEJA_CHEZ_CE_LIVREUR,
+  MESSAGE_LIVREUR_AUTRE_RESTAURANT_EN_COURSE,
   MESSAGE_PAS_A_LIVRER,
   MESSAGE_PAS_ENCORE_PRETE,
   messageAffectation,
@@ -46,7 +47,11 @@ import { DispatchJournalService } from './dispatch-journal.service';
 
 const ADMIN = { id: 'u-admin', role: 'ADMIN' };
 
-function monterCas(donnees: Parameters<typeof monter>[0]) {
+/**
+ * `renforts` : livreurs d'autres restaurants que la détection du renfort voit
+ * près du restaurant de la commande (`DeliverersService.renfortsPour`, simulé).
+ */
+function monterCas(donnees: Parameters<typeof monter>[0], renforts: readonly string[] = []) {
   const h = monter(donnees);
   const turbo = Object.assign(h.turbo, {
     annulerCourseGroupe: jest.fn(
@@ -74,6 +79,12 @@ function monterCas(donnees: Parameters<typeof monter>[0]) {
   );
   const passerelle = { livreurConnecte: jest.fn(async (): Promise<boolean | null> => true) };
   const duree = { estimerDureeTournee: jest.fn(async () => undefined) };
+  const livreurs = {
+    renfortsPour: jest.fn(
+      async (_restaurantId: string, _maintenant: Date, ids?: readonly string[]) =>
+        new Map((ids ?? renforts).filter((id) => renforts.includes(id)).map((id) => [id, { distance_m: 400 }] as const)),
+    ),
+  };
   const service = new AffectationCommandeService(
     h.base.prisma,
     new CourseHelper(),
@@ -84,10 +95,11 @@ function monterCas(donnees: Parameters<typeof monter>[0]) {
     passerelle as never,
     duree as never,
     detachement,
+    livreurs as never,
   );
   const affecter = (orderId: string, livreurId: string) => service.affecter(orderId, livreurId, ADMIN as never, MAINTENANT);
   const livraisonDe = (orderId: string) => h.base.livraisons.find((l) => l.order_id === orderId);
-  return { h, turbo, push, detachement, passerelle, duree, service, affecter, livraisonDe };
+  return { h, turbo, push, detachement, passerelle, duree, livreurs, service, affecter, livraisonDe };
 }
 
 const koffi = (s: Record<string, unknown> = {}) =>
@@ -346,11 +358,49 @@ describe('Affecter à un livreur', () => {
     await expect(t2.affecter(b.id, enCourse.id)).resolves.toMatchObject({ nouvelle_course: false });
   });
 
-  it('livreur d’un autre restaurant : refus', async () => {
+  it('livreur d’un autre restaurant, ni proche ni en course ici : refus', async () => {
     const d = koffi({ restaurant_id: 'autre-resto' });
     const a = prete();
     const t = monterCas({ commandes: [a], livreurs: [d] });
     await expect(t.affecter(a.id, d.id)).rejects.toThrow(MESSAGE_AUTRE_RESTAURANT_LIVREUR);
+    expect(t.livreurs.renfortsPour).toHaveBeenCalledWith(RESTO, MAINTENANT, [d.id]);
+    expect(t.h.base.courses).toHaveLength(0);
+  });
+
+  it('livreur d’un autre restaurant détecté près de celui-ci (renfort) : course créée au restaurant de la commande', async () => {
+    const d = koffi({ restaurant_id: 'autre-resto' });
+    const a = prete();
+    const t = monterCas({ commandes: [a], livreurs: [d] }, [d.id]);
+
+    const r = await t.affecter(a.id, d.id);
+
+    expect(r.nouvelle_course).toBe(true);
+    expect(t.h.base.courses.find((k) => k.id === r.course_id)).toMatchObject({
+      restaurant_id: RESTO,
+      deliverer_id: d.id,
+      statut: CourseStatut.ACCEPTED,
+    });
+    expect(t.livraisonDe(a.id)?.course_id).toBe(r.course_id);
+  });
+
+  it('livreur d’un autre restaurant déjà en course pour celui-ci : la commande rejoint sa course', async () => {
+    const d = koffi({ restaurant_id: 'autre-resto', last_available_at: null });
+    const k = coursDe(d);
+    const a = prete();
+    const t = monterCas({ courses: [k], commandes: [a], livreurs: [d] });
+
+    await expect(t.affecter(a.id, d.id)).resolves.toMatchObject({ course_id: k.id, nouvelle_course: false });
+    expect(t.livreurs.renfortsPour).not.toHaveBeenCalled();
+  });
+
+  it('livreur d’un autre restaurant en course pour le sien : refus qui le dit, rien n’est écrit', async () => {
+    const d = koffi({ restaurant_id: 'autre-resto', last_available_at: null });
+    const k = coursDe(d, { restaurant_id: 'autre-resto' });
+    const a = prete();
+    const t = monterCas({ courses: [k], commandes: [a], livreurs: [d] }, [d.id]);
+
+    await expect(t.affecter(a.id, d.id)).rejects.toThrow(MESSAGE_LIVREUR_AUTRE_RESTAURANT_EN_COURSE);
+    expect(t.livraisonDe(a.id)).toBeUndefined();
   });
 
   it('commande inconnue ou supprimée : 404 ; livreur inconnu : 404', async () => {
@@ -530,6 +580,7 @@ describe('Qui peut affecter ou retirer une commande (09/11)', () => {
       id_card_url: 'https://pieces/cni.jpg',
       address: 'Cocody',
       vehicle_plate: 'AB-123',
+      renfort: { restaurant_id: 'r-faya', restaurant_name: 'Faya', distance_m: 400 },
     };
     expect(Object.keys(livreurPourAffectation(complet)).sort()).toEqual(
       [
@@ -542,6 +593,7 @@ describe('Qui peut affecter ou retirer une commande (09/11)', () => {
         'id',
         'last_name',
         'phone',
+        'renfort',
         'restaurant_id',
       ].sort(),
     );

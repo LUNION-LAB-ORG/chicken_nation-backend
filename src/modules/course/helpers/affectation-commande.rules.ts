@@ -23,7 +23,8 @@ import { MESSAGE_COMMANDE_ANNULEE } from './sac-rapporte.rules';
 export const MESSAGE_PAS_A_LIVRER = "Cette commande n'est pas à livrer.";
 export const MESSAGE_PAS_ENCORE_PRETE = "Cette commande n'est pas encore prête : marquez-la prête, puis affectez-la.";
 export const MESSAGE_DEJA_CHEZ_CE_LIVREUR = 'Cette commande est déjà dans la course de ce livreur.';
-export const MESSAGE_AUTRE_RESTAURANT_LIVREUR = "Ce livreur n'est pas rattaché au restaurant de cette commande.";
+export const MESSAGE_AUTRE_RESTAURANT_LIVREUR =
+  "Ce livreur n'est pas rattaché au restaurant de cette commande et n'est pas assez près pour venir en renfort.";
 export const MESSAGE_LIVREUR_AUTRE_RESTAURANT_EN_COURSE = 'Ce livreur est en course pour un autre restaurant.';
 
 export const MESSAGE_COMMANDE_AUTRE_RESTAURANT = "Cette commande n'appartient pas à votre restaurant.";
@@ -35,7 +36,8 @@ const ROLES_GESTES_DU_RESTAURANT: readonly string[] = ['MANAGER', 'ASSISTANT_MAN
  * Ce compte peut-il affecter ou retirer cette commande ? Siège (administrateur,
  * call center) : tous les restaurants. Manager et assistant manager : la
  * commande de leur restaurant seulement, quel que soit le type du compte.
- * Livreurs proposés : ceux du restaurant de la commande (`refusLivreurAffectation`).
+ * Livreurs proposés : ceux du restaurant de la commande, et ceux d'ailleurs en
+ * renfort (`refusLivreurAffectation`).
  */
 export function peutAgirSurCommande(
   compte: { role?: string | null; restaurant_id?: string | null } | null | undefined,
@@ -49,7 +51,8 @@ export function peutAgirSurCommande(
 /**
  * Livreurs proposés dans « Affecter à un livreur » : de quoi les nommer, les
  * appeler et lire leur état. Rien d'autre ne sort (pièces, adresse, véhicule) :
- * le manager n'a pas accès à la gestion des livreurs.
+ * le manager n'a pas accès à la gestion des livreurs. `renfort` : livreur d'un
+ * autre restaurant (le sien et sa distance), `null` pour ceux du restaurant.
  */
 const CHAMPS_LIVREUR_AFFECTATION = [
   'id',
@@ -62,6 +65,7 @@ const CHAMPS_LIVREUR_AFFECTATION = [
   'appli_active',
   'appli_vue_a',
   'appli_etat',
+  'renfort',
 ] as const;
 
 export function livreurPourAffectation(livreur: Record<string, unknown>): Record<string, unknown> {
@@ -100,6 +104,11 @@ export function refusCommandeAAffecter(commande: CommandeAAffecter, delivererId:
  * service et un téléphone injoignable refusent aussi. Appli fermée ou coupée,
  * en appel : jamais un refus (la notification part).
  *
+ * Livreur d'un autre restaurant (demande du 10/11) : permis en `renfort`,
+ * c'est-à-dire déjà en course pour ce restaurant, ou libre et détecté près de
+ * lui (`whereCandidatsRenfort` et `restaurantsDeRenfort`, la règle du
+ * planificateur). En course ailleurs : refusé, une course ne sert qu'un restaurant.
+ *
  * @returns `null` si permis, sinon le refus en clair.
  */
 export function refusLivreurAffectation(
@@ -107,11 +116,13 @@ export function refusLivreurAffectation(
   enCourse: boolean,
   restaurantId: string,
   maintenant: Date,
+  renfort = false,
 ): string | null {
   // Une course en livraison : la règle de la relance ne regarde plus que le compte.
   const refus = refusLivreurRelance(etat, enCourse ? [{ statut: CourseStatut.IN_DELIVERY }] : [], maintenant);
   if (refus) return refus.message;
-  return etat?.restaurant_id === restaurantId ? null : MESSAGE_AUTRE_RESTAURANT_LIVREUR;
+  if (etat?.restaurant_id === restaurantId || renfort) return null;
+  return enCourse ? MESSAGE_LIVREUR_AUTRE_RESTAURANT_EN_COURSE : MESSAGE_AUTRE_RESTAURANT_LIVREUR;
 }
 
 /** Texte rendu au siège après l'affectation. */

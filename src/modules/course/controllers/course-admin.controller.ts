@@ -14,7 +14,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { DelivererStatus, User, UserRole } from '@prisma/client';
+import { User, UserRole } from '@prisma/client';
 import type { Request } from 'express';
 
 import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
@@ -39,7 +39,6 @@ import {
   ROLES_GESTES_COMMANDE_A_LIVRER,
   ROLES_SUIVI_LIVRAISON,
 } from 'src/modules/auth/constantes/roles-suivi-livraison';
-import { QueryDeliverersDto } from 'src/modules/deliverers/dto/query-deliverers.dto';
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 import { DeliverersService } from 'src/modules/deliverers/services/deliverers.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
@@ -272,19 +271,17 @@ export class CourseAdminController {
   @ApiOperation({
     summary: 'Livreurs proposés pour « Affecter à un livreur »',
     description:
-      'Livreurs actifs du restaurant de la commande, avec leur état (`disponibilite`) et celui de leur appli. ' +
-      'Seulement le nom, le téléphone et ces états. Manager et assistant manager : commandes de leur restaurant ' +
-      'seulement (403 sinon).',
+      'Livreurs actifs du restaurant de la commande, puis ceux d\'un autre restaurant qui peuvent la livrer : déjà ' +
+      'en course pour ce restaurant, ou libres et détectés près de lui (renfort, règle du planificateur). Avec leur ' +
+      'état (`disponibilite`), celui de leur appli et `renfort` (leur restaurant et leur distance, `null` pour ceux ' +
+      'du restaurant). Seulement le nom, le téléphone et ces états. Manager et assistant manager : commandes de ' +
+      'leur restaurant seulement (403 sinon).',
   })
   @Get('commandes/:orderId/livreurs')
   @UserRoles(...ROLES_GESTES_COMMANDE_A_LIVRER)
   async livreursPourAffectation(@Req() req: Request, @Param('orderId', new ParseUUIDPipe()) orderId: string) {
     const restaurantId = await this.affectation!.restaurantPourGeste(orderId, req.user as User);
-    const { items } = await this.livreurs!.findAll({
-      status: DelivererStatus.ACTIVE,
-      restaurant_id: restaurantId,
-      limit: 50,
-    } as QueryDeliverersDto);
+    const items = await this.livreurs!.livreursPourAffectation(restaurantId);
     return { items: items.map((l) => livreurPourAffectation(l as Record<string, unknown>)) };
   }
 
@@ -294,7 +291,7 @@ export class CourseAdminController {
       "Sans offre : la commande lui est donnée d'office. Sans course, une course est créée pour lui, déjà acceptée. " +
       'En course : la commande rejoint sa course ; déjà parti, il la récupère au restaurant avec le même code. ' +
       "Elle quitte sa course d'origine, chez Turbo compris. 409 avec la raison : commande pas prête, sac déjà " +
-      'remis, livreur Turbo engagé, livreur inactif ou d\'un autre restaurant ; sans course, livreur en pause, hors ' +
+      'remis, livreur Turbo engagé, livreur inactif, d\'un autre restaurant sans être en renfort ; sans course, livreur en pause, hors ' +
       'service ou injoignable. Manager et assistant manager : commandes de leur restaurant seulement (403 sinon).',
   })
   @ApiBody({ type: AssignDelivererDto })

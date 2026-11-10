@@ -24,12 +24,14 @@ import { journeeDeService } from 'src/modules/course/helpers/journee-service.rul
 import { enRetard, finTourneePrevue, retardMin } from 'src/modules/course/helpers/retard-tournee.rules';
 import { lireReglagesPlanification } from 'src/modules/course/helpers/planification.rules';
 import {
+  CLE_POSITION_EXPIRATION_MIN,
   CLE_RENFORT,
   CLE_RENFORT_RAYON_M,
   CLE_SERVICE_PAR_DEFAUT,
   CLE_SERVICE_PAR_RESTAURANT,
   livreParNosLivreurs,
   restaurantsDeRenfort,
+  whereCandidatsRenfort,
 } from 'src/modules/course/helpers/renfort.rules';
 
 import { AssignRestaurantDto } from '../dto/assign-restaurant.dto';
@@ -78,6 +80,23 @@ const INCLUDE_DISPONIBILITE = {
 } satisfies Prisma.DelivererInclude;
 
 type SafeDeliverer = Omit<Deliverer, 'password' | 'refresh_token'>;
+
+/** Livreurs en renfort lus au plus par restaurant : bien au-delà d'une flotte de quelques dizaines. */
+const RENFORTS_LUS_MAX = 50;
+
+/** Livreurs proposés au plus dans « Affecter à un livreur ». */
+const LIVREURS_AFFECTATION_MAX = 80;
+
+/**
+ * Livreur d'un autre restaurant proposé dans « Affecter à un livreur » : son
+ * restaurant, et sa distance à vol d'oiseau quand il est libre près de celui
+ * de la commande (`null` s'il y est déjà en course).
+ */
+export interface RenfortAffectation {
+  restaurant_id: string | null;
+  restaurant_name: string | null;
+  distance_m: number | null;
+}
 
 /**
  * `appli_connectee` d'un livreur dans les listes : l'appli a-t-elle un socket
@@ -222,60 +241,168 @@ export class DeliverersService {
     };
 
     const [items, total] = await Promise.all([
-      this.prisma.deliverer.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { created_at: 'desc' },
-        include: {
-          restaurant: {
-            select: {
-              id: true,
-              name: true,
-              image: true,
-              address: true,
-              phone: true,
-              latitude: true,
-              longitude: true,
-            },
-          },
-          ...INCLUDE_DISPONIBILITE,
-        },
-        omit: { password: true, refresh_token: true },
-      }),
+      this.lireAvecEtat(where, { skip, take: limit }),
       this.prisma.deliverer.count({ where }),
     ]);
 
-    // État de chaque livreur par la règle unique (fenêtre « Forcer l'affectation »).
-    const maintenant = new Date();
-    const connectes = await this.gateway.livreursConnectes(items.map((l) => l.id));
-    const reglages = await this.scoringSettings.load();
-    const fins = await this.finsSansSocket(items.map((l) => l.id), connectes, reglages.appliFermeeApresS);
-    const appli = contexteAffichage(reglages, connectes, items, await this.livreursEnAppel(maintenant), fins);
     return {
-      // `expo_push_token` sert au calcul ci dessus (le livreur est-il
-      // joignable ?) et ne sort jamais : le serveur pousse sans jeton d'accès
-      // Expo, ce jeton suffit à envoyer une fausse offre au téléphone du
-      // livreur. La liste est ouverte au suivi des livraisons et au call center.
-      items: items.map(({ offer_attempts, _count, expo_push_token: _jeton, ...livreur }) => {
-        const disponibilite = disponibiliteLivreur(
-          etatLivreurDepuis({ ...livreur, _count }, appli, maintenant),
-          maintenant,
-          offer_attempts[0]?.course_id ?? null,
-          regleAppliPour(livreur.protocole_appli, appli.appliFermeeApresS),
-        );
-        return {
-          ...livreur,
-          disponibilite,
-          appli_connectee: presence(connectes, livreur.id),
-          ...etatAppli(disponibilite),
-        };
-      }),
+      items,
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  /**
+   * Livreurs lus avec leur état par la règle unique (fenêtre « Forcer
+   * l'affectation », « Affecter à un livreur »), du plus récent au plus ancien.
+   */
+  private async lireAvecEtat(where: Prisma.DelivererWhereInput, page: { skip?: number; take: number }) {
+    const items = await this.prisma.deliverer.findMany({
+      where,
+      skip: page.skip,
+      take: page.take,
+      orderBy: { created_at: 'desc' },
+      include: {
+        restaurant: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+            address: true,
+            phone: true,
+            latitude: true,
+            longitude: true,
+          },
+        },
+        ...INCLUDE_DISPONIBILITE,
+      },
+      omit: { password: true, refresh_token: true },
+    });
+
+    const maintenant = new Date();
+    const connectes = await this.gateway.livreursConnectes(items.map((l) => l.id));
+    const reglages = await this.scoringSettings.load();
+    const fins = await this.finsSansSocket(items.map((l) => l.id), connectes, reglages.appliFermeeApresS);
+    const appli = contexteAffichage(reglages, connectes, items, await this.livreursEnAppel(maintenant), fins);
+    // `expo_push_token` sert au calcul ci dessus (le livreur est-il
+    // joignable ?) et ne sort jamais : le serveur pousse sans jeton d'accès
+    // Expo, ce jeton suffit à envoyer une fausse offre au téléphone du
+    // livreur. La liste est ouverte au suivi des livraisons et au call center.
+    return items.map(({ offer_attempts, _count, expo_push_token: _jeton, ...livreur }) => {
+      const disponibilite = disponibiliteLivreur(
+        etatLivreurDepuis({ ...livreur, _count }, appli, maintenant),
+        maintenant,
+        offer_attempts[0]?.course_id ?? null,
+        regleAppliPour(livreur.protocole_appli, appli.appliFermeeApresS),
+      );
+      return {
+        ...livreur,
+        disponibilite,
+        appli_connectee: presence(connectes, livreur.id),
+        ...etatAppli(disponibilite),
+      };
+    });
+  }
+
+  /**
+   * Livreurs proposés dans « Affecter à un livreur » (demande du 10/11 : tous
+   * ceux qui peuvent livrer la commande) :
+   *  - ceux du restaurant, quel que soit leur état (grisés s'ils ne peuvent pas) ;
+   *  - ceux d'un autre restaurant déjà en course pour celui-ci : la commande
+   *    rejoint leur course ;
+   *  - ceux d'un autre restaurant détectés près de celui-ci (`renfortsPour`),
+   *    seulement s'ils peuvent recevoir une course maintenant, comme pour le
+   *    planificateur : un renfort en pause n'encombre pas la liste.
+   * `renfort` : `null` pour ceux du restaurant, sinon leur restaurant et leur distance.
+   */
+  async livreursPourAffectation(restaurantId: string, maintenant: Date = new Date()) {
+    const renforts = await this.renfortsPour(restaurantId, maintenant);
+    const items = await this.lireAvecEtat(
+      {
+        entity_status: { not: EntityStatus.DELETED },
+        status: DelivererStatus.ACTIVE,
+        OR: [
+          { restaurant_id: restaurantId },
+          ...(renforts.size > 0 ? [{ id: { in: [...renforts.keys()] } }] : []),
+          {
+            courses: {
+              some: { restaurant_id: restaurantId, statut: { in: STATUTS_COURSE_EN_COURS }, turbo_escalated_at: null },
+            },
+          },
+        ],
+      },
+      { take: LIVREURS_AFFECTATION_MAX },
+    );
+    return items
+      .map((l) => {
+        const renfort: RenfortAffectation | null =
+          l.restaurant_id === restaurantId
+            ? null
+            : {
+                restaurant_id: l.restaurant_id,
+                restaurant_name: l.restaurant?.name ?? null,
+                distance_m: renforts.get(l.id)?.distance_m ?? null,
+              };
+        return { ...l, renfort };
+      })
+      .filter((l) => !l.renfort || l.disponibilite.en_course || l.disponibilite.peut_recevoir_offre);
+  }
+
+  /**
+   * Livreurs d'autres restaurants détectés près de celui-ci (renfort, demande
+   * du 09/11) : la règle du planificateur, mêmes réglages (`course.renfort`,
+   * `course.renfort_rayon_m`, fraîcheur des positions), mêmes candidats
+   * (`whereCandidatsRenfort`) et même distance (`restaurantsDeRenfort`).
+   * `ids` : ne regarder que ces livreurs. Réglage coupé ou lecture
+   * impossible : aucun. Ne lève jamais.
+   *
+   * @returns id du livreur → sa distance au restaurant, à vol d'oiseau, en mètres.
+   */
+  async renfortsPour(
+    restaurantId: string,
+    maintenant: Date = new Date(),
+    ids?: readonly string[],
+  ): Promise<Map<string, { distance_m: number }>> {
+    const res = new Map<string, { distance_m: number }>();
+    if (typeof this.scoringSettings.lireValeurs !== 'function') return res;
+    try {
+      const valeurs = await this.scoringSettings.lireValeurs([
+        CLE_RENFORT,
+        CLE_RENFORT_RAYON_M,
+        CLE_POSITION_EXPIRATION_MIN,
+      ]);
+      const { reglages } = lireReglagesPlanification(valeurs);
+      if (!reglages.renfort) return res;
+      const candidats = await this.prisma.deliverer.findMany({
+        where: {
+          ...whereCandidatsRenfort(restaurantId, maintenant, reglages.positionExpirationMin),
+          ...(ids ? { id: { in: [...ids] } } : {}),
+        },
+        select: { id: true, restaurant_id: true, last_location: true, last_location_at: true },
+        orderBy: { last_location_at: 'desc' },
+        take: RENFORTS_LUS_MAX,
+      });
+      if (candidats.length === 0) return res;
+      const restaurants = await this.prisma.restaurant.findMany({
+        where: { entity_status: EntityStatus.ACTIVE, latitude: { not: null }, longitude: { not: null } },
+        select: { id: true, latitude: true, longitude: true },
+      });
+      const situes = restaurants.map((r) => ({ id: r.id, position: { lat: r.latitude!, lng: r.longitude! } }));
+      for (const l of candidats) {
+        const ici = restaurantsDeRenfort(
+          lirePositionLivreur(l.last_location, l.last_location_at).position,
+          l.restaurant_id,
+          situes,
+          reglages.renfortRayonM,
+        ).find((r) => r.id === restaurantId);
+        if (ici) res.set(l.id, { distance_m: Math.round(ici.distance_m) });
+      }
+    } catch (err) {
+      this.logger.warn(`Renforts illisibles (${restaurantId.slice(0, 8)}) : ${(err as Error).message}`);
+    }
+    return res;
   }
 
   /**

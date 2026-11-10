@@ -13,7 +13,6 @@ import {
 import { PrismaService } from 'src/database/services/prisma.service';
 import {
   SELECT_ETAT_LIVREUR,
-  STATUTS_COURSE_EN_COURS,
   etatLivreurDepuis,
   peutRecevoirOffre,
 } from 'src/modules/deliverers/helpers/disponibilite.rules';
@@ -42,7 +41,7 @@ import {
 } from '../helpers/planification.rules';
 import { ReglagesPreparation } from '../helpers/preparation.rules';
 import { APPELS_REGROUPEMENT_PAR_PASSAGE } from '../helpers/regroupement-tournee.rules';
-import { restaurantsDeRenfort } from '../helpers/renfort.rules';
+import { restaurantsDeRenfort, whereCandidatsRenfort } from '../helpers/renfort.rules';
 import { DirectionService } from './direction.service';
 import { EstimationPreparationService } from './estimation-preparation.service';
 
@@ -423,16 +422,7 @@ export class InstantanePlanificationService {
     if (!r.renfort) return [];
     try {
       const candidats = await this.prisma.deliverer.findMany({
-        where: {
-          NOT: { restaurant_id: null },
-          restaurant_id: { not: restaurantId },
-          status: DelivererStatus.ACTIVE,
-          is_operational: true,
-          entity_status: EntityStatus.ACTIVE,
-          last_location_at: { gte: new Date(maintenant.getTime() - r.positionExpirationMin * 60_000) },
-          courses: { none: { statut: { in: STATUTS_COURSE_EN_COURS } } },
-          offer_attempts: { none: { status: CourseOfferStatus.PENDING } },
-        },
+        where: whereCandidatsRenfort(restaurantId, maintenant, r.positionExpirationMin),
         select: SELECT_LIVREUR_PLANIF,
         orderBy: { last_location_at: 'desc' },
         take: RENFORTS_LUS_MAX,

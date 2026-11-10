@@ -191,3 +191,109 @@ describe('DelivererEvent.restaurantChange : attend le planning, ne lève jamais'
     expect(await new DelivererEvent(enPanne).restaurantChange({ delivererId: 'k', ancienRestaurantId: null, nouveauRestaurantId: 'z' })).toEqual([]);
   });
 });
+
+/**
+ * « Affecter à un livreur » (demande du 10/11) : tous les livreurs qui peuvent
+ * livrer la commande, y compris ceux d'un autre restaurant détectés près de
+ * celui de la commande (la règle du planificateur) ou déjà en course pour lui.
+ */
+describe('livreurs proposés pour « Affecter à un livreur »', () => {
+  const EN_PAUSE = { pause_until: new Date(M.getTime() + 600_000) };
+
+  function monterAffectation(valeurs: Record<string, string> = {}) {
+    // Candidats au renfort de Zone 4 (lecture `whereCandidatsRenfort`) : d'autres restaurants.
+    const candidats = [
+      ligne('koffi', PRES_DE_ZONE_4),
+      ligne('awa', { lat: FAYA.latitude, lng: FAYA.longitude }),
+      ligne('renfort-en-pause', PRES_DE_ZONE_4, EN_PAUSE),
+    ];
+    // Ce que la liste lit ensuite : ceux de Zone 4, les renforts, ceux en course pour Zone 4.
+    const lignes = [
+      ligne('zone4-dispo', { lat: ZONE4.latitude, lng: ZONE4.longitude }, { restaurant_id: ZONE4.id, restaurant: ZONE4 }),
+      ligne('zone4-pause', { lat: ZONE4.latitude, lng: ZONE4.longitude }, { restaurant_id: ZONE4.id, restaurant: ZONE4, ...EN_PAUSE }),
+      ligne('koffi', PRES_DE_ZONE_4),
+      ligne('renfort-en-pause', PRES_DE_ZONE_4, EN_PAUSE),
+      ligne('faya-en-course-ici', PRES_DE_ZONE_4, { last_available_at: null, _count: { courses: 1, offer_attempts: 0 } }),
+    ];
+    const lectures: Record<string, any>[] = [];
+    const prisma = {
+      deliverer: {
+        findMany: jest.fn(async (args: Record<string, any>) => {
+          lectures.push(args);
+          if (args.select) {
+            const ids: string[] | undefined = args.where?.id?.in;
+            return candidats.filter((c) => !ids || ids.includes(c.id));
+          }
+          return lignes;
+        }),
+      },
+      restaurant: { findMany: jest.fn(async () => [ZONE4, FAYA]) },
+    };
+    const reglages = { gpsExpirationMinutes: 5, appliFermeeApresS: 180, facteurRetard: 1.5, offreJoignablesSeulement: false };
+    const service = new DeliverersService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      { load: jest.fn(async () => reglages), lireValeurs: jest.fn(async () => valeurs) } as never,
+      {} as never,
+      { livreursConnectes: jest.fn(async () => new Set<string>()) } as never,
+    );
+    return { service, lectures };
+  }
+
+  it('renfortsPour : libre près de Zone 4, avec sa distance ; à Faya : non ; même lecture que le planificateur', async () => {
+    const t = monterAffectation();
+    const renforts = await t.service.renfortsPour(ZONE4.id, M);
+
+    expect([...renforts.keys()].sort()).toEqual(['koffi', 'renfort-en-pause']);
+    expect(Math.round(renforts.get('koffi')!.distance_m / 100)).toBe(5);
+    expect(t.lectures[0].where).toMatchObject({
+      restaurant_id: { not: ZONE4.id },
+      status: DelivererStatus.ACTIVE,
+      is_operational: true,
+      last_location_at: { gte: ilYA(5) },
+    });
+  });
+
+  it('renfortsPour sur un seul livreur : ne lit que lui ; réglage coupé : aucun, sans lecture', async () => {
+    const t = monterAffectation();
+    expect([...(await t.service.renfortsPour(ZONE4.id, M, ['awa'])).keys()]).toEqual([]);
+    expect(t.lectures[0].where.id).toEqual({ in: ['awa'] });
+
+    const coupe = monterAffectation({ 'course.renfort': 'non' });
+    expect((await coupe.service.renfortsPour(ZONE4.id, M)).size).toBe(0);
+    expect(coupe.lectures).toHaveLength(0);
+  });
+
+  it('liste : ceux du restaurant (même en pause), le renfort libre, celui en course ici ; jamais un renfort en pause', async () => {
+    const t = monterAffectation();
+    const items = await t.service.livreursPourAffectation(ZONE4.id, M);
+    const parId = Object.fromEntries(items.map((l) => [l.id, l.renfort] as const));
+
+    expect(Object.keys(parId).sort()).toEqual(['faya-en-course-ici', 'koffi', 'zone4-dispo', 'zone4-pause']);
+    expect(parId['zone4-dispo']).toBeNull();
+    expect(parId['zone4-pause']).toBeNull();
+    expect(parId.koffi).toMatchObject({ restaurant_id: FAYA.id, restaurant_name: 'Faya' });
+    expect(Math.round(parId.koffi!.distance_m! / 100)).toBe(5);
+    expect(parId['faya-en-course-ici']).toEqual({ restaurant_id: FAYA.id, restaurant_name: 'Faya', distance_m: null });
+
+    // Lecture de la liste : son restaurant, les renforts détectés, ceux en course pour lui.
+    const liste = t.lectures.find((a) => a.include)!;
+    expect(liste.where.status).toBe(DelivererStatus.ACTIVE);
+    expect(liste.where.OR).toEqual([
+      { restaurant_id: ZONE4.id },
+      { id: { in: expect.arrayContaining(['koffi', 'renfort-en-pause']) } },
+      { courses: { some: expect.objectContaining({ restaurant_id: ZONE4.id, turbo_escalated_at: null }) } },
+    ]);
+  });
+
+  it('réglage du renfort coupé : pas de renfort libre, celui déjà en course ici reste proposé', async () => {
+    const t = monterAffectation({ 'course.renfort': 'non' });
+    await t.service.livreursPourAffectation(ZONE4.id, M);
+    const liste = t.lectures.find((a) => a.include)!;
+    expect(liste.where.OR).toEqual([
+      { restaurant_id: ZONE4.id },
+      { courses: { some: expect.objectContaining({ restaurant_id: ZONE4.id }) } },
+    ]);
+  });
+});

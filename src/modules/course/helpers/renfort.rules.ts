@@ -1,4 +1,7 @@
-import { DeliveryService } from '@prisma/client';
+import { CourseOfferStatus, DelivererStatus, DeliveryService, EntityStatus, Prisma } from '@prisma/client';
+
+import { STATUTS_COURSE_EN_COURS } from 'src/modules/deliverers/helpers/disponibilite.rules';
+
 import { haversineMeters, ILatLng } from './geo.helper';
 
 /**
@@ -21,6 +24,8 @@ import { haversineMeters, ILatLng } from './geo.helper';
 /** Réglages lus avec ceux du planificateur (`planification.rules.ts`). */
 export const CLE_RENFORT = 'course.renfort';
 export const CLE_RENFORT_RAYON_M = 'course.renfort_rayon_m';
+/** Fraîcheur des positions (minutes), lue avec les réglages du renfort. */
+export const CLE_POSITION_EXPIRATION_MIN = 'deliverer.gps_expiration_minutes';
 
 /** Service de livraison par défaut et par restaurant (lus aussi par les frais de livraison). */
 export const CLE_SERVICE_PAR_DEFAUT = 'delivery.default_service';
@@ -36,6 +41,31 @@ export interface RestaurantDeRenfort {
   id: string;
   name: string | null;
   distance_m: number;
+}
+
+/**
+ * Livreurs qui peuvent prêter main-forte à ce restaurant, avant la distance
+ * (`restaurantsDeRenfort`) : d'un autre restaurant, actifs, sans course en
+ * cours ni offre en attente (leur restaurant les verrait occupés), position
+ * de moins de `positionExpirationMin`. Une seule lecture pour le
+ * planificateur et pour « Affecter à un livreur » (demande du 10/11) : un
+ * livreur que le planificateur prendrait en renfort est aussi proposé au siège.
+ */
+export function whereCandidatsRenfort(
+  restaurantId: string,
+  maintenant: Date,
+  positionExpirationMin: number,
+): Prisma.DelivererWhereInput {
+  return {
+    NOT: { restaurant_id: null },
+    restaurant_id: { not: restaurantId },
+    status: DelivererStatus.ACTIVE,
+    is_operational: true,
+    entity_status: EntityStatus.ACTIVE,
+    last_location_at: { gte: new Date(maintenant.getTime() - positionExpirationMin * 60_000) },
+    courses: { none: { statut: { in: STATUTS_COURSE_EN_COURS } } },
+    offer_attempts: { none: { status: CourseOfferStatus.PENDING } },
+  };
 }
 
 /**
