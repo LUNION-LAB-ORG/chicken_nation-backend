@@ -28,6 +28,7 @@ import {
 } from 'src/modules/deliverers/helpers/disponibilite.rules';
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 import { DelivererPushService } from 'src/modules/deliverers/services/deliverer-push.service';
+import { DelivererQueueService } from 'src/modules/deliverers/services/deliverer-queue.service';
 import { DeliverersService } from 'src/modules/deliverers/services/deliverers.service';
 import { ComptePersonnel } from 'src/modules/users/helpers/personnel-scope.helper';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
@@ -35,13 +36,19 @@ import { AppGateway } from 'src/socket-io/gateways/app.gateway';
 import { CourseEvent } from '../events/course.event';
 import {
   messageAffectation,
+  messageChangementLivreur,
   MESSAGE_COMMANDE_AUTRE_RESTAURANT,
+  MESSAGE_COURSE_CHANGEE,
   MESSAGE_LIVREUR_AUTRE_RESTAURANT_EN_COURSE,
+  MESSAGE_LIVREUR_DEJA_EN_COURSE,
+  MOTIF_COURSE_CONFIEE_AILLEURS,
   peutAgirSurCommande,
   RAISON_COMMANDE_AFFECTEE,
   refusCommandeAAffecter,
+  refusCourseAChanger,
   refusLivreurAffectation,
 } from '../helpers/affectation-commande.rules';
+import { CourseChannels } from '../enums/course-channels';
 import { RaisonsPlanificateur, texteCommandeAjoutee } from '../helpers/application-plan.rules';
 import { CLASSE_VERROU_OFFRE_LIVREUR } from '../helpers/offres.rules';
 import { CourseHelper } from '../helpers/course.helper';
@@ -65,6 +72,17 @@ const SELECTION_COMMANDE = {
 } satisfies Prisma.OrderSelect;
 
 type CommandeLue = Prisma.OrderGetPayload<{ select: typeof SELECTION_COMMANDE }>;
+
+/** Raison de la clôture des offres quand une course est confiée d'office à un livreur (10/11). */
+const RAISON_COURSE_CONFIEE = 'COURSE_CONFIEE';
+
+/** Réponse de `POST /courses/:id/livreur` (changer le livreur d'une course). */
+export interface ReponseChangementLivreur {
+  course_id: string;
+  reference: string;
+  appli_connectee: boolean | null;
+  message: string;
+}
 
 /** Réponse de `POST /courses/commandes/:orderId/affecter`. */
 export interface ReponseAffectation {
@@ -111,6 +129,8 @@ export class AffectationCommandeService {
     private readonly detachement: DetachementCommandeService,
     // Renfort (10/11) : un livreur d'un autre restaurant détecté près de celui de la commande.
     @Optional() private readonly livreurs?: DeliverersService,
+    // Changer le livreur d'une course (10/11) : l'ancien retrouve sa place dans la file.
+    @Optional() private readonly file?: DelivererQueueService,
   ) {}
 
   /**
@@ -192,6 +212,174 @@ export class AffectationCommandeService {
     );
     if (refus) throw new ConflictException(refus);
     return { appli: appli ?? SANS_REGLE_APPLI, renfort };
+  }
+
+  /**
+   * CHANGER LE LIVREUR D'UNE COURSE (demande du 10/11, menu « Livreur » d'une
+   * carte du kanban « En direct ») : d'office, sans offre à accepter, avant le
+   * départ du restaurant (`refusCourseAChanger`). Le livreur choisi doit être
+   * libre (sans course) et pouvoir recevoir une course, de ce restaurant ou en
+   * renfort, comme pour « Affecter à un livreur ».
+   *
+   * Sous le verrou des offres du livreur choisi : la course passe à lui,
+   * acceptée, avec le même code de retrait. Ensuite : l'ancien livreur la voit
+   * disparaître de son appli (`course:cancelled`, comme une course qu'on lui
+   * retire) et retrouve sa place dans la file ; les offres encore en attente
+   * sur cette course sont closes sans pénalité ; le nouveau la reçoit comme
+   * une course affectée (temps réel et notification).
+   */
+  async changerLivreurCourse(
+    courseId: string,
+    delivererId: string,
+    user: ComptePersonnel | undefined,
+    maintenant = new Date(),
+  ): Promise<ReponseChangementLivreur> {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: {
+        id: true,
+        reference: true,
+        statut: true,
+        restaurant_id: true,
+        deliverer_id: true,
+        turbo_escalated_at: true,
+        assigned_at: true,
+        deliverer: { select: { first_name: true } },
+        deliveries: { select: { statut: true } },
+      },
+    });
+    if (!course) throw new NotFoundException('Course non trouvée');
+    const refus = refusCourseAChanger(course, delivererId);
+    if (refus) throw new ConflictException(refus);
+
+    const ligne = await this.prisma.deliverer.findUnique({
+      where: { id: delivererId },
+      select: { ...SELECT_ETAT_LIVREUR, expo_push_token: true },
+    });
+    if (!ligne) throw new NotFoundException('Livreur non trouvé');
+    if (ligne._count.courses > 0) throw new ConflictException(MESSAGE_LIVREUR_DEJA_EN_COURSE);
+    const appli = await this.appliLivreur.contexte([ligne], maintenant);
+    const renfort =
+      ligne.restaurant_id !== course.restaurant_id &&
+      (await this.permisEnRenfort(delivererId, course.restaurant_id, maintenant));
+    const refusLivreur = refusLivreurAffectation(
+      { ...etatLivreurDepuis(ligne, appli, maintenant), restaurant_id: ligne.restaurant_id },
+      false,
+      course.restaurant_id,
+      maintenant,
+      renfort,
+    );
+    if (refusLivreur) throw new ConflictException(refusLivreur);
+
+    // Offre en attente chez le livreur choisi (une autre course) : close sans pénalité, sa recherche repart.
+    await this.cloture.clorePourLivreur(delivererId, 'LIVREUR_INDISPONIBLE', {
+      source: 'admin',
+      details: { raison: RAISON_COURSE_CONFIEE },
+    });
+
+    const ancienId = course.deliverer_id;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${CLASSE_VERROU_OFFRE_LIVREUR}::int, hashtext(${delivererId}))`;
+      const offre = await tx.courseOfferAttempt.findFirst({
+        where: { deliverer_id: delivererId, status: CourseOfferStatus.PENDING },
+        select: { id: true },
+      });
+      if (offre) {
+        throw new ConflictException(
+          messageRefusOffre('OFFRE_EN_ATTENTE', { pause_until: null, auto_pause_until: null }, maintenant),
+        );
+      }
+      const enCours = await tx.course.count({
+        where: { deliverer_id: delivererId, statut: { in: STATUTS_COURSE_DU_LIVREUR } },
+      });
+      if (enCours > 0) throw new ConflictException(MESSAGE_LIVREUR_DEJA_EN_COURSE);
+      // La course n'a pas bougé depuis la lecture : même statut, même livreur, toujours sans Turbo.
+      const tenue = await tx.course.updateMany({
+        where: { id: course.id, statut: course.statut, deliverer_id: ancienId, turbo_escalated_at: null },
+        data: {
+          deliverer_id: delivererId,
+          statut: CourseStatut.ACCEPTED,
+          assigned_at: maintenant,
+          at_restaurant_at: null,
+          delay_alerted_at: null,
+        },
+      });
+      if (tenue.count !== 1) throw new ConflictException(MESSAGE_COURSE_CHANGEE);
+      // Hors de la file, comme à l'acceptation d'une offre.
+      await tx.deliverer.updateMany({ where: { id: delivererId }, data: { last_available_at: null } });
+      await tx.dispatchEvenement.create({
+        data: {
+          type: 'LIVREUR_CHANGE',
+          motif: ancienId ? 'REMPLACE' : 'AFFECTE',
+          source: 'admin',
+          restaurant_id: course.restaurant_id,
+          course_id: course.id,
+          deliverer_id: delivererId,
+          details: {
+            course: course.reference,
+            statut_avant: course.statut,
+            ancien_livreur: ancienId,
+            ...(renfort ? { renfort: true } : {}),
+            par: { id: user?.id ?? null, role: user?.role ?? null },
+          },
+        },
+      });
+    });
+    this.logger.log(
+      JSON.stringify({ type: 'LIVREUR_CHANGE', course_id: course.id, ancien: ancienId, nouveau: delivererId }),
+    );
+
+    // L'ancien : la course quitte son appli, il retrouve sa place dans la file.
+    if (ancienId) {
+      try {
+        await this.file?.remettreEnFile(ancienId, course.assigned_at ?? maintenant, maintenant);
+        this.gateway.emitToDeliverer(ancienId, CourseChannels.COURSE_CANCELLED, {
+          course: { id: course.id, reference: course.reference, cancelled_reason: MOTIF_COURSE_CONFIEE_AILLEURS },
+          cancelled_by: 'admin',
+          reason: MOTIF_COURSE_CONFIEE_AILLEURS,
+        });
+        this.push.notifyCourseCancelled({
+          delivererId: ancienId,
+          courseReference: course.reference,
+          cancelledBy: 'admin',
+          courseId: course.id,
+        });
+      } catch (err) {
+        this.logger.warn(`Course ${course.reference} : ancien livreur pas prévenu (${(err as Error)?.message ?? err})`);
+      }
+    }
+    // Offres encore en attente sur cette course (recherche en cours) : closes, sans relance.
+    await this.cloture.clorePourCourse(course.id, 'AFFECTATION_FORCEE', {
+      source: 'admin',
+      relancerRecherche: false,
+      details: { raison: RAISON_COURSE_CONFIEE },
+    });
+
+    const complete = await this.prisma.course.findUniqueOrThrow({ where: { id: course.id }, include: COURSE_FULL_INCLUDE });
+    try {
+      await this.courseEvent.courseAssigned({ course: complete });
+      this.push.notifyCourseAssigned({
+        delivererId,
+        courseReference: complete.reference,
+        restaurantName: complete.restaurant?.name ?? 'le restaurant',
+        courseId: complete.id,
+      });
+    } catch (err) {
+      this.logger.warn(`Course ${course.reference} confiée : annonce en échec (${(err as Error)?.message ?? err})`);
+    }
+    const appliConnectee = await this.gateway.livreurConnecte(delivererId).catch(() => null);
+    return {
+      course_id: complete.id,
+      reference: complete.reference,
+      appli_connectee: appliConnectee,
+      message: messageChangementLivreur({
+        reference: complete.reference,
+        prenom: complete.deliverer?.first_name ?? null,
+        ancienPrenom: course.deliverer?.first_name ?? null,
+        ancien: !!ancienId,
+        appliConnectee,
+      }),
+    };
   }
 
   /**

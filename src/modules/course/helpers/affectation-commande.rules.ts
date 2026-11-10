@@ -139,3 +139,67 @@ export function messageAffectation(p: {
   const notification = p.appliConnectee === false ? ', prévenu par notification' : '';
   return `${debut}${parti}${notification}.`;
 }
+
+// ============================================================
+// CHANGER LE LIVREUR D'UNE COURSE (demande du 10/11, kanban « En direct »)
+// ============================================================
+
+export const MESSAGE_COURSE_CHEZ_TURBO =
+  'Course confiée à Turbo : reprenez-la en interne depuis sa fiche, puis choisissez le livreur.';
+export const MESSAGE_COURSE_PARTIE = 'Le livreur est déjà parti avec les sacs : on ne change plus de livreur.';
+export const MESSAGE_COURSE_TERMINEE = 'Cette course est terminée.';
+export const MESSAGE_COURSE_ANNULEE = 'Cette course est annulée.';
+export const MESSAGE_DEJA_SA_COURSE = 'Ce livreur a déjà cette course.';
+export const MESSAGE_COURSE_VIDE = "Cette course n'a plus de commande à livrer.";
+export const MESSAGE_LIVREUR_DEJA_EN_COURSE =
+  'Ce livreur est déjà en course : donnez-lui plutôt une commande prête (« Affecter à un livreur »).';
+export const MESSAGE_COURSE_CHANGEE = 'La course vient de changer : rouvrez-la.';
+/** Motif lu par l'appli de l'ancien livreur (`course:cancelled`). */
+export const MOTIF_COURSE_CONFIEE_AILLEURS = 'Course confiée à un autre livreur';
+
+/** Statuts où le livreur se change : personne n'est parti avec les sacs. */
+export const STATUTS_COURSE_LIVREUR_MODIFIABLE: CourseStatut[] = [
+  CourseStatut.PENDING_ASSIGNMENT,
+  CourseStatut.EXPIRED,
+  CourseStatut.ACCEPTED,
+  CourseStatut.AT_RESTAURANT,
+];
+
+/** Ce que la règle lit de la course. */
+export interface CourseAChanger {
+  statut: CourseStatut;
+  deliverer_id: string | null;
+  turbo_escalated_at: Date | string | null;
+  deliveries: Array<{ statut: DeliveryStatut }>;
+}
+
+/**
+ * Le livreur de cette course peut-il devenir celui-ci ? D'office, avant le
+ * départ du restaurant (en recherche, aucun livreur trouvé, acceptée, au
+ * restaurant), jamais chez Turbo. `null` si oui, sinon le refus en clair.
+ */
+export function refusCourseAChanger(c: CourseAChanger, delivererId: string): string | null {
+  if (c.turbo_escalated_at) return MESSAGE_COURSE_CHEZ_TURBO;
+  if (c.statut === CourseStatut.IN_DELIVERY) return MESSAGE_COURSE_PARTIE;
+  if (c.statut === CourseStatut.COMPLETED) return MESSAGE_COURSE_TERMINEE;
+  if (c.statut === CourseStatut.CANCELLED) return MESSAGE_COURSE_ANNULEE;
+  if (!STATUTS_COURSE_LIVREUR_MODIFIABLE.includes(c.statut)) return MESSAGE_COURSE_CHANGEE;
+  if (c.deliverer_id === delivererId) return MESSAGE_DEJA_SA_COURSE;
+  if (!c.deliveries.some((l) => !STATUTS_LIVRAISON_TERMINEE.includes(l.statut))) return MESSAGE_COURSE_VIDE;
+  return null;
+}
+
+/** « CRS-… confiée à Koffi. Elle est retirée de l'appli de Yann. » */
+export function messageChangementLivreur(p: {
+  reference: string;
+  prenom: string | null;
+  ancienPrenom: string | null;
+  ancien: boolean;
+  appliConnectee: boolean | null;
+}): string {
+  const nouveau = p.prenom ?? 'ce livreur';
+  const parties = [`${p.reference} confiée à ${nouveau}.`];
+  if (p.ancien) parties.push(`Elle est retirée de l'appli de ${p.ancienPrenom ?? "l'ancien livreur"}.`);
+  if (p.appliConnectee === false) parties.push(`${nouveau} reçoit une notification.`);
+  return parties.join(' ');
+}

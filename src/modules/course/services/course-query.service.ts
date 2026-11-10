@@ -349,6 +349,16 @@ export class CourseQueryService {
     return Array.from(buckets.entries()).map(([date, v]) => ({ date, ...v }));
   }
 
+  /** Restaurant d'une course (livreurs proposés pour la changer) ; 404 inconnue. */
+  async findRestaurantDeCourse(courseId: string): Promise<{ id: string; restaurant_id: string }> {
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      select: { id: true, restaurant_id: true },
+    });
+    if (!course) throw new NotFoundException('Course non trouvée');
+    return course;
+  }
+
   /**
    * Détail d'une Course (avec toutes Delivery + Order + restaurant + livreur).
    * `compte` : le code client des livraisons n'est lu que pour l'ADMIN.

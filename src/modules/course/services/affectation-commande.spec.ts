@@ -27,9 +27,15 @@ import {
   MESSAGE_AUTRE_RESTAURANT_LIVREUR,
   MESSAGE_DEJA_CHEZ_CE_LIVREUR,
   MESSAGE_LIVREUR_AUTRE_RESTAURANT_EN_COURSE,
+  MESSAGE_COURSE_CHEZ_TURBO,
+  MESSAGE_COURSE_PARTIE,
+  MESSAGE_DEJA_SA_COURSE,
+  MESSAGE_LIVREUR_DEJA_EN_COURSE,
   MESSAGE_PAS_A_LIVRER,
   MESSAGE_PAS_ENCORE_PRETE,
   messageAffectation,
+  messageChangementLivreur,
+  MOTIF_COURSE_CONFIEE_AILLEURS,
   peutAgirSurCommande,
   refusCommandeAAffecter,
 } from '../helpers/affectation-commande.rules';
@@ -77,8 +83,9 @@ function monterCas(donnees: Parameters<typeof monter>[0], renforts: readonly str
     h.actionsLivraison,
     cloche as never,
   );
-  const passerelle = { livreurConnecte: jest.fn(async (): Promise<boolean | null> => true) };
+  const passerelle = { livreurConnecte: jest.fn(async (): Promise<boolean | null> => true), emitToDeliverer: jest.fn() };
   const duree = { estimerDureeTournee: jest.fn(async () => undefined) };
+  const file = { remettreEnFile: jest.fn(async () => true) };
   const livreurs = {
     renfortsPour: jest.fn(
       async (_restaurantId: string, _maintenant: Date, ids?: readonly string[]) =>
@@ -96,10 +103,13 @@ function monterCas(donnees: Parameters<typeof monter>[0], renforts: readonly str
     duree as never,
     detachement,
     livreurs as never,
+    file as never,
   );
   const affecter = (orderId: string, livreurId: string) => service.affecter(orderId, livreurId, ADMIN as never, MAINTENANT);
   const livraisonDe = (orderId: string) => h.base.livraisons.find((l) => l.order_id === orderId);
-  return { h, turbo, push, detachement, passerelle, duree, livreurs, service, affecter, livraisonDe };
+  const changer = (courseId: string, livreurId: string) =>
+    service.changerLivreurCourse(courseId, livreurId, ADMIN as never, MAINTENANT);
+  return { h, turbo, push, detachement, passerelle, duree, livreurs, file, service, affecter, changer, livraisonDe };
 }
 
 const koffi = (s: Record<string, unknown> = {}) =>
@@ -728,5 +738,111 @@ describe('Terminer une commande : la règle du statut', () => {
     expect(() =>
       helper.validateStatusTransition(DELIVERY, OrderStatus.CANCELLED, OrderStatus.COLLECTED, { sauterEtapes: true }),
     ).toThrow();
+  });
+});
+
+
+/**
+ * Changer le livreur d'une course (demande du 10/11, menu « Livreur » du
+ * kanban « En direct ») : d'office, avant le départ du restaurant.
+ */
+describe('Changer le livreur d’une course', () => {
+  const enRecherche = (s: Record<string, unknown> = {}) =>
+    course({ statut: CourseStatut.PENDING_ASSIGNMENT, deliverer_id: null, created_at: avant(300), pickup_code: '305', ...s });
+  const avecCommande = (k: Record<string, unknown>) => {
+    const a = prete();
+    return { a, l: livraison({ course_id: k.id, order_id: a.id }) };
+  };
+
+  it('en recherche : le livreur choisi la reçoit d’office, acceptée, même code, hors de la file', async () => {
+    const d = koffi();
+    const k = enRecherche();
+    const { a, l } = avecCommande(k);
+    const t = monterCas({ courses: [k], commandes: [a], livraisons: [l], livreurs: [d] });
+
+    const r = await t.changer(k.id, d.id);
+
+    expect(k).toMatchObject({ statut: CourseStatut.ACCEPTED, deliverer_id: d.id, pickup_code: '305', assigned_at: MAINTENANT });
+    expect(d.last_available_at).toBeNull();
+    expect(r.message).toBe(`${k.reference} confiée à Koffi.`);
+    expect(t.push.notifyCourseAssigned).toHaveBeenCalledWith(expect.objectContaining({ delivererId: d.id, courseId: k.id }));
+    expect(t.passerelle.emitToDeliverer).not.toHaveBeenCalled();
+    expect(t.h.base.journal.some((e: any) => e.type === 'LIVREUR_CHANGE' && e.motif === 'AFFECTE')).toBe(true);
+  });
+
+  it('acceptée par Yann : passe à Koffi ; Yann la voit disparaître et retrouve sa place dans la file', async () => {
+    const yann = awa({ first_name: 'Yann', last_available_at: null });
+    const d = koffi();
+    const k = coursDe(yann, { statut: CourseStatut.AT_RESTAURANT, at_restaurant_at: avant(60) });
+    const { a, l } = avecCommande(k);
+    const t = monterCas({ courses: [k], commandes: [a], livraisons: [l], livreurs: [yann, d] });
+
+    const r = await t.changer(k.id, d.id);
+
+    expect(k).toMatchObject({ statut: CourseStatut.ACCEPTED, deliverer_id: d.id, at_restaurant_at: null });
+    expect(r.message).toBe(`${k.reference} confiée à Koffi. Elle est retirée de l'appli de Yann.`);
+    expect(t.file.remettreEnFile).toHaveBeenCalledWith(yann.id, avant(120), MAINTENANT);
+    expect(t.passerelle.emitToDeliverer).toHaveBeenCalledWith(
+      yann.id,
+      'course:cancelled',
+      expect.objectContaining({ course: expect.objectContaining({ id: k.id, cancelled_reason: MOTIF_COURSE_CONFIEE_AILLEURS }) }),
+    );
+    expect(t.push.notifyCourseCancelled).toHaveBeenCalledWith(expect.objectContaining({ delivererId: yann.id, courseId: k.id }));
+  });
+
+  it.each([
+    ['partie avec les sacs', { statut: CourseStatut.IN_DELIVERY }, MESSAGE_COURSE_PARTIE],
+    ['confiée à Turbo', { turbo_escalated_at: avant(60) }, MESSAGE_COURSE_CHEZ_TURBO],
+  ])('course %s : refus en clair, rien ne bouge', async (_nom, s, message) => {
+    const d = koffi();
+    const k = enRecherche(s);
+    const { a, l } = avecCommande(k);
+    const t = monterCas({ courses: [k], commandes: [a], livraisons: [l], livreurs: [d] });
+    await expect(t.changer(k.id, d.id)).rejects.toThrow(message);
+    expect(k.deliverer_id).toBeNull();
+  });
+
+  it('livreur déjà en course, ou déjà sur cette course : refus', async () => {
+    const d = koffi({ last_available_at: null });
+    const sienne = coursDe(d);
+    const k = enRecherche();
+    const { a, l } = avecCommande(k);
+    const t = monterCas({ courses: [sienne, k], commandes: [a], livraisons: [l], livreurs: [d] });
+    await expect(t.changer(k.id, d.id)).rejects.toThrow(MESSAGE_LIVREUR_DEJA_EN_COURSE);
+    await expect(t.changer(sienne.id, d.id)).rejects.toThrow(MESSAGE_DEJA_SA_COURSE);
+  });
+
+  it('livreur en pause, ou d’un autre restaurant sans renfort : refus du serveur', async () => {
+    const enPause = koffi({ pause_until: avant(-600) });
+    const ailleurs = awa({ restaurant_id: 'autre-resto' });
+    const k = enRecherche();
+    const { a, l } = avecCommande(k);
+    const t = monterCas({ courses: [k], commandes: [a], livraisons: [l], livreurs: [enPause, ailleurs] });
+    await expect(t.changer(k.id, enPause.id)).rejects.toThrow(/en pause/i);
+    await expect(t.changer(k.id, ailleurs.id)).rejects.toThrow(MESSAGE_AUTRE_RESTAURANT_LIVREUR);
+  });
+
+  it('livreur d’un autre restaurant détecté près (renfort) : permis', async () => {
+    const ailleurs = awa({ restaurant_id: 'autre-resto' });
+    const k = enRecherche();
+    const { a, l } = avecCommande(k);
+    const t = monterCas({ courses: [k], commandes: [a], livraisons: [l], livreurs: [ailleurs] }, [ailleurs.id]);
+    await t.changer(k.id, ailleurs.id);
+    expect(k.deliverer_id).toBe(ailleurs.id);
+  });
+
+  it('message : notification quand l’appli n’est pas ouverte', () => {
+    expect(
+      messageChangementLivreur({ reference: 'CRS-1', prenom: 'Koffi', ancienPrenom: null, ancien: false, appliConnectee: false }),
+    ).toBe('CRS-1 confiée à Koffi. Koffi reçoit une notification.');
+  });
+
+  it('routes : kanban lu par le suivi des livraisons, déclaré avant `:id` ; gestes au siège', () => {
+    const roles = (m: keyof CourseAdminController) => Reflect.getMetadata(USER_ROLES_KEY, CourseAdminController.prototype[m]);
+    expect(roles('coursesEnDirect')).toEqual(['ADMIN', 'LIVRAISON_OPS', 'CALL_CENTER']);
+    expect(roles('livreursPourCourse')).toEqual(['ADMIN', 'CALL_CENTER']);
+    expect(roles('changerLivreur')).toEqual(['ADMIN', 'CALL_CENTER']);
+    const ordre = Object.getOwnPropertyNames(CourseAdminController.prototype);
+    expect(ordre.indexOf('coursesEnDirect')).toBeLessThan(ordre.indexOf('findOne'));
   });
 });

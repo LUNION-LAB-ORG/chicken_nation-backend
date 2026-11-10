@@ -35,6 +35,7 @@ import { AffectationCommandeService } from '../services/affectation-commande.ser
 import { DetachementCommandeService } from '../services/detachement-commande.service';
 import { RelanceLivraisonService } from '../services/relance-livraison.service';
 import { CoursesAnciennesService } from '../services/courses-anciennes.service';
+import { CoursesEnDirectService } from '../services/courses-en-direct.service';
 import {
   ROLES_ACTIONS_COURSES,
   ROLES_GESTES_COMMANDE_A_LIVRER,
@@ -102,6 +103,8 @@ export class CourseAdminController {
     private readonly livreurs?: DeliverersService,
     // « Les fermer » : courses restées ouvertes d'une journée passée (10/11).
     private readonly anciennes?: CoursesAnciennesService,
+    // Kanban « En direct » de l'écran Courses (10/11).
+    private readonly enDirect?: CoursesEnDirectService,
   ) {}
 
   @ApiOperation({
@@ -166,6 +169,56 @@ export class CourseAdminController {
     summary: "Détail d'une course (+ tentatives d'affectation)",
     description: 'Code client des livraisons (`delivery_pin`) pour l\'ADMIN seulement.',
   })
+  @ApiOperation({
+    summary: 'Courses « En direct » : le kanban de l’écran Courses',
+    description:
+      'Courses de la journée de service (depuis 5 h), une par carte, avec leur colonne : `A_AFFECTER` ' +
+      '(en recherche, ou aucun livreur trouvé avec une commande qui attend), `VERS_RESTAURANT`, `AU_RESTAURANT`, ' +
+      '`EN_LIVRAISON` (fin prévue et retard), `TERMINEE` (les 30 plus récentes ; `terminees_total` les compte). ' +
+      '`livreur_modifiable` : le livreur se change encore (avant le départ, sans Turbo). Tout le réseau, ou ' +
+      '`restaurantId`.',
+  })
+  @Get('en-direct')
+  @UserRoles(...ROLES_SUIVI_LIVRAISON)
+  async coursesEnDirect(@Query('restaurantId', new ParseUUIDPipe({ optional: true })) restaurantId?: string) {
+    return this.enDirect!.lire(restaurantId);
+  }
+
+  @ApiOperation({
+    summary: 'Livreurs proposés pour changer le livreur d’une course',
+    description:
+      'Mêmes livreurs que « Affecter à un livreur » : ceux du restaurant de la course, ceux d’ailleurs déjà en ' +
+      'course pour lui ou détectés près de lui (renfort). Nom, téléphone, états et `renfort` seulement.',
+  })
+  @Get(':id/livreurs')
+  @UserRoles(...ROLES_ACTIONS_COURSES)
+  async livreursPourCourse(@Param('id', new ParseUUIDPipe()) id: string) {
+    const course = await this.queryService.findRestaurantDeCourse(id);
+    const items = await this.livreurs!.livreursPourAffectation(course.restaurant_id);
+    return { items: items.map((l) => livreurPourAffectation(l as Record<string, unknown>)) };
+  }
+
+  @ApiOperation({
+    summary: 'Changer le livreur d’une course, d’office',
+    description:
+      'Avant le départ du restaurant (en recherche, aucun livreur trouvé, acceptée, au restaurant), jamais chez ' +
+      'Turbo. Le livreur choisi la reçoit tout de suite, acceptée, avec le même code de retrait ; l’ancien la ' +
+      'voit disparaître de son appli et retrouve sa place dans la file. 409 avec la raison : livreur déjà en ' +
+      'course, en pause, hors service, injoignable, d’un autre restaurant sans être en renfort, course partie, ' +
+      'terminée ou confiée à Turbo.',
+  })
+  @ApiBody({ type: AssignDelivererDto })
+  @Post(':id/livreur')
+  @HttpCode(HttpStatus.OK)
+  @UserRoles(...ROLES_ACTIONS_COURSES)
+  async changerLivreur(
+    @Req() req: Request,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: AssignDelivererDto,
+  ) {
+    return this.affectation!.changerLivreurCourse(id, dto.deliverer_id, req.user as User);
+  }
+
   @Get(':id')
   @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async findOne(@Req() req: Request, @Param('id', new ParseUUIDPipe()) id: string) {

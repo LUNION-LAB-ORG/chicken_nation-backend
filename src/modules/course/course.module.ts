@@ -44,6 +44,7 @@ import { LotsV2Service } from './services/lots-v2.service';
 import { OffreEnAttenteService } from './services/offre-en-attente.service';
 import { RelanceLivraisonService } from './services/relance-livraison.service';
 import { CoursesAnciennesService } from './services/courses-anciennes.service';
+import { CoursesEnDirectService } from './services/courses-en-direct.service';
 import { SacRapporteService } from './services/sac-rapporte.service';
 import { TableauLivraisonService } from './services/tableau-livraison.service';
 import { CourseBatchTask } from './tasks/course-batch.task';
@@ -92,6 +93,7 @@ import { CourseWebSocketService } from './websockets/course-websocket.service';
     AffectationCommandeService, // « Affecter à un livreur » : le siège donne une commande prête à un livreur précis, même en course (06/11)
     RelanceLivraisonService, // « Relancer la livraison » : la livraison annulée revient au même livreur (28/10)
     CoursesAnciennesService, // « Les fermer » : courses restées ouvertes d'une journée passée, par l'administrateur (10/11)
+    CoursesEnDirectService, // Kanban « En direct » de l'écran Courses (10/11)
     // Diffusion du statut d'une commande (« Sac rapporté »), même service que le module commande
     // (sans état : il n'utilise que la passerelle) ; le module commande importe celui-ci.
     OrderWebSocketService,
