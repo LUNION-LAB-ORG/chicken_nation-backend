@@ -926,6 +926,8 @@ export class DeliverersService {
         id: true,
         first_name: true,
         last_name: true,
+        // Pour l'appeler hors de l'appli (fiche rapide du livreur, 10/11).
+        phone: true,
         image: true,
         type_vehicule: true,
         restaurant_id: true,
@@ -1047,6 +1049,7 @@ export class DeliverersService {
           id: d.id,
           first_name: d.first_name,
           last_name: d.last_name,
+          phone: d.phone,
           image: d.image,
           type_vehicule: d.type_vehicule,
           restaurant: d.restaurant,

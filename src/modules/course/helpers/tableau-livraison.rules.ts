@@ -128,7 +128,12 @@ export interface SignalLivraison {
 export interface LivreurDuTableau {
   id: string;
   prenom: string | null;
+  /** Nom et téléphone : liste dépliée du bandeau, fiche rapide pour l'appeler hors de l'appli (10/11). */
+  nom: string | null;
+  telephone: string | null;
   etat: EtatAffichageLivreur;
+  /** « En pause jusqu'à 14 h 32 », « Pause automatique jusqu'à 22 h 10 »… ; null sans détail. */
+  libelle: string | null;
   /** Place dans la file de CE restaurant (rang-file.rules.ts). */
   rang_file: number | null;
   course: { reference: string; statut: CourseStatut } | null;
@@ -194,8 +199,10 @@ export interface ReglagesTableau {
 export interface LivreurLu {
   id: string;
   first_name: string | null;
+  last_name?: string | null;
+  phone?: string | null;
   restaurant: { id: string } | null;
-  disponibilite: { etat: EtatAffichageLivreur };
+  disponibilite: { etat: EtatAffichageLivreur; libelle?: string | null };
   rang_file: number | null;
   appli_active: boolean | null;
   appli_vue_a: string | null;
@@ -609,7 +616,10 @@ function listeDuRestaurant(livreurs: LivreurLu[]): LivreurDuTableau[] {
     .map((l) => ({
       id: l.id,
       prenom: l.first_name,
+      nom: l.last_name ?? null,
+      telephone: l.phone ?? null,
       etat: l.disponibilite.etat,
+      libelle: l.disponibilite.libelle ?? null,
       rang_file: l.rang_file,
       course: l.active_course ? { reference: l.active_course.reference, statut: l.active_course.statut } : null,
     }))

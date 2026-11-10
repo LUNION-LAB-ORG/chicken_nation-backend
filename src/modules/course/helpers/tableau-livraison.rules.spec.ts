@@ -216,19 +216,41 @@ describe('restaurants : chiffres et liste', () => {
         livreur({ id: 'zoe', first_name: 'Zoé', restaurant: { id: MARCORY.id }, rang_file: 1 }),
       ],
     });
+    const sans = { nom: null, telephone: null, libelle: null };
     expect(angre(t).liste).toEqual([
-      { id: 'ines', prenom: 'Inès', etat: 'DISPONIBLE', rang_file: 1, course: null },
-      { id: 'moussa', prenom: 'Moussa', etat: 'DISPONIBLE', rang_file: 2, course: null },
+      { id: 'ines', prenom: 'Inès', ...sans, etat: 'DISPONIBLE', rang_file: 1, course: null },
+      { id: 'moussa', prenom: 'Moussa', ...sans, etat: 'DISPONIBLE', rang_file: 2, course: null },
       {
         id: 'awa',
         prenom: 'Awa',
+        ...sans,
         etat: 'EN_COURSE',
         rang_file: null,
         course: { reference: 'CRS-241024-0040', statut: CourseStatut.IN_DELIVERY },
       },
-      { id: 'yao', prenom: 'Yao', etat: 'HORS_SERVICE', rang_file: null, course: null },
+      { id: 'yao', prenom: 'Yao', ...sans, etat: 'HORS_SERVICE', rang_file: null, course: null },
     ]);
     expect(marcory(t).liste.map((l) => l.id)).toEqual(['zoe']);
+  });
+
+  it('liste dépliée du bandeau (10/11) : nom, téléphone et détail de l’état', () => {
+    const t = tableau({
+      livreurs: [
+        livreur({
+          id: 'koffi',
+          first_name: 'Koffi',
+          last_name: 'Kouassi',
+          phone: '+2250700000000',
+          disponibilite: { etat: 'EN_PAUSE', libelle: "En pause jusqu'à 14 h 32" },
+        }),
+      ],
+    });
+    expect(angre(t).liste[0]).toMatchObject({
+      nom: 'Kouassi',
+      telephone: '+2250700000000',
+      etat: 'EN_PAUSE',
+      libelle: "En pause jusqu'à 14 h 32",
+    });
   });
 
   it('livrées du jour et durée moyenne de la commande prête à la livraison', () => {
