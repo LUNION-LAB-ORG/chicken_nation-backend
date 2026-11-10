@@ -7,30 +7,33 @@ import { CourseTourneeLue, finTourneePrevue, retardMin } from './retard-tournee.
  * COURSES « EN DIRECT » (demande du 10/11) : le kanban de l'écran Courses.
  * Règles pures ; lectures dans `CoursesEnDirectService`.
  *
- * Cinq colonnes, une carte par course de la journée de service :
- *  - À affecter : en recherche (sans livreur), ou « Aucun livreur trouvé »
- *    avec encore une commande à livrer ;
- *  - Vers le restaurant : acceptée ;
- *  - Au restaurant ;
+ * Quatre colonnes (retour de l'utilisateur du 10/11 : sans les terminées,
+ * trois étapes, Turbo à part), une carte par course en cours de la journée :
+ *  - À affecter : en recherche sans livreur, ou « Aucun livreur trouvé » avec
+ *    encore une commande à livrer ;
+ *  - Livreur affecté : il vient au restaurant ou y attend les sacs (`etape`) ;
  *  - En livraison : retard compté par la règle commune (`retardMin`) ;
- *  - Terminées : terminées dans la journée, les plus récentes d'abord.
+ *  - Turbo : toutes les courses confiées à Turbo, avec leur étape. Rien à y
+ *    affecter : c'est Turbo qui cherche son livreur.
  *
- * Les courses restées ouvertes d'une journée passée n'y sont pas : elles sont
- * comptées à part au tableau de la livraison (« Les fermer »).
+ * Les terminées sont dans l'historique ; les courses restées ouvertes d'une
+ * journée passée, au tableau de la livraison (« Les fermer »).
  */
 
-export type ColonneEnDirect = 'A_AFFECTER' | 'VERS_RESTAURANT' | 'AU_RESTAURANT' | 'EN_LIVRAISON' | 'TERMINEE';
+export type ColonneEnDirect = 'A_AFFECTER' | 'LIVREUR_AFFECTE' | 'EN_LIVRAISON' | 'TURBO';
 
-export const COLONNES_EN_DIRECT: readonly ColonneEnDirect[] = [
-  'A_AFFECTER',
-  'VERS_RESTAURANT',
+export const COLONNES_EN_DIRECT: readonly ColonneEnDirect[] = ['A_AFFECTER', 'LIVREUR_AFFECTE', 'EN_LIVRAISON', 'TURBO'];
+
+/** Où en est la course, quelle que soit sa colonne. */
+export type EtapeEnDirect = 'RECHERCHE' | 'AUCUN_LIVREUR' | 'VERS_RESTAURANT' | 'AU_RESTAURANT' | 'EN_LIVRAISON';
+
+const ORDRE_ETAPES: readonly EtapeEnDirect[] = [
+  'AUCUN_LIVREUR',
+  'RECHERCHE',
   'AU_RESTAURANT',
+  'VERS_RESTAURANT',
   'EN_LIVRAISON',
-  'TERMINEE',
 ];
-
-/** Terminées montrées au plus : le reste est dans l'historique. */
-export const TERMINEES_MONTREES_MAX = 30;
 
 type DateLue = Date | string | null | undefined;
 
@@ -46,7 +49,6 @@ export interface CourseEnDirectLue extends CourseTourneeLue {
   created_at: DateLue;
   assigned_at: DateLue;
   at_restaurant_at: DateLue;
-  completed_at: DateLue;
   total_delivery_fee: number | null;
   deliveries: Array<{
     statut: DeliveryStatut;
@@ -63,6 +65,7 @@ export interface CourseEnDirect {
   code: string | null;
   statut: CourseStatut;
   colonne: ColonneEnDirect;
+  etape: EtapeEnDirect;
   restaurant: { id: string; nom: string | null };
   livreur: { id: string; prenom: string | null; nom: string | null; telephone: string | null } | null;
   /** Confiée à Turbo : le livreur ne se change pas ici. */
@@ -72,7 +75,7 @@ export interface CourseEnDirect {
   /** Offre en attente chez ce livreur (prénom), recherche en cours. */
   proposee_a: string | null;
   commandes: { total: number; livrees: number; references: string[] };
-  /** Début de l'étape de la colonne (ISO) : création, acceptation, arrivée, départ, fin. */
+  /** Début de l'étape (ISO) : création, acceptation, arrivée au restaurant, départ. */
   depuis: string | null;
   /** En livraison : fin prévue de la tournée (ISO) et retard au-delà, en minutes. */
   fin_prevue: string | null;
@@ -85,8 +88,6 @@ export interface CourseEnDirect {
 export interface CoursesEnDirect {
   genere_a: string;
   courses: CourseEnDirect[];
-  /** Terminées de la journée en tout (seules les plus récentes sont dans `courses`). */
-  terminees_total: number;
 }
 
 const lireDate = (v: DateLue): Date | null => {
@@ -111,22 +112,31 @@ export const STATUTS_LIVREUR_MODIFIABLE: CourseStatut[] = [
   CourseStatut.AT_RESTAURANT,
 ];
 
-export function colonneDe(statut: CourseStatut): ColonneEnDirect | null {
+export function etapeDe(statut: CourseStatut): EtapeEnDirect | null {
   switch (statut) {
     case CourseStatut.PENDING_ASSIGNMENT:
+      return 'RECHERCHE';
     case CourseStatut.EXPIRED:
-      return 'A_AFFECTER';
+      return 'AUCUN_LIVREUR';
     case CourseStatut.ACCEPTED:
       return 'VERS_RESTAURANT';
     case CourseStatut.AT_RESTAURANT:
       return 'AU_RESTAURANT';
     case CourseStatut.IN_DELIVERY:
       return 'EN_LIVRAISON';
-    case CourseStatut.COMPLETED:
-      return 'TERMINEE';
     default:
       return null;
   }
+}
+
+/** Colonne d'une course en cours ; null : terminée ou annulée (pas au kanban). */
+export function colonneDe(statut: CourseStatut, turbo = false): ColonneEnDirect | null {
+  const etape = etapeDe(statut);
+  if (!etape) return null;
+  if (turbo) return 'TURBO';
+  if (etape === 'RECHERCHE' || etape === 'AUCUN_LIVREUR') return 'A_AFFECTER';
+  if (etape === 'EN_LIVRAISON') return 'EN_LIVRAISON';
+  return 'LIVREUR_AFFECTE';
 }
 
 /** Une commande attend encore sa livraison (ni livrée, ni annulée, ni supprimée). */
@@ -139,10 +149,8 @@ export function aUneCommandeVivante(c: Pick<CourseEnDirectLue, 'deliveries'>): b
   );
 }
 
-function depuisDeLaColonne(c: CourseEnDirectLue, colonne: ColonneEnDirect): string | null {
-  switch (colonne) {
-    case 'A_AFFECTER':
-      return iso(c.created_at);
+function depuisDeLEtape(c: CourseEnDirectLue, etape: EtapeEnDirect): string | null {
+  switch (etape) {
     case 'VERS_RESTAURANT':
       return iso(c.assigned_at) ?? iso(c.created_at);
     case 'AU_RESTAURANT':
@@ -150,15 +158,16 @@ function depuisDeLaColonne(c: CourseEnDirectLue, colonne: ColonneEnDirect): stri
     case 'EN_LIVRAISON':
       return iso(c.parti_at) ?? iso(c.picked_up_at);
     default:
-      return iso(c.completed_at);
+      return iso(c.created_at);
   }
 }
 
 export function carteEnDirect(c: CourseEnDirectLue, maintenant: Date, facteurRetard: number): CourseEnDirect | null {
-  const colonne = colonneDe(c.statut);
-  if (!colonne) return null;
   const turbo = !!lireDate(c.turbo_escalated_at);
-  const enLivraison = colonne === 'EN_LIVRAISON';
+  const etape = etapeDe(c.statut);
+  const colonne = colonneDe(c.statut, turbo);
+  if (!etape || !colonne) return null;
+  const enLivraison = etape === 'EN_LIVRAISON';
   const proposee = c.statut === CourseStatut.PENDING_ASSIGNMENT ? c.offer_attempts?.[0]?.deliverer?.first_name ?? null : null;
   return {
     id: c.id,
@@ -166,6 +175,7 @@ export function carteEnDirect(c: CourseEnDirectLue, maintenant: Date, facteurRet
     code: c.pickup_code,
     statut: c.statut,
     colonne,
+    etape,
     restaurant: { id: c.restaurant.id, nom: c.restaurant.name },
     livreur: c.deliverer
       ? { id: c.deliverer.id, prenom: c.deliverer.first_name, nom: c.deliverer.last_name, telephone: c.deliverer.phone }
@@ -178,7 +188,7 @@ export function carteEnDirect(c: CourseEnDirectLue, maintenant: Date, facteurRet
       livrees: c.deliveries.filter((l) => l.statut === DeliveryStatut.DELIVERED).length,
       references: c.deliveries.map((l) => l.order.reference),
     },
-    depuis: depuisDeLaColonne(c, colonne),
+    depuis: depuisDeLEtape(c, etape),
     fin_prevue: enLivraison ? iso(finTourneePrevue(c)) : null,
     retard_min: enLivraison ? retardMin(c, maintenant, facteurRetard) : null,
     frais: c.total_delivery_fee ?? 0,
@@ -189,18 +199,19 @@ export function carteEnDirect(c: CourseEnDirectLue, maintenant: Date, facteurRet
 const temps = (v: string | null) => (v ? Date.parse(v) : Number.POSITIVE_INFINITY);
 
 /**
- * Ordre dans chaque colonne : en livraison, le plus en retard d'abord ;
- * terminées, la plus récente d'abord ; ailleurs, la plus ancienne d'abord
- * (celle qui attend depuis le plus longtemps).
+ * Ordre dans chaque colonne : par étape (aucun livreur trouvé d'abord, au
+ * restaurant avant en route) ; en livraison, le plus en retard d'abord ;
+ * sinon la plus ancienne d'abord (celle qui attend depuis le plus longtemps).
  */
 export function comparerCartes(a: CourseEnDirect, b: CourseEnDirect): number {
   const rang = COLONNES_EN_DIRECT.indexOf(a.colonne) - COLONNES_EN_DIRECT.indexOf(b.colonne);
   if (rang !== 0) return rang;
-  if (a.colonne === 'EN_LIVRAISON') {
+  const etape = ORDRE_ETAPES.indexOf(a.etape) - ORDRE_ETAPES.indexOf(b.etape);
+  if (etape !== 0) return etape;
+  if (a.etape === 'EN_LIVRAISON') {
     const retard = (b.retard_min ?? -1) - (a.retard_min ?? -1);
     if (retard !== 0) return retard;
   }
-  if (a.colonne === 'TERMINEE') return temps(b.depuis) - temps(a.depuis) || a.reference.localeCompare(b.reference);
   return temps(a.depuis) - temps(b.depuis) || a.reference.localeCompare(b.reference);
 }
 
@@ -208,12 +219,11 @@ export function construireCoursesEnDirect(e: {
   maintenant: Date;
   facteurRetard: number;
   courses: CourseEnDirectLue[];
-  termineesTotal: number;
 }): CoursesEnDirect {
   const cartes = e.courses
     .filter((c) => c.statut !== CourseStatut.EXPIRED || aUneCommandeVivante(c))
     .map((c) => carteEnDirect(c, e.maintenant, e.facteurRetard))
     .filter((c): c is CourseEnDirect => c !== null)
     .sort(comparerCartes);
-  return { genere_a: e.maintenant.toISOString(), courses: cartes, terminees_total: e.termineesTotal };
+  return { genere_a: e.maintenant.toISOString(), courses: cartes };
 }

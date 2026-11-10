@@ -172,11 +172,11 @@ export class CourseAdminController {
   @ApiOperation({
     summary: 'Courses « En direct » : le kanban de l’écran Courses',
     description:
-      'Courses de la journée de service (depuis 5 h), une par carte, avec leur colonne : `A_AFFECTER` ' +
-      '(en recherche, ou aucun livreur trouvé avec une commande qui attend), `VERS_RESTAURANT`, `AU_RESTAURANT`, ' +
-      '`EN_LIVRAISON` (fin prévue et retard), `TERMINEE` (les 30 plus récentes ; `terminees_total` les compte). ' +
-      '`livreur_modifiable` : le livreur se change encore (avant le départ, sans Turbo). Tout le réseau, ou ' +
-      '`restaurantId`.',
+      'Courses en cours de la journée de service (depuis 5 h), une par carte, avec leur colonne : `A_AFFECTER` ' +
+      '(en recherche, ou aucun livreur trouvé avec une commande qui attend), `LIVREUR_AFFECTE` (vers le restaurant ' +
+      'ou au restaurant, voir `etape`), `EN_LIVRAISON` (fin prévue et retard), `TURBO` (toutes les courses ' +
+      'confiées à Turbo, avec leur `etape`). `livreur_modifiable` : le livreur se change encore (avant le départ, ' +
+      'sans Turbo). Les terminées sont dans l’historique. Tout le réseau, ou `restaurantId`.',
   })
   @Get('en-direct')
   @UserRoles(...ROLES_SUIVI_LIVRAISON)

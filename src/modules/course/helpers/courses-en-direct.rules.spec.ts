@@ -9,6 +9,7 @@ import {
   carteEnDirect,
   colonneDe,
   construireCoursesEnDirect,
+  etapeDe,
 } from './courses-en-direct.rules';
 
 const M = new Date('2026-11-10T20:30:00.000Z');
@@ -28,7 +29,6 @@ function lue(p: Partial<CourseEnDirectLue> = {}): CourseEnDirectLue {
     created_at: ilYA(10),
     assigned_at: null,
     at_restaurant_at: null,
-    completed_at: null,
     picked_up_at: null,
     parti_at: null,
     motif_depart: null,
@@ -46,17 +46,25 @@ function lue(p: Partial<CourseEnDirectLue> = {}): CourseEnDirectLue {
 
 const KOFFI = { id: 'l-koffi', first_name: 'Koffi', last_name: 'K.', phone: '+2250700000000' };
 
-describe('colonnes', () => {
+describe('colonnes (retour du 10/11 : sans terminées, trois étapes, Turbo à part)', () => {
   it.each([
-    [CourseStatut.PENDING_ASSIGNMENT, 'A_AFFECTER'],
-    [CourseStatut.EXPIRED, 'A_AFFECTER'],
-    [CourseStatut.ACCEPTED, 'VERS_RESTAURANT'],
-    [CourseStatut.AT_RESTAURANT, 'AU_RESTAURANT'],
-    [CourseStatut.IN_DELIVERY, 'EN_LIVRAISON'],
-    [CourseStatut.COMPLETED, 'TERMINEE'],
-    [CourseStatut.CANCELLED, null],
-  ])('%s → %s', (statut, colonne) => {
+    [CourseStatut.PENDING_ASSIGNMENT, 'A_AFFECTER', 'RECHERCHE'],
+    [CourseStatut.EXPIRED, 'A_AFFECTER', 'AUCUN_LIVREUR'],
+    [CourseStatut.ACCEPTED, 'LIVREUR_AFFECTE', 'VERS_RESTAURANT'],
+    [CourseStatut.AT_RESTAURANT, 'LIVREUR_AFFECTE', 'AU_RESTAURANT'],
+    [CourseStatut.IN_DELIVERY, 'EN_LIVRAISON', 'EN_LIVRAISON'],
+    [CourseStatut.COMPLETED, null, null],
+    [CourseStatut.CANCELLED, null, null],
+  ])('%s → %s, étape %s', (statut, colonne, etape) => {
     expect(colonneDe(statut)).toBe(colonne);
+    expect(etapeDe(statut)).toBe(etape);
+  });
+
+  it('Turbo : sa colonne, quelle que soit l’étape ; terminée : jamais', () => {
+    for (const statut of [CourseStatut.PENDING_ASSIGNMENT, CourseStatut.ACCEPTED, CourseStatut.IN_DELIVERY]) {
+      expect(colonneDe(statut, true)).toBe('TURBO');
+    }
+    expect(colonneDe(CourseStatut.COMPLETED, true)).toBeNull();
   });
 });
 
@@ -96,8 +104,25 @@ describe('carte', () => {
     });
   });
 
-  it('confiée à Turbo : livreur pas modifiable ici', () => {
-    expect(carteEnDirect(lue({ turbo_escalated_at: ilYA(5) }), M, 1.5)).toMatchObject({ turbo: true, livreur_modifiable: false });
+  it('confiée à Turbo : colonne Turbo, étape gardée, livreur pas modifiable ici', () => {
+    expect(carteEnDirect(lue({ turbo_escalated_at: ilYA(5) }), M, 1.5)).toMatchObject({
+      colonne: 'TURBO',
+      etape: 'RECHERCHE',
+      turbo: true,
+      livreur_modifiable: false,
+    });
+  });
+
+  it('livreur affecté : au restaurant depuis son arrivée, en route depuis son acceptation', () => {
+    const auResto = lue({ statut: CourseStatut.AT_RESTAURANT, deliverer: KOFFI, assigned_at: ilYA(20), at_restaurant_at: ilYA(8) });
+    expect(carteEnDirect(auResto, M, 1.5)).toMatchObject({
+      colonne: 'LIVREUR_AFFECTE',
+      etape: 'AU_RESTAURANT',
+      depuis: ilYA(8).toISOString(),
+      livreur_modifiable: true,
+    });
+    const enRoute = lue({ statut: CourseStatut.ACCEPTED, deliverer: KOFFI, assigned_at: ilYA(5) });
+    expect(carteEnDirect(enRoute, M, 1.5)).toMatchObject({ etape: 'VERS_RESTAURANT', depuis: ilYA(5).toISOString() });
   });
 });
 
@@ -111,44 +136,47 @@ describe('tableau', () => {
     const r = construireCoursesEnDirect({
       maintenant: M,
       facteurRetard: 1.5,
-      courses: [vide, attend, lue({ statut: CourseStatut.CANCELLED })],
-      termineesTotal: 0,
+      courses: [vide, attend, lue({ statut: CourseStatut.CANCELLED }), lue({ statut: CourseStatut.COMPLETED })],
     });
     expect(r.courses.map((c) => c.id)).toEqual([attend.id]);
     expect(r.courses[0].expiree).toBe(true);
   });
 
-  it('ordre : par colonne ; la plus ancienne d’abord, en livraison la plus en retard, terminées la plus récente', () => {
+  it('ordre : par colonne et étape ; la plus ancienne d’abord, en livraison la plus en retard', () => {
     const recente = lue({ created_at: ilYA(2) });
     const ancienne = lue({ created_at: ilYA(40) });
+    const aucun = lue({ statut: CourseStatut.EXPIRED, created_at: ilYA(1) });
+    const enRoute = lue({ statut: CourseStatut.ACCEPTED, deliverer: KOFFI, assigned_at: ilYA(30) });
+    const auResto = lue({ statut: CourseStatut.AT_RESTAURANT, deliverer: KOFFI, at_restaurant_at: ilYA(3) });
     const enRetard = lue({
       statut: CourseStatut.IN_DELIVERY, deliverer: KOFFI, picked_up_at: ilYA(90), parti_at: ilYA(90), estimated_duration_min: 30,
     });
     const aLHeure = lue({ statut: CourseStatut.IN_DELIVERY, deliverer: KOFFI, picked_up_at: ilYA(5), parti_at: ilYA(5), estimated_duration_min: 30 });
-    const finieTot = lue({ statut: CourseStatut.COMPLETED, completed_at: ilYA(50) });
-    const finieTard = lue({ statut: CourseStatut.COMPLETED, completed_at: ilYA(1) });
+    const turbo = lue({ turbo_escalated_at: ilYA(4) });
     const r = construireCoursesEnDirect({
       maintenant: M,
       facteurRetard: 1.5,
-      courses: [finieTot, aLHeure, recente, enRetard, finieTard, ancienne],
-      termineesTotal: 33,
+      courses: [turbo, aLHeure, recente, enRoute, enRetard, auResto, aucun, ancienne],
     });
-    expect(r.courses.map((c) => c.id)).toEqual([ancienne.id, recente.id, enRetard.id, aLHeure.id, finieTard.id, finieTot.id]);
-    expect(r.terminees_total).toBe(33);
+    expect(r.courses.map((c) => c.id)).toEqual([
+      aucun.id,
+      ancienne.id,
+      recente.id,
+      auResto.id,
+      enRoute.id,
+      enRetard.id,
+      aLHeure.id,
+      turbo.id,
+    ]);
   });
 });
 
 describe('lecture (CoursesEnDirectService)', () => {
-  it('journée de service seulement : en cours depuis 5 h, terminées du jour (30 au plus), comptées', async () => {
+  it('journée de service seulement : en cours depuis 5 h, jamais les terminées', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { CoursesEnDirectService } = require('../services/courses-en-direct.service');
     const lectures: any[] = [];
-    const prisma = {
-      course: {
-        findMany: jest.fn(async (a: any) => (lectures.push(a), [])),
-        count: jest.fn(async () => 33),
-      },
-    };
+    const prisma = { course: { findMany: jest.fn(async (a: any) => (lectures.push(a), [])) } };
     const service = new CoursesEnDirectService(prisma as never, { load: jest.fn(async () => ({ delayAlertFactor: 1.5 })) } as never);
     const r = await service.lire('r-zone4', M);
     const debut = new Date('2026-11-10T05:00:00.000Z');
@@ -156,11 +184,8 @@ describe('lecture (CoursesEnDirectService)', () => {
     expect(lectures[0].where.statut.in).toEqual(
       expect.arrayContaining([CourseStatut.PENDING_ASSIGNMENT, CourseStatut.IN_DELIVERY, CourseStatut.EXPIRED]),
     );
-    expect(lectures[1]).toMatchObject({
-      where: { statut: CourseStatut.COMPLETED, completed_at: { gte: debut } },
-      orderBy: { completed_at: 'desc' },
-      take: 30,
-    });
-    expect(r).toMatchObject({ courses: [], terminees_total: 33 });
+    expect(lectures[0].where.statut.in).not.toContain(CourseStatut.COMPLETED);
+    expect(lectures).toHaveLength(1);
+    expect(r).toMatchObject({ courses: [] });
   });
 });
