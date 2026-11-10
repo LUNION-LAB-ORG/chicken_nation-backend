@@ -547,6 +547,23 @@ export function messagePauseAuto(autoPauseUntil: Date, maintenant: Date): string
   return `Pause automatique${jusqua(autoPauseUntil, maintenant)}.`;
 }
 
+/** Ce que devient le livreur après « Débloquer » (10/11). */
+export type IssueDeblocage = 'DISPONIBLE' | 'EN_PAUSE' | 'EN_COURSE' | 'PAS_EN_PAUSE_AUTO';
+
+/** Texte rendu au siège après « Débloquer ». */
+export function messageDeblocage(prenom: string, issue: IssueDeblocage): string {
+  switch (issue) {
+    case 'DISPONIBLE':
+      return `Pause automatique levée : ${prenom} reçoit de nouveau des courses.`;
+    case 'EN_COURSE':
+      return `Pause automatique levée : ${prenom} recevra des courses après sa course.`;
+    case 'EN_PAUSE':
+      return `Pause automatique levée. ${prenom} reste en pause jusqu'à « Reprendre » dans son appli.`;
+    default:
+      return `${prenom} n'est pas en pause automatique.`;
+  }
+}
+
 // ============================================================
 // AFFICHAGE AU BACKOFFICE (liste des livreurs, carte, affectation forcée)
 // ============================================================

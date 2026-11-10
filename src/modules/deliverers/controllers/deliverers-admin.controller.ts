@@ -1,6 +1,7 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
+import { User, UserRole } from '@prisma/client';
+import type { Request } from 'express';
 
 import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
@@ -11,8 +12,9 @@ import { QueryDeliverersDto } from '../dto/query-deliverers.dto';
 import { RejectDelivererDto, SuspendDelivererDto } from '../dto/reject-deliverer.dto';
 import { ValidateDelivererDto } from '../dto/validate-deliverer.dto';
 import { DelivererInfoService } from '../services/deliverer-info.service';
+import { DisponibiliteLivreurService } from '../services/disponibilite-livreur.service';
 import { DeliverersService } from '../services/deliverers.service';
-import { ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
+import { ROLES_ACTIONS_COURSES, ROLES_SUIVI_LIVRAISON } from 'src/modules/auth/constantes/roles-suivi-livraison';
 
 /**
  * Endpoints réservés aux utilisateurs backoffice (admin / manager).
@@ -28,6 +30,8 @@ export class DeliverersAdminController {
   constructor(
     private readonly deliverersService: DeliverersService,
     private readonly delivererInfoService: DelivererInfoService,
+    // « Débloquer » : pause automatique levée par le siège (10/11).
+    private readonly disponibilite?: DisponibiliteLivreurService,
   ) {}
 
   @ApiOperation({
@@ -93,6 +97,20 @@ export class DeliverersAdminController {
   @UserRoles(...ROLES_SUIVI_LIVRAISON)
   async getScoringInfo(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.delivererInfoService.getScoringInfo(id);
+  }
+
+  @ApiOperation({
+    summary: 'Débloquer : lever la pause automatique d’un livreur (siège)',
+    description:
+      'Pause automatique après des refus répétés : levée avant son heure, refus récents et pénalité de file ' +
+      'effacés. Ni en pause manuelle ni en course, le livreur rentre dans la file et reçoit de nouveau des ' +
+      'courses sans rien faire sur son téléphone. Sans pause automatique : rien ne change (`debloque: false`). ' +
+      'Administrateur et centre d’appels. Réponse : `{ debloque, disponible, message }`.',
+  })
+  @Patch(':id/debloquer')
+  @UserRoles(...ROLES_ACTIONS_COURSES)
+  async debloquer(@Req() req: Request, @Param('id', new ParseUUIDPipe()) id: string) {
+    return this.disponibilite!.debloquer(id, req.user as User);
   }
 
   @ApiOperation({

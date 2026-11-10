@@ -23,6 +23,8 @@ export type TypeEvenementDispatch =
   | 'PAUSE'
   | 'REPRISE'
   | 'REPRISE_REFUSEE_PAUSE_AUTO'
+  /** Pause automatique levée par le siège (« Débloquer », 10/11) ; `details.par`. */
+  | 'PAUSE_AUTO_LEVEE'
   /** Entrée dans la file (« Reprendre », ou ouverture de l'ancienne appli). */
   | 'DISPONIBLE'
   /** `/available` pendant une pause : rien ne change (ancienne appli). */

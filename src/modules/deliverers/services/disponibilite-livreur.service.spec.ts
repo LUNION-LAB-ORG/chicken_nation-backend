@@ -608,3 +608,99 @@ describe('clôture des offres', () => {
     expect(o.status).toBe(CourseOfferStatus.CANCELLED);
   });
 });
+
+/**
+ * « Débloquer » (demande du 10/11) : le siège lève la pause automatique d'un
+ * livreur (refus répétés) avant son heure ; le livreur ne touche à rien.
+ */
+describe('PATCH /deliverers/:id/debloquer', () => {
+  const SIEGE = { id: 'u-admin', role: 'ADMIN' };
+  const bloque = (s: Record<string, unknown> = {}) =>
+    livreur({
+      first_name: 'Koffi',
+      auto_pause_until: apres(25),
+      last_available_at: null,
+      recent_refusals: [avant(3).toISOString(), avant(2).toISOString(), avant(1).toISOString()],
+      queue_penalty_positions: 6,
+      queue_penalty_until: apres(10),
+      ...s,
+    });
+
+  it('libre : pause levée, refus et pénalité effacés, de retour dans la file, son appli relit son état', async () => {
+    const l = bloque();
+    const t = monter({ livreurs: [l] });
+
+    const r = await t.disponibilite.debloquer(l.id, SIEGE, MAINTENANT);
+
+    expect(r).toEqual({
+      debloque: true,
+      disponible: true,
+      message: 'Pause automatique levée : Koffi reçoit de nouveau des courses.',
+    });
+    expect(l).toMatchObject({
+      auto_pause_until: null,
+      recent_refusals: [],
+      queue_penalty_positions: 0,
+      queue_penalty_until: null,
+      last_available_at: MAINTENANT,
+    });
+    expect(t.types()).toEqual(['PAUSE_AUTO_LEVEE', 'DISPONIBLE']);
+    expect(t.journal.every((e) => e.source === 'admin')).toBe(true);
+    expect(t.journal[0].details).toMatchObject({ par: { id: 'u-admin', role: 'ADMIN' } });
+    expect(t.delivererEvent.queueChanged).toHaveBeenCalledWith(l.id, l.restaurant_id);
+  });
+
+  it('aussi en pause manuelle : pause automatique levée, il reste en pause jusqu’à « Reprendre »', async () => {
+    const l = bloque({ pause_until: apres(60) });
+    const t = monter({ livreurs: [l] });
+
+    const r = await t.disponibilite.debloquer(l.id, SIEGE, MAINTENANT);
+
+    expect(r).toMatchObject({ debloque: true, disponible: false });
+    expect(r.message).toBe('Pause automatique levée. Koffi reste en pause jusqu’à « Reprendre » dans son appli.'.replace('’', "'"));
+    expect(l).toMatchObject({ auto_pause_until: null, last_available_at: null, pause_until: apres(60) });
+    expect(t.types()).toEqual(['PAUSE_AUTO_LEVEE']);
+  });
+
+  it('en course : pause levée, pas remis dans la file pendant la course', async () => {
+    const l = bloque();
+    const c = course({ deliverer_id: l.id, statut: CourseStatut.IN_DELIVERY });
+    const t = monter({ livreurs: [l], courses: [c] });
+
+    const r = await t.disponibilite.debloquer(l.id, SIEGE, MAINTENANT);
+
+    expect(r).toEqual({
+      debloque: true,
+      disponible: false,
+      message: 'Pause automatique levée : Koffi recevra des courses après sa course.',
+    });
+    expect(l.last_available_at).toBeNull();
+  });
+
+  it('pas (ou plus) en pause automatique : rien ne change, rien n’est journalisé', async () => {
+    const l = bloque({ auto_pause_until: avant(1), recent_refusals: ['x'] });
+    const t = monter({ livreurs: [l] });
+
+    expect(await t.disponibilite.debloquer(l.id, SIEGE, MAINTENANT)).toEqual({
+      debloque: false,
+      disponible: false,
+      message: "Koffi n'est pas en pause automatique.",
+    });
+    expect(l.recent_refusals).toEqual(['x']);
+    expect(t.journal).toHaveLength(0);
+  });
+
+  it('livreur inconnu : 404', async () => {
+    const t = monter({ livreurs: [] });
+    await expect(t.disponibilite.debloquer('inconnu', SIEGE, MAINTENANT)).rejects.toThrow('Livreur non trouvé');
+  });
+
+  it('route du siège : administrateur et centre d’appels', () => {
+    const { USER_ROLES_KEY } = jest.requireActual('src/modules/auth/decorators/user-roles.decorator');
+    const { DeliverersAdminController } = jest.requireActual('../controllers/deliverers-admin.controller');
+    expect(Reflect.getMetadata(USER_ROLES_KEY, DeliverersAdminController.prototype.debloquer)).toEqual([
+      'ADMIN',
+      'CALL_CENTER',
+    ]);
+  });
+});

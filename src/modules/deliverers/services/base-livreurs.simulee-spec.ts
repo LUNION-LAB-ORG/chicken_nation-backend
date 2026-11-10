@@ -15,10 +15,11 @@
  * Fichier de test seulement. Son nom finit par « -spec.ts » : exclu de la
  * construction sans être lancé comme une suite par jest.
  */
-import { CourseStatut, DelivererStatus, EntityStatus } from '@prisma/client';
+import { CourseOfferStatus, CourseStatut, DelivererStatus, EntityStatus } from '@prisma/client';
 
 import { DispatchJournalService } from 'src/modules/course/services/dispatch-journal.service';
 
+import { STATUTS_COURSE_EN_COURS } from '../helpers/disponibilite.rules';
 import { AppliLivreurService } from './appli-livreur.service';
 
 type Ligne = Record<string, any>;
@@ -182,6 +183,11 @@ export function monterBase(donnees: { livreurs?: Ligne[]; courses?: Ligne[]; off
     ...d,
     courses: courses.filter((c) => c.deliverer_id === d.id),
     offer_attempts: offres.filter((o) => o.deliverer_id === d.id),
+    // `_count` des lectures d'état : courses en cours, offres en attente.
+    _count: {
+      courses: courses.filter((c) => c.deliverer_id === d.id && STATUTS_COURSE_EN_COURS.includes(c.statut)).length,
+      offer_attempts: offres.filter((o) => o.deliverer_id === d.id && o.status === CourseOfferStatus.PENDING).length,
+    },
   });
   const vueOffre = (o: Ligne): Ligne => ({
     ...o,

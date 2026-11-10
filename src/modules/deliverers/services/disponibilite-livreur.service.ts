@@ -1,5 +1,6 @@
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { EntityStatus } from '@prisma/client';
 import type { Cache } from 'cache-manager';
 
 import { PrismaService } from 'src/database/services/prisma.service';
@@ -16,8 +17,10 @@ import { DelivererEvent } from '../events/deliverer.event';
 import { DelivererScoringSettingsHelper } from '../helpers/deliverer-scoring-settings.helper';
 import {
   FIN_PAUSE_INDEFINIE,
+  STATUTS_COURSE_EN_COURS,
   estEnPause,
   estEnPauseAuto,
+  messageDeblocage,
   messagePauseAuto,
 } from '../helpers/disponibilite.rules';
 import { AppliLivreurService } from './appli-livreur.service';
@@ -36,6 +39,15 @@ export const DUREE_PLACE_GARDEE_MS = 30 * 60_000;
 const clePlaceGardee = (delivererId: string) => `livreur:place-file:${delivererId}`;
 
 /** Réponse de `POST /deliverers/me/available`. */
+/** Réponse de « Débloquer » (`PATCH /deliverers/:id/debloquer`). */
+export interface ReponseDeblocage {
+  /** La pause automatique a été levée par ce geste. */
+  debloque: boolean;
+  /** Il est dans la file : il reçoit de nouveau des courses. */
+  disponible: boolean;
+  message: string;
+}
+
 export interface ReponseDisponible {
   id: string;
   restaurant_id: string | null;
@@ -248,6 +260,96 @@ export class DisponibiliteLivreurService {
       return { ...livreur, last_available_at: entreeA, en_pause: false };
     }
     return { ...livreur, en_pause: false };
+  }
+
+  /**
+   * « Débloquer » (demande du 10/11), par le siège (administrateur, centre
+   * d'appels) : lève la pause automatique d'un livreur (refus répétés) avant
+   * son heure. Ses refus récents et sa pénalité de file sont effacés : sinon
+   * le refus suivant le remettrait aussitôt en pause. Ni en pause manuelle ni
+   * en course, il rentre dans la file (sa place d'avant s'il en avait une,
+   * sinon maintenant) et reçoit de nouveau des courses SANS rien toucher sur
+   * son téléphone : son appli relit son état au changement de la file.
+   *
+   * Sans pause automatique en cours : rien ne change, réponse 200 avec
+   * `debloque: false` (un double clic ne fait rien de plus).
+   */
+  async debloquer(
+    delivererId: string,
+    compte: { id?: string | null; role?: string | null } | undefined,
+    maintenant = new Date(),
+  ): Promise<ReponseDeblocage> {
+    const livreur = await this.prisma.deliverer.findUnique({
+      where: { id: delivererId },
+      select: {
+        id: true,
+        first_name: true,
+        restaurant_id: true,
+        entity_status: true,
+        pause_until: true,
+        auto_pause_until: true,
+        last_available_at: true,
+        _count: { select: { courses: { where: { statut: { in: STATUTS_COURSE_EN_COURS } } } } },
+      },
+    });
+    if (!livreur || livreur.entity_status === EntityStatus.DELETED) throw new NotFoundException('Livreur non trouvé');
+    const prenom = livreur.first_name?.trim() || 'Ce livreur';
+
+    if (!estEnPauseAuto(livreur, maintenant)) {
+      return { debloque: false, disponible: false, message: messageDeblocage(prenom, 'PAS_EN_PAUSE_AUTO') };
+    }
+
+    const leve = await this.prisma.deliverer.updateMany({
+      where: { id: delivererId, auto_pause_until: { gt: maintenant } },
+      data: { auto_pause_until: null, recent_refusals: [], queue_penalty_positions: 0, queue_penalty_until: null },
+    });
+    if (leve.count !== 1) {
+      return { debloque: false, disponible: false, message: messageDeblocage(prenom, 'PAS_EN_PAUSE_AUTO') };
+    }
+    const par = { id: compte?.id ?? null, role: compte?.role ?? null };
+    await this.journal.ecrire({
+      type: 'PAUSE_AUTO_LEVEE',
+      source: 'admin',
+      deliverer_id: delivererId,
+      restaurant_id: livreur.restaurant_id,
+      details: { pause_auto_jusqua: livreur.auto_pause_until?.toISOString() ?? null, par },
+    });
+
+    const enPause = estEnPause(livreur, maintenant);
+    const enCourse = livreur._count.courses > 0;
+    let disponible = false;
+    if (!enPause && !enCourse) {
+      // Même entrée que « Je suis disponible » : sa place d'avant, sinon maintenant ; une pause posée entre-temps l'emporte.
+      const place = livreur.last_available_at ? null : await this.placeGardee(delivererId, maintenant);
+      const entree = await this.prisma.deliverer.updateMany({
+        where: {
+          id: delivererId,
+          last_available_at: null,
+          AND: [
+            { OR: [{ pause_until: null }, { pause_until: { lte: maintenant } }] },
+            { OR: [{ auto_pause_until: null }, { auto_pause_until: { lte: maintenant } }] },
+          ],
+        },
+        data: { last_available_at: place ?? maintenant },
+      });
+      disponible = entree.count === 1 || !!livreur.last_available_at;
+      if (entree.count === 1) {
+        if (place) await this.oublierPlace(delivererId);
+        await this.journal.ecrire({
+          type: 'DISPONIBLE',
+          source: 'admin',
+          deliverer_id: delivererId,
+          restaurant_id: livreur.restaurant_id,
+          details: { apres: 'PAUSE_AUTO_LEVEE', ...(place ? { place_gardee: place.toISOString() } : {}), par },
+        });
+      }
+    }
+    this.delivererEvent.queueChanged(delivererId, livreur.restaurant_id);
+    return {
+      debloque: true,
+      disponible,
+      message: messageDeblocage(prenom, enCourse ? 'EN_COURSE' : enPause ? 'EN_PAUSE' : disponible ? 'DISPONIBLE' : 'EN_PAUSE'),
+    };
   }
 
   /**
