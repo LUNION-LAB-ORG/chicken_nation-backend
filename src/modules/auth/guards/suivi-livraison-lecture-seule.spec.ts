@@ -50,7 +50,8 @@ const ECRANS: {
   {
     nom: 'Courses',
     proto: CourseAdminController.prototype,
-    lectures: ['findAll', 'stats', 'findOne'],
+    // `coursesEnDirect` : le tableau « En direct » de l'écran Courses (10/11).
+    lectures: ['findAll', 'stats', 'findOne', 'coursesEnDirect'],
     gestesCallCenter: [
       'forceAssign',
       'cancel',
@@ -59,16 +60,21 @@ const ECRANS: {
       'basculerVersTurbo',
       'revenirEnInterne',
       'relancerLivraisonCommande',
+      // Changer le livreur d'une course depuis le tableau (10/11).
+      'livreursPourCourse',
+      'changerLivreur',
     ],
     gestesCommande: ['affecterCommande', 'retirerCommande', 'livreursPourAffectation'],
-    actions: [],
+    // « Les fermer » : les courses des jours passés restées ouvertes (10/11), administrateur seul.
+    actions: ['fermerAnciennes'],
     reservees: ['reglagesPlanificateur'],
   },
   {
     nom: 'Livreurs',
     proto: DeliverersAdminController.prototype,
     lectures: ['findAll', 'getLiveLocations', 'findOne', 'getScoringInfo'],
-    gestesCallCenter: [],
+    // « Débloquer » : lever la pause automatique d'un livreur (10/11).
+    gestesCallCenter: ['debloquer'],
     gestesCommande: [],
     actions: ['validate', 'reject', 'suspend', 'reactivate', 'forceActivate', 'assignRestaurant', 'remove'],
     reservees: [],

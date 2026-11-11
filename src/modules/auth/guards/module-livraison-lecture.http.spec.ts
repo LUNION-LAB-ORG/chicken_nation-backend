@@ -36,6 +36,8 @@ import { AffectationCommandeService } from 'src/modules/course/services/affectat
 import { CourseActionService } from 'src/modules/course/services/course-action.service';
 import { CourseOfferService } from 'src/modules/course/services/course-offer.service';
 import { CourseQueryService } from 'src/modules/course/services/course-query.service';
+import { CoursesAnciennesService } from 'src/modules/course/services/courses-anciennes.service';
+import { CoursesEnDirectService } from 'src/modules/course/services/courses-en-direct.service';
 import { DetachementCommandeService } from 'src/modules/course/services/detachement-commande.service';
 import { GardeOffresService } from 'src/modules/course/services/garde-offres.service';
 import { RelanceLivraisonService } from 'src/modules/course/services/relance-livraison.service';
@@ -44,6 +46,7 @@ import { DeliverersAdminController } from 'src/modules/deliverers/controllers/de
 import { AppliLivreurService } from 'src/modules/deliverers/services/appli-livreur.service';
 import { DelivererInfoService } from 'src/modules/deliverers/services/deliverer-info.service';
 import { DeliverersService } from 'src/modules/deliverers/services/deliverers.service';
+import { DisponibiliteLivreurService } from 'src/modules/deliverers/services/disponibilite-livreur.service';
 import { ScheduleAdminController } from 'src/modules/schedule/controllers/schedule-admin.controller';
 import { SchedulePlanningService } from 'src/modules/schedule/services/schedule-planning.service';
 import { ScheduleQueryService } from 'src/modules/schedule/services/schedule-query.service';
@@ -67,6 +70,7 @@ const LECTURES: Route[] = [
   ['GET', '/courses'],
   ['GET', '/courses/stats'],
   ['GET', `/courses/${ID}`],
+  ['GET', '/courses/en-direct'], // tableau « En direct » de l'écran Courses (10/11)
   ['GET', '/deliverers'],
   ['GET', '/deliverers/live-locations'], // Carte live, Livreurs « Aujourd'hui »
   ['GET', `/deliverers/${ID}`],
@@ -86,6 +90,10 @@ const GESTES_COURSES: Route[] = [
   ['PATCH', `/courses/${ID}/turbo`],
   ['PATCH', `/courses/${ID}/interne`],
   ['POST', `/courses/commandes/${ID}/relancer-livraison`], // livraison annulée par le livreur (28/10)
+  // Changer le livreur d'une course depuis le tableau, et « Débloquer » un livreur (10/11).
+  ['GET', `/courses/${ID}/livreurs`],
+  ['POST', `/courses/${ID}/livreur`],
+  ['PATCH', `/deliverers/${ID}/debloquer`],
 ];
 
 /**
@@ -132,6 +140,7 @@ const ADMIN_SEUL: Route[] = [
   ['PATCH', `/deliverers/${ID}/assign-restaurant`],
   ['DELETE', `/deliverers/${ID}`],
   ['GET', '/courses/planificateur/reglages'],
+  ['POST', '/courses/anciennes/fermer'], // « Les fermer » : courses des jours passés (10/11)
 ];
 
 const TOUTES: Route[] = [...LECTURES, ...GESTES_CALL_CENTER, ...GESTES_COMMANDE, ...ADMIN_SEUL];
@@ -141,6 +150,7 @@ const CORPS: Record<string, object> = {
   [`PATCH /courses/${ID}/force-assign`]: { deliverer_id: ID2 },
   [`PATCH /courses/${ID}/cancel`]: { reason: 'Client injoignable' },
   [`POST /courses/commandes/${ID}/affecter`]: { deliverer_id: ID2 },
+  [`POST /courses/${ID}/livreur`]: { deliverer_id: ID2 },
   ['POST /schedule/plans/generate']: { restaurantId: RESTO_PLAN, periodStart: '2026-11-02', periodEnd: '2026-11-15' },
   [`PATCH /schedule/plans/${ID}/deliverers/${ID2}/day`]: { date: '2026-11-03', mode: 'REST' },
   [`POST /schedule/plans/${ID}/regenerate`]: { periodStart: '2026-11-02' },
@@ -151,6 +161,7 @@ const POST_EN_200 = new Set([
   `/courses/commandes/${ID}/relancer-livraison`,
   `/courses/commandes/${ID}/affecter`,
   `/courses/commandes/${ID}/retirer`,
+  `/courses/${ID}/livreur`,
 ]);
 
 /** Statut d'un geste qui passe : 201 pour un POST (sauf `POST_EN_200`), 200 sinon. */
@@ -177,11 +188,15 @@ describe('module Livraison par HTTP : le call center lit tout et agit sur les co
       findAllAdmin: jest.fn(async () => ({ items: [], total: 0 })),
       getStats: jest.fn(async () => ({})),
       findOne: jest.fn(async () => ({ id: ID })),
+      // Restaurant de la course dont on change le livreur (10/11).
+      findRestaurantDeCourse: jest.fn(async () => ({ restaurant_id: RESTO_PLAN })),
     },
     livreurs: {
       findAll: jest.fn(async () => ({ items: [], total: 0 })),
       getLiveLocations: jest.fn(async () => []),
       findOne: jest.fn(async () => ({ id: ID })),
+      // Livreurs proposés pour une affectation, renforts compris (10/11).
+      livreursPourAffectation: jest.fn(async () => []),
     },
     infoLivreur: { getScoringInfo: jest.fn(async () => ({})) },
   };
@@ -225,6 +240,7 @@ describe('module Livraison par HTTP : le call center lit tout et agit sur les co
         ),
       ),
       affecter: jest.fn(async () => ({ message: 'Commande affectée' })),
+      changerLivreurCourse: jest.fn(async () => ({ message: 'Course confiée' })),
     },
     detachement: { retirerDeLaCourse: jest.fn(async () => ({ message: 'Commande retirée' })) },
     gateway: { livreurConnecte: jest.fn(async () => true) },
@@ -264,6 +280,10 @@ describe('module Livraison par HTTP : le call center lit tout et agit sur les co
         { provide: AppliLivreurService, useValue: gestes.appliLivreur },
         { provide: DeliverersService, useValue: lus.livreurs },
         { provide: DelivererInfoService, useValue: lus.infoLivreur },
+        // Routes du 10/11 : tableau « En direct », courses des jours passés (administrateur seul), « Débloquer ».
+        { provide: CoursesEnDirectService, useValue: { lire: jest.fn(async () => ({ courses: [] })) } },
+        { provide: CoursesAnciennesService, useValue: vide },
+        { provide: DisponibiliteLivreurService, useValue: { debloquer: jest.fn(async () => ({ debloque: true })) } },
         { provide: ScheduleQueryService, useValue: planningLu },
         { provide: SchedulePlanningService, useValue: gestes.planning },
         { provide: AuditService, useValue: journal },
