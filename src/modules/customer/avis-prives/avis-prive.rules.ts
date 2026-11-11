@@ -521,13 +521,17 @@ export function texteSuivi(s: {
       return avecNote(`${LIBELLE_ACTION.NOTE}.`);
     case AvisSuiviType.STATUT: {
       const statut = s.statut_apres ? `Statut « ${LIBELLE_STATUT[s.statut_apres]} ».` : 'Statut modifié.';
-      return s.solution ? `${statut} Solution : ${LIBELLE_SOLUTION[s.solution]}.` : statut;
+      const suite = s.solution ? `${statut} Solution : ${LIBELLE_SOLUTION[s.solution]}.` : statut;
+      // Avis résolu par la clôture de son incident (11/11).
+      return typeof meta.code === 'string' ? `${suite} Incident ${meta.code} clôturé.` : suite;
     }
     case AvisSuiviType.COMMANDE:
       return typeof meta.reference === 'string' ? `Commande ${meta.reference} cochée.` : 'Commande décochée.';
     case AvisSuiviType.AGENT:
       return typeof meta.agent === 'string' ? `Agent : ${meta.agent}.` : 'Agent retiré.';
     case AvisSuiviType.INCIDENT:
+      // Depuis le 11/11 l'avis ouvre un incident (`incident_id`) ; avant, un ticket.
+      if (typeof meta.incident_id === 'string') return `Incident ouvert : ${typeof meta.code === 'string' ? meta.code : ''}.`;
       return `Incident ouvert : ticket ${typeof meta.code === 'string' ? meta.code : ''}.`;
     case AvisSuiviType.SUPPRESSION:
       return TEXTE_SUPPRESSION;

@@ -47,6 +47,7 @@ import { SettingsModule } from 'src/modules/settings/settings.module';
 import { OnesignalModule } from 'src/modules/onesignal/onesignal.module';
 import { PushCampaignModule } from 'src/modules/push-campaign/push-campaign.module';
 import { CrmModule } from 'src/modules/crm/crm.module';
+import { IncidentModule } from 'src/modules/incident/incident.module';
 import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
 import { ReferralModule } from 'src/modules/referral/referral.module';
 import { DeliveryOfferModule } from 'src/modules/delivery-offer/delivery-offer.module';
@@ -157,6 +158,8 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
     MapsModule,
     ProspectModule,
     CrmModule,
+    // Incidents sur commande : pont entre le CRM, les tickets et les avis (11/11).
+    IncidentModule,
     AdhesionModule,
     CallsModule,
   ],

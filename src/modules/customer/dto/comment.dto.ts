@@ -79,6 +79,11 @@ export class CommentResponseDto {
         reference: string;
         created_at: Date;
     };
+
+    /** Incident ouvert à partir de cette note ; liste du personnel seulement. */
+    @ApiProperty({ required: false })
+    @IsOptional()
+    incident?: { id: string; code: string; statut: string } | null;
 }
 
 export class DishCommentsResponseDto {

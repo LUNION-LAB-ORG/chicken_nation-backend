@@ -343,10 +343,12 @@ model Comment {
   site_visible Boolean @default(false)
 
   // Relations
-  customer_id String   @db.Uuid
-  order_id    String   @db.Uuid
-  customer    Customer @relation(fields: [customer_id], references: [id], onDelete: Cascade)
-  order       Order    @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  customer_id String    @db.Uuid
+  order_id    String    @db.Uuid
+  customer    Customer  @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  order       Order     @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  /// Incident ouvert à partir de cette note (11/11).
+  incident    Incident?
 
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
@@ -473,6 +475,8 @@ model AvisPrive {
   created_at         DateTime         @default(now()) @db.Timestamp(6)
   updated_at         DateTime         @default(now()) @updatedAt @db.Timestamp(6)
   suivis             AvisPriveSuivi[]
+  /// Incidents ouverts à partir de cet avis (« Créer un incident », 11/11).
+  incidents          Incident[]
 
   @@index([entity_status, created_at])
   @@index([entity_status, statut])
@@ -506,6 +510,181 @@ model AvisPriveSuivi {
   created_at   DateTime      @default(now()) @db.Timestamp(6)
 
   @@index([avis_id, created_at])
+}
+
+// ================================
+// INCIDENTS SUR COMMANDE (11/11)
+// ================================
+// Dossier interne de traitement d'un problème sur UNE commande : catégorie,
+// gravité, responsable, cause, action corrective, geste, recontact. Pont
+// entre le CRM, les tickets (la conversation) et les avis. Le client ne le
+// voit jamais. Règles : src/modules/incident/incident.rules.ts.
+
+enum IncidentStatut {
+  OUVERT
+  EN_COURS
+  RESOLU
+  CLOTURE
+}
+
+enum IncidentGravite {
+  FAIBLE
+  MOYENNE
+  HAUTE
+}
+
+enum IncidentOrigine {
+  APPEL
+  WHATSAPP
+  SUR_PLACE
+  CONSTAT_INTERNE
+  TICKET
+  AVIS
+  NOTE
+  /// Réservé au rappel du lendemain (lot suivant)
+  RAPPEL
+}
+
+/// Qui répond de l'incident
+enum IncidentPole {
+  RESTAURANT
+  LIVRAISON
+  CALL_CENTER
+}
+
+enum IncidentGeste {
+  AUCUN
+  EXCUSES
+  /// Bon d'achat (Voucher) créé pour le client
+  BON
+  REMPLACEMENT
+  REMBOURSEMENT
+}
+
+enum IncidentRecontact {
+  INFORME
+  INJOIGNABLE
+  SANS_RECONTACT
+}
+
+enum IncidentSuiviType {
+  CREATION
+  ASSIGNATION
+  RESOLUTION
+  BON
+  MESSAGE
+  CLOTURE
+  REOUVERTURE
+  NOTE
+  RETARD
+}
+
+/// Catégories d'incident, réglables sans déploiement. Jamais supprimées :
+/// désactivées (les incidents passés gardent la leur).
+model IncidentCategorie {
+  id           String       @id @default(uuid()) @db.Uuid
+  nom          String       @unique @db.VarChar(80)
+  /// Responsable proposé à la création
+  pole         IncidentPole
+  /// Délai cible de résolution
+  delai_heures Int          @default(24)
+  actif        Boolean      @default(true)
+  ordre        Int          @default(0)
+  created_at   DateTime     @default(now()) @db.Timestamp(6)
+  updated_at   DateTime     @default(now()) @updatedAt @db.Timestamp(6)
+  incidents    Incident[]
+}
+
+model Incident {
+  id                String             @id @default(uuid()) @db.Uuid
+  /// INC-AAMMJJ-NNN
+  code              String             @unique @db.VarChar(20)
+  statut            IncidentStatut     @default(OUVERT)
+  gravite           IncidentGravite
+  origine           IncidentOrigine
+  categorie_id      String             @db.Uuid
+  categorie         IncidentCategorie  @relation(fields: [categorie_id], references: [id])
+  description       String             @db.Text
+  // Commande, avec son restaurant et son client recopiés (filtres, rapports)
+  order_id          String             @db.Uuid
+  order             Order              @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  restaurant_id     String             @db.Uuid
+  restaurant        Restaurant         @relation(fields: [restaurant_id], references: [id], onDelete: Cascade)
+  customer_id       String             @db.Uuid
+  customer          Customer           @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  // D'où vient le signalement
+  ticket_id         String?            @db.Uuid
+  ticket            TicketThread?      @relation(fields: [ticket_id], references: [id], onDelete: SetNull)
+  avis_id           String?            @db.Uuid
+  avis              AvisPrive?         @relation(fields: [avis_id], references: [id], onDelete: SetNull)
+  /// Une note après commande ouvre un incident au plus
+  comment_id        String?            @unique @db.Uuid
+  comment           Comment?           @relation(fields: [comment_id], references: [id], onDelete: SetNull)
+  // Responsable
+  pole              IncidentPole
+  agent_id          String?            @db.Uuid
+  agent             User?              @relation("IncidentAgent", fields: [agent_id], references: [id], onDelete: SetNull)
+  assigne_at        DateTime?          @db.Timestamp(6)
+  /// Création + délai de la catégorie
+  echeance_at       DateTime           @db.Timestamp(6)
+  /// Claim de la cloche de retard (une seule par incident)
+  alerte_retard_at  DateTime?          @db.Timestamp(6)
+  // Résolution
+  cause             String?            @db.Text
+  action            String?            @db.Text
+  geste             IncidentGeste?
+  bon_montant       Int?
+  voucher_id        String?            @unique @db.Uuid
+  voucher           Voucher?           @relation(fields: [voucher_id], references: [id], onDelete: SetNull)
+  /// Claim de la création du bon (un seul bon par incident)
+  bon_demande_at    DateTime?          @db.Timestamp(6)
+  bon_message_at    DateTime?          @db.Timestamp(6)
+  /// SMS, ou AUCUN quand rien n'est parti
+  bon_message_canal String?            @db.VarChar(20)
+  resolu_at         DateTime?          @db.Timestamp(6)
+  /// Sans clé étrangère : la trace survit au départ de la personne
+  resolu_par_id     String?            @db.Uuid
+  resolu_par_nom    String?            @db.VarChar(255)
+  // Clôture
+  recontact         IncidentRecontact?
+  reaction          String?            @db.Text
+  cloture_at        DateTime?          @db.Timestamp(6)
+  cloture_par_id    String?            @db.Uuid
+  cloture_par_nom   String?            @db.VarChar(255)
+  signale_par_id    String?            @db.Uuid
+  signale_par_nom   String?            @db.VarChar(255)
+  created_at        DateTime           @default(now()) @db.Timestamp(6)
+  updated_at        DateTime           @default(now()) @updatedAt @db.Timestamp(6)
+  suivis            IncidentSuivi[]
+
+  @@index([statut, created_at])
+  @@index([restaurant_id, statut])
+  @@index([statut, echeance_at])
+  @@index([created_at])
+  @@index([order_id])
+  @@index([customer_id])
+  @@index([categorie_id])
+  @@index([ticket_id])
+  @@index([avis_id])
+}
+
+/// Journal d'un incident : lignes jamais modifiées.
+model IncidentSuivi {
+  id           String            @id @default(uuid()) @db.Uuid
+  incident_id  String            @db.Uuid
+  incident     Incident          @relation(fields: [incident_id], references: [id], onDelete: Cascade)
+  type         IncidentSuiviType
+  note         String?           @db.Text
+  statut_avant IncidentStatut?
+  statut_apres IncidentStatut?
+  /// null = Système
+  auteur_id    String?           @db.Uuid
+  /// Recopié : la trace survit au départ de la personne
+  auteur_nom   String?           @db.VarChar(255)
+  meta         Json?
+  created_at   DateTime          @default(now()) @db.Timestamp(6)
+
+  @@index([incident_id, created_at])
 }
 
 model Customer {
@@ -583,6 +762,8 @@ model Customer {
 
   /// Retours privés « Ton avis compte » rapprochés de ce compte (02/11).
   avis_prives AvisPrive[]
+  /// Incidents sur les commandes de ce client (11/11).
+  incidents   Incident[]
 }
 
 // -------------------- Livreurs (deliverers) ------------------------------
@@ -1249,6 +1430,9 @@ model TicketThread {
   /// Retour privé « Ton avis compte » à l'origine du ticket (« Créer un incident », 02/11).
   avis_prive AvisPrive?
 
+  /// Incidents ouverts à partir de ce ticket (11/11).
+  incidents Incident[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1875,6 +2059,8 @@ model Order {
   calls             Call[]
   /// Retours privés « Ton avis compte » qui désignent cette commande (02/11).
   avis_prives       AvisPrive[]
+  /// Incidents signalés sur cette commande (11/11).
+  incidents         Incident[]
 
   @@index([reference, status, entity_status, customer_id])
   // Index pour les agrégations statistiques (page Stats > Clients/Commandes) :
@@ -1982,6 +2168,8 @@ model Restaurant {
   prospects       Prospect[]
   /// Retours privés « Ton avis compte » (02/11).
   avis_prives     AvisPrive[]
+  /// Incidents sur les commandes de ce restaurant (11/11).
+  incidents       Incident[]
 }
 
 model Supplement {
@@ -2082,6 +2270,8 @@ model User {
   // Retours privés « Ton avis compte » (02/11)
   avis_prives_agent AvisPrive[]      @relation("AvisPriveAgent")
   avis_prive_suivis AvisPriveSuivi[] @relation("AvisPriveSuiviAuteur")
+  /// Incidents suivis par cet agent (11/11).
+  incidents_agent   Incident[]       @relation("IncidentAgent")
 
   @@index([email, type])
 }
@@ -2585,6 +2775,8 @@ model Voucher {
   created_at       DateTime      @default(now()) @db.Timestamp(6)
   updated_at       DateTime      @default(now()) @db.Timestamp(6)
   Redemption       Redemption[]
+  /// Bon offert pour clore un incident (geste « Bon de réduction », 11/11).
+  incident         Incident?
 
   created_by    String       @db.Uuid
   creator       User         @relation(fields: [created_by], references: [id])

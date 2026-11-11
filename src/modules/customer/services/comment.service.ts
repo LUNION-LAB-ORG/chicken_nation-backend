@@ -488,6 +488,8 @@ export class CommentService {
                             created_at: true,
                         },
                     },
+                    // Incident ouvert à partir de cette note (liste du personnel seulement, 11/11).
+                    incident: { select: { id: true, code: true, statut: true } },
                 },
                 orderBy: [
                     { message: 'desc' },
@@ -634,6 +636,8 @@ export class CommentService {
             updated_at: comment.updated_at,
             customer: comment.customer,
             order: comment.order,
+            // Présent seulement quand la requête l'a chargé (liste du personnel).
+            ...(comment.incident !== undefined && { incident: comment.incident }),
         };
     }
 }

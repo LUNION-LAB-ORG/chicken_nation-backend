@@ -112,6 +112,8 @@ export interface AvisFiche extends AvisLigne {
   };
   order_id: string | null;
   ticket: { id: string; code: string; status: string } | null;
+  /** Incident ouvert à partir de cet avis, le plus récent (« Créer un incident », 11/11). */
+  incident: { id: string; code: string; statut: string } | null;
   dernieres_commandes: CommandeRecente[] | null;
   journal: LigneJournal[];
 }
@@ -136,6 +138,7 @@ const INCLUDE_AVIS = {
   agent: { select: { id: true, fullname: true } },
   order: { select: { id: true, reference: true } },
   ticket: { select: { id: true, code: true, status: true } },
+  incidents: { select: { id: true, code: true, statut: true }, orderBy: { created_at: 'desc' }, take: 1 },
 } satisfies Prisma.AvisPriveInclude;
 
 export type AvisCharge = Prisma.AvisPriveGetPayload<{ include: typeof INCLUDE_AVIS }>;
@@ -361,6 +364,7 @@ export class AvisPriveService {
       },
       order_id: a.order_id,
       ticket: a.ticket ? { id: a.ticket.id, code: a.ticket.code, status: a.ticket.status } : null,
+      incident: a.incidents?.[0] ?? null,
       dernieres_commandes: commandes,
       journal: suivis.map((s) => ({
         id: s.id,
