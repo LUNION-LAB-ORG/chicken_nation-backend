@@ -52,7 +52,15 @@ export interface CourseEnDirectLue extends CourseTourneeLue {
   total_delivery_fee: number | null;
   deliveries: Array<{
     statut: DeliveryStatut;
-    order: { reference: string; status: OrderStatus; entity_status: EntityStatus };
+    order: {
+      id?: string;
+      reference: string;
+      status: OrderStatus;
+      entity_status: EntityStatus;
+      amount?: number | null;
+      fullname?: string | null;
+      customer?: { first_name: string | null; last_name: string | null } | null;
+    };
   }>;
   /** Offre en attente : à qui elle est proposée (recherche en cours). */
   offer_attempts?: Array<{ deliverer: { first_name: string | null } | null }>;
@@ -74,7 +82,13 @@ export interface CourseEnDirect {
   expiree: boolean;
   /** Offre en attente chez ce livreur (prénom), recherche en cours. */
   proposee_a: string | null;
-  commandes: { total: number; livrees: number; references: string[] };
+  commandes: {
+    total: number;
+    livrees: number;
+    references: string[];
+    /** Le détail, déplié sur la carte (11/11) : référence, montant, client, livrée ou annulée. */
+    liste: CommandeDeLaCourse[];
+  };
   /** Début de l'étape (ISO) : création, acceptation, arrivée au restaurant, départ. */
   depuis: string | null;
   /** En livraison : fin prévue de la tournée (ISO) et retard au-delà, en minutes. */
@@ -83,6 +97,17 @@ export interface CourseEnDirect {
   frais: number;
   /** Le livreur peut encore être changé : sans Turbo, avant le départ du restaurant. */
   livreur_modifiable: boolean;
+}
+
+export interface CommandeDeLaCourse {
+  id: string | null;
+  reference: string;
+  /** Tous frais compris (`Order.amount`). */
+  montant: number;
+  /** Prénom et nom du client, sinon le nom saisi, sinon null (règle de l'écran Commandes). */
+  client: string | null;
+  livree: boolean;
+  annulee: boolean;
 }
 
 export interface CoursesEnDirect {
@@ -162,6 +187,19 @@ function depuisDeLEtape(c: CourseEnDirectLue, etape: EtapeEnDirect): string | nu
   }
 }
 
+function commandeDeLaCourse(l: CourseEnDirectLue['deliveries'][number]): CommandeDeLaCourse {
+  const o = l.order;
+  const complet = [o.customer?.first_name, o.customer?.last_name].filter((x) => !!x && x.trim()).join(' ').trim();
+  return {
+    id: o.id ?? null,
+    reference: o.reference,
+    montant: o.amount ?? 0,
+    client: complet || o.fullname?.trim() || null,
+    livree: l.statut === DeliveryStatut.DELIVERED,
+    annulee: l.statut === DeliveryStatut.CANCELLED || o.status === OrderStatus.CANCELLED,
+  };
+}
+
 export function carteEnDirect(c: CourseEnDirectLue, maintenant: Date, facteurRetard: number): CourseEnDirect | null {
   const turbo = !!lireDate(c.turbo_escalated_at);
   const etape = etapeDe(c.statut);
@@ -187,6 +225,7 @@ export function carteEnDirect(c: CourseEnDirectLue, maintenant: Date, facteurRet
       total: c.deliveries.filter((l) => l.order.entity_status !== EntityStatus.DELETED).length,
       livrees: c.deliveries.filter((l) => l.statut === DeliveryStatut.DELIVERED).length,
       references: c.deliveries.map((l) => l.order.reference),
+      liste: c.deliveries.filter((l) => l.order.entity_status !== EntityStatus.DELETED).map(commandeDeLaCourse),
     },
     depuis: depuisDeLEtape(c, etape),
     fin_prevue: enLivraison ? iso(finTourneePrevue(c)) : null,

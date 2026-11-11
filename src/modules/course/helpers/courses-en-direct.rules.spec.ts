@@ -104,6 +104,23 @@ describe('carte', () => {
     });
   });
 
+  it('commandes dépliées (11/11) : référence, montant, client (prénom et nom, sinon le nom saisi), livrée, annulée', () => {
+    const o = (p: Record<string, unknown>) => ({ reference: 'ORD-1', status: OrderStatus.PICKED_UP, entity_status: EntityStatus.ACTIVE, ...p });
+    const c = lue({
+      deliveries: [
+        { statut: DeliveryStatut.DELIVERED, order: o({ id: 'o1', reference: 'ORD-261110-50950', amount: 5500, customer: { first_name: 'Dogbo', last_name: 'Leaticia' } }) },
+        { statut: DeliveryStatut.IN_ROUTE, order: o({ reference: 'ORD-261110-11111', amount: 3000, fullname: 'Awa K.', customer: { first_name: null, last_name: null } }) },
+        { statut: DeliveryStatut.CANCELLED, order: o({ reference: 'ORD-261110-22222', status: OrderStatus.CANCELLED }) },
+        { statut: DeliveryStatut.PENDING, order: o({ reference: 'ORD-SUPPRIMEE', entity_status: EntityStatus.DELETED }) },
+      ],
+    });
+    expect(carteEnDirect(c, M, 1.5)!.commandes.liste).toEqual([
+      { id: 'o1', reference: 'ORD-261110-50950', montant: 5500, client: 'Dogbo Leaticia', livree: true, annulee: false },
+      { id: null, reference: 'ORD-261110-11111', montant: 3000, client: 'Awa K.', livree: false, annulee: false },
+      { id: null, reference: 'ORD-261110-22222', montant: 0, client: null, livree: false, annulee: true },
+    ]);
+  });
+
   it('confiée à Turbo : colonne Turbo, étape gardée, livreur pas modifiable ici', () => {
     expect(carteEnDirect(lue({ turbo_escalated_at: ilYA(5) }), M, 1.5)).toMatchObject({
       colonne: 'TURBO',

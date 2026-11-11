@@ -29,7 +29,18 @@ const SELECT_COURSE_EN_DIRECT = {
   deliveries: {
     select: {
       statut: true,
-      order: { select: { reference: true, status: true, entity_status: true } },
+      // Détail déplié sur la carte (11/11) : montant et client.
+      order: {
+        select: {
+          id: true,
+          reference: true,
+          status: true,
+          entity_status: true,
+          amount: true,
+          fullname: true,
+          customer: { select: { first_name: true, last_name: true } },
+        },
+      },
     },
     orderBy: { sequence_order: 'asc' },
   },
