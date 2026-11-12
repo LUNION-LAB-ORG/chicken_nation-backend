@@ -825,7 +825,9 @@ export class PaiementsService {
     return paiements;
   }
 
-  // Remboursement d'un paiement par Kkiapay
+  // Remboursement d'un paiement par Kkiapay, à l'ANNULATION d'une commande
+  // (OrderHelper, repli sur un bon si KKiaPay refuse). Le remboursement fait
+  // à la main depuis l'onglet Paiement passe par RemboursementService (12/11).
   async refundPaiement(paiementId: string) {
     const paiement = await this.findOne(paiementId);
 
@@ -1112,7 +1114,7 @@ export class PaiementsService {
    * côté OrderService — logique dupliquée pour éviter une dépendance circulaire
    * Paiements ↔ Order). À garder synchronisé avec OrderService.recomputeOrderPaiedFlag.
    */
-  private async recomputeOrderPaiedFlag(orderId: string) {
+  async recomputeOrderPaiedFlag(orderId: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {

@@ -21,6 +21,12 @@ describe('anomaliePaiement', () => {
     expect(a?.encaisse).toBe(0);
   });
 
+  it('se tait sur une commande remboursée : l’argent a été rendu volontairement', () => {
+    expect(
+      anomaliePaiement({ amount: 6060, paied: false, paiements: [{ status: PaiementStatus.REVERTED, amount: 6060 }] }),
+    ).toBeNull();
+  });
+
   it('ne compte que les paiements réussis', () => {
     const a = anomaliePaiement({
       amount: 12000,

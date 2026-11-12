@@ -2118,6 +2118,14 @@ model Paiement {
   /// l'argent par restaurant. Colonne scalaire volontairement sans relation.
   restaurant_id   String?        @db.Uuid
 
+  /// REMBOURSEMENT KKiaPay (12/11) : revendication de la demande en cours
+  /// (un seul clic aboutit, deux backends compris), puis qui et quand.
+  remboursement_demande_at DateTime? @db.Timestamp(6)
+  rembourse_at             DateTime? @db.Timestamp(6)
+  /// Sans clé étrangère : la trace survit au départ de la personne
+  rembourse_par_id         String?   @db.Uuid
+  rembourse_par_nom        String?   @db.VarChar(255)
+
   entity_status EntityStatus @default(ACTIVE)
   created_at    DateTime     @default(now()) @db.Timestamp(6)
   updated_at    DateTime     @default(now()) @db.Timestamp(6)

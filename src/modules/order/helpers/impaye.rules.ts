@@ -42,6 +42,10 @@ export interface Anomalie {
 export function anomaliePaiement(commande: CommandeAJuger): Anomalie | null {
   if (commande.paied) return null;
 
+  // Remboursée (12/11) : l'argent a été rendu au client volontairement, depuis
+  // l'onglet Paiement. Ce n'est pas un impayé, et le groupe n'a pas à crier.
+  if ((commande.paiements ?? []).some((p) => p.status === PaiementStatus.REVERTED)) return null;
+
   const du = Number(commande.amount) || 0;
   if (du <= 0) return null;
 

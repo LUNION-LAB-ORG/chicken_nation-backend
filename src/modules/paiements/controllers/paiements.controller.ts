@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { User, UserRole } from '@prisma/client';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { RequirePermission } from 'src/modules/auth/decorators/user-require-permission';
@@ -11,6 +11,11 @@ import { QueryPaiementDto } from 'src/modules/paiements/dto/query-paiement.dto';
 import { UpdatePaiementDto } from 'src/modules/paiements/dto/update-paiement.dto';
 import { PaiementsService } from 'src/modules/paiements/services/paiements.service';
 import { CreatePaiementKkiapayDto } from '../dto/create-paiement-kkiapay.dto';
+import { RembourserPaiementDto } from '../dto/rembourser-paiement.dto';
+import { ROLES_REMBOURSEMENT } from '../helpers/remboursement.rules';
+import { RemboursementService } from '../services/remboursement.service';
+import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
+import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
 
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
@@ -32,7 +37,10 @@ function assertAdmin(
 @ApiTags('Paiements')
 @Controller('paiements')
 export class PaiementsController {
-  constructor(private readonly paiementsService: PaiementsService) { }
+  constructor(
+    private readonly paiementsService: PaiementsService,
+    private readonly remboursement: RemboursementService,
+  ) { }
 
   // ⚠️ Aucune permission : tout jeton personnel, cuisine comprise, agissait sur l'argent.
   // ⚠️ COMMANDES UPDATE laissait encore passer la CUISINE, qui n'encaisse pas
@@ -57,13 +65,41 @@ export class PaiementsController {
     return this.paiementsService.payWithKkiapay(req, createPaiementKkiapayDto);
   }
 
-  // ⚠️ Aucune permission : tout jeton personnel, cuisine comprise, agissait sur l'argent.
-  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
-  @RequirePermission(Modules.COMMANDES, Action.DELETE)
-  @Post('refund/:id')
-  @ApiOperation({ summary: 'Remboursement d\'un paiement par Kkiapay' })
-  refundPaiement(@Param('id') paiementId: string) {
-    return this.paiementsService.refundPaiement(paiementId);
+  /**
+   * REMBOURSEMENT KKiaPay (12/11), depuis l'onglet Paiement d'une commande.
+   * Administrateur partout, manager sur les commandes de SON restaurant
+   * (contrôlé dans le service). L'ancienne route `POST refund/:id`, appelée par
+   * aucun écran, remboursait sans vérifier, sans revendication et en avalant
+   * les refus de KKiaPay : elle est remplacée par ces trois routes.
+   *
+   * 1. GET : vérification auprès du compte KKiaPay qui a encaissé (lecture seule).
+   */
+  @UseGuards(JwtAuthGuard, UserRolesGuard)
+  @UserRoles(...ROLES_REMBOURSEMENT)
+  @Get(':id/remboursement')
+  @ApiOperation({ summary: 'Vérifier chez KKiaPay avant de rembourser un paiement' })
+  verifierRemboursement(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string) {
+    return this.remboursement.verifier(id, req.user as User);
+  }
+
+  /** 2. POST : demande le remboursement à KKiaPay, après une nouvelle vérification. */
+  @UseGuards(JwtAuthGuard, UserRolesGuard)
+  @UserRoles(...ROLES_REMBOURSEMENT)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/remboursement')
+  @ApiOperation({ summary: 'Rembourser un paiement par KKiaPay' })
+  rembourser(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string, @Body() dto: RembourserPaiementDto) {
+    return this.remboursement.rembourser(id, dto, req.user as User);
+  }
+
+  /** 3. POST : KKiaPay l'a déjà remboursé (réponse incertaine, tableau de bord) : on l'enregistre. */
+  @UseGuards(JwtAuthGuard, UserRolesGuard)
+  @UserRoles(...ROLES_REMBOURSEMENT)
+  @HttpCode(HttpStatus.OK)
+  @Post(':id/remboursement/constater')
+  @ApiOperation({ summary: 'Enregistrer un remboursement déjà fait chez KKiaPay' })
+  constaterRemboursement(@Req() req: Request, @Param('id', ParseUUIDPipe) id: string, @Body() dto: RembourserPaiementDto) {
+    return this.remboursement.constater(id, dto, req.user as User);
   }
 
   // ⚠️ Aucune permission : tout jeton personnel, cuisine comprise, agissait sur l'argent.

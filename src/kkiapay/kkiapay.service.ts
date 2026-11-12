@@ -17,6 +17,20 @@ const KKIAPAY_URL_SANDBOX = 'https://api-sandbox.kkiapay.me';
 const VERIFY_PATH = '/api/v1/transactions/status';
 const REFUND_PATH = '/api/v1/transactions/revert';
 
+export const MESSAGE_COMPTE_DECONFIGURE =
+    "Le compte KKiaPay de ce restaurant n'est plus configuré : impossible d'agir depuis le compte qui a encaissé. Reconfigurez ses clés d'abord.";
+
+/** Issue d'une demande de remboursement à KKiaPay (voir `rembourserTransaction`). */
+export type IssueRemboursementKkiapay =
+    | { issue: 'REMBOURSE'; reponse: Record<string, unknown> }
+    | { issue: 'REFUSE'; code: string | null; raison: string | null }
+    | { issue: 'INCERTAIN' };
+
+/** Texte non vide d'un champ de réponse, sinon null. */
+function texte(v: unknown): string | null {
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
 /**
  * Compte KKiaPay résolu (global ou dédié à un restaurant).
  * `restaurantId` = null → compte GLOBAL historique.
@@ -323,6 +337,67 @@ export class KkiapayService {
                 throw new ServiceUnavailableException('KKiaPay injoignable (refund)');
             }
             throw new BadRequestException("Transaction non trouvée");
+        }
+    }
+
+    /**
+     * Compte qui a ENCAISSÉ une transaction, sans repli : celui du restaurant
+     * tracé sur le paiement (null = compte global historique). Un compte dédié
+     * qui n'est plus configuré est refusé : vérifier ou rembourser depuis un
+     * autre compte serait une erreur comptable.
+     */
+    async compteEncaisseur(restaurantId: string | null): Promise<ResolvedAccount> {
+        const account = await this.resolveAccount(restaurantId);
+        if (restaurantId !== null && account.restaurantId !== restaurantId) {
+            throw new BadRequestException(MESSAGE_COMPTE_DECONFIGURE);
+        }
+        return account;
+    }
+
+    /**
+     * La transaction telle que la voit le compte qui l'a encaissée (12/11,
+     * remboursement). `null` : ce compte ne la connaît pas. KKiaPay injoignable :
+     * ServiceUnavailableException, jamais confondue avec « inconnue ».
+     */
+    async lireSurCompteEncaisseur(transactionId: string, restaurantId: string | null): Promise<KkiapayResponse | null> {
+        const account = await this.compteEncaisseur(restaurantId);
+        try {
+            return await this.rawVerify(account.http, transactionId);
+        } catch (error) {
+            if (error instanceof ServiceUnavailableException) throw error;
+            return null;
+        }
+    }
+
+    /**
+     * Remboursement (12/11) depuis le compte encaisseur, avec une issue claire :
+     *  - REMBOURSE : KKiaPay a accepté (réponse 2xx sans échec annoncé) ;
+     *  - REFUSE : KKiaPay a répondu non, avec son code et sa raison ;
+     *  - INCERTAIN : pas de réponse, ou erreur de son côté. Le remboursement est
+     *    PEUT-ÊTRE passé : l'appelant ne marque rien et fait revérifier.
+     */
+    async rembourserTransaction(transactionId: string, restaurantId: string | null): Promise<IssueRemboursementKkiapay> {
+        const account = await this.compteEncaisseur(restaurantId);
+        try {
+            const res = await account.http.post(REFUND_PATH, { transactionId });
+            const corps = (res.data ?? {}) as Record<string, unknown>;
+            const statut = typeof corps.status === 'string' ? corps.status.toUpperCase() : '';
+            if (statut === 'FAILED' || statut === 'ERROR') {
+                return { issue: 'REFUSE', code: texte(corps.failureCode) ?? texte(corps.code), raison: texte(corps.failureMessage) ?? texte(corps.reason) };
+            }
+            return { issue: 'REMBOURSE', reponse: corps };
+        } catch (error: any) {
+            const reponse = error?.response;
+            if (!reponse || reponse.status >= 500) {
+                this.logger.warn(`Remboursement KKiaPay ${transactionId} : pas de réponse claire (${reponse?.status ?? 'réseau'})`);
+                return { issue: 'INCERTAIN' };
+            }
+            const corps = (reponse.data ?? {}) as Record<string, unknown>;
+            return {
+                issue: 'REFUSE',
+                code: texte(corps.code) ?? texte(corps.status) ?? texte(corps.failureCode),
+                raison: texte(corps.reason) ?? texte(corps.message) ?? texte(corps.failureMessage),
+            };
         }
     }
 
