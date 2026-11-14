@@ -24,6 +24,7 @@ import { RestaurantModule } from '../restaurant/restaurant.module';
 import { ReceiptsService } from './services/receipts.service';
 import { TurboModule } from 'src/turbo/turbo.module';
 import { KkiapayOrderListenerService } from './listeners/kkiapay-order.listener.service';
+import { CommandeSoldeeListener } from './listeners/commande-soldee.listener';
 import { OrderV2Helper } from './helpers/orderv2.helper';
 import { DeliveryFeeHelper } from './helpers/delivery-fee.helper';
 import { ExpoPushModule } from 'src/expo-push/expo-push.module';
@@ -87,6 +88,8 @@ import { CourseModule } from 'src/modules/course/course.module';
     OrderWebSocketService,
     ReceiptsService,
     KkiapayOrderListenerService,
+    // Commande en attente soldée par un paiement ajouté à la main : elle se confirme.
+    CommandeSoldeeListener,
     // Relance des paniers de l'application non payés (SettingsService est global).
     OrderRelanceService,
     OrderRelanceTask,

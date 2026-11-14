@@ -31,7 +31,8 @@ import { RESTAURANT_COMMANDE_SELECT } from 'src/modules/restaurant/constantes/re
 import { CLIENT_COMMANDE_SELECT } from 'src/modules/order/constantes/client-commande.select';
 import { sansIdentifiantsPush } from 'src/modules/order/helpers/identifiants-push.helper';
 import { assertCanAccessRestaurant } from 'src/modules/order/helpers/restaurant-scope.helper';
-import { ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE } from 'src/modules/order/helpers/brouillons.rules';
+import { ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE, estBrouillon } from 'src/modules/order/helpers/brouillons.rules';
+import { PaiementChannels } from 'src/modules/paiements/enums/paiement-channels';
 import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
 import {
   encaisseAvant,
@@ -267,7 +268,10 @@ export class PaiementsService {
    *     (nouveaux + existants) couvre `order.amount`, à la tolérance près ;
    *   - si de plus la commande est déjà `COLLECTED` (livrée mais pas encore
    *     encaissée), elle passe en `COMPLETED` avec `completed_at = now`. Une
-   *     commande partiellement payée garde son statut et un reste dû.
+   *     commande partiellement payée garde son statut et un reste dû ;
+   *   - si elle est EN ATTENTE (14/11 : paiement en ligne dont le webhook
+   *     n'est jamais arrivé), elle se CONFIRME : ACCEPTED et `accepted_at`,
+   *     par le chemin ordinaire de l'acceptation (`CommandeSoldeeListener`).
    */
   async addPaiement(
     req: Request,
@@ -357,6 +361,12 @@ export class PaiementsService {
       throw new BadRequestException('Aucun montant à encaisser : saisissez le montant reçu.');
     }
 
+    // Commande en attente soldée : elle se confirme (14/11). Lu AVANT
+    // l'écriture : payée, elle ne serait plus un brouillon, et le restaurant,
+    // qui ne l'a jamais vue, ne recevrait pas « Nouvelle commande ».
+    const aConfirmer = soldee && order.status === OrderStatus.PENDING;
+    const etaitBrouillon = estBrouillon(order);
+
     const updatedOrder = await this.prisma.order.update({
       where: { id: order.id },
       data: {
@@ -364,6 +374,8 @@ export class PaiementsService {
           paied: true,
           paied_at: order.paied_at ?? now,
         }),
+        // Paiement différé : ramenée à l'instant du paiement, comme au webhook.
+        ...(aConfirmer && this.buildPaymentDateAlignment(order, now)),
         ...(aTerminer && {
           status: OrderStatus.COMPLETED,
           completed_at: now,
@@ -380,11 +392,29 @@ export class PaiementsService {
       console.error(`Sync usage promo (addPaiement) échoué pour ${orderId}: ${(e as any)?.message}`);
     }
 
+    // Acceptation par le module des commandes (Paiements ne dépend pas de
+    // lui) : ACCEPTED, `accepted_at`, cloche et « Nouvelle commande » au
+    // restaurant, sockets. Le paiement reste enregistré si elle échoue.
+    let confirmee = false;
+    if (aConfirmer) {
+      const user = req.user as User | undefined;
+      const issues = await this.eventEmitter.emitAsync(PaiementChannels.COMMANDE_EN_ATTENTE_SOLDEE, {
+        orderId: order.id,
+        etaitBrouillon,
+        userId: user?.id ?? null,
+        role: user?.role ?? null,
+      });
+      confirmee = issues.some((issue) => issue === true);
+    }
+
     return {
       success: true,
-      message: soldee
-        ? 'Paiement effectué avec succès'
-        : `Paiement enregistré, reste dû ${Math.max(0, order.amount - totalPaid).toLocaleString('fr-FR')} XOF (commande non soldée).`,
+      confirmee,
+      message: confirmee
+        ? 'Paiement enregistré : la commande est confirmée.'
+        : soldee
+          ? 'Paiement effectué avec succès'
+          : `Paiement enregistré, reste dû ${Math.max(0, order.amount - totalPaid).toLocaleString('fr-FR')} XOF (commande non soldée).`,
     };
   }
 

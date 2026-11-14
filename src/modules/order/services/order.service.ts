@@ -1214,7 +1214,17 @@ export class OrderService {
     id: string,
     status: OrderStatus,
     meta?: Record<string, any>,
-    options: { parLeClient?: boolean; conditionEcriture?: Prisma.OrderWhereInput; sauterEtapes?: boolean } = {},
+    options: {
+      parLeClient?: boolean;
+      conditionEcriture?: Prisma.OrderWhereInput;
+      sauterEtapes?: boolean;
+      /**
+       * La commande était un brouillon avant un geste qui l'a déjà modifiée
+       * (paiement ajouté à la main, 14/11) : relue payée, elle ne l'est plus,
+       * et le restaurant ne recevrait pas « Nouvelle commande ».
+       */
+      etaitBrouillon?: boolean;
+    } = {},
   ) {
     const order = await this.findById(id);
     //Meta peut contenir estimated_delivery_time, estimated_preparation_time, deliveryDriverId, role
@@ -1456,7 +1466,7 @@ export class OrderService {
     this.orderEvent.orderStatusUpdatedEvent({
       order: updatedOrder,
       // État PRÉCÉDENT : un panier non payé qu'on annule ne sonne pas au restaurant.
-      etait_brouillon: estBrouillon(order),
+      etait_brouillon: options.etaitBrouillon ?? estBrouillon(order),
       expo_token: reglagesPush?.expo_push_token ?? null,
       voucher: meta?._voucher ? {
         code: meta._voucher.code,
