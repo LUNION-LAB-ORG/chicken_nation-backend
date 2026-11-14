@@ -301,6 +301,12 @@ model Address {
 
   created_at DateTime @default(now()) @db.Timestamp(6)
   updated_at DateTime @default(now()) @db.Timestamp(6)
+
+  /// Ce modèle n'avait AUCUN index (14/11/2026) : chaque lecture des adresses
+  /// d'un client balayait toute la table (65 millions de balayages complets
+  /// relevés sur la base de production), ce qui saturait le processeur de
+  /// Neon et ralentissait tout le backoffice au pic du soir.
+  @@index([customer_id])
 }
 
 model Category {
@@ -1922,6 +1928,14 @@ model OrderItem {
   cooking_time  Int?     @db.Integer // en minutes
   created_at    DateTime @default(now()) @db.Timestamp(6)
   updated_at    DateTime @default(now()) @db.Timestamp(6)
+
+  /// Aucun index sur les clés étrangères (14/11/2026) : chaque affichage d'une
+  /// commande avec ses lignes balayait toute la table (24 millions de balayages
+  /// complets relevés sur la base de production). `order_id` sert à lire les
+  /// lignes d'une commande, `dish_id` aux statistiques par plat et aux
+  /// suppressions de plats.
+  @@index([order_id])
+  @@index([dish_id])
 }
 
 model Order {
@@ -2131,6 +2145,10 @@ model Paiement {
   updated_at    DateTime     @default(now()) @db.Timestamp(6)
 
   @@index([restaurant_id])
+  /// Seul l'index partiel `Paiement_order_source_pending_unique` (paiements en
+  /// attente) existait : toute lecture des paiements d'une commande balayait
+  /// la table entière (29 millions de balayages complets relevés, 14/11/2026).
+  @@index([order_id])
 }
 
 model Restaurant {
