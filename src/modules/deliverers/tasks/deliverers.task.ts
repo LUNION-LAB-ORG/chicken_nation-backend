@@ -5,6 +5,7 @@ import { EntityStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { S3Service } from 'src/s3/s3.service';
 
+import { donneesEffacementLivreur } from '../helpers/effacement-livreur.rules';
 import { AppliLivreurService } from '../services/appli-livreur.service';
 
 /**
@@ -17,7 +18,8 @@ import { AppliLivreurService } from '../services/appli-livreur.service';
  *  1. Trouve tous les Deliverer dont `deletion_scheduled_at <= NOW`
  *     ET pas encore en entity_status = DELETED
  *  2. Pour chacun :
- *     - Anonymise les PII (RGPD : nom, email, téléphone, documents)
+ *     - Anonymise les PII (`donneesEffacementLivreur` : identité,
+ *       coordonnées, pièces, permis, véhicule, domicile, positions)
  *     - Marque entity_status = DELETED
  *     - Tente de supprimer les fichiers S3 (best effort, log si échec)
  *  3. La ligne reste en DB pour préserver l'intégrité référentielle (FK orders).
@@ -80,21 +82,10 @@ export class DeliverersTask {
         // 1. Tentative de suppression S3 (non bloquante)
         await this.cleanupS3Files(d);
 
-        // 2. Anonymisation + soft delete
+        // 2. Anonymisation + soft delete (liste complète dans la règle)
         await this.prisma.deliverer.update({
           where: { id: d.id },
-          data: {
-            entity_status: EntityStatus.DELETED,
-            is_operational: false,
-            refresh_token: null,
-            phone: `deleted-${d.id}`, // libère le numéro original
-            email: null,
-            first_name: null,
-            last_name: null,
-            image: null,
-            piece_identite: null,
-            permis_conduire: null,
-          },
+          data: donneesEffacementLivreur(d.id),
         });
 
         this.logger.log(`Deliverer ${d.id} purgé (anonymisé + DELETED)`);
