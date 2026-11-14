@@ -27,6 +27,7 @@ import { OrderService } from '../services/order.service';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { AnnulerRelanceDto } from '../dto/annuler-relance.dto';
+import { ConfirmerPaiementRelanceDto } from '../dto/confirmer-paiement-relance.dto';
 import { IgnorerRelanceDto } from '../dto/ignorer-relance.dto';
 import { OrderModule } from '../order.module';
 import { correspond } from '../relance/relance.base-simulee-spec';
@@ -42,6 +43,8 @@ const ROUTES: [string, (...args: never[]) => unknown][] = [
   ['POST /orders/relances/:orderId/retablir', OrderRelanceController.prototype.retablir],
   // Commande du site à payer à la livraison, à confirmer (19/10).
   ['POST /orders/relances/:orderId/annuler', OrderRelanceController.prototype.annuler],
+  // Paiement KKiaPay resté sans suite (14/11) : centre d'appels compris.
+  ['POST /orders/relances/:orderId/confirmer-paiement', OrderRelanceController.prototype.confirmerPaiement],
 ];
 
 const garde = new UserRolesGuard(new Reflector());
@@ -57,7 +60,16 @@ function autorise(role: UserRole, route: (...args: never[]) => unknown): boolean
 describe('Relance des paniers : droits', () => {
   it('toutes les méthodes du contrôleur sont listées ici', () => {
     const methodes = Object.getOwnPropertyNames(OrderRelanceController.prototype).filter((m) => m !== 'constructor');
-    expect(methodes.sort()).toEqual(['annuler', 'ignorer', 'liberer', 'lister', 'listerIgnorees', 'prendre', 'retablir']);
+    expect(methodes.sort()).toEqual([
+      'annuler',
+      'confirmerPaiement',
+      'ignorer',
+      'liberer',
+      'lister',
+      'listerIgnorees',
+      'prendre',
+      'retablir',
+    ]);
   });
 
   it.each(ROUTES)('%s : jeton puis rôle, sur la méthode elle-même', (_route, methode) => {
@@ -272,5 +284,31 @@ describe.each([
     ]);
     expect(await erreurs({ raison_code: 'AUTRE', raison_texte: `  ${'x'.repeat(160)}  ` })).toEqual([]);
     expect(await erreurs({ raison_code: 'DOUBLON' })).toEqual([]);
+  });
+});
+
+describe('ConfirmerPaiementRelanceDto (14/11)', () => {
+  const ILLISIBLE = "Saisissez l'identifiant de la transaction KKiaPay : lettres et chiffres, sans espace.";
+  const lire = (corps: Record<string, unknown>) => plainToInstance(ConfirmerPaiementRelanceDto, corps);
+  const erreurs = async (corps: Record<string, unknown>) =>
+    (await validate(lire(corps))).flatMap((e) => Object.values(e.constraints ?? {}));
+
+  it('identifiant absent, vide, avec une espace ou un caractère hors alphabet : un seul message', async () => {
+    for (const transaction_id of [undefined, '', '   ', 'TX 123', 'TX;DROP', "TX'1", '-TX1']) {
+      expect({ transaction_id, erreurs: await erreurs({ transaction_id }) }).toEqual({
+        transaction_id,
+        erreurs: [ILLISIBLE],
+      });
+    }
+  });
+
+  it('64 caractères au plus', async () => {
+    expect(await erreurs({ transaction_id: `T${'x'.repeat(63)}` })).toEqual([]);
+    expect(await erreurs({ transaction_id: `T${'x'.repeat(64)}` })).toEqual([ILLISIBLE]);
+  });
+
+  it('identifiant lisible accepté, espaces des bords retirés', async () => {
+    expect(await erreurs({ transaction_id: '  qXw9_Ab-12.3  ' })).toEqual([]);
+    expect(lire({ transaction_id: '  qXw9_Ab-12.3  ' }).transaction_id).toBe('qXw9_Ab-12.3');
   });
 });

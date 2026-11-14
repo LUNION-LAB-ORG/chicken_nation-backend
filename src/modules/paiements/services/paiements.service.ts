@@ -1103,6 +1103,19 @@ export class PaiementsService {
     });
   }
 
+  /**
+   * Paiements déjà enregistrés sous cet identifiant de transaction KKiaPay, et
+   * la commande de chacun. Lu avant une confirmation manuelle : une transaction
+   * ne paie qu'une commande (`refusTransactionDejaRattachee`).
+   */
+  async enregistrementsDeLaTransaction(reference: string) {
+    return this.prisma.paiement.findMany({
+      where: { reference },
+      select: { order_id: true, order: { select: { reference: true } } },
+      take: 5,
+    });
+  }
+
   /** Somme des paiements SUCCESS d'une commande (montant réellement encaissé). */
   private sommeEncaissee(paiements: { amount: number | null; total: number | null }[]): number {
     return paiements.reduce((s, p) => s + (p.total ?? p.amount ?? 0), 0);

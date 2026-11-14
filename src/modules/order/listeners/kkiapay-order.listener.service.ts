@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { KkiapayChannels } from 'src/kkiapay/kkiapay-channels';
 import { KkiapayWebhookDto } from 'src/kkiapay/kkiapay.type';
@@ -16,6 +16,11 @@ import { ReferralService } from 'src/modules/referral/referral.service';
 import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
 import { Order, OrderStatus, LoyaltyPointType, PaymentMethod } from '@prisma/client';
 import { libelleRetrait } from 'src/modules/fidelity/helpers/points-commande.rules';
+import {
+    MESSAGE_KKIAPAY_INJOIGNABLE,
+    messageRefusConfirmation,
+    refusTransactionDejaRattachee,
+} from '../helpers/confirmation-paiement.rules';
 
 /**
  * Résultat structuré du traitement d'un paiement KKiaPay réussi.
@@ -512,10 +517,18 @@ export class KkiapayOrderListenerService {
      *   • Commande absente → 404 (via orderService.findById).
      *   • Commande non ONLINE → 400 (ce flux ne concerne que le paiement en ligne).
      *   • Commande déjà avancée (≠ PENDING) → 409 (déjà payée / en préparation…).
+     *   • Transaction déjà enregistrée sur une AUTRE commande → 409, avant tout
+     *     appel à KKiaPay (14/11).
      *
-     * @returns { confirmed:true, order, paiement } si KKiaPay valide le paiement.
-     * @throws BadRequestException avec un motif clair si le verify KKiaPay échoue
-     *   (« transaction introuvable » / « KKiaPay: statut non SUCCESS » / « montant non couvert »).
+     * Appelée aussi par « Confirmer le paiement » de la relance
+     * (`OrderRelanceController`, centre d'appels compris), après ses propres
+     * contrôles.
+     *
+     * @returns { confirmed:true, order, paiement, justPaid, enDouble } si KKiaPay
+     *   valide le paiement. `justPaid` faux : la commande était déjà confirmée.
+     * @throws BadRequestException avec un motif en clair si KKiaPay ne valide
+     *   pas (`messageRefusConfirmation`) ; ServiceUnavailableException si
+     *   KKiaPay ne répond pas.
      */
     async confirmPaymentManually(orderId: string, transactionId: string) {
         // 404 si absente (findById lève NotFoundException).
@@ -533,6 +546,15 @@ export class KkiapayOrderListenerService {
             );
         }
 
+        // Une transaction déjà enregistrée ailleurs ne paie pas cette commande :
+        // le chemin du webhook la retrouverait sans la rattacher, et répondrait
+        // « montant non couvert ». On le dit, avant tout appel à KKiaPay.
+        const refus = refusTransactionDejaRattachee(
+            order.id,
+            await this.paiementsService.enregistrementsDeLaTransaction(transactionId),
+        );
+        if (refus) throw new ConflictException(refus);
+
         // Payload synthétique identique à celui d'un webhook « transaction.success ».
         // Seuls transactionId + stateData (référence) sont réellement utilisés en aval :
         // linkPaiementToOrder re-vérifie la transaction auprès de KKiaPay et se sert des
@@ -546,16 +568,32 @@ export class KkiapayOrderListenerService {
             isPaymentSucces: true,
         } as unknown as KkiapayWebhookDto;
 
-        const result = await this.processTransactionSuccess(payload);
-
-        if (!result.confirmed) {
-            // Motif de refus KKiaPay (déjà formulé lisiblement en amont) → 400 pour que
-            // l'admin sache POURQUOI : « KKiaPay: statut non SUCCESS » / « montant non
-            // couvert » / « transaction introuvable ».
-            throw new BadRequestException(result.reason ?? 'Confirmation KKiaPay impossible');
+        let result: ProcessTransactionSuccessResult;
+        try {
+            result = await this.processTransactionSuccess(payload);
+        } catch (error) {
+            // Le webhook relance cette erreur pour que BullMQ retente ; ici une
+            // personne attend la réponse : on lui dit quoi faire.
+            if (error instanceof ServiceUnavailableException) {
+                throw new ServiceUnavailableException(MESSAGE_KKIAPAY_INJOIGNABLE);
+            }
+            throw error;
         }
 
-        return { confirmed: true, order: result.order, paiement: result.paiement };
+        if (!result.confirmed) {
+            // 400 avec le motif en clair : la personne qui confirme doit savoir
+            // POURQUOI KKiaPay ne valide pas (transaction inconnue, paiement non
+            // abouti, montant qui ne couvre pas la commande).
+            throw new BadRequestException(messageRefusConfirmation(result.reason));
+        }
+
+        return {
+            confirmed: true,
+            order: result.order,
+            paiement: result.paiement,
+            justPaid: !!result.justPaid,
+            enDouble: !!result.enDouble,
+        };
     }
 
     /** Vrai si l'erreur est un code Prisma transitoire (infra DB) → à relancer. */

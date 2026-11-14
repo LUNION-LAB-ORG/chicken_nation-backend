@@ -8,12 +8,20 @@ import {
   Optional,
 } from '@nestjs/common';
 import { EntityStatus, OrderChannel, OrderStatus, PaymentMethod, Prisma, User, UserRole } from '@prisma/client';
+import { ACTEUR_KKIAPAY_ID } from 'src/kkiapay/kkiapay-audit.helper';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { commandeEffective } from 'src/modules/crm/crm.rules';
 import { SettingsService } from 'src/modules/settings/settings.service';
 import { AppGateway } from 'src/socket-io/gateways/app.gateway';
-import { RELANCABLE_WHERE, estPanierAnnuleParClient, estRelancable, peutVoirLesBrouillons } from '../helpers/brouillons.rules';
+import {
+  RELANCABLE_WHERE,
+  estBrouillon,
+  estPanierAnnuleParClient,
+  estRelancable,
+  peutVoirLesBrouillons,
+} from '../helpers/brouillons.rules';
+import { MESSAGE_TRANSACTION_ILLISIBLE, lireTransactionKkiapay } from '../helpers/confirmation-paiement.rules';
 import { A_CONFIRMER_WHERE, estAConfirmer } from '../helpers/paiement-livraison.rules';
 import { resolveRestaurantScope } from '../helpers/restaurant-scope.helper';
 import {
@@ -56,6 +64,14 @@ const MESSAGE_A_CONFIRMER_NON_IGNORABLE =
   '«\u00a0Reprendre au téléphone\u00a0», ou annulez-la.';
 const MESSAGE_DEJA_ANNULEE_PAR_CLIENT = 'Le client a déjà annulé cette commande.';
 const MESSAGE_NON_ANNULABLE = "Seule une commande à payer à la livraison s'annule ici.";
+const MESSAGE_PAIEMENT_A_LA_LIVRAISON =
+  "Une commande à payer à la livraison n'a aucun paiement en ligne à confirmer : transmettez-la avec " +
+  '« Reprendre au téléphone ».';
+const MESSAGE_PAIEMENT_PANIER_ANNULE =
+  "Le client a annulé ce panier : seul un panier en attente de paiement se confirme ici.";
+
+/** Transactions signalées lues au plus par lecture de la liste. */
+const MAX_PAIEMENTS_SIGNALES_LUS = 100;
 
 /** Ce qu'on lit d'un brouillon pour le classer et l'afficher. */
 const SELECT_BROUILLON = {
@@ -141,6 +157,28 @@ export interface BrouillonLigne {
   paiement_a_la_livraison: boolean;
 }
 
+/**
+ * Transaction KKiaPay réussie qu'un webhook a apportée pour un panier du
+ * groupe, sans confirmer la commande (refusé à l'entrée, abandonné par le
+ * traitement, ou en échec après toutes ses tentatives). Lue dans le journal
+ * d'audit (`kkiapay-audit.helper.ts`) : le client a sans doute payé, l'agent
+ * confirme le paiement sans lui demander l'identifiant (14/11).
+ */
+export interface PaiementSignale {
+  /** Panier visé : la tête ou l'un des autres paniers du groupe. */
+  order_id: string;
+  reference: string;
+  transaction_id: string;
+  /** Montant annoncé par le webhook ; seul KKiaPay fait foi, à la confirmation. */
+  montant: number | null;
+  /** PaiementMode annoncé (MOBILE_MONEY, CARD, WALLET). */
+  moyen: string | null;
+  /** Instant de la ligne du journal (ISO). */
+  le: string;
+  /** Pourquoi le webhook n'a rien confirmé, tel que le journal le dit. */
+  motif: string | null;
+}
+
 export interface GroupeRelance {
   cle: string;
   etat: 'A_RELANCER' | 'PRIS' | 'EN_COURS';
@@ -169,6 +207,11 @@ export interface GroupeRelance {
      * `jusqua` en ISO.
      */
     paiement_en_ligne_en_cours: { reference: string; jusqua: string } | null;
+    /**
+     * Paiement signalé sur la tête, sinon sur le premier autre panier qui en
+     * a un ; pour un panier, la transaction la plus récente (14/11).
+     */
+    paiement_signale: PaiementSignale | null;
   };
   crm: { contact_id: string; statut: string; agent: string | null } | null;
 }
@@ -345,7 +388,7 @@ export class OrderRelanceService {
     const { brouillons, effectives } = await this.lireBrouillons(scope, maintenant, regles);
     const classement = classerBrouillons({ brouillons, effectives, maintenant, regles, moi: user.id });
 
-    const [crm, ignorees] = await Promise.all([
+    const [crm, ignorees, signales] = await Promise.all([
       this.lireCrm(classement.groupes.map((g) => g.tete.customer_id)),
       this.prisma.orderRelance.count({
         where: {
@@ -353,6 +396,7 @@ export class OrderRelanceService {
           ...(scope ? { order: { restaurant_id: scope } } : {}),
         },
       }),
+      this.lirePaiementsSignales(classement.groupes.flatMap((g) => [g.tete, ...g.autres])),
     ]);
 
     const compter = (filtre: (g: GroupeClasse) => boolean) => classement.groupes.filter(filtre).length;
@@ -373,7 +417,7 @@ export class OrderRelanceService {
         ignorees,
         a_confirmer: compter((g) => g.a_confirmer && (g.etat === 'A_RELANCER' || g.etat === 'PRIS')),
       },
-      groupes: classement.groupes.map((g) => this.versGroupeRelance(g, crm)),
+      groupes: classement.groupes.map((g) => this.versGroupeRelance(g, crm, signales)),
     };
   }
 
@@ -705,6 +749,124 @@ export class OrderRelanceService {
     this.signaler('annulation', [orderId], userId);
   }
 
+  // =========================================================================
+  // Paiement KKiaPay resté sans suite (14/11)
+  // =========================================================================
+
+  /**
+   * Avant « Confirmer le paiement » (`POST /orders/relances/:orderId/confirmer-paiement`) :
+   * le client a payé, le webhook n'a rien confirmé. Seul un panier payable en
+   * ligne, encore en attente, se confirme ici ; pas pendant qu'un collègue l'a
+   * en main, sauf pour un administrateur. Lève 400, 403, 404 ou 409 avec le
+   * motif. Renvoie l'identifiant de transaction nettoyé, et la commande telle
+   * que le journal la cite.
+   *
+   * Ni la fenêtre, ni l'ignorance, ni une exclusion du classement n'y font
+   * obstacle : l'argent reçu se rattache quel que soit l'âge du panier.
+   *
+   * La confirmation elle-même (`confirmPaymentManually`) revérifie la
+   * transaction auprès de KKiaPay, et son écriture est conditionnée à l'attente
+   * (`linkPaiementToOrder`) : un webhook arrivé entre-temps ne fait pas payer
+   * deux fois.
+   */
+  async verifierPaiementConfirmable(
+    orderId: string,
+    corps: { transaction_id?: string | null },
+    user: User,
+  ): Promise<{ transactionId: string; commande: { id: string; reference: string; restaurant_id: string } }> {
+    this.verifierRole(user);
+    const transaction = lireTransactionKkiapay(corps?.transaction_id);
+    if (!transaction) throw new BadRequestException(MESSAGE_TRANSACTION_ILLISIBLE);
+
+    const commande = await this.chargerCommande(orderId, user);
+    if (estAConfirmer(commande)) throw new ConflictException(MESSAGE_PAIEMENT_A_LA_LIVRAISON);
+    if (estPanierAnnuleParClient(commande)) throw new ConflictException(MESSAGE_PAIEMENT_PANIER_ANNULE);
+    if (!estBrouillon(commande) || commande.payment_method !== PaymentMethod.ONLINE) {
+      const motif = motifSortie(commande);
+      const auteur = motif === 'REPRISE' ? await this.auteurReprise(orderId) : null;
+      throw new ConflictException(messageSortie(motif, { auteur }));
+    }
+
+    if (user.role !== UserRole.ADMIN) {
+      const relance = await this.prisma.orderRelance.findUnique({
+        where: { order_id: orderId },
+        select: { pris_par_id: true, prise_expire_le: true, pris_par: { select: { fullname: true } } },
+      });
+      const parAutre =
+        !!relance?.pris_par_id &&
+        relance.pris_par_id !== user.id &&
+        !!relance.prise_expire_le &&
+        relance.prise_expire_le > new Date();
+      if (parAutre) {
+        const nom = relance!.pris_par?.fullname?.trim() || 'Un collègue';
+        throw new ConflictException(`${nom} s'occupe de cette commande : laissez-le conclure.`);
+      }
+    }
+    return {
+      transactionId: transaction,
+      commande: { id: commande.id, reference: commande.reference, restaurant_id: commande.restaurant_id },
+    };
+  }
+
+  /**
+   * Après la confirmation d'un paiement depuis « À relancer » : la prise
+   * s'efface, le journal garde l'agent et la transaction, le journal d'audit
+   * aussi, et les agents relisent leur liste. Ne lève jamais : la commande est
+   * déjà confirmée.
+   */
+  async noterPaiementConfirme(
+    commande: { id: string; reference: string; restaurant_id?: string | null },
+    user: Pick<User, 'id' | 'fullname' | 'email' | 'role'>,
+    transactionId: string,
+    effet: { justPaid: boolean; enDouble: boolean },
+  ): Promise<void> {
+    const raison = `Transaction KKiaPay ${transactionId}`.slice(0, 200);
+    try {
+      await this.prisma.$transaction([
+        this.prisma.orderRelance.updateMany({
+          where: { order_id: commande.id },
+          data: { pris_par_id: null, pris_le: null, prise_expire_le: null },
+        }),
+        this.prisma.orderRelanceJournal.create({
+          data: {
+            order_id: commande.id,
+            action: ACTIONS_JOURNAL_RELANCE.PAIEMENT_CONFIRME,
+            user_id: user.id,
+            raison,
+          },
+        }),
+      ]);
+    } catch (e) {
+      this.logger.warn(`Relance : paiement de ${commande.id} non journalisé : ${(e as Error)?.message}`);
+    }
+    try {
+      this.audit?.record({
+        actor_id: user.id,
+        actor_name: user.fullname ?? user.email ?? null,
+        actor_role: user.role ?? null,
+        restaurant_id: commande.restaurant_id ?? null,
+        action: 'PAIEMENT_CONFIRME',
+        module: 'orders',
+        entity_id: commande.id,
+        method: 'POST',
+        path: `/orders/relances/${commande.id}/confirmer-paiement`,
+        status_code: 200,
+        summary: effet.justPaid
+          ? `Paiement KKiaPay ${transactionId} confirmé depuis « À relancer » : commande ${commande.reference} transmise au restaurant`
+          : `Paiement KKiaPay ${transactionId} rattaché depuis « À relancer » : commande ${commande.reference} déjà confirmée`,
+        metadata: {
+          reference: commande.reference,
+          transaction: transactionId,
+          premiere_confirmation: effet.justPaid,
+          en_double: effet.enDouble,
+        },
+      });
+    } catch (e) {
+      this.logger.warn(`Relance : paiement de ${commande.id} absent du journal d'audit : ${(e as Error)?.message}`);
+    }
+    this.signaler('paiement', [commande.id], user.id);
+  }
+
   /**
    * RÉACTIVATION d'un panier annulé par le client (reprise au téléphone, dans
    * `OrderService.update`) : il doit être encore relançable au moment du geste.
@@ -857,8 +1019,11 @@ export class OrderRelanceService {
       const classement = classerBrouillons({ brouillons, effectives, maintenant, regles, moi: user.id });
       const trouve = groupeDeLaCommande(classement, orderId);
       if (!trouve?.visible) return null;
-      const crm = await this.lireCrm([trouve.visible.tete.customer_id]);
-      return this.versGroupeRelance(trouve.visible, crm);
+      const [crm, signales] = await Promise.all([
+        this.lireCrm([trouve.visible.tete.customer_id]),
+        this.lirePaiementsSignales([trouve.visible.tete, ...trouve.visible.autres]),
+      ]);
+      return this.versGroupeRelance(trouve.visible, crm, signales);
     } catch (e) {
       this.logger.warn(`Relance : relecture du groupe de ${orderId} impossible : ${(e as Error)?.message}`);
       return null;
@@ -923,11 +1088,73 @@ export class OrderRelanceService {
     return resultat;
   }
 
+  /**
+   * PAIEMENTS SIGNALÉS (14/11), par identifiant de commande : transactions
+   * KKiaPay réussies que le webhook a apportées sans confirmer la commande. Le
+   * webhook les écrit au journal d'audit (`kkiapay-audit.helper.ts`), avec la
+   * référence de la commande : refusé à l'entrée (403, 503), abandonné par le
+   * traitement (409), en échec après toutes ses tentatives (500). Ni les
+   * paiements confirmés (200), ni ceux que KKiaPay a refusés (402).
+   *
+   * Seulement les paniers en ligne en attente reçus, et les lignes postérieures
+   * au plus ancien : jamais tout le journal. Un webhook jamais reçu ne laisse
+   * aucune ligne : l'agent saisit alors l'identifiant. Ne lève jamais.
+   */
+  private async lirePaiementsSignales(brouillons: BrouillonLu[]): Promise<Map<string, PaiementSignale>> {
+    const resultat = new Map<string, PaiementSignale>();
+    const enLigne = brouillons.filter((b) => estBrouillon(b) && b.payment_method === PaymentMethod.ONLINE);
+    if (enLigne.length === 0) return resultat;
+    const parReference = new Map(enLigne.map((b) => [b.reference, b]));
+    const depuis = enLigne.reduce((min, b) => (b.created_at < min ? b.created_at : min), enLigne[0].created_at);
+    try {
+      const lignes = await this.prisma.auditLog.findMany({
+        where: {
+          actor_id: ACTEUR_KKIAPAY_ID,
+          module: 'paiements',
+          created_at: { gte: depuis },
+          status_code: { notIn: [200, 402] },
+          OR: [...parReference.keys()].map((reference) => ({
+            metadata: { path: ['reference_commande'], equals: reference },
+          })),
+        },
+        select: { entity_id: true, created_at: true, metadata: true },
+        orderBy: { created_at: 'desc' },
+        take: MAX_PAIEMENTS_SIGNALES_LUS,
+      });
+      for (const l of lignes) {
+        const m = (l.metadata ?? {}) as Record<string, unknown>;
+        // Un refus à l'entrée journalise aussi les échecs : seuls les paiements réussis comptent.
+        if (m.evenement !== 'transaction.success') continue;
+        const b = typeof m.reference_commande === 'string' ? parReference.get(m.reference_commande) : undefined;
+        const transaction = lireTransactionKkiapay(m.transaction ?? l.entity_id);
+        // Plus récente d'abord : la première ligne retenue pour un panier est la bonne.
+        if (!b || !transaction || resultat.has(b.id) || l.created_at < b.created_at) continue;
+        const motif = [m.motif_non_confirmation, m.motif_refus, m.erreur].find(
+          (v): v is string => typeof v === 'string' && v.trim() !== '',
+        );
+        resultat.set(b.id, {
+          order_id: b.id,
+          reference: b.reference,
+          transaction_id: transaction,
+          montant: typeof m.montant === 'number' && Number.isFinite(m.montant) ? m.montant : null,
+          moyen: typeof m.moyen === 'string' ? m.moyen : null,
+          le: l.created_at.toISOString(),
+          motif: motif ? motif.trim().slice(0, 200) : null,
+        });
+      }
+    } catch (e) {
+      this.logger.warn(`Relance : paiements signalés illisibles : ${(e as Error)?.message}`);
+    }
+    return resultat;
+  }
+
   private versGroupeRelance(
     g: GroupeClasse,
     crm: Map<string, { contact_id: string; statut: string; agent: string | null }>,
+    signales: Map<string, PaiementSignale> = new Map(),
   ): GroupeRelance {
     const partiel = g.signaux.paiement_partiel;
+    const signale = [g.tete, ...g.autres].map((b) => signales.get(b.id)).find((s) => !!s) ?? null;
     return {
       cle: g.cle,
       etat: g.etat,
@@ -973,6 +1200,7 @@ export class OrderRelanceService {
               jusqua: g.signaux.paiement_en_ligne_en_cours.jusqua.toISOString(),
             }
           : null,
+        paiement_signale: signale,
       },
       crm: (g.tete.customer_id && crm.get(g.tete.customer_id)) || null,
     };

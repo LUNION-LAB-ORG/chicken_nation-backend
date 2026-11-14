@@ -126,11 +126,34 @@ export function commande(maintenant: Date, minutes: number, surcharge: Ligne = {
   };
 }
 
+/**
+ * Filtre du journal d'audit employé par la relance (paiements signalés,
+ * 14/11) : égalités, `created_at.gte`, `status_code.notIn` (une valeur nulle
+ * n'y passe pas, comme NOT IN en SQL), et `OR` de chemins JSON `metadata`.
+ */
+function correspondAudit(ligne: Ligne, where: Ligne = {}): boolean {
+  for (const cle of ['actor_id', 'module']) {
+    if (where[cle] !== undefined && ligne[cle] !== where[cle]) return false;
+  }
+  if (where.created_at?.gte && !(ligne.created_at >= where.created_at.gte)) return false;
+  const exclus = where.status_code?.notIn as unknown[] | undefined;
+  if (exclus && (ligne.status_code == null || exclus.includes(ligne.status_code))) return false;
+  if (Array.isArray(where.OR)) {
+    const valeurJson = (chemin: string[]) =>
+      chemin.reduce<any>((v, k) => (v == null ? undefined : v[k]), ligne.metadata);
+    if (!where.OR.some((c: Ligne) => valeurJson(c.metadata?.path ?? []) === c.metadata?.equals)) return false;
+  }
+  return true;
+}
+
 /** Monte un OrderRelanceService RÉEL sur une base en mémoire. */
-export function monterRelance(donnees: { commandes?: Ligne[]; relances?: Ligne[]; users?: User[] } = {}) {
+export function monterRelance(
+  donnees: { commandes?: Ligne[]; relances?: Ligne[]; users?: User[]; journalAudit?: Ligne[] } = {},
+) {
   const commandes = donnees.commandes ?? [];
   const relances: Ligne[] = donnees.relances ?? [];
   const journal: Ligne[] = [];
+  const journalAudit: Ligne[] = donnees.journalAudit ?? [];
   const users: User[] = donnees.users ?? [AWA, YAO, ADMIN];
   const settings: Record<string, string> = {};
   let ids = 0;
@@ -215,6 +238,16 @@ export function monterRelance(donnees: { commandes?: Ligne[]; relances?: Ligne[]
       }),
     },
     crmContact: { findMany: jest.fn(async () => []) },
+    auditLog: {
+      lignes: journalAudit,
+      findMany: jest.fn(async ({ where, select, take }: { where: Ligne; select?: Ligne; take?: number }) =>
+        journalAudit
+          .filter((l) => correspondAudit(l, where))
+          .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())
+          .slice(0, take ?? journalAudit.length)
+          .map((l) => projeter(l, select)),
+      ),
+    },
   };
 
   /** Transactions une à une, annulées si leur fonction lève. */
@@ -242,11 +275,12 @@ export function monterRelance(donnees: { commandes?: Ligne[]; relances?: Ligne[]
     return r;
   }) };
   const appGateway = { emitToRelances: jest.fn() };
-  const service = new OrderRelanceService(prisma, settingsService as never, appGateway as never);
+  const audit = { record: jest.fn() };
+  const service = new OrderRelanceService(prisma, settingsService as never, appGateway as never, audit as never);
 
   // Vérifie que la lecture des brouillons passe bien par la règle unique.
   const lecturesBrouillons = () =>
     prisma.order.findMany.mock.calls.filter((c: [Ligne]) => c[0].where?.AND?.[0] === RELANCABLE_WHERE).length;
 
-  return { service, prisma, commandes, relances, journal, settings, appGateway, lecturesBrouillons };
+  return { service, prisma, commandes, relances, journal, journalAudit, settings, appGateway, audit, lecturesBrouillons };
 }

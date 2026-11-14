@@ -878,7 +878,7 @@ describe('POST /orders/relances/:orderId/annuler : déroulé', () => {
         },
       ),
     };
-    const controleur = new OrderRelanceController(monte.service, orders as never);
+    const controleur = new OrderRelanceController(monte.service, orders as never, {} as never);
     const annuler = (id: string, user: User, corps: Record<string, unknown> = { raison_code: 'CLIENT_INJOIGNABLE' }) =>
       controleur.annuler({ user } as never, id, corps as never);
     return { ...monte, orders, annuler, entreTemps: (f: () => void) => (entreTemps = f) };

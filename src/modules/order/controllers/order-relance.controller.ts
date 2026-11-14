@@ -19,10 +19,12 @@ import { UserRoles } from 'src/modules/auth/decorators/user-roles.decorator';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
 import { AnnulerRelanceDto } from '../dto/annuler-relance.dto';
+import { ConfirmerPaiementRelanceDto } from '../dto/confirmer-paiement-relance.dto';
 import { IgnorerRelanceDto } from '../dto/ignorer-relance.dto';
 import { QueryRelanceDto } from '../dto/query-relance.dto';
 import { ROLES_BROUILLONS } from '../helpers/brouillons.rules';
 import { A_CONFIRMER_WHERE } from '../helpers/paiement-livraison.rules';
+import { KkiapayOrderListenerService } from '../listeners/kkiapay-order.listener.service';
 import { OrderRelanceService } from '../services/order-relance.service';
 import { OrderService } from '../services/order.service';
 
@@ -55,6 +57,10 @@ export class OrderRelanceController {
     // annulations (coupon et cadeaux rendus, client prévenu). Aucun cycle :
     // c'est OrderService qui dépend de la relance, pas ce contrôleur.
     private readonly orders: OrderService,
+    // Confirmation d'un paiement KKiaPay resté sans suite (14/11) : le chemin
+    // du webhook, revérification KKiaPay comprise. Appelé d'ici et non du
+    // service de relance, pour la même raison d'absence de cycle.
+    private readonly kkiapay: KkiapayOrderListenerService,
   ) {}
 
   @Get()
@@ -136,6 +142,47 @@ export class OrderRelanceController {
     );
     await this.relances.noterAnnulation(orderId, user.id, raison);
     return { ok: true };
+  }
+
+  /**
+   * « Confirmer le paiement » (14/11) : le client a payé en ligne, le webhook
+   * n'a pas confirmé la commande, elle attend dans « À relancer ».
+   *
+   * L'identifiant de transaction n'est jamais cru sur parole : la
+   * confirmation rejoue le chemin du webhook, qui interroge KKiaPay et ne
+   * confirme QUE si le paiement a réussi et couvre la commande. Une
+   * transaction qui paie déjà une autre commande est refusée (409). Aucun
+   * « forcer ». C'est ce qui permet d'ouvrir le geste au centre d'appels,
+   * quand la route `POST /orders/:id/confirm-payment` reste aux administrateurs.
+   *
+   * Confirmée, la commande part au restaurant (cloche, notification au client,
+   * points), comme après un webhook ; l'agent et la transaction restent au
+   * journal de la relance et au journal d'audit.
+   */
+  @Post(':orderId/confirmer-paiement')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, UserRolesGuard)
+  @UserRoles(...ROLES_BROUILLONS)
+  @ApiBody({ type: ConfirmerPaiementRelanceDto })
+  @ApiOperation({ summary: 'Confirmer le paiement KKiaPay d’un panier resté en attente' })
+  async confirmerPaiement(
+    @Req() req: Request,
+    @Param('orderId', ID_COMMANDE) orderId: string,
+    @Body() corps: ConfirmerPaiementRelanceDto,
+  ): Promise<{ ok: true; reference: string; deja_confirmee: boolean; en_double: boolean }> {
+    const user = req.user as User;
+    const { transactionId, commande } = await this.relances.verifierPaiementConfirmable(orderId, corps, user);
+    const resultat = await this.kkiapay.confirmPaymentManually(orderId, transactionId);
+    await this.relances.noterPaiementConfirme(commande, user, transactionId, {
+      justPaid: resultat.justPaid,
+      enDouble: resultat.enDouble,
+    });
+    return {
+      ok: true,
+      reference: commande.reference,
+      deja_confirmee: !resultat.justPaid,
+      en_double: resultat.enDouble,
+    };
   }
 
   @Post(':orderId/retablir')
