@@ -15,6 +15,7 @@ import {
   libelleEncaissements,
   normaliserEncaissements,
 } from '../constantes/turbo.constante';
+import { CODES_REFUS_ENCAISSEMENT } from 'src/modules/paiements/helpers/encaissement.helper';
 
 const LIVRAISON_FINIE: DeliveryStatut[] = [
   DeliveryStatut.DELIVERED,
@@ -549,8 +550,17 @@ export class TurboWebhookService {
     },
     data: any,
   ): Promise<void> {
+    // Déjà déclaré : en attente, ou refusé par la caisse (18/11). Sans le
+    // refus, un appel rejoué recréait la déclaration que la caissière venait
+    // d'écarter.
     const dejaDeclare = await this.prisma.paiement.findFirst({
-      where: { order_id: order.id, status: PaiementStatus.PENDING },
+      where: {
+        order_id: order.id,
+        OR: [
+          { status: PaiementStatus.PENDING },
+          { status: PaiementStatus.FAILED, failure_code: { in: CODES_REFUS_ENCAISSEMENT } },
+        ],
+      },
       select: { id: true },
     });
     if (dejaDeclare) return;

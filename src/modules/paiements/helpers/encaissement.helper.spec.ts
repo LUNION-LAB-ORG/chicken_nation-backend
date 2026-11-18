@@ -7,14 +7,18 @@
  */
 
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { EntityStatus, OrderStatus, User, UserRole, UserType } from '@prisma/client';
+import { EntityStatus, OrderStatus, PaiementStatus, User, UserRole, UserType } from '@prisma/client';
 import {
+  cumulDesPaiements,
   encaisseAvant,
   estPaiementEnDouble,
   etatApresEncaissement,
   extraireEncaissement,
   PAYMENT_AMOUNT_TOLERANCE,
+  verifierAjoutSansExces,
   verifierCommandeEncaissable,
+  verifierConfirmationSansExces,
+  verifierCorrectionSansExces,
 } from './encaissement.helper';
 
 const COMMANDE_A = '11111111-1111-4111-8111-111111111111';
@@ -209,5 +213,113 @@ describe('estPaiementEnDouble', () => {
   it('non sans montant de commande', () => {
     expect(estPaiementEnDouble(null, 10000)).toBe(false);
     expect(estPaiementEnDouble(undefined, 10000)).toBe(false);
+  });
+});
+
+/**
+ * PAIEMENTS DE TROP (18/11) : 15 000 saisis pour une commande à 10 000
+ * passaient, et la caisse encaissait de nouveau ce que le livreur avait déjà
+ * déclaré. Jamais plus que le prix de la commande.
+ */
+describe('Paiements de trop', () => {
+  const recu = (amount: number) => ({ status: PaiementStatus.SUCCESS, amount });
+  const declare = (amount: number) => ({ status: PaiementStatus.PENDING, amount });
+  const echoue = (amount: number) => ({ status: PaiementStatus.FAILED, amount });
+  const message = (f: () => void) => {
+    try {
+      f();
+    } catch (e) {
+      expect(e).toBeInstanceOf(BadRequestException);
+      return (e as Error).message;
+    }
+    throw new Error('aucun refus');
+  };
+
+  describe('cumulDesPaiements', () => {
+    it('sépare le reçu de ce que le livreur a déclaré, et ignore les échecs et les remboursés', () => {
+      expect(
+        cumulDesPaiements([recu(3000), declare(2000), echoue(9000), { status: PaiementStatus.REVERTED, amount: 500 }]),
+      ).toEqual({ recu: 3000, enAttente: 2000 });
+    });
+  });
+
+  describe('verifierAjoutSansExces', () => {
+    it('laisse encaisser exactement le prix, ou le reste après un acompte', () => {
+      expect(() => verifierAjoutSansExces(10000, [], 10000)).not.toThrow();
+      expect(() => verifierAjoutSansExces(10000, [recu(4000)], 6000)).not.toThrow();
+      expect(() => verifierAjoutSansExces(10000, [], 4000)).not.toThrow();
+    });
+
+    it('refuse 15 000 pour une commande à 10 000 et dit ce qui reste', () => {
+      const texte = message(() => verifierAjoutSansExces(10000, [], 15000));
+      expect(texte).toMatch(/^Paiement de trop : il reste 10.000 XOF à encaisser/);
+    });
+
+    it("refuse ce qui dépasse le reste après un acompte, d'un franc près", () => {
+      expect(() => verifierAjoutSansExces(10000, [recu(4000)], 6001)).toThrow(BadRequestException);
+      expect(() => verifierAjoutSansExces(10000, [recu(4000)], 6000.4)).not.toThrow();
+    });
+
+    it("compte la déclaration du livreur : il faut d'abord la confirmer ou la refuser", () => {
+      const texte = message(() => verifierAjoutSansExces(10000, [declare(10000)], 10000));
+      expect(texte).toMatch(/^Le livreur a déjà déclaré 10.000 XOF, en attente de confirmation/);
+      expect(texte).toContain('confirmez ou refusez');
+    });
+
+    it('laisse encaisser ce que la déclaration partielle du livreur ne couvre pas', () => {
+      expect(() => verifierAjoutSansExces(10000, [declare(6000)], 4000)).not.toThrow();
+      const texte = message(() => verifierAjoutSansExces(10000, [declare(6000)], 10000));
+      expect(texte).toMatch(/^Paiement de trop : il reste 4.000 XOF/);
+      expect(texte).toMatch(/Le livreur a déjà déclaré 6.000 XOF/);
+    });
+
+    it("ne compte pas une déclaration refusée", () => {
+      expect(() => verifierAjoutSansExces(10000, [echoue(10000)], 10000)).not.toThrow();
+    });
+
+    it('commande déjà réglée : « Commande déjà payée. »', () => {
+      expect(message(() => verifierAjoutSansExces(10000, [recu(10000)], 500))).toBe('Commande déjà payée.');
+    });
+  });
+
+  describe('verifierConfirmationSansExces', () => {
+    it("confirme la déclaration qui solde la commande, ou l'une des deux d'un paiement partagé", () => {
+      expect(() => verifierConfirmationSansExces(10000, [], 10000)).not.toThrow();
+      expect(() => verifierConfirmationSansExces(10000, [recu(4000)], 6000)).not.toThrow();
+    });
+
+    it('refuse de confirmer quand la caisse a déjà encaissé : la déclaration est à refuser', () => {
+      expect(message(() => verifierConfirmationSansExces(10000, [recu(10000)], 10000))).toBe(
+        'Commande déjà payée : ce paiement serait de trop. Refusez-le.',
+      );
+    });
+
+    it('refuse une déclaration plus grosse que le reste', () => {
+      const texte = message(() => verifierConfirmationSansExces(10000, [recu(4000)], 10000));
+      expect(texte).toMatch(/^Ce paiement dépasse ce qui reste à encaisser \(6.000 XOF\)/);
+    });
+
+    it("ne compte pas les autres déclarations encore en attente : chacune se décide à son tour", () => {
+      expect(() => verifierConfirmationSansExces(10000, [declare(4000)], 6000)).not.toThrow();
+    });
+  });
+
+  describe('verifierCorrectionSansExces', () => {
+    it("refuse de relever un paiement au-delà du prix", () => {
+      const texte = message(() => verifierCorrectionSansExces(10000, [recu(4000)], 6000, 7000));
+      expect(texte).toMatch(/^Ce montant dépasserait le prix de la commande : 4.000 XOF déjà reçus ailleurs pour 10.000 XOF/);
+    });
+
+    it('laisse toujours baisser un paiement de trop enregistré avant', () => {
+      expect(() => verifierCorrectionSansExces(10000, [recu(10000)], 5000, 2000)).not.toThrow();
+    });
+
+    it("refuse de repasser réussi un paiement qui ferait dépasser le prix", () => {
+      expect(() => verifierCorrectionSansExces(10000, [recu(10000)], 0, 3000)).toThrow(BadRequestException);
+    });
+
+    it('laisse relever jusqu’au prix exact', () => {
+      expect(() => verifierCorrectionSansExces(10000, [recu(4000)], 5000, 6000)).not.toThrow();
+    });
   });
 });

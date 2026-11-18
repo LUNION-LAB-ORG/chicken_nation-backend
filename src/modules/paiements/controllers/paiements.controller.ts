@@ -118,6 +118,23 @@ export class PaiementsController {
     return this.paiementsService.confirmerEncaissement(req, paiementId);
   }
 
+  // REFUS (18/11) : même droit que la confirmation. La caissière refuse un
+  // encaissement déclaré par le livreur (mauvais moyen, mauvais montant, ou
+  // déjà encaissé en caisse) ; il ne compte plus, la commande ne bouge pas.
+  // Restaurant de la commande contrôlé dans le service.
+  @UseGuards(JwtAuthGuard, UserPermissionsGuard)
+  @RequirePermission(Modules.COMMANDES, Action.UPDATE_FULL)
+  @Patch(':id/refuser-encaissement')
+  @ApiOperation({
+    summary: "Refuser un encaissement livreur en attente",
+    description:
+      "Le paiement déclaré par le livreur passe en échec, avec le nom de qui l'a refusé. " +
+      "Il ne compte plus dans ce que la commande a reçu ; la commande ne change pas.",
+  })
+  refuserEncaissement(@Req() req: Request, @Param('id', ParseUUIDPipe) paiementId: string) {
+    return this.paiementsService.refuserEncaissement(req, paiementId);
+  }
+
   // ⚠️ Sans garde alors que la méthode lit `req.user` : l'appel anonyme
   // partait en 500. Toutes les routes voisines sont gardées.
   @UseGuards(JwtCustomerAuthGuard)
@@ -147,7 +164,7 @@ export class PaiementsController {
       req,
       "Seul un administrateur peut créer un paiement directement. Pour encaisser une commande, ajoutez un paiement depuis la commande.",
     );
-    return this.paiementsService.create(createPaiementDto);
+    return this.paiementsService.creerDepuisRegistre(createPaiementDto);
   }
 
   // Guard AJOUTÉ (revue 31/07) : la liste ANONYME fuyait références, montants

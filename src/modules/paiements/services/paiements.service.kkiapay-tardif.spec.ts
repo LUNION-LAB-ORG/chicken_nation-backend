@@ -30,7 +30,14 @@ function monter(statut: OrderStatus, compteClaim: number, compteRetablie = 0, co
         .mockResolvedValue({ count: compteTerminee }),
     },
     notificationSetting: { findUnique: jest.fn().mockResolvedValue({ expo_push_token: 'ExponentPushToken[x]' }) },
-    paiement: { findMany: jest.fn().mockResolvedValue([{ amount: 10000, total: 10000 }]) },
+    // Réussis pour le cumul ; aucune déclaration du livreur en attente (18/11).
+    paiement: {
+      findMany: jest
+        .fn()
+        .mockImplementation((args: { where?: { status?: unknown } }) =>
+          Promise.resolve(args?.where?.status === 'PENDING' ? [] : [{ amount: 10000, total: 10000 }]),
+        ),
+    },
   };
   const kkiapay = {
     verifyTransactionForRestaurant: jest.fn().mockResolvedValue({

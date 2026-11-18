@@ -52,6 +52,8 @@ export enum CodeAlerte {
   PAIEMENT_EN_DOUBLE = 'PAIEMENT_EN_DOUBLE',
   /** Commande payée avec une remise en points que le solde ne couvrait plus : points utilisés deux fois. */
   POINTS_NON_RETIRES = 'POINTS_NON_RETIRES',
+  /** Payée par KKiaPay alors que le livreur avait déclaré un encaissement : déclaration refusée d'office. */
+  ENCAISSEMENT_LIVREUR_REFUSE = 'ENCAISSEMENT_LIVREUR_REFUSE',
 }
 
 /**
@@ -86,6 +88,7 @@ const TITRES: Record<CodeAlerte, string> = {
   [CodeAlerte.PAIEMENT_SUR_COMMANDE_ANNULEE]: 'Paiement reçu sur une commande annulée, à rembourser',
   [CodeAlerte.PAIEMENT_EN_DOUBLE]: 'Paiement reçu deux fois, à rembourser',
   [CodeAlerte.POINTS_NON_RETIRES]: 'Points de fidélité utilisés deux fois',
+  [CodeAlerte.ENCAISSEMENT_LIVREUR_REFUSE]: 'Payée en ligne : encaissement du livreur refusé',
 };
 
 /**

@@ -26,6 +26,8 @@ import { OrderController } from './order.controller';
 const ROUTES_ENCAISSEMENT: [string, (...args: never[]) => unknown][] = [
   ['POST /paiements/add', PaiementsController.prototype.addPaiement],
   ['PATCH /paiements/:id/confirmer-encaissement', PaiementsController.prototype.confirmerEncaissement],
+  // Refuser la déclaration du livreur (18/11) : même droit que la confirmer.
+  ['PATCH /paiements/:id/refuser-encaissement', PaiementsController.prototype.refuserEncaissement],
   ['POST /orders/:id/mark-paid-cash', OrderController.prototype.markPaidCash],
   // Pas une route d'encaissement, mais elle posait `paied` : même droit.
   ['PATCH /orders/:id', OrderController.prototype.update],

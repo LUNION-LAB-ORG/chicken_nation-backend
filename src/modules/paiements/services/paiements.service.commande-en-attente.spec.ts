@@ -43,18 +43,22 @@ function monter(commande: Record<string, unknown>, encaisse: number, issues: unk
         .mockResolvedValueOnce({ ...commande, paiements: [{ status: PaiementStatus.SUCCESS, amount: encaisse, total: encaisse }] }),
       update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({ ...commande, ...data })),
     },
+    // Contrôle et écriture sous le verrou de la commande (18/11).
+    paiement: { create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({ id: 'p-1', ...data })) },
+    $queryRaw: jest.fn().mockResolvedValue([]),
+    $transaction: jest.fn(),
   };
+  prisma.$transaction.mockImplementation((cb: (tx: typeof prisma) => unknown) => cb(prisma));
   const eventEmitter = { emit: jest.fn(), emitAsync: jest.fn().mockResolvedValue(issues) };
   const service = new PaiementsService(
     prisma as never,
     {} as never,
-    {} as never,
+    { paiementEffectue: jest.fn() } as never,
     { activateUsageForOrder: jest.fn().mockResolvedValue(undefined) } as never,
     {} as never,
     eventEmitter as never,
     { signaler: jest.fn() } as never,
   );
-  jest.spyOn(service, 'create').mockResolvedValue({ paiement: { id: 'p-1' }, order: null } as never);
   const encaisser = (montant: number) =>
     service.addPaiement({ user: ADMIN } as unknown as Request, {
       items: [{ amount: montant, mode: PaiementMode.MOBILE_MONEY, source: 'wave', order_id: COMMANDE }],

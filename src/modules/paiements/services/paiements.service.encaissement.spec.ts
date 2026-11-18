@@ -48,9 +48,18 @@ const reglages = () => ({
 function monter() {
   const prisma = {
     order: { findUnique: jest.fn(), update: jest.fn() },
-    paiement: { findUnique: jest.fn(), updateMany: jest.fn() },
+    paiement: {
+      findUnique: jest.fn(),
+      updateMany: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
+      create: jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'p-neuf', ...data })),
+    },
     notificationSetting: { findUnique: jest.fn() },
+    // Verrou de la commande (18/11) : la transaction rejoue le même client.
+    $queryRaw: jest.fn().mockResolvedValue([]),
+    $transaction: jest.fn(),
   };
+  prisma.$transaction.mockImplementation((travail: (tx: typeof prisma) => unknown) => travail(prisma));
   const promoCodeService = { activateUsageForOrder: jest.fn().mockResolvedValue(undefined) };
   const appGateway = {
     emitToUser: jest.fn(),
@@ -58,19 +67,18 @@ function monter() {
     emitToRestaurant: jest.fn(),
   };
   const eventEmitter = { emit: jest.fn() };
+  const paiementEvent = { paiementEffectue: jest.fn(), paiementAnnule: jest.fn() };
   const service = new PaiementsService(
     prisma as never,
     {} as never,
-    {} as never,
+    paiementEvent as never,
     promoCodeService as never,
     appGateway as never,
     eventEmitter as never,
     { signaler: jest.fn() } as never,
   );
-  const creer = jest
-    .spyOn(service, 'create')
-    .mockResolvedValue({ paiement: { id: 'p-neuf' }, order: null } as never);
-  return { service, prisma, appGateway, eventEmitter, creer };
+  const creer = prisma.paiement.create;
+  return { service, prisma, appGateway, eventEmitter, creer, paiementEvent };
 }
 
 /** Toutes les clés présentes, à toute profondeur. */
@@ -143,7 +151,7 @@ describe('PaiementsService.addPaiement', () => {
     expect(reponse.success).toBe(true);
     // La ligne à zéro est ignorée, le client du corps aussi.
     expect(creer).toHaveBeenCalledTimes(1);
-    expect(creer.mock.calls[0][0]).toEqual(
+    expect(creer.mock.calls[0][0].data).toEqual(
       expect.objectContaining({
         amount: 8000,
         order_id: COMMANDE,
@@ -219,7 +227,7 @@ describe('PaiementsService.addPaiement', () => {
       status: OrderStatus.READY,
       entity_status: EntityStatus.ACTIVE,
       amount: 8000,
-      paiements: [{ total: 8000, amount: 8000 }],
+      paiements: [{ status: PaiementStatus.SUCCESS, total: 8000, amount: 8000 }],
     });
 
     await expect(
@@ -240,7 +248,7 @@ describe('PaiementsService.addPaiement', () => {
       status: OrderStatus.READY,
       entity_status: EntityStatus.ACTIVE,
       amount: 8000,
-      paiements: [{ total: 3000, amount: 3000 }],
+      paiements: [{ status: PaiementStatus.SUCCESS, total: 3000, amount: 3000 }],
     });
     prisma.order.findUnique.mockResolvedValueOnce({
       id: COMMANDE,
@@ -261,13 +269,129 @@ describe('PaiementsService.addPaiement', () => {
   });
 });
 
+describe('PaiementsService.addPaiement : paiements de trop (18/11)', () => {
+  /** Commande lue sous le verrou : réussis ET en attente. */
+  function commandeSousVerrou(
+    prisma: ReturnType<typeof monter>['prisma'],
+    paiements: { status: PaiementStatus; amount: number; total?: number }[],
+    montant = 10000,
+  ) {
+    prisma.order.findUnique.mockImplementation((args: { select?: unknown }) =>
+      Promise.resolve(
+        args.select
+          ? {
+              id: COMMANDE,
+              restaurant_id: RESTAURANT_A,
+              customer_id: CLIENT,
+              status: OrderStatus.READY,
+              entity_status: EntityStatus.ACTIVE,
+              amount: montant,
+              paiements: paiements.map((p) => ({ total: p.amount, ...p })),
+            }
+          : {
+              id: COMMANDE,
+              amount: montant,
+              status: OrderStatus.READY,
+              paied_at: null,
+              paiements: [{ total: montant, amount: montant }],
+            },
+      ),
+    );
+    prisma.order.update.mockResolvedValue({ id: COMMANDE, code_promo: null });
+  }
+
+  it('refuse 15 000 sur une commande à 10 000, sans rien écrire', async () => {
+    const { service, prisma, creer, paiementEvent } = monter();
+    commandeSousVerrou(prisma, []);
+
+    await expect(
+      service.addPaiement(requete(caissierA), {
+        items: [{ amount: 15000, mode: PaiementMode.CASH, order_id: COMMANDE }],
+      }),
+    ).rejects.toThrow(/^Paiement de trop/);
+    expect(creer).not.toHaveBeenCalled();
+    expect(paiementEvent.paiementEffectue).not.toHaveBeenCalled();
+    expect(prisma.order.update).not.toHaveBeenCalled();
+  });
+
+  it('refuse aussi un paiement partagé dont la somme dépasse le prix', async () => {
+    const { service, prisma, creer } = monter();
+    commandeSousVerrou(prisma, []);
+
+    await expect(
+      service.addPaiement(requete(caissierA), {
+        items: [
+          { amount: 6000, mode: PaiementMode.CASH, order_id: COMMANDE },
+          { amount: 6000, mode: PaiementMode.MOBILE_MONEY, source: 'wave', order_id: COMMANDE },
+        ],
+      }),
+    ).rejects.toThrow(/^Paiement de trop/);
+    expect(creer).not.toHaveBeenCalled();
+  });
+
+  it("refuse d'encaisser ce que le livreur a déjà déclaré : il faut d'abord confirmer ou refuser", async () => {
+    const { service, prisma, creer } = monter();
+    commandeSousVerrou(prisma, [{ status: PaiementStatus.PENDING, amount: 10000 }]);
+
+    await expect(
+      service.addPaiement(requete(caissierA), {
+        items: [{ amount: 10000, mode: PaiementMode.CASH, order_id: COMMANDE }],
+      }),
+    ).rejects.toThrow(/^Le livreur a déjà déclaré/);
+    expect(creer).not.toHaveBeenCalled();
+  });
+
+  it('laisse encaisser ce que la déclaration partielle du livreur ne couvre pas', async () => {
+    const { service, prisma, creer } = monter();
+    commandeSousVerrou(prisma, [{ status: PaiementStatus.PENDING, amount: 6000 }]);
+
+    await service.addPaiement(requete(caissierA), {
+      items: [{ amount: 4000, mode: PaiementMode.CASH, order_id: COMMANDE }],
+    });
+    expect(creer).toHaveBeenCalledTimes(1);
+  });
+
+  it('verrouille la commande AVANT de la lire : deux postes au même instant ne passent pas tous les deux', async () => {
+    const { service, prisma } = monter();
+    commandeSousVerrou(prisma, []);
+
+    await service.addPaiement(requete(caissierA), {
+      items: [{ amount: 10000, mode: PaiementMode.CASH, order_id: COMMANDE }],
+    });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    const verrou = prisma.$queryRaw.mock.invocationCallOrder[0];
+    const lecture = prisma.order.findUnique.mock.invocationCallOrder[0];
+    expect(verrou).toBeLessThan(lecture);
+    expect(prisma.$queryRaw.mock.calls[0][0].join('')).toContain('FOR UPDATE');
+  });
+
+  it("n'annonce les paiements qu'une fois tout le lot écrit", async () => {
+    const { service, prisma, creer, paiementEvent } = monter();
+    commandeSousVerrou(prisma, []);
+    creer
+      .mockImplementationOnce(({ data }) => Promise.resolve({ id: 'p1', ...data }))
+      .mockRejectedValueOnce(new Error('base indisponible'));
+
+    await expect(
+      service.addPaiement(requete(caissierA), {
+        items: [
+          { amount: 4000, mode: PaiementMode.CASH, order_id: COMMANDE },
+          { amount: 6000, mode: PaiementMode.MOBILE_MONEY, source: 'wave', order_id: COMMANDE },
+        ],
+      }),
+    ).rejects.toThrow('base indisponible');
+    expect(paiementEvent.paiementEffectue).not.toHaveBeenCalled();
+  });
+});
+
 describe('PaiementsService.confirmerEncaissement', () => {
   function paiementEnAttente(prisma: ReturnType<typeof monter>['prisma'], restaurant_id: string) {
     prisma.paiement.findUnique.mockResolvedValue({
       id: PAIEMENT,
       status: PaiementStatus.PENDING,
+      amount: 8000,
       order_id: COMMANDE,
-      order: { status: OrderStatus.COLLECTED, restaurant_id },
+      order: { status: OrderStatus.COLLECTED, restaurant_id, amount: 8000 },
     });
     prisma.paiement.updateMany.mockResolvedValue({ count: 1 });
     prisma.order.findUnique.mockResolvedValue({
@@ -332,5 +456,191 @@ describe('PaiementsService.confirmerEncaissement', () => {
     const [canal, evenement] = eventEmitter.emit.mock.calls[0];
     expect(canal).toBe(OrderChannels.ORDER_STATUS_UPDATED);
     expect(evenement.expo_token).toBe('ExponentPushToken[abc]');
+  });
+});
+
+describe('PaiementsService.confirmerEncaissement : paiements de trop (18/11)', () => {
+  function declaration(prisma: ReturnType<typeof monter>['prisma'], declare: number, dejaRecu: number[]) {
+    prisma.paiement.findUnique.mockResolvedValue({
+      id: PAIEMENT,
+      status: PaiementStatus.PENDING,
+      amount: declare,
+      order_id: COMMANDE,
+      order: { status: OrderStatus.COLLECTED, restaurant_id: RESTAURANT_A, amount: 8000 },
+    });
+    prisma.paiement.findMany.mockResolvedValue(
+      dejaRecu.map((amount) => ({ status: PaiementStatus.SUCCESS, amount })),
+    );
+    prisma.paiement.updateMany.mockResolvedValue({ count: 1 });
+  }
+
+  it('refuse de confirmer quand la caisse a déjà encaissé la commande, avant tout claim', async () => {
+    const { service, prisma } = monter();
+    declaration(prisma, 8000, [8000]);
+
+    await expect(service.confirmerEncaissement(requete(caissierA), PAIEMENT)).rejects.toThrow(
+      'Commande déjà payée : ce paiement serait de trop. Refusez-le.',
+    );
+    expect(prisma.paiement.updateMany).not.toHaveBeenCalled();
+    expect(prisma.order.update).not.toHaveBeenCalled();
+  });
+
+  it('refuse une déclaration plus grosse que le reste', async () => {
+    const { service, prisma } = monter();
+    declaration(prisma, 8000, [3000]);
+
+    await expect(service.confirmerEncaissement(requete(caissierA), PAIEMENT)).rejects.toThrow(
+      /^Ce paiement dépasse ce qui reste à encaisser/,
+    );
+    expect(prisma.paiement.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('contrôle et revendique sous le verrou de la commande', async () => {
+    const { service, prisma } = monter();
+    declaration(prisma, 5000, [3000]);
+    prisma.order.findUnique.mockResolvedValue({
+      id: COMMANDE,
+      amount: 8000,
+      status: OrderStatus.COLLECTED,
+      paied_at: null,
+      paiements: [{ total: 3000, amount: 3000 }, { total: 5000, amount: 5000 }],
+    });
+    prisma.order.update.mockResolvedValue({ id: COMMANDE, customer_id: CLIENT, restaurant_id: RESTAURANT_A, code_promo: null });
+    prisma.notificationSetting.findUnique.mockResolvedValue(null);
+
+    await service.confirmerEncaissement(requete(caissierA), PAIEMENT);
+    const verrou = prisma.$queryRaw.mock.invocationCallOrder[0];
+    expect(verrou).toBeLessThan(prisma.paiement.findMany.mock.invocationCallOrder[0]);
+    expect(verrou).toBeLessThan(prisma.paiement.updateMany.mock.invocationCallOrder[0]);
+  });
+
+  it("ne dit pas « déjà confirmé » d'un encaissement qu'un autre poste vient de refuser", async () => {
+    const { service, prisma } = monter();
+    declaration(prisma, 8000, []);
+    prisma.paiement.updateMany.mockResolvedValue({ count: 0 });
+    prisma.paiement.findUnique
+      .mockResolvedValueOnce({
+        id: PAIEMENT,
+        status: PaiementStatus.PENDING,
+        amount: 8000,
+        order_id: COMMANDE,
+        order: { status: OrderStatus.COLLECTED, restaurant_id: RESTAURANT_A, amount: 8000 },
+      })
+      .mockResolvedValueOnce({ status: PaiementStatus.FAILED });
+
+    await expect(service.confirmerEncaissement(requete(caissierA), PAIEMENT)).rejects.toThrow(/vient d'être refusé/);
+    expect(prisma.order.update).not.toHaveBeenCalled();
+  });
+
+  it('refuse de confirmer une déclaration déjà refusée', async () => {
+    const { service, prisma } = monter();
+    prisma.paiement.findUnique.mockResolvedValue({
+      id: PAIEMENT,
+      status: PaiementStatus.FAILED,
+      amount: 8000,
+      order_id: COMMANDE,
+      order: { status: OrderStatus.COLLECTED, restaurant_id: RESTAURANT_A, amount: 8000 },
+    });
+
+    await expect(service.confirmerEncaissement(requete(caissierA), PAIEMENT)).rejects.toThrow(/a été refusé/);
+    expect(prisma.paiement.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('PaiementsService.refuserEncaissement (18/11)', () => {
+  const caissiereNommee = { ...caissierA, fullname: 'Awa Koné' } as unknown as User;
+
+  function enAttente(prisma: ReturnType<typeof monter>['prisma'], restaurant_id: string, status = PaiementStatus.PENDING as PaiementStatus) {
+    prisma.paiement.findUnique.mockResolvedValue({ id: PAIEMENT, status, order: { restaurant_id } });
+    prisma.paiement.updateMany.mockResolvedValue({ count: 1 });
+  }
+
+  it("interdit à un caissier de refuser l'encaissement d'un autre restaurant, avant toute écriture", async () => {
+    const { service, prisma } = monter();
+    enAttente(prisma, RESTAURANT_B);
+
+    await expect(service.refuserEncaissement(requete(caissiereNommee), PAIEMENT)).rejects.toThrow(ForbiddenException);
+    expect(prisma.paiement.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("passe la déclaration en échec, avec le motif et le nom de qui l'a refusée, sans toucher la commande", async () => {
+    const { service, prisma } = monter();
+    enAttente(prisma, RESTAURANT_A);
+
+    const reponse = await service.refuserEncaissement(requete(caissiereNommee), PAIEMENT);
+
+    expect(reponse).toEqual({ success: true, message: 'Encaissement refusé.' });
+    const [{ where, data }] = prisma.paiement.updateMany.mock.calls[0];
+    expect(where).toEqual({ id: PAIEMENT, status: PaiementStatus.PENDING });
+    expect(data).toEqual(
+      expect.objectContaining({
+        status: PaiementStatus.FAILED,
+        failure_code: 'REFUSE_PAR_LE_RESTAURANT',
+        failure_message: 'Refusé par Awa Koné',
+      }),
+    );
+    expect(prisma.order.update).not.toHaveBeenCalled();
+  });
+
+  it('répond sans rien écrire quand la déclaration est déjà refusée (double clic)', async () => {
+    const { service, prisma } = monter();
+    enAttente(prisma, RESTAURANT_A, PaiementStatus.FAILED);
+
+    await expect(service.refuserEncaissement(requete(caissiereNommee), PAIEMENT)).resolves.toEqual(
+      expect.objectContaining({ message: 'Encaissement déjà refusé.' }),
+    );
+    expect(prisma.paiement.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuse de défaire un paiement réussi : seule une déclaration en attente se refuse', async () => {
+    const { service, prisma } = monter();
+    enAttente(prisma, RESTAURANT_A, PaiementStatus.SUCCESS);
+
+    await expect(service.refuserEncaissement(requete(caissiereNommee), PAIEMENT)).rejects.toThrow(BadRequestException);
+    expect(prisma.paiement.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('le dit quand un autre poste vient de la confirmer', async () => {
+    const { service, prisma } = monter();
+    enAttente(prisma, RESTAURANT_A);
+    prisma.paiement.updateMany.mockResolvedValue({ count: 0 });
+    prisma.paiement.findUnique
+      .mockResolvedValueOnce({ id: PAIEMENT, status: PaiementStatus.PENDING, order: { restaurant_id: RESTAURANT_A } })
+      .mockResolvedValueOnce({ status: PaiementStatus.SUCCESS });
+
+    await expect(service.refuserEncaissement(requete(caissiereNommee), PAIEMENT)).rejects.toThrow(/vient d'être confirmé/);
+  });
+});
+
+describe('PaiementsService.update : correction par l’administrateur (18/11)', () => {
+  function paiementReussi(prisma: ReturnType<typeof monter>['prisma'], amount: number, autres: number[]) {
+    prisma.paiement.findUnique.mockResolvedValue({
+      id: PAIEMENT,
+      amount,
+      fees: 0,
+      status: PaiementStatus.SUCCESS,
+      mode: PaiementMode.CASH,
+      source: 'cash',
+      order_id: COMMANDE,
+    });
+    prisma.order.findUnique.mockResolvedValue({ id: COMMANDE, amount: 10000, paied: true, paiements: [] });
+    prisma.paiement.findMany.mockResolvedValue(autres.map((a) => ({ status: PaiementStatus.SUCCESS, amount: a })));
+    (prisma.paiement as Record<string, jest.Mock>).update = jest.fn().mockResolvedValue({ id: PAIEMENT });
+  }
+
+  it('refuse de relever un paiement au-delà du prix de la commande', async () => {
+    const { service, prisma } = monter();
+    paiementReussi(prisma, 6000, [4000]);
+
+    await expect(service.update(PAIEMENT, { amount: 9000 })).rejects.toThrow(/^Ce montant dépasserait le prix/);
+    expect((prisma.paiement as Record<string, jest.Mock>).update).not.toHaveBeenCalled();
+  });
+
+  it('laisse baisser un paiement de trop', async () => {
+    const { service, prisma } = monter();
+    paiementReussi(prisma, 9000, [4000]);
+
+    await service.update(PAIEMENT, { amount: 6000 });
+    expect((prisma.paiement as Record<string, jest.Mock>).update).toHaveBeenCalledTimes(1);
   });
 });

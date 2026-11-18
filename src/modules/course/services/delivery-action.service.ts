@@ -35,6 +35,7 @@ import { MESSAGE_DEPART_AVANT_RETRAIT } from '../helpers/depart.rules';
 import { DecisionPlusTard, MESSAGE_CLIENT_EN_COURS, reglePlusTard } from '../helpers/plus-tard.rules';
 import { DepartCourseService } from './depart-course.service';
 import { DispatchJournalService } from './dispatch-journal.service';
+import { CODES_REFUS_ENCAISSEMENT } from 'src/modules/paiements/helpers/encaissement.helper';
 
 /**
  * Livraison encore à faire : le livreur peut la passer en échec. PENDING
@@ -449,8 +450,17 @@ export class DeliveryActionService {
     },
     dto: ConfirmDeliveryDto,
   ): Promise<void> {
+    // Déjà déclaré : en attente, ou refusé par la caisse (18/11). Sans le
+    // refus, un appel rejoué recréait la déclaration que la caissière venait
+    // d'écarter.
     const dejaDeclare = await this.prisma.paiement.findFirst({
-      where: { order_id: order.id, status: PaiementStatus.PENDING },
+      where: {
+        order_id: order.id,
+        OR: [
+          { status: PaiementStatus.PENDING },
+          { status: PaiementStatus.FAILED, failure_code: { in: CODES_REFUS_ENCAISSEMENT } },
+        ],
+      },
       select: { id: true },
     });
     if (dejaDeclare) return;

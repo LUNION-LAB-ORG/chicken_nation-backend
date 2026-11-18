@@ -53,6 +53,7 @@ function monter({
   existant = null as Ligne | null,
   commande = commandeReglee(),
   compteClaim = 0,
+  enAttente = [] as { id: string; amount: number; source: string }[],
 }: {
   transaction?: Ligne;
   statut?: PaiementStatus;
@@ -60,6 +61,8 @@ function monter({
   existant?: Ligne | null;
   commande?: ReturnType<typeof commandeReglee>;
   compteClaim?: number;
+  /** Encaissements déclarés par le livreur, encore en attente. */
+  enAttente?: { id: string; amount: number; source: string }[];
 } = {}) {
   const prisma = {
     order: {
@@ -72,7 +75,13 @@ function monter({
       create: jest.fn().mockImplementation(({ data }) =>
         Promise.resolve({ id: transaction.id, ...data, created_at: transaction.created_at }),
       ),
-      findMany: jest.fn().mockResolvedValue(enBase),
+      // Réussis pour le cumul ; déclarations du livreur en attente à part (18/11).
+      findMany: jest
+        .fn()
+        .mockImplementation((args: { where?: { status?: unknown } }) =>
+          Promise.resolve(args?.where?.status === PaiementStatus.PENDING ? enAttente : enBase),
+        ),
+      updateMany: jest.fn().mockResolvedValue({ count: enAttente.length }),
     },
   };
   const kkiapay = {
@@ -259,5 +268,76 @@ describe('PaiementsService.payWithKkiapay : paiement reçu deux fois', () => {
     await payer(service);
 
     expect(alertes.signaler).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * KKIAPAY PRIORITAIRE (18/11) : un paiement en ligne vérifié solde la
+ * commande, les encaissements que le livreur avait déclarés sont de trop. Ils
+ * sont refusés d'office pour que personne ne les confirme par erreur, et
+ * l'équipe est prévenue.
+ */
+describe('KKiaPay prioritaire sur les déclarations du livreur', () => {
+  const declaration = { id: 'd1', amount: 10000, source: 'cash' };
+  const commandeAPayer = () => commandeReglee({ paied: false, status: OrderStatus.COLLECTED });
+
+  it('webhook qui solde la commande : la déclaration en attente est refusée d’office, avec une alerte', async () => {
+    const { service, prisma, alertes } = monter({
+      transaction: premier,
+      enBase: [premier],
+      commande: commandeAPayer(),
+      enAttente: [declaration],
+    });
+
+    const resultat = await lier(service, premier);
+
+    expect(resultat.isPaid).toBe(true);
+    const [{ where, data }] = prisma.paiement.updateMany.mock.calls[0];
+    expect(where).toEqual({ id: { in: ['d1'] }, status: PaiementStatus.PENDING });
+    expect(data).toEqual(
+      expect.objectContaining({ status: PaiementStatus.FAILED, failure_code: 'REFUSE_PAYEE_EN_LIGNE' }),
+    );
+    const alerte = alertes.signaler.mock.calls.map((c) => c[0]).find((a) => a.code === CodeAlerte.ENCAISSEMENT_LIVREUR_REFUSE);
+    expect(alerte).toBeDefined();
+    expect(alerte.details.join(' ')).toContain('kk-1');
+    expect(alerte.details.join(' ')).toContain('à rembourser');
+  });
+
+  it('retour de l’application qui solde la commande : même refus d’office', async () => {
+    const { service, prisma } = monter({
+      transaction: premier,
+      enBase: [premier],
+      commande: commandeAPayer(),
+      enAttente: [declaration],
+    });
+
+    await service.payWithKkiapay({ user: { id: CLIENT } } as never, { transactionId: 'kk-1', orderId: COMMANDE } as never);
+
+    expect(prisma.paiement.updateMany.mock.calls[0][0].data.failure_code).toBe('REFUSE_PAYEE_EN_LIGNE');
+  });
+
+  it("paiement en ligne qui ne solde pas la commande : la déclaration du livreur reste à décider", async () => {
+    const acompte = { ...premier, amount: 4000, total: 4000 };
+    const { service, prisma, alertes } = monter({
+      transaction: acompte,
+      enBase: [acompte],
+      commande: commandeAPayer(),
+      enAttente: [{ ...declaration, amount: 6000 }],
+    });
+
+    const resultat = await lier(service, acompte);
+
+    expect(resultat.isPaid).toBe(false);
+    expect(prisma.paiement.updateMany).not.toHaveBeenCalled();
+    expect(alertes.signaler).not.toHaveBeenCalled();
+  });
+
+  it("rien à refuser : aucune écriture, aucune alerte de déclaration", async () => {
+    const { service, prisma, alertes } = monter({ transaction: premier, enBase: [premier], commande: commandeAPayer() });
+
+    await lier(service, premier);
+
+    expect(prisma.paiement.updateMany).not.toHaveBeenCalled();
+    expect(alertes.signaler.mock.calls.map((c) => c[0].code)).not.toContain(CodeAlerte.ENCAISSEMENT_LIVREUR_REFUSE);
   });
 });

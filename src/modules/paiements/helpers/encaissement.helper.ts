@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { EntityStatus, OrderStatus, User } from '@prisma/client';
+import { EntityStatus, OrderStatus, PaiementStatus, User } from '@prisma/client';
 import { assertCanAccessRestaurant } from 'src/modules/order/helpers/restaurant-scope.helper';
 
 /**
@@ -158,4 +158,131 @@ export function estPaiementEnDouble(
 ): boolean {
   if (montantCommande == null || dejaEncaisse <= 0) return false;
   return dejaEncaisse >= montantCommande - PAYMENT_AMOUNT_TOLERANCE;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAIEMENTS DE TROP (18/11)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Motifs d'un encaissement du livreur refusé (paiement passé de « en attente »
+ * à FAILED). Les écrans les reconnaissent pour afficher « Refusé » plutôt
+ * qu'« Échec ».
+ */
+export const REFUS_ENCAISSEMENT = {
+  /** Refusé à la main, par la caisse ou le back office. */
+  PAR_LE_RESTAURANT: 'REFUSE_PAR_LE_RESTAURANT',
+  /** Refusé d'office : un paiement KKiaPay a soldé la commande. */
+  PAYEE_EN_LIGNE: 'REFUSE_PAYEE_EN_LIGNE',
+} as const;
+
+export const CODES_REFUS_ENCAISSEMENT: string[] = Object.values(REFUS_ENCAISSEMENT);
+
+/** Ce qu'il faut d'un paiement pour compter ce que la commande a reçu ou attend. */
+export interface PaiementCompte {
+  status: PaiementStatus;
+  amount: number | null;
+}
+
+/**
+ * Ce que la commande a reçu (paiements réussis) et ce que le livreur a déclaré
+ * sans que ce soit encore confirmé (paiements en attente).
+ *
+ * Montant SANS la commission KKiaPay (`amount`, pas `total`), comme
+ * `encaisseAvant` : c'est ce que le client a réglé pour la commande. Le reste
+ * à encaisser est ainsi le plus large possible, et le paiement qui solde
+ * vraiment la commande n'est jamais refusé.
+ */
+export function cumulDesPaiements(paiements: PaiementCompte[]): { recu: number; enAttente: number } {
+  let recu = 0;
+  let enAttente = 0;
+  for (const p of paiements) {
+    if (p.status === PaiementStatus.SUCCESS) recu += p.amount ?? 0;
+    else if (p.status === PaiementStatus.PENDING) enAttente += p.amount ?? 0;
+  }
+  return { recu, enAttente };
+}
+
+/** « 4 000 XOF » : même écriture que les autres messages d'encaissement. */
+const xof = (montant: number) => `${Math.round(montant).toLocaleString('fr-FR')} XOF`;
+
+/** Comparaison au franc près : les montants sont des nombres à virgule en base. */
+const depasse = (montant: number, plafond: number) => Math.round(montant) > Math.round(plafond);
+
+/**
+ * AJOUT D'UN PAIEMENT (caisse, back office) : refuse ce qui ferait dépasser le
+ * prix de la commande.
+ *
+ * Avant le 18/11, seul un ajout sur une commande DÉJÀ soldée était refusé :
+ * 15 000 XOF saisis pour une commande à 10 000 passaient, et la commande
+ * restait « payée » avec 5 000 de trop.
+ *
+ * Les encaissements que le livreur a déclarés comptent comme s'ils étaient
+ * reçus : la caissière encaissait de nouveau ce que le livreur avait déjà
+ * rapporté, et la confirmation suivante doublait le paiement. Elle doit d'abord
+ * confirmer ou refuser la déclaration du livreur.
+ */
+export function verifierAjoutSansExces(
+  montantCommande: number,
+  paiements: PaiementCompte[],
+  ajout: number,
+): void {
+  const { recu, enAttente } = cumulDesPaiements(paiements);
+  const reste = Math.max(0, montantCommande - recu - enAttente);
+  if (!depasse(ajout, reste)) return;
+  const declaration =
+    `Le livreur a déjà déclaré ${xof(enAttente)}, en attente de confirmation : ` +
+    `confirmez ou refusez ce paiement avant d'en ajouter un autre.`;
+  if (Math.round(reste) <= 0) {
+    throw new BadRequestException(enAttente > 0 ? declaration : 'Commande déjà payée.');
+  }
+  throw new BadRequestException(
+    `Paiement de trop : il reste ${xof(reste)} à encaisser sur cette commande.` +
+      (enAttente > 0 ? ` ${declaration}` : ''),
+  );
+}
+
+/**
+ * CONFIRMATION D'UN ENCAISSEMENT DU LIVREUR : refuse ce qui ferait dépasser le
+ * prix de la commande. Elle a déjà reçu ce qu'il faut (paiement en ligne,
+ * caisse, autre déclaration confirmée) : cette déclaration est à refuser.
+ */
+export function verifierConfirmationSansExces(
+  montantCommande: number,
+  paiements: PaiementCompte[],
+  declare: number,
+): void {
+  const { recu } = cumulDesPaiements(paiements);
+  const reste = Math.max(0, montantCommande - recu);
+  if (!depasse(declare, reste)) return;
+  if (Math.round(reste) <= 0) {
+    throw new BadRequestException('Commande déjà payée : ce paiement serait de trop. Refusez-le.');
+  }
+  throw new BadRequestException(
+    `Ce paiement dépasse ce qui reste à encaisser (${xof(reste)}) : refusez-le, puis ajoutez le bon montant.`,
+  );
+}
+
+/**
+ * CORRECTION PAR L'ADMINISTRATEUR (montant modifié, statut passé à réussi,
+ * paiement créé directement) : même plafond. Seule une HAUSSE est contrôlée :
+ * baisser un paiement de trop enregistré avant le 18/11 reste toujours permis.
+ *
+ * @param autres paiements de la commande, sans celui qui est corrigé
+ * @param avant montant réussi avant la correction (0 s'il n'était pas réussi)
+ * @param apres montant réussi après la correction (0 s'il ne l'est plus)
+ */
+export function verifierCorrectionSansExces(
+  montantCommande: number,
+  autres: PaiementCompte[],
+  avant: number,
+  apres: number,
+): void {
+  if (!depasse(apres, avant)) return;
+  const { recu } = cumulDesPaiements(autres);
+  if (!depasse(recu + apres, montantCommande)) return;
+  throw new BadRequestException(
+    `Ce montant dépasserait le prix de la commande : ${xof(recu)} déjà reçus ailleurs pour ${xof(montantCommande)}.`,
+  );
 }

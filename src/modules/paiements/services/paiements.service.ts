@@ -13,6 +13,7 @@ import {
   Order,
   OrderStatus,
   OrderType,
+  Paiement,
   PaiementMode,
   PaiementStatus,
   PaymentMethod,
@@ -41,7 +42,11 @@ import {
   extraireEncaissement,
   PaiementReussi,
   PAYMENT_AMOUNT_TOLERANCE,
+  REFUS_ENCAISSEMENT,
+  verifierAjoutSansExces,
   verifierCommandeEncaissable,
+  verifierConfirmationSansExces,
+  verifierCorrectionSansExces,
 } from 'src/modules/paiements/helpers/encaissement.helper';
 
 @Injectable()
@@ -146,6 +151,64 @@ export class PaiementsService {
     return true;
   }
 
+  /**
+   * KKIAPAY PRIORITAIRE (18/11).
+   *
+   * Un paiement en ligne vérifié auprès de KKiaPay (webhook, retour de
+   * l'application, rattrapage) vient de solder la commande. Les encaissements
+   * que le livreur avait déclarés à la livraison, encore en attente, ne
+   * peuvent plus être que de trop : ils sont refusés d'office, pour que
+   * personne ne les confirme par erreur. L'argent de KKiaPay est réel et
+   * vérifié, la déclaration du livreur ne l'est pas.
+   *
+   * Une alerte prévient l'équipe : si le livreur a vraiment reçu cet argent,
+   * le client a payé deux fois et il doit être remboursé.
+   *
+   * Idempotent (seuls les paiements encore en attente changent) et isolé : le
+   * paiement est déjà enregistré, une erreur ici ne doit pas faire échouer sa
+   * prise en compte. La caisse peut toujours refuser à la main.
+   */
+  private async refuserDeclarationsApresKkiapay(
+    commande: { id: string; reference?: string | null; restaurant_id?: string | null },
+    transactionId: string,
+  ): Promise<void> {
+    try {
+      const enAttente = await this.prisma.paiement.findMany({
+        where: { order_id: commande.id, status: PaiementStatus.PENDING },
+        select: { id: true, amount: true, source: true },
+      });
+      if (enAttente.length === 0) return;
+      const { count } = await this.prisma.paiement.updateMany({
+        where: { id: { in: enAttente.map((p) => p.id) }, status: PaiementStatus.PENDING },
+        data: {
+          status: PaiementStatus.FAILED,
+          failure_code: REFUS_ENCAISSEMENT.PAYEE_EN_LIGNE,
+          failure_message: "Refusé d'office : commande payée en ligne (KKiaPay)",
+          updated_at: new Date(),
+        },
+      });
+      if (count === 0) return;
+      const montant = enAttente.reduce((somme, p) => somme + (p.amount ?? 0), 0);
+      const moyens = [...new Set(enAttente.map((p) => p.source).filter(Boolean))].join(', ');
+      this.alertes.signaler({
+        code: CodeAlerte.ENCAISSEMENT_LIVREUR_REFUSE,
+        restaurantId: commande.restaurant_id ?? null,
+        reference: commande.reference ?? null,
+        details: [
+          `La commande est payée en ligne (transaction KKiaPay ${transactionId}).`,
+          `L'encaissement déclaré par le livreur, ${montant.toLocaleString('fr-FR')} XOF${moyens ? ` (${moyens})` : ''}, est refusé d'office : il serait de trop.`,
+          `Si le livreur a vraiment reçu cet argent, le client a payé deux fois : il est à rembourser.`,
+        ],
+        cleBridage: `${CodeAlerte.ENCAISSEMENT_LIVREUR_REFUSE}:${commande.reference ?? commande.id}`,
+        meta: { orderId: commande.id, transactionId, paiements: enAttente.map((p) => p.id), montant },
+      });
+    } catch (e) {
+      console.error(
+        `[Paiement KKiaPay] Encaissements du livreur non refusés pour ${commande.reference ?? commande.id} : ${(e as Error)?.message}`,
+      );
+    }
+  }
+
   // Payer avec Kkiapay
   async payWithKkiapay(
     req: Request,
@@ -204,6 +267,8 @@ export class PaiementsService {
         this.controlerPaiementEnDouble(result.order, result.paiement, reussis, !result.dejaEnregistre);
       }
       if (isSuccess && covered) {
+        // KKiaPay prioritaire : les déclarations du livreur en attente sont de trop.
+        await this.refuserDeclarationsApresKkiapay(result.order, transaction.transactionId);
         const paymentAt = result.paiement.created_at;
         // TODO(§3a) : unifier ce chemin app-confirm avec linkPaiementToOrder pour qu'il
         // fasse aussi avancer le statut (PENDING → ACCEPTED) et déclenche les effets de
@@ -261,7 +326,10 @@ export class PaiementsService {
    *   - toutes les lignes portent la même commande ;
    *   - la commande existe, n'est pas annulée, et appartient au restaurant du
    *     compte quand c'est un compte de restaurant ;
-   *   - le client du paiement est celui de la commande, jamais celui du corps.
+   *   - le client du paiement est celui de la commande, jamais celui du corps ;
+   *   - jamais plus que le prix de la commande (18/11), en comptant ce que le
+   *     livreur a déclaré sans confirmation (`verifierAjoutSansExces`), sous
+   *     le verrou de la commande.
    *
    * Cascade sur l'Order :
    *   - `paied = true` seulement si la somme des paiements **SUCCESS**
@@ -278,63 +346,85 @@ export class PaiementsService {
     data: AddPaiementDto,
   ) {
     const { orderId, lignes } = extraireEncaissement(data.items);
+    // Moyens contrôlés avant le verrou (aucune lecture en base).
+    const moyens = await Promise.all(
+      lignes.map((item) => this.verifyPaiementMode(item.mode, item.source ?? null)),
+    );
 
-    const commande = verifierCommandeEncaissable(
-      await this.prisma.order.findUnique({
-        where: { id: orderId },
-        select: {
-          id: true,
-          restaurant_id: true,
-          customer_id: true,
-          status: true,
-          entity_status: true,
-          amount: true,
-          paiements: {
-            where: { status: PaiementStatus.SUCCESS },
-            select: { amount: true, total: true },
+    // PAIEMENTS DE TROP (18/11) : contrôle et écriture sous le verrou de la
+    // commande. Deux postes qui encaissent la même commande au même instant
+    // (caisse et back office, double backend) passaient tous les deux le
+    // contrôle, puis enregistraient chacun leur paiement. Le second attend
+    // désormais le premier, et relit ce qu'il a enregistré.
+    const { commande, crees } = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${orderId}::uuid FOR UPDATE`;
+      const commande = verifierCommandeEncaissable(
+        await tx.order.findUnique({
+          where: { id: orderId },
+          select: {
+            id: true,
+            restaurant_id: true,
+            customer_id: true,
+            status: true,
+            entity_status: true,
+            amount: true,
+            // Réussis ET en attente : une déclaration du livreur pas encore
+            // confirmée compte dans le plafond (`verifierAjoutSansExces`).
+            paiements: {
+              where: { status: { in: [PaiementStatus.SUCCESS, PaiementStatus.PENDING] } },
+              select: { status: true, amount: true, total: true },
+            },
           },
-        },
-      }),
-      req.user as User | undefined,
-    );
+        }),
+        req.user as User | undefined,
+      );
 
-    // Commande déjà soldée : un nouvel encaissement serait un double
-    // encaissement. Cas réel : client qui finit de payer dans l'application
-    // pendant que la caisse, sur un écran pas encore rafraîchi, encaisse au
-    // comptoir. Des lignes toutes à zéro n'enregistrent rien : elles gardent
-    // leur traitement habituel, plus bas.
-    const dejaPercu = (commande.paiements ?? []).reduce(
-      (somme, p) => somme + (p.total ?? p.amount ?? 0),
-      0,
-    );
-    if (
-      lignes.length > 0 &&
-      commande.amount != null &&
-      dejaPercu >= commande.amount - PAYMENT_AMOUNT_TOLERANCE
-    ) {
-      throw new BadRequestException('Commande déjà payée.');
-    }
+      // Commande déjà soldée : un nouvel encaissement serait un double
+      // encaissement. Cas réel : client qui finit de payer dans l'application
+      // pendant que la caisse, sur un écran pas encore rafraîchi, encaisse au
+      // comptoir. Des lignes toutes à zéro n'enregistrent rien : elles gardent
+      // leur traitement habituel, plus bas.
+      const dejaPercu = (commande.paiements ?? [])
+        .filter((p) => p.status === PaiementStatus.SUCCESS)
+        .reduce((somme, p) => somme + (p.total ?? p.amount ?? 0), 0);
+      if (lignes.length > 0 && commande.amount != null) {
+        if (dejaPercu >= commande.amount - PAYMENT_AMOUNT_TOLERANCE) {
+          throw new BadRequestException('Commande déjà payée.');
+        }
+        // Jamais plus que le prix de la commande.
+        verifierAjoutSansExces(
+          commande.amount,
+          commande.paiements ?? [],
+          lignes.reduce((somme, l) => somme + l.amount, 0),
+        );
+      }
 
-    // Résoudre toutes les créations en parallèle — le bug précédent utilisait
-    // `items.map(async)` sans Promise.all, donc la vérification `length`
-    // portait sur un tableau de Promises, et seul paiements[0] était awaited.
-    await Promise.all(
-      lignes.map(async (item) => {
-        const uniqueRef = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        return this.create({
-          reference: uniqueRef,
-          amount: item.amount,
-          fees: 0,
-          total: item.amount,
-          mode: item.mode,
-          source: item.source,
-          status: PaiementStatus.SUCCESS,
-          order_id: commande.id,
-          // ⚠️ Le client venait du corps de la requête, sans contrôle.
-          client_id: commande.customer_id,
-        });
-      }),
-    );
+      // Écrits un par un dans la transaction : un refus annule tout le lot.
+      const crees: Paiement[] = [];
+      for (const [i, item] of lignes.entries()) {
+        crees.push(
+          await tx.paiement.create({
+            data: {
+              reference: `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}-${i}`,
+              amount: item.amount,
+              fees: 0,
+              total: item.amount,
+              mode: moyens[i].mode,
+              source: moyens[i].source,
+              status: PaiementStatus.SUCCESS,
+              order_id: commande.id,
+              // ⚠️ Le client venait du corps de la requête, sans contrôle.
+              client_id: commande.customer_id,
+              entity_status: EntityStatus.ACTIVE,
+            },
+          }),
+        );
+      }
+      return { commande, crees };
+    });
+    // Après l'écriture définitive : un paiement annulé avec le lot ne doit
+    // jamais avoir été annoncé.
+    for (const paiement of crees) this.paiementEvent.paiementEffectue(paiement);
 
     const now = new Date();
 
@@ -439,8 +529,9 @@ export class PaiementsService {
       select: {
         id: true,
         status: true,
+        amount: true,
         order_id: true,
-        order: { select: { status: true, restaurant_id: true } },
+        order: { select: { status: true, restaurant_id: true, amount: true } },
       },
     });
     if (!paiement) {
@@ -455,7 +546,9 @@ export class PaiementsService {
     assertCanAccessRestaurant(req.user as User | undefined, paiement.order?.restaurant_id);
     if (paiement.status !== PaiementStatus.PENDING) {
       throw new BadRequestException(
-        'Seul un encaissement en attente peut être confirmé.',
+        paiement.status === PaiementStatus.FAILED
+          ? 'Cet encaissement a été refusé : il ne peut plus être confirmé.'
+          : 'Seul un encaissement en attente peut être confirmé.',
       );
     }
     if (!paiement.order_id) {
@@ -472,12 +565,37 @@ export class PaiementsService {
       );
     }
 
-    // Claim atomique PENDING → SUCCESS.
-    const claim = await this.prisma.paiement.updateMany({
-      where: { id: paiementId, status: PaiementStatus.PENDING },
-      data: { status: PaiementStatus.SUCCESS, updated_at: new Date() },
+    // PAIEMENTS DE TROP (18/11) : jamais plus que le prix de la commande. Le
+    // livreur déclarait 8 000 pendant que la caisse encaissait les mêmes
+    // 8 000 : confirmer doublait le paiement. Contrôle et claim sous le verrou
+    // de la commande, comme l'ajout d'un paiement : une confirmation et un
+    // encaissement simultanés ne passent pas tous les deux.
+    const orderId = paiement.order_id;
+    const claim = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${orderId}::uuid FOR UPDATE`;
+      if (paiement.order?.amount != null) {
+        const reussis = await tx.paiement.findMany({
+          where: { order_id: orderId, status: PaiementStatus.SUCCESS },
+          select: { status: true, amount: true },
+        });
+        verifierConfirmationSansExces(paiement.order.amount, reussis, paiement.amount ?? 0);
+      }
+      // Claim atomique PENDING → SUCCESS.
+      return tx.paiement.updateMany({
+        where: { id: paiementId, status: PaiementStatus.PENDING },
+        data: { status: PaiementStatus.SUCCESS, updated_at: new Date() },
+      });
     });
     if (claim.count !== 1) {
+      // Traité entre la lecture et le claim : confirmé (rejeu, idempotent) ou
+      // refusé par un autre poste.
+      const maintenant = await this.prisma.paiement.findUnique({
+        where: { id: paiementId },
+        select: { status: true },
+      });
+      if (maintenant?.status === PaiementStatus.FAILED) {
+        throw new BadRequestException('Cet encaissement vient d\'être refusé : il ne peut plus être confirmé.');
+      }
       return { success: true, message: 'Encaissement déjà confirmé.' }; // idempotent
     }
 
@@ -550,6 +668,61 @@ export class PaiementsService {
           ? 'Encaissement confirmé.'
           : `Encaissement confirmé, reste dû ${Math.max(0, order.amount - totalPaid).toLocaleString('fr-FR')} XOF (commande non soldée).`,
     };
+  }
+
+  /**
+   * REFUS D'UN ENCAISSEMENT DU LIVREUR (18/11), depuis la caisse ou le back
+   * office.
+   *
+   * Le livreur (interne ou Turbo) a déclaré un encaissement à la livraison :
+   * le paiement est EN ATTENTE. Quand la déclaration est fausse (mauvais
+   * moyen, mauvais montant, ou la caisse a déjà encaissé), la caissière la
+   * refuse : le paiement passe en échec avec le motif et le nom de qui l'a
+   * refusé, ne compte jamais dans ce que la commande a reçu, et elle peut
+   * ensuite enregistrer le bon paiement. La commande ne bouge pas.
+   *
+   * Mêmes contrôles que la confirmation : restaurant du compte d'abord, puis
+   * paiement en attente. Permis sur une commande annulée : c'est le moyen de
+   * clore la déclaration. Revendication atomique : un double clic, ou une
+   * confirmation au même instant sur un autre poste, n'a qu'un effet.
+   */
+  async refuserEncaissement(req: Request, paiementId: string) {
+    const paiement = await this.prisma.paiement.findUnique({
+      where: { id: paiementId },
+      select: { id: true, status: true, order: { select: { restaurant_id: true } } },
+    });
+    if (!paiement) {
+      throw new NotFoundException('Paiement introuvable');
+    }
+    const user = req.user as User | undefined;
+    assertCanAccessRestaurant(user, paiement.order?.restaurant_id);
+    if (paiement.status === PaiementStatus.FAILED) {
+      return { success: true, message: 'Encaissement déjà refusé.' }; // idempotent
+    }
+    if (paiement.status !== PaiementStatus.PENDING) {
+      throw new BadRequestException('Seul un encaissement en attente peut être refusé.');
+    }
+    const nom = user?.fullname?.trim();
+    const claim = await this.prisma.paiement.updateMany({
+      where: { id: paiementId, status: PaiementStatus.PENDING },
+      data: {
+        status: PaiementStatus.FAILED,
+        failure_code: REFUS_ENCAISSEMENT.PAR_LE_RESTAURANT,
+        failure_message: nom ? `Refusé par ${nom}` : 'Refusé par le restaurant',
+        updated_at: new Date(),
+      },
+    });
+    if (claim.count !== 1) {
+      const maintenant = await this.prisma.paiement.findUnique({
+        where: { id: paiementId },
+        select: { status: true },
+      });
+      if (maintenant?.status === PaiementStatus.SUCCESS) {
+        throw new BadRequestException('Cet encaissement vient d\'être confirmé : il ne peut plus être refusé.');
+      }
+      return { success: true, message: 'Encaissement déjà refusé.' };
+    }
+    return { success: true, message: 'Encaissement refusé.' };
   }
 
   /**
@@ -740,6 +913,8 @@ export class PaiementsService {
         notPaidReason = !isSuccess ? 'KKiaPay: statut non SUCCESS' : 'montant non couvert';
       }
       if (isPaid) {
+        // KKiaPay prioritaire : les déclarations du livreur en attente sont de trop.
+        await this.refuserDeclarationsApresKkiapay(result.order, transaction.transactionId);
         const next_status = this.getOrderStatus(result.order.payment_method!, result.order.type, result.order.status);
         const paymentAt = result.paiement.created_at;
         const claim = await this.prisma.order.updateMany({
@@ -913,6 +1088,26 @@ export class PaiementsService {
     }
   }
 
+  /**
+   * Création directe d'un paiement par l'administrateur (POST /paiements,
+   * correction du registre, aucun écran). Même plafond que l'encaissement
+   * (18/11) : un paiement réussi ne fait jamais dépasser le prix de la
+   * commande.
+   */
+  async creerDepuisRegistre(dto: CreatePaiementDto) {
+    if (dto.order_id && dto.status === PaiementStatus.SUCCESS) {
+      const commande = await this.prisma.order.findUnique({
+        where: { id: dto.order_id },
+        select: {
+          amount: true,
+          paiements: { where: { status: PaiementStatus.SUCCESS }, select: { status: true, amount: true } },
+        },
+      });
+      if (commande) verifierCorrectionSansExces(commande.amount, commande.paiements, 0, dto.amount);
+    }
+    return this.create(dto);
+  }
+
   // Création de paiement
   async create(
     createPaiementDto: CreatePaiementDto,
@@ -1074,6 +1269,23 @@ export class PaiementsService {
     const nextAmount = updatePaiementDto.amount ?? paiement.amount;
     const nextFees = updatePaiementDto.fees ?? paiement.fees ?? 0;
     const nextTotal = updatePaiementDto.total ?? (nextAmount + nextFees);
+
+    // PAIEMENTS DE TROP (18/11) : une correction ne fait jamais dépasser le
+    // prix de la commande. Seule une hausse de ce que la commande a reçu est
+    // contrôlée (montant relevé, paiement repassé réussi) : baisser un
+    // paiement de trop reste toujours permis.
+    if (order) {
+      const avant =
+        paiement.status === PaiementStatus.SUCCESS && paiement.order_id === order.id ? paiement.amount : 0;
+      const apres = status === PaiementStatus.SUCCESS ? nextAmount : 0;
+      if (apres > avant) {
+        const autres = await this.prisma.paiement.findMany({
+          where: { order_id: order.id, status: PaiementStatus.SUCCESS, id: { not: paiement.id } },
+          select: { status: true, amount: true },
+        });
+        verifierCorrectionSansExces(order.amount, autres, avant, apres);
+      }
+    }
 
     const updated = await this.prisma.paiement.update({
       where: {
