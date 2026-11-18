@@ -221,8 +221,8 @@ export class KkiapayService {
 
     /**
      * Secret de webhook d'un restaurant (null = route legacy globale).
-     * Renvoie `null` si AUCUNE source n'est disponible (ni DB ni cache mémoire) :
-     * l'appelant doit alors répondre 503 (retry KKiaPay), jamais 403.
+     * Renvoie `null` si AUCUNE source n'est disponible (ni DB ni cache mémoire).
+     * Ne sert plus qu'au journal (18/11) : la clé ne bloque aucun webhook.
      */
     async getWebhookSecret(restaurantId: string | null): Promise<string | null> {
         // GLOBAL : DB-FIRST (revue 31/07) — l'ancien chemin env-first rendait la
@@ -252,7 +252,7 @@ export class KkiapayService {
             // Secret retiré / jamais posé : on purge la copie de secours pour ne
             // pas accepter indéfiniment un secret révoqué.
             this.webhookSecretCache.delete(cacheKey);
-            return null; // aucun secret configuré → l'appelant tranche (503)
+            return null; // aucun secret configuré (journal seulement, le webhook passe quand même)
         } catch (e) {
             // Neon injoignable : dernier recours = copie mémoire même périmée,
             // puis l'env (global uniquement).

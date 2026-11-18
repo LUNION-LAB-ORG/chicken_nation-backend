@@ -14,6 +14,7 @@ import { SettingsService } from 'src/modules/settings/settings.service';
 import { AuditService } from 'src/modules/audit/audit.service';
 import { journalRefusWebhook } from './kkiapay-audit.helper';
 import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
+import { isUUID } from 'class-validator';
 
 /**
  * Longueur, bords et 3 premiers/derniers caractères d'un secret, pour
@@ -105,15 +106,16 @@ export class KkiapayController {
     }
 
     /**
-     * Webhook KKiaPay — INGESTION SANS PERTE.
+     * Webhook KKiaPay — INGESTION SANS PERTE, POUR TOUS LES COMPTES.
      *
-     * 1. Vérifie le secret via un lecteur env-first Neon-indépendant (§2) → un désaccord est journalisé, jamais bloquant (24/09).
-     * 2. Enfile le payload brut dans BullMQ (Redis) avec un jobId idempotent
+     * 1. Enfile le payload brut dans BullMQ (Redis) avec un jobId idempotent
      *    `event_transactionId` (assaini, sans ':' interdit par BullMQ) → répond 200.
-     *    Le traitement DB awaité se fait dans le
-     *    worker (KkiapayWebhookConsumer), qui retente sur erreur transitoire.
-     * 3. Si l'enfilement échoue (Redis injoignable) → 503 pour que KKiaPay RETENTE.
+     *    Le traitement DB awaité se fait dans le worker (KkiapayWebhookConsumer),
+     *    qui retente sur erreur transitoire.
+     * 2. Si l'enfilement échoue (Redis injoignable) → 503 pour que KKiaPay RETENTE.
      *    On ne renvoie JAMAIS 200 sur erreur (sinon paiement perdu sans retry).
+     * 3. La clé (`x-kkiapay-secret`) ne décide plus rien, pour aucun restaurant :
+     *    elle est comparée APRÈS la réponse, pour le journal seulement.
      */
     @Post("webhook")
     async handleWebhook(
@@ -128,8 +130,8 @@ export class KkiapayController {
     /**
      * MULTI-COMPTES : une URL de webhook PAR RESTAURANT
      * (`/kkiapay/webhook/<restaurantId>`, configurée dans le dashboard du compte
-     * KKiaPay du restaurant, chacun avec SON secret). La route legacy ci-dessus
-     * reste active pour le compte global historique pendant toute la transition.
+     * KKiaPay du restaurant). La route legacy ci-dessus reste active pour le
+     * compte global historique.
      */
     @Post("webhook/:restaurantId")
     async handleWebhookForRestaurant(
@@ -150,39 +152,29 @@ export class KkiapayController {
         restaurantId: string | null,
     ) {
         /**
-         * Tout refus est JOURNALISÉ (Audits → Logs).
-         *
-         * Un webhook repoussé ne laissait de trace que dans les logs du
-         * conteneur : il fallait un accès SSH à la production pour découvrir
-         * qu'un secret était désaligné, pendant que des commandes payées
-         * restaient en attente sans explication visible. Écriture
-         * fire-and-forget : elle ne peut ni ralentir ni casser l'ingestion.
-         * Le secret reçu n'est JAMAIS journalisé.
+         * Tout refus est JOURNALISÉ (Audits → Logs) et annoncé dans le groupe.
+         * Le secret reçu n'est JAMAIS journalisé. Écriture fire-and-forget : elle
+         * ne peut ni ralentir ni casser l'ingestion.
          */
-        const tracerRefus = (statut: number, motif: string, compteReconnu: boolean) => {
+        const tracerRefus = (statut: number, motif: string, avecAlerte: boolean) => {
             // `null` = refus bridé : une ligne récente couvre déjà ce cas. La route
-            // est publique et sans limitation de débit, et le refus survient
-            // justement quand l'appelant n'est pas authentifié : sans cette bride,
-            // n'importe qui ferait grossir la table d'audit à volonté.
+            // est publique : sans cette bride, n'importe qui ferait grossir la
+            // table d'audit à volonté. Aucun compte n'est « reconnu » ici (la base
+            // n'est plus lue avant la réponse) : tous les refus partagent une clé.
             const entree = journalRefusWebhook({
                 payload: body ?? {},
                 restaurantId,
                 statut,
                 motif,
-                compteReconnu,
+                compteReconnu: false,
                 path: request?.originalUrl ?? request?.url ?? '/kkiapay/webhook',
                 ip: request?.ip ?? null,
                 userAgent: request?.headers?.['user-agent'] ?? null,
             });
             if (entree) this.auditService.record(entree);
-
-            /**
-             * Le refus est aussi annoncé dans le groupe. Un secret désaligné se
-             * voyait jusqu'ici dans les logs du conteneur, c'est-à-dire nulle
-             * part : trois paiements ont été perdus le 21/09 avant que
-             * quiconque s'en aperçoive. Le service brime lui-même les
-             * répétitions, une panne ne produira pas cent messages.
-             */
+            if (!avecAlerte) return;
+            // Le service brime lui-même les répétitions : une panne ne produira
+            // pas cent messages.
             this.alertes.signaler({
                 code: CodeAlerte.WEBHOOK_REFUSE,
                 restaurantId: restaurantId,
@@ -193,45 +185,30 @@ export class KkiapayController {
                 meta: { statut, transactionId: body?.transactionId ?? null },
             });
         };
-        // Secret : global (env-first Neon-indépendant) ou par restaurant (Settings
-        // + cache mémoire longue durée). `null` = aucune source disponible
-        // (restaurant pas encore configuré OU Neon injoignable sans cache) → 503
-        // pour que KKiaPay RETENTE : si l'URL a été posée dans le dashboard avant
-        // la saisie du secret au backoffice, les webhooks passeront dès la saisie ;
-        // et un blip DB ne doit jamais devenir un paiement perdu (incident 14/07).
-        const webhookSecret = await this.kkiapayService.getWebhookSecret(restaurantId);
-        // 503 sur les DEUX routes (legacy comprise, revue 31/07) : « aucun secret
-        // disponible » (pas encore configuré, ou DB injoignable sans cache ni env)
-        // doit faire RETENTER KKiaPay, jamais rejeter en 403 définitif.
-        if (webhookSecret === null) {
-            this.logger.warn(
-                `Webhook KKiaPay [${restaurantId}] : secret indisponible (non configuré ou DB injoignable sans cache)`,
-            );
-            // Compte NON reconnu : aucun secret n'existe pour cet identifiant, qui
-            // peut donc être n'importe quoi. Tous ces refus partagent une clé.
-            tracerRefus(
-                HttpStatus.SERVICE_UNAVAILABLE,
-                'secret de webhook indisponible (non configuré, ou base injoignable sans cache)',
-                false,
-            );
-            return response.status(HttpStatus.SERVICE_UNAVAILABLE).send('Secret unavailable');
+
+        // Les comptes des restaurants sont des UUID : une autre valeur dans
+        // l'adresse ne vient pas d'un compte KKiaPay configuré par nous.
+        if (restaurantId !== null && !isUUID(restaurantId)) {
+            tracerRefus(HttpStatus.NOT_FOUND, `compte inconnu dans l'adresse (« ${restaurantId.slice(0, 40)} »)`, false);
+            return response.status(HttpStatus.NOT_FOUND).send('Unknown account');
         }
 
-        // Secret NON BLOQUANT (décision du 24/09, incident ZONE 4 : secret collé
-        // à l'identique des deux côtés, webhooks refusés quand même, commandes
-        // payées jamais confirmées). Le secret n'est pas ce qui protège l'argent :
-        // le traitement revérifie la transaction auprès de KKiaPay avec les clés
-        // du compte, exige un statut SUCCESS et un montant qui couvre la commande,
-        // et une transaction déjà rattachée ne compte pas pour une autre commande.
-        // Un désaccord est donc seulement journalisé, avec l'empreinte des deux
-        // valeurs (jamais la valeur entière) pour pouvoir le réaligner.
-        if (receivedSecret !== webhookSecret) {
-            this.logger.warn(
-                `Webhook KKiaPay${restaurantId ? ` [${restaurantId}]` : ''} : secret différent, traité quand même` +
-                ` (reçu ${empreinteSecret(receivedSecret)}, attendu ${empreinteSecret(webhookSecret)})`,
-            );
-        }
-
+        /**
+         * CLÉ NON BLOQUANTE POUR TOUS (18/11). Depuis le 24/09 (incident ZONE 4 :
+         * clé collée à l'identique des deux côtés, webhooks refusés quand même),
+         * une clé DIFFÉRENTE n'arrêtait plus rien. Restait un cas bloquant :
+         * aucune clé enregistrée chez nous pour le compte, ou base injoignable
+         * sans copie en mémoire → 503, et le paiement attendait que KKiaPay
+         * renvoie son webhook. Il n'existe plus.
+         *
+         * La clé ne protège pas l'argent : le traitement revérifie la transaction
+         * auprès de KKiaPay avec les clés du compte, exige un statut SUCCESS et un
+         * montant qui couvre la commande, et une transaction déjà rattachée ne
+         * compte pas pour une autre commande.
+         *
+         * La réponse ne lit donc plus la base : le webhook est mis en file tout
+         * de suite, même quand Neon est lent ou injoignable (le worker retente).
+         */
         try {
             // jobId idempotent : un même event/transaction ne s'enfile pas deux fois
             // tant que le job existe. Le traitement est de toute façon idempotent.
@@ -241,19 +218,46 @@ export class KkiapayController {
             // On assainit donc le jobId (on ne garde que [a-zA-Z0-9_.-]).
             const jobId = `${body.event}_${body.transactionId}`.replace(/[^a-zA-Z0-9_.-]/g, '');
             // L'id du restaurant voyage AVEC le payload : le traitement aval vérifie
-            // la transaction auprès du bon compte (repli global pendant la transition).
+            // la transaction auprès du bon compte (repli global si non configuré).
             await this.webhooksQueue.add('event', { ...body, restaurantId: restaurantId ?? undefined }, { jobId });
-            return response.status(HttpStatus.OK).send({ received: true });
         } catch (err) {
             // Redis injoignable → 503 pour que KKiaPay retente (NE PAS avaler en 200).
             this.logger.error('Échec enfilement webhook KKiaPay', err as any);
-            // Le secret a été validé plus haut : compte reconnu.
             tracerRefus(
                 HttpStatus.SERVICE_UNAVAILABLE,
                 `file d'attente indisponible : ${(err as Error)?.message ?? 'cause inconnue'}`,
                 true,
             );
             return response.status(HttpStatus.SERVICE_UNAVAILABLE).send('Queue unavailable');
+        }
+
+        response.status(HttpStatus.OK).send({ received: true });
+        // Après la réponse : la clé, pour le journal seulement.
+        void this.noterCle(receivedSecret, restaurantId);
+    }
+
+    /**
+     * Compare la clé reçue à celle enregistrée pour le compte, pour pouvoir la
+     * réaligner (empreintes, jamais la valeur entière). Ne décide de rien, ne
+     * lève jamais.
+     */
+    private async noterCle(receivedSecret: string | undefined, restaurantId: string | null): Promise<void> {
+        const compte = restaurantId ? ` [${restaurantId}]` : '';
+        try {
+            const attendue = await this.kkiapayService.getWebhookSecret(restaurantId);
+            if (attendue === null) {
+                this.logger.warn(
+                    `Webhook KKiaPay${compte} : aucune clé enregistrée pour ce compte (ou base injoignable), traité quand même` +
+                    ` (reçu ${empreinteSecret(receivedSecret)})`,
+                );
+            } else if (receivedSecret !== attendue) {
+                this.logger.warn(
+                    `Webhook KKiaPay${compte} : clé différente, traité quand même` +
+                    ` (reçu ${empreinteSecret(receivedSecret)}, attendu ${empreinteSecret(attendue)})`,
+                );
+            }
+        } catch (e) {
+            this.logger.warn(`Webhook KKiaPay${compte} : clé non comparée (${(e as Error)?.message ?? 'cause inconnue'})`);
         }
     }
 }
