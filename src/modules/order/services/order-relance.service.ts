@@ -239,6 +239,8 @@ export interface IgnoreeLigne extends BrouillonLigne {
   raison_libelle: string;
   raison_texte: string | null;
   encore_en_attente: boolean;
+  /** Annulée en l'ignorant (depuis le 23/11) : plus rien à rétablir. */
+  annulee: boolean;
 }
 
 const montantFormate = (n: number) => `${Math.round(n).toLocaleString('fr-FR')} F`;
@@ -451,6 +453,7 @@ export class OrderRelanceService {
         raison_texte: l.raison_texte,
         // Encore relançable : en attente, ou annulée par le client.
         encore_en_attente: estRelancable(l.order),
+        annulee: l.order.status === OrderStatus.CANCELLED && !estPanierAnnuleParClient(l.order),
       })),
     };
   }
@@ -539,12 +542,19 @@ export class OrderRelanceService {
     return { ok: true };
   }
 
-  /** « Ignorer » pour toute l'équipe, avec une raison. Efface la prise. */
+  /**
+   * « Ignorer » pour toute l'équipe, avec une raison. Efface la prise.
+   *
+   * Depuis le 23/11, ignorer ANNULE aussi la commande (demande du client) :
+   * renvoie les paniers encore en attente du groupe, que le contrôleur annule
+   * par le chemin ordinaire (`OrderService.updateStatus`), et la raison à
+   * écrire comme motif. Un panier déjà annulé par le client reste tel quel.
+   */
   async ignorer(
     orderId: string,
     corps: { raison_code: string; raison_texte?: string | null },
     user: User,
-  ): Promise<{ ok: true; nombre: number }> {
+  ): Promise<{ ok: true; nombre: number; a_annuler: string[]; raison: string }> {
     this.verifierRole(user);
     const texte = this.lireRaison(corps);
 
@@ -555,6 +565,12 @@ export class OrderRelanceService {
     // Ignorée, une commande à confirmer attendrait pour toujours : le client
     // verrait « À confirmer » sans fin. Elle se transmet ou s'annule (19/10).
     if (groupe.a_confirmer) throw new ConflictException(MESSAGE_A_CONFIRMER_NON_IGNORABLE);
+    // Ignorer annule : pas pendant que le client paie peut-être, sinon son
+    // paiement arriverait sur une commande annulée, à rembourser.
+    if (groupe.etat === 'EN_COURS') {
+      const reste = Math.max(1, Math.ceil(((groupe.echeance?.getTime() ?? 0) - maintenant.getTime()) / MINUTE));
+      throw new ConflictException(`Le client est peut-être en train de payer : attendez ${reste} min.`);
+    }
     const admin = user.role === UserRole.ADMIN;
     if (groupe.prise && !groupe.prise.par_moi && !admin) {
       throw new ConflictException(`${groupe.prise.par_nom} s'occupe de cette commande : laissez-le conclure.`);
@@ -599,7 +615,11 @@ export class OrderRelanceService {
       });
     });
     this.signaler('ignore', groupe.ids, user.id);
-    return { ok: true, nombre: groupe.ids.length };
+    const aAnnuler = [groupe.tete, ...groupe.autres]
+      .filter((b) => groupe.ids.includes(b.id) && estBrouillon(b))
+      .map((b) => b.id)
+      .sort();
+    return { ok: true, nombre: groupe.ids.length, a_annuler: aAnnuler, raison: raisonJournal };
   }
 
   /**
