@@ -9,6 +9,8 @@ import { OrderController } from './controllers/order.controller';
 import { OrderCouponController } from './controllers/order-coupon.controller';
 import { OrderCouponService } from './services/order-coupon.service';
 import { OrderDelivererController } from './controllers/order-deliverer.controller';
+import { OrderHabitudesController } from './controllers/order-habitudes.controller';
+import { OrderHabitudesService } from './services/order-habitudes.service';
 import { OrderHelper } from './helpers/order.helper';
 import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
@@ -64,15 +66,23 @@ import { CourseModule } from 'src/modules/course/course.module';
     // module course n'importe jamais celui-ci (il écoute ses événements).
     CourseModule,
   ],
-  // OrderCouponController et OrderRelanceController AVANT OrderController :
-  // `orders/coupon/...` et `orders/relances/...` ne doivent jamais être lus
-  // comme un identifiant de commande.
-  controllers: [OrderCouponController, OrderRelanceController, OrderController, OrderDelivererController],
+  // OrderCouponController, OrderHabitudesController et OrderRelanceController
+  // AVANT OrderController : `orders/coupon/...`, `orders/habitudes/...` et
+  // `orders/relances/...` ne doivent jamais être lus comme un identifiant de
+  // commande.
+  controllers: [
+    OrderCouponController,
+    OrderHabitudesController,
+    OrderRelanceController,
+    OrderController,
+    OrderDelivererController,
+  ],
   providers: [
     OrderService,
     SuiviOperationsService, // Écran Opérations : offre nommée, fenêtre d'ajout après le retrait
     SuiviLivraisonService, // Tiroir de détail : section « Livraison »
     OrderCouponService,
+    OrderHabitudesService, // Prise de commande : plats habituels du client
     OrderDelivererService,
     OrderHelper,
     OrderV2Helper,
