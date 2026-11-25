@@ -145,3 +145,63 @@ export function messageRefusKkiapay(code: string | null, raison: string | null):
   if (c.includes('INVALID')) return "KKiaPay refuse : cette transaction n'appartient pas au compte utilisé.";
   return `KKiaPay refuse le remboursement${raison ? ` : ${raison}` : '.'}`;
 }
+
+// ─── Paystack (25/11) ────────────────────────────────────────────────────────
+
+export const MESSAGE_PAYSTACK_INJOIGNABLE = 'Paystack ne répond pas. Réessayez dans un instant.';
+export const MESSAGE_PAYSTACK_INCONNUE = 'Paystack ne connaît pas cette transaction.';
+export const MESSAGE_PAYSTACK_DEJA_REMBOURSE =
+  'Paystack indique ce paiement déjà remboursé. Enregistrez le remboursement ici.';
+export const MESSAGE_PAYSTACK_EN_COURS =
+  "Remboursement demandé à Paystack, en cours de traitement. Il sera noté ici dès que Paystack l'aura fait.";
+export const MESSAGE_PAYSTACK_PAS_REMBOURSE = "Paystack n'indique pas ce paiement comme remboursé.";
+
+export const LIBELLE_STATUT_PAYSTACK: Record<string, string> = {
+  success: 'Payée',
+  failed: 'Échouée',
+  abandoned: 'Abandonnée',
+  ongoing: 'En cours',
+  pending: 'En attente',
+  processing: 'En cours',
+  queued: 'En attente',
+  reversed: 'Remboursée',
+};
+
+export function libelleStatutPaystack(statut: string | null | undefined): string {
+  const s = (statut ?? '').toLowerCase();
+  return LIBELLE_STATUT_PAYSTACK[s] ?? (s || 'Inconnu');
+}
+
+/** Référence de notre demande de remboursement (8 à 64 lettres, chiffres, tirets) : une par paiement. */
+export function referenceRemboursementPaystack(paiementId: string): string {
+  return `CNR-${paiementId.replace(/[^A-Za-z0-9]/g, '').slice(0, 32)}`;
+}
+
+/**
+ * Ce que permet la vérification d'un paiement Paystack. `demandeEnCours` :
+ * un remboursement a déjà été demandé et n'est pas encore traité.
+ */
+export function bilanRemboursementPaystack(
+  paiement: { status: PaiementStatus; amount: number; total: number | null; rembourse_at?: Date | null; demandeEnCours?: boolean },
+  transaction: { statutPaystack: string; montant: number | null } | null,
+): BilanRemboursement {
+  const non = (raison: string, constatable = false): BilanRemboursement => ({ remboursable: false, constatable, raison });
+  if (paiement.status === PaiementStatus.REVERTED || paiement.rembourse_at) return non(MESSAGE_DEJA_REMBOURSE);
+  if (paiement.status !== PaiementStatus.SUCCESS) return non(MESSAGE_PAS_REUSSI);
+  if (!transaction) return non(MESSAGE_PAYSTACK_INCONNUE);
+  if (transaction.statutPaystack === 'reversed') return non(MESSAGE_PAYSTACK_DEJA_REMBOURSE, true);
+  if (paiement.demandeEnCours) return non(MESSAGE_PAYSTACK_EN_COURS);
+  if (transaction.statutPaystack !== 'success') {
+    return non(
+      `Paystack indique que cette transaction n'est pas payée (${libelleStatutPaystack(transaction.statutPaystack).toLowerCase()}) : rien à rembourser.`,
+    );
+  }
+  const montant = transaction.montant;
+  const candidats = [paiement.amount, paiement.total ?? paiement.amount].filter((m) => Number.isFinite(m) && m > 0);
+  if (montant === null || !candidats.some((m) => Math.abs(m - montant) <= TOLERANCE_MONTANT)) {
+    return non(
+      `Le montant chez Paystack (${montant !== null ? montantLisible(montant) : 'inconnu'}) ne correspond pas à ce paiement (${montantLisible(paiement.amount)}). Remboursement bloqué par prudence.`,
+    );
+  }
+  return { remboursable: true, constatable: false, raison: null };
+}

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { KkiapayChannels } from 'src/kkiapay/kkiapay-channels';
 import { KkiapayWebhookDto } from 'src/kkiapay/kkiapay.type';
@@ -14,7 +14,10 @@ import { RewardService } from 'src/modules/fidelity/services/reward.service';
 import { ScratchEngineService } from 'src/modules/fidelity/services/scratch-engine.service';
 import { ReferralService } from 'src/modules/referral/referral.service';
 import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
-import { Order, OrderStatus, LoyaltyPointType, PaymentMethod } from '@prisma/client';
+import { FournisseurPaiement, Order, OrderStatus, LoyaltyPointType, PaymentMethod } from '@prisma/client';
+import { EvenementPaiementPaystack, IssuePaiementPaystack, PaystackChannels } from 'src/paystack/paystack.channels';
+import { PaystackService } from 'src/paystack/paystack.service';
+import { REFERENCE_TENTATIVE } from 'src/paystack/paystack.rules';
 import { libelleRetrait } from 'src/modules/fidelity/helpers/points-commande.rules';
 import {
     MESSAGE_KKIAPAY_INJOIGNABLE,
@@ -31,6 +34,9 @@ import {
  * transitoires relancées) ; c'est la confirmation manuelle admin qui l'exploite
  * pour renvoyer un 200 clair ou un 4xx motivé.
  */
+/** Paiement à confirmer : webhook KKiaPay, ou tentative Paystack (`fournisseur`). */
+export type PaiementAConfirmer = KkiapayWebhookDto & { fournisseur?: FournisseurPaiement };
+
 export interface ProcessTransactionSuccessResult {
     confirmed: boolean;
     reason?: string;
@@ -68,7 +74,42 @@ export class KkiapayOrderListenerService {
         private readonly scratchEngineService: ScratchEngineService,
         private readonly referralService: ReferralService,
         private readonly alertes: AlertesService,
+        // En dernier : les essais existants construisent le service sans lui.
+        @Optional() private readonly paystack?: PaystackService,
     ) { }
+
+    /**
+     * PAYSTACK (25/11) : paiement annoncé par le webhook. Même traitement que
+     * KKiaPay (`processTransactionSuccess`), la transaction étant revérifiée
+     * chez Paystack. Les erreurs passagères remontent : la file réessaie.
+     */
+    @OnEvent(PaystackChannels.PAIEMENT_A_CONFIRMER, { suppressErrors: false })
+    async paiementPaystackAConfirmer(evenement: EvenementPaiementPaystack): Promise<IssuePaiementPaystack> {
+        return this.confirmerPaiementPaystack(evenement.reference);
+    }
+
+    /**
+     * Confirme la commande d'une tentative Paystack (webhook, retour du client,
+     * filet des webhooks perdus, bouton du centre d'appels). Sûr au rejeu.
+     */
+    async confirmerPaiementPaystack(reference: string): Promise<IssuePaiementPaystack & { result?: ProcessTransactionSuccessResult }> {
+        const tentative = await this.paystack?.tentative(reference);
+        if (!tentative) return { confirmed: false, reason: 'tentative inconnue' };
+        const result = await this.processTransactionSuccess({
+            event: 'transaction.success',
+            transactionId: reference,
+            stateData: tentative.order.reference,
+            restaurantId: tentative.restaurant_id ?? undefined,
+            fournisseur: FournisseurPaiement.PAYSTACK,
+        } as PaiementAConfirmer);
+        return {
+            confirmed: result.confirmed,
+            reason: result.reason,
+            orderReference: tentative.order.reference,
+            restaurantId: tentative.restaurant_id,
+            result,
+        };
+    }
 
     /**
      * Point d'entrée @OnEvent. Émis via emitAsync (cf. KkiapayEvent) : tout rejet
@@ -111,7 +152,7 @@ export class KkiapayOrderListenerService {
      * par la confirmation manuelle admin pour distinguer succès / motif d'échec.
      */
     async processTransactionSuccess(
-        payload: KkiapayWebhookDto,
+        payload: PaiementAConfirmer,
     ): Promise<ProcessTransactionSuccessResult> {
         // Erreur permanente : la référence n'existe pas. findByReferenceOrNull ne lève
         // PAS (contrairement à findByReference) → on distingue « commande absente »
@@ -149,6 +190,7 @@ export class KkiapayOrderListenerService {
                 customer_id: order.customer_id,
                 // Compte annoncé par la route webhook (a validé SON secret).
                 collectorRestaurantId: payload.restaurantId ?? null,
+                fournisseur: payload.fournisseur,
             });
             paiement = linked.paiement;
             justPaid = linked.justPaid;
@@ -183,9 +225,13 @@ export class KkiapayOrderListenerService {
             // verifyTransaction lève BadRequestException(« Transaction non trouvée »)
             // → tx inconnue de KKiaPay (motif lisible pour l'admin). Toute autre erreur
             // applicative reste permanente (ack, réconciliation prendra le relais).
+            // Paystack : le motif du refus est déjà écrit pour une personne
+            // (« Transaction refusée : encaissée sur un autre sous-compte »).
             const reason =
                 error instanceof BadRequestException
-                    ? 'transaction introuvable'
+                    ? payload.fournisseur === FournisseurPaiement.PAYSTACK
+                        ? (error.message || 'transaction introuvable')
+                        : 'transaction introuvable'
                     : 'erreur de traitement du paiement';
             return { confirmed: false, reason };
         }
@@ -534,6 +580,14 @@ export class KkiapayOrderListenerService {
         // 404 si absente (findById lève NotFoundException).
         const order = await this.orderService.findById(orderId);
 
+        // PAYSTACK (25/11) : « paystack » revérifie les tentatives de la
+        // commande (les plus récentes d'abord) ; une référence de tentative
+        // revérifie celle-là. Aucun identifiant à recopier pour l'agent.
+        const voiePaystack = transactionId.trim().toLowerCase() === 'paystack' || REFERENCE_TENTATIVE.test(transactionId.trim());
+        if (this.paystack && voiePaystack) {
+            return this.confirmerPaystackManuellement(order, transactionId.trim());
+        }
+
         if (order.payment_method !== PaymentMethod.ONLINE) {
             throw new BadRequestException(
                 'Confirmation manuelle réservée aux commandes payées EN LIGNE (KKiaPay).',
@@ -594,6 +648,49 @@ export class KkiapayOrderListenerService {
             justPaid: !!result.justPaid,
             enDouble: !!result.enDouble,
         };
+    }
+
+    private async confirmerPaystackManuellement(order: Order, saisie: string) {
+        if (order.payment_method !== PaymentMethod.ONLINE) {
+            throw new BadRequestException('Confirmation réservée aux commandes payées en ligne.');
+        }
+        if (order.status !== OrderStatus.PENDING) {
+            throw new BadRequestException(
+                `Commande déjà traitée (statut ${order.status}) : la confirmation ne s'applique qu'aux commandes en attente de paiement.`,
+            );
+        }
+        const references = saisie.toLowerCase() === 'paystack'
+            ? await this.paystack!.referencesDeCommande(order.id)
+            : [saisie];
+        if (!references.length) throw new BadRequestException(messageRefusConfirmation('tentative inconnue'));
+        let dernierMotif: string | undefined;
+        for (const reference of references) {
+            const tentative = await this.paystack!.tentative(reference);
+            if (!tentative || tentative.order_id !== order.id) {
+                dernierMotif = 'tentative inconnue';
+                continue;
+            }
+            let issue: Awaited<ReturnType<KkiapayOrderListenerService['confirmerPaiementPaystack']>>;
+            try {
+                issue = await this.confirmerPaiementPaystack(reference);
+            } catch (error) {
+                if (error instanceof ServiceUnavailableException) {
+                    throw new ServiceUnavailableException('Paystack ne répond pas : réessayez dans un instant.');
+                }
+                throw error;
+            }
+            if (issue.confirmed && issue.result) {
+                return {
+                    confirmed: true,
+                    order: issue.result.order,
+                    paiement: issue.result.paiement,
+                    justPaid: !!issue.result.justPaid,
+                    enDouble: !!issue.result.enDouble,
+                };
+            }
+            dernierMotif = issue.reason;
+        }
+        throw new BadRequestException(messageRefusConfirmation(dernierMotif));
     }
 
     /** Vrai si l'erreur est un code Prisma transitoire (infra DB) → à relancer. */

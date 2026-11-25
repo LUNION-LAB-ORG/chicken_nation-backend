@@ -78,6 +78,13 @@ enum PaymentMethod {
   ONLINE // En ligne
 }
 
+/// Prestataire qui a encaissé un paiement en ligne (25/11). `null` sur un
+/// paiement : KKiaPay (tout l'historique d'avant Paystack).
+enum FournisseurPaiement {
+  KKIAPAY
+  PAYSTACK
+}
+
 enum PaiementStatus {
   REVERTED // ANNULÉ
   SUCCESS // SUCCÈS
@@ -2013,17 +2020,18 @@ model Order {
   batch_id String?      @db.Uuid
   batch    CourseBatch? @relation(fields: [batch_id], references: [id], onDelete: SetNull)
 
-  status           OrderStatus
-  restaurant_id    String      @db.Uuid
-  order_items      OrderItem[]
-  paiements        Paiement[]
-  customer         Customer    @relation(fields: [customer_id], references: [id])
-  restaurant       Restaurant  @relation(fields: [restaurant_id], references: [id])
-  cancelled_by     String?
-  cancelled_reason String?
+  status              OrderStatus
+  restaurant_id       String              @db.Uuid
+  order_items         OrderItem[]
+  paiements           Paiement[]
+  tentatives_paiement TentativePaiement[]
+  customer            Customer            @relation(fields: [customer_id], references: [id])
+  restaurant          Restaurant          @relation(fields: [restaurant_id], references: [id])
+  cancelled_by        String?
+  cancelled_reason    String?
   // Dernier membre du staff (User) ayant modifié la commande — audit backoffice.
   // Champ simple (comme cancelled_by) : le nom est résolu côté service à la lecture.
-  updated_by       String?     @db.Uuid
+  updated_by          String?             @db.Uuid
 
   // ================================
   // INTÉGRATION HUBRISE
@@ -2112,25 +2120,27 @@ model OtpVerificationAttempt {
 }
 
 model Paiement {
-  id              String         @id @default(uuid()) @db.Uuid
-  amount          Float          @default(0)
-  total           Float          @default(0)
+  id              String               @id @default(uuid()) @db.Uuid
+  amount          Float                @default(0)
+  total           Float                @default(0)
   mode            PaiementMode
   source          String?
-  fees            Float          @default(0)
-  client          Json?          @db.Json
-  client_id       String?        @db.Uuid
+  fees            Float                @default(0)
+  client          Json?                @db.Json
+  client_id       String?              @db.Uuid
   status          PaiementStatus
-  reference       String         @db.VarChar
+  reference       String               @db.VarChar
   failure_code    String?
   failure_message String?
-  order_id        String?        @db.Uuid
-  order           Order?         @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  order_id        String?              @db.Uuid
+  order           Order?               @relation(fields: [order_id], references: [id], onDelete: Cascade)
   /// MULTI-COMPTES KKiaPay : restaurant dont le COMPTE a encaissé cette
   /// transaction (tracé au moment de la vérification). null = compte global
   /// historique. Sert à rembourser depuis le BON compte et à réconcilier
   /// l'argent par restaurant. Colonne scalaire volontairement sans relation.
-  restaurant_id   String?        @db.Uuid
+  restaurant_id   String?              @db.Uuid
+  /// Prestataire qui a encaissé (25/11). null = KKiaPay (historique).
+  fournisseur     FournisseurPaiement?
 
   /// REMBOURSEMENT KKiaPay (12/11) : revendication de la demande en cours
   /// (un seul clic aboutit, deux backends compris), puis qui et quand.
@@ -4318,4 +4328,34 @@ model DispatchEvenement {
   @@index([deliverer_id, created_at])
   @@index([restaurant_id, created_at])
   @@index([course_id])
+}
+
+/// PAIEMENT EN LIGNE PAR PAYSTACK (25/11) : une ligne par lancement d'un
+/// paiement (page de paiement Paystack ouverte). La référence est celle de la
+/// transaction chez Paystack, unique, propre à la tentative (un client peut
+/// relancer le paiement d'une même commande). Sert à retrouver la commande au
+/// webhook ou au retour du client, et au filet qui revérifie les tentatives
+/// dont le webhook n'est jamais arrivé. Le paiement réussi reste une ligne
+/// `Paiement` (fournisseur PAYSTACK), comme pour KKiaPay.
+model TentativePaiement {
+  id            String              @id @default(uuid()) @db.Uuid
+  order_id      String              @db.Uuid
+  order         Order               @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  fournisseur   FournisseurPaiement
+  reference     String              @unique @db.VarChar(100)
+  /// Montant demandé, en francs (Paystack le reçoit multiplié par 100).
+  montant       Int
+  /// Restaurant et sous-compte Paystack qui encaissent, figés au lancement.
+  restaurant_id String?             @db.Uuid
+  sous_compte   String?             @db.VarChar(100)
+  /// APP ou WEB.
+  canal         String              @db.VarChar(20)
+  /// INITIEE, PAYEE, ECHEC, ABANDON.
+  statut        String              @default("INITIEE") @db.VarChar(20)
+  verifiee_at   DateTime?           @db.Timestamp(6)
+  created_at    DateTime            @default(now()) @db.Timestamp(6)
+  updated_at    DateTime            @updatedAt @db.Timestamp(6)
+
+  @@index([order_id])
+  @@index([statut, created_at])
 }

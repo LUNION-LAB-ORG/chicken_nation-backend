@@ -88,7 +88,7 @@ describe('confirmPaymentManually', () => {
 
   it('KKiaPay ne valide pas : 400 avec le motif en clair', async () => {
     const cas: [string, string][] = [
-      ['montant non couvert', 'Le montant payé sur KKiaPay ne couvre pas la commande : elle reste en attente.'],
+      ['montant non couvert', 'Le montant payé ne couvre pas la commande : elle reste en attente.'],
       ['KKiaPay: statut non SUCCESS', "KKiaPay indique que ce paiement n'a pas abouti : la commande reste en attente."],
       ['transaction introuvable', "KKiaPay ne connaît pas cette transaction sur le compte du restaurant : vérifiez l'identifiant."],
     ];

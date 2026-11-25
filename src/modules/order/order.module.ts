@@ -1,5 +1,7 @@
 import { MenuModule } from 'src/modules/menu/menu.module';
 import { KkiapayModule } from 'src/kkiapay/kkiapay.module';
+import { PaystackModule } from 'src/paystack/paystack.module';
+import { PaiementEnLigneController } from './controllers/paiement-en-ligne.controller';
 import { Module } from '@nestjs/common';
 import { SuiviOperationsService } from './services/suivi-operations.service';
 import { SuiviLivraisonService } from './services/suivi-livraison.service';
@@ -48,6 +50,7 @@ import { CourseModule } from 'src/modules/course/course.module';
     // MENUS COMPOSABLES : DishOptionService résout le prix des choix côté serveur.
     MenuModule,
     KkiapayModule,
+    PaystackModule,
     AuthDelivererModule,
     PaiementsModule,
     FidelityModule,
@@ -76,6 +79,7 @@ import { CourseModule } from 'src/modules/course/course.module';
     OrderRelanceController,
     OrderController,
     OrderDelivererController,
+    PaiementEnLigneController, // Paiement en ligne du client (Paystack, 25/11)
   ],
   providers: [
     OrderService,

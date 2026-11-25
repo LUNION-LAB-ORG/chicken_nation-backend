@@ -43,14 +43,21 @@ export function messageRefusConfirmation(motif?: string | null): string {
       return "KKiaPay ne connaît pas cette transaction sur le compte du restaurant : vérifiez l'identifiant.";
     case 'KKiaPay: statut non SUCCESS':
       return "KKiaPay indique que ce paiement n'a pas abouti : la commande reste en attente.";
+    case 'Paystack: statut non SUCCESS':
+      return "Paystack indique que ce paiement n'a pas abouti : la commande reste en attente.";
+    case 'tentative inconnue':
+      return 'Aucun paiement Paystack lancé pour cette commande.';
     case 'montant non couvert':
-      return 'Le montant payé sur KKiaPay ne couvre pas la commande : elle reste en attente.';
+      return 'Le montant payé ne couvre pas la commande : elle reste en attente.';
     case 'commande introuvable':
       return 'Commande introuvable.';
     case 'erreur de traitement du paiement':
       return "Le paiement n'a pas pu être enregistré : réessayez dans un instant.";
     default:
-      return motif?.trim() || 'Confirmation KKiaPay impossible.';
+      if (motif?.startsWith('Paystack: paiement non abouti')) {
+        return "Le client n'a pas terminé le paiement sur Paystack : la commande reste en attente.";
+      }
+      return motif?.trim() || 'Confirmation du paiement impossible.';
   }
 }
 

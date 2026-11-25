@@ -3,13 +3,18 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { AddPaiementDto, CreatePaiementDto } from 'src/modules/paiements/dto/create-paiement.dto';
 import { UpdatePaiementDto } from 'src/modules/paiements/dto/update-paiement.dto';
 import { PrismaService } from 'src/database/services/prisma.service';
+import { PaystackService } from 'src/paystack/paystack.service';
+import { referenceRemboursementPaystack } from 'src/modules/paiements/helpers/remboursement.rules';
 import {
   Customer,
   EntityStatus,
+  FournisseurPaiement,
   Order,
   OrderStatus,
   OrderType,
@@ -53,6 +58,20 @@ import {
   verifierCorrectionSansExces,
 } from 'src/modules/paiements/helpers/encaissement.helper';
 
+/** Transaction vérifiée chez le prestataire, dans la forme commune à KKiaPay et Paystack (25/11). */
+interface TransactionVerifiee {
+  transactionId: string;
+  amount: number;
+  fees: number;
+  total: number;
+  source: PaiementMode;
+  source_common_name: string | null;
+  client: string | null;
+  status: PaiementStatus;
+  failureCode: string | null;
+  failureMessage: string | null;
+}
+
 @Injectable()
 export class PaiementsService {
   constructor(
@@ -63,7 +82,14 @@ export class PaiementsService {
     private readonly appGateway: AppGateway,
     private readonly eventEmitter: EventEmitter2,
     private readonly alertes: AlertesService,
+    // En dernier : les essais existants construisent le service sans lui.
+    @Optional() private readonly paystackService?: PaystackService,
   ) { }
+
+  private get paystack(): PaystackService {
+    if (!this.paystackService) throw new ServiceUnavailableException("Paystack n'est pas disponible.");
+    return this.paystackService;
+  }
 
   /**
    * PAIEMENT REÇU SUR UN PANIER QUE LE CLIENT AVAIT ANNULÉ (revue du 01/10,
@@ -846,43 +872,92 @@ export class PaiementsService {
        *  transaction introuvable — vérifiée sur [nouveau restaurant, global]
        *  mais jamais sur le compte qui avait réellement reçu l'argent). */
       collectorRestaurantId?: string | null;
+      /** Prestataire qui a encaissé (25/11) ; KKiaPay par défaut. Paystack :
+       *  `transactionId` est la référence de la tentative. */
+      fournisseur?: FournisseurPaiement;
     },
   ) {
+    const fournisseur = data.fournisseur ?? FournisseurPaiement.KKIAPAY;
+    const libelle = fournisseur === FournisseurPaiement.PAYSTACK ? 'Paystack' : 'KKiaPay';
 
-    // MULTI-COMPTES : compte annoncé par le webhook d'abord, sinon le compte du
-    // restaurant de la commande — avec repli global dans les deux cas
-    // (transaction encaissée par une ancienne version de l'app).
-    const restaurantId = data.collectorRestaurantId
-      ?? (data.orderId
-        ? (await this.prisma.order.findUnique({
-            where: { id: data.orderId },
-            select: { restaurant_id: true },
-          }))?.restaurant_id ?? null
-        : null);
+    let transaction: TransactionVerifiee;
+    let collectedBy: string | null;
+    if (fournisseur === FournisseurPaiement.PAYSTACK) {
+      // Vérifiée chez Paystack et contrôlée pour CETTE commande (référence,
+      // mode de la clé, XOF, sous-compte attendu). Lève BadRequest (refus
+      // définitif) ou ServiceUnavailable (Paystack injoignable, à retenter).
+      if (!data.orderId) throw new BadRequestException('Commande inconnue pour ce paiement.');
+      const verifie = await this.paystack.transactionPourCommande(data.transactionId, data.orderId);
+      const t = verifie.transaction;
+      collectedBy = verifie.restaurantId;
+      // Paiement pas (encore) abouti : rien d'enregistré. Un paiement
+      // « abandonné » peut encore aboutir tant que la page reste ouverte.
+      if (t.statutPaystack !== 'success') {
+        return {
+          paiement: null,
+          justPaid: false,
+          isPaid: false,
+          payeApresCoup: false,
+          annuleeRetablie: false,
+          enDouble: false,
+          notPaidReason: `Paystack: paiement non abouti (${t.statutPaystack})`,
+        };
+      }
+      transaction = {
+        transactionId: t.reference,
+        amount: t.montant ?? 0,
+        fees: t.frais,
+        // Le client paie le montant ; les frais sont retenus sur le sous-compte.
+        total: t.montant ?? 0,
+        source: t.mode,
+        source_common_name: t.source,
+        client: t.client ? JSON.stringify(t.client) : null,
+        status: t.statut,
+        failureCode: null,
+        failureMessage: t.motifEchec,
+      };
+    } else {
+      // MULTI-COMPTES : compte annoncé par le webhook d'abord, sinon le compte du
+      // restaurant de la commande — avec repli global dans les deux cas
+      // (transaction encaissée par une ancienne version de l'app).
+      const restaurantId = data.collectorRestaurantId
+        ?? (data.orderId
+          ? (await this.prisma.order.findUnique({
+              where: { id: data.orderId },
+              select: { restaurant_id: true },
+            }))?.restaurant_id ?? null
+          : null);
 
-    const { transaction, collectedBy } = await this.kkiapay.verifyTransactionForRestaurant(
-      data.transactionId,
-      restaurantId,
-    );
+      const verifie = await this.kkiapay.verifyTransactionForRestaurant(
+        data.transactionId,
+        restaurantId,
+      );
+      collectedBy = verifie.collectedBy;
+      transaction = {
+        ...verifie.transaction,
+        total: verifie.transaction.amount + verifie.transaction.fees,
+        client:
+          typeof verifie.transaction.client === 'object'
+            ? JSON.stringify(verifie.transaction.client)
+            : verifie.transaction.client,
+      };
+    }
 
     const result = await this.create({
       restaurant_id: collectedBy, // compte encaisseur TRACÉ (null = global)
       reference: transaction.transactionId,
       amount: transaction.amount,
       fees: transaction.fees,
-      total: transaction.amount + transaction.fees,
+      total: transaction.total,
       mode: transaction.source,
-      source: transaction.source_common_name,
-      client:
-        typeof transaction.client === 'object'
-          ? JSON.stringify(transaction.client)
-          : transaction.client,
+      source: transaction.source_common_name ?? undefined,
+      client: transaction.client ?? undefined,
       status: transaction.status,
-      failure_code: transaction.failureCode,
-      failure_message: transaction.failureMessage,
+      failure_code: transaction.failureCode ?? undefined,
+      failure_message: transaction.failureMessage ?? undefined,
       order_id: data.orderId,
       client_id: data.customer_id,
-    }, { dedupeByReference: true });
+    }, { dedupeByReference: true, fournisseur });
 
     // Mise a jour de la commande à payée — CLAIM ATOMIQUE sur la TRANSITION de statut
     // PENDING → ACCEPTED (et non plus sur paied:false). Raisons (§3a) :
@@ -925,7 +1000,7 @@ export class PaiementsService {
         enDouble = this.controlerPaiementEnDouble(result.order, result.paiement, reussis, !result.dejaEnregistre);
       }
       if (!isPaid) {
-        notPaidReason = !isSuccess ? 'KKiaPay: statut non SUCCESS' : 'montant non couvert';
+        notPaidReason = !isSuccess ? `${libelle}: statut non SUCCESS` : 'montant non couvert';
       }
       if (isPaid) {
         // KKiaPay prioritaire : les déclarations du livreur en attente sont de trop.
@@ -1060,6 +1135,32 @@ export class PaiementsService {
       };
     }
     try {
+      // PAYSTACK (25/11) : demande à Paystack, avec notre référence (une par
+      // paiement). Souvent traitée en différé : « demandée », le paiement
+      // passe « Remboursé » au webhook refund.processed.
+      if (paiement.fournisseur === FournisseurPaiement.PAYSTACK) {
+        const { statut } = await this.paystack.rembourser({
+          transaction: paiement.reference,
+          montant: Math.round(paiement.amount),
+          reference: referenceRemboursementPaystack(paiement.id),
+          note: 'Commande annulée',
+        });
+        if (statut === 'processed') {
+          const rembourse = await this.update(paiementId, { status: PaiementStatus.REVERTED });
+          if (paiement.order_id) await this.recomputeOrderPaiedFlag(paiement.order_id);
+          this.paiementEvent.paiementAnnule(paiement);
+          return { success: true, message: 'Remboursement effectué avec succès', transactionId: paiement.reference, paiement: rembourse };
+        }
+        if (['pending', 'processing', 'needs-attention'].includes(statut)) {
+          const demande = await this.prisma.paiement.update({
+            where: { id: paiementId },
+            data: { remboursement_demande_at: new Date(), rembourse_par_nom: 'Annulation de la commande' },
+          });
+          return { success: true, message: 'Remboursement demandé à Paystack', transactionId: paiement.reference, paiement: demande };
+        }
+        throw new Error(`Remboursement Paystack ${statut}`);
+      }
+
       // Rembourse depuis le compte qui a ENCAISSÉ (tracé à la vérification ;
       // null = compte global historique). Jamais de repli : rembourser depuis
       // un autre compte serait une erreur comptable.
@@ -1126,7 +1227,7 @@ export class PaiementsService {
   // Création de paiement
   async create(
     createPaiementDto: CreatePaiementDto,
-    opts?: { dedupeByReference?: boolean },
+    opts?: { dedupeByReference?: boolean; fournisseur?: FournisseurPaiement },
   ) {
     // Idempotence (KKiaPay) : un même transactionId (reference) ne doit créer qu'UN
     // paiement, même si le webhook est rejoué ou reçu en parallèle (double backend).
@@ -1167,6 +1268,7 @@ export class PaiementsService {
         mode,
         status,
         source,
+        ...(opts?.fournisseur ? { fournisseur: opts.fournisseur } : {}),
         entity_status: EntityStatus.ACTIVE,
       },
     });

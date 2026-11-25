@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { OrderService } from '../services/order.service';
-import { OrderStatus, PaiementStatus, PaymentMethod } from '@prisma/client';
+import { FournisseurPaiement, OrderStatus, PaiementStatus, PaymentMethod } from '@prisma/client';
 import { KkiapayOrderListenerService } from '../listeners/kkiapay-order.listener.service';
 
 @Injectable()
@@ -83,6 +83,41 @@ export class OrderTask {
         this.logger.warn(
           `Réconciliation KKiaPay : échec transitoire sur ${order.reference} : ${(e as any)?.message}`,
         );
+      }
+    }
+  }
+
+  /**
+   * FILET PAYSTACK (25/11) : le webhook n'est jamais arrivé et le client a
+   * fermé la page avant le retour. Toutes les 5 min, les tentatives sans
+   * issue (de 3 min à 24 h) d'une commande encore à payer en ligne sont
+   * revérifiées chez Paystack ; une transaction réussie confirme la commande
+   * par le même chemin que le webhook (sûr au rejeu). Une tentative n'est pas
+   * revérifiée plus d'une fois toutes les 10 min. Coupé avec le filet
+   * KKiaPay sur le 2e serveur (DISABLE_KKIAPAY_RECONCILE_CRON=true).
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async rapprocherPaystack() {
+    if (process.env.DISABLE_KKIAPAY_RECONCILE_CRON === 'true') return;
+    const now = Date.now();
+    const tentatives = await this.prisma.tentativePaiement.findMany({
+      where: {
+        fournisseur: FournisseurPaiement.PAYSTACK,
+        statut: { in: ['INITIEE', 'ABANDON'] },
+        created_at: { gte: new Date(now - 24 * 3_600_000), lte: new Date(now - 3 * 60_000) },
+        OR: [{ verifiee_at: null }, { verifiee_at: { lte: new Date(now - 10 * 60_000) } }],
+        order: { status: OrderStatus.PENDING, paied: false, payment_method: PaymentMethod.ONLINE },
+      },
+      select: { reference: true },
+      orderBy: { created_at: 'desc' },
+      take: 20,
+    });
+    for (const t of tentatives) {
+      try {
+        const issue = await this.kkiapayListener.confirmerPaiementPaystack(t.reference);
+        if (issue.confirmed) this.logger.log(`Rapprochement Paystack : ${issue.orderReference} confirmée (${t.reference}).`);
+      } catch (e) {
+        this.logger.warn(`Rapprochement Paystack : ${t.reference} non vérifiée (${(e as Error)?.message}).`);
       }
     }
   }

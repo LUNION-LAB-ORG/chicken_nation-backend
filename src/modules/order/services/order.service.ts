@@ -15,6 +15,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   Customer,
@@ -75,6 +76,7 @@ import {
   peutVoirLesBrouillons,
 } from '../helpers/brouillons.rules';
 import { PAS_PANIER_ANNULE_PAR_CLIENT_WHERE } from '../helpers/annulation-client.rules';
+import { PaiementEnLigneService } from 'src/paystack/paiement-en-ligne.service';
 import { motifRefusModification, peutModifierCommande } from '../helpers/modification-commande.rules';
 import { heureDeLaCommande } from '../helpers/heure-commande.rules';
 import { clientDeLApercu } from '../helpers/client-apercu-frais.rules';
@@ -211,6 +213,8 @@ export class OrderService {
     private readonly orderRelance: OrderRelanceService,
     // Commande à livrer passée à emporter ou sur place : retirée de sa course (module course).
     private readonly detachementCommande?: DetachementCommandeService,
+    // Paiement en ligne (25/11) : interrupteur, prestataire, sous-compte du restaurant.
+    @Optional() private readonly paiementEnLigne?: PaiementEnLigneService,
   ) { }
 
   /** Référence `ORD-AAMMJJ-NNNNN` pas encore prise (tirage au hasard, doublons possibles dans la journée). */
@@ -230,6 +234,7 @@ export class OrderService {
     customer_id: string,
     createOrderDto: OrderCreateDto,
     canal: OrderChannel = OrderChannel.APP,
+    options: { compatiblePaystack?: boolean } = {},
   ): Promise<Order> {
     const {
       items, address, restaurant_id, type, code_promo, date, fullname, phone, email, payment_method, points,
@@ -363,6 +368,16 @@ export class OrderService {
 
       restaurant = await this.orderHelperV2.validateRestaurantChoice(restaurant_id, dishIds);
       finalDeliveryFee = 0; // Pas de frais de livraison
+    }
+
+    // 4 bis. Paiement en ligne (25/11) : coupé au back-office, appli trop
+    // ancienne pour Paystack, ou restaurant sans sous-compte utilisable →
+    // refus avant toute écriture, avec un message qui propose l'autre moyen.
+    if ((payment_method ?? PaymentMethod.OFFLINE) === PaymentMethod.ONLINE && this.paiementEnLigne) {
+      await this.paiementEnLigne.exigerDisponible({
+        restaurantId: restaurant.id,
+        compatiblePaystack: !!options.compatiblePaystack,
+      });
     }
 
     // 5. Calcul Final des Totaux

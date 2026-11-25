@@ -32,6 +32,7 @@ import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { PaiementEnLigneService, compatiblePaystack } from 'src/paystack/paiement-en-ligne.service';
 import { JwtCustomerOrStaffOptionalAuthGuard } from 'src/modules/auth/guards/jwt-customer-or-staff-optional-auth.guard';
 import { UserPermissionsGuard } from 'src/modules/auth/guards/user-permissions.guard';
 import { UserRolesGuard } from 'src/modules/auth/guards/user-roles.guard';
@@ -91,6 +92,8 @@ export class OrderController {
     @Optional() private readonly suiviOperations?: SuiviOperationsService,
     // Tiroir de détail : section « Livraison » (livreur, étapes, durées).
     @Optional() private readonly suiviLivraison?: SuiviLivraisonService,
+    // Paiement en ligne (25/11) : interrupteur et prestataire du back-office.
+    @Optional() private readonly paiementEnLigne?: PaiementEnLigneService,
   ) { }
 
   /**
@@ -118,6 +121,12 @@ export class OrderController {
   @ApiBody({ type: CreateOrderDto })
   async create(@Req() req: Request, @Body() createOrderDto: CreateOrderDto) {
     const client = req.user as Customer;
+    // Cette route enregistre toujours un paiement en ligne (25/11 : même
+    // contrôle que /create-v2, interrupteur et prestataire du back-office).
+    await this.paiementEnLigne?.exigerDisponible({
+      restaurantId: createOrderDto.restaurant_id ?? null,
+      compatiblePaystack: compatiblePaystack(req.headers['x-app-paiements']),
+    });
     return this.orderService.create(req, {
       ...createOrderDto,
       // Le client commande pour LUI, quoi qu'annonce le corps de la requête.
@@ -149,8 +158,10 @@ export class OrderController {
       // jamais du client (même logique que delivery_fee sur POST /orders).
       { ...createOrderDto, delivery_service: undefined },
       canal,
+      // Version de l'appli (ou du site) qui sait payer par Paystack (25/11).
+      { compatiblePaystack: compatiblePaystack(req.headers['x-app-paiements']) },
     );
-    return this.attachPaymentConfig(order);
+    return this.attachPaymentConfig(order, req);
   }
 
   /**
@@ -162,12 +173,39 @@ export class OrderController {
    * en cas d'échec de résolution, la commande part sans bloc `payment` et
    * l'app retombe sur sa clé embarquée (compte global).
    */
-  private async attachPaymentConfig<T extends { restaurant_id?: string | null }>(order: T) {
+  private async attachPaymentConfig<T extends { restaurant_id?: string | null }>(order: T, req?: Request) {
     try {
+      // PAYSTACK (25/11) : le bloc annonce le prestataire et si le paiement
+      // en ligne est proposé pour ce restaurant. Paystack ne demande aucune
+      // clé côté appli : la page de paiement est lancée par le serveur.
+      // KKiaPay : clé publique du compte du restaurant, comme avant.
+      const disponibilite = this.paiementEnLigne
+        ? await this.paiementEnLigne.disponibilite({
+            restaurantId: order?.restaurant_id ?? null,
+            compatiblePaystack: compatiblePaystack(req?.headers?.['x-app-paiements']),
+          })
+        : null;
+      if (disponibilite?.fournisseur === 'paystack') {
+        return {
+          ...order,
+          payment: {
+            provider: 'paystack' as const,
+            disponible: disponibilite.disponible,
+            message: disponibilite.message,
+          },
+        };
+      }
       const payment = await this.kkiapayService.getPublicPaymentConfig(
         order?.restaurant_id ?? null,
       );
-      return { ...order, payment };
+      return {
+        ...order,
+        payment: {
+          ...payment,
+          disponible: disponibilite?.disponible ?? true,
+          message: disponibilite?.message ?? null,
+        },
+      };
     } catch {
       return order;
     }
@@ -308,7 +346,7 @@ export class OrderController {
     // est mémoïsé 60 s → coût négligeable sur une page de commandes.
     if (Array.isArray((result as any)?.data)) {
       (result as any).data = await Promise.all(
-        (result as any).data.map((o: any) => this.attachPaymentConfig(o)),
+        (result as any).data.map((o: any) => this.attachPaymentConfig(o, req)),
       );
     }
     return result;
@@ -559,7 +597,7 @@ export class OrderController {
     if (!order || (order as any).customer_id !== customerId) {
       throw new NotFoundException('Commande introuvable');
     }
-    return this.attachPaymentConfig(order);
+    return this.attachPaymentConfig(order, req);
   }
 
   /**

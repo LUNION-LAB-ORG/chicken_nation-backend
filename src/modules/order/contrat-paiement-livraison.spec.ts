@@ -108,11 +108,12 @@ describe('contrat : POST /orders/create-v2 sur le site', () => {
       'client-1',
       expect.objectContaining({ type: 'DELIVERY', payment_method: 'OFFLINE' }),
       OrderChannel.WEB,
+      { compatiblePaystack: false },
     );
 
     const appli = monter();
     await appli.controleur.createorderv2({ user: { id: 'client-1' }, headers: {} } as never, corps);
-    expect(appli.orderService.createv2).toHaveBeenCalledWith('client-1', expect.anything(), OrderChannel.APP);
+    expect(appli.orderService.createv2).toHaveBeenCalledWith('client-1', expect.anything(), OrderChannel.APP, { compatiblePaystack: false });
   });
 
   it('refus : textes exacts (champ `message` de l’erreur), affichés tels quels par le site', () => {

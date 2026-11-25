@@ -24,6 +24,7 @@ import { PaiementsModule } from 'src/modules/paiements/paiements.module';
 import { OrderModule } from 'src/modules/order/order.module';
 import { NotificationsModule } from 'src/modules/notifications/notifications.module';
 import { KkiapayModule } from 'src/kkiapay/kkiapay.module';
+import { PaystackModule } from 'src/paystack/paystack.module';
 import { FidelityModule } from 'src/modules/fidelity/fidelity.module';
 import { StatisticsModule } from 'src/modules/statistics/statistics.module';
 import { SocketIoModule } from 'src/socket-io/socket-io.module';
@@ -131,6 +132,7 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
     OrderModule,
     NotificationsModule,
     KkiapayModule,
+    PaystackModule,
     SocketIoModule,
     TwilioModule,
     FidelityModule,

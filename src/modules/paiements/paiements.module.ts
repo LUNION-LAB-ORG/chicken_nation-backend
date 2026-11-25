@@ -3,12 +3,13 @@ import { PaiementsService } from './services/paiements.service';
 import { RemboursementService } from './services/remboursement.service';
 import { PaiementsController } from './controllers/paiements.controller';
 import { KkiapayModule } from 'src/kkiapay/kkiapay.module';
+import { PaystackModule } from 'src/paystack/paystack.module';
 // import { PaymentListener } from './listeners/paiement.listener';
 import { PaiementEvent } from './events/paiement.event';
 import { PromoCodeModule } from 'src/modules/promo-code/promo-code.module';
 
 @Module({
-  imports: [KkiapayModule, PromoCodeModule],
+  imports: [KkiapayModule, PaystackModule, PromoCodeModule],
   controllers: [PaiementsController],
   providers: [
     PaiementsService, // PaymentListener, 

@@ -20,8 +20,8 @@ describe('Confirmation manuelle d’un paiement KKiaPay : règles (14/11)', () =
       "Le paiement n'a pas pu être enregistré : réessayez dans un instant.",
     );
     expect(messageRefusConfirmation('motif nouveau')).toBe('motif nouveau');
-    expect(messageRefusConfirmation(undefined)).toBe('Confirmation KKiaPay impossible.');
-    expect(messageRefusConfirmation('  ')).toBe('Confirmation KKiaPay impossible.');
+    expect(messageRefusConfirmation(undefined)).toBe('Confirmation du paiement impossible.');
+    expect(messageRefusConfirmation('  ')).toBe('Confirmation du paiement impossible.');
   });
 
   it('transaction libre, ou déjà rattachée à cette commande : aucun refus', () => {

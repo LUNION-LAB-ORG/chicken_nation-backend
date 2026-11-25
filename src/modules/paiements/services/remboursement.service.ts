@@ -6,9 +6,15 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { PaiementStatus, User } from '@prisma/client';
+import { OnEvent } from '@nestjs/event-emitter';
+import { FournisseurPaiement, PaiementStatus, User } from '@prisma/client';
+import { ErreurPaystack } from 'src/paystack/paystack-http';
+import { EvenementRemboursementPaystack, PaystackChannels } from 'src/paystack/paystack.channels';
+import { PaystackService } from 'src/paystack/paystack.service';
+import type { TransactionPaystackLue } from 'src/paystack/paystack.rules';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { KkiapayService } from 'src/kkiapay/kkiapay.service';
 import { RembourserPaiementDto } from '../dto/rembourser-paiement.dto';
@@ -24,7 +30,13 @@ import {
   MESSAGE_MANUEL,
   MESSAGE_PAS_REMBOURSE_KKIAPAY,
   MESSAGE_PAS_REUSSI,
+  MESSAGE_PAYSTACK_EN_COURS,
+  MESSAGE_PAYSTACK_INJOIGNABLE,
+  MESSAGE_PAYSTACK_PAS_REMBOURSE,
   bilanRemboursement,
+  bilanRemboursementPaystack,
+  libelleStatutPaystack,
+  referenceRemboursementPaystack,
   estPaiementKkiapay,
   estRembourseeChezKkiapay,
   libelleStatutKkiapay,
@@ -62,8 +74,10 @@ export interface VerificationRemboursement {
     moyen: string | null;
     date: string | null;
   } | null;
-  /** Compte KKiaPay qui a encaissé. */
+  /** Compte qui a encaissé. */
   compte: string;
+  /** Prestataire du paiement (25/11) : le bloc `kkiapay` porte alors ce que dit Paystack. */
+  fournisseur: FournisseurPaiement;
   remboursable: boolean;
   constatable: boolean;
   raison: string | null;
@@ -101,7 +115,24 @@ export class RemboursementService {
     private readonly kkiapay: KkiapayService,
     private readonly paiements: PaiementsService,
     private readonly paiementEvent: PaiementEvent,
+    // En dernier : les essais existants construisent le service sans lui.
+    @Optional() private readonly paystack?: PaystackService,
   ) {}
+
+  private estPaystack(p: { fournisseur?: FournisseurPaiement | null }): boolean {
+    return p.fournisseur === FournisseurPaiement.PAYSTACK;
+  }
+
+  /** La transaction chez Paystack ; null si inconnue. Pannes traduites en messages lisibles. */
+  private async lirePaystack(p: PaiementCharge): Promise<TransactionPaystackLue | null> {
+    if (!this.paystack) throw new ServiceUnavailableException(MESSAGE_PAYSTACK_INJOIGNABLE);
+    try {
+      return await this.paystack.verifier(p.reference);
+    } catch (e) {
+      if (e instanceof ErreurPaystack && e.nature === 'INTROUVABLE') return null;
+      throw new ServiceUnavailableException(MESSAGE_PAYSTACK_INJOIGNABLE);
+    }
+  }
 
   async charger(id: string) {
     return this.prisma.paiement.findUnique({
@@ -120,6 +151,9 @@ export class RemboursementService {
         order_id: true,
         rembourse_at: true,
         rembourse_par_nom: true,
+        rembourse_par_id: true,
+        remboursement_demande_at: true,
+        fournisseur: true,
         order: { select: { id: true, reference: true, restaurant_id: true } },
       },
     });
@@ -169,8 +203,32 @@ export class RemboursementService {
         rembourse_par: p.rembourse_par_nom,
       },
       commande: p.order ? { id: p.order.id, reference: p.order.reference } : null,
-      compte: await this.nomCompte(p.restaurant_id ?? null),
+      compte: this.estPaystack(p)
+        ? (await this.nomCompte(p.restaurant_id ?? null)).replace(/^Compte du restaurant/, 'Sous-compte Paystack du restaurant')
+        : await this.nomCompte(p.restaurant_id ?? null),
+      fournisseur: p.fournisseur ?? FournisseurPaiement.KKIAPAY,
     };
+    if (this.estPaystack(p)) {
+      if (p.status === PaiementStatus.REVERTED || p.rembourse_at) {
+        return { ...base, kkiapay: null, remboursable: false, constatable: false, raison: MESSAGE_DEJA_REMBOURSE };
+      }
+      const t = await this.lirePaystack(p);
+      const bilan = bilanRemboursementPaystack({ ...p, demandeEnCours: this.demandePaystackEnCours(p) }, t);
+      return {
+        ...base,
+        kkiapay: t
+          ? {
+              statut: t.statutPaystack.toUpperCase(),
+              libelle: libelleStatutPaystack(t.statutPaystack),
+              montant: t.montant,
+              frais: t.frais,
+              moyen: t.source,
+              date: t.paieLe,
+            }
+          : null,
+        ...bilan,
+      };
+    }
     if (!estPaiementKkiapay(p)) {
       return { ...base, kkiapay: null, remboursable: false, constatable: false, raison: MESSAGE_MANUEL };
     }
@@ -204,6 +262,7 @@ export class RemboursementService {
    */
   async rembourser(id: string, dto: RembourserPaiementDto, user: User, maintenant = new Date()): Promise<ResultatRemboursement> {
     const p = await this.preparer(id, dto, user);
+    if (this.estPaystack(p)) return this.rembourserPaystack(p, user, maintenant);
     await this.revendiquer(p.id, maintenant);
     let enregistre = false;
     try {
@@ -233,11 +292,16 @@ export class RemboursementService {
    */
   async constater(id: string, dto: RembourserPaiementDto, user: User, maintenant = new Date()): Promise<ResultatRemboursement> {
     const p = await this.preparer(id, dto, user);
-    await this.revendiquer(p.id, maintenant);
+    await this.revendiquer(p.id, maintenant, { memeSiDemandeEnCours: this.estPaystack(p) });
     let enregistre = false;
     try {
-      const t = await this.lire(p);
-      if (!estRembourseeChezKkiapay(t)) throw new ConflictException(MESSAGE_PAS_REMBOURSE_KKIAPAY);
+      if (this.estPaystack(p)) {
+        const t = await this.lirePaystack(p);
+        if (t?.statutPaystack !== 'reversed') throw new ConflictException(MESSAGE_PAYSTACK_PAS_REMBOURSE);
+      } else {
+        const t = await this.lire(p);
+        if (!estRembourseeChezKkiapay(t)) throw new ConflictException(MESSAGE_PAS_REMBOURSE_KKIAPAY);
+      }
       const resultat = await this.enregistrer(p, user, maintenant, 'Remboursement enregistré.');
       enregistre = true;
       return resultat;
@@ -256,21 +320,133 @@ export class RemboursementService {
     return p;
   }
 
-  /** Un seul clic aboutit : la demande est revendiquée sur le paiement encore réussi. */
-  private async revendiquer(id: string, maintenant: Date): Promise<void> {
+  /**
+   * Un seul clic aboutit : la demande est revendiquée sur le paiement encore
+   * réussi. `memeSiDemandeEnCours` : un remboursement Paystack déjà demandé
+   * (et pas encore traité) peut être enregistré une fois fait.
+   */
+  private async revendiquer(id: string, maintenant: Date, options: { memeSiDemandeEnCours?: boolean } = {}): Promise<void> {
     const pris = await this.prisma.paiement.updateMany({
       where: {
         id,
         status: PaiementStatus.SUCCESS,
         rembourse_at: null,
-        OR: [
-          { remboursement_demande_at: null },
-          { remboursement_demande_at: { lt: new Date(maintenant.getTime() - DELAI_DEMANDE_MS) } },
-        ],
+        ...(options.memeSiDemandeEnCours
+          ? {}
+          : {
+              OR: [
+                { remboursement_demande_at: null },
+                { remboursement_demande_at: { lt: new Date(maintenant.getTime() - DELAI_DEMANDE_MS) } },
+              ],
+            }),
       },
       data: { remboursement_demande_at: maintenant },
     });
     if (pris.count === 0) throw new ConflictException(MESSAGE_EN_COURS);
+  }
+
+  /** Remboursement Paystack demandé et pas encore traité : la personne qui l'a demandé est notée, sans date de remboursement. */
+  private demandePaystackEnCours(p: { rembourse_at: Date | null; rembourse_par_id?: string | null; remboursement_demande_at?: Date | null }): boolean {
+    return !p.rembourse_at && !!p.rembourse_par_id && !!p.remboursement_demande_at;
+  }
+
+  /**
+   * PAYSTACK (25/11) : revérifie chez Paystack, puis demande le remboursement
+   * avec notre référence (une par paiement : un second envoi ne crée pas un
+   * second remboursement). Paystack traite souvent en différé : « en cours »,
+   * la personne qui a demandé est notée et le paiement passe « Remboursé » au
+   * webhook `refund.processed` (ou à « Enregistrer le remboursement »).
+   */
+  private async rembourserPaystack(p: PaiementCharge, user: User, maintenant: Date): Promise<ResultatRemboursement> {
+    if (this.demandePaystackEnCours(p)) throw new ConflictException(MESSAGE_PAYSTACK_EN_COURS);
+    await this.revendiquer(p.id, maintenant);
+    let garder = false;
+    try {
+      const t = await this.lirePaystack(p);
+      const bilan = bilanRemboursementPaystack(p, t);
+      if (!bilan.remboursable) {
+        if (bilan.constatable) throw new ConflictException({ message: bilan.raison, code: CODE_REMBOURSEE_CHEZ_KKIAPAY });
+        throw new BadRequestException(bilan.raison);
+      }
+      let statut: string;
+      try {
+        ({ statut } = await this.paystack!.rembourser({
+          transaction: p.reference,
+          montant: Math.round(t?.montant ?? p.amount),
+          reference: referenceRemboursementPaystack(p.id),
+          note: `Commande ${p.order?.reference ?? ''} remboursée par ${user.fullname}`.trim(),
+        }));
+      } catch (e) {
+        if (e instanceof ErreurPaystack && e.nature === 'INJOIGNABLE') throw new HttpException(MESSAGE_INCERTAIN, 502);
+        if (e instanceof ErreurPaystack) {
+          throw new BadRequestException(e.messagePaystack ? `Paystack refuse le remboursement : ${e.messagePaystack}` : 'Paystack refuse le remboursement.');
+        }
+        throw e;
+      }
+      if (statut === 'processed') {
+        const resultat = await this.enregistrer(p, user, maintenant, `Remboursement de ${montantLisible(Math.round(t?.montant ?? p.amount))} effectué.`);
+        garder = true;
+        return resultat;
+      }
+      if (statut === 'failed') throw new BadRequestException("Paystack n'a pas pu rembourser ce paiement.");
+      if (!['pending', 'processing', 'needs-attention'].includes(statut)) throw new HttpException(MESSAGE_INCERTAIN, 502);
+      // Demandé, pas encore traité : la revendication reste, avec qui l'a demandé.
+      const maj = await this.prisma.paiement.update({
+        where: { id: p.id },
+        data: { rembourse_par_id: user.id, rembourse_par_nom: user.fullname, remboursement_demande_at: maintenant },
+        select: { id: true, status: true, rembourse_at: true, rembourse_par_nom: true },
+      });
+      garder = true;
+      this.logger.log(`Remboursement Paystack demandé pour ${p.id} (${p.reference}) par ${user.fullname} : ${statut}.`);
+      return {
+        message:
+          statut === 'needs-attention'
+            ? "Remboursement demandé : Paystack a besoin des coordonnées du client pour le terminer. Complétez-le depuis le tableau de bord Paystack."
+            : MESSAGE_PAYSTACK_EN_COURS,
+        paiement: maj,
+        commande_payee: null,
+      };
+    } finally {
+      if (!garder) await this.rendre(p.id, maintenant);
+    }
+  }
+
+  /**
+   * Webhook `refund.*` de Paystack (25/11) : remboursement traité, le
+   * paiement passe « Remboursé » (fait depuis notre écran ou depuis le
+   * tableau de bord Paystack) ; échoué, la demande est rendue.
+   */
+  @OnEvent(PaystackChannels.REMBOURSEMENT, { suppressErrors: false })
+  async remboursementPaystack(evenement: EvenementRemboursementPaystack): Promise<void> {
+    const paiements = await this.prisma.paiement.findMany({
+      where: { reference: evenement.reference, fournisseur: FournisseurPaiement.PAYSTACK, status: PaiementStatus.SUCCESS },
+      select: { id: true, reference: true, order_id: true, rembourse_par_nom: true, rembourse_at: true },
+    });
+    const maintenant = new Date();
+    for (const p of paiements) {
+      if (evenement.statut === 'processed') {
+        const maj = await this.prisma.paiement.update({
+          where: { id: p.id },
+          data: {
+            status: PaiementStatus.REVERTED,
+            rembourse_at: maintenant,
+            rembourse_par_nom: p.rembourse_par_nom ?? 'Tableau de bord Paystack',
+            remboursement_demande_at: null,
+            updated_at: maintenant,
+          },
+          select: { id: true, status: true, rembourse_at: true, rembourse_par_nom: true },
+        });
+        if (p.order_id) await this.paiements.recomputeOrderPaiedFlag(p.order_id);
+        this.paiementEvent.paiementAnnule(maj);
+        this.logger.log(`Remboursement Paystack traité : paiement ${p.id} (${p.reference}) remboursé.`);
+      } else if (evenement.statut === 'failed' && !p.rembourse_at) {
+        await this.prisma.paiement.update({
+          where: { id: p.id },
+          data: { remboursement_demande_at: null, rembourse_par_id: null, rembourse_par_nom: null },
+        });
+        this.logger.warn(`Remboursement Paystack échoué pour ${p.id} (${p.reference}) : demande rendue.`);
+      }
+    }
   }
 
   private async rendre(id: string, maintenant: Date): Promise<void> {
