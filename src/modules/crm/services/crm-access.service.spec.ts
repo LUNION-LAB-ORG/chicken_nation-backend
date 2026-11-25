@@ -6,6 +6,7 @@ import {
   PAS_A_CONFIRMER_WHERE,
   PAS_ANNULEE_AVANT_CONFIRMATION_WHERE,
 } from 'src/modules/order/helpers/paiement-livraison.rules';
+import { PAS_PANIER_ANNULE_PAR_CLIENT_WHERE } from 'src/modules/order/helpers/annulation-client.rules';
 import { CrmAccessService } from './crm-access.service';
 import { filtreRestaurant } from './crm-passages.query';
 
@@ -92,8 +93,9 @@ describe('ficheDuRestaurant', () => {
                 entity_status: { not: EntityStatus.DELETED },
                 NOT: { payment_method: 'ONLINE', paied: false, status: 'PENDING' },
                 // Commande du site à payer à la livraison pas encore confirmée,
-                // ou annulée par le centre d'appels sans l'avoir été : ne compte pas.
-                AND: [PAS_A_CONFIRMER_WHERE, PAS_ANNULEE_AVANT_CONFIRMATION_WHERE],
+                // annulée par le centre d'appels sans l'avoir été, ou panier
+                // annulé par le client sans paiement (25/11) : ne compte pas.
+                AND: [PAS_A_CONFIRMER_WHERE, PAS_ANNULEE_AVANT_CONFIRMATION_WHERE, PAS_PANIER_ANNULE_PAR_CLIENT_WHERE],
               },
             },
           },

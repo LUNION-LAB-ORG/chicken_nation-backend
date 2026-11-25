@@ -1,3 +1,4 @@
+import { PANIER_ABANDONNE_SQL } from 'src/modules/order/helpers/annulation-client.rules';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { COLONNES_VENTE, COMMANDE_EFFECTIVE_SQL, COMMANDE_VALIDE_SQL, NOUVEAU_CYCLE_SQL, compter, venteManquante } from '../crm.rules';
@@ -104,7 +105,7 @@ export class CrmRattrapageService {
         INSERT INTO "CrmContact" ("id", "customer_id", "phone", "phone_key", "registered_at", "segment", "segment_since", "abandoned_orders", "updated_at")
         SELECT gen_random_uuid(), c."id", nullif(regexp_replace(c."phone", '\\D', '', 'g'), ''), ${CLE_CLIENT}, c."created_at",
                'JAMAIS_COMMANDE', c."created_at",
-               (SELECT count(*) FROM "Order" o WHERE o."customer_id" = c."id" AND o."entity_status" = 'DELETED'),
+               (SELECT count(*) FROM "Order" o WHERE o."customer_id" = c."id" AND ${PANIER_ABANDONNE_SQL('o')}),
                now()
         FROM "Customer" c
         WHERE c."entity_status" <> 'DELETED'

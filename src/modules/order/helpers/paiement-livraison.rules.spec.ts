@@ -11,6 +11,11 @@
  */
 import { EntityStatus, OrderChannel, OrderStatus, PaymentMethod, Prisma } from '@prisma/client';
 import { COMMANDE_EFFECTIVE_SQL, commandeEffective } from 'src/modules/crm/crm.rules';
+import {
+  estPanierAnnuleParClient,
+  PANIER_ANNULE_PAR_CLIENT_WHERE,
+  PAS_PANIER_ANNULE_PAR_CLIENT_WHERE,
+} from './annulation-client.rules';
 import { BROUILLON_WHERE, estBrouillon } from './brouillons.rules';
 import {
   A_CONFIRMER_SQL,
@@ -80,14 +85,19 @@ const retenue = (ligne: Ligne, where: Prisma.OrderWhereInput) => sql3(ligne, whe
 const CANAUX = [null, ...Object.values(OrderChannel)];
 const MOYENS = [null, ...Object.values(PaymentMethod)];
 
-/** Toutes les combinaisons des six champs de la règle, canal et moyen vides compris. */
+/** Auteur de l'annulation : vide, le client (panier annulé), le personnel. */
+const AUTEURS = [null, 'client', 'agent'];
+
+/** Toutes les combinaisons des sept champs des règles, canal, moyen et auteur vides compris. */
 function* combinaisons(): Generator<Ligne> {
   for (const auto of [true, false])
     for (const status of Object.values(OrderStatus))
       for (const paied of [true, false])
         for (const payment_method of MOYENS)
           for (const entity_status of Object.values(EntityStatus))
-            for (const channel of CANAUX) yield { auto, status, paied, payment_method, entity_status, channel };
+            for (const channel of CANAUX)
+              for (const cancelled_by of AUTEURS)
+                yield { auto, status, paied, payment_method, entity_status, channel, cancelled_by };
 }
 
 /** Commande du site à payer à la livraison, juste créée. */
@@ -111,8 +121,9 @@ describe('estAConfirmer et A_CONFIRMER_WHERE', () => {
       expect({ commande, verdict: retenue(commande, A_CONFIRMER_WHERE) }).toEqual({ commande, verdict: attendu });
       if (attendu) nombre += 1;
     }
-    // Un seul cas : site, à la livraison, auto, en attente, non payée, non supprimée (ACTIVE ou INACTIVE).
-    expect(nombre).toBe(Object.values(EntityStatus).length - 1);
+    // Un seul cas : site, à la livraison, auto, en attente, non payée, non
+    // supprimée (ACTIVE ou INACTIVE), quel que soit l'auteur d'annulation lu.
+    expect(nombre).toBe((Object.values(EntityStatus).length - 1) * AUTEURS.length);
   });
 
   it('le canal APP, le centre d’appels, la caisse et un canal vide ne sont jamais à confirmer', () => {
@@ -190,6 +201,25 @@ describe('commandeEffective et BROUILLON_WHERE avec la logique de SQL', () => {
     }
   });
 
+  // Demande du 25/11 : le panier annulé par le client reste actif ; le CRM
+  // l'écarte par le complément écrit en positif, jamais par un `NOT` qui
+  // vaudrait NULL sur une colonne vide et ferait disparaître la commande.
+  it('PAS_PANIER_ANNULE_PAR_CLIENT_WHERE est le complément exact du panier annulé, colonnes vides comprises', () => {
+    for (const commande of combinaisons()) {
+      const annule = sql3(commande, PANIER_ANNULE_PAR_CLIENT_WHERE);
+      const pas = sql3(commande, PAS_PANIER_ANNULE_PAR_CLIENT_WHERE);
+      expect({ commande, pas }).toEqual({ commande, pas: annule === true ? false : true });
+      expect({ commande, enMemoire: estPanierAnnuleParClient(commande) }).toEqual({ commande, enMemoire: annule === true });
+    }
+  });
+
+  it('une annulation ordinaire sans auteur, ou d’avant le 02/10 sans canal, reste une commande effective', () => {
+    const annulee = { auto: true, status: OrderStatus.CANCELLED, paied: false, entity_status: EntityStatus.ACTIVE };
+    expect(retenue({ ...annulee, payment_method: PaymentMethod.ONLINE, channel: null, cancelled_by: null }, commandeEffective())).toBe(true);
+    expect(retenue({ ...annulee, payment_method: PaymentMethod.OFFLINE, channel: null, cancelled_by: 'client' }, commandeEffective())).toBe(true);
+    expect(retenue({ ...annulee, payment_method: PaymentMethod.ONLINE, channel: null, cancelled_by: 'client' }, commandeEffective())).toBe(false);
+  });
+
   it('une commande retenue en base est soit effective, soit brouillon, jamais les deux', () => {
     for (const commande of combinaisons()) {
       if (commande.auto !== true) continue;
@@ -197,12 +227,14 @@ describe('commandeEffective et BROUILLON_WHERE avec la logique de SQL', () => {
       const brouillon = retenue(commande, BROUILLON_WHERE);
       expect({ commande, deux: effective && brouillon }).toEqual({ commande, deux: false });
       // Hors moyen de paiement vide (règle d'avant, inchangée), aucune ne se
-      // perd, sauf la commande du site annulée avant d'être confirmée :
-      // ni commande, ni brouillon (voir plus bas).
+      // perd, sauf la commande du site annulée avant d'être confirmée, et le
+      // panier annulé par le client sans paiement (resté actif depuis le
+      // 25/11) : ni commande, ni brouillon (voir plus bas).
       if (
         commande.payment_method !== null &&
         commande.entity_status !== EntityStatus.DELETED &&
-        !estAnnuleeAvantConfirmation(commande)
+        !estAnnuleeAvantConfirmation(commande) &&
+        !estPanierAnnuleParClient(commande)
       ) {
         expect({ commande, une: effective || brouillon }).toEqual({ commande, une: true });
       }

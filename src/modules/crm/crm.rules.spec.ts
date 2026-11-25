@@ -4,6 +4,10 @@ import {
   PAS_A_CONFIRMER_WHERE,
   PAS_ANNULEE_AVANT_CONFIRMATION_WHERE,
 } from 'src/modules/order/helpers/paiement-livraison.rules';
+import {
+  PANIER_ANNULE_PAR_CLIENT_SQL,
+  PAS_PANIER_ANNULE_PAR_CLIENT_WHERE,
+} from 'src/modules/order/helpers/annulation-client.rules';
 import { correspond } from 'src/modules/order/relance/relance.base-simulee-spec';
 import {
   commandeEffective,
@@ -189,7 +193,7 @@ describe('commandeEffective', () => {
       customer_id: 'c1',
       entity_status: { not: 'DELETED' },
       NOT: { payment_method: 'ONLINE', paied: false, status: 'PENDING' },
-      AND: [PAS_A_CONFIRMER_WHERE, PAS_ANNULEE_AVANT_CONFIRMATION_WHERE],
+      AND: [PAS_A_CONFIRMER_WHERE, PAS_ANNULEE_AVANT_CONFIRMATION_WHERE, PAS_PANIER_ANNULE_PAR_CLIENT_WHERE],
     });
   });
 
@@ -229,12 +233,24 @@ describe('commandeEffective', () => {
     expect(effective(commande({ status: 'CANCELLED', channel: null, accepted_at: null }))).toBe(true);
   });
 
+  // Demande du 25/11 : le panier que le client annule sans l'avoir payé reste
+  // ACTIVE. Il n'a jamais été une commande : ni conversion, ni « a commandé ».
+  it('panier annulé par le client sans paiement, resté actif : ne compte pas ; payé avant l’annulation : compte', () => {
+    const annule = { channel: 'APP', payment_method: 'ONLINE', status: 'CANCELLED', cancelled_by: 'client', accepted_at: null };
+    expect(effective(commande(annule))).toBe(false);
+    expect(effective(commande({ ...annule, channel: 'WEB', payment_method: 'OFFLINE' }))).toBe(false);
+    expect(effective(commande({ ...annule, paied: true }))).toBe(true);
+    // Annulée par le personnel : règle inchangée.
+    expect(effective(commande({ ...annule, cancelled_by: 'agent' }))).toBe(true);
+  });
+
   it('en SQL : même exclusion, écrite pour ne jamais valoir NULL', () => {
     const sql = COMMANDE_EFFECTIVE_SQL.replace(/\s+/g, ' ');
     expect(sql).toContain(`AND NOT (o."payment_method" = 'ONLINE' AND o."paied" = false AND o."status" = 'PENDING')`);
     expect(sql).toContain(`AND NOT ${A_CONFIRMER_SQL('o').replace(/\s+/g, ' ')}`);
     expect(sql).toContain(`o."channel" IS NOT DISTINCT FROM 'WEB'`);
     expect(sql).toContain(`o."payment_method" IS NOT DISTINCT FROM 'OFFLINE'`);
+    expect(sql).toContain(`AND NOT ${PANIER_ANNULE_PAR_CLIENT_SQL('o').replace(/\s+/g, ' ')}`);
   });
 });
 

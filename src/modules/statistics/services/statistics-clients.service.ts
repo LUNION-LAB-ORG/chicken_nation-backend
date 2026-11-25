@@ -1,3 +1,4 @@
+import { PAS_PANIER_ANNULE_PAR_CLIENT_WHERE } from 'src/modules/order/helpers/annulation-client.rules';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
@@ -153,7 +154,8 @@ export class StatisticsClientsService {
         _count: {
           select: {
             orders: {
-              where: { entity_status: { not: 'DELETED' } },
+              // Un panier annulé par le client n'est pas une commande (25/11).
+              where: { entity_status: { not: 'DELETED' }, AND: [PAS_PANIER_ANNULE_PAR_CLIENT_WHERE] },
             },
           },
         },

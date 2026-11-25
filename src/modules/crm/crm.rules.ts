@@ -14,6 +14,7 @@ import {
   PAS_A_CONFIRMER_WHERE,
   PAS_ANNULEE_AVANT_CONFIRMATION_WHERE,
 } from 'src/modules/order/helpers/paiement-livraison.rules';
+import { PANIER_ANNULE_PAR_CLIENT_SQL, PAS_PANIER_ANNULE_PAR_CLIENT_WHERE } from 'src/modules/order/helpers/annulation-client.rules';
 
 /**
  * Règles du module Contacts qui ne dépendent d'aucun service : elles sont
@@ -102,7 +103,9 @@ export const CRM_SOCKET_EVENT = 'crm:contact-updated';
 
 /**
  * Une commande qui COMPTE : ni supprimée, ni paiement en ligne encore en
- * attente, ni commande du site à payer à la livraison pas encore confirmée.
+ * attente, ni commande du site à payer à la livraison pas encore confirmée,
+ * ni panier annulé par le client (resté actif depuis le 25/11, il était
+ * supprimé avant : `PANIER_ANNULE_PAR_CLIENT_WHERE`).
  * Un paiement en ligne abandonné finit supprimé ; tant qu'il est en cours, le
  * client n'a pas encore commandé et doit rester dans la file. De même, une
  * commande à confirmer (`paiement-livraison.rules.ts`) ne compte qu'une fois
@@ -123,7 +126,7 @@ export function commandeEffective(customerId?: string): Prisma.OrderWhereInput {
       status: OrderStatus.PENDING,
     },
     // Écrit en positif : sûr avec un canal ou un mode de paiement vide.
-    AND: [PAS_A_CONFIRMER_WHERE, PAS_ANNULEE_AVANT_CONFIRMATION_WHERE],
+    AND: [PAS_A_CONFIRMER_WHERE, PAS_ANNULEE_AVANT_CONFIRMATION_WHERE, PAS_PANIER_ANNULE_PAR_CLIENT_WHERE],
   };
 }
 
@@ -165,7 +168,8 @@ export const NOUVEAU_CYCLE_SQL = Object.keys(NOUVEAU_CYCLE)
 export const COMMANDE_EFFECTIVE_SQL = `o."entity_status" <> 'DELETED'
   AND NOT (o."payment_method" = 'ONLINE' AND o."paied" = false AND o."status" = 'PENDING')
   AND NOT ${A_CONFIRMER_SQL('o')}
-  AND NOT ${ANNULEE_AVANT_CONFIRMATION_SQL('o')}`;
+  AND NOT ${ANNULEE_AVANT_CONFIRMATION_SQL('o')}
+  AND NOT ${PANIER_ANNULE_PAR_CLIENT_SQL('o')}`;
 
 /**
  * Vente comptée dans les chiffres (alias `v` sur "CrmConversion") : ni annulée

@@ -1,5 +1,6 @@
 import { EntityStatus, OrderChannel, OrderStatus, PaymentMethod, Prisma, UserRole } from '@prisma/client';
 import { commandeEffective } from 'src/modules/crm/crm.rules';
+import { PANIER_ANNULE_PAR_CLIENT_WHERE, estPanierAnnuleParClient } from './annulation-client.rules';
 import { estAConfirmer } from './paiement-livraison.rules';
 
 /**
@@ -76,92 +77,17 @@ export function estBrouillon(commande?: EtatBrouillon | null): boolean {
   return panierEnLigne || estAConfirmer(commande);
 }
 
-/**
- * Mode de paiement d'un brouillon : en ligne (application ou site), ou à la
- * livraison sur le site. Lu par la règle des paniers annulés par le client,
- * en Prisma et en mémoire.
- */
-const PAYABLE_PAR_LE_CLIENT_WHERE: Prisma.OrderWhereInput[] = [
-  { payment_method: PaymentMethod.ONLINE },
-  { payment_method: PaymentMethod.OFFLINE, channel: OrderChannel.WEB },
-];
-
-function payableParLeClient(commande: EtatBrouillon): boolean {
-  return (
-    commande.payment_method === PaymentMethod.ONLINE ||
-    (commande.payment_method === PaymentMethod.OFFLINE && commande.channel === OrderChannel.WEB)
-  );
-}
-
 // ---------------------------------------------------------------------------
-// Paniers annulés par le client (demande du 01/10)
+// Paniers annulés par le client : règle dans annulation-client.rules.ts (le
+// CRM la lit aussi), reprise ici pour les appelants existants.
 // ---------------------------------------------------------------------------
-
-/**
- * Valeur de `Order.cancelled_by` posée quand le CLIENT annule lui-même, depuis
- * l'application ou le site (`PATCH /orders/:id/client/status`), un brouillon :
- * panier non payé, ou commande du site à confirmer (« Modifier ma commande »).
- *
- * Constante, et non plus l'identifiant du client : c'est le marqueur que
- * lisent la relance, la lecture d'une commande et la réactivation, et il doit
- * pouvoir s'écrire dans un `where` Prisma (comparer deux colonnes ne s'y écrit
- * pas). Rien n'est perdu : l'auteur est le titulaire de la commande,
- * `customer_id`. Les annulations par le personnel gardent l'identifiant de
- * l'agent. La migration 20261001180000 a posé cette valeur sur les paniers
- * annulés par le client entre le 30/09 et ce correctif.
- */
-export const ANNULEE_PAR_CLIENT = 'client';
-
-/**
- * Panier annulé par le client : un brouillon (non payé, payable en ligne, ou
- * commande du site à payer à la livraison) que le client a annulé lui-même
- * avant de payer ou d'être appelé. Il est SUPPRIMÉ des listes (`entity_status`
- * DELETED : ni Commandes, ni En cours, ni statistiques, ni CRM), mais reste
- * relançable : le centre d'appels le voit dans « À relancer » avec le motif
- * « Annulée par le client », et le reprendre au téléphone le réactive
- * (`OrderService.update`).
- *
- * ⚠️ Le mode de paiement est un `OR` : qui étale cet objet dans un `where`
- * ne doit pas y avoir son propre `OR`.
- */
-export const PANIER_ANNULE_PAR_CLIENT_WHERE: Prisma.OrderWhereInput = {
-  auto: true,
-  OR: PAYABLE_PAR_LE_CLIENT_WHERE,
-  paied: false,
-  status: OrderStatus.CANCELLED,
-  entity_status: EntityStatus.DELETED,
-  cancelled_by: ANNULEE_PAR_CLIENT,
-};
-
-/**
- * Commande SUPPRIMÉE par l'annulation du client, PAYÉE OU NON : la règle
- * ci-dessus sans la condition sur `paied`, et en ligne seulement (une
- * commande à payer à la livraison n'attend aucun paiement en ligne). Sert au
- * seul paiement en ligne arrivé après l'annulation : le retrouver par sa
- * référence (`OrderService.findByReferenceOrNull`, même au rejeu d'un webhook
- * dont un premier passage a déjà posé `paied`), puis rendre visible la
- * commande payée (`PaiementsService`, avec `paied: true`).
- */
-export const ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE: Prisma.OrderWhereInput = {
-  auto: true,
-  payment_method: PaymentMethod.ONLINE,
-  status: OrderStatus.CANCELLED,
-  entity_status: EntityStatus.DELETED,
-  cancelled_by: ANNULEE_PAR_CLIENT,
-};
-
-/** Même règle que `PANIER_ANNULE_PAR_CLIENT_WHERE`, sur une commande en mémoire. */
-export function estPanierAnnuleParClient(commande?: EtatBrouillon | null): boolean {
-  if (!commande) return false;
-  return (
-    commande.auto === true &&
-    payableParLeClient(commande) &&
-    commande.paied !== true &&
-    commande.status === OrderStatus.CANCELLED &&
-    commande.entity_status === EntityStatus.DELETED &&
-    commande.cancelled_by === ANNULEE_PAR_CLIENT
-  );
-}
+export {
+  ANNULEE_PAR_CLIENT,
+  ANNULEE_PAR_CLIENT_EN_LIGNE_WHERE,
+  ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE,
+  PANIER_ANNULE_PAR_CLIENT_WHERE,
+  estPanierAnnuleParClient,
+} from './annulation-client.rules';
 
 /**
  * Ce que suit la relance : les brouillons ET les paniers annulés par le

@@ -10,7 +10,11 @@
 
 import { EntityStatus, OrderStatus, OrderType, PaiementStatus, PaymentMethod } from '@prisma/client';
 import { CodeAlerte } from 'src/modules/alertes/alertes.service';
-import { ANNULEE_PAR_CLIENT, ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE } from 'src/modules/order/helpers/brouillons.rules';
+import {
+  ANNULEE_PAR_CLIENT,
+  ANNULEE_PAR_CLIENT_EN_LIGNE_WHERE,
+  ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE,
+} from 'src/modules/order/helpers/brouillons.rules';
 import { PaiementsService } from './paiements.service';
 
 const COMMANDE = '11111111-1111-4111-8111-111111111111';
@@ -22,6 +26,8 @@ function monter(statut: OrderStatus, compteClaim: number, compteRetablie = 0, co
   const prisma = {
     order: {
       findUnique: jest.fn().mockResolvedValue({ restaurant_id: RESTAURANT_A }),
+      // Panier annulé par le client resté actif (depuis le 25/11) : aucun par défaut.
+      findFirst: jest.fn().mockResolvedValue(null),
       updateMany: jest
         .fn()
         .mockResolvedValueOnce({ count: compteClaim })
@@ -157,7 +163,7 @@ describe('PaiementsService.linkPaiementToOrder : paiement tardif', () => {
     expect(prisma.order.updateMany.mock.calls[0][0].where).toEqual({ id: COMMANDE, status: OrderStatus.PENDING });
   });
 
-  it("panier annulé par le client puis payé : rendu visible, remboursement signalé, code promo non compté", async () => {
+  it("panier annulé avant le 25/11 (supprimé) puis payé : rendu visible, remboursement signalé, code promo non compté", async () => {
     const { service, prisma, promoCodeService, alertes } = monter(OrderStatus.CANCELLED, 0, 1);
     prisma.order.findUnique.mockResolvedValue({ restaurant_id: RESTAURANT_A, status: OrderStatus.CANCELLED });
 
@@ -182,7 +188,7 @@ describe('PaiementsService.linkPaiementToOrder : paiement tardif', () => {
     expect(promoCodeService.activateUsageForOrder).not.toHaveBeenCalled();
   });
 
-  it("rejeu du webhook sur ce panier déjà payé : rétabli s'il ne l'était pas, sinon rien", async () => {
+  it("rejeu du webhook sur un panier supprimé déjà payé : rétabli s'il ne l'était pas, sinon rien", async () => {
     const { service, prisma, alertes } = monter(OrderStatus.CANCELLED, 0, 0);
     prisma.order.updateMany.mockReset();
     // Claim (PENDING) et passage à payée sans effet : déjà fait au 1er passage.
@@ -193,5 +199,49 @@ describe('PaiementsService.linkPaiementToOrder : paiement tardif', () => {
     expect(resultat.payeApresCoup).toBe(false);
     expect(resultat.annuleeRetablie).toBe(true);
     expect(alertes.signaler).toHaveBeenCalledTimes(1);
+  });
+  it('panier annulé depuis le 25/11 (resté actif) puis payé : remboursement signalé une fois, rien à rendre visible', async () => {
+    const { service, prisma, promoCodeService, alertes } = monter(OrderStatus.CANCELLED, 0, 0);
+    prisma.order.findUnique.mockResolvedValue({ restaurant_id: RESTAURANT_A, status: OrderStatus.CANCELLED });
+    prisma.order.findFirst.mockResolvedValue({ id: COMMANDE });
+
+    const resultat = await service.linkPaiementToOrder(donnees);
+
+    expect(resultat.payeApresCoup).toBe(true);
+    expect(resultat.annuleeRetablie).toBe(true);
+    // Rien de supprimé à rétablir ; relue en base sur l'état « annulée par le client, payée ».
+    expect(prisma.order.findFirst.mock.calls[0][0].where).toEqual({ id: COMMANDE, ...ANNULEE_PAR_CLIENT_EN_LIGNE_WHERE, paied: true });
+    expect(prisma.order.findFirst.mock.calls[0][0].where).not.toHaveProperty('entity_status');
+    expect(alertes.signaler).toHaveBeenCalledTimes(1);
+    expect(alertes.signaler.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ code: CodeAlerte.PAIEMENT_SUR_COMMANDE_ANNULEE, reference: 'CMD-1' }),
+    );
+    expect(promoCodeService.activateUsageForOrder).not.toHaveBeenCalled();
+  });
+
+  it('rejeu du webhook sur ce panier resté actif, déjà payé : aucune seconde alerte', async () => {
+    const { service, prisma, alertes } = monter(OrderStatus.CANCELLED, 0, 0);
+    prisma.order.updateMany.mockReset();
+    // Claim, passage à payée et rétablissement sans effet : `paied` déjà posé.
+    prisma.order.updateMany.mockResolvedValue({ count: 0 });
+    prisma.order.findFirst.mockResolvedValue({ id: COMMANDE });
+
+    const resultat = await service.linkPaiementToOrder(donnees);
+
+    expect(resultat.payeApresCoup).toBe(false);
+    expect(resultat.annuleeRetablie).toBe(false);
+    expect(prisma.order.findFirst).not.toHaveBeenCalled();
+    expect(alertes.signaler).not.toHaveBeenCalled();
+  });
+
+  it('commande ordinaire payée après coup : relue, aucune alerte', async () => {
+    const { service, prisma, alertes } = monter(OrderStatus.ACCEPTED, 0);
+
+    const resultat = await service.linkPaiementToOrder(donnees);
+
+    expect(resultat.payeApresCoup).toBe(true);
+    expect(prisma.order.findFirst).toHaveBeenCalledTimes(1);
+    expect(resultat.annuleeRetablie).toBe(false);
+    expect(alertes.signaler).not.toHaveBeenCalled();
   });
 });

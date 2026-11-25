@@ -175,14 +175,15 @@ describe('Règle unique des brouillons', () => {
                     commande,
                     verdict: correspond(commande, RELANCABLE_WHERE),
                   });
-                  // Jamais les deux à la fois : un brouillon n'est jamais supprimé.
+                  // Jamais les deux à la fois : un brouillon est en attente, le panier annulé non.
                   if (attendu) expect(estBrouillon(commande)).toBe(false);
                   if (attendu) annules += 1;
                 }
-    // Annulée, non payée, auto, supprimée, par le client, et : en ligne quel
-    // que soit le canal (5, vide compris), ou commande du site à payer à la
-    // livraison (1, « Modifier ma commande », 19/10).
-    expect(annules).toBe(6);
+    // Annulée, non payée, auto, par le client, et : en ligne quel que soit le
+    // canal (5, vide compris), ou commande du site à payer à la livraison (1,
+    // « Modifier ma commande », 19/10). Depuis le 25/11, quel que soit son
+    // état (ACTIVE depuis, DELETED avant, INACTIVE).
+    expect(annules).toBe(6 * Object.values(EntityStatus).length);
   });
 
   it('une commande en espèces de l’application, ou sans canal, n’est jamais un brouillon', () => {

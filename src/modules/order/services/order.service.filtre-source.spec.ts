@@ -217,3 +217,49 @@ describe('QueryOrderDto : le paramètre `source`', () => {
     expect(absent.auto).toBe(false);
   });
 });
+
+// ===========================================================================
+// Panier annulé par le client, resté actif (demande du 25/11)
+// ===========================================================================
+
+describe('GET /orders : panier annulé par le client avant de payer, resté actif', () => {
+  const annulee = (id: string, surcharge: Record<string, unknown> = {}) => ({
+    id,
+    channel: OrderChannel.APP,
+    auto: true,
+    status: OrderStatus.CANCELLED,
+    type: OrderType.DELIVERY,
+    entity_status: EntityStatus.ACTIVE,
+    created_at: new Date(),
+    payment_method: 'ONLINE',
+    paied: false,
+    cancelled_by: null as string | null,
+    ...surcharge,
+  });
+  const LIGNES = [
+    annulee('panier-appli-annule-client', { cancelled_by: 'client' }),
+    annulee('panier-site-annule-client', { channel: OrderChannel.WEB, payment_method: 'OFFLINE', cancelled_by: 'client' }),
+    annulee('payee-puis-annulee-client', { cancelled_by: 'client', paied: true }),
+    annulee('annulee-par-le-restaurant', { cancelled_by: 'u-manager' }),
+    annulee('annulee-sans-auteur-ni-canal', { channel: null }),
+  ];
+  const lister = async (user: User) => {
+    const { service, lus } = monter();
+    await service.findAll(filtres({}), user);
+    return LIGNES.filter((c) => rendueParLaBase(c, lus[0])).map((c) => c.id).sort();
+  };
+
+  it('le restaurant ne le voit pas (il ne l’a jamais reçu) ; les autres annulations, si', async () => {
+    for (const role of [UserRole.CAISSIER, UserRole.MANAGER]) {
+      expect(await lister(compte(role))).toEqual(
+        ['annulee-par-le-restaurant', 'annulee-sans-auteur-ni-canal', 'payee-puis-annulee-client'],
+      );
+    }
+  });
+
+  it('l’administrateur et le centre d’appels le voient, au statut Annulée', async () => {
+    for (const role of [UserRole.ADMIN, UserRole.CALL_CENTER]) {
+      expect(await lister(compte(role))).toEqual(LIGNES.map((c) => c.id).sort());
+    }
+  });
+});

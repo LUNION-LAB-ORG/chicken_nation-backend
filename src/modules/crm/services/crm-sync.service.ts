@@ -1,3 +1,4 @@
+import { PANIER_ABANDONNE_WHERE } from 'src/modules/order/helpers/annulation-client.rules';
 import { Injectable, Logger } from '@nestjs/common';
 import {
   CrmEventType,
@@ -194,7 +195,7 @@ export class CrmSyncService {
   /** Abandons de paiement et dernière commande, recopiés pour trier et filtrer. */
   private async entretenir(c: ContactVu, derniereLe: Date | null) {
     const abandons = await this.prisma.order.count({
-      where: { customer_id: c.customer_id!, entity_status: EntityStatus.DELETED },
+      where: { customer_id: c.customer_id!, ...PANIER_ABANDONNE_WHERE },
     });
     if (c.abandoned_orders !== abandons || c.last_order_at?.getTime() !== derniereLe?.getTime()) {
       await this.prisma.crmContact.update({
@@ -241,7 +242,7 @@ export class CrmSyncService {
     const [premiere, derniere, abandons, jours] = await Promise.all([
       this.prisma.order.findFirst({ where: commandeEffective(client.id), orderBy: { created_at: 'asc' }, select: { id: true } }),
       this.prisma.order.findFirst({ where: commandeEffective(client.id), orderBy: { created_at: 'desc' }, select: { created_at: true } }),
-      this.prisma.order.count({ where: { customer_id: client.id, entity_status: EntityStatus.DELETED } }),
+      this.prisma.order.count({ where: { customer_id: client.id, ...PANIER_ABANDONNE_WHERE } }),
       this.config.joursInactivite(),
     ]);
     const telephone = { phone: chiffresTelephone(client.phone) || null, phone_key: cleTelephone(client.phone) };

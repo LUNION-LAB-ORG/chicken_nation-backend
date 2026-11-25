@@ -1,3 +1,4 @@
+import { PAS_PANIER_ANNULE_PAR_CLIENT_WHERE } from 'src/modules/order/helpers/annulation-client.rules';
 import {
   ConflictException,
   Injectable,
@@ -197,6 +198,8 @@ export class CustomerService {
           whereClause.orders = {
             some: {
               entity_status: { not: EntityStatus.DELETED },
+              // Un panier annulé par le client n'est pas une commande (25/11).
+              AND: [PAS_PANIER_ANNULE_PAR_CLIENT_WHERE],
               ...(query.restaurantId ? { restaurant_id: query.restaurantId } : {}),
             },
           };
@@ -205,6 +208,7 @@ export class CustomerService {
           whereClause.orders = {
             none: {
               entity_status: { not: EntityStatus.DELETED },
+              AND: [PAS_PANIER_ANNULE_PAR_CLIENT_WHERE],
             },
           };
           break;

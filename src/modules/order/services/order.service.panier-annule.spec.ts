@@ -2,7 +2,8 @@
  * PANIER ANNULÉ PAR LE CLIENT (demande du 01/10).
  *
  * Le client passe une commande dans l'application, ne paie pas et l'annule :
- * elle passe CANCELLED et DELETED (hors des listes), reste relançable, et le
+ * elle passe CANCELLED et reste ACTIVE (depuis le 25/11 ; elle était supprimée
+ * avant), reste relançable, et le
  * centre d'appels qui le joint la RÉACTIVE en la reprenant au téléphone :
  * active, acceptée, paiement à la caisse, coupon consommé de nouveau.
  *
@@ -87,12 +88,10 @@ const panier = (surcharge: Commande = {}): Commande => ({
   ...surcharge,
 });
 
-/** Le même panier, annulé par le client dans l'application (état écrit par S1). */
+/** Le même panier, annulé par le client dans l'application (état écrit depuis le 25/11 : reste actif). */
 const panierAnnule = (surcharge: Commande = {}): Commande =>
   panier({
     status: OrderStatus.CANCELLED,
-    entity_status: EntityStatus.DELETED,
-    deleted_at: ANNULEE_LE,
     cancelled_at: ANNULEE_LE,
     cancelled_by: ANNULEE_PAR_CLIENT,
     cancelled_reason: 'Trop long',
@@ -213,7 +212,7 @@ function monterEcouteur() {
 }
 
 describe('OrderService.updateStatus : le client annule son panier non payé', () => {
-  it('passe CANCELLED et DELETED, annulée « par le client », coupon rendu comme aujourd’hui', async () => {
+  it('passe CANCELLED et reste ACTIVE, annulée « par le client », coupon rendu comme aujourd’hui', async () => {
     const { service, prisma, orderCoupon, base } = monterStatut(panier());
 
     await service.updateStatus(COMMANDE, OrderStatus.CANCELLED, { reason: 'Trop long', userId: CLIENT }, { parLeClient: true });
@@ -231,14 +230,16 @@ describe('OrderService.updateStatus : le client annule son panier non payé', ()
     expect(ecriture).toEqual(
       expect.objectContaining({
         status: OrderStatus.CANCELLED,
-        entity_status: EntityStatus.DELETED,
         cancelled_by: ANNULEE_PAR_CLIENT,
         cancelled_reason: 'Trop long',
       }),
     );
-    expect(ecriture.deleted_at).toBeInstanceOf(Date);
-    expect(ecriture.cancelled_at).toEqual(ecriture.deleted_at);
-    expect(base().entity_status).toBe(EntityStatus.DELETED);
+    // Plus supprimée (demande du 25/11) : visible dans Commandes, au statut Annulée.
+    expect(ecriture).not.toHaveProperty('entity_status');
+    expect(ecriture).not.toHaveProperty('deleted_at');
+    expect(ecriture.cancelled_at).toBeInstanceOf(Date);
+    expect(base().entity_status).toBe(EntityStatus.ACTIVE);
+    expect(base().deleted_at).toBeNull();
     // Restitution inchangée : le motif reste ANNULATION, l'auteur le client.
     expect(orderCoupon.restituerPourCommande).toHaveBeenCalledWith(
       expect.objectContaining({ id: COMMANDE }),
@@ -253,9 +254,9 @@ describe('OrderService.updateStatus : le client annule son panier non payé', ()
     expect(orderEvent.orderStatusUpdatedEvent).toHaveBeenCalledTimes(1);
     const evenement = orderEvent.orderStatusUpdatedEvent.mock.calls[0][0];
     expect(evenement.etait_brouillon).toBe(true);
-    expect(evenement.order.entity_status).toBe(EntityStatus.DELETED);
+    expect(evenement.order.entity_status).toBe(EntityStatus.ACTIVE);
     expect(orderWebSocketService.emitStatusUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ entity_status: EntityStatus.DELETED }),
+      expect.objectContaining({ entity_status: EntityStatus.ACTIVE, status: OrderStatus.CANCELLED }),
       OrderStatus.PENDING,
     );
 
@@ -382,15 +383,20 @@ describe('Paiement KKiaPay arrivé après l’annulation par le client', () => {
     const ordinaire = findFirst.mock.calls[1][0].where;
 
     const reference = 'ORD-261001-1';
+    // Annulé depuis le 25/11 : resté actif, trouvé avec ou sans l'option.
     expect(correspond({ ...panierAnnule(), reference }, pourLeWebhook)).toBe(true);
+    expect(correspond({ ...panierAnnule(), reference }, ordinaire)).toBe(true);
+    // Annulé avant le 25/11, quand l'annulation le supprimait.
+    const supprime = panierAnnule({ entity_status: EntityStatus.DELETED, deleted_at: ANNULEE_LE });
+    expect(correspond({ ...supprime, reference }, pourLeWebhook)).toBe(true);
     // Rejeu d'un webhook dont un premier passage a déjà posé `paied`.
-    expect(correspond({ ...panierAnnule({ paied: true }), reference }, pourLeWebhook)).toBe(true);
+    expect(correspond({ ...supprime, paied: true, reference }, pourLeWebhook)).toBe(true);
     expect(correspond({ ...panier(), reference }, pourLeWebhook)).toBe(true);
     // Supprimée par le personnel, ou annulée par le personnel puis supprimée : non.
-    expect(correspond({ ...panierAnnule({ cancelled_by: 'u1' }), reference }, pourLeWebhook)).toBe(false);
+    expect(correspond({ ...supprime, cancelled_by: 'u1', reference }, pourLeWebhook)).toBe(false);
     expect(correspond({ ...panier({ entity_status: EntityStatus.DELETED }), reference }, pourLeWebhook)).toBe(false);
     // Sans l'option : inchangé, le panier supprimé reste introuvable.
-    expect(correspond({ ...panierAnnule(), reference }, ordinaire)).toBe(false);
+    expect(correspond({ ...supprime, reference }, ordinaire)).toBe(false);
   });
 
   it('le paiement est rattaché, sans aucun effet de fidélité ; la réactivation est ensuite refusée', async () => {
@@ -525,10 +531,10 @@ describe('OrderService.update : reprendre un panier annulé par le client le ré
         auto: true,
         paied: false,
         status: OrderStatus.CANCELLED,
-        entity_status: EntityStatus.DELETED,
         cancelled_by: ANNULEE_PAR_CLIENT,
       }),
     );
+    expect(m.prisma.order.updateMany.mock.calls[0][0].where).not.toHaveProperty('entity_status');
     expect(m.base()).toEqual(
       expect.objectContaining({
         entity_status: EntityStatus.ACTIVE,
@@ -567,6 +573,22 @@ describe('OrderService.update : reprendre un panier annulé par le client le ré
         commande: expect.objectContaining({ cancelled_at: ANNULEE_LE, cancelled_reason: 'Trop long', cancelled_by: ANNULEE_PAR_CLIENT }),
         acteur: CALL_CENTER,
         coupon: null,
+      }),
+    );
+  });
+
+  it('panier annulé avant le 25/11 (l’annulation le supprimait) : la reprise le réactive aussi', async () => {
+    const m = monterReprise(panierAnnule({ entity_status: EntityStatus.DELETED, deleted_at: ANNULEE_LE }));
+
+    await reprendre(m.service);
+    await attendre();
+
+    expect(m.base()).toEqual(
+      expect.objectContaining({
+        entity_status: EntityStatus.ACTIVE,
+        deleted_at: null,
+        status: OrderStatus.ACCEPTED,
+        cancelled_by: null,
       }),
     );
   });
@@ -719,7 +741,7 @@ describe('OrderService.update : reprendre un panier annulé par le client le ré
     });
     expect(m.prisma.order.updateMany).not.toHaveBeenCalled();
     expect(m.prisma.order.update).not.toHaveBeenCalled();
-    expect(m.base().entity_status).toBe(EntityStatus.DELETED);
+    expect(m.base()).toEqual(expect.objectContaining({ status: OrderStatus.CANCELLED, cancelled_by: ANNULEE_PAR_CLIENT }));
   });
 
   it('les autres rôles ne lisent pas le panier supprimé ; si on le leur passait, refus', async () => {
@@ -734,7 +756,7 @@ describe('OrderService.update : reprendre un panier annulé par le client le ré
     expect(m.prisma.order.update).not.toHaveBeenCalled();
   });
 
-  it('autre modification du panier annulé (sans reprise) : il reste annulé et supprimé', async () => {
+  it('autre modification du panier annulé (sans reprise) : il reste annulé', async () => {
     const m = monterReprise(panierAnnule());
     await reprendre(m.service, CALL_CENTER, { note: 'Rappeler après 18 h' });
     expect(m.orderRelance.verifierReactivable).not.toHaveBeenCalled();
@@ -742,7 +764,7 @@ describe('OrderService.update : reprendre un panier annulé par le client le ré
     expect(m.base()).toEqual(
       expect.objectContaining({
         status: OrderStatus.CANCELLED,
-        entity_status: EntityStatus.DELETED,
+        cancelled_by: ANNULEE_PAR_CLIENT,
         auto: true,
         tax: 500,
         amount: 10500,
@@ -752,7 +774,7 @@ describe('OrderService.update : reprendre un panier annulé par le client le ré
   });
 
   it('commande annulée par le PERSONNEL : la règle reste, son origine ne change pas (409)', async () => {
-    const m = monterReprise(panierAnnule({ entity_status: EntityStatus.ACTIVE, deleted_at: null, cancelled_by: 'u9' }));
+    const m = monterReprise(panierAnnule({ cancelled_by: 'u9' }));
     expect(await refus(reprendre(m.service))).toEqual({
       classe: ConflictException,
       message: "L'origine d'une commande annulée ne peut pas être changée.",
@@ -1104,15 +1126,13 @@ describe('Commande du site à payer à la livraison, annulée par le client', ()
   const aConfirmerAnnulee = (surcharge: Commande = {}): Commande =>
     aConfirmer({
       status: OrderStatus.CANCELLED,
-      entity_status: EntityStatus.DELETED,
-      deleted_at: ANNULEE_LE,
       cancelled_at: ANNULEE_LE,
       cancelled_by: ANNULEE_PAR_CLIENT,
       cancelled_reason: 'Je change ma commande',
       ...surcharge,
     });
 
-  it('annulée par le client : CANCELLED, DELETED, « par le client », coupon rendu, rien aux restaurants', async () => {
+  it('annulée par le client : CANCELLED, reste ACTIVE, « par le client », coupon rendu, rien aux restaurants', async () => {
     const { service, prisma, orderCoupon, orderEvent, base } = monterStatut(aConfirmer());
 
     await service.updateStatus(
@@ -1126,7 +1146,7 @@ describe('Commande du site à payer à la livraison, annulée par le client', ()
     expect(base()).toEqual(
       expect.objectContaining({
         status: OrderStatus.CANCELLED,
-        entity_status: EntityStatus.DELETED,
+        entity_status: EntityStatus.ACTIVE,
         cancelled_by: ANNULEE_PAR_CLIENT,
       }),
     );

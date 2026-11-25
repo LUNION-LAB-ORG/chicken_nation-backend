@@ -74,6 +74,7 @@ import {
   estPanierAnnuleParClient,
   peutVoirLesBrouillons,
 } from '../helpers/brouillons.rules';
+import { PAS_PANIER_ANNULE_PAR_CLIENT_WHERE } from '../helpers/annulation-client.rules';
 import { motifRefusModification, peutModifierCommande } from '../helpers/modification-commande.rules';
 import { heureDeLaCommande } from '../helpers/heure-commande.rules';
 import { clientDeLApercu } from '../helpers/client-apercu-frais.rules';
@@ -1286,6 +1287,13 @@ export class OrderService {
      * payé, en attente). Toute annulation par le personnel reste ACTIVE.
      * Toujours UNE notification au client : l'écouteur n'envoie pas « Commande
      * supprimée » pour une commande annulée.
+     *
+     * ⚠️ REVU LE 25/11, à la demande de l'utilisateur : le panier annulé par
+     * le client N'EST PLUS SUPPRIMÉ. Il reste ACTIVE, se voit dans Commandes
+     * (Annulée), et garde `cancelled_by` = `ANNULEE_PAR_CLIENT`. Il ne compte
+     * toujours pas comme une commande (CRM, statistiques, « a commandé ») et
+     * reste dans « À relancer » (`PANIER_ANNULE_PAR_CLIENT_WHERE`, qui ne lit
+     * plus `entity_status`).
      */
     const annulationDuPanierParLeClient =
       options.parLeClient === true && status === OrderStatus.CANCELLED && estBrouillon(order);
@@ -1332,8 +1340,10 @@ export class OrderService {
      *
      * La commande a été lue au début, puis le remboursement (s'il y a lieu)
      * a pu prendre plusieurs secondes. Entre-temps, un paiement a pu arriver
-     * ou le centre d'appels la reprendre au téléphone. La suppression n'est
-     * donc posée que si, AU MOMENT DE L'ÉCRITURE, c'est encore un brouillon
+     * ou le centre d'appels la reprendre au téléphone. Le marqueur du panier
+     * annulé par le client (`cancelled_by` = `ANNULEE_PAR_CLIENT`, commande
+     * restée active depuis le 25/11) n'est donc posé que si, AU MOMENT DE
+     * L'ÉCRITURE, c'est encore un brouillon
      * (application, en ligne, non payé, en attente) et qu'aucun paiement
      * réussi n'y reste rattaché : un remboursement en échec laisse le
      * paiement réussi (le client reçoit un bon à la place), et une commande
@@ -1365,8 +1375,8 @@ export class OrderService {
         data: {
           ...donnees,
           cancelled_by: ANNULEE_PAR_CLIENT,
-          entity_status: EntityStatus.DELETED,
-          deleted_at: maintenant,
+          // Reste ACTIVE depuis le 25/11 (demande du client) : visible dans
+          // Commandes, Annulée. Avant, elle était supprimée.
         },
       });
       if (count === 1) {
@@ -1714,7 +1724,8 @@ export class OrderService {
    */
   /**
    * @param options.inclurePanierAnnuleParClient  Rend aussi un panier annulé
-   *   par le client (supprimé des listes, mais relançable). Réservé aux rôles
+   *   par le client et supprimé (annulé avant le 25/11, quand l'annulation le
+   *   supprimait), encore relançable. Depuis, il reste actif. Réservé aux rôles
    *   qui voient les brouillons (`peutVoirLesBrouillons` : ADMIN, CALL_CENTER),
    *   pour ouvrir le tiroir et le formulaire depuis « À relancer ». Toute
    *   autre commande supprimée reste introuvable, pour tous.
@@ -1852,8 +1863,9 @@ export class OrderService {
    * une erreur d'infra : ici un `null` = référence absente, pas un blip réseau.
    *
    * @param options.inclurePanierAnnuleParClient  Rend aussi un panier annulé
-   *   par le client (supprimé des listes), payé ou non
-   *   (`ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE`). Réservé au traitement d'un
+   *   par le client et supprimé (avant le 25/11, ou par le personnel), payé
+   *   ou non (`ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE`) ; depuis le 25/11, il
+   *   reste actif et se trouve sans l'option. Réservé au traitement d'un
    *   paiement KKiaPay : un paiement validé APRÈS l'annulation doit être
    *   rattaché à sa commande (paiement enregistré, commande payée, donc
    *   sortie de la relance et de nouveau visible), et non acquitté comme
@@ -2136,10 +2148,15 @@ export class OrderService {
     // avec le filtre `status` explicite + le bloc `auto`). ⚠️ Doit rester aligné sur
     // `canSeePending` ci-dessus : sinon un rôle habilité demande PENDING d'un côté et se
     // le fait exclure ici → résultat vide (le bug vécu pour le CALL_CENTER).
+    //
+    // Le panier annulé par le client avant de payer reste actif depuis le 25/11 :
+    // le restaurant ne l'a jamais reçu (il était en attente), il ne le voit pas
+    // davantage annulé. Écrit en positif, sûr avec un canal vide.
     if (!canSeePending) {
       where.AND = [
         ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
         { status: { not: OrderStatus.PENDING } },
+        PAS_PANIER_ANNULE_PAR_CLIENT_WHERE,
       ];
     }
 
@@ -3005,9 +3022,12 @@ export class OrderService {
           await retirerDeLaCourse(tx);
           // Revendication : un seul geste réactive, et seulement un panier
           // toujours annulé par le client (ni payé, ni repris entre-temps).
+          // Elle efface le marqueur « annulée par le client » : depuis le 25/11
+          // le panier est déjà actif, c'est ce marqueur qui fait perdre la
+          // seconde reprise simultanée (409, le bon débité une seule fois).
           const revendique = await tx.order.updateMany({
             where: { id: order.id, ...PANIER_ANNULE_PAR_CLIENT_WHERE },
-            data: { entity_status: EntityStatus.ACTIVE, deleted_at: null },
+            data: { entity_status: EntityStatus.ACTIVE, deleted_at: null, cancelled_by: null },
           });
           if (revendique.count !== 1) {
             throw new ConflictException('Cette commande vient de changer : rechargez-la avant de la reprendre.');

@@ -32,7 +32,11 @@ import { RESTAURANT_COMMANDE_SELECT } from 'src/modules/restaurant/constantes/re
 import { CLIENT_COMMANDE_SELECT } from 'src/modules/order/constantes/client-commande.select';
 import { sansIdentifiantsPush } from 'src/modules/order/helpers/identifiants-push.helper';
 import { assertCanAccessRestaurant } from 'src/modules/order/helpers/restaurant-scope.helper';
-import { ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE, estBrouillon } from 'src/modules/order/helpers/brouillons.rules';
+import {
+  ANNULEE_PAR_CLIENT_EN_LIGNE_WHERE,
+  ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE,
+  estBrouillon,
+} from 'src/modules/order/helpers/brouillons.rules';
 import { PaiementChannels } from 'src/modules/paiements/enums/paiement-channels';
 import { AlertesService, CodeAlerte } from 'src/modules/alertes/alertes.service';
 import {
@@ -62,39 +66,50 @@ export class PaiementsService {
   ) { }
 
   /**
-   * PAIEMENT REÇU SUR UN PANIER QUE LE CLIENT AVAIT ANNULÉ (revue du 01/10).
+   * PAIEMENT REÇU SUR UN PANIER QUE LE CLIENT AVAIT ANNULÉ (revue du 01/10,
+   * revue le 25/11).
    *
-   * Le panier annulé par le client avant de payer est supprimé des listes
-   * (`entity_status` DELETED) et suivi dans « À relancer ». Si son paiement
-   * en ligne est validé APRÈS l'annulation (Mobile Money confirmé sur le
-   * téléphone une fois l'application fermée), `paied` vient de passer à vrai :
-   * la commande n'est plus relançable, et resterait supprimée, donc absente
-   * de tous les écrans, alors que l'argent est reçu et que personne ne la
-   * rembourse.
+   * Le client annule son panier avant de payer ; son paiement en ligne est
+   * validé APRÈS l'annulation (Mobile Money confirmé sur le téléphone une
+   * fois l'application fermée) : `paied` vient de passer à vrai, la commande
+   * n'est plus relançable, l'argent est reçu et personne ne le rembourse.
+   * Une alerte demande donc le remboursement.
    *
-   * Elle redevient donc ACTIVE : une annulation payée ordinaire, visible dans
-   * Commandes avec le badge « Payé », et une alerte demande le remboursement.
-   * Écriture conditionnée (idempotente) : rejouée, elle ne fait rien. Ne
-   * touche aucune autre commande, annulée par le personnel comprise.
+   * Avant le 25/11, l'annulation la supprimait : elle redevient ACTIVE,
+   * visible dans Commandes avec le badge « Payé ». Écriture conditionnée,
+   * rejouée sans effet. Depuis le 25/11, elle reste active : rien à rendre
+   * visible, seul le passage qui vient de poser `paied` (`vientDEtrePayee`)
+   * signale, pour qu'un rejeu du webhook ne l'annonce pas une seconde fois.
+   * Ne touche aucune autre commande, annulée par le personnel comprise.
    *
-   * @returns vrai si la commande vient d'être rendue visible.
+   * @returns vrai si le remboursement vient d'être signalé.
    */
   private async retablirAnnuleeParClientPayee(
     commande: { id: string; reference?: string | null; restaurant_id?: string | null },
     transactionId: string,
+    vientDEtrePayee: boolean,
   ): Promise<boolean> {
     const { count } = await this.prisma.order.updateMany({
       where: { id: commande.id, ...ANNULEE_PAR_CLIENT_SUPPRIMEE_WHERE, paied: true },
       data: { entity_status: EntityStatus.ACTIVE, deleted_at: null },
     });
-    if (count !== 1) return false;
+    let aSignaler = count === 1;
+    if (!aSignaler && vientDEtrePayee) {
+      // Relue en base : le client a pu annuler après la lecture de la commande.
+      const resteeActive = await this.prisma.order.findFirst({
+        where: { id: commande.id, ...ANNULEE_PAR_CLIENT_EN_LIGNE_WHERE, paied: true },
+        select: { id: true },
+      });
+      aSignaler = !!resteeActive;
+    }
+    if (!aSignaler) return false;
     this.alertes.signaler({
       code: CodeAlerte.PAIEMENT_SUR_COMMANDE_ANNULEE,
       restaurantId: commande.restaurant_id ?? null,
       reference: commande.reference ?? null,
       details: [
         `Le client a payé dans l'application une commande qu'il avait annulée avant la validation de son paiement.`,
-        `Elle réapparaît dans Commandes, au statut Annulée avec le badge Payé : la rembourser, ou la reprendre avec le client.`,
+        `Elle est dans Commandes, au statut Annulée avec le badge Payé : la rembourser, ou la reprendre avec le client.`,
       ],
       cleBridage: `${CodeAlerte.PAIEMENT_SUR_COMMANDE_ANNULEE}:${commande.reference ?? commande.id}`,
       meta: { orderId: commande.id, transactionId },
@@ -287,11 +302,11 @@ export class PaiementsService {
         });
         // Déjà remise au client (commande reprise, payée après coup) : terminée.
         if (paye.count === 1) await this.terminerSiRecuperee(result.order.id, 'payWithKkiapay');
-        // Panier annulé par le client entre-temps : visible de nouveau, et
-        // remboursement signalé. Isolé : la réponse au client ne doit pas
+        // Panier annulé par le client entre-temps : remboursement signalé, et
+        // visible de nouveau s'il avait été supprimé. Isolé : la réponse au client ne doit pas
         // échouer, et le webhook du même paiement rejoue ce geste.
         try {
-          await this.retablirAnnuleeParClientPayee(result.order, transaction.transactionId);
+          await this.retablirAnnuleeParClientPayee(result.order, transaction.transactionId, paye.count === 1);
         } catch (e) {
           console.error(
             `[Paiement KKiaPay] Commande annulée par le client ${result.order.reference} payée, ` +
@@ -885,8 +900,8 @@ export class PaiementsService {
     // soldée : l'appelant doit prévenir les écrans ouverts (aucun autre
     // événement ne part sur ce chemin).
     let payeApresCoup = false;
-    // Panier annulé par le client que ce paiement vient de rendre visible
-    // (`retablirAnnuleeParClientPayee`) : il ne rapporte rien.
+    // Panier annulé par le client dont ce paiement vient de signaler le
+    // remboursement (`retablirAnnuleeParClientPayee`) : il ne rapporte rien.
     let annuleeRetablie = false;
     // Motif lisible d'un paiement NON abouti — remonté à l'appelant (confirmation
     // manuelle admin) pour un 4xx explicite. `undefined` si isPaid=true.
@@ -941,13 +956,13 @@ export class PaiementsService {
             data: { paied: true, paied_at: paymentAt },
           });
           payeApresCoup = tardif.count === 1;
-          // Panier annulé par le client avant ce paiement : rendu visible,
-          // remboursement signalé. Rejoué à chaque passage (idempotent), y
-          // compris quand `paied` était déjà posé par un passage précédent ou
-          // par la confirmation de l'application. Une erreur remonte : le
+          // Panier annulé par le client avant ce paiement : remboursement
+          // signalé, et rendu visible s'il avait été supprimé. Rejoué à chaque
+          // passage (idempotent), y compris quand `paied` était déjà posé par
+          // un passage précédent ou par la confirmation de l'application. Une erreur remonte : le
           // webhook est alors retenté, et la commande retrouvée par sa
           // référence même payée (`findByReferenceOrNull`).
-          annuleeRetablie = await this.retablirAnnuleeParClientPayee(result.order, transaction.transactionId);
+          annuleeRetablie = await this.retablirAnnuleeParClientPayee(result.order, transaction.transactionId, payeApresCoup);
         }
 
         // Paiement tardif : c'est LUI qui solde la commande, plus personne ne

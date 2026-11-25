@@ -1,3 +1,4 @@
+import { PAS_PANIER_ANNULE_PAR_CLIENT_WHERE } from './annulation-client.rules';
 import {
   Injectable,
   BadRequestException,
@@ -889,7 +890,9 @@ export class OrderHelper {
    * positif, sûr avec un canal vide.
    */
   buildWhereClause(filters?: QueryOrderDto) {
-    if (!filters) return { entity_status: { not: EntityStatus.DELETED }, AND: [PAS_A_CONFIRMER_WHERE] };
+    if (!filters) {
+      return { entity_status: { not: EntityStatus.DELETED }, AND: [PAS_A_CONFIRMER_WHERE, PAS_PANIER_ANNULE_PAR_CLIENT_WHERE] };
+    }
 
     const {
       status,
@@ -922,7 +925,8 @@ export class OrderHelper {
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
       ...(restaurantId && { restaurant_id: restaurantId }),
-      AND: [PAS_A_CONFIRMER_WHERE],
+      // Un panier annulé par le client reste actif depuis le 25/11 : il n'est pas une commande.
+      AND: [PAS_A_CONFIRMER_WHERE, PAS_PANIER_ANNULE_PAR_CLIENT_WHERE],
     };
   }
 

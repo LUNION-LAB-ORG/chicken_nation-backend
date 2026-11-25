@@ -37,8 +37,9 @@ function chargeBrouillon(order: Order) {
  * caisse doit alors le recevoir en temps réel, comme la cloche le lui annonce.
  */
 function resteHorsDuRestaurant(order: Order, previousStatus: OrderStatus): boolean {
-    // Panier annulé par le client (01/10) : supprimé des listes, donc plus un
-    // brouillon au sens strict, mais le restaurant ne l'a jamais vu.
+    // Panier annulé par le client (01/10) : plus un brouillon au sens strict
+    // (resté actif depuis le 25/11, supprimé avant), mais le restaurant ne
+    // l'a jamais vu.
     if (estPanierAnnuleParClient(order)) return true;
     return (
         estBrouillon({ ...order, status: previousStatus }) &&
