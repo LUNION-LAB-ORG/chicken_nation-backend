@@ -8,14 +8,16 @@ encaissant sur son sous-compte. Rien ne change tant que le prestataire reste
 
 - Le paiement part sur le sous-compte du restaurant (`subaccount`), frais
   Paystack portés par ce sous-compte (`bearer: "subaccount"`). Le compte
-  principal ne peut pas garder plus que le « supplément » réglé au back-office :
-  un sous-compte qui lui laisse davantage est refusé. (Au tableau de bord
-  Paystack, « 99 % » est la part du restaurant : 1 % pour le compte principal.)
-- Frais ajoutés au client : Paystack n'ajoute rien au montant. Le client
-  choisit Mobile Money ou carte avant de payer, et paie la commande plus le
-  taux de ce moyen et le supplément. Défauts : Mobile Money 2,3 %, carte
-  3,8 %, supplément 1 %, tous réglables au back-office. Arrondi au franc
-  supérieur. La page de paiement ne propose ensuite que le moyen choisi.
+  principal ne peut pas garder plus que le taux des frais de service de la
+  commande (réglage `order_tax_rate`, 1 %) : un sous-compte qui lui laisse
+  davantage est refusé. (Au tableau de bord Paystack, « 99 % » est la part du
+  restaurant : 1 % pour le compte principal.)
+- Frais de paiement ajoutés au client : Paystack n'ajoute rien au montant. Le
+  client choisit Mobile Money ou carte avant de payer, et paie la commande
+  (plats, frais de service, livraison) plus le taux de ce moyen. Défauts :
+  Mobile Money 2,3 %, carte 3,8 %, réglables au back-office avec les frais
+  de service. Arrondi au franc supérieur. La page de paiement ne propose
+  ensuite que le moyen choisi.
   Carte locale ou internationale : inconnue avant la saisie de la carte, un
   seul taux « carte » s'applique (Paystack prend 4,5 % sur une carte
   internationale).
@@ -46,10 +48,11 @@ encaissant sur son sous-compte. Rien ne change tant que le prestataire reste
    back-office (`https://api-private.chicken-nation.com/api/v1/paystack/webhook`).
 2. Back-office, Paramètres, Paiements, carte « Paystack » : coller la clé
    secrète, « Enregistrer les clés ». Le badge « Réel » apparaît.
-3. Vérifier les « Frais ajoutés au client » (Mobile Money, carte, supplément).
+3. Vérifier les « Frais payés par le client » (Mobile Money, carte, frais de
+   service).
 4. Choisir le sous-compte de chaque restaurant. Refus « laisse X % au compte
    principal » : corriger le pourcentage du sous-compte dans le tableau de
-   bord Paystack (ou le supplément), puis « Relire chez Paystack ».
+   bord Paystack (ou les frais de service), puis « Relire chez Paystack ».
 5. Carte « Paiement en ligne » : choisir « Paystack », confirmer.
 6. Faire un petit paiement réel dans un restaurant, puis le rembourser.
 
@@ -73,15 +76,24 @@ Les valeurs par défaut sont celles de la production.
 
 ## Vérifié en mode test (25/11, clé `sk_test_`)
 
-- Mobile Money (Wave) : commande de 4 550 F payée 4 701 F. Paystack annonce
-  108 F de frais (2,3 %), 0 F pour le compte principal, 4 593 F pour le
-  sous-compte (sous-compte à 100 %).
-- Carte de test : 4 550 F payés 4 769 F, frais Paystack 3,80 %. Un refus de
-  carte laisse le client sur la page Paystack, qui propose de réessayer.
+Sous-comptes de test à 100 % (0 % pour le compte principal), frais de service 1 %.
+
+| Plats | Commande | Moyen | Client débité | Paystack | Sous-compte |
+| --- | --- | --- | --- | --- | --- |
+| 10 000 F | 10 100 F | Wave | 10 333 F | 238 F | 10 095 F |
+| 10 000 F | 10 100 F | Carte | 10 484 F | 398 F | 10 086 F |
+| 5 000 F | 5 050 F | Wave, Orange, MTN | 5 167 F | 119 F | 5 048 F |
+| 5 000 F | 5 050 F | Carte | 5 242 F | 199 F | 5 043 F |
+
+- Paystack calcule ses frais sur le total débité, frais compris : le
+  sous-compte reçoit quelques francs de moins que la commande (2 à 14 F ici).
+- Un refus de carte laisse le client sur la page Paystack, qui propose de
+  réessayer.
 - Remboursement : accepté pour tout ce que le client a payé, « entièrement
   déduit » dès la demande, puis en attente de traitement.
 - Un e-mail au domaine fictif est refusé par Paystack (« must be a valid
   email ») : le serveur repart alors avec l'adresse technique.
+- En mode test, Paystack étiquette « WAVE CIV » les paiements Orange et MTN.
 
 ## À vérifier au premier paiement réel
 

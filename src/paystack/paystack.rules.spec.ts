@@ -8,6 +8,7 @@ import {
   fraisClient,
   lireTaux,
   messageSousCompte,
+  pourCentFraisService,
   tauxClient,
   lireSousCompte,
   lireTransaction,
@@ -40,21 +41,22 @@ describe('Paystack : montants en XOF (multipliés par 100, docs 25/11)', () => {
   });
 });
 
-describe('Paystack : frais ajoutés au client (25/11)', () => {
-  it('tarifs par défaut : Mobile Money 2,3 % + 1 %, carte 3,8 % + 1 %', () => {
-    expect(TAUX_FRAIS_DEFAUT).toEqual({ mobileMoney: 2.3, carte: 3.8, supplement: 1 });
-    expect(tauxClient(TAUX_FRAIS_DEFAUT, 'mobile_money')).toBe(3.3);
-    expect(tauxClient(TAUX_FRAIS_DEFAUT, 'card')).toBe(4.8);
+describe('Paystack : frais de paiement ajoutés au client (25/11)', () => {
+  it('tarifs par défaut : Mobile Money 2,3 %, carte 3,8 %, sans supplément', () => {
+    expect(TAUX_FRAIS_DEFAUT).toEqual({ mobileMoney: 2.3, carte: 3.8 });
+    expect(tauxClient(TAUX_FRAIS_DEFAUT, 'mobile_money')).toBe(2.3);
+    expect(tauxClient(TAUX_FRAIS_DEFAUT, 'card')).toBe(3.8);
   });
   it('arrondi au franc supérieur, sans erreur de virgule', () => {
-    // 10 000 F à 3,3 % : 330 F tout rond (jamais 331).
-    expect(fraisClient(10000, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(330);
-    expect(fraisClient(10000, 'card', TAUX_FRAIS_DEFAUT)).toBe(480);
-    // 4 550 F à 3,3 % : 150,15 F → 151 F.
-    expect(fraisClient(4550, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(151);
+    // 10 000 F à 2,3 % : 230 F tout rond (jamais 231).
+    expect(fraisClient(10000, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(230);
+    expect(fraisClient(10000, 'card', TAUX_FRAIS_DEFAUT)).toBe(380);
+    // Commande de 10 100 F (10 000 F de plats + 1 % de frais de service) : 232,3 F → 233 F ; 383,8 F → 384 F.
+    expect(fraisClient(10100, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(233);
+    expect(fraisClient(10100, 'card', TAUX_FRAIS_DEFAUT)).toBe(384);
     expect(fraisClient(1, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(1);
     expect(fraisClient(0, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(0);
-    expect(fraisClient(10000, 'mobile_money', { mobileMoney: 0, carte: 0, supplement: 0 })).toBe(0);
+    expect(fraisClient(10000, 'mobile_money', { mobileMoney: 0, carte: 0 })).toBe(0);
   });
   it('taux lus dans les réglages : virgule acceptée, hors bornes ou illisible → défaut', () => {
     expect(lireTaux('2,3', 9)).toBe(2.3);
@@ -64,6 +66,14 @@ describe('Paystack : frais ajoutés au client (25/11)', () => {
     expect(lireTaux('abc', 9)).toBe(9);
     expect(lireTaux('-1', 9)).toBe(9);
     expect(lireTaux('45', 9)).toBe(9);
+  });
+  it('frais de service : le réglage est une fraction (0.01 = 1 %)', () => {
+    expect(pourCentFraisService('0.01')).toBe(1);
+    expect(pourCentFraisService('0.005')).toBe(0.5);
+    expect(pourCentFraisService('0,18')).toBe(18);
+    expect(pourCentFraisService('0')).toBe(0);
+    expect(pourCentFraisService('abc')).toBe(0);
+    expect(pourCentFraisService(undefined)).toBe(0);
   });
 });
 
@@ -111,15 +121,15 @@ describe('Paystack : sous-compte du restaurant', () => {
     expect(motifSousCompteInutilisable(s)).toBeNull();
     expect(motifSousCompteInutilisable(s, 1)).toBeNull();
   });
-  it('compte principal à 1 % (99 % pour le restaurant) : accepté avec un supplément de 1 %, refusé sans', () => {
+  it('compte principal à 1 % (99 % pour le restaurant) : accepté avec des frais de service de 1 %, refusé sans', () => {
     const s = lireSousCompte({ ...brut, percentage_charge: 1 });
     expect(motifSousCompteInutilisable(s, 1)).toBeNull();
     expect(motifSousCompteInutilisable(s, 0)).toBe('PART_COMPTE_PRINCIPAL');
     expect(messageSousCompte('PART_COMPTE_PRINCIPAL', s, 0)).toBe(
-      'Ce sous-compte laisse 1 % au compte principal : le maximum est le supplément réglé (0 %). Corrigez le pourcentage dans le tableau de bord Paystack, ou le supplément.',
+      'Ce sous-compte laisse 1 % au compte principal : le maximum est le taux des frais de service (0 %). Corrigez le pourcentage dans le tableau de bord Paystack, ou les frais de service.',
     );
   });
-  it('refusé si le compte principal garde plus que le supplément, inactif, autre devise ou inconnu', () => {
+  it('refusé si le compte principal garde plus que les frais de service, inactif, autre devise ou inconnu', () => {
     expect(motifSousCompteInutilisable(lireSousCompte({ ...brut, percentage_charge: 2.5 }), 1)).toBe('PART_COMPTE_PRINCIPAL');
     // 99 saisi par erreur à la place de 1 : le compte principal prendrait presque tout.
     expect(motifSousCompteInutilisable(lireSousCompte({ ...brut, percentage_charge: 99 }), 1)).toBe('PART_COMPTE_PRINCIPAL');

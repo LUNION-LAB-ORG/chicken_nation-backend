@@ -18,6 +18,7 @@ import {
   lireSousCompte,
   lireTaux,
   lireTransaction,
+  pourCentFraisService,
   modeDeCle,
   motifSousCompteInutilisable,
   motifTransactionRefusee,
@@ -31,18 +32,21 @@ export const CLES_PAYSTACK = {
   cleSecrete: 'paystack_secret_key',
   secretWebhook: 'paystack_webhook_secret',
   sousCompte: (restaurantId: string) => `paystack.${restaurantId}.subaccount_code`,
-  /** Frais ajoutés au client (25/11), en pourcentage. */
+  /** Frais de paiement ajoutés au client (25/11), en pourcentage. */
   fraisMobileMoney: 'paystack_frais_mobile_money',
   fraisCarte: 'paystack_frais_carte',
-  fraisSupplement: 'paystack_frais_supplement',
+  /** Frais de service de la commande (fraction : « 0.01 » = 1 %), réglage existant. */
+  fraisService: 'order_tax_rate',
 } as const;
 
 export interface ConfigPaystack {
   cle: string | null;
   mode: 'test' | 'live' | null;
   secretsWebhook: string[];
-  /** Taux des frais ajoutés au client ; le supplément borne aussi la part du compte principal. */
+  /** Taux des frais de paiement ajoutés au client. */
   frais: TauxFraisPaystack;
+  /** Frais de service de la commande, en pourcentage : c'est la part maximale du compte principal. */
+  fraisService: number;
 }
 
 /** Sous-compte lu chez Paystack et gardé en mémoire (deux serveurs partagent la base, pas la mémoire). */
@@ -88,8 +92,11 @@ export class PaystackService {
       CLES_PAYSTACK.secretWebhook,
       CLES_PAYSTACK.fraisMobileMoney,
       CLES_PAYSTACK.fraisCarte,
-      CLES_PAYSTACK.fraisSupplement,
     ]);
+    // Même lecture que la création des commandes (OrderV2Helper.getTaxRate).
+    const fraisService = pourCentFraisService(
+      await this.settings.getOrEnv(CLES_PAYSTACK.fraisService, 'ORDER_TAX_RATE', '0.05'),
+    );
     const brute = (valeurs[CLES_PAYSTACK.cleSecrete] || process.env.PAYSTACK_SECRET_KEY || '').trim();
     let mode = modeDeCle(brute);
     if (mode === 'live' && process.env.NODE_ENV !== 'production' && process.env.PAYSTACK_LIVE_HORS_PRODUCTION !== 'true') {
@@ -102,9 +109,8 @@ export class PaystackService {
     const frais: TauxFraisPaystack = {
       mobileMoney: lireTaux(valeurs[CLES_PAYSTACK.fraisMobileMoney], TAUX_FRAIS_DEFAUT.mobileMoney),
       carte: lireTaux(valeurs[CLES_PAYSTACK.fraisCarte], TAUX_FRAIS_DEFAUT.carte),
-      supplement: lireTaux(valeurs[CLES_PAYSTACK.fraisSupplement], TAUX_FRAIS_DEFAUT.supplement),
     };
-    const valeur: ConfigPaystack = { cle: mode ? brute : null, mode, secretsWebhook: [...new Set(secrets)], frais };
+    const valeur: ConfigPaystack = { cle: mode ? brute : null, mode, secretsWebhook: [...new Set(secrets)], frais, fraisService };
     this.configEnCache = { valeur, expire: maintenant + TTL_CONFIG_MS };
     return valeur;
   }
@@ -188,8 +194,8 @@ export class PaystackService {
     const code = await this.codeSousCompte(restaurantId);
     if (!code) return { code: null, motif: 'NON_RELIE' };
     try {
-      const [s, { frais }] = await Promise.all([this.lireSousCompte(code), this.config()]);
-      return { code, motif: motifSousCompteInutilisable(s, frais.supplement) };
+      const [s, { fraisService }] = await Promise.all([this.lireSousCompte(code), this.config()]);
+      return { code, motif: motifSousCompteInutilisable(s, fraisService) };
     } catch (e) {
       this.logger.warn(`Sous-compte ${code} illisible (${(e as Error).message}).`);
       return { code, motif: 'ILLISIBLE' };
@@ -216,7 +222,7 @@ export class PaystackService {
     const { order, moyen } = params;
     const montant = Math.round(Number(order.amount));
     // Paystack n'ajoute rien : le client paie la commande plus les frais du
-    // moyen choisi (taux et supplément réglés au back-office).
+    // moyen choisi (taux réglé au back-office).
     const frais = fraisClient(montant, moyen, (await this.config()).frais);
     const total = montant + frais;
     const unites = versUnitePaystack(total);

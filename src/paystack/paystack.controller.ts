@@ -166,13 +166,13 @@ export class PaystackController {
         if (!config.cle) return { id: r.id, nom: r.name, sous_compte: { code }, utilisable: false, motif: "Clé secrète Paystack absente." };
         try {
           const s = await this.paystack.lireSousCompte(code, { frais: relire === '1' });
-          const motif = motifSousCompteInutilisable(s, config.frais.supplement);
+          const motif = motifSousCompteInutilisable(s, config.fraisService);
           return {
             id: r.id,
             nom: r.name,
             sous_compte: s ? { ...s } : { code },
             utilisable: !motif,
-            motif: motif ? messageSousCompte(motif, s, config.frais.supplement) : null,
+            motif: motif ? messageSousCompte(motif, s, config.fraisService) : null,
           };
         } catch (e) {
           return { id: r.id, nom: r.name, sous_compte: { code }, utilisable: false, motif: messageErreur(e) };
@@ -188,12 +188,10 @@ export class PaystackController {
         secret_webhook_configure: config.secretsWebhook.length > 0,
         webhook_path: '/api/v1/paystack/webhook',
       },
-      // Frais ajoutés au client, en pourcentage : taux du moyen + supplément.
-      frais: {
-        mobile_money: config.frais.mobileMoney,
-        carte: config.frais.carte,
-        supplement: config.frais.supplement,
-      },
+      // Frais de paiement ajoutés au client, en pourcentage du total de la commande.
+      frais: { mobile_money: config.frais.mobileMoney, carte: config.frais.carte },
+      // Frais de service de la commande, en pourcentage : part maximale du compte principal.
+      frais_service: config.fraisService,
       restaurants: lignes,
     };
   }
@@ -204,10 +202,10 @@ export class PaystackController {
   @RequirePermission(Modules.SETTINGS, Action.READ)
   async sousComptes() {
     try {
-      const [liste, { frais }] = await Promise.all([this.paystack.listerSousComptes(), this.paystack.config()]);
+      const [liste, { fraisService }] = await Promise.all([this.paystack.listerSousComptes(), this.paystack.config()]);
       return liste.map((s) => {
-        const motif = motifSousCompteInutilisable(s, frais.supplement);
-        return { ...s, utilisable: !motif, motif: motif ? messageSousCompte(motif, s, frais.supplement) : null };
+        const motif = motifSousCompteInutilisable(s, fraisService);
+        return { ...s, utilisable: !motif, motif: motif ? messageSousCompte(motif, s, fraisService) : null };
       });
     } catch (e) {
       throw new BadRequestException(messageErreur(e));
@@ -239,7 +237,7 @@ export class PaystackController {
     } catch (e) {
       throw new BadRequestException(messageErreur(e));
     }
-    const partMax = (await this.paystack.config()).frais.supplement;
+    const partMax = (await this.paystack.config()).fraisService;
     const motif = motifSousCompteInutilisable(s, partMax);
     if (motif) throw new BadRequestException(messageSousCompte(motif, s, partMax));
     await this.settings.set(CLES_PAYSTACK.sousCompte(id), code, `Sous-compte Paystack de ${restaurant.name}`);
@@ -248,8 +246,10 @@ export class PaystackController {
   }
 
   /**
-   * Interrupteur et prestataire du paiement en ligne (appli et site), et
-   * frais Paystack ajoutés au client (pourcentages de 0 à 20, deux décimales).
+   * Interrupteur et prestataire du paiement en ligne (appli et site), frais
+   * de paiement Paystack ajoutés au client et frais de service de la
+   * commande (pourcentages de 0 à 20, deux décimales). Les frais de service
+   * sont le réglage existant `order_tax_rate`, écrit en fraction (1 % = 0.01).
    */
   @Put('reglages')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
@@ -259,22 +259,29 @@ export class PaystackController {
     body: {
       en_ligne_actif?: boolean;
       fournisseur?: string;
-      frais?: { mobile_money?: unknown; carte?: unknown; supplement?: unknown };
+      frais?: { mobile_money?: unknown; carte?: unknown };
+      frais_service?: unknown;
     },
   ) {
+    const pourCent = (valeur: unknown): number => {
+      const t = typeof valeur === 'number' ? valeur : Number(String(valeur).replace(',', '.'));
+      if (!Number.isFinite(t) || t < 0 || t > TAUX_FRAIS_MAX) {
+        throw new BadRequestException(`Taux invalide : un pourcentage entre 0 et ${TAUX_FRAIS_MAX}.`);
+      }
+      return Math.round(t * 100) / 100;
+    };
+    if (body?.frais_service !== undefined) {
+      const t = pourCent(body.frais_service);
+      await this.settings.set(CLES_PAYSTACK.fraisService, String(Math.round(t * 100) / 10_000), 'Frais de service des commandes (fraction : 0.01 = 1 %)');
+    }
     if (body?.frais && typeof body.frais === 'object') {
       const champs: [unknown, string, string][] = [
         [body.frais.mobile_money, CLES_PAYSTACK.fraisMobileMoney, 'Paystack · frais Mobile Money (%)'],
         [body.frais.carte, CLES_PAYSTACK.fraisCarte, 'Paystack · frais carte bancaire (%)'],
-        [body.frais.supplement, CLES_PAYSTACK.fraisSupplement, 'Paystack · supplément (%)'],
       ];
       for (const [valeur, cle, description] of champs) {
         if (valeur === undefined) continue;
-        const t = typeof valeur === 'number' ? valeur : Number(String(valeur).replace(',', '.'));
-        if (!Number.isFinite(t) || t < 0 || t > TAUX_FRAIS_MAX) {
-          throw new BadRequestException(`Taux invalide : un pourcentage entre 0 et ${TAUX_FRAIS_MAX}.`);
-        }
-        await this.settings.set(cle, String(Math.round(t * 100) / 100), description);
+        await this.settings.set(cle, String(pourCent(valeur)), description);
       }
     }
     if (typeof body?.en_ligne_actif === 'boolean') {
@@ -290,7 +297,8 @@ export class PaystackController {
     const [reglages, config] = await Promise.all([this.paiementEnLigne.reglages(), this.paystack.config()]);
     return {
       ...reglages,
-      frais: { mobile_money: config.frais.mobileMoney, carte: config.frais.carte, supplement: config.frais.supplement },
+      frais: { mobile_money: config.frais.mobileMoney, carte: config.frais.carte },
+      frais_service: config.fraisService,
     };
   }
 }

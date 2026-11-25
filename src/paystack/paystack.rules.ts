@@ -16,14 +16,14 @@ import { PaiementMode, PaiementStatus } from '@prisma/client';
  *
  * Règles de Chicken Nation :
  *  - Le paiement va sur le sous-compte du restaurant, frais Paystack portés
- *    par ce sous-compte. Le compte principal ne garde au plus que le
- *    « supplément » réglé au back-office (1 % au 25/11) : un sous-compte qui
- *    lui laisse davantage n'est pas utilisable.
- *  - FRAIS (25/11) : Paystack n'ajoute rien au montant, c'est à nous de le
- *    préparer. Le client paie la commande PLUS des frais : le taux du moyen
- *    choisi (Mobile Money ou carte) et le supplément, tous réglables au
- *    back-office. Le client choisit donc son moyen AVANT d'ouvrir la page de
- *    paiement, qui ne propose alors que ce moyen.
+ *    par ce sous-compte. Le compte principal ne garde au plus que le taux
+ *    des FRAIS DE SERVICE de la commande (réglage `order_tax_rate`, 1 % au
+ *    25/11) : un sous-compte qui lui laisse davantage n'est pas utilisable.
+ *  - FRAIS DE PAIEMENT (25/11) : Paystack n'ajoute rien au montant, c'est à
+ *    nous de le préparer. Le client paie la commande (plats, frais de
+ *    service, livraison) PLUS les frais du moyen choisi (Mobile Money ou
+ *    carte), au taux réglé au back-office. Il choisit donc son moyen AVANT
+ *    d'ouvrir la page de paiement, qui ne propose alors que ce moyen.
  */
 
 export const DEVISE_PAYSTACK = 'XOF';
@@ -41,21 +41,20 @@ export function lireMoyen(v: unknown): MoyenPaystack {
   return v === 'card' ? 'card' : 'mobile_money';
 }
 
-/** Taux des frais ajoutés au client, en pourcentage. */
+/** Taux des frais de paiement ajoutés au client, en pourcentage du total de la commande. */
 export interface TauxFraisPaystack {
   mobileMoney: number;
   carte: number;
-  /** Ajouté à chaque taux ; c'est aussi la part maximale du compte principal. */
-  supplement: number;
 }
 
 /**
  * Tarifs de Paystack en Côte d'Ivoire communiqués par le client le 25/11,
  * toutes taxes comprises : Mobile Money 2,3 %, carte locale 3,8 % (carte
  * internationale 4,5 % : le type de carte n'est connu qu'une fois la carte
- * saisie, un seul taux « carte » est donc appliqué), plus 1 % de supplément.
+ * saisie, un seul taux « carte » est donc appliqué). Rien de plus : le 1 %
+ * du client est celui des frais de service, déjà dans la commande.
  */
-export const TAUX_FRAIS_DEFAUT: TauxFraisPaystack = { mobileMoney: 2.3, carte: 3.8, supplement: 1 };
+export const TAUX_FRAIS_DEFAUT: TauxFraisPaystack = { mobileMoney: 2.3, carte: 3.8 };
 export const TAUX_FRAIS_MAX = 20;
 
 /** Taux lu dans un réglage : nombre de 0 à 20, deux décimales au plus ; sinon le défaut. */
@@ -65,9 +64,19 @@ export function lireTaux(valeur: unknown, defaut: number): number {
   return Math.round(t * 100) / 100;
 }
 
-/** Taux payé par le client pour ce moyen : taux du moyen + supplément. */
+/** Taux payé par le client pour ce moyen. */
 export function tauxClient(taux: TauxFraisPaystack, moyen: MoyenPaystack): number {
-  return Math.round(((moyen === 'card' ? taux.carte : taux.mobileMoney) + taux.supplement) * 100) / 100;
+  return Math.round((moyen === 'card' ? taux.carte : taux.mobileMoney) * 100) / 100;
+}
+
+/**
+ * Taux des frais de service en pourcentage, d'après le réglage
+ * `order_tax_rate` (une fraction : « 0.01 » = 1 %). Illisible : 0.
+ */
+export function pourCentFraisService(reglage: unknown): number {
+  const t = typeof reglage === 'number' ? reglage : typeof reglage === 'string' ? Number(reglage.replace(',', '.')) : Number.NaN;
+  if (!Number.isFinite(t) || t < 0 || t > 1) return 0;
+  return Math.round(t * 10_000) / 100;
 }
 
 /**
@@ -190,7 +199,7 @@ export type MotifSousCompte = 'INCONNU' | 'INACTIF' | 'PART_COMPTE_PRINCIPAL' | 
 /**
  * Un sous-compte encaisse pour Chicken Nation s'il est actif, en XOF (ou sans
  * devise lue), et ne laisse au compte principal pas plus que `partMax` (le
- * supplément payé par le client, en pourcentage).
+ * taux des frais de service, en pourcentage).
  */
 export function motifSousCompteInutilisable(s: SousComptePaystack | null, partMax = 0): MotifSousCompte | null {
   if (!s) return 'INCONNU';
@@ -212,7 +221,7 @@ export function messageSousCompte(motif: MotifSousCompte, s: SousComptePaystack 
     case 'DEVISE':
       return "Ce sous-compte n'encaisse pas en francs CFA (XOF).";
     case 'PART_COMPTE_PRINCIPAL':
-      return `Ce sous-compte laisse ${pourCent(s?.partComptePrincipal ?? null)} au compte principal : le maximum est le supplément réglé (${pourCent(partMax)}). Corrigez le pourcentage dans le tableau de bord Paystack, ou le supplément.`;
+      return `Ce sous-compte laisse ${pourCent(s?.partComptePrincipal ?? null)} au compte principal : le maximum est le taux des frais de service (${pourCent(partMax)}). Corrigez le pourcentage dans le tableau de bord Paystack, ou les frais de service.`;
   }
 }
 
