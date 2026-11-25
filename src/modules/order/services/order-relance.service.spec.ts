@@ -171,12 +171,7 @@ describe('OrderRelanceService : gestes', () => {
     });
     expect(relances[0].ignore_le).toBeNull();
 
-    await expect(service.ignorer(a.id, { raison_code: 'DOUBLON' }, ADMIN)).resolves.toEqual({
-      ok: true,
-      nombre: 1,
-      a_annuler: [a.id],
-      raison: 'Doublon',
-    });
+    await expect(service.ignorer(a.id, { raison_code: 'DOUBLON' }, ADMIN)).resolves.toEqual({ ok: true, nombre: 1 });
     expect(relances[0]).toEqual(
       expect.objectContaining({ ignore_par_id: ADMIN.id, raison_code: 'DOUBLON', pris_par_id: null, prise_expire_le: null }),
     );
@@ -188,13 +183,7 @@ describe('OrderRelanceService : gestes', () => {
     const f2 = commande(maintenant(), 5, { customer_id: 'client-f', phone: '0700000077' });
     const { service, relances } = monterRelance({ commandes: [f1, f2] });
 
-    await expect(service.ignorer(f1.id, { raison_code: 'CLIENT_INJOIGNABLE' }, AWA)).resolves.toEqual({
-      ok: true,
-      nombre: 2,
-      // Les deux paniers en attente, que le contrôleur annule (23/11).
-      a_annuler: [f1.id, f2.id].sort(),
-      raison: 'Client injoignable',
-    });
+    await expect(service.ignorer(f1.id, { raison_code: 'CLIENT_INJOIGNABLE' }, AWA)).resolves.toEqual({ ok: true, nombre: 2 });
     expect(relances.filter((r) => r.ignore_le).map((r) => r.order_id).sort()).toEqual([f1.id, f2.id].sort());
 
     const liste = await service.lister(AWA);
@@ -220,7 +209,7 @@ describe('OrderRelanceService : gestes', () => {
     });
     await expect(
       service.ignorer(a.id, { raison_code: 'AUTRE', raison_texte: ' Rappel demandé demain ' }, AWA),
-    ).resolves.toEqual(expect.objectContaining({ ok: true, nombre: 1, a_annuler: [a.id] }));
+    ).resolves.toEqual({ ok: true, nombre: 1 });
   });
 
   it('7. rétablir deux fois : idempotent, alerte_le conservé', async () => {
@@ -956,94 +945,57 @@ describe('POST /orders/relances/:orderId/annuler : déroulé', () => {
 });
 
 /**
- * `POST /orders/relances/:orderId/ignorer` (23/11) : ignorer ANNULE aussi la
- * commande. Vrai contrôleur, vrai service de relance sur la base en mémoire ;
- * `OrderService.updateStatus` est simulé par une écriture qui ÉVALUE la
- * condition reçue, comme la base.
+ * `POST /orders/relances/:orderId/ignorer` : ignorer N'ANNULE PAS la commande
+ * (décision du 25/11, retour sur celle du 23/11). Vrai contrôleur, vrai
+ * service de relance sur la base en mémoire ; tout changement de statut
+ * passerait par `OrderService.updateStatus`, simulé ici pour le surveiller.
  */
-describe('POST /orders/relances/:orderId/ignorer : la commande est annulée', () => {
+describe('POST /orders/relances/:orderId/ignorer : la commande reste en attente', () => {
   function monterIgnorer(commandes: Record<string, any>[], relances: Record<string, any>[] = []) {
     const monte = monterRelance({ commandes, relances });
-    let entreTemps: (() => void) | null = null;
-    const orders = {
-      updateStatus: jest.fn(
-        async (id: string, status: OrderStatus, meta: Record<string, any>, options: { conditionEcriture?: object } = {}) => {
-          entreTemps?.();
-          const c = monte.commandes.find((x) => x.id === id)!;
-          if (options.conditionEcriture && !correspond(c, options.conditionEcriture)) {
-            throw new ConflictException('Cette commande vient de changer : actualisez la liste.');
-          }
-          Object.assign(c, { status, cancelled_by: meta.userId, cancelled_reason: meta.reason, cancelled_at: new Date() });
-          return c;
-        },
-      ),
-    };
+    const orders = { updateStatus: jest.fn() };
     const controleur = new OrderRelanceController(monte.service, orders as never, {} as never);
     const ignorer = (id: string, user: User, corps: Record<string, unknown> = { raison_code: 'CLIENT_INJOIGNABLE' }) =>
       controleur.ignorer({ user } as never, id, corps as never);
-    return { ...monte, orders, ignorer, entreTemps: (f: () => void) => (entreTemps = f) };
+    return { ...monte, orders, ignorer };
   }
 
-  it('annule chaque panier du groupe, avec la raison, et la commande reste active (visible dans Commandes)', async () => {
+  it('ignore tout le groupe sans annuler : commandes en attente, hors des alertes, rétablissables', async () => {
     const f1 = commande(maintenant(), 8, { customer_id: 'client-i', phone: '0700000066' });
     const f2 = commande(maintenant(), 5, { customer_id: 'client-i', phone: '0700000066' });
-    const { ignorer, orders, service } = monterIgnorer([f1, f2]);
+    const { ignorer, orders, service, relances } = monterIgnorer([f1, f2]);
 
-    await expect(ignorer(f1.id, AWA)).resolves.toEqual({ ok: true, nombre: 2, annulees: 2 });
+    await expect(ignorer(f1.id, AWA)).resolves.toEqual({ ok: true, nombre: 2 });
 
-    expect(orders.updateStatus).toHaveBeenCalledTimes(2);
-    for (const [, status, meta, options] of orders.updateStatus.mock.calls) {
-      expect(status).toBe(OrderStatus.CANCELLED);
-      expect(meta).toEqual({ userId: AWA.id, role: UserRole.CALL_CENTER, reason: 'Client injoignable' });
-      expect(options?.conditionEcriture).toEqual(expect.objectContaining({ auto: true, status: OrderStatus.PENDING }));
-    }
-    for (const c of [f1, f2]) {
-      expect(c).toEqual(expect.objectContaining({ status: OrderStatus.CANCELLED, entity_status: 'ACTIVE', cancelled_by: AWA.id }));
-    }
-    // Toujours dans « Ignorées », marquée annulée : plus rien à rétablir.
+    expect(orders.updateStatus).not.toHaveBeenCalled();
+    for (const c of [f1, f2]) expect(c).toEqual(expect.objectContaining({ status: OrderStatus.PENDING, entity_status: 'ACTIVE' }));
+    expect(relances.filter((r) => r.ignore_le).map((r) => r.order_id).sort()).toEqual([f1.id, f2.id].sort());
+    expect((await service.lister(AWA)).groupes).toEqual([]);
     const { items } = await service.listerIgnorees(AWA);
     expect(items.map((i) => [i.annulee, i.encore_en_attente])).toEqual([
-      [true, false],
-      [true, false],
+      [false, true],
+      [false, true],
     ]);
-    expect((await service.lister(AWA)).groupes).toEqual([]);
   });
 
-  it('un panier déjà annulé par le client n’est pas annulé une seconde fois', async () => {
-    const parClient = commande(maintenant(), 9, {
-      customer_id: 'client-j',
-      phone: '0700000055',
-      status: OrderStatus.CANCELLED,
-      entity_status: 'DELETED',
-      cancelled_by: 'client',
-      cancelled_at: plusTot(1),
-    });
-    const enAttente = commande(maintenant(), 6, { customer_id: 'client-j', phone: '0700000055' });
-    const { ignorer, orders } = monterIgnorer([parClient, enAttente]);
-
-    await expect(ignorer(enAttente.id, AWA)).resolves.toEqual({ ok: true, nombre: 2, annulees: 1 });
-    expect(orders.updateStatus.mock.calls.map((c) => c[0])).toEqual([enAttente.id]);
-    expect(parClient).toEqual(expect.objectContaining({ entity_status: 'DELETED', cancelled_by: 'client' }));
-  });
-
-  it('payée entre-temps : pas annulée, seulement ignorée, la réponse le dit', async () => {
-    const a = commande(maintenant(), 9);
-    const monte = monterIgnorer([a]);
-    monte.entreTemps(() => Object.assign(a, { paied: true }));
-
-    await expect(monte.ignorer(a.id, AWA)).resolves.toEqual({ ok: true, nombre: 1, annulees: 0 });
-    expect(a.status).toBe(OrderStatus.PENDING);
-    expect(monte.relances[0].ignore_le).not.toBeNull();
-  });
-
-  it('client peut-être en train de payer : 409, ni ignorée ni annulée', async () => {
+  it('client peut-être en train de payer : ignorable, rien n’est annulé', async () => {
     const a = commande(maintenant(), 1);
     const { ignorer, orders, relances } = monterIgnorer([a]);
 
-    const r = await refus(ignorer(a.id, AWA));
-    expect(r.classe).toBe(ConflictException);
-    expect(r.message).toMatch(/^Le client est peut-être en train de payer : attendez \d+ min\.$/);
+    await expect(ignorer(a.id, AWA)).resolves.toEqual({ ok: true, nombre: 1 });
     expect(orders.updateStatus).not.toHaveBeenCalled();
-    expect(relances.filter((x) => x.ignore_le)).toEqual([]);
+    expect(a.status).toBe(OrderStatus.PENDING);
+    expect(relances[0].ignore_le).not.toBeNull();
+  });
+
+  it('ignorée puis annulée ailleurs : « Ignorées » la dit annulée, plus rien à rétablir', async () => {
+    const a = commande(maintenant(), 9);
+    const { ignorer, service } = monterIgnorer([a]);
+
+    await ignorer(a.id, AWA);
+    Object.assign(a, { status: OrderStatus.CANCELLED, cancelled_by: AWA.id, cancelled_at: new Date() });
+
+    const { items } = await service.listerIgnorees(AWA);
+    expect(items.map((i) => [i.annulee, i.encore_en_attente])).toEqual([[true, false]]);
   });
 });

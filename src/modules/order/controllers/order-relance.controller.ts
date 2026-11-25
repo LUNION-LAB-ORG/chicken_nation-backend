@@ -4,7 +4,6 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  Logger,
   NotFoundException,
   Param,
   ParseUUIDPipe,
@@ -23,7 +22,7 @@ import { AnnulerRelanceDto } from '../dto/annuler-relance.dto';
 import { ConfirmerPaiementRelanceDto } from '../dto/confirmer-paiement-relance.dto';
 import { IgnorerRelanceDto } from '../dto/ignorer-relance.dto';
 import { QueryRelanceDto } from '../dto/query-relance.dto';
-import { BROUILLON_WHERE, ROLES_BROUILLONS } from '../helpers/brouillons.rules';
+import { ROLES_BROUILLONS } from '../helpers/brouillons.rules';
 import { A_CONFIRMER_WHERE } from '../helpers/paiement-livraison.rules';
 import { KkiapayOrderListenerService } from '../listeners/kkiapay-order.listener.service';
 import { OrderRelanceService } from '../services/order-relance.service';
@@ -52,8 +51,6 @@ const ID_COMMANDE = new ParseUUIDPipe({
 @ApiTags('Commandes')
 @Controller('orders/relances')
 export class OrderRelanceController {
-  private readonly logger = new Logger(OrderRelanceController.name);
-
   constructor(
     private readonly relances: OrderRelanceService,
     // Annulation d'une commande à confirmer : le chemin ordinaire des
@@ -100,42 +97,23 @@ export class OrderRelanceController {
     return this.relances.liberer(orderId, req.user as User);
   }
 
+  /**
+   * Ignorer sort la commande des alertes de toute l'équipe, sans l'annuler :
+   * elle reste en attente et se rétablit depuis « Ignorées » (décision du
+   * 25/11, retour sur celle du 23/11 où ignorer l'annulait).
+   */
   @Post(':orderId/ignorer')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, UserRolesGuard)
   @UserRoles(...ROLES_BROUILLONS)
   @ApiBody({ type: IgnorerRelanceDto })
-  @ApiOperation({ summary: 'Ignorer pour toute l’équipe, et annuler la commande' })
-  async ignorer(
+  @ApiOperation({ summary: 'Ignorer pour toute l’équipe (la commande reste en attente)' })
+  ignorer(
     @Req() req: Request,
     @Param('orderId', ID_COMMANDE) orderId: string,
     @Body() corps: IgnorerRelanceDto,
-  ): Promise<{ ok: true; nombre: number; annulees: number }> {
-    const user = req.user as User;
-    const { nombre, a_annuler, raison } = await this.relances.ignorer(orderId, corps, user);
-    /**
-     * IGNORER ANNULE (23/11, demande du client) : chaque panier encore en
-     * attente du groupe passe « Annulée », visible dans Commandes, par le
-     * chemin ordinaire (client prévenu, bon et code rendus, rien ne sonne au
-     * restaurant pour un panier qu'il n'a jamais vu). Écriture conditionnée :
-     * un panier payé ou repris au téléphone entre-temps n'est pas annulé, il
-     * reste seulement ignoré, comme avant.
-     */
-    let annulees = 0;
-    for (const id of a_annuler) {
-      try {
-        await this.orders.updateStatus(
-          id,
-          OrderStatus.CANCELLED,
-          { userId: user.id, role: user.role, reason: raison },
-          { conditionEcriture: BROUILLON_WHERE },
-        );
-        annulees += 1;
-      } catch (e) {
-        this.logger.warn(`Relance : commande ${id} ignorée mais non annulée : ${(e as Error)?.message}`);
-      }
-    }
-    return { ok: true, nombre, annulees };
+  ) {
+    return this.relances.ignorer(orderId, corps, req.user as User);
   }
 
   /**
