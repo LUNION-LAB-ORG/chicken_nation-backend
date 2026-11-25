@@ -42,18 +42,30 @@ describe('Paystack : montants en XOF (multipliés par 100, docs 25/11)', () => {
 });
 
 describe('Paystack : frais de paiement ajoutés au client (25/11)', () => {
-  it('tarifs par défaut : Mobile Money 2,3 %, carte 3,8 %, sans supplément', () => {
-    expect(TAUX_FRAIS_DEFAUT).toEqual({ mobileMoney: 2.3, carte: 3.8 });
+  it('tarifs par défaut : Mobile Money 2,3 %, carte 4,5 %, sans supplément', () => {
+    expect(TAUX_FRAIS_DEFAUT).toEqual({ mobileMoney: 2.3, carte: 4.5 });
     expect(tauxClient(TAUX_FRAIS_DEFAUT, 'mobile_money')).toBe(2.3);
-    expect(tauxClient(TAUX_FRAIS_DEFAUT, 'card')).toBe(3.8);
+    expect(tauxClient(TAUX_FRAIS_DEFAUT, 'card')).toBe(4.5);
   });
-  it('arrondi au franc supérieur, sans erreur de virgule', () => {
-    // 10 000 F à 2,3 % : 230 F tout rond (jamais 231).
-    expect(fraisClient(10000, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(230);
-    expect(fraisClient(10000, 'card', TAUX_FRAIS_DEFAUT)).toBe(380);
-    // Commande de 10 100 F (10 000 F de plats + 1 % de frais de service) : 232,3 F → 233 F ; 383,8 F → 384 F.
-    expect(fraisClient(10100, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(233);
-    expect(fraisClient(10100, 'card', TAUX_FRAIS_DEFAUT)).toBe(384);
+  it('le restaurant reçoit au moins la commande : total = commande / (1 − taux), au franc supérieur', () => {
+    // 5 050 F à 2,3 % : 5 168,88 → 5 169 F débités. Paystack retient 2,3 % de 5 169 = 118,89 F : il reste 5 050,11 F.
+    expect(fraisClient(5050, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(119);
+    expect(fraisClient(10100, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(238);
+    // Carte à 4,5 % : 5 050 / 0,955 = 5 287,96 → 5 288 F ; 10 100 / 0,955 = 10 575,92 → 10 576 F.
+    expect(fraisClient(5050, 'card', TAUX_FRAIS_DEFAUT)).toBe(238);
+    expect(fraisClient(10100, 'card', TAUX_FRAIS_DEFAUT)).toBe(476);
+    // Quel que soit le montant, ce qui reste après les frais de Paystack couvre la commande.
+    for (const moyen of ['mobile_money', 'card'] as const) {
+      const taux = moyen === 'card' ? 0.045 : 0.023;
+      for (let m = 1; m <= 60_000; m += 137) {
+        const total = m + fraisClient(m, moyen, TAUX_FRAIS_DEFAUT);
+        expect(total - total * taux).toBeGreaterThanOrEqual(m - 1e-6);
+        // Et sans franc de trop : un franc de moins ne couvrirait plus.
+        expect(total - 1 - (total - 1) * taux).toBeLessThan(m);
+      }
+    }
+  });
+  it('bornes : montant nul, taux nul', () => {
     expect(fraisClient(1, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(1);
     expect(fraisClient(0, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(0);
     expect(fraisClient(10000, 'mobile_money', { mobileMoney: 0, carte: 0 })).toBe(0);

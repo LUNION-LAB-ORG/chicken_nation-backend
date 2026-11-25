@@ -49,12 +49,13 @@ export interface TauxFraisPaystack {
 
 /**
  * Tarifs de Paystack en Côte d'Ivoire communiqués par le client le 25/11,
- * toutes taxes comprises : Mobile Money 2,3 %, carte locale 3,8 % (carte
- * internationale 4,5 % : le type de carte n'est connu qu'une fois la carte
- * saisie, un seul taux « carte » est donc appliqué). Rien de plus : le 1 %
- * du client est celui des frais de service, déjà dans la commande.
+ * toutes taxes comprises : Mobile Money 2,3 %, carte locale 3,8 %, carte
+ * internationale 4,5 %. Le type de carte n'est connu qu'une fois la carte
+ * saisie : un seul taux « carte » s'applique, et le client a retenu 4,5 %
+ * pour couvrir aussi les cartes internationales. Rien de plus : le 1 % du
+ * client est celui des frais de service, déjà dans la commande.
  */
-export const TAUX_FRAIS_DEFAUT: TauxFraisPaystack = { mobileMoney: 2.3, carte: 3.8 };
+export const TAUX_FRAIS_DEFAUT: TauxFraisPaystack = { mobileMoney: 2.3, carte: 4.5 };
 export const TAUX_FRAIS_MAX = 20;
 
 /** Taux lu dans un réglage : nombre de 0 à 20, deux décimales au plus ; sinon le défaut. */
@@ -80,16 +81,23 @@ export function pourCentFraisService(reglage: unknown): number {
 }
 
 /**
- * Frais ajoutés au montant de la commande, en francs, arrondis au franc
- * SUPÉRIEUR. Calcul en entiers (centièmes de pour-cent) : 10 000 F à 3,3 %
- * font 330 F, jamais 331.
+ * Frais ajoutés au montant de la commande, en francs, pour que le
+ * sous-compte reçoive AU MOINS la commande une fois les frais de Paystack
+ * retenus. Paystack prend son pourcentage sur le total débité, frais
+ * compris : il faut donc débiter commande / (1 − taux), arrondi au franc
+ * supérieur, et non commande × (1 + taux). Essai du 25/11 : à 2,3 %,
+ * 5 050 F débités 5 167 F ne laissaient que 5 048 F au restaurant ; il en
+ * faut 5 169. Calcul en entiers (centièmes de pour-cent).
  */
 export function fraisClient(montant: number, moyen: MoyenPaystack, taux: TauxFraisPaystack): number {
   const m = Math.round(montant);
   if (!Number.isFinite(m) || m <= 0) return 0;
   const centiemes = Math.round(tauxClient(taux, moyen) * 100);
-  // Entiers seulement : plafond de (m × centièmes) / 10 000.
-  return Math.floor((m * centiemes + 9_999) / 10_000);
+  if (centiemes <= 0 || centiemes >= 10_000) return 0;
+  const reste = 10_000 - centiemes;
+  // Plafond de m × 10 000 / reste, en entiers.
+  const total = Math.floor((m * 10_000 + reste - 1) / reste);
+  return total - m;
 }
 
 /** Montant en francs (entier >= 1) vers l'unité de Paystack ; null si invalide. */

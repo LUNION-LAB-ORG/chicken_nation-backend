@@ -66,19 +66,19 @@ describe('PaystackService.initialiser', () => {
     global.fetch = fetchOriginal;
   });
 
-  it('Mobile Money : sous-compte du restaurant, frais portés par lui, commande + 2,3 % de frais, ×100 en XOF, seul moyen proposé', async () => {
+  it('Mobile Money : sous-compte du restaurant, frais portés par lui, commande / (1 − 2,3 %), ×100 en XOF, seul moyen proposé', async () => {
     const m = monter();
     global.fetch = m.fetchFaux as never;
     const r = await m.service.initialiser({ order: commande, email: null, canal: 'APP', moyen: 'mobile_money', callbackUrl: 'https://api.test/retour' });
 
     expect(r.authorization_url).toBe('https://checkout.paystack.com/abc123');
     expect(r.reference).toMatch(/^ORD-261125-44839-P[A-Z0-9]+$/);
-    // 10 500 F à 2,3 % : 241,5 F, arrondis au franc supérieur.
-    expect(r).toEqual(expect.objectContaining({ montant: 10500, frais: 242, total: 10742, moyen: 'mobile_money' }));
+    // 10 500 F / 0,977 = 10 747,18 → 10 748 F : le restaurant garde au moins 10 500 F après les 2,3 % de Paystack.
+    expect(r).toEqual(expect.objectContaining({ montant: 10500, frais: 248, total: 10748, moyen: 'mobile_money' }));
     const init = m.appels.find((a) => a.url.endsWith('/transaction/initialize'))!;
     expect(init.corps).toEqual(
       expect.objectContaining({
-        amount: 1_074_200,
+        amount: 1_074_800,
         currency: 'XOF',
         subaccount: 'ACCT_zone4abc',
         bearer: 'subaccount',
@@ -91,27 +91,29 @@ describe('PaystackService.initialiser', () => {
     expect(init.corps).not.toHaveProperty('transaction_charge');
     expect(String(init.corps!.email)).toMatch(/@clients\.chicken-nation\.com$/);
     expect(JSON.parse(String(init.corps!.metadata))).toEqual(
-      expect.objectContaining({ order_id: 'o-1', restaurant_id: 'r-1', montant_commande: 10500, frais: 242 }),
+      expect.objectContaining({ order_id: 'o-1', restaurant_id: 'r-1', montant_commande: 10500, frais: 248 }),
     );
     // Tentative enregistrée AVANT l'appel, avec le sous-compte, le moyen et les frais figés.
     expect(m.tentatives[0]).toEqual(
-      expect.objectContaining({ reference: r.reference, montant: 10500, frais: 242, moyen: 'mobile_money', sous_compte: 'ACCT_zone4abc', canal: 'APP' }),
+      expect.objectContaining({ reference: r.reference, montant: 10500, frais: 248, moyen: 'mobile_money', sous_compte: 'ACCT_zone4abc', canal: 'APP' }),
     );
   });
 
-  it('carte : 3,8 %, et seule la carte est proposée ; taux réglés au back-office repris', async () => {
+  it('carte : 4,5 %, et seule la carte est proposée ; taux réglés au back-office repris', async () => {
     const m = monter();
     global.fetch = m.fetchFaux as never;
     const r = await m.service.initialiser({ order: commande, email: null, canal: 'WEB', moyen: 'card', callbackUrl: 'https://site.test/retour' });
-    expect(r).toEqual(expect.objectContaining({ frais: 399, total: 10899 }));
+    // 10 500 F / 0,955 = 10 994,76 → 10 995 F.
+    expect(r).toEqual(expect.objectContaining({ frais: 495, total: 10995 }));
     expect(m.appels.find((a) => a.url.endsWith('/transaction/initialize'))!.corps).toEqual(
-      expect.objectContaining({ amount: 1_089_900, channels: ['card'] }),
+      expect.objectContaining({ amount: 1_099_500, channels: ['card'] }),
     );
 
-    const regle = monter({ reglages: { paystack_frais_mobile_money: '2', paystack_frais_carte: '4,5' } });
+    const regle = monter({ reglages: { paystack_frais_mobile_money: '2', paystack_frais_carte: '3,8' } });
     global.fetch = regle.fetchFaux as never;
-    expect((await regle.service.initialiser({ order: commande, email: null, canal: 'APP', moyen: 'mobile_money', callbackUrl: 'https://api.test/r' })).frais).toBe(210);
-    expect((await regle.service.initialiser({ order: commande, email: null, canal: 'APP', moyen: 'card', callbackUrl: 'https://api.test/r' })).frais).toBe(473);
+    // 10 500 / 0,98 = 10 714,29 → 10 715 ; 10 500 / 0,962 = 10 914,76 → 10 915.
+    expect((await regle.service.initialiser({ order: commande, email: null, canal: 'APP', moyen: 'mobile_money', callbackUrl: 'https://api.test/r' })).frais).toBe(215);
+    expect((await regle.service.initialiser({ order: commande, email: null, canal: 'APP', moyen: 'card', callbackUrl: 'https://api.test/r' })).frais).toBe(415);
   });
 
   it('e-mail du client refusé par Paystack : relancé une fois avec l’adresse technique', async () => {
