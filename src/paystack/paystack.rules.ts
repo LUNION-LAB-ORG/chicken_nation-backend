@@ -14,9 +14,16 @@ import { PaiementMode, PaiementStatus } from '@prisma/client';
  *  - Référence : lettres, chiffres, « - », « . » et « = » seulement.
  *  - Mobile Money en Côte d'Ivoire : MTN, Orange, Wave.
  *
- * Règle de Chicken Nation : l'argent va en ENTIER au sous-compte du
- * restaurant, rien sur le compte principal, frais compris. Un sous-compte qui
- * laisse une part au compte principal n'est pas utilisable.
+ * Règles de Chicken Nation :
+ *  - Le paiement va sur le sous-compte du restaurant, frais Paystack portés
+ *    par ce sous-compte. Le compte principal ne garde au plus que le
+ *    « supplément » réglé au back-office (1 % au 25/11) : un sous-compte qui
+ *    lui laisse davantage n'est pas utilisable.
+ *  - FRAIS (25/11) : Paystack n'ajoute rien au montant, c'est à nous de le
+ *    préparer. Le client paie la commande PLUS des frais : le taux du moyen
+ *    choisi (Mobile Money ou carte) et le supplément, tous réglables au
+ *    back-office. Le client choisit donc son moyen AVANT d'ouvrir la page de
+ *    paiement, qui ne propose alors que ce moyen.
  */
 
 export const DEVISE_PAYSTACK = 'XOF';
@@ -26,6 +33,55 @@ export const HOTE_CHECKOUT_PAYSTACK = 'checkout.paystack.com';
 export const CANAUX_PAYSTACK = ['card', 'mobile_money'] as const;
 /** IP d'où Paystack envoie ses webhooks (docs/payments/webhooks), test et live. */
 export const IP_WEBHOOK_PAYSTACK = ['52.31.139.75', '52.49.173.169', '52.214.14.220'];
+
+/** Moyen choisi par le client avant de payer. */
+export type MoyenPaystack = 'mobile_money' | 'card';
+
+export function lireMoyen(v: unknown): MoyenPaystack {
+  return v === 'card' ? 'card' : 'mobile_money';
+}
+
+/** Taux des frais ajoutés au client, en pourcentage. */
+export interface TauxFraisPaystack {
+  mobileMoney: number;
+  carte: number;
+  /** Ajouté à chaque taux ; c'est aussi la part maximale du compte principal. */
+  supplement: number;
+}
+
+/**
+ * Tarifs de Paystack en Côte d'Ivoire communiqués par le client le 25/11,
+ * toutes taxes comprises : Mobile Money 2,3 %, carte locale 3,8 % (carte
+ * internationale 4,5 % : le type de carte n'est connu qu'une fois la carte
+ * saisie, un seul taux « carte » est donc appliqué), plus 1 % de supplément.
+ */
+export const TAUX_FRAIS_DEFAUT: TauxFraisPaystack = { mobileMoney: 2.3, carte: 3.8, supplement: 1 };
+export const TAUX_FRAIS_MAX = 20;
+
+/** Taux lu dans un réglage : nombre de 0 à 20, deux décimales au plus ; sinon le défaut. */
+export function lireTaux(valeur: unknown, defaut: number): number {
+  const t = typeof valeur === 'number' ? valeur : typeof valeur === 'string' && valeur.trim() ? Number(valeur.replace(',', '.')) : Number.NaN;
+  if (!Number.isFinite(t) || t < 0 || t > TAUX_FRAIS_MAX) return defaut;
+  return Math.round(t * 100) / 100;
+}
+
+/** Taux payé par le client pour ce moyen : taux du moyen + supplément. */
+export function tauxClient(taux: TauxFraisPaystack, moyen: MoyenPaystack): number {
+  return Math.round(((moyen === 'card' ? taux.carte : taux.mobileMoney) + taux.supplement) * 100) / 100;
+}
+
+/**
+ * Frais ajoutés au montant de la commande, en francs, arrondis au franc
+ * SUPÉRIEUR. Calcul en entiers (centièmes de pour-cent) : 10 000 F à 3,3 %
+ * font 330 F, jamais 331.
+ */
+export function fraisClient(montant: number, moyen: MoyenPaystack, taux: TauxFraisPaystack): number {
+  const m = Math.round(montant);
+  if (!Number.isFinite(m) || m <= 0) return 0;
+  const centiemes = Math.round(tauxClient(taux, moyen) * 100);
+  // Entiers seulement : plafond de (m × centièmes) / 10 000.
+  return Math.floor((m * centiemes + 9_999) / 10_000);
+}
 
 /** Montant en francs (entier >= 1) vers l'unité de Paystack ; null si invalide. */
 export function versUnitePaystack(francs: number): number | null {
@@ -47,15 +103,26 @@ export function depuisUnitePaystack(valeur: unknown): number | null {
   return Math.round(n / FACTEUR_XOF);
 }
 
+/** Domaines de premier niveau réservés aux essais : Paystack les refuse. */
+const DOMAINES_FICTIFS = /\.(test|local|localhost|example|invalid)$/i;
+
+/** Adresse technique stable, propre au client, qui ne révèle pas son numéro. */
+export function emailTechnique(clientId: string, domaine = 'clients.chicken-nation.com'): string {
+  const empreinte = createHash('sha256').update(`cn:${clientId}`, 'utf8').digest('hex').slice(0, 24);
+  return `${empreinte}@${domaine}`;
+}
+
 /**
- * Paystack exige un e-mail. Celui du client s'il en a un valide ; sinon une
- * adresse technique stable, propre au client, qui ne révèle pas son numéro.
+ * Paystack exige un e-mail valide. Celui du client s'il en a un plausible
+ * (domaine avec une extension en lettres, hors domaines fictifs) ; sinon
+ * l'adresse technique. Paystack reste juge : s'il refuse quand même
+ * l'adresse, le paiement est relancé avec l'adresse technique
+ * (`PaystackService.initialiser`).
  */
 export function emailPourPaystack(email: string | null | undefined, clientId: string, domaine = 'clients.chicken-nation.com'): string {
   const e = (email ?? '').trim();
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e) && e.length <= 200) return e;
-  const empreinte = createHash('sha256').update(`cn:${clientId}`, 'utf8').digest('hex').slice(0, 24);
-  return `${empreinte}@${domaine}`;
+  if (/^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(e) && e.length <= 200 && !DOMAINES_FICTIFS.test(e)) return e;
+  return emailTechnique(clientId, domaine);
 }
 
 /**
@@ -120,22 +187,34 @@ export function lireSousCompte(brut: unknown): SousComptePaystack | null {
 
 export type MotifSousCompte = 'INCONNU' | 'INACTIF' | 'PART_COMPTE_PRINCIPAL' | 'DEVISE';
 
-/** Un sous-compte encaisse pour Chicken Nation s'il est actif, en XOF (ou sans devise lue) et laisse 0 % au compte principal. */
-export function motifSousCompteInutilisable(s: SousComptePaystack | null): MotifSousCompte | null {
+/**
+ * Un sous-compte encaisse pour Chicken Nation s'il est actif, en XOF (ou sans
+ * devise lue), et ne laisse au compte principal pas plus que `partMax` (le
+ * supplément payé par le client, en pourcentage).
+ */
+export function motifSousCompteInutilisable(s: SousComptePaystack | null, partMax = 0): MotifSousCompte | null {
   if (!s) return 'INCONNU';
   if (!s.actif) return 'INACTIF';
-  if (s.partComptePrincipal !== 0) return 'PART_COMPTE_PRINCIPAL';
+  if (s.partComptePrincipal === null || s.partComptePrincipal > partMax + 1e-9) return 'PART_COMPTE_PRINCIPAL';
   if (s.devise && s.devise.toUpperCase() !== DEVISE_PAYSTACK) return 'DEVISE';
   return null;
 }
 
-export const MESSAGES_SOUS_COMPTE: Record<MotifSousCompte, string> = {
-  INCONNU: "Sous-compte introuvable chez Paystack.",
-  INACTIF: "Sous-compte inactif chez Paystack.",
-  PART_COMPTE_PRINCIPAL:
-    "Ce sous-compte laisse une part au compte principal : mettez la part (pourcentage) à 0 dans le tableau de bord Paystack.",
-  DEVISE: "Ce sous-compte n'encaisse pas en francs CFA (XOF).",
-};
+const pourCent = (n: number | null) => (n === null ? 'une part inconnue' : `${String(n).replace('.', ',')} %`);
+
+/** Le motif, en mots, pour l'écran d'administration. */
+export function messageSousCompte(motif: MotifSousCompte, s: SousComptePaystack | null, partMax = 0): string {
+  switch (motif) {
+    case 'INCONNU':
+      return 'Sous-compte introuvable chez Paystack.';
+    case 'INACTIF':
+      return 'Sous-compte inactif chez Paystack.';
+    case 'DEVISE':
+      return "Ce sous-compte n'encaisse pas en francs CFA (XOF).";
+    case 'PART_COMPTE_PRINCIPAL':
+      return `Ce sous-compte laisse ${pourCent(s?.partComptePrincipal ?? null)} au compte principal : le maximum est le supplément réglé (${pourCent(partMax)}). Corrigez le pourcentage dans le tableau de bord Paystack, ou le supplément.`;
+  }
+}
 
 /** Transaction Paystack ramenée au vocabulaire du paiement de Chicken Nation. */
 export interface TransactionPaystackLue {

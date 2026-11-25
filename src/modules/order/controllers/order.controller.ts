@@ -192,6 +192,8 @@ export class OrderController {
             provider: 'paystack' as const,
             disponible: disponibilite.disponible,
             message: disponibilite.message,
+            // Frais ajoutés selon le moyen choisi, en pourcentage du montant.
+            frais: disponibilite.frais,
           },
         };
       }

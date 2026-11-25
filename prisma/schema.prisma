@@ -4343,8 +4343,13 @@ model TentativePaiement {
   order         Order               @relation(fields: [order_id], references: [id], onDelete: Cascade)
   fournisseur   FournisseurPaiement
   reference     String              @unique @db.VarChar(100)
-  /// Montant demandé, en francs (Paystack le reçoit multiplié par 100).
+  /// Montant de la commande, en francs, sans les frais de paiement.
   montant       Int
+  /// Frais de paiement ajoutés pour le client (taux du moyen + supplément,
+  /// réglés au back-office). Paystack reçoit montant + frais, multiplié par 100.
+  frais         Int                 @default(0)
+  /// Moyen choisi par le client avant de payer : mobile_money ou card.
+  moyen         String?             @db.VarChar(20)
   /// Restaurant et sous-compte Paystack qui encaissent, figés au lancement.
   restaurant_id String?             @db.Uuid
   sous_compte   String?             @db.VarChar(100)

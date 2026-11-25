@@ -32,7 +32,13 @@ import { SettingsService } from 'src/modules/settings/settings.service';
 import { CLES_PAIEMENT_EN_LIGNE, PaiementEnLigneService } from './paiement-en-ligne.service';
 import { ErreurPaystack } from './paystack-http';
 import { ipAutorisee, signatureAncienneValide, signatureNouvelleValide } from './paystack-signature';
-import { IP_WEBHOOK_PAYSTACK, MESSAGES_SOUS_COMPTE, REFERENCE_TENTATIVE, motifSousCompteInutilisable } from './paystack.rules';
+import {
+  IP_WEBHOOK_PAYSTACK,
+  REFERENCE_TENTATIVE,
+  TAUX_FRAIS_MAX,
+  messageSousCompte,
+  motifSousCompteInutilisable,
+} from './paystack.rules';
 import { CLES_PAYSTACK, PaystackService } from './paystack.service';
 import { TravailWebhookPaystack } from './paystack-webhook.consumer';
 import { lienRetourAppli } from './retour-paiement.rules';
@@ -160,13 +166,13 @@ export class PaystackController {
         if (!config.cle) return { id: r.id, nom: r.name, sous_compte: { code }, utilisable: false, motif: "Clé secrète Paystack absente." };
         try {
           const s = await this.paystack.lireSousCompte(code, { frais: relire === '1' });
-          const motif = motifSousCompteInutilisable(s);
+          const motif = motifSousCompteInutilisable(s, config.frais.supplement);
           return {
             id: r.id,
             nom: r.name,
             sous_compte: s ? { ...s } : { code },
             utilisable: !motif,
-            motif: motif ? MESSAGES_SOUS_COMPTE[motif] : null,
+            motif: motif ? messageSousCompte(motif, s, config.frais.supplement) : null,
           };
         } catch (e) {
           return { id: r.id, nom: r.name, sous_compte: { code }, utilisable: false, motif: messageErreur(e) };
@@ -182,6 +188,12 @@ export class PaystackController {
         secret_webhook_configure: config.secretsWebhook.length > 0,
         webhook_path: '/api/v1/paystack/webhook',
       },
+      // Frais ajoutés au client, en pourcentage : taux du moyen + supplément.
+      frais: {
+        mobile_money: config.frais.mobileMoney,
+        carte: config.frais.carte,
+        supplement: config.frais.supplement,
+      },
       restaurants: lignes,
     };
   }
@@ -192,10 +204,10 @@ export class PaystackController {
   @RequirePermission(Modules.SETTINGS, Action.READ)
   async sousComptes() {
     try {
-      const liste = await this.paystack.listerSousComptes();
+      const [liste, { frais }] = await Promise.all([this.paystack.listerSousComptes(), this.paystack.config()]);
       return liste.map((s) => {
-        const motif = motifSousCompteInutilisable(s);
-        return { ...s, utilisable: !motif, motif: motif ? MESSAGES_SOUS_COMPTE[motif] : null };
+        const motif = motifSousCompteInutilisable(s, frais.supplement);
+        return { ...s, utilisable: !motif, motif: motif ? messageSousCompte(motif, s, frais.supplement) : null };
       });
     } catch (e) {
       throw new BadRequestException(messageErreur(e));
@@ -227,18 +239,44 @@ export class PaystackController {
     } catch (e) {
       throw new BadRequestException(messageErreur(e));
     }
-    const motif = motifSousCompteInutilisable(s);
-    if (motif) throw new BadRequestException(MESSAGES_SOUS_COMPTE[motif]);
+    const partMax = (await this.paystack.config()).frais.supplement;
+    const motif = motifSousCompteInutilisable(s, partMax);
+    if (motif) throw new BadRequestException(messageSousCompte(motif, s, partMax));
     await this.settings.set(CLES_PAYSTACK.sousCompte(id), code, `Sous-compte Paystack de ${restaurant.name}`);
     this.paiementEnLigne.invaliderCache();
     return { id, sous_compte: s };
   }
 
-  /** Interrupteur et prestataire du paiement en ligne (appli et site). */
+  /**
+   * Interrupteur et prestataire du paiement en ligne (appli et site), et
+   * frais Paystack ajoutés au client (pourcentages de 0 à 20, deux décimales).
+   */
   @Put('reglages')
   @UseGuards(JwtAuthGuard, UserPermissionsGuard)
   @RequirePermission(Modules.SETTINGS, Action.UPDATE)
-  async reglages(@Body() body: { en_ligne_actif?: boolean; fournisseur?: string }) {
+  async reglages(
+    @Body()
+    body: {
+      en_ligne_actif?: boolean;
+      fournisseur?: string;
+      frais?: { mobile_money?: unknown; carte?: unknown; supplement?: unknown };
+    },
+  ) {
+    if (body?.frais && typeof body.frais === 'object') {
+      const champs: [unknown, string, string][] = [
+        [body.frais.mobile_money, CLES_PAYSTACK.fraisMobileMoney, 'Paystack · frais Mobile Money (%)'],
+        [body.frais.carte, CLES_PAYSTACK.fraisCarte, 'Paystack · frais carte bancaire (%)'],
+        [body.frais.supplement, CLES_PAYSTACK.fraisSupplement, 'Paystack · supplément (%)'],
+      ];
+      for (const [valeur, cle, description] of champs) {
+        if (valeur === undefined) continue;
+        const t = typeof valeur === 'number' ? valeur : Number(String(valeur).replace(',', '.'));
+        if (!Number.isFinite(t) || t < 0 || t > TAUX_FRAIS_MAX) {
+          throw new BadRequestException(`Taux invalide : un pourcentage entre 0 et ${TAUX_FRAIS_MAX}.`);
+        }
+        await this.settings.set(cle, String(Math.round(t * 100) / 100), description);
+      }
+    }
     if (typeof body?.en_ligne_actif === 'boolean') {
       await this.settings.set(CLES_PAIEMENT_EN_LIGNE.actif, body.en_ligne_actif ? 'true' : 'false', 'Paiement en ligne (appli et site)');
     }
@@ -249,7 +287,11 @@ export class PaystackController {
       await this.settings.set(CLES_PAIEMENT_EN_LIGNE.fournisseur, body.fournisseur, 'Prestataire du paiement en ligne');
     }
     this.paiementEnLigne.invaliderCache();
-    return this.paiementEnLigne.reglages();
+    const [reglages, config] = await Promise.all([this.paiementEnLigne.reglages(), this.paystack.config()]);
+    return {
+      ...reglages,
+      frais: { mobile_money: config.frais.mobileMoney, carte: config.frais.carte, supplement: config.frais.supplement },
+    };
   }
 }
 

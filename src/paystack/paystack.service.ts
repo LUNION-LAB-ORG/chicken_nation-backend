@@ -7,10 +7,16 @@ import {
   CANAUX_PAYSTACK,
   DEVISE_PAYSTACK,
   HOTE_CHECKOUT_PAYSTACK,
+  MoyenPaystack,
   SousComptePaystack,
+  TAUX_FRAIS_DEFAUT,
+  TauxFraisPaystack,
   TransactionPaystackLue,
   emailPourPaystack,
+  emailTechnique,
+  fraisClient,
   lireSousCompte,
+  lireTaux,
   lireTransaction,
   modeDeCle,
   motifSousCompteInutilisable,
@@ -25,12 +31,18 @@ export const CLES_PAYSTACK = {
   cleSecrete: 'paystack_secret_key',
   secretWebhook: 'paystack_webhook_secret',
   sousCompte: (restaurantId: string) => `paystack.${restaurantId}.subaccount_code`,
+  /** Frais ajoutés au client (25/11), en pourcentage. */
+  fraisMobileMoney: 'paystack_frais_mobile_money',
+  fraisCarte: 'paystack_frais_carte',
+  fraisSupplement: 'paystack_frais_supplement',
 } as const;
 
 export interface ConfigPaystack {
   cle: string | null;
   mode: 'test' | 'live' | null;
   secretsWebhook: string[];
+  /** Taux des frais ajoutés au client ; le supplément borne aussi la part du compte principal. */
+  frais: TauxFraisPaystack;
 }
 
 /** Sous-compte lu chez Paystack et gardé en mémoire (deux serveurs partagent la base, pas la mémoire). */
@@ -71,7 +83,13 @@ export class PaystackService {
   async config(): Promise<ConfigPaystack> {
     const maintenant = Date.now();
     if (this.configEnCache && this.configEnCache.expire > maintenant) return this.configEnCache.valeur;
-    const valeurs = await this.settings.getMany([CLES_PAYSTACK.cleSecrete, CLES_PAYSTACK.secretWebhook]);
+    const valeurs = await this.settings.getMany([
+      CLES_PAYSTACK.cleSecrete,
+      CLES_PAYSTACK.secretWebhook,
+      CLES_PAYSTACK.fraisMobileMoney,
+      CLES_PAYSTACK.fraisCarte,
+      CLES_PAYSTACK.fraisSupplement,
+    ]);
     const brute = (valeurs[CLES_PAYSTACK.cleSecrete] || process.env.PAYSTACK_SECRET_KEY || '').trim();
     let mode = modeDeCle(brute);
     if (mode === 'live' && process.env.NODE_ENV !== 'production' && process.env.PAYSTACK_LIVE_HORS_PRODUCTION !== 'true') {
@@ -81,7 +99,12 @@ export class PaystackService {
     const secrets = [valeurs[CLES_PAYSTACK.secretWebhook], process.env.PAYSTACK_WEBHOOK_SECRET]
       .map((s) => (s ?? '').trim())
       .filter((s) => /^whsec_[A-Za-z0-9_-]{8,}$/.test(s));
-    const valeur: ConfigPaystack = { cle: mode ? brute : null, mode, secretsWebhook: [...new Set(secrets)] };
+    const frais: TauxFraisPaystack = {
+      mobileMoney: lireTaux(valeurs[CLES_PAYSTACK.fraisMobileMoney], TAUX_FRAIS_DEFAUT.mobileMoney),
+      carte: lireTaux(valeurs[CLES_PAYSTACK.fraisCarte], TAUX_FRAIS_DEFAUT.carte),
+      supplement: lireTaux(valeurs[CLES_PAYSTACK.fraisSupplement], TAUX_FRAIS_DEFAUT.supplement),
+    };
+    const valeur: ConfigPaystack = { cle: mode ? brute : null, mode, secretsWebhook: [...new Set(secrets)], frais };
     this.configEnCache = { valeur, expire: maintenant + TTL_CONFIG_MS };
     return valeur;
   }
@@ -165,8 +188,8 @@ export class PaystackService {
     const code = await this.codeSousCompte(restaurantId);
     if (!code) return { code: null, motif: 'NON_RELIE' };
     try {
-      const s = await this.lireSousCompte(code);
-      return { code, motif: motifSousCompteInutilisable(s) };
+      const [s, { frais }] = await Promise.all([this.lireSousCompte(code), this.config()]);
+      return { code, motif: motifSousCompteInutilisable(s, frais.supplement) };
     } catch (e) {
       this.logger.warn(`Sous-compte ${code} illisible (${(e as Error).message}).`);
       return { code, motif: 'ILLISIBLE' };
@@ -186,12 +209,18 @@ export class PaystackService {
     order: { id: string; reference: string; amount: number; restaurant_id: string; customer_id: string };
     email: string | null;
     canal: 'APP' | 'WEB';
+    /** Moyen choisi par le client : il fixe les frais, et la page ne propose que lui. */
+    moyen: MoyenPaystack;
     callbackUrl: string;
-  }): Promise<{ authorization_url: string; reference: string }> {
-    const { order } = params;
+  }): Promise<{ authorization_url: string; reference: string; montant: number; frais: number; total: number; moyen: MoyenPaystack }> {
+    const { order, moyen } = params;
     const montant = Math.round(Number(order.amount));
-    const unites = versUnitePaystack(montant);
-    if (unites === null) throw new BadRequestException('Montant de la commande invalide pour un paiement en ligne.');
+    // Paystack n'ajoute rien : le client paie la commande plus les frais du
+    // moyen choisi (taux et supplément réglés au back-office).
+    const frais = fraisClient(montant, moyen, (await this.config()).frais);
+    const total = montant + frais;
+    const unites = versUnitePaystack(total);
+    if (unites === null || montant < 1) throw new BadRequestException('Montant de la commande invalide pour un paiement en ligne.');
 
     const { code, motif } = await this.sousCompteUtilisable(order.restaurant_id);
     if (!code || motif) {
@@ -207,6 +236,8 @@ export class PaystackService {
         fournisseur: FournisseurPaiement.PAYSTACK,
         reference,
         montant,
+        frais,
+        moyen,
         restaurant_id: order.restaurant_id,
         sous_compte: code,
         canal: params.canal,
@@ -219,7 +250,8 @@ export class PaystackService {
       currency: DEVISE_PAYSTACK,
       reference,
       callback_url: params.callbackUrl,
-      channels: [...CANAUX_PAYSTACK],
+      // Un seul moyen proposé : celui dont les frais viennent d'être calculés.
+      channels: CANAUX_PAYSTACK.filter((c) => c === moyen),
       subaccount: code,
       // Frais Paystack portés par le sous-compte : rien sur le compte principal.
       bearer: 'subaccount',
@@ -228,12 +260,26 @@ export class PaystackService {
         order_reference: order.reference,
         restaurant_id: order.restaurant_id,
         canal: params.canal,
+        montant_commande: montant,
+        frais,
         cancel_action: params.callbackUrl,
       }),
     };
     let data: unknown;
     try {
-      ({ data } = await this.appeler('POST', '/transaction/initialize', corps));
+      try {
+        ({ data } = await this.appeler('POST', '/transaction/initialize', corps));
+      } catch (e) {
+        // Paystack juge l'e-mail du client invalide (faute de frappe, domaine
+        // inconnu) : le paiement ne doit pas en dépendre. Relancé une fois
+        // avec l'adresse technique.
+        const adresse = emailTechnique(order.customer_id);
+        if (!(e instanceof ErreurPaystack) || e.nature !== 'REFUS' || !/email/i.test(e.messagePaystack ?? '') || corps.email === adresse) {
+          throw e;
+        }
+        this.logger.warn(`E-mail du client refusé par Paystack pour ${order.reference} : adresse technique utilisée.`);
+        ({ data } = await this.appeler('POST', '/transaction/initialize', { ...corps, email: adresse }));
+      }
     } catch (e) {
       await this.prisma.tentativePaiement.update({ where: { reference }, data: { statut: 'ECHEC' } }).catch(() => undefined);
       this.logger.error(`Initialisation Paystack refusée pour ${order.reference} : ${(e as Error).message}`);
@@ -248,7 +294,7 @@ export class PaystackService {
       this.logger.error(`Réponse Paystack inattendue à l'initialisation de ${order.reference}.`);
       throw new BadRequestException("Le paiement en ligne n'a pas pu être lancé. Réessayez dans un instant.");
     }
-    return { authorization_url: url, reference };
+    return { authorization_url: url, reference, montant, frais, total, moyen };
   }
 
   /** Lien de paiement en https sur l'hôte de Paystack (http admis hors production, pour le faux local). */
@@ -320,6 +366,11 @@ export class PaystackService {
       t = await this.verifier(reference);
     } catch (e) {
       if (e instanceof ErreurPaystack && e.nature === 'INTROUVABLE') {
+        // Paystack ne connaît pas cette référence : la tentative ne paiera
+        // jamais. Classée en échec, le filet ne la revérifie plus.
+        await this.prisma.tentativePaiement
+          .update({ where: { reference }, data: { statut: 'ECHEC', verifiee_at: new Date() } })
+          .catch(() => undefined);
         throw new BadRequestException('Transaction non trouvée chez Paystack.');
       }
       throw new ServiceUnavailableException('Paystack ne répond pas.');
@@ -333,7 +384,7 @@ export class PaystackService {
       this.logger.error(`Transaction Paystack ${reference} refusée pour la commande ${orderId} : ${refus}.`);
       throw new BadRequestException(`Transaction refusée : ${refus}.`);
     }
-    return { transaction: t, restaurantId: tentative.restaurant_id };
+    return { transaction: t, restaurantId: tentative.restaurant_id, frais: tentative.frais };
   }
 
   // ---------------------------------------------------------------------------

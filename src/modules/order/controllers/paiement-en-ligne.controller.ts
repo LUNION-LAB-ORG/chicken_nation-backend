@@ -19,7 +19,7 @@ import type { Request } from 'express';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import { PaiementEnLigneService, compatiblePaystack } from 'src/paystack/paiement-en-ligne.service';
-import { REFERENCE_TENTATIVE } from 'src/paystack/paystack.rules';
+import { REFERENCE_TENTATIVE, lireMoyen } from 'src/paystack/paystack.rules';
 import { PaystackService } from 'src/paystack/paystack.service';
 import { callbackAppli, callbackSite, lienProfondAccepte } from 'src/paystack/retour-paiement.rules';
 import { KkiapayOrderListenerService } from '../listeners/kkiapay-order.listener.service';
@@ -37,7 +37,8 @@ const canalDe = (req: Request): 'APP' | 'WEB' =>
  *    est-elle proposée (réglage du back-office, version de l'appli,
  *    sous-compte du restaurant) ;
  *  - `POST /paiement-en-ligne/paystack/initialiser` : lance la page de
- *    paiement Paystack d'une commande du client ;
+ *    paiement Paystack d'une commande du client, pour le moyen choisi
+ *    (`moyen` : mobile_money ou card), et rend les frais ajoutés et le total ;
  *  - `POST /paiement-en-ligne/paystack/verifier` : au retour du client,
  *    revérifie chez Paystack et confirme la commande (le webhook fait de même).
  */
@@ -63,7 +64,7 @@ export class PaiementEnLigneController {
   @UseGuards(JwtCustomerAuthGuard)
   @HttpCode(200)
   @ApiOperation({ summary: "Lance le paiement Paystack d'une commande du client" })
-  async initialiser(@Req() req: Request, @Body() body: { order_id?: string; retour?: string }) {
+  async initialiser(@Req() req: Request, @Body() body: { order_id?: string; retour?: string; moyen?: string }) {
     const client = req.user as Customer;
     const orderId = body?.order_id;
     if (typeof orderId !== 'string' || !isUUID(orderId)) throw new BadRequestException('Commande invalide.');
@@ -132,6 +133,8 @@ export class PaiementEnLigneController {
       },
       email: order.email || order.customer?.email || null,
       canal: canal === 'WEB' || order.channel === OrderChannel.WEB ? 'WEB' : 'APP',
+      // Moyen choisi par le client (Mobile Money par défaut) : il fixe les frais.
+      moyen: lireMoyen(body?.moyen),
       callbackUrl,
     });
   }

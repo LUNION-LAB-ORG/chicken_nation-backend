@@ -903,12 +903,16 @@ export class PaiementsService {
           notPaidReason: `Paystack: paiement non abouti (${t.statutPaystack})`,
         };
       }
+      // Le client a payé la commande plus les frais du moyen choisi (figés
+      // sur la tentative) : `amount` est la part de la commande, `fees` les
+      // frais ajoutés, `total` ce qui a été débité.
+      const paye = t.montant ?? 0;
+      const fraisAjoutes = Math.min(Math.max(0, verifie.frais), paye);
       transaction = {
         transactionId: t.reference,
-        amount: t.montant ?? 0,
-        fees: t.frais,
-        // Le client paie le montant ; les frais sont retenus sur le sous-compte.
-        total: t.montant ?? 0,
+        amount: paye - fraisAjoutes,
+        fees: fraisAjoutes,
+        total: paye,
         source: t.mode,
         source_common_name: t.source,
         client: t.client ? JSON.stringify(t.client) : null,
@@ -1141,7 +1145,8 @@ export class PaiementsService {
       if (paiement.fournisseur === FournisseurPaiement.PAYSTACK) {
         const { statut } = await this.paystack.rembourser({
           transaction: paiement.reference,
-          montant: Math.round(paiement.amount),
+          // Tout ce que le client a payé, frais compris.
+          montant: Math.round(paiement.total || paiement.amount),
           reference: referenceRemboursementPaystack(paiement.id),
           note: 'Commande annulée',
         });

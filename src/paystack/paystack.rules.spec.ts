@@ -2,8 +2,13 @@ import { createHmac } from 'node:crypto';
 import { PaiementMode, PaiementStatus } from '@prisma/client';
 import {
   REFERENCE_TENTATIVE,
+  TAUX_FRAIS_DEFAUT,
   depuisUnitePaystack,
   emailPourPaystack,
+  fraisClient,
+  lireTaux,
+  messageSousCompte,
+  tauxClient,
   lireSousCompte,
   lireTransaction,
   masquerCompte,
@@ -35,6 +40,33 @@ describe('Paystack : montants en XOF (multipliés par 100, docs 25/11)', () => {
   });
 });
 
+describe('Paystack : frais ajoutés au client (25/11)', () => {
+  it('tarifs par défaut : Mobile Money 2,3 % + 1 %, carte 3,8 % + 1 %', () => {
+    expect(TAUX_FRAIS_DEFAUT).toEqual({ mobileMoney: 2.3, carte: 3.8, supplement: 1 });
+    expect(tauxClient(TAUX_FRAIS_DEFAUT, 'mobile_money')).toBe(3.3);
+    expect(tauxClient(TAUX_FRAIS_DEFAUT, 'card')).toBe(4.8);
+  });
+  it('arrondi au franc supérieur, sans erreur de virgule', () => {
+    // 10 000 F à 3,3 % : 330 F tout rond (jamais 331).
+    expect(fraisClient(10000, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(330);
+    expect(fraisClient(10000, 'card', TAUX_FRAIS_DEFAUT)).toBe(480);
+    // 4 550 F à 3,3 % : 150,15 F → 151 F.
+    expect(fraisClient(4550, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(151);
+    expect(fraisClient(1, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(1);
+    expect(fraisClient(0, 'mobile_money', TAUX_FRAIS_DEFAUT)).toBe(0);
+    expect(fraisClient(10000, 'mobile_money', { mobileMoney: 0, carte: 0, supplement: 0 })).toBe(0);
+  });
+  it('taux lus dans les réglages : virgule acceptée, hors bornes ou illisible → défaut', () => {
+    expect(lireTaux('2,3', 9)).toBe(2.3);
+    expect(lireTaux('4.567', 9)).toBe(4.57);
+    expect(lireTaux('0', 9)).toBe(0);
+    expect(lireTaux('', 9)).toBe(9);
+    expect(lireTaux('abc', 9)).toBe(9);
+    expect(lireTaux('-1', 9)).toBe(9);
+    expect(lireTaux('45', 9)).toBe(9);
+  });
+});
+
 describe('Paystack : e-mail, référence, clé', () => {
   it("e-mail du client s'il est valide ; sinon une adresse technique stable qui ne révèle rien", () => {
     expect(emailPourPaystack('awa@exemple.ci', 'c1')).toBe('awa@exemple.ci');
@@ -42,6 +74,11 @@ describe('Paystack : e-mail, référence, clé', () => {
     expect(a).toMatch(/^[0-9a-f]{24}@clients\.chicken-nation\.com$/);
     expect(emailPourPaystack('', 'c1')).toBe(a);
     expect(emailPourPaystack('pas-un-email', 'c2')).not.toBe(a);
+    // Domaines fictifs ou sans extension en lettres : Paystack les refuse (vu le 25/11 en mode test).
+    expect(emailPourPaystack('koffi@exemple.test', 'c1')).toBe(a);
+    expect(emailPourPaystack('koffi@serveur.local', 'c1')).toBe(a);
+    expect(emailPourPaystack('koffi@gmail', 'c1')).toBe(a);
+    expect(emailPourPaystack('koffi@gmail.c0m', 'c1')).toBe(a);
   });
   it('référence : commande + suffixe aléatoire, caractères permis par Paystack', () => {
     const r = referenceTentative('ORD-261125-44839', () => 'a1b2c3d4');
@@ -68,17 +105,28 @@ describe('Paystack : sous-compte du restaurant', () => {
     active: true,
     currency: 'XOF',
   };
-  it('utilisable : actif, en XOF, 0 % pour le compte principal ; numéro masqué', () => {
+  it('utilisable : actif, en XOF, compte principal à 0 % ; numéro masqué', () => {
     const s = lireSousCompte(brut)!;
     expect(s.compte).toBe('••••••0707');
     expect(motifSousCompteInutilisable(s)).toBeNull();
+    expect(motifSousCompteInutilisable(s, 1)).toBeNull();
   });
-  it('refusé dès que le compte principal garde une part, inactif, autre devise ou inconnu', () => {
-    expect(motifSousCompteInutilisable(lireSousCompte({ ...brut, percentage_charge: 2.5 }))).toBe('PART_COMPTE_PRINCIPAL');
-    expect(motifSousCompteInutilisable(lireSousCompte({ ...brut, percentage_charge: undefined }))).toBe('PART_COMPTE_PRINCIPAL');
-    expect(motifSousCompteInutilisable(lireSousCompte({ ...brut, active: false }))).toBe('INACTIF');
-    expect(motifSousCompteInutilisable(lireSousCompte({ ...brut, currency: 'GHS' }))).toBe('DEVISE');
-    expect(motifSousCompteInutilisable(lireSousCompte({}))).toBe('INCONNU');
+  it('compte principal à 1 % (99 % pour le restaurant) : accepté avec un supplément de 1 %, refusé sans', () => {
+    const s = lireSousCompte({ ...brut, percentage_charge: 1 });
+    expect(motifSousCompteInutilisable(s, 1)).toBeNull();
+    expect(motifSousCompteInutilisable(s, 0)).toBe('PART_COMPTE_PRINCIPAL');
+    expect(messageSousCompte('PART_COMPTE_PRINCIPAL', s, 0)).toBe(
+      'Ce sous-compte laisse 1 % au compte principal : le maximum est le supplément réglé (0 %). Corrigez le pourcentage dans le tableau de bord Paystack, ou le supplément.',
+    );
+  });
+  it('refusé si le compte principal garde plus que le supplément, inactif, autre devise ou inconnu', () => {
+    expect(motifSousCompteInutilisable(lireSousCompte({ ...brut, percentage_charge: 2.5 }), 1)).toBe('PART_COMPTE_PRINCIPAL');
+    // 99 saisi par erreur à la place de 1 : le compte principal prendrait presque tout.
+    expect(motifSousCompteInutilisable(lireSousCompte({ ...brut, percentage_charge: 99 }), 1)).toBe('PART_COMPTE_PRINCIPAL');
+    expect(motifSousCompteInutilisable(lireSousCompte({ ...brut, percentage_charge: undefined }), 1)).toBe('PART_COMPTE_PRINCIPAL');
+    expect(motifSousCompteInutilisable(lireSousCompte({ ...brut, active: false }), 1)).toBe('INACTIF');
+    expect(motifSousCompteInutilisable(lireSousCompte({ ...brut, currency: 'GHS' }), 1)).toBe('DEVISE');
+    expect(motifSousCompteInutilisable(lireSousCompte({}), 1)).toBe('INCONNU');
   });
   it('masquage', () => {
     expect(masquerCompte('1234')).toBe('1234');

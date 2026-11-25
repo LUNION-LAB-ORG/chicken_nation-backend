@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { SettingsService } from 'src/modules/settings/settings.service';
+import { TauxFraisPaystack, tauxClient } from './paystack.rules';
 import { PaystackService } from './paystack.service';
 
 /** Réglages du back-office (table settings). */
@@ -17,11 +18,23 @@ export interface ReglagesPaiementEnLigne {
 
 export type MotifIndisponible = 'DESACTIVE' | 'MISE_A_JOUR' | 'RESTAURANT' | 'NON_CONFIGURE';
 
+/** Frais ajoutés au client selon le moyen, en pourcentage du montant de la commande (Paystack). */
+export interface FraisClientPaiement {
+  mobile_money: number;
+  carte: number;
+}
+
 export interface DisponibilitePaiementEnLigne {
   disponible: boolean;
   fournisseur: Fournisseur;
   motif: MotifIndisponible | null;
   message: string | null;
+  /** Paystack : frais ajoutés selon le moyen choisi. null avec KKiaPay. */
+  frais: FraisClientPaiement | null;
+}
+
+export function fraisPourLeClient(taux: TauxFraisPaystack): FraisClientPaiement {
+  return { mobile_money: tauxClient(taux, 'mobile_money'), carte: tauxClient(taux, 'card') };
 }
 
 /**
@@ -67,13 +80,17 @@ export function verdictDisponibilite(params: {
   paystackConfigure: boolean;
   /** Paystack : sous-compte du restaurant utilisable ; null si aucun restaurant n'est encore connu. */
   sousCompteUtilisable: boolean | null;
+  /** Paystack : frais ajoutés au client. */
+  frais?: FraisClientPaiement | null;
 }): DisponibilitePaiementEnLigne {
   const { reglages } = params;
+  const frais = reglages.fournisseur === 'paystack' ? params.frais ?? null : null;
   const indisponible = (motif: MotifIndisponible): DisponibilitePaiementEnLigne => ({
     disponible: false,
     fournisseur: reglages.fournisseur,
     motif,
     message: MESSAGES_INDISPONIBLE[motif],
+    frais,
   });
   if (!reglages.actif) return indisponible('DESACTIVE');
   if (reglages.fournisseur === 'paystack') {
@@ -81,7 +98,7 @@ export function verdictDisponibilite(params: {
     if (!params.paystackConfigure) return indisponible('NON_CONFIGURE');
     if (params.sousCompteUtilisable === false) return indisponible('RESTAURANT');
   }
-  return { disponible: true, fournisseur: reglages.fournisseur, motif: null, message: null };
+  return { disponible: true, fournisseur: reglages.fournisseur, motif: null, message: null, frais };
 }
 
 /**
@@ -121,6 +138,8 @@ export class PaiementEnLigneService {
     const reglages = await this.reglages();
     let paystackConfigure = false;
     let sousCompteUtilisable: boolean | null = null;
+    let frais: FraisClientPaiement | null = null;
+    if (reglages.fournisseur === 'paystack') frais = fraisPourLeClient((await this.paystack.config()).frais);
     if (reglages.actif && reglages.fournisseur === 'paystack' && params.compatiblePaystack) {
       paystackConfigure = !!(await this.paystack.config()).cle;
       if (paystackConfigure && params.restaurantId) {
@@ -128,7 +147,7 @@ export class PaiementEnLigneService {
         sousCompteUtilisable = !!code && !motif;
       }
     }
-    return verdictDisponibilite({ reglages, compatiblePaystack: params.compatiblePaystack, paystackConfigure, sousCompteUtilisable });
+    return verdictDisponibilite({ reglages, compatiblePaystack: params.compatiblePaystack, paystackConfigure, sousCompteUtilisable, frais });
   }
 
   /** Refuse (400, message pour le client) une commande à payer en ligne qui ne peut pas l'être. */

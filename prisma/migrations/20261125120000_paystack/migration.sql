@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS "TentativePaiement" (
   "fournisseur" "FournisseurPaiement" NOT NULL,
   "reference" VARCHAR(100) NOT NULL,
   "montant" INTEGER NOT NULL,
+  "frais" INTEGER NOT NULL DEFAULT 0,
+  "moyen" VARCHAR(20),
   "restaurant_id" UUID,
   "sous_compte" VARCHAR(100),
   "canal" VARCHAR(20) NOT NULL,
@@ -23,6 +25,10 @@ CREATE TABLE IF NOT EXISTS "TentativePaiement" (
   "updated_at" TIMESTAMP(6) NOT NULL,
   CONSTRAINT "TentativePaiement_pkey" PRIMARY KEY ("id")
 );
+
+-- Table déjà créée par une première version de cette migration (banc d'essai).
+ALTER TABLE "TentativePaiement" ADD COLUMN IF NOT EXISTS "frais" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "TentativePaiement" ADD COLUMN IF NOT EXISTS "moyen" VARCHAR(20);
 
 CREATE UNIQUE INDEX IF NOT EXISTS "TentativePaiement_reference_key" ON "TentativePaiement"("reference");
 CREATE INDEX IF NOT EXISTS "TentativePaiement_order_id_idx" ON "TentativePaiement"("order_id");
