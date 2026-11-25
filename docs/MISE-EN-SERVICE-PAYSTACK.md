@@ -14,13 +14,16 @@ encaissant sur son sous-compte. Rien ne change tant que le prestataire reste
   restaurant : 1 % pour le compte principal.)
 - Frais de paiement ajoutés au client : Paystack n'ajoute rien au montant. Le
   client choisit Mobile Money ou carte avant de payer, et paie la commande
-  (plats, frais de service, livraison) plus le taux de ce moyen. Défauts :
-  Mobile Money 2,3 %, carte 3,8 %, réglables au back-office avec les frais
-  de service. Arrondi au franc supérieur. La page de paiement ne propose
-  ensuite que le moyen choisi.
+  (plats, frais de service, livraison) plus les frais de ce moyen. Défauts :
+  Mobile Money 2,3 %, carte 4,5 %, réglables au back-office avec les frais
+  de service. La page de paiement ne propose ensuite que le moyen choisi.
+  Paystack prend son pourcentage sur le total débité : le client paie donc
+  commande / (1 − taux), au franc supérieur, pour que le restaurant reçoive
+  au moins sa commande.
   Carte locale ou internationale : inconnue avant la saisie de la carte, un
-  seul taux « carte » s'applique (Paystack prend 4,5 % sur une carte
-  internationale).
+  seul taux « carte » s'applique. Paystack prend 3,8 % sur une carte locale
+  et 4,5 % sur une carte internationale ; 4,5 % couvre les deux (le
+  restaurant reçoit un peu plus sur une carte locale).
 - Sur un paiement, « montant » est la part de la commande, « frais » ce que le
   client a payé en plus, « total » ce qui a été débité.
 - Montants en XOF, envoyés multipliés par 100 (règle de Paystack).
@@ -76,17 +79,18 @@ Les valeurs par défaut sont celles de la production.
 
 ## Vérifié en mode test (25/11, clé `sk_test_`)
 
-Sous-comptes de test à 100 % (0 % pour le compte principal), frais de service 1 %.
+Sous-comptes de test à 100 % (0 % pour le compte principal), frais de service
+1 %, 5 000 F de plats, soit une commande de 5 050 F.
 
-| Plats | Commande | Moyen | Client débité | Paystack | Sous-compte |
-| --- | --- | --- | --- | --- | --- |
-| 10 000 F | 10 100 F | Wave | 10 333 F | 238 F | 10 095 F |
-| 10 000 F | 10 100 F | Carte | 10 484 F | 398 F | 10 086 F |
-| 5 000 F | 5 050 F | Wave, Orange, MTN | 5 167 F | 119 F | 5 048 F |
-| 5 000 F | 5 050 F | Carte | 5 242 F | 199 F | 5 043 F |
+| Moyen | Client débité | Paystack | Sous-compte |
+| --- | --- | --- | --- |
+| Wave | 5 169 F | 119 F | 5 050 F |
+| Carte de test (locale, 3,8 % chez Paystack) | 5 288 F | 201 F | 5 087 F |
 
-- Paystack calcule ses frais sur le total débité, frais compris : le
-  sous-compte reçoit quelques francs de moins que la commande (2 à 14 F ici).
+Pour 10 000 F de plats (commande de 10 100 F) : 10 338 F en Mobile Money,
+10 576 F par carte. Orange Money et MTN ont été essayés avec le calcul
+précédent, au même tarif que Wave.
+
 - Un refus de carte laisse le client sur la page Paystack, qui propose de
   réessayer.
 - Remboursement : accepté pour tout ce que le client a payé, « entièrement
