@@ -26,8 +26,10 @@ export function lienProfondAccepte(vers: unknown, production = process.env.NODE_
   const m = /^([a-z][a-z0-9+.-]*):\/\//i.exec(v);
   if (!m) return null;
   const schema = m[1].toLowerCase();
-  const permis = [schemaAppli(), ...(production ? [] : ['exp', 'exps'])];
-  if (!permis.includes(schema)) return null;
+  // Hors production : Expo Go (`exp://`) et les versions de développement
+  // (`exp+<nom>://`), pour les essais dans le simulateur.
+  const essai = !production && (schema === 'exp' || schema === 'exps' || schema.startsWith('exp+'));
+  if (schema !== schemaAppli() && !essai) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i.test(v)) return null;
   return v;
 }

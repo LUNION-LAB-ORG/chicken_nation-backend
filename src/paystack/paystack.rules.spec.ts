@@ -240,6 +240,9 @@ describe('Retour après la page de paiement', () => {
     expect(lienProfondAccepte('chickennation://paiement-retour', true)).toBe('chickennation://paiement-retour');
     expect(lienProfondAccepte('exp://192.168.1.5:8081/--/paiement-retour', false)).toBeTruthy();
     expect(lienProfondAccepte('exp://192.168.1.5:8081/--/paiement-retour', true)).toBeNull();
+    // Version de développement (expo-dev-client) : hors production seulement.
+    expect(lienProfondAccepte('exp+chicken-nation://paiement-retour', false)).toBeTruthy();
+    expect(lienProfondAccepte('exp+chicken-nation://paiement-retour', true)).toBeNull();
     expect(lienProfondAccepte('https://pirate.example/x', false)).toBeNull();
     expect(lienProfondAccepte('javascript://alert(1)', false)).toBeNull();
     expect(lienProfondAccepte('chickennation://x" onload="y', true)).toBeNull();
