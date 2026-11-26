@@ -72,11 +72,15 @@ function monterV2({ client = clientStandard, rewards = [] as Record<string, unkn
       calculateTax: jest.fn().mockResolvedValue(0),
       generateOrderReference: jest.fn().mockReturnValue('ORD-X'),
       getOrderStatus: jest.fn().mockReturnValue(OrderStatus.PENDING),
-      // Types et paiement de l'application (26/11) : tout permis, ces tests portent sur autre chose.
-      reglagesCommandeAppli: jest.fn().mockResolvedValue({
-        DELIVERY: { actif: true, paiement: 'LES_DEUX', message: null },
-        PICKUP: { actif: true, paiement: 'LES_DEUX', message: null },
-        TABLE: { actif: true, paiement: 'LES_DEUX', message: null },
+      // Types, paiement et parcours (26/11, application et site) : tout permis,
+      // commande directe ; ces tests portent sur autre chose.
+      reglagesCommande: jest.fn().mockResolvedValue({
+        types: {
+          DELIVERY: { actif: true, paiement: 'LES_DEUX', message: null },
+          PICKUP: { actif: true, paiement: 'LES_DEUX', message: null },
+          TABLE: { actif: true, paiement: 'LES_DEUX', message: null },
+        },
+        reception: 'DIRECTE',
       }),
     },
     orderHelper: { remiseFidelite: jest.fn().mockResolvedValue({ remise: 0, points: 0 }) },

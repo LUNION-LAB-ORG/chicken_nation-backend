@@ -94,8 +94,8 @@ import {
 } from '../helpers/canal-commande.rules';
 import { ConditionsCommande, conditionsCommandePubliques } from '../helpers/conditions-commande.rules';
 import { noteDeCommande } from '../helpers/note-commande.rules';
-import { refusCommandeAppli } from '../helpers/reglages-commande-appli.rules';
-import { A_CONFIRMER_WHERE, REFUS_PAIEMENT_SITE } from '../helpers/paiement-livraison.rules';
+import { parcoursCommande, ParcoursCommande, refusCommande } from '../helpers/reglages-commande.rules';
+import { A_CONFIRMER_WHERE, REFUS_PAIEMENT_SITE, siteOuRepere } from '../helpers/paiement-livraison.rules';
 import {
   cadeauxDesLignes,
   cadeauxRefactures,
@@ -228,9 +228,8 @@ export class OrderService {
 
   /**
    * `canal` : APP pour l'application, WEB pour le site. Il ne vient que d'un
-   * en-tête déclaratif ; il ne donne donc aucun droit, il en retire : sur le
-   * site, le paiement est en ligne, ou à la livraison sous conditions
-   * (`controlerPaiementSite`).
+   * en-tête déclaratif et ne donne aucun droit. Depuis le 26/11, les deux
+   * suivent les mêmes réglages (`controlerCommandeClient`).
    */
   async createv2(
     customer_id: string,
@@ -246,16 +245,10 @@ export class OrderService {
     // quand le client commande pour une autre personne.
     const note = noteDeCommande(createOrderDto.note);
 
-    // Site web : en ligne, ou à la livraison sous conditions. L'application
-    // n'est pas concernée : elle accepte toujours OFFLINE, sans contrôle.
-    if (canal === OrderChannel.WEB) {
-      await this.controlerPaiementSite(customer_id, payment_method, type);
-    }
-    // Application (26/11) : type de commande proposé et moyen de paiement
-    // permis, réglés au back-office (`reglages-commande-appli.rules.ts`).
-    if (canal === OrderChannel.APP) {
-      await this.controlerCommandeAppli(payment_method, type);
-    }
+    // Application et site (26/11), même réglage : type de commande proposé,
+    // moyen de paiement permis, et parcours d'une commande à payer à la
+    // réception, directe ou après confirmation (`reglages-commande.rules.ts`).
+    const parcours = await this.controlerCommandeClient(canal, customer_id, payment_method, type);
 
     // 🚫 Livraison désactivée pour l'app (réglage backoffice temporaire).
     // createv2 = chemin EXCLUSIF de l'app → ne bloque jamais le call center.
@@ -398,14 +391,13 @@ export class OrderService {
 
     const orderNumber = await this.referenceLibre(() => this.orderHelperV2.generateOrderReference());
 
-    // Application, à payer à la réception (26/11, réglage du back-office) : la
-    // commande va directement au restaurant, donc ACCEPTÉE dès la création,
-    // comme une commande saisie par le personnel (cloche, points, promotion :
-    // `orderCreatedEventListener` les traite à la création). Celle du site
-    // reste en attente : le centre d'appels la confirme d'abord.
-    const directeAuRestaurant =
-      canal === OrderChannel.APP && (payment_method ?? PaymentMethod.OFFLINE) === PaymentMethod.OFFLINE;
-    const next_status = directeAuRestaurant
+    // À payer à la réception (26/11, réglage du back-office, application et
+    // site). « Directe » : la commande va au restaurant, donc ACCEPTÉE dès la
+    // création, comme une commande saisie par le personnel (cloche, points,
+    // promotion : `orderCreatedEventListener` les traite à la création).
+    // « Après confirmation » : elle reste en attente et porte le repère
+    // `a_confirmer`, le centre d'appels la confirme d'abord.
+    const next_status = parcours.directe
       ? OrderStatus.ACCEPTED
       : this.orderHelperV2.getOrderStatus(payment_method ?? PaymentMethod.OFFLINE, type);
     // 6. Sauvegarde en Base de données
@@ -451,6 +443,7 @@ export class OrderService {
           paied: false,
           auto: true,
           channel: canal,
+          a_confirmer: parcours.aConfirmer,
           order_items: {
             create: orderItems.map((item) => ({
               dish_id: item.dish_id,
@@ -582,66 +575,75 @@ export class OrderService {
   }
 
   /**
-   * PAIEMENT SUR LE SITE (19/10/2026) : en ligne, ou à la livraison.
+   * Commande de l'application ou du site (26/11, même réglage) :
+   *  1. le site dit toujours son moyen de paiement (ONLINE ou OFFLINE) ;
+   *  2. le type doit être proposé, coupure temporaire de la livraison comprise ;
+   *  3. le moyen de paiement doit être permis pour ce type ;
+   *  4. à payer à la réception, le réglage décide : directe au restaurant, ou
+   *     après confirmation du centre d'appels (`paiement-livraison.rules.ts`).
+   *     Dans ce dernier cas, une seule commande à confirmer à la fois par
+   *     client, comme pour le site depuis le 19/10.
    *
-   * Une commande du site à payer à la livraison est une COMMANDE À CONFIRMER
-   * (`paiement-livraison.rules.ts`) : le restaurant ne la voit pas, le centre
-   * d'appels appelle le client puis la transmet ou l'annule. Depuis un
-   * formulaire public, c'est la porte ouverte aux fausses commandes, d'où
-   * quatre contrôles, dans cet ordre :
-   *  1. un moyen de paiement connu ;
-   *  2. l'option ouverte dans Paramètres > Commandes (coupée en cas de
-   *     fausses commandes ou en l'absence du centre d'appels) ;
-   *  3. une livraison : c'est le livreur qui encaisse ; au retrait, le site
-   *     ne propose que le paiement en ligne (décision du client) ;
-   *  4. une seule commande à confirmer à la fois par client : ferme le double
-   *     onglet et l'envoi en rafale. « Modifier ma commande » annule d'abord
-   *     la précédente, il n'est donc pas gêné.
+   * Une commande à confirmer n'est pas vue du restaurant : le centre d'appels
+   * appelle le client, puis la transmet ou l'annule. Depuis un formulaire
+   * public, c'est la porte ouverte aux fausses commandes : d'où la limite
+   * d'une seule à la fois, qui ferme aussi le double onglet et l'envoi en
+   * rafale (« Modifier ma commande », sur le site, annule d'abord la
+   * précédente). Cette limite se lit avant la transaction : deux requêtes
+   * parties ensemble peuvent encore passer toutes les deux ; la relance les
+   * regroupe alors, et l'agent annule le doublon.
    *
-   * Le 4 se lit avant la transaction : deux requêtes parties ensemble
-   * peuvent encore passer toutes les deux. La relance les regroupe alors, et
-   * l'agent annule le doublon.
+   * Rend le parcours de la commande. Tout autre canal (aucun aujourd'hui) :
+   * ni contrôle ni parcours, le comportement d'avant.
    */
-  /**
-   * Commande de l'application (26/11) : le type doit être proposé et le moyen
-   * de paiement permis (Paramètres > Commandes).
-   *
-   * À payer à la réception, elle va DIRECTEMENT au restaurant (décision du
-   * client, 26/11) : ce n'est pas une commande à confirmer, contrairement à
-   * celle du site, que le centre d'appels appelle d'abord
-   * (`paiement-livraison.rules.ts`, canal WEB seulement).
-   */
-  private async controlerCommandeAppli(payment_method: PaymentMethod | undefined, type: OrderType): Promise<void> {
-    const coupure = type === OrderType.DELIVERY ? await this.deliveryFeeHelper.isAppDeliveryDisabled() : null;
-    const reglages = await this.orderHelperV2.reglagesCommandeAppli(coupure);
-    const refus = refusCommandeAppli(reglages, type, payment_method);
-    if (refus) throw new BadRequestException(refus);
-  }
-
-  private async controlerPaiementSite(
+  private async controlerCommandeClient(
+    canal: OrderChannel,
     customer_id: string,
     payment_method: PaymentMethod | undefined,
     type: OrderType,
-  ): Promise<void> {
-    if (payment_method !== PaymentMethod.ONLINE && payment_method !== PaymentMethod.OFFLINE) {
+  ): Promise<ParcoursCommande> {
+    if (canal !== OrderChannel.APP && canal !== OrderChannel.WEB) return { directe: false, aConfirmer: false };
+
+    if (
+      canal === OrderChannel.WEB &&
+      payment_method !== PaymentMethod.ONLINE &&
+      payment_method !== PaymentMethod.OFFLINE
+    ) {
       throw new BadRequestException(REFUS_PAIEMENT_SITE.moyenAbsent);
     }
-    if (payment_method === PaymentMethod.ONLINE) return;
 
-    if (!(await this.orderHelperV2.paiementLivraisonSiteActif())) {
+    const coupure = type === OrderType.DELIVERY ? await this.deliveryFeeHelper.isAppDeliveryDisabled() : null;
+    const { types, reception } = await this.orderHelperV2.reglagesCommande(coupure);
+
+    // Le site garde son message d'avant quand la livraison ne se paie qu'en ligne.
+    if (
+      canal === OrderChannel.WEB &&
+      type === OrderType.DELIVERY &&
+      payment_method === PaymentMethod.OFFLINE &&
+      types.DELIVERY.actif &&
+      types.DELIVERY.paiement === 'EN_LIGNE'
+    ) {
       throw new BadRequestException(REFUS_PAIEMENT_SITE.indisponible);
     }
-    if (type !== OrderType.DELIVERY) {
-      throw new BadRequestException(REFUS_PAIEMENT_SITE.livraisonSeulement);
+    const refus = refusCommande(types, type, payment_method, canal);
+    if (refus) throw new BadRequestException(refus);
+
+    const parcours = parcoursCommande(payment_method, reception);
+    if (parcours.aConfirmer) {
+      const enAttente = await this.prisma.order.findFirst({
+        where: { customer_id, ...A_CONFIRMER_WHERE },
+        orderBy: { created_at: 'desc' },
+        select: { reference: true },
+      });
+      if (enAttente) {
+        throw new ConflictException(
+          canal === OrderChannel.WEB
+            ? REFUS_PAIEMENT_SITE.dejaEnAttente(enAttente.reference)
+            : REFUS_PAIEMENT_SITE.dejaEnAttenteAppli(enAttente.reference),
+        );
+      }
     }
-    const enAttente = await this.prisma.order.findFirst({
-      where: { customer_id, ...A_CONFIRMER_WHERE },
-      orderBy: { created_at: 'desc' },
-      select: { reference: true },
-    });
-    if (enAttente) {
-      throw new ConflictException(REFUS_PAIEMENT_SITE.dejaEnAttente(enAttente.reference));
-    }
+    return parcours;
   }
 
   /**
@@ -2550,10 +2552,10 @@ export class OrderService {
      * Si l'agent change les articles ou la livraison, le total est refait et
      * l'agent est averti d'un cadeau désormais facturé.
      */
+    // Depuis le 26/11, de même pour une commande de l'application à
+    // confirmer (`a_confirmer`) : le client a validé ce total dans l'appli.
     const fraisAcceptesSurLeSite =
-      passeEnManuel &&
-      order.channel === OrderChannel.WEB &&
-      order.payment_method === PaymentMethod.OFFLINE;
+      passeEnManuel && siteOuRepere(order) && order.payment_method === PaymentMethod.OFFLINE;
 
     /**
      * CHANGER LE COUPON D'UNE COMMANDE (demande du 02/10).
@@ -4591,22 +4593,21 @@ export class OrderService {
    * `conditions-commande.rules.ts`.
    */
   async obtenirConditionsCommande(): Promise<ConditionsCommande> {
-    const [taux, livraison, paiementLivraison, coupureLivraison] = await Promise.all([
+    const [taux, livraison, coupureLivraison] = await Promise.all([
       this.orderHelperV2.getTaxRate(),
       this.deliveryFeeHelper.load(),
-      // Même lecture que le refus de `createv2` : le site ne propose jamais
-      // une option que la création refuserait.
-      this.orderHelperV2.paiementLivraisonSiteActif(),
       this.deliveryFeeHelper.isAppDeliveryDisabled(),
     ]);
+    // Types, paiement et parcours (26/11), application et site, coupure
+    // temporaire de la livraison comprise : mêmes lectures que le contrôle de
+    // `createv2`, pour ne jamais proposer ce que la création refuserait.
+    const { types, reception } = await this.orderHelperV2.reglagesCommande(coupureLivraison);
     return conditionsCommandePubliques({
       tauxFraisService: taux,
       grille: livraison.grid,
       zonesLivreurActives: livraison.turboZonesEnabled,
-      paiementLivraisonActif: paiementLivraison,
-      // Types et paiement de l'application (26/11), coupure temporaire de la
-      // livraison comprise : mêmes lectures que le contrôle de `createv2`.
-      typesAppli: await this.orderHelperV2.reglagesCommandeAppli(coupureLivraison),
+      types,
+      reception,
     });
   }
 }

@@ -1,5 +1,5 @@
 import type { IDeliveryFeeTier } from './delivery-fee.helper';
-import type { ReglagesCommandeAppli } from './reglages-commande-appli.rules';
+import type { ModeReception, ReglagesCommande } from './reglages-commande.rules';
 
 /**
  * CONDITIONS DE COMMANDE PUBLIQUES (05/10/2026).
@@ -20,16 +20,19 @@ import type { ReglagesCommandeAppli } from './reglages-commande-appli.rules';
  *    ne sert alors que de secours et le prix vient de la zone : l'afficher
  *    comme un tarif serait une promesse fausse. Le site décide (masquer, ou
  *    présenter comme indicative) ;
- *  - `paiement_livraison.disponible` : le paiement à la livraison est proposé
- *    sur le site (réglage `order_paiement_livraison_site`, lu par
- *    `OrderV2Helper.paiementLivraisonSiteActif` comme à la création). Un
- *    serveur plus ancien n'envoie pas ce champ : le site cache alors l'option.
- *
- *  - `appli.types` (26/11) : pour l'application, chaque type de commande
+ *  - `types` (26/11) : pour l'application ET le site, chaque type de commande
  *    (`DELIVERY`, `PICKUP`, `TABLE`) avec `actif`, `paiement` (`EN_LIGNE`,
  *    `A_LA_RECEPTION`, `LES_DEUX`) et, s'il n'est pas proposé, `message`
- *    (`reglages-commande-appli.rules.ts`). Un serveur plus ancien n'envoie pas
- *    ce champ : l'application garde alors livraison et à emporter, en ligne.
+ *    (`reglages-commande.rules.ts`). Un serveur plus ancien n'envoie pas ce
+ *    champ : chacun garde alors livraison et à emporter, en ligne ;
+ *  - `reception` (26/11) : `DIRECTE` ou `APRES_CONFIRMATION`, ce que devient
+ *    une commande à payer à la réception. Sert à dire au client, avant qu'il
+ *    commande, s'il sera appelé pour confirmer ;
+ *  - `paiement_livraison.disponible` : gardé pour le site déjà en ligne, qui
+ *    ne lit que lui. Vrai quand une livraison peut se payer à la livraison
+ *    (`types.DELIVERY.paiement` autre que `EN_LIGNE`) ;
+ *  - `appli.types` : le même contenu que `types`, sous le nom que lit
+ *    l'application construite le 26/11.
  *
  * Rien d'autre que les frais et la disponibilité du paiement à la livraison :
  * ni service de livraison par restaurant, ni clé, ni offre. Le prix réel d'une adresse reste donné par `/orders/frais-livraison`, et le
@@ -46,10 +49,14 @@ export interface ConditionsCommande {
   taux_frais_service: number | null;
   grille_frais: PalierPublic[];
   grille_frais_appliquee: boolean;
-  /** Paiement à la livraison proposé sur le site (livraison seulement). */
+  /** Une livraison peut se payer à la livraison (lu par le site déjà en ligne). */
   paiement_livraison: { disponible: boolean };
-  /** Types de commande et paiement permis dans l'application. */
-  appli: { types: ReglagesCommandeAppli };
+  /** Types de commande et paiement permis, application et site. */
+  types: ReglagesCommande;
+  /** Ce que devient une commande à payer à la réception. */
+  reception: ModeReception;
+  /** Ancien nom de `types`, lu par l'application construite le 26/11. */
+  appli: { types: ReglagesCommande };
 }
 
 /** Taux publié : un nombre fini et positif, sinon `null` (réglage mal saisi). */
@@ -105,14 +112,16 @@ export function conditionsCommandePubliques(reglages: {
   tauxFraisService: number | null | undefined;
   grille: readonly IDeliveryFeeTier[] | null | undefined;
   zonesLivreurActives: boolean;
-  paiementLivraisonActif: boolean;
-  typesAppli: ReglagesCommandeAppli;
+  types: ReglagesCommande;
+  reception: ModeReception;
 }): ConditionsCommande {
   return {
     taux_frais_service: tauxPublic(reglages.tauxFraisService),
     grille_frais: grillePublique(reglages.grille),
     grille_frais_appliquee: !reglages.zonesLivreurActives,
-    paiement_livraison: { disponible: reglages.paiementLivraisonActif === true },
-    appli: { types: reglages.typesAppli },
+    paiement_livraison: { disponible: reglages.types.DELIVERY.paiement !== 'EN_LIGNE' },
+    types: reglages.types,
+    reception: reglages.reception,
+    appli: { types: reglages.types },
   };
 }

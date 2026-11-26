@@ -23,7 +23,35 @@ import { EntityStatus, OrderChannel, OrderStatus, PaymentMethod, Prisma } from '
  * un SQL en `IS NOT DISTINCT FROM`. Le moteur en mémoire des tests raisonne
  * en logique à deux valeurs et ne voit pas ce piège : la vérification se fait
  * aussi sur une vraie base (recette R12).
+ *
+ * APPLICATION AUSSI (26/11, « paiement à la livraison : directe ou après
+ * confirmation », même réglage pour l'appli et le site). Quand le réglage
+ * demande une confirmation, `createv2` pose `Order.a_confirmer` sur la
+ * commande à payer à la réception, quel que soit son canal. Une commande est
+ * donc à confirmer si elle vient du site (WEB), comme avant, OU si elle porte
+ * ce repère. Le repère vaut faux sur toutes les commandes antérieures : les
+ * anciennes commandes en espèces de l'application ne changent pas d'état.
+ * `a_confirmer` est obligatoire en base : jamais NULL, un complément simple.
  */
+
+/** Canal du site OU repère posé à la création : les deux façons d'être « à confirmer ». */
+export const SITE_OU_REPERE: Prisma.OrderWhereInput[] = [{ channel: OrderChannel.WEB }, { a_confirmer: true }];
+
+/**
+ * Complément EXACT de `SITE_OU_REPERE`, en positif : ni le site (canal vide
+ * compris), ni le repère.
+ */
+export const NI_SITE_NI_REPERE: Prisma.OrderWhereInput = {
+  AND: [{ a_confirmer: false }, { OR: [{ channel: null }, { channel: { not: OrderChannel.WEB } }] }],
+};
+
+/** Même chose en SQL, jamais NULL. */
+const siteOuRepereSql = (alias: string): string =>
+  `(${alias}."channel" IS NOT DISTINCT FROM 'WEB' OR ${alias}."a_confirmer" IS TRUE)`;
+
+/** Même chose sur une commande en mémoire. Sans repère lu : le canal seul, comme avant. */
+export const siteOuRepere = (commande: { channel?: OrderChannel | string | null; a_confirmer?: boolean | null }): boolean =>
+  commande.channel === OrderChannel.WEB || commande.a_confirmer === true;
 
 /** Réglage de Paramètres > Commandes : « 1 » proposé, « 0 » coupé. */
 export const REGLAGE_PAIEMENT_LIVRAISON_SITE = 'order_paiement_livraison_site';
@@ -54,14 +82,15 @@ export function paiementLivraisonActif(valeur?: string | null): boolean {
 export const REFUS_PAIEMENT_SITE = {
   /** 400 : ni ONLINE ni OFFLINE. */
   moyenAbsent: 'Choisissez un moyen de paiement.',
-  /** 400 : réglage coupé. */
+  /** 400 : livraison à payer en ligne seulement (réglage). */
   indisponible: 'Le paiement à la livraison est indisponible pour le moment\u00a0: payez en ligne.',
-  /** 400 : retrait ou sur place. */
-  livraisonSeulement: "Sur le site, le paiement à la livraison n'est proposé que pour une livraison.",
-  /** 409 : une commande à confirmer du même client attend déjà. */
+  /** 409 : une commande à confirmer du même client attend déjà (site). */
   dejaEnAttente: (reference: string) =>
     `Vous avez déjà une commande en attente de confirmation (${reference})\u00a0: notre équipe vous appelle. ` +
     'Pour la changer, ouvrez-la puis «\u00a0Modifier ma commande\u00a0».',
+  /** 409 : la même, depuis l'application (qui n'a pas « Modifier ma commande »). */
+  dejaEnAttenteAppli: (reference: string) =>
+    `Vous avez déjà une commande en attente de confirmation (${reference})\u00a0: notre équipe vous appelle.`,
 } as const;
 
 /** Ce qu'il faut lire d'une commande pour savoir si elle est à confirmer. */
@@ -72,22 +101,24 @@ export interface EtatAConfirmer {
   payment_method?: PaymentMethod | string | null;
   entity_status?: EntityStatus | string | null;
   channel?: OrderChannel | string | null;
+  /** Repère posé à la création (appli ou site) quand une confirmation est demandée. */
+  a_confirmer?: boolean | null;
 }
 
 /**
- * Commande du site à payer à la livraison, que le centre d'appels n'a pas
- * encore confirmée. Même règle que `A_CONFIRMER_WHERE`, sur une commande en
- * mémoire ; un test vérifie que les deux donnent le même verdict sur toutes
- * les combinaisons.
+ * Commande à payer à la réception (du site, ou portant le repère), que le
+ * centre d'appels n'a pas encore confirmée. Même règle que
+ * `A_CONFIRMER_WHERE`, sur une commande en mémoire ; un test vérifie que les
+ * deux donnent le même verdict sur toutes les combinaisons.
  *
- * Un appelant qui ne lit pas `channel` obtient « pas à confirmer » : le
- * comportement d'avant cette règle.
+ * Un appelant qui ne lit ni `channel` ni `a_confirmer` obtient « pas à
+ * confirmer » : le comportement d'avant cette règle.
  */
 export function estAConfirmer(commande?: EtatAConfirmer | null): boolean {
   if (!commande) return false;
   return (
     commande.auto === true &&
-    commande.channel === OrderChannel.WEB &&
+    siteOuRepere(commande) &&
     commande.payment_method === PaymentMethod.OFFLINE &&
     commande.paied !== true &&
     commande.status === OrderStatus.PENDING &&
@@ -95,10 +126,15 @@ export function estAConfirmer(commande?: EtatAConfirmer | null): boolean {
   );
 }
 
-/** Commande à confirmer, en Prisma. */
+/**
+ * Commande à confirmer, en Prisma.
+ *
+ * ⚠️ Le canal ou le repère est un `OR` : qui étale cet objet dans un `where`
+ * ne doit pas y avoir son propre `OR` (ou l'écrire dans un `AND`).
+ */
 export const A_CONFIRMER_WHERE: Prisma.OrderWhereInput = {
   auto: true,
-  channel: OrderChannel.WEB,
+  OR: SITE_OU_REPERE,
   payment_method: PaymentMethod.OFFLINE,
   paied: false,
   status: OrderStatus.PENDING,
@@ -114,8 +150,7 @@ export const A_CONFIRMER_WHERE: Prisma.OrderWhereInput = {
 export const PAS_A_CONFIRMER_WHERE: Prisma.OrderWhereInput = {
   OR: [
     { auto: false },
-    { channel: null },
-    { channel: { not: OrderChannel.WEB } },
+    NI_SITE_NI_REPERE,
     { payment_method: null },
     { payment_method: { not: PaymentMethod.OFFLINE } },
     { paied: true },
@@ -132,7 +167,7 @@ export const PAS_A_CONFIRMER_WHERE: Prisma.OrderWhereInput = {
  */
 export function A_CONFIRMER_SQL(alias: string): string {
   if (!/^[a-z_][a-z0-9_]*$/i.test(alias)) throw new Error(`Alias SQL invalide : ${alias}`);
-  return `(${alias}."auto" IS TRUE AND ${alias}."channel" IS NOT DISTINCT FROM 'WEB'
+  return `(${alias}."auto" IS TRUE AND ${siteOuRepereSql(alias)}
     AND ${alias}."payment_method" IS NOT DISTINCT FROM 'OFFLINE'
     AND ${alias}."paied" = false AND ${alias}."status" = 'PENDING')`;
 }
@@ -157,7 +192,7 @@ export function A_CONFIRMER_SQL(alias: string): string {
  */
 export const ANNULEE_AVANT_CONFIRMATION_WHERE: Prisma.OrderWhereInput = {
   auto: true,
-  channel: OrderChannel.WEB,
+  OR: SITE_OU_REPERE,
   payment_method: PaymentMethod.OFFLINE,
   paied: false,
   status: OrderStatus.CANCELLED,
@@ -168,8 +203,7 @@ export const ANNULEE_AVANT_CONFIRMATION_WHERE: Prisma.OrderWhereInput = {
 export const PAS_ANNULEE_AVANT_CONFIRMATION_WHERE: Prisma.OrderWhereInput = {
   OR: [
     { auto: false },
-    { channel: null },
-    { channel: { not: OrderChannel.WEB } },
+    NI_SITE_NI_REPERE,
     { payment_method: null },
     { payment_method: { not: PaymentMethod.OFFLINE } },
     { paied: true },
@@ -185,7 +219,7 @@ export function estAnnuleeAvantConfirmation(
   if (!commande) return false;
   return (
     commande.auto === true &&
-    commande.channel === OrderChannel.WEB &&
+    siteOuRepere(commande) &&
     commande.payment_method === PaymentMethod.OFFLINE &&
     commande.paied !== true &&
     commande.status === OrderStatus.CANCELLED &&
@@ -196,7 +230,7 @@ export function estAnnuleeAvantConfirmation(
 /** Même règle en SQL, jamais NULL : un `NOT` devant reste sûr. Alias contrôlé. */
 export function ANNULEE_AVANT_CONFIRMATION_SQL(alias: string): string {
   if (!/^[a-z_][a-z0-9_]*$/i.test(alias)) throw new Error(`Alias SQL invalide : ${alias}`);
-  return `(${alias}."auto" IS TRUE AND ${alias}."channel" IS NOT DISTINCT FROM 'WEB'
+  return `(${alias}."auto" IS TRUE AND ${siteOuRepereSql(alias)}
     AND ${alias}."payment_method" IS NOT DISTINCT FROM 'OFFLINE'
     AND ${alias}."paied" = false AND ${alias}."status" = 'CANCELLED' AND ${alias}."accepted_at" IS NULL)`;
 }

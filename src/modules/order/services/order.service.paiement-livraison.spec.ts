@@ -1,13 +1,14 @@
 /**
- * PAIEMENT À LA LIVRAISON SUR LE SITE (19/10) : création par `createv2`.
+ * COMMANDE À PAYER À LA RÉCEPTION, création par `createv2` (site le 19/10,
+ * application et site sous le même réglage le 26/11).
  *
- * Sur le site (canal WEB), quatre contrôles dans cet ordre : un moyen de
- * paiement connu, l'option ouverte (Paramètres > Commandes), une livraison,
- * et une seule commande à confirmer à la fois par client. La commande créée
- * est un BROUILLON : ni « Nouvelle commande » au restaurant, ni socket vers
- * sa salle, et sa taxe est comptée comme pour un paiement en ligne (le site
- * affiche exactement ce que le serveur facture). L'application n'est pas
- * concernée : elle accepte OFFLINE sans contrôle, comme avant.
+ * Sur le site (canal WEB) comme dans l'application (canal APP) : un moyen de
+ * paiement connu (site), un type proposé, un moyen permis pour ce type, puis
+ * le parcours réglé au back-office. « Après confirmation » : la commande est
+ * un BROUILLON à confirmer, ni « Nouvelle commande » au restaurant, ni socket
+ * vers sa salle, une seule à la fois par client. « Directe » : elle part au
+ * restaurant, acceptée dès la création. Sa taxe est comptée comme pour un
+ * paiement en ligne (on affiche exactement ce que le serveur facture).
  *
  * Méthode testée en isolation, comme order.service.audience.spec.ts : seules
  * les dépendances qu'elle lit sont greffées. La recherche d'une commande à
@@ -30,6 +31,7 @@ import {
 } from '@prisma/client';
 import { estBrouillon } from '../helpers/brouillons.rules';
 import { OrderV2Helper } from '../helpers/orderv2.helper';
+import type { ModeReception, ReglagesCommande } from '../helpers/reglages-commande.rules';
 import { A_CONFIRMER_WHERE } from '../helpers/paiement-livraison.rules';
 import { correspond } from '../relance/relance.base-simulee-spec';
 import { OrderService } from './order.service';
@@ -58,6 +60,7 @@ const enBase = (surcharge: Ligne = {}): Ligne => ({
   created_at: new Date('2026-10-19T09:00:00.000Z'),
   auto: true,
   channel: OrderChannel.WEB,
+  a_confirmer: false,
   payment_method: PaymentMethod.OFFLINE,
   paied: false,
   status: OrderStatus.PENDING,
@@ -65,7 +68,18 @@ const enBase = (surcharge: Ligne = {}): Ligne => ({
   ...surcharge,
 });
 
-function monter({ reglageActif = true, commandes = [] as Ligne[] } = {}) {
+/** Tout proposé, en ligne ou à la réception : ces tests règlent ce qu'ils regardent. */
+const TOUT_PERMIS: ReglagesCommande = {
+  DELIVERY: { actif: true, paiement: 'LES_DEUX', message: null },
+  PICKUP: { actif: true, paiement: 'LES_DEUX', message: null },
+  TABLE: { actif: true, paiement: 'LES_DEUX', message: null },
+};
+
+function monter({
+  types = {} as Partial<ReglagesCommande>,
+  reception = 'APRES_CONFIRMATION' as ModeReception,
+  commandes = [] as Ligne[],
+} = {}) {
   const tx = {
     order: { create: jest.fn(async ({ data }: { data: Ligne }) => ({ id: 'commande-1', ...data })) },
     reward: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
@@ -82,7 +96,6 @@ function monter({ reglageActif = true, commandes = [] as Ligne[] } = {}) {
       },
     },
     orderHelperV2: {
-      paiementLivraisonSiteActif: jest.fn().mockResolvedValue(reglageActif),
       resolveCustomerData: jest.fn().mockResolvedValue(client),
       getDishesWithDetails: jest.fn().mockResolvedValue([{ id: 'plat-1', name: 'Poulet braisé', audiences: [] }]),
       calculateOrderDetails: jest.fn().mockResolvedValue({
@@ -98,12 +111,8 @@ function monter({ reglageActif = true, commandes = [] as Ligne[] } = {}) {
       calculateTax: jest.fn().mockResolvedValue(500),
       generateOrderReference: jest.fn().mockReturnValue('ORD-261019-22222'),
       getOrderStatus: jest.fn().mockReturnValue(OrderStatus.PENDING),
-      // Types et paiement de l'application (26/11) : tout permis, ces tests portent sur autre chose.
-      reglagesCommandeAppli: jest.fn().mockResolvedValue({
-        DELIVERY: { actif: true, paiement: 'LES_DEUX', message: null },
-        PICKUP: { actif: true, paiement: 'LES_DEUX', message: null },
-        TABLE: { actif: true, paiement: 'LES_DEUX', message: null },
-      }),
+      // Types, paiement et parcours (26/11), application et site.
+      reglagesCommande: jest.fn().mockResolvedValue({ types: { ...TOUT_PERMIS, ...types }, reception }),
     },
     deliveryFeeHelper: {
       isAppDeliveryDisabled: jest.fn().mockResolvedValue({ disabled: false, message: '' }),
@@ -147,8 +156,12 @@ async function refus(promesse: Promise<unknown>) {
   throw new Error('La promesse devait être rejetée');
 }
 
-describe('OrderService.createv2 : paiement à la livraison sur le site', () => {
-  it('cas nominal : commande à confirmer créée, brouillon, taxe comptée, restaurant tenu à l’écart', async () => {
+const EN_LIGNE_SEULEMENT = { actif: true, paiement: 'EN_LIGNE' as const, message: null };
+const aEmporter = (payment_method: PaymentMethod) =>
+  corps({ type: OrderType.PICKUP, restaurant_id: RESTAURANT_A, address: undefined, payment_method });
+
+describe('OrderService.createv2 : à payer à la réception, APRÈS CONFIRMATION (réglage par défaut)', () => {
+  it('site : commande à confirmer créée, brouillon, taxe comptée, restaurant tenu à l’écart', async () => {
     const m = monter();
 
     const commande = await m.service.createv2(CLIENT, corps(), OrderChannel.WEB);
@@ -161,56 +174,61 @@ describe('OrderService.createv2 : paiement à la livraison sur le site', () => {
         auto: true,
         paied: false,
         status: OrderStatus.PENDING,
+        // Le repère est posé : la commande attend l'appel du centre d'appels.
+        a_confirmer: true,
         tax: 500,
         delivery_fee: 1000,
         // Exactement ce que le site a affiché : articles, frais de service, livraison.
         amount: 11500,
       }),
     );
+    expect(donnees.accepted_at).toBeUndefined();
     expect(estBrouillon(commande)).toBe(true);
     // Ni « Nouvelle commande » au restaurant, ni « Commande confirmée ! » au client.
     expect(m.orderEvent.orderCreatedEvent).toHaveBeenCalledWith(expect.objectContaining({ brouillon: true }));
     // Socket : charge réduite au back office, rien vers la salle du restaurant.
     expect(m.orderWebSocketService.emitOrderCreated).toHaveBeenCalledWith(commande, { brouillon: true });
     // Contrôle « une seule à la fois » sur ce client et cette règle.
-    expect(m.prisma.order.findFirst.mock.calls[0][0].where).toEqual(
+    expect(m.prisma.order.findFirst.mock.calls[0][0].where).toEqual({ customer_id: CLIENT, ...A_CONFIRMER_WHERE });
+  });
+
+  it('application : même parcours, la commande porte le repère et attend le centre d’appels', async () => {
+    const m = monter();
+
+    const commande = await m.service.createv2(CLIENT, corps(), OrderChannel.APP);
+
+    expect(m.tx.order.create.mock.calls[0][0].data).toEqual(
       expect.objectContaining({
-        customer_id: CLIENT,
-        auto: true,
-        channel: OrderChannel.WEB,
+        channel: OrderChannel.APP,
         payment_method: PaymentMethod.OFFLINE,
-        paied: false,
         status: OrderStatus.PENDING,
+        a_confirmer: true,
+        auto: true,
+        paied: false,
       }),
     );
+    // Un brouillon, comme celle du site : le restaurant ne la voit pas encore.
+    expect(estBrouillon(commande)).toBe(true);
+    expect(m.orderEvent.orderCreatedEvent).toHaveBeenCalledWith(expect.objectContaining({ brouillon: true }));
+    expect(m.orderWebSocketService.emitOrderCreated).toHaveBeenCalledWith(commande, { brouillon: true });
   });
 
-  it('option coupée dans Paramètres > Commandes : 400, rien créé', async () => {
-    const m = monter({ reglageActif: false });
-
-    const erreur = await refus(m.service.createv2(CLIENT, corps(), OrderChannel.WEB));
-
-    expect(erreur).toEqual({
-      classe: BadRequestException,
-      message: 'Le paiement à la livraison est indisponible pour le moment : payez en ligne.',
-    });
-    expect(m.prisma.$transaction).not.toHaveBeenCalled();
-  });
-
-  it('à emporter ou sur place : 400, le livreur seul encaisse', async () => {
+  it('à emporter ou sur place à payer au restaurant, quand le réglage le permet : à confirmer aussi', async () => {
     for (const type of [OrderType.PICKUP, OrderType.TABLE]) {
-      const m = monter();
-      const erreur = await refus(
-        m.service.createv2(CLIENT, corps({ type, restaurant_id: RESTAURANT_A, address: undefined }), OrderChannel.WEB),
-      );
-      expect({ type, erreur }).toEqual({
-        type,
-        erreur: {
-          classe: BadRequestException,
-          message: "Sur le site, le paiement à la livraison n'est proposé que pour une livraison.",
-        },
-      });
-      expect(m.prisma.$transaction).not.toHaveBeenCalled();
+      for (const canal of [OrderChannel.WEB, OrderChannel.APP]) {
+        const m = monter();
+        const commande = await m.service.createv2(
+          CLIENT,
+          corps({ type, restaurant_id: RESTAURANT_A, address: undefined }),
+          canal,
+        );
+        expect({ type, canal, donnees: m.tx.order.create.mock.calls[0][0].data }).toEqual({
+          type,
+          canal,
+          donnees: expect.objectContaining({ status: OrderStatus.PENDING, a_confirmer: true, channel: canal }),
+        });
+        expect(estBrouillon(commande)).toBe(true);
+      }
     }
   });
 
@@ -228,7 +246,23 @@ describe('OrderService.createv2 : paiement à la livraison sur le site', () => {
     expect(m.prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('ne bloquent pas : la commande d’un autre client, une commande confirmée, annulée par le client, en ligne, ou de l’application', async () => {
+  it('application : même limite, sans renvoyer à « Modifier ma commande » ; une commande de l’appli avec le repère bloque aussi', async () => {
+    const enAttenteAppli = enBase({ channel: OrderChannel.APP, a_confirmer: true, reference: 'ORD-261126-33333' });
+    const m = monter({ commandes: [enAttenteAppli] });
+
+    const erreur = await refus(m.service.createv2(CLIENT, corps(), OrderChannel.APP));
+
+    expect(erreur).toEqual({
+      classe: ConflictException,
+      message: 'Vous avez déjà une commande en attente de confirmation (ORD-261126-33333) : notre équipe vous appelle.',
+    });
+    expect(m.prisma.$transaction).not.toHaveBeenCalled();
+    // La limite vaut d'un canal à l'autre : le site refuse aussi.
+    const site = monter({ commandes: [enAttenteAppli] });
+    expect((await refus(site.service.createv2(CLIENT, corps(), OrderChannel.WEB))).classe).toBe(ConflictException);
+  });
+
+  it('ne bloquent pas : la commande d’un autre client, une commande confirmée, annulée par le client, en ligne, ou une ancienne commande en espèces de l’application (sans repère)', async () => {
     const m = monter({
       commandes: [
         enBase({ customer_id: AUTRE_CLIENT }),
@@ -244,74 +278,11 @@ describe('OrderService.createv2 : paiement à la livraison sur le site', () => {
 
     expect(m.tx.order.create).toHaveBeenCalledTimes(1);
   });
-
-  it('sans moyen de paiement, ou un moyen inconnu : 400', async () => {
-    for (const payment_method of [undefined, null, 'ESPECES']) {
-      const m = monter();
-      const erreur = await refus(m.service.createv2(CLIENT, corps({ payment_method }), OrderChannel.WEB));
-      expect({ payment_method, erreur }).toEqual({
-        payment_method,
-        erreur: { classe: BadRequestException, message: 'Choisissez un moyen de paiement.' },
-      });
-      expect(m.orderHelperV2.paiementLivraisonSiteActif).not.toHaveBeenCalled();
-    }
-  });
-
-  it('les contrôles suivent l’ordre de la conception : option coupée avant le retrait, retrait avant le doublon', async () => {
-    const coupee = monter({ reglageActif: false, commandes: [enBase()] });
-    expect(
-      (await refus(coupee.service.createv2(CLIENT, corps({ type: OrderType.PICKUP }), OrderChannel.WEB))).message,
-    ).toMatch(/indisponible/);
-
-    const retrait = monter({ commandes: [enBase()] });
-    expect(
-      (await refus(retrait.service.createv2(CLIENT, corps({ type: OrderType.PICKUP }), OrderChannel.WEB))).message,
-    ).toMatch(/que pour une livraison/);
-    expect(retrait.prisma.order.findFirst).not.toHaveBeenCalled();
-  });
-
-  it('paiement en ligne sur le site : inchangé, aucun contrôle de plus, brouillon comme avant', async () => {
-    const m = monter({ reglageActif: false, commandes: [enBase()] });
-
-    const commande = await m.service.createv2(CLIENT, corps({ payment_method: PaymentMethod.ONLINE }), OrderChannel.WEB);
-
-    expect(m.orderHelperV2.paiementLivraisonSiteActif).not.toHaveBeenCalled();
-    expect(m.prisma.order.findFirst).not.toHaveBeenCalled();
-    expect(estBrouillon(commande)).toBe(true);
-    expect(m.orderEvent.orderCreatedEvent).toHaveBeenCalledWith(expect.objectContaining({ brouillon: true }));
-  });
-
-  it('application en espèces (canal APP) : acceptée sans contrôle, pas un brouillon, comme avant', async () => {
-    const m = monter({ reglageActif: false, commandes: [enBase()] });
-
-    const commande = await m.service.createv2(CLIENT, corps({ type: OrderType.PICKUP, restaurant_id: RESTAURANT_A }));
-
-    expect(m.orderHelperV2.paiementLivraisonSiteActif).not.toHaveBeenCalled();
-    expect(m.prisma.order.findFirst).not.toHaveBeenCalled();
-    expect(commande).toEqual(expect.objectContaining({ channel: OrderChannel.APP, payment_method: PaymentMethod.OFFLINE }));
-    expect(estBrouillon(commande)).toBe(false);
-    expect(m.orderEvent.orderCreatedEvent).toHaveBeenCalledWith(expect.objectContaining({ brouillon: false }));
-    expect(m.orderWebSocketService.emitOrderCreated).toHaveBeenCalledWith(commande, { brouillon: false });
-  });
 });
 
-describe('OrderService.createv2 : types et paiement de l’application réglés au back-office (26/11)', () => {
-  /** Réglages de l'application lus par `OrderV2Helper.reglagesCommandeAppli`. */
-  const avecReglages = (types: Record<string, { actif: boolean; paiement: string; message: string | null }>) => {
-    const m = monter({ reglageActif: true });
-    m.orderHelperV2.reglagesCommandeAppli.mockResolvedValue({
-      DELIVERY: { actif: true, paiement: 'EN_LIGNE', message: null },
-      PICKUP: { actif: true, paiement: 'EN_LIGNE', message: null },
-      TABLE: { actif: false, paiement: 'EN_LIGNE', message: 'La commande sur place n’est pas proposée.' },
-      ...types,
-    });
-    return m;
-  };
-  const aEmporter = (payment_method: PaymentMethod) =>
-    corps({ type: OrderType.PICKUP, restaurant_id: RESTAURANT_A, payment_method });
-
-  it('à payer à la réception, permis : la commande va directement au restaurant, acceptée dès la création', async () => {
-    const m = avecReglages({ PICKUP: { actif: true, paiement: 'LES_DEUX', message: null } });
+describe('OrderService.createv2 : à payer à la réception, DIRECTE', () => {
+  it('application : la commande va directement au restaurant, acceptée dès la création', async () => {
+    const m = monter({ reception: 'DIRECTE', commandes: [enBase()] });
 
     const commande = await m.service.createv2(CLIENT, aEmporter(PaymentMethod.OFFLINE));
 
@@ -320,68 +291,153 @@ describe('OrderService.createv2 : types et paiement de l’application réglés 
         channel: OrderChannel.APP,
         payment_method: PaymentMethod.OFFLINE,
         status: OrderStatus.ACCEPTED,
+        a_confirmer: false,
         paied: false,
       }),
     );
     expect((commande as { accepted_at?: Date | null }).accepted_at).toBeInstanceOf(Date);
-    // Pas une commande à confirmer : le restaurant la reçoit, sans appel du centre d'appels.
+    // Pas une commande à confirmer : le restaurant la reçoit, sans appel du centre d'appels,
+    // et la limite « une seule à la fois » ne joue pas.
+    expect(m.prisma.order.findFirst).not.toHaveBeenCalled();
     expect(estBrouillon(commande)).toBe(false);
     expect(m.orderEvent.orderCreatedEvent).toHaveBeenCalledWith(expect.objectContaining({ brouillon: false }));
     expect(m.orderWebSocketService.emitOrderCreated).toHaveBeenCalledWith(commande, { brouillon: false });
   });
 
-  it('en ligne, permis : la commande reste en attente du paiement, comme avant', async () => {
-    const m = avecReglages({ PICKUP: { actif: true, paiement: 'LES_DEUX', message: null } });
-    const commande = await m.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE));
-    expect(commande).toEqual(expect.objectContaining({ status: OrderStatus.PENDING, payment_method: PaymentMethod.ONLINE }));
-    expect(estBrouillon(commande)).toBe(true);
-  });
+  it('site : même parcours, la commande n’attend plus le centre d’appels', async () => {
+    const m = monter({ reception: 'DIRECTE', commandes: [enBase()] });
 
-  it('en ligne seulement : à la réception refusé, rien n’est écrit', async () => {
-    const m = avecReglages({});
-    const rejet = await refus(m.service.createv2(CLIENT, aEmporter(PaymentMethod.OFFLINE)));
-    expect(rejet).toEqual({ classe: BadRequestException, message: 'Pour ce mode de réception, le paiement se fait en ligne.' });
-    expect(m.tx.order.create).not.toHaveBeenCalled();
-  });
+    const commande = await m.service.createv2(CLIENT, corps(), OrderChannel.WEB);
 
-  it('à la réception seulement : en ligne refusé', async () => {
-    const m = avecReglages({ PICKUP: { actif: true, paiement: 'A_LA_RECEPTION', message: null } });
-    const rejet = await refus(m.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE)));
-    expect(rejet.classe).toBe(BadRequestException);
-    expect(rejet.message).toContain('le paiement se fait au restaurant');
-    expect(m.tx.order.create).not.toHaveBeenCalled();
-  });
-
-  it('type non proposé dans l’application : refus avec son message', async () => {
-    const m = avecReglages({ PICKUP: { actif: false, paiement: 'EN_LIGNE', message: 'La commande à emporter n’est pas proposée.' } });
-    const rejet = await refus(m.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE)));
-    expect(rejet).toEqual({ classe: BadRequestException, message: 'La commande à emporter n’est pas proposée.' });
-  });
-
-  it('le site n’est pas concerné par les réglages de l’application', async () => {
-    const m = avecReglages({ PICKUP: { actif: false, paiement: 'EN_LIGNE', message: 'x' } });
-    await m.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE), OrderChannel.WEB);
-    expect(m.orderHelperV2.reglagesCommandeAppli).not.toHaveBeenCalled();
+    expect(commande).toEqual(
+      expect.objectContaining({
+        channel: OrderChannel.WEB,
+        payment_method: PaymentMethod.OFFLINE,
+        status: OrderStatus.ACCEPTED,
+        a_confirmer: false,
+      }),
+    );
+    expect((commande as { accepted_at?: Date | null }).accepted_at).toBeInstanceOf(Date);
+    expect(estBrouillon(commande)).toBe(false);
+    expect(m.prisma.order.findFirst).not.toHaveBeenCalled();
+    expect(m.orderEvent.orderCreatedEvent).toHaveBeenCalledWith(expect.objectContaining({ brouillon: false }));
   });
 });
 
-describe('OrderV2Helper.paiementLivraisonSiteActif : lecture du réglage', () => {
-  const lire = async (valeur: string | null) => {
-    const helper = Object.create(OrderV2Helper.prototype) as OrderV2Helper;
-    const settingsService = { get: jest.fn().mockResolvedValue(valeur) };
-    Object.assign(helper, { settingsService });
-    const actif = await helper.paiementLivraisonSiteActif();
-    expect(settingsService.get).toHaveBeenCalledWith('order_paiement_livraison_site');
-    return actif;
-  };
-
-  it('absent : proposé dès le déploiement (décision du 19/10)', async () => {
-    expect(await lire(null)).toBe(true);
+describe('OrderService.createv2 : types et paiement réglés au back-office, application et site', () => {
+  it('site sans moyen de paiement, ou un moyen inconnu : 400, avant toute lecture des réglages', async () => {
+    for (const payment_method of [undefined, null, 'ESPECES']) {
+      const m = monter();
+      const erreur = await refus(m.service.createv2(CLIENT, corps({ payment_method }), OrderChannel.WEB));
+      expect({ payment_method, erreur }).toEqual({
+        payment_method,
+        erreur: { classe: BadRequestException, message: 'Choisissez un moyen de paiement.' },
+      });
+      expect(m.orderHelperV2.reglagesCommande).not.toHaveBeenCalled();
+    }
   });
 
-  it('« 1 » : proposé ; « 0 » : coupé', async () => {
-    expect(await lire('1')).toBe(true);
-    expect(await lire('0')).toBe(false);
+  it('livraison à payer en ligne seulement : le site garde son message, rien créé', async () => {
+    const m = monter({ types: { DELIVERY: EN_LIGNE_SEULEMENT } });
+
+    const erreur = await refus(m.service.createv2(CLIENT, corps(), OrderChannel.WEB));
+
+    expect(erreur).toEqual({
+      classe: BadRequestException,
+      message: 'Le paiement à la livraison est indisponible pour le moment : payez en ligne.',
+    });
+    expect(m.prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('en ligne seulement : à la réception refusé, pour le site comme pour l’application', async () => {
+    for (const canal of [OrderChannel.WEB, OrderChannel.APP]) {
+      const m = monter({ types: { PICKUP: EN_LIGNE_SEULEMENT } });
+      const rejet = await refus(m.service.createv2(CLIENT, aEmporter(PaymentMethod.OFFLINE), canal));
+      expect({ canal, rejet }).toEqual({
+        canal,
+        rejet: { classe: BadRequestException, message: 'Pour ce mode de réception, le paiement se fait en ligne.' },
+      });
+      expect(m.tx.order.create).not.toHaveBeenCalled();
+    }
+  });
+
+  it('à la réception seulement : en ligne refusé', async () => {
+    const reglage = { PICKUP: { actif: true, paiement: 'A_LA_RECEPTION' as const, message: null } };
+    const appli = monter({ types: reglage });
+    const rejet = await refus(appli.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE)));
+    expect(rejet.classe).toBe(BadRequestException);
+    expect(rejet.message).toContain('le paiement se fait au restaurant');
+    expect(rejet.message).toContain("Mettez l'application à jour");
+    expect(appli.tx.order.create).not.toHaveBeenCalled();
+
+    const site = monter({ types: reglage });
+    const rejetSite = await refus(site.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE), OrderChannel.WEB));
+    expect(rejetSite.message).toBe('Pour ce mode de réception, le paiement se fait au restaurant.');
+  });
+
+  it('type non proposé : refus avec son message, pour le site comme pour l’application', async () => {
+    for (const canal of [OrderChannel.WEB, OrderChannel.APP]) {
+      const m = monter({
+        types: { PICKUP: { actif: false, paiement: 'EN_LIGNE', message: 'La commande à emporter n’est pas proposée.' } },
+      });
+      const rejet = await refus(m.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE), canal));
+      expect({ canal, rejet }).toEqual({
+        canal,
+        rejet: { classe: BadRequestException, message: 'La commande à emporter n’est pas proposée.' },
+      });
+    }
+  });
+
+  it('le type se contrôle avant le doublon : un type non proposé ne lit pas les commandes en attente', async () => {
+    const m = monter({
+      types: { DELIVERY: { actif: false, paiement: 'LES_DEUX', message: 'La livraison n’est pas proposée.' } },
+      commandes: [enBase()],
+    });
+    expect((await refus(m.service.createv2(CLIENT, corps(), OrderChannel.WEB))).message).toBe(
+      'La livraison n’est pas proposée.',
+    );
+    expect(m.prisma.order.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('paiement en ligne : la commande attend son paiement comme avant, sans limite ni repère', async () => {
+    for (const canal of [OrderChannel.WEB, OrderChannel.APP]) {
+      const m = monter({ commandes: [enBase()] });
+
+      const commande = await m.service.createv2(CLIENT, corps({ payment_method: PaymentMethod.ONLINE }), canal);
+
+      expect(m.prisma.order.findFirst).not.toHaveBeenCalled();
+      expect(commande).toEqual(
+        expect.objectContaining({ status: OrderStatus.PENDING, payment_method: PaymentMethod.ONLINE, a_confirmer: false }),
+      );
+      expect(estBrouillon(commande)).toBe(true);
+      expect(m.orderEvent.orderCreatedEvent).toHaveBeenCalledWith(expect.objectContaining({ brouillon: true }));
+    }
+  });
+});
+
+describe('OrderV2Helper.reglagesCommande : lecture des réglages', () => {
+  const lire = async (valeurs: Record<string, string | null>) => {
+    const helper = Object.create(OrderV2Helper.prototype) as OrderV2Helper;
+    const settingsService = { getMany: jest.fn().mockResolvedValue(valeurs) };
+    Object.assign(helper, { settingsService });
+    const lu = await helper.reglagesCommande();
+    expect(settingsService.getMany.mock.calls[0][0]).toEqual(
+      expect.arrayContaining(['order_paiement_reception', 'order_paiement_livraison', 'order_paiement_livraison_site']),
+    );
+    return lu;
+  };
+
+  it('rien de réglé : après confirmation, et la livraison se paie en ligne ou à la livraison (ancien réglage du site, proposé par défaut)', async () => {
+    const lu = await lire({});
+    expect(lu.reception).toBe('APRES_CONFIRMATION');
+    expect(lu.types.DELIVERY).toEqual({ actif: true, paiement: 'LES_DEUX', message: null });
+    expect(lu.types.PICKUP.paiement).toBe('EN_LIGNE');
+  });
+
+  it('« directe » enregistré, ancien réglage du site coupé', async () => {
+    const lu = await lire({ order_paiement_reception: 'DIRECTE', order_paiement_livraison_site: '0' });
+    expect(lu.reception).toBe('DIRECTE');
+    expect(lu.types.DELIVERY.paiement).toBe('EN_LIGNE');
   });
 });
 

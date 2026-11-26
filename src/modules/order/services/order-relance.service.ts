@@ -7,7 +7,7 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { EntityStatus, OrderChannel, OrderStatus, PaymentMethod, Prisma, User, UserRole } from '@prisma/client';
+import { EntityStatus, OrderStatus, PaymentMethod, Prisma, User, UserRole } from '@prisma/client';
 import { ACTEUR_KKIAPAY_ID } from 'src/kkiapay/kkiapay-audit.helper';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { AuditService } from 'src/modules/audit/audit.service';
@@ -22,7 +22,7 @@ import {
   peutVoirLesBrouillons,
 } from '../helpers/brouillons.rules';
 import { MESSAGE_TRANSACTION_ILLISIBLE, lireTransactionKkiapay } from '../helpers/confirmation-paiement.rules';
-import { A_CONFIRMER_WHERE, estAConfirmer } from '../helpers/paiement-livraison.rules';
+import { A_CONFIRMER_WHERE, estAConfirmer, siteOuRepere } from '../helpers/paiement-livraison.rules';
 import { resolveRestaurantScope } from '../helpers/restaurant-scope.helper';
 import {
   ACTIONS_JOURNAL_RELANCE,
@@ -98,6 +98,9 @@ const SELECT_BROUILLON = {
   // Canal (02/10) : le backoffice signale un panier du site, que l'agent ne
   // reprend pas avec les mêmes mots qu'un panier de l'application.
   channel: true,
+  // Repère « à confirmer » (26/11) : une commande de l'application à payer à
+  // la réception attend l'appel, comme celle du site.
+  a_confirmer: true,
   relance: {
     select: {
       alerte_le: true,
@@ -125,6 +128,8 @@ const SELECT_COMMANDE = {
   // Obligatoire depuis le 19/10 : sans le canal, une commande du site à
   // confirmer n'est pas reconnue (`estAConfirmer`) et chaque geste répond 409.
   channel: true,
+  // De même depuis le 26/11 pour une commande de l'application à confirmer.
+  a_confirmer: true,
 } satisfies Prisma.OrderSelect;
 
 type CommandeLue = Prisma.OrderGetPayload<{ select: typeof SELECT_COMMANDE }>;
@@ -261,7 +266,9 @@ function ligne(b: BrouillonLu): BrouillonLigne {
     paiement_refuse: (b.paiements ?? []).some((p) => p.status === 'FAILED'),
     annulee_par_client: estPanierAnnuleParClient(b),
     channel: b.channel ?? null,
-    paiement_a_la_livraison: b.payment_method === PaymentMethod.OFFLINE && b.channel === OrderChannel.WEB,
+    // À payer à la réception et à confirmer : du site, ou de l'application
+    // quand le réglage demande une confirmation (26/11).
+    paiement_a_la_livraison: b.payment_method === PaymentMethod.OFFLINE && siteOuRepere(b),
   };
 }
 

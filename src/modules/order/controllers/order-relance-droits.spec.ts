@@ -139,6 +139,8 @@ describe('Règle unique des brouillons', () => {
 
   /** Canal vide (commandes d'avant le 02/10, HubRise) compris. */
   const CANAUX = [null, ...Object.values(OrderChannel)];
+  /** Repère « à confirmer » (26/11) : posé à la création, quel que soit le canal. */
+  const REPERES = [false, true];
 
   it('estBrouillon et BROUILLON_WHERE donnent le même verdict sur toutes les combinaisons', () => {
     let brouillons = 0;
@@ -147,16 +149,18 @@ describe('Règle unique des brouillons', () => {
         for (const paied of [true, false])
           for (const payment_method of Object.values(PaymentMethod))
             for (const entity_status of Object.values(EntityStatus))
-              for (const channel of CANAUX) {
-                const commande = { auto, status, paied, payment_method, entity_status, channel };
-                const attendu = correspond(commande, BROUILLON_WHERE);
-                expect({ commande, verdict: estBrouillon(commande) }).toEqual({ commande, verdict: attendu });
-                if (attendu) brouillons += 1;
-              }
+              for (const channel of CANAUX)
+                for (const a_confirmer of REPERES) {
+                  const commande = { auto, status, paied, payment_method, entity_status, channel, a_confirmer };
+                  const attendu = correspond(commande, BROUILLON_WHERE);
+                  expect({ commande, verdict: estBrouillon(commande) }).toEqual({ commande, verdict: attendu });
+                  if (attendu) brouillons += 1;
+                }
     // En attente, non payée, auto, non supprimée (ACTIVE ou INACTIVE), et :
-    // en ligne quel que soit le canal (5, vide compris), ou à la livraison
-    // sur le site (1, commande à confirmer, 19/10).
-    expect(brouillons).toBe(6 * (Object.values(EntityStatus).length - 1));
+    // en ligne quel que soit le canal et le repère (5 canaux, vide compris,
+    // fois 2), ou à la réception et à confirmer : sur le site avec ou sans
+    // repère (2, 19/10), ailleurs avec le repère (4, 26/11).
+    expect(brouillons).toBe((10 + 6) * (Object.values(EntityStatus).length - 1));
   });
 
   it('estPanierAnnuleParClient, estRelancable et leurs `where` donnent le même verdict sur toutes les combinaisons', () => {
@@ -167,37 +171,58 @@ describe('Règle unique des brouillons', () => {
           for (const payment_method of Object.values(PaymentMethod))
             for (const entity_status of Object.values(EntityStatus))
               for (const channel of CANAUX)
-                for (const cancelled_by of [ANNULEE_PAR_CLIENT, 'id-du-client', 'id-agent', null]) {
-                  const commande = { auto, status, paied, payment_method, entity_status, channel, cancelled_by };
-                  const attendu = correspond(commande, PANIER_ANNULE_PAR_CLIENT_WHERE);
-                  expect({ commande, verdict: estPanierAnnuleParClient(commande) }).toEqual({ commande, verdict: attendu });
-                  expect({ commande, verdict: estRelancable(commande) }).toEqual({
-                    commande,
-                    verdict: correspond(commande, RELANCABLE_WHERE),
-                  });
-                  // Jamais les deux à la fois : un brouillon est en attente, le panier annulé non.
-                  if (attendu) expect(estBrouillon(commande)).toBe(false);
-                  if (attendu) annules += 1;
-                }
+                for (const a_confirmer of REPERES)
+                  for (const cancelled_by of [ANNULEE_PAR_CLIENT, 'id-du-client', 'id-agent', null]) {
+                    const commande = {
+                      auto,
+                      status,
+                      paied,
+                      payment_method,
+                      entity_status,
+                      channel,
+                      a_confirmer,
+                      cancelled_by,
+                    };
+                    const attendu = correspond(commande, PANIER_ANNULE_PAR_CLIENT_WHERE);
+                    expect({ commande, verdict: estPanierAnnuleParClient(commande) }).toEqual({ commande, verdict: attendu });
+                    expect({ commande, verdict: estRelancable(commande) }).toEqual({
+                      commande,
+                      verdict: correspond(commande, RELANCABLE_WHERE),
+                    });
+                    // Jamais les deux à la fois : un brouillon est en attente, le panier annulé non.
+                    if (attendu) expect(estBrouillon(commande)).toBe(false);
+                    if (attendu) annules += 1;
+                  }
     // Annulée, non payée, auto, par le client, et : en ligne quel que soit le
-    // canal (5, vide compris), ou commande du site à payer à la livraison (1,
-    // « Modifier ma commande », 19/10). Depuis le 25/11, quel que soit son
-    // état (ACTIVE depuis, DELETED avant, INACTIVE).
-    expect(annules).toBe(6 * Object.values(EntityStatus).length);
+    // canal et le repère (5 canaux, vide compris, fois 2), ou commande à
+    // confirmer à payer à la réception : du site avec ou sans repère (2,
+    // « Modifier ma commande », 19/10), d'ailleurs avec le repère (4, 26/11).
+    // Depuis le 25/11, quel que soit son état (ACTIVE depuis, DELETED avant,
+    // INACTIVE).
+    expect(annules).toBe((10 + 6) * Object.values(EntityStatus).length);
   });
 
-  it('une commande en espèces de l’application, ou sans canal, n’est jamais un brouillon', () => {
+  it('une commande en espèces de l’application, ou sans canal, n’est un brouillon qu’avec le repère « à confirmer »', () => {
     const base = {
       auto: true,
       status: OrderStatus.PENDING,
       paied: false,
       payment_method: PaymentMethod.OFFLINE,
       entity_status: EntityStatus.ACTIVE,
+      a_confirmer: false,
     };
     expect(estBrouillon({ ...base, channel: OrderChannel.WEB })).toBe(true);
     for (const channel of [OrderChannel.APP, OrderChannel.CALL_CENTER, OrderChannel.RESTAURANT, null, undefined]) {
+      // Sans le repère : jamais (les commandes d'avant le 26/11, la caisse, le centre d'appels).
       expect({ channel, brouillon: estBrouillon({ ...base, channel }) }).toEqual({ channel, brouillon: false });
       expect({ channel, brouillon: correspond({ ...base, channel }, BROUILLON_WHERE) }).toEqual({ channel, brouillon: false });
+      // Un appelant qui ne lit pas le repère : pas brouillon, le comportement d'avant.
+      const { a_confirmer: _sansRepere, ...sansRepere } = base;
+      expect(estBrouillon({ ...sansRepere, channel })).toBe(false);
+      // Avec le repère (réglage « après confirmation ») : le centre d'appels la suit.
+      const reperee = { ...base, channel, a_confirmer: true };
+      expect({ channel, brouillon: estBrouillon(reperee) }).toEqual({ channel, brouillon: true });
+      expect({ channel, brouillon: correspond(reperee, BROUILLON_WHERE) }).toEqual({ channel, brouillon: true });
     }
   });
 });

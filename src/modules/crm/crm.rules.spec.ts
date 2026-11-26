@@ -206,6 +206,9 @@ describe('commandeEffective', () => {
     paied: false,
     status: 'PENDING',
     entity_status: 'ACTIVE',
+    // Repère « à confirmer » (26/11) : obligatoire en base, faux sur les
+    // commandes d'avant et sur celles qui partent en direct au restaurant.
+    a_confirmer: false,
     ...surcharge,
   });
   const effective = (c: Record<string, unknown>) => correspond(c, commandeEffective('c1') as Record<string, unknown>);
@@ -222,6 +225,25 @@ describe('commandeEffective', () => {
     expect(effective(commande({ channel: 'APP' }))).toBe(true);
     expect(effective(commande({ channel: null }))).toBe(true);
     expect(effective(commande({ channel: 'CALL_CENTER', auto: false }))).toBe(true);
+  });
+
+  // 26/11, « directe ou après confirmation » : même réglage pour l'appli.
+  it('de l’application, à payer à la réception : à confirmer, elle ne compte pas ; directe ou confirmée, elle compte', () => {
+    // Réglage « après confirmation » : le repère est posé, elle attend l'appel.
+    expect(effective(commande({ channel: 'APP', a_confirmer: true }))).toBe(false);
+    // Confirmée par le centre d'appels (reprise au téléphone).
+    expect(effective(commande({ channel: 'APP', a_confirmer: true, auto: false, status: 'ACCEPTED' }))).toBe(true);
+    // Réglage « directe » : pas de repère, acceptée dès la création.
+    expect(effective(commande({ channel: 'APP', status: 'ACCEPTED', accepted_at: new Date() }))).toBe(true);
+    expect(effective(commande({ channel: 'WEB', status: 'ACCEPTED', accepted_at: new Date() }))).toBe(true);
+    // Annulée avant d'avoir été confirmée : le client n'a jamais commandé.
+    expect(
+      effective(commande({ channel: 'APP', a_confirmer: true, status: 'CANCELLED', accepted_at: null, cancelled_by: 'agent' })),
+    ).toBe(false);
+    // Directe puis annulée par le restaurant : une commande annulée ordinaire.
+    expect(
+      effective(commande({ channel: 'WEB', status: 'CANCELLED', accepted_at: new Date(), cancelled_by: 'agent' })),
+    ).toBe(true);
   });
 
   // Revue du 19/10 : « Annuler la commande » de « À relancer » la laisse
@@ -249,6 +271,7 @@ describe('commandeEffective', () => {
     expect(sql).toContain(`AND NOT (o."payment_method" = 'ONLINE' AND o."paied" = false AND o."status" = 'PENDING')`);
     expect(sql).toContain(`AND NOT ${A_CONFIRMER_SQL('o').replace(/\s+/g, ' ')}`);
     expect(sql).toContain(`o."channel" IS NOT DISTINCT FROM 'WEB'`);
+    expect(sql).toContain(`o."a_confirmer" IS TRUE`);
     expect(sql).toContain(`o."payment_method" IS NOT DISTINCT FROM 'OFFLINE'`);
     expect(sql).toContain(`AND NOT ${PANIER_ANNULE_PAR_CLIENT_SQL('o').replace(/\s+/g, ' ')}`);
   });

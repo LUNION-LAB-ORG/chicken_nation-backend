@@ -82,9 +82,12 @@ describe('OrderService.obtenirDisponibiliteLivraison', () => {
   });
 });
 
-/** Types de l'application quand rien n'est réglé : livraison et à emporter, en ligne ; pas de sur place. */
-const TYPES_APPLI = {
-  DELIVERY: { actif: true, paiement: 'EN_LIGNE', message: null },
+/**
+ * Types (application et site) quand rien n'est réglé : livraison et à
+ * emporter, pas de sur place ; la livraison garde le paiement à la livraison.
+ */
+const TYPES = {
+  DELIVERY: { actif: true, paiement: 'LES_DEUX', message: null },
   PICKUP: { actif: true, paiement: 'EN_LIGNE', message: null },
   TABLE: {
     actif: false,
@@ -96,12 +99,14 @@ const TYPES_APPLI = {
 describe('OrderService.obtenirConditionsCommande', () => {
   const monter = (taux: number, reglages: Record<string, unknown>, paiementLivraison = true) => {
     const service = Object.create(OrderService.prototype) as OrderService;
+    const types = paiementLivraison
+      ? TYPES
+      : { ...TYPES, DELIVERY: { actif: true, paiement: 'EN_LIGNE', message: null } };
     Object.assign(service, {
       orderHelperV2: {
         getTaxRate: jest.fn().mockResolvedValue(taux),
-        paiementLivraisonSiteActif: jest.fn().mockResolvedValue(paiementLivraison),
-        // Types et paiement de l'application (26/11), réglages absents.
-        reglagesCommandeAppli: jest.fn().mockResolvedValue(TYPES_APPLI),
+        // Types, paiement et parcours (26/11, application et site).
+        reglagesCommande: jest.fn().mockResolvedValue({ types, reception: 'APRES_CONFIRMATION' }),
       },
       deliveryFeeHelper: {
         load: jest.fn().mockResolvedValue(reglages),
@@ -133,12 +138,14 @@ describe('OrderService.obtenirConditionsCommande', () => {
       ],
       grille_frais_appliquee: true,
       paiement_livraison: { disponible: true },
-      appli: { types: TYPES_APPLI },
+      types: TYPES,
+      reception: 'APRES_CONFIRMATION',
+      appli: { types: TYPES },
     });
     expect(JSON.stringify(conditions)).not.toMatch(/TURBO|CHICKEN_NATION|restaurant-1/);
   });
 
-  it('paiement à la livraison : même lecture du réglage que la création', async () => {
+  it('paiement à la livraison : suit le paiement réglé pour la livraison, comme la création', async () => {
     expect((await monter(0.01, reglages(false), true).obtenirConditionsCommande()).paiement_livraison).toEqual({
       disponible: true,
     });

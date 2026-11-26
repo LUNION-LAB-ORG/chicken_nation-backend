@@ -1,0 +1,12 @@
+-- Commande à payer à la réception, à confirmer par le centre d'appels
+-- (demande du 26/11 : « paiement à la livraison : directe ou après
+-- confirmation », même réglage pour l'appli et le site).
+--
+-- Jusqu'ici, une commande à confirmer se reconnaissait à son canal : le site
+-- (WEB). Avec le réglage « après confirmation », une commande de l'appli peut
+-- l'être aussi. `Order.a_confirmer` le dit, posé à la création.
+--
+-- Aucune reprise de données : la colonne vaut faux sur toutes les commandes
+-- existantes, et celles du site restent reconnues à leur canal, comme avant.
+-- Rejouable.
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "a_confirmer" BOOLEAN NOT NULL DEFAULT false;

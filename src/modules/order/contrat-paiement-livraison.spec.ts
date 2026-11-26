@@ -30,11 +30,15 @@ const enJson = <T>(valeur: T): unknown => JSON.parse(JSON.stringify(valeur));
 // ===========================================================================
 
 describe('contrat : GET /orders/conditions-commande', () => {
-  /** Service réel, réglage du paiement à la livraison lu par le vrai `OrderV2Helper`. */
-  const monter = (reglage: string | null) => {
+  /**
+   * Service réel, réglages lus par le vrai `OrderV2Helper`. `reglage` :
+   * l'ancien réglage du site, seul enregistré tant que personne n'a repris
+   * Paramètres > Commandes ; `autres` : les réglages du 26/11.
+   */
+  const monter = (reglage: string | null, autres: Record<string, string> = {}) => {
     const helper = Object.create(OrderV2Helper.prototype) as OrderV2Helper;
-    // `getMany` : réglages des types de l'application (26/11), absents ici.
-    const settingsService = { get: jest.fn().mockResolvedValue(reglage), getMany: jest.fn().mockResolvedValue({}) };
+    const valeurs = { ...(reglage === null ? {} : { [REGLAGE_PAIEMENT_LIVRAISON_SITE]: reglage }), ...autres };
+    const settingsService = { getMany: jest.fn().mockResolvedValue(valeurs) };
     Object.assign(helper, { settingsService, getTaxRate: jest.fn().mockResolvedValue(0.05) });
     const service = Object.create(OrderService.prototype) as OrderService;
     Object.assign(service, {
@@ -55,6 +59,15 @@ describe('contrat : GET /orders/conditions-commande', () => {
 
   it('réglage absent : paiement à la livraison PROPOSÉ (décision du 19/10), forme exacte', async () => {
     const { service, settingsService } = monter(null);
+    const types = {
+      DELIVERY: { actif: true, paiement: 'LES_DEUX', message: null },
+      PICKUP: { actif: true, paiement: 'EN_LIGNE', message: null },
+      TABLE: {
+        actif: false,
+        paiement: 'EN_LIGNE',
+        message: "La commande sur place n'est pas proposée pour le moment. Choisissez un autre mode de réception.",
+      },
+    };
 
     expect(enJson(await service.obtenirConditionsCommande())).toEqual({
       taux_frais_service: 0.05,
@@ -64,20 +77,15 @@ describe('contrat : GET /orders/conditions-commande', () => {
       ],
       grille_frais_appliquee: true,
       paiement_livraison: { disponible: true },
-      // Application (26/11), rien de réglé : ce qu'elle faisait déjà.
-      appli: {
-        types: {
-          DELIVERY: { actif: true, paiement: 'EN_LIGNE', message: null },
-          PICKUP: { actif: true, paiement: 'EN_LIGNE', message: null },
-          TABLE: {
-            actif: false,
-            paiement: 'EN_LIGNE',
-            message: "La commande sur place n'est pas proposée pour le moment. Choisissez un autre mode de réception.",
-          },
-        },
-      },
+      // Même réglage pour le site et l'application (26/11). Rien de réglé :
+      // la livraison garde le paiement à la livraison du site.
+      types,
+      // À payer à la réception : le centre d'appels confirme d'abord.
+      reception: 'APRES_CONFIRMATION',
+      // Lu par l'application poussée le 26/11, avant « même réglage ».
+      appli: { types },
     });
-    expect(settingsService.get).toHaveBeenCalledWith('order_paiement_livraison_site');
+    expect(settingsService.getMany).toHaveBeenCalledWith(expect.arrayContaining(['order_paiement_livraison_site']));
     expect(REGLAGE_PAIEMENT_LIVRAISON_SITE).toBe('order_paiement_livraison_site');
   });
 
@@ -88,6 +96,22 @@ describe('contrat : GET /orders/conditions-commande', () => {
     expect(enJson((await monter('1').service.obtenirConditionsCommande()).paiement_livraison)).toEqual({
       disponible: true,
     });
+  });
+
+  it('nouveaux réglages (26/11) : ils l’emportent sur l’ancien, pour le site comme pour l’application', async () => {
+    // Ancien réglage à « Non », livraison réglée sur « les deux » : proposé.
+    const proposee = await monter('0', { order_paiement_livraison: 'LES_DEUX' }).service.obtenirConditionsCommande();
+    expect(proposee.paiement_livraison).toEqual({ disponible: true });
+    // Ancien à « Oui », livraison réglée « en ligne seulement » : retiré.
+    const retiree = await monter('1', { order_paiement_livraison: 'EN_LIGNE' }).service.obtenirConditionsCommande();
+    expect(retiree.paiement_livraison).toEqual({ disponible: false });
+    // « À la réception seulement » : le paiement à la livraison est proposé (et le seul).
+    const seule = await monter(null, { order_paiement_livraison: 'A_LA_RECEPTION' }).service.obtenirConditionsCommande();
+    expect(seule.paiement_livraison).toEqual({ disponible: true });
+    expect(seule.types.DELIVERY.paiement).toBe('A_LA_RECEPTION');
+    // Parcours : directe au restaurant.
+    const directe = await monter(null, { order_paiement_reception: 'DIRECTE' }).service.obtenirConditionsCommande();
+    expect(directe.reception).toBe('DIRECTE');
   });
 });
 
@@ -134,9 +158,6 @@ describe('contrat : POST /orders/create-v2 sur le site', () => {
     expect(REFUS_PAIEMENT_SITE.moyenAbsent).toBe('Choisissez un moyen de paiement.');
     expect(REFUS_PAIEMENT_SITE.indisponible).toBe(
       'Le paiement à la livraison est indisponible pour le moment : payez en ligne.',
-    );
-    expect(REFUS_PAIEMENT_SITE.livraisonSeulement).toBe(
-      "Sur le site, le paiement à la livraison n'est proposé que pour une livraison.",
     );
     expect(REFUS_PAIEMENT_SITE.dejaEnAttente('ORD-261019-00002')).toBe(
       'Vous avez déjà une commande en attente de confirmation (ORD-261019-00002) : notre équipe vous appelle. ' +

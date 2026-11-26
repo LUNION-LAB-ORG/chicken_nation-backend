@@ -22,12 +22,13 @@ import { OrderItemDto } from '../dto/order-create.dto';
 import { nomSurLaCommande } from './nom-client.helper';
 import { MapsService } from 'src/modules/maps/maps.service';
 import { choisirRestaurant } from './acheminement.rules';
-import { paiementLivraisonActif, REGLAGE_PAIEMENT_LIVRAISON_SITE } from './paiement-livraison.rules';
 import {
-  CLES_REGLAGES_COMMANDE_APPLI,
-  ReglagesCommandeAppli,
-  reglagesCommandeAppli,
-} from './reglages-commande-appli.rules';
+  CLES_REGLAGES_COMMANDE,
+  ModeReception,
+  modeReception,
+  ReglagesCommande,
+  reglagesCommande,
+} from './reglages-commande.rules';
 
 @Injectable()
 export class OrderV2Helper {
@@ -56,27 +57,20 @@ export class OrderV2Helper {
   }
 
   /**
-   * Paiement à la livraison proposé sur le site (Paramètres > Commandes).
-   * Public pour que `GET /orders/conditions-commande` l'annonce avec la même
-   * lecture que `createv2` : le site ne montre jamais une option que la
-   * création refuserait. Absent : proposé (`paiementLivraisonActif`).
+   * Types de commande, paiement permis et parcours d'une commande à payer à la
+   * réception, pour l'application ET le site (26/11, Paramètres > Commandes).
+   * Même lecture pour `GET /orders/conditions-commande` et pour le contrôle de
+   * `createv2` : ni l'application ni le site ne montrent un choix que la
+   * création refuserait. `livraisonCoupee` : la coupure temporaire de la
+   * livraison, lue par l'appelant. L'ancien réglage du site
+   * (`order_paiement_livraison_site`) n'est plus lu qu'ici, comme valeur de
+   * départ du paiement d'une livraison (`reglages-commande.rules.ts`).
    */
-  async paiementLivraisonSiteActif(): Promise<boolean> {
-    return paiementLivraisonActif(await this.settingsService.get(REGLAGE_PAIEMENT_LIVRAISON_SITE));
-  }
-
-  /**
-   * Types de commande et paiement permis dans l'application (26/11,
-   * Paramètres > Commandes). Même lecture pour `GET /orders/conditions-commande`
-   * et pour le contrôle de `createv2` : l'application ne montre jamais un
-   * choix que la création refuserait. `livraisonCoupee` : la coupure
-   * temporaire de la livraison, lue par l'appelant.
-   */
-  async reglagesCommandeAppli(
+  async reglagesCommande(
     livraisonCoupee?: { disabled: boolean; message: string } | null,
-  ): Promise<ReglagesCommandeAppli> {
-    const valeurs = await this.settingsService.getMany(CLES_REGLAGES_COMMANDE_APPLI);
-    return reglagesCommandeAppli(valeurs, livraisonCoupee);
+  ): Promise<{ types: ReglagesCommande; reception: ModeReception }> {
+    const valeurs = await this.settingsService.getMany(CLES_REGLAGES_COMMANDE);
+    return { types: reglagesCommande(valeurs, livraisonCoupee), reception: modeReception(valeurs) };
   }
 
   /**

@@ -88,7 +88,13 @@ const MOYENS = [null, ...Object.values(PaymentMethod)];
 /** Auteur de l'annulation : vide, le client (panier annulé), le personnel. */
 const AUTEURS = [null, 'client', 'agent'];
 
-/** Toutes les combinaisons des sept champs des règles, canal, moyen et auteur vides compris. */
+/**
+ * Repère `Order.a_confirmer` (26/11) : colonne obligatoire, faux sur toute
+ * commande d'avant, vrai sur une commande créée « après confirmation ».
+ */
+const REPERES = [false, true];
+
+/** Toutes les combinaisons des huit champs des règles, canal, moyen et auteur vides compris. */
 function* combinaisons(): Generator<Ligne> {
   for (const auto of [true, false])
     for (const status of Object.values(OrderStatus))
@@ -97,12 +103,14 @@ function* combinaisons(): Generator<Ligne> {
           for (const entity_status of Object.values(EntityStatus))
             for (const channel of CANAUX)
               for (const cancelled_by of AUTEURS)
-                yield { auto, status, paied, payment_method, entity_status, channel, cancelled_by };
+                for (const a_confirmer of REPERES)
+                  yield { auto, status, paied, payment_method, entity_status, channel, cancelled_by, a_confirmer };
 }
 
-/** Commande du site à payer à la livraison, juste créée. */
+/** Commande du site à payer à la livraison, juste créée (sans repère : comme avant le 26/11). */
 const aConfirmer = (surcharge: Ligne = {}): Ligne => ({
   auto: true,
+  a_confirmer: false,
   channel: OrderChannel.WEB,
   payment_method: PaymentMethod.OFFLINE,
   paied: false,
@@ -121,12 +129,28 @@ describe('estAConfirmer et A_CONFIRMER_WHERE', () => {
       expect({ commande, verdict: retenue(commande, A_CONFIRMER_WHERE) }).toEqual({ commande, verdict: attendu });
       if (attendu) nombre += 1;
     }
-    // Un seul cas : site, à la livraison, auto, en attente, non payée, non
-    // supprimée (ACTIVE ou INACTIVE), quel que soit l'auteur d'annulation lu.
-    expect(nombre).toBe((Object.values(EntityStatus).length - 1) * AUTEURS.length);
+    // À la réception, auto, en attente, non payée, non supprimée (ACTIVE ou
+    // INACTIVE), quel que soit l'auteur d'annulation lu, et : le site sans
+    // repère (comme avant), ou n'importe quel canal avec le repère.
+    expect(nombre).toBe((Object.values(EntityStatus).length - 1) * AUTEURS.length * (CANAUX.length + 1));
   });
 
-  it('le canal APP, le centre d’appels, la caisse et un canal vide ne sont jamais à confirmer', () => {
+  it('avec le repère, une commande de l’application est à confirmer, comme celle du site', () => {
+    for (const channel of [OrderChannel.APP, OrderChannel.WEB, null]) {
+      const c = aConfirmer({ channel, a_confirmer: true });
+      expect({ channel, verdict: estAConfirmer(c) }).toEqual({ channel, verdict: true });
+      expect({ channel, verdict: retenue(c, A_CONFIRMER_WHERE) }).toEqual({ channel, verdict: true });
+      expect({ channel, verdict: sql3(c, PAS_A_CONFIRMER_WHERE) }).toEqual({ channel, verdict: false });
+    }
+    // Le repère ne suffit pas : confirmée, payée ou payée en ligne, elle ne l'est plus.
+    const appli = (surcharge: Ligne) => aConfirmer({ channel: OrderChannel.APP, a_confirmer: true, ...surcharge });
+    expect(estAConfirmer(appli({ status: OrderStatus.ACCEPTED }))).toBe(false);
+    expect(estAConfirmer(appli({ paied: true }))).toBe(false);
+    expect(estAConfirmer(appli({ payment_method: PaymentMethod.ONLINE }))).toBe(false);
+    expect(estAConfirmer(appli({ auto: false }))).toBe(false);
+  });
+
+  it('sans repère, le canal APP, le centre d’appels, la caisse et un canal vide ne sont jamais à confirmer', () => {
     for (const channel of [OrderChannel.APP, OrderChannel.CALL_CENTER, OrderChannel.RESTAURANT, null, undefined]) {
       expect(estAConfirmer(aConfirmer({ channel }))).toBe(false);
     }
@@ -186,6 +210,17 @@ describe('commandeEffective et BROUILLON_WHERE avec la logique de SQL', () => {
     }
   });
 
+  it('commande de l’application créée « après confirmation » (repère) : un brouillon, pas encore une commande', () => {
+    const c = aConfirmer({ channel: OrderChannel.APP, a_confirmer: true });
+    expect(retenue(c, commandeEffective())).toBe(false);
+    expect(retenue(c, BROUILLON_WHERE)).toBe(true);
+    expect(estBrouillon(c)).toBe(true);
+    // Confirmée au téléphone (manuelle, acceptée), elle compte.
+    const confirmee = { ...c, auto: false, status: OrderStatus.ACCEPTED };
+    expect(retenue(confirmee, commandeEffective())).toBe(true);
+    expect(retenue(confirmee, BROUILLON_WHERE)).toBe(false);
+  });
+
   it('confirmée par le centre d’appels (manuelle, acceptée) : effective', () => {
     const c = aConfirmer({ auto: false, status: OrderStatus.ACCEPTED });
     expect(retenue(c, commandeEffective())).toBe(true);
@@ -214,7 +249,13 @@ describe('commandeEffective et BROUILLON_WHERE avec la logique de SQL', () => {
   });
 
   it('une annulation ordinaire sans auteur, ou d’avant le 02/10 sans canal, reste une commande effective', () => {
-    const annulee = { auto: true, status: OrderStatus.CANCELLED, paied: false, entity_status: EntityStatus.ACTIVE };
+    const annulee = {
+      auto: true,
+      a_confirmer: false,
+      status: OrderStatus.CANCELLED,
+      paied: false,
+      entity_status: EntityStatus.ACTIVE,
+    };
     expect(retenue({ ...annulee, payment_method: PaymentMethod.ONLINE, channel: null, cancelled_by: null }, commandeEffective())).toBe(true);
     expect(retenue({ ...annulee, payment_method: PaymentMethod.OFFLINE, channel: null, cancelled_by: 'client' }, commandeEffective())).toBe(true);
     expect(retenue({ ...annulee, payment_method: PaymentMethod.ONLINE, channel: null, cancelled_by: 'client' }, commandeEffective())).toBe(false);
@@ -308,10 +349,19 @@ describe('commande du site annulée avant toute confirmation', () => {
     }
   });
 
+  it('avec le repère, une commande de l’application annulée avant confirmation ne compte pas non plus', () => {
+    const c = annuleeParLAgent({ channel: OrderChannel.APP, a_confirmer: true });
+    expect(estAnnuleeAvantConfirmation(c)).toBe(true);
+    expect(retenue(c, commandeEffective())).toBe(false);
+    expect(retenue(c, BROUILLON_WHERE)).toBe(false);
+    // Confirmée puis annulée : elle compte, comme celle du site.
+    expect(retenue({ ...c, accepted_at: new Date('2026-11-26T10:00:00.000Z') }, commandeEffective())).toBe(true);
+  });
+
   it('SQL : jamais NULL, alias contrôlé, écarté de COMMANDE_EFFECTIVE_SQL', () => {
     const sql = ANNULEE_AVANT_CONFIRMATION_SQL('o').replace(/\s+/g, ' ');
     expect(sql).toBe(
-      `(o."auto" IS TRUE AND o."channel" IS NOT DISTINCT FROM 'WEB' AND o."payment_method" IS NOT DISTINCT FROM 'OFFLINE' AND o."paied" = false AND o."status" = 'CANCELLED' AND o."accepted_at" IS NULL)`,
+      `(o."auto" IS TRUE AND (o."channel" IS NOT DISTINCT FROM 'WEB' OR o."a_confirmer" IS TRUE) AND o."payment_method" IS NOT DISTINCT FROM 'OFFLINE' AND o."paied" = false AND o."status" = 'CANCELLED' AND o."accepted_at" IS NULL)`,
     );
     expect(() => ANNULEE_AVANT_CONFIRMATION_SQL('o; DROP TABLE "Order"')).toThrow();
     expect(COMMANDE_EFFECTIVE_SQL.replace(/\s+/g, ' ')).toContain(`AND NOT ${sql}`);
@@ -323,7 +373,7 @@ describe('A_CONFIRMER_SQL', () => {
 
   it('compare canal et moyen de paiement sans jamais valoir NULL', () => {
     expect(sql).toBe(
-      `(o."auto" IS TRUE AND o."channel" IS NOT DISTINCT FROM 'WEB' AND o."payment_method" IS NOT DISTINCT FROM 'OFFLINE' AND o."paied" = false AND o."status" = 'PENDING')`,
+      `(o."auto" IS TRUE AND (o."channel" IS NOT DISTINCT FROM 'WEB' OR o."a_confirmer" IS TRUE) AND o."payment_method" IS NOT DISTINCT FROM 'OFFLINE' AND o."paied" = false AND o."status" = 'PENDING')`,
     );
   });
 
@@ -366,8 +416,8 @@ describe('textes des refus', () => {
   const textes = [
     REFUS_PAIEMENT_SITE.moyenAbsent,
     REFUS_PAIEMENT_SITE.indisponible,
-    REFUS_PAIEMENT_SITE.livraisonSeulement,
     REFUS_PAIEMENT_SITE.dejaEnAttente('ORD-261019-12345'),
+    REFUS_PAIEMENT_SITE.dejaEnAttenteAppli('ORD-261019-12345'),
   ];
 
   it('ceux de la conception, espaces insécables comprises', () => {
@@ -375,9 +425,10 @@ describe('textes des refus', () => {
     expect(textes.map(lisible)).toEqual([
       'Choisissez un moyen de paiement.',
       'Le paiement à la livraison est indisponible pour le moment : payez en ligne.',
-      "Sur le site, le paiement à la livraison n'est proposé que pour une livraison.",
       'Vous avez déjà une commande en attente de confirmation (ORD-261019-12345) : notre équipe vous appelle. ' +
         'Pour la changer, ouvrez-la puis « Modifier ma commande ».',
+      // L'application n'a pas « Modifier ma commande ».
+      'Vous avez déjà une commande en attente de confirmation (ORD-261019-12345) : notre équipe vous appelle.',
     ]);
   });
 

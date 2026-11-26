@@ -1,4 +1,6 @@
 import { EntityStatus, OrderChannel, OrderStatus, PaymentMethod, Prisma } from '@prisma/client';
+// Sans cycle : ce fichier-là n'importe que Prisma, lui aussi.
+import { NI_SITE_NI_REPERE, SITE_OU_REPERE, siteOuRepere } from './paiement-livraison.rules';
 
 /**
  * PANIERS ANNULÉS PAR LE CLIENT (demande du 01/10, revue le 25/11).
@@ -30,22 +32,25 @@ export interface EtatAnnulationClient {
   paied?: boolean | null;
   payment_method?: PaymentMethod | string | null;
   channel?: OrderChannel | string | null;
+  /** Repère « à confirmer » posé à la création (26/11), appli ou site. */
+  a_confirmer?: boolean | null;
   cancelled_by?: string | null;
 }
 
 /**
  * Mode de paiement d'un brouillon : en ligne (application ou site), ou à la
- * livraison sur le site.
+ * réception pour une commande à confirmer (du site, ou portant le repère
+ * `a_confirmer` depuis le 26/11 : application comprise).
  */
 export const PAYABLE_PAR_LE_CLIENT_WHERE: Prisma.OrderWhereInput[] = [
   { payment_method: PaymentMethod.ONLINE },
-  { payment_method: PaymentMethod.OFFLINE, channel: OrderChannel.WEB },
+  { payment_method: PaymentMethod.OFFLINE, OR: SITE_OU_REPERE },
 ];
 
 export function payableParLeClient(commande: EtatAnnulationClient): boolean {
   return (
     commande.payment_method === PaymentMethod.ONLINE ||
-    (commande.payment_method === PaymentMethod.OFFLINE && commande.channel === OrderChannel.WEB)
+    (commande.payment_method === PaymentMethod.OFFLINE && siteOuRepere(commande))
   );
 }
 
@@ -88,7 +93,7 @@ export const PAS_PANIER_ANNULE_PAR_CLIENT_WHERE: Prisma.OrderWhereInput = {
     {
       AND: [
         { payment_method: { not: PaymentMethod.ONLINE } },
-        { OR: [{ payment_method: { not: PaymentMethod.OFFLINE } }, { channel: null }, { channel: { not: OrderChannel.WEB } }] },
+        { OR: [{ payment_method: { not: PaymentMethod.OFFLINE } }, NI_SITE_NI_REPERE] },
       ],
     },
     { paied: true },
@@ -104,7 +109,8 @@ export const PAS_PANIER_ANNULE_PAR_CLIENT_WHERE: Prisma.OrderWhereInput = {
  */
 export const PANIER_ANNULE_PAR_CLIENT_SQL = (a: string) => `(${a}."auto" IS TRUE
     AND (${a}."payment_method" IS NOT DISTINCT FROM 'ONLINE'
-      OR (${a}."payment_method" IS NOT DISTINCT FROM 'OFFLINE' AND ${a}."channel" IS NOT DISTINCT FROM 'WEB'))
+      OR (${a}."payment_method" IS NOT DISTINCT FROM 'OFFLINE'
+        AND (${a}."channel" IS NOT DISTINCT FROM 'WEB' OR ${a}."a_confirmer" IS TRUE)))
     AND ${a}."paied" = false AND ${a}."status" = 'CANCELLED'
     AND ${a}."cancelled_by" IS NOT DISTINCT FROM '${ANNULEE_PAR_CLIENT}')`;
 

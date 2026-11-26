@@ -2076,6 +2076,11 @@ model Order {
   /// est aligné sur l'instant du PAIEMENT afin que la commande remonte en tête de liste
   /// et soit filtrée sur la bonne période. `submitted_at` conserve la création d'origine.
   submitted_at      DateTime?             @db.Timestamp(6)
+  /// Commande à payer à la réception, créée quand le réglage demande une
+  /// confirmation du centre d'appels (26/11). Le restaurant ne la voit qu'une
+  /// fois confirmée. Les commandes du site d'avant ce champ restent reconnues
+  /// à leur canal (`paiement-livraison.rules.ts`).
+  a_confirmer       Boolean               @default(false)
   created_at        DateTime              @default(now()) @db.Timestamp(6)
   updated_at        DateTime              @default(now()) @db.Timestamp(6)
   Comment           Comment[]
