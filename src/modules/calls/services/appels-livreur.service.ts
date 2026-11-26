@@ -534,6 +534,8 @@ export class AppelsLivreurService implements OnModuleDestroy {
         direction,
         phase,
         peerLabel: deClient ? LIBELLE_CLIENT : LIBELLE_SERVICE_CLIENT,
+        // Qui est au bout du fil, pour l'appli : même champ que sur `call:incoming`.
+        appelant: deClient ? 'CLIENT' : 'SERVICE_CLIENT',
         agentName: agent ?? null,
         startedAt: call.started_at,
         answeredAt: call.answered_at,

@@ -286,6 +286,7 @@ describe('Appels avec les clients', () => {
         callId: ligne.id,
         phase: 'ringing',
         peerLabel: 'Client',
+        appelant: 'CLIENT',
         agentName: 'Awa',
         order_reference: 'ORD-261126-00042',
       });
