@@ -93,6 +93,7 @@ import {
   libelleSource,
 } from '../helpers/canal-commande.rules';
 import { ConditionsCommande, conditionsCommandePubliques } from '../helpers/conditions-commande.rules';
+import { noteDeCommande } from '../helpers/note-commande.rules';
 import { A_CONFIRMER_WHERE, REFUS_PAIEMENT_SITE } from '../helpers/paiement-livraison.rules';
 import {
   cadeauxDesLignes,
@@ -240,6 +241,9 @@ export class OrderService {
       items, address, restaurant_id, type, code_promo, date, fullname, phone, email, payment_method, points,
       delivery_service: overrideDeliveryService,
     } = createOrderDto;
+    // Note de la commande (26/11) : l'appli y écrit pour qui est la commande
+    // quand le client commande pour une autre personne.
+    const note = noteDeCommande(createOrderDto.note);
 
     // Site web : en ligne, ou à la livraison sous conditions. L'application
     // n'est pas concernée : elle accepte toujours OFFLINE, sans contrôle.
@@ -421,6 +425,7 @@ export class OrderService {
           // backoffice affichait « Réduction » sans en donner la raison
           // (le détail/drawer lit order.code_promo → « Réduction · Code XXX »).
           ...(promoResult.type && code_promo ? { code_promo } : {}),
+          ...(note && { note }),
           net_amount: Number(netAmount),
           amount: Number(totalAmount),
           date: finalDate,

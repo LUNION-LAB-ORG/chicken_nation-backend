@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsBoolean, IsUUID, ValidateNested, IsNumber, Max, Min } from "class-validator";
+import { ArrayMinSize, IsArray, IsDateString, IsEnum, IsInt, IsOptional, IsString, IsBoolean, IsUUID, ValidateNested, IsNumber, Max, MaxLength, Min } from "class-validator";
 import { Transform, Type } from "class-transformer";
 import { OrderType } from "src/modules/order/enums/order-type.enum";
 import { DeliveryService, PaymentMethod } from "@prisma/client";
@@ -128,6 +128,16 @@ export class OrderCreateDto {
     @IsOptional()
     @IsString()
     email?: string;
+
+    /**
+     * Note de la commande (26/11). L'appli y écrit pour qui est la commande
+     * quand le client commande pour une autre personne.
+     */
+    @ApiPropertyOptional({ description: "Note de la commande (pour qui elle est, quand le client commande pour une autre personne)" })
+    @IsOptional()
+    @IsString()
+    @MaxLength(500)
+    note?: string;
 
     @ApiProperty({ description: "Éléments de la commande", type: [OrderItemDto] })
     @IsArray()
