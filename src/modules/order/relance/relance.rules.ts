@@ -261,9 +261,15 @@ export interface BrouillonLu {
   cancelled_at?: Date | null;
   /**
    * Canal de la commande (APP, WEB...). Affiché, et lu par `estAConfirmer` :
-   * seule une commande du site (WEB) à payer à la livraison est à confirmer.
+   * une commande du site (WEB) à payer à la livraison est à confirmer.
    */
   channel?: string | null;
+  /**
+   * Repère « à confirmer » (26/11), lu par `estAConfirmer` : posé à la
+   * création d'une commande de l'application ou du site à payer à la
+   * réception, quand le réglage demande la confirmation du centre d'appels.
+   */
+  a_confirmer?: boolean | null;
 }
 
 export interface CommandeEffectiveLue {

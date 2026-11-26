@@ -582,6 +582,35 @@ describe('OrderRelanceService : commandes du site à payer à la livraison (19/1
     expect(prisma.order.findUnique.mock.calls[0][0].select.channel).toBe(true);
   });
 
+  // 26/11, « directe ou après confirmation » : même réglage pour l'application.
+  it('commande de l’APPLICATION à payer à la réception, avec le repère : listée tout de suite, à confirmer, et ses gestes passent', async () => {
+    const panier = commande(maintenant(), 20);
+    // À emporter, à payer au restaurant, réglage « après confirmation ».
+    const c = commande(maintenant(), 0.1, { payment_method: 'OFFLINE', channel: 'APP', a_confirmer: true, type: 'PICKUP' });
+    // Même commande sans le repère (réglage « directe », ou d'avant le 26/11) : jamais dans la relance.
+    const directe = commande(maintenant(), 0.2, { payment_method: 'OFFLINE', channel: 'APP', a_confirmer: false });
+    const { service, prisma } = monterRelance({ commandes: [panier, c, directe] });
+
+    const liste = await service.lister(AWA);
+
+    expect(liste.groupes.map((g) => [g.cle, g.etat, g.a_confirmer])).toEqual([
+      [c.id, 'A_RELANCER', true],
+      [panier.id, 'A_RELANCER', false],
+    ]);
+    expect(liste.groupes[0].tete).toEqual(
+      expect.objectContaining({ id: c.id, channel: 'APP', type: 'PICKUP', paiement_a_la_livraison: true }),
+    );
+    expect(liste.compteurs.a_confirmer).toBe(1);
+
+    // « Je m'en occupe » : la lecture du geste demande aussi le repère, sans
+    // quoi la commande ne serait pas reconnue (409).
+    const { groupe } = await service.prendre(c.id, AWA);
+    expect(groupe).toEqual(expect.objectContaining({ cle: c.id, etat: 'PRIS', a_confirmer: true }));
+    expect(prisma.order.findUnique.mock.calls[0][0].select.a_confirmer).toBe(true);
+    // Elle ne s'ignore pas, comme celle du site : on la transmet ou on l'annule.
+    await expect(service.ignorer(c.id, { raison_code: 'CLIENT_INJOIGNABLE' }, AWA)).rejects.toThrow(NON_IGNORABLE);
+  });
+
   it('« Je m’en occupe » dès la création : jamais « le client est peut-être en train de payer »', async () => {
     const c = aConfirmer(0.1);
     const { service } = monterRelance({ commandes: [c] });
