@@ -6,6 +6,7 @@
  * tests casse, relisez conditions-commande.rules.ts avant de l'adapter.
  */
 
+import { reglagesCommandeAppli } from './reglages-commande-appli.rules';
 import { DELIVERY_FEE_DEFAULT_GRID, DeliveryFeeHelper, IDeliveryFeeTier } from './delivery-fee.helper';
 import { conditionsCommandePubliques, grillePublique, PalierPublic, tauxPublic } from './conditions-commande.rules';
 
@@ -131,15 +132,19 @@ describe('grillePublique', () => {
 });
 
 describe('conditionsCommandePubliques', () => {
-  it('ne publie que le taux, la grille, son statut et le paiement à la livraison : rien d\'autre', () => {
+  // Types et paiement de l'application (26/11), réglages absents.
+  const typesAppli = reglagesCommandeAppli({});
+
+  it('ne publie que le taux, la grille, son statut, le paiement à la livraison et les types de l\'appli : rien d\'autre', () => {
     const conditions = conditionsCommandePubliques({
       tauxFraisService: 0.01,
       grille: [{ maxKm: 2, price: 1000 }, { maxKm: null, price: 2000 }],
       zonesLivreurActives: false,
       paiementLivraisonActif: true,
+      typesAppli,
     });
     expect(Object.keys(conditions).sort()).toEqual(
-      ['grille_frais', 'grille_frais_appliquee', 'paiement_livraison', 'taux_frais_service'].sort(),
+      ['appli', 'grille_frais', 'grille_frais_appliquee', 'paiement_livraison', 'taux_frais_service'].sort(),
     );
     expect(conditions).toEqual({
       taux_frais_service: 0.01,
@@ -149,6 +154,7 @@ describe('conditionsCommandePubliques', () => {
       ],
       grille_frais_appliquee: true,
       paiement_livraison: { disponible: true },
+      appli: { types: typesAppli },
     });
   });
 
@@ -158,6 +164,7 @@ describe('conditionsCommandePubliques', () => {
       grille: DELIVERY_FEE_DEFAULT_GRID,
       zonesLivreurActives: true,
       paiementLivraisonActif: true,
+      typesAppli,
     });
     expect(conditions.grille_frais_appliquee).toBe(false);
     expect(conditions.grille_frais).toHaveLength(9);
@@ -169,6 +176,7 @@ describe('conditionsCommandePubliques', () => {
       grille: DELIVERY_FEE_DEFAULT_GRID,
       zonesLivreurActives: true,
       paiementLivraisonActif: false,
+      typesAppli,
     });
     expect(conditions.paiement_livraison).toEqual({ disponible: false });
   });

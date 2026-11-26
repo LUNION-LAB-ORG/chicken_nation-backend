@@ -82,6 +82,17 @@ describe('OrderService.obtenirDisponibiliteLivraison', () => {
   });
 });
 
+/** Types de l'application quand rien n'est réglé : livraison et à emporter, en ligne ; pas de sur place. */
+const TYPES_APPLI = {
+  DELIVERY: { actif: true, paiement: 'EN_LIGNE', message: null },
+  PICKUP: { actif: true, paiement: 'EN_LIGNE', message: null },
+  TABLE: {
+    actif: false,
+    paiement: 'EN_LIGNE',
+    message: "La commande sur place n'est pas proposée pour le moment. Choisissez un autre mode de réception.",
+  },
+};
+
 describe('OrderService.obtenirConditionsCommande', () => {
   const monter = (taux: number, reglages: Record<string, unknown>, paiementLivraison = true) => {
     const service = Object.create(OrderService.prototype) as OrderService;
@@ -89,8 +100,13 @@ describe('OrderService.obtenirConditionsCommande', () => {
       orderHelperV2: {
         getTaxRate: jest.fn().mockResolvedValue(taux),
         paiementLivraisonSiteActif: jest.fn().mockResolvedValue(paiementLivraison),
+        // Types et paiement de l'application (26/11), réglages absents.
+        reglagesCommandeAppli: jest.fn().mockResolvedValue(TYPES_APPLI),
       },
-      deliveryFeeHelper: { load: jest.fn().mockResolvedValue(reglages) },
+      deliveryFeeHelper: {
+        load: jest.fn().mockResolvedValue(reglages),
+        isAppDeliveryDisabled: jest.fn().mockResolvedValue({ disabled: false, message: '' }),
+      },
     });
     return service;
   };
@@ -117,6 +133,7 @@ describe('OrderService.obtenirConditionsCommande', () => {
       ],
       grille_frais_appliquee: true,
       paiement_livraison: { disponible: true },
+      appli: { types: TYPES_APPLI },
     });
     expect(JSON.stringify(conditions)).not.toMatch(/TURBO|CHICKEN_NATION|restaurant-1/);
   });

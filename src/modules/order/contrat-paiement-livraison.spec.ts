@@ -33,7 +33,8 @@ describe('contrat : GET /orders/conditions-commande', () => {
   /** Service réel, réglage du paiement à la livraison lu par le vrai `OrderV2Helper`. */
   const monter = (reglage: string | null) => {
     const helper = Object.create(OrderV2Helper.prototype) as OrderV2Helper;
-    const settingsService = { get: jest.fn().mockResolvedValue(reglage) };
+    // `getMany` : réglages des types de l'application (26/11), absents ici.
+    const settingsService = { get: jest.fn().mockResolvedValue(reglage), getMany: jest.fn().mockResolvedValue({}) };
     Object.assign(helper, { settingsService, getTaxRate: jest.fn().mockResolvedValue(0.05) });
     const service = Object.create(OrderService.prototype) as OrderService;
     Object.assign(service, {
@@ -46,6 +47,7 @@ describe('contrat : GET /orders/conditions-commande', () => {
           ],
           turboZonesEnabled: false,
         }),
+        isAppDeliveryDisabled: jest.fn().mockResolvedValue({ disabled: false, message: '' }),
       },
     });
     return { service, settingsService };
@@ -62,6 +64,18 @@ describe('contrat : GET /orders/conditions-commande', () => {
       ],
       grille_frais_appliquee: true,
       paiement_livraison: { disponible: true },
+      // Application (26/11), rien de réglé : ce qu'elle faisait déjà.
+      appli: {
+        types: {
+          DELIVERY: { actif: true, paiement: 'EN_LIGNE', message: null },
+          PICKUP: { actif: true, paiement: 'EN_LIGNE', message: null },
+          TABLE: {
+            actif: false,
+            paiement: 'EN_LIGNE',
+            message: "La commande sur place n'est pas proposée pour le moment. Choisissez un autre mode de réception.",
+          },
+        },
+      },
     });
     expect(settingsService.get).toHaveBeenCalledWith('order_paiement_livraison_site');
     expect(REGLAGE_PAIEMENT_LIVRAISON_SITE).toBe('order_paiement_livraison_site');

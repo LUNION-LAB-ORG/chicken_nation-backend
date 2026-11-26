@@ -23,6 +23,11 @@ import { nomSurLaCommande } from './nom-client.helper';
 import { MapsService } from 'src/modules/maps/maps.service';
 import { choisirRestaurant } from './acheminement.rules';
 import { paiementLivraisonActif, REGLAGE_PAIEMENT_LIVRAISON_SITE } from './paiement-livraison.rules';
+import {
+  CLES_REGLAGES_COMMANDE_APPLI,
+  ReglagesCommandeAppli,
+  reglagesCommandeAppli,
+} from './reglages-commande-appli.rules';
 
 @Injectable()
 export class OrderV2Helper {
@@ -58,6 +63,20 @@ export class OrderV2Helper {
    */
   async paiementLivraisonSiteActif(): Promise<boolean> {
     return paiementLivraisonActif(await this.settingsService.get(REGLAGE_PAIEMENT_LIVRAISON_SITE));
+  }
+
+  /**
+   * Types de commande et paiement permis dans l'application (26/11,
+   * Paramètres > Commandes). Même lecture pour `GET /orders/conditions-commande`
+   * et pour le contrôle de `createv2` : l'application ne montre jamais un
+   * choix que la création refuserait. `livraisonCoupee` : la coupure
+   * temporaire de la livraison, lue par l'appelant.
+   */
+  async reglagesCommandeAppli(
+    livraisonCoupee?: { disabled: boolean; message: string } | null,
+  ): Promise<ReglagesCommandeAppli> {
+    const valeurs = await this.settingsService.getMany(CLES_REGLAGES_COMMANDE_APPLI);
+    return reglagesCommandeAppli(valeurs, livraisonCoupee);
   }
 
   /**

@@ -1,4 +1,5 @@
 import type { IDeliveryFeeTier } from './delivery-fee.helper';
+import type { ReglagesCommandeAppli } from './reglages-commande-appli.rules';
 
 /**
  * CONDITIONS DE COMMANDE PUBLIQUES (05/10/2026).
@@ -24,6 +25,12 @@ import type { IDeliveryFeeTier } from './delivery-fee.helper';
  *    `OrderV2Helper.paiementLivraisonSiteActif` comme à la création). Un
  *    serveur plus ancien n'envoie pas ce champ : le site cache alors l'option.
  *
+ *  - `appli.types` (26/11) : pour l'application, chaque type de commande
+ *    (`DELIVERY`, `PICKUP`, `TABLE`) avec `actif`, `paiement` (`EN_LIGNE`,
+ *    `A_LA_RECEPTION`, `LES_DEUX`) et, s'il n'est pas proposé, `message`
+ *    (`reglages-commande-appli.rules.ts`). Un serveur plus ancien n'envoie pas
+ *    ce champ : l'application garde alors livraison et à emporter, en ligne.
+ *
  * Rien d'autre que les frais et la disponibilité du paiement à la livraison :
  * ni service de livraison par restaurant, ni clé, ni offre. Le prix réel d'une adresse reste donné par `/orders/frais-livraison`, et le
  * montant payé par la commande créée.
@@ -41,6 +48,8 @@ export interface ConditionsCommande {
   grille_frais_appliquee: boolean;
   /** Paiement à la livraison proposé sur le site (livraison seulement). */
   paiement_livraison: { disponible: boolean };
+  /** Types de commande et paiement permis dans l'application. */
+  appli: { types: ReglagesCommandeAppli };
 }
 
 /** Taux publié : un nombre fini et positif, sinon `null` (réglage mal saisi). */
@@ -97,11 +106,13 @@ export function conditionsCommandePubliques(reglages: {
   grille: readonly IDeliveryFeeTier[] | null | undefined;
   zonesLivreurActives: boolean;
   paiementLivraisonActif: boolean;
+  typesAppli: ReglagesCommandeAppli;
 }): ConditionsCommande {
   return {
     taux_frais_service: tauxPublic(reglages.tauxFraisService),
     grille_frais: grillePublique(reglages.grille),
     grille_frais_appliquee: !reglages.zonesLivreurActives,
     paiement_livraison: { disponible: reglages.paiementLivraisonActif === true },
+    appli: { types: reglages.typesAppli },
   };
 }

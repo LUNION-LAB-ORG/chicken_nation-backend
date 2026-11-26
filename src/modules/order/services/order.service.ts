@@ -94,6 +94,7 @@ import {
 } from '../helpers/canal-commande.rules';
 import { ConditionsCommande, conditionsCommandePubliques } from '../helpers/conditions-commande.rules';
 import { noteDeCommande } from '../helpers/note-commande.rules';
+import { refusCommandeAppli } from '../helpers/reglages-commande-appli.rules';
 import { A_CONFIRMER_WHERE, REFUS_PAIEMENT_SITE } from '../helpers/paiement-livraison.rules';
 import {
   cadeauxDesLignes,
@@ -250,6 +251,11 @@ export class OrderService {
     if (canal === OrderChannel.WEB) {
       await this.controlerPaiementSite(customer_id, payment_method, type);
     }
+    // Application (26/11) : type de commande proposé et moyen de paiement
+    // permis, réglés au back-office (`reglages-commande-appli.rules.ts`).
+    if (canal === OrderChannel.APP) {
+      await this.controlerCommandeAppli(payment_method, type);
+    }
 
     // 🚫 Livraison désactivée pour l'app (réglage backoffice temporaire).
     // createv2 = chemin EXCLUSIF de l'app → ne bloque jamais le call center.
@@ -392,7 +398,16 @@ export class OrderService {
 
     const orderNumber = await this.referenceLibre(() => this.orderHelperV2.generateOrderReference());
 
-    const next_status = this.orderHelperV2.getOrderStatus(payment_method ?? PaymentMethod.OFFLINE, type);
+    // Application, à payer à la réception (26/11, réglage du back-office) : la
+    // commande va directement au restaurant, donc ACCEPTÉE dès la création,
+    // comme une commande saisie par le personnel (cloche, points, promotion :
+    // `orderCreatedEventListener` les traite à la création). Celle du site
+    // reste en attente : le centre d'appels la confirme d'abord.
+    const directeAuRestaurant =
+      canal === OrderChannel.APP && (payment_method ?? PaymentMethod.OFFLINE) === PaymentMethod.OFFLINE;
+    const next_status = directeAuRestaurant
+      ? OrderStatus.ACCEPTED
+      : this.orderHelperV2.getOrderStatus(payment_method ?? PaymentMethod.OFFLINE, type);
     // 6. Sauvegarde en Base de données
     const order = await this.prisma.$transaction(async (prisma) => {
       const created = await prisma.order.create({
@@ -587,6 +602,22 @@ export class OrderService {
    * peuvent encore passer toutes les deux. La relance les regroupe alors, et
    * l'agent annule le doublon.
    */
+  /**
+   * Commande de l'application (26/11) : le type doit être proposé et le moyen
+   * de paiement permis (Paramètres > Commandes).
+   *
+   * À payer à la réception, elle va DIRECTEMENT au restaurant (décision du
+   * client, 26/11) : ce n'est pas une commande à confirmer, contrairement à
+   * celle du site, que le centre d'appels appelle d'abord
+   * (`paiement-livraison.rules.ts`, canal WEB seulement).
+   */
+  private async controlerCommandeAppli(payment_method: PaymentMethod | undefined, type: OrderType): Promise<void> {
+    const coupure = type === OrderType.DELIVERY ? await this.deliveryFeeHelper.isAppDeliveryDisabled() : null;
+    const reglages = await this.orderHelperV2.reglagesCommandeAppli(coupure);
+    const refus = refusCommandeAppli(reglages, type, payment_method);
+    if (refus) throw new BadRequestException(refus);
+  }
+
   private async controlerPaiementSite(
     customer_id: string,
     payment_method: PaymentMethod | undefined,
@@ -4560,18 +4591,22 @@ export class OrderService {
    * `conditions-commande.rules.ts`.
    */
   async obtenirConditionsCommande(): Promise<ConditionsCommande> {
-    const [taux, livraison, paiementLivraison] = await Promise.all([
+    const [taux, livraison, paiementLivraison, coupureLivraison] = await Promise.all([
       this.orderHelperV2.getTaxRate(),
       this.deliveryFeeHelper.load(),
       // Même lecture que le refus de `createv2` : le site ne propose jamais
       // une option que la création refuserait.
       this.orderHelperV2.paiementLivraisonSiteActif(),
+      this.deliveryFeeHelper.isAppDeliveryDisabled(),
     ]);
     return conditionsCommandePubliques({
       tauxFraisService: taux,
       grille: livraison.grid,
       zonesLivreurActives: livraison.turboZonesEnabled,
       paiementLivraisonActif: paiementLivraison,
+      // Types et paiement de l'application (26/11), coupure temporaire de la
+      // livraison comprise : mêmes lectures que le contrôle de `createv2`.
+      typesAppli: await this.orderHelperV2.reglagesCommandeAppli(coupureLivraison),
     });
   }
 }

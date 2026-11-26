@@ -98,6 +98,12 @@ function monter({ reglageActif = true, commandes = [] as Ligne[] } = {}) {
       calculateTax: jest.fn().mockResolvedValue(500),
       generateOrderReference: jest.fn().mockReturnValue('ORD-261019-22222'),
       getOrderStatus: jest.fn().mockReturnValue(OrderStatus.PENDING),
+      // Types et paiement de l'application (26/11) : tout permis, ces tests portent sur autre chose.
+      reglagesCommandeAppli: jest.fn().mockResolvedValue({
+        DELIVERY: { actif: true, paiement: 'LES_DEUX', message: null },
+        PICKUP: { actif: true, paiement: 'LES_DEUX', message: null },
+        TABLE: { actif: true, paiement: 'LES_DEUX', message: null },
+      }),
     },
     deliveryFeeHelper: {
       isAppDeliveryDisabled: jest.fn().mockResolvedValue({ disabled: false, message: '' }),
@@ -286,6 +292,76 @@ describe('OrderService.createv2 : paiement à la livraison sur le site', () => {
     expect(estBrouillon(commande)).toBe(false);
     expect(m.orderEvent.orderCreatedEvent).toHaveBeenCalledWith(expect.objectContaining({ brouillon: false }));
     expect(m.orderWebSocketService.emitOrderCreated).toHaveBeenCalledWith(commande, { brouillon: false });
+  });
+});
+
+describe('OrderService.createv2 : types et paiement de l’application réglés au back-office (26/11)', () => {
+  /** Réglages de l'application lus par `OrderV2Helper.reglagesCommandeAppli`. */
+  const avecReglages = (types: Record<string, { actif: boolean; paiement: string; message: string | null }>) => {
+    const m = monter({ reglageActif: true });
+    m.orderHelperV2.reglagesCommandeAppli.mockResolvedValue({
+      DELIVERY: { actif: true, paiement: 'EN_LIGNE', message: null },
+      PICKUP: { actif: true, paiement: 'EN_LIGNE', message: null },
+      TABLE: { actif: false, paiement: 'EN_LIGNE', message: 'La commande sur place n’est pas proposée.' },
+      ...types,
+    });
+    return m;
+  };
+  const aEmporter = (payment_method: PaymentMethod) =>
+    corps({ type: OrderType.PICKUP, restaurant_id: RESTAURANT_A, payment_method });
+
+  it('à payer à la réception, permis : la commande va directement au restaurant, acceptée dès la création', async () => {
+    const m = avecReglages({ PICKUP: { actif: true, paiement: 'LES_DEUX', message: null } });
+
+    const commande = await m.service.createv2(CLIENT, aEmporter(PaymentMethod.OFFLINE));
+
+    expect(commande).toEqual(
+      expect.objectContaining({
+        channel: OrderChannel.APP,
+        payment_method: PaymentMethod.OFFLINE,
+        status: OrderStatus.ACCEPTED,
+        paied: false,
+      }),
+    );
+    expect((commande as { accepted_at?: Date | null }).accepted_at).toBeInstanceOf(Date);
+    // Pas une commande à confirmer : le restaurant la reçoit, sans appel du centre d'appels.
+    expect(estBrouillon(commande)).toBe(false);
+    expect(m.orderEvent.orderCreatedEvent).toHaveBeenCalledWith(expect.objectContaining({ brouillon: false }));
+    expect(m.orderWebSocketService.emitOrderCreated).toHaveBeenCalledWith(commande, { brouillon: false });
+  });
+
+  it('en ligne, permis : la commande reste en attente du paiement, comme avant', async () => {
+    const m = avecReglages({ PICKUP: { actif: true, paiement: 'LES_DEUX', message: null } });
+    const commande = await m.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE));
+    expect(commande).toEqual(expect.objectContaining({ status: OrderStatus.PENDING, payment_method: PaymentMethod.ONLINE }));
+    expect(estBrouillon(commande)).toBe(true);
+  });
+
+  it('en ligne seulement : à la réception refusé, rien n’est écrit', async () => {
+    const m = avecReglages({});
+    const rejet = await refus(m.service.createv2(CLIENT, aEmporter(PaymentMethod.OFFLINE)));
+    expect(rejet).toEqual({ classe: BadRequestException, message: 'Pour ce mode de réception, le paiement se fait en ligne.' });
+    expect(m.tx.order.create).not.toHaveBeenCalled();
+  });
+
+  it('à la réception seulement : en ligne refusé', async () => {
+    const m = avecReglages({ PICKUP: { actif: true, paiement: 'A_LA_RECEPTION', message: null } });
+    const rejet = await refus(m.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE)));
+    expect(rejet.classe).toBe(BadRequestException);
+    expect(rejet.message).toContain('le paiement se fait au restaurant');
+    expect(m.tx.order.create).not.toHaveBeenCalled();
+  });
+
+  it('type non proposé dans l’application : refus avec son message', async () => {
+    const m = avecReglages({ PICKUP: { actif: false, paiement: 'EN_LIGNE', message: 'La commande à emporter n’est pas proposée.' } });
+    const rejet = await refus(m.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE)));
+    expect(rejet).toEqual({ classe: BadRequestException, message: 'La commande à emporter n’est pas proposée.' });
+  });
+
+  it('le site n’est pas concerné par les réglages de l’application', async () => {
+    const m = avecReglages({ PICKUP: { actif: false, paiement: 'EN_LIGNE', message: 'x' } });
+    await m.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE), OrderChannel.WEB);
+    expect(m.orderHelperV2.reglagesCommandeAppli).not.toHaveBeenCalled();
   });
 });
 

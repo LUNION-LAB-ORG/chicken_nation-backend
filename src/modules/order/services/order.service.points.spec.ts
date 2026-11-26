@@ -52,6 +52,12 @@ function monter() {
       calculateTax: jest.fn().mockResolvedValue(0),
       generateOrderReference: jest.fn().mockReturnValue('ORD-X'),
       getOrderStatus: jest.fn().mockReturnValue(OrderStatus.PENDING),
+      // Types et paiement de l'application (26/11) : tout permis, ces tests portent sur autre chose.
+      reglagesCommandeAppli: jest.fn().mockResolvedValue({
+        DELIVERY: { actif: true, paiement: 'LES_DEUX', message: null },
+        PICKUP: { actif: true, paiement: 'LES_DEUX', message: null },
+        TABLE: { actif: true, paiement: 'LES_DEUX', message: null },
+      }),
     },
     orderHelper: {
       resolveCustomerData: jest.fn().mockResolvedValue(client),
