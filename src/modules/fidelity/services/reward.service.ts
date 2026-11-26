@@ -3,6 +3,11 @@ import { Prisma, RewardStatus, RewardType } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { platOffrable } from 'src/modules/menu/utils/plat-offrable.util';
 import { VoucherService } from 'src/modules/voucher/voucher.service';
+import {
+    categorieDuPortefeuille,
+    resumePortefeuille,
+    type CategoriePortefeuille,
+} from '../helpers/portefeuille.rules';
 
 /**
  * Récompenses « à gratter » — couche CÉLÉBRATION au-dessus de la comptabilité.
@@ -165,8 +170,18 @@ export class RewardService {
      *
      * Renvoie une liste PLATE triée du plus récent au plus ancien, paginée : un
      * seul statut par ligne, aucune section à recomposer côté client.
+     *
+     * Classement par type (26/11) : `categorie` ne garde qu'un onglet (Points,
+     * Bons ou Cadeaux) ; `resume` porte les chiffres des trois onglets, calculés
+     * sur TOUT le portefeuille. Sans `categorie`, la réponse est celle d'avant
+     * (anciennes applis), le résumé en plus.
      */
-    async getWallet(customer_id: string, page = 1, limit = 20) {
+    async getWallet(
+        customer_id: string,
+        page = 1,
+        limit = 20,
+        categorie: CategoriePortefeuille | null = null,
+    ) {
         const safePage = Math.max(1, Math.floor(page));
         const safeLimit = Math.min(50, Math.max(1, Math.floor(limit)));
 
@@ -217,11 +232,17 @@ export class RewardService {
             ...vouchers.map((v) => this.voucherToWalletItem(v, lastUseByVoucher.get(v.id))),
         ].sort((a, b) => new Date(b.obtained_at).getTime() - new Date(a.obtained_at).getTime());
 
-        const total = items.length;
+        const resume = resumePortefeuille(items);
+        const visibles = categorie
+            ? items.filter((i) => categorieDuPortefeuille(i.kind) === categorie)
+            : items;
+
+        const total = visibles.length;
         const start = (safePage - 1) * safeLimit;
 
         return {
-            data: items.slice(start, start + safeLimit),
+            data: visibles.slice(start, start + safeLimit),
+            resume,
             meta: {
                 page: safePage,
                 limit: safeLimit,
@@ -305,6 +326,8 @@ export class RewardService {
             amount: pending ? null : Number(p.amount ?? p.price) || null,
             initial_amount: null as number | null,
             remaining: null as number | null,
+            // Points gagnés, en nombre (le titre les porte déjà en toutes lettres).
+            points: !pending && r.type === RewardType.POINTS ? Number(p.points) || 0 : null,
             code: pending ? null : (p.code ?? null),
             image: pending ? null : (p.image ?? null),
             obtained_at: r.created_at,
@@ -358,6 +381,7 @@ export class RewardService {
             amount: v.initial_amount,
             initial_amount: v.initial_amount,
             remaining: v.remaining_amount,
+            points: null as number | null,
             code: v.code,
             image: null as string | null,
             obtained_at: v.created_at,

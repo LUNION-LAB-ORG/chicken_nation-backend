@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { Customer } from '@prisma/client';
 import { RewardService } from '../services/reward.service';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
+import { lireCategoriePortefeuille } from '../helpers/portefeuille.rules';
 
 /**
  * Récompenses « à gratter » du client connecté.
@@ -48,17 +49,22 @@ export class RewardController {
         summary:
             'Portefeuille d\'avantages PAGINÉ — bons, codes promo, articles offerts et cartes à gratter en UNE liste',
     })
-    @ApiOkResponse({ description: '{ data: WalletItem[], meta: { page, limit, total, has_more } }' })
+    @ApiOkResponse({
+        description:
+            '{ data: WalletItem[], resume: { points, bons, cadeaux }, meta: { page, limit, total, has_more } } ; `categorie` = POINTS | BONS | CADEAUX',
+    })
     getWallet(
         @Req() req: Request,
         @Query('page') page?: string,
         @Query('limit') limit?: string,
+        @Query('categorie') categorie?: string,
     ) {
         const customerId = (req.user as Customer).id;
         return this.rewardService.getWallet(
             customerId,
             Number(page) || 1,
             Number(limit) || 20,
+            lireCategoriePortefeuille(categorie),
         );
     }
 
