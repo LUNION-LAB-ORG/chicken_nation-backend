@@ -132,18 +132,19 @@ describe('grillePublique', () => {
 });
 
 describe('conditionsCommandePubliques', () => {
-  // Types et paiement (26/11, application et site), réglages absents : la
-  // livraison garde le paiement à la livraison du site.
-  const types = reglagesCommande({});
-  const reception = 'APRES_CONFIRMATION' as const;
+  // Un paramétrage par canal (26/11). Réglages absents : ce que chaque canal
+  // faisait (le site garde le paiement à la livraison et la confirmation,
+  // l'application paie en ligne et part en direct).
+  const site = { types: reglagesCommande({}, null, 'WEB'), reception: 'APRES_CONFIRMATION' as const };
+  const appli = { types: reglagesCommande({}, null, 'APP'), reception: 'DIRECTE' as const };
 
-  it('ne publie que le taux, la grille, son statut, les types, le parcours et le paiement à la livraison : rien d\'autre', () => {
+  it('ne publie que le taux, la grille, son statut, le paramétrage du site, celui de l\'application et le paiement à la livraison : rien d\'autre', () => {
     const conditions = conditionsCommandePubliques({
       tauxFraisService: 0.01,
       grille: [{ maxKm: 2, price: 1000 }, { maxKm: null, price: 2000 }],
       zonesLivreurActives: false,
-      types,
-      reception,
+      site,
+      appli,
     });
     expect(Object.keys(conditions).sort()).toEqual(
       ['appli', 'grille_frais', 'grille_frais_appliquee', 'paiement_livraison', 'reception', 'taux_frais_service', 'types'].sort(),
@@ -156,11 +157,15 @@ describe('conditionsCommandePubliques', () => {
       ],
       grille_frais_appliquee: true,
       paiement_livraison: { disponible: true },
-      types,
+      // Le site lit `types` et `reception` à la racine.
+      types: site.types,
       reception: 'APRES_CONFIRMATION',
-      // Ancien nom, lu par l'application construite le 26/11.
-      appli: { types },
+      // L'application lit les siens sous `appli`.
+      appli: { types: appli.types, reception: 'DIRECTE' },
     });
+    // Les deux paramétrages diffèrent : la livraison ne se paie à la livraison que sur le site.
+    expect(conditions.types.DELIVERY.paiement).toBe('LES_DEUX');
+    expect(conditions.appli.types.DELIVERY.paiement).toBe('EN_LIGNE');
   });
 
   it('zones du livreur actives : la grille ne sert que de secours, elle est signalée non appliquée', () => {
@@ -168,43 +173,46 @@ describe('conditionsCommandePubliques', () => {
       tauxFraisService: 0.01,
       grille: DELIVERY_FEE_DEFAULT_GRID,
       zonesLivreurActives: true,
-      types,
-      reception,
+      site,
+      appli,
     });
     expect(conditions.grille_frais_appliquee).toBe(false);
     expect(conditions.grille_frais).toHaveLength(9);
   });
 
-  it('livraison à payer en ligne seulement : annoncé indisponible, le site déjà en ligne cache l\'option', () => {
-    const conditions = conditionsCommandePubliques({
-      tauxFraisService: 0.01,
-      grille: DELIVERY_FEE_DEFAULT_GRID,
-      zonesLivreurActives: true,
-      types: reglagesCommande({ order_paiement_livraison: 'EN_LIGNE' }),
-      reception,
-    });
-    expect(conditions.paiement_livraison).toEqual({ disponible: false });
-    // Ancien réglage du site coupé, nouveau pas encore enregistré : pareil.
-    expect(
-      conditionsCommandePubliques({
+  it('livraison du site à payer en ligne seulement : annoncé indisponible, le site déjà en ligne cache l\'option', () => {
+    for (const valeur of ['EN_LIGNE', '0']) {
+      const conditions = conditionsCommandePubliques({
         tauxFraisService: 0.01,
         grille: DELIVERY_FEE_DEFAULT_GRID,
         zonesLivreurActives: true,
-        types: reglagesCommande({ order_paiement_livraison_site: '0' }),
-        reception,
-      }).paiement_livraison,
-    ).toEqual({ disponible: false });
-  });
-
-  it('le parcours d\'une commande à payer à la réception est publié tel que réglé', () => {
+        site: { ...site, types: reglagesCommande({ order_paiement_livraison_site: valeur }, null, 'WEB') },
+        appli,
+      });
+      expect({ valeur, lu: conditions.paiement_livraison }).toEqual({ valeur, lu: { disponible: false } });
+    }
+    // Le paiement à la livraison de l'APPLICATION ne dit rien du site.
     const conditions = conditionsCommandePubliques({
       tauxFraisService: 0.01,
       grille: DELIVERY_FEE_DEFAULT_GRID,
       zonesLivreurActives: true,
-      types,
-      reception: 'DIRECTE',
+      site: { ...site, types: reglagesCommande({ order_paiement_livraison_site: '0', order_paiement_livraison_appli: 'LES_DEUX' }, null, 'WEB') },
+      appli: { ...appli, types: reglagesCommande({ order_paiement_livraison_appli: 'LES_DEUX' }, null, 'APP') },
+    });
+    expect(conditions.paiement_livraison).toEqual({ disponible: false });
+    expect(conditions.appli.types.DELIVERY.paiement).toBe('LES_DEUX');
+  });
+
+  it('le parcours d\'une commande à payer à la réception est publié pour chaque canal, tel que réglé', () => {
+    const conditions = conditionsCommandePubliques({
+      tauxFraisService: 0.01,
+      grille: DELIVERY_FEE_DEFAULT_GRID,
+      zonesLivreurActives: true,
+      site: { ...site, reception: 'DIRECTE' },
+      appli: { ...appli, reception: 'APRES_CONFIRMATION' },
     });
     expect(conditions.reception).toBe('DIRECTE');
+    expect(conditions.appli.reception).toBe('APRES_CONFIRMATION');
   });
 });
 

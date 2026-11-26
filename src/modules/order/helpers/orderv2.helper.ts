@@ -67,16 +67,17 @@ export class OrderV2Helper {
    * (`order_paiement_livraison_site`) n'est plus lu qu'ici, comme valeur de
    * départ du paiement d'une livraison (`reglages-commande.rules.ts`).
    *
-   * `canal` : un type n'est proposé que sur les canaux cochés au back-office
-   * (« on doit cocher site web ou appli », 26/11). Les types rendus sont ceux
-   * de CE canal.
+   * `canal` : l'application et le site ont chacun LEUR paramétrage (26/11,
+   * « le paramétrage pour le site et le paramétrage pour l'appli, pareil pour
+   * commande à payer à la réception »). Les types et le parcours rendus sont
+   * ceux de CE canal.
    */
   async reglagesCommande(
-    livraisonCoupee?: { disabled: boolean; message: string } | null,
-    canal: CanalClient = 'APP',
+    livraisonCoupee: { disabled: boolean; message: string } | null | undefined,
+    canal: CanalClient,
   ): Promise<{ types: ReglagesCommande; reception: ModeReception }> {
     const valeurs = await this.settingsService.getMany(CLES_REGLAGES_COMMANDE);
-    return { types: reglagesCommande(valeurs, livraisonCoupee, canal), reception: modeReception(valeurs) };
+    return { types: reglagesCommande(valeurs, livraisonCoupee, canal), reception: modeReception(valeurs, canal) };
   }
 
   /**

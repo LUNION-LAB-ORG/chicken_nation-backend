@@ -51,12 +51,12 @@ export interface ConditionsCommande {
   grille_frais_appliquee: boolean;
   /** Une livraison peut se payer à la livraison (lu par le site déjà en ligne). */
   paiement_livraison: { disponible: boolean };
-  /** Types de commande et paiement permis SUR LE SITE (canaux cochés au back-office). */
+  /** Types de commande et paiement permis SUR LE SITE (son paramétrage au back-office). */
   types: ReglagesCommande;
-  /** Ce que devient une commande à payer à la réception. */
+  /** Ce que devient une commande à payer à la réception, SUR LE SITE. */
   reception: ModeReception;
-  /** Types de commande et paiement permis DANS L'APPLICATION. */
-  appli: { types: ReglagesCommande };
+  /** Le paramétrage de L'APPLICATION : ses types, son paiement, son parcours. */
+  appli: { types: ReglagesCommande; reception: ModeReception };
 }
 
 /** Taux publié : un nombre fini et positif, sinon `null` (réglage mal saisi). */
@@ -112,19 +112,18 @@ export function conditionsCommandePubliques(reglages: {
   tauxFraisService: number | null | undefined;
   grille: readonly IDeliveryFeeTier[] | null | undefined;
   zonesLivreurActives: boolean;
-  /** Ce que le site peut proposer. */
-  types: ReglagesCommande;
-  /** Ce que l'application peut proposer ; absent : comme le site. */
-  typesAppli?: ReglagesCommande;
-  reception: ModeReception;
+  /** Paramétrage du site. */
+  site: { types: ReglagesCommande; reception: ModeReception };
+  /** Paramétrage de l'application. */
+  appli: { types: ReglagesCommande; reception: ModeReception };
 }): ConditionsCommande {
   return {
     taux_frais_service: tauxPublic(reglages.tauxFraisService),
     grille_frais: grillePublique(reglages.grille),
     grille_frais_appliquee: !reglages.zonesLivreurActives,
-    paiement_livraison: { disponible: reglages.types.DELIVERY.paiement !== 'EN_LIGNE' },
-    types: reglages.types,
-    reception: reglages.reception,
-    appli: { types: reglages.typesAppli ?? reglages.types },
+    paiement_livraison: { disponible: reglages.site.types.DELIVERY.paiement !== 'EN_LIGNE' },
+    types: reglages.site.types,
+    reception: reglages.site.reception,
+    appli: { types: reglages.appli.types, reception: reglages.appli.reception },
   };
 }

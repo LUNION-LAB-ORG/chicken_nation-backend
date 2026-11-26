@@ -1,41 +1,45 @@
 import { OrderChannel, OrderType, PaymentMethod } from '@prisma/client';
 
-import { paiementLivraisonActif, REGLAGE_PAIEMENT_LIVRAISON_SITE } from './paiement-livraison.rules';
+import { REGLAGE_PAIEMENT_LIVRAISON_SITE } from './paiement-livraison.rules';
 
 /**
- * TYPES DE COMMANDE ET PAIEMENT, RÉGLÉS AU BACK-OFFICE POUR L'APPLICATION ET
- * LE SITE (demandes du 26/11).
+ * TYPES DE COMMANDE ET PAIEMENT, RÉGLÉS AU BACK-OFFICE : UN PARAMÉTRAGE POUR
+ * L'APPLICATION, UN PARAMÉTRAGE POUR LE SITE (demandes du 26/11).
  *
- * D'abord pour l'application seule : « contrôler depuis le back-office les
- * types de commandes, livraison, à emporter et sur place », et pour chaque
- * type le paiement : à la réception, en ligne seulement, ou les deux. Puis,
- * le même jour : « même réglage » pour le site, « paiement à la livraison sur
- * le site et appli aussi », « directe ou après confirmation ».
+ * Le client a d'abord demandé de « contrôler depuis le back-office les types
+ * de commandes, livraison, à emporter et sur place », et pour chaque type le
+ * paiement : à la réception, en ligne seulement, ou les deux. Puis, le même
+ * jour, après plusieurs allers et retours : « on doit avoir le paramétrage
+ * pour le site et le paramétrage pour l'appli [...] pareil pour commande à
+ * payer à la réception ». Chaque canal a donc SES réglages, de même forme.
  *
- * Paramètres > Commandes :
- *  - `order_type_<type>` : où le type est proposé. Le client coche « Appli »
- *    et/ou « Site web » (« on doit cocher site web ou appli », 26/11) : la
- *    valeur est la liste des canaux cochés, `APP,WEB`, `APP`, `WEB`. « 1 »
- *    vaut les deux, « 0 » aucun ;
- *  - `order_paiement_<type>` : `EN_LIGNE`, `A_LA_RECEPTION` ou `LES_DEUX` ;
- *  - `order_paiement_reception` : ce que devient une commande à payer à la
- *    réception. `DIRECTE` : elle part au restaurant, acceptée.
+ * Paramètres > Vente > Commandes écrit, pour chaque canal (`appli`, `site`) :
+ *  - `order_type_<type>_<canal>` : « 1 » le type est proposé, « 0 » non ;
+ *  - `order_paiement_<type>_<canal>` : `EN_LIGNE`, `A_LA_RECEPTION` ou
+ *    `LES_DEUX` ;
+ *  - `order_paiement_reception_<canal>` : ce que devient une commande à payer
+ *    à la réception. `DIRECTE` : elle part au restaurant, acceptée.
  *    `APRES_CONFIRMATION` : le centre d'appels l'appelle d'abord
  *    (`paiement-livraison.rules.ts`, commande « à confirmer »).
  *
- * Clés absentes : ce qui se faisait avant ces réglages.
- *  - Livraison et à emporter proposés, sur place non.
- *  - Paiement en ligne seulement, SAUF la livraison : elle reprend l'ancien
- *    réglage du site (`order_paiement_livraison_site`, proposé s'il est
- *    absent). Le site ne perd donc pas son paiement à la livraison au
- *    déploiement ; c'est désormais le même réglage que l'application.
- *  - Après confirmation : ce que le site faisait déjà.
+ * Clés absentes : ce que chaque canal faisait avant ces réglages.
+ *  - Application : livraison et à emporter, payés en ligne ; une commande à
+ *    payer à la réception part directement au restaurant.
+ *  - Site : livraison et à emporter, payés en ligne, la livraison aussi à la
+ *    livraison ; une commande à payer à la réception attend la confirmation
+ *    du centre d'appels.
+ *  - « Sur place » n'est proposé nulle part (le site ne sait pas le vendre).
  *
- * L'application et le site lisent ces réglages par
- * `GET /orders/conditions-commande` (`types`, `reception`) et n'affichent que
- * ce qui est permis ; `createv2` les contrôle à la création, seule vraie
- * garantie : une version plus ancienne ne les lit pas et reçoit alors le
- * refus en clair. Le centre d'appels et la caisse ne sont pas concernés.
+ * ⚠️ `order_paiement_livraison_site` existait avant (19/10) : « 1 » le
+ * paiement à la livraison est proposé sur le site, « 0 » il ne l'est pas.
+ * C'est la même clé, lue dans les deux écritures : « 1 » (ou absent) vaut
+ * `LES_DEUX`, « 0 » vaut `EN_LIGNE`. Le site ne perd rien au déploiement.
+ *
+ * L'application et le site lisent leurs réglages par
+ * `GET /orders/conditions-commande` et n'affichent que ce qui est permis ;
+ * `createv2` les contrôle à la création, seule vraie garantie : une version
+ * plus ancienne ne les lit pas et reçoit alors le refus en clair. Le centre
+ * d'appels et la caisse ne sont pas concernés.
  *
  * Fonctions pures : testées sans base.
  */
@@ -53,47 +57,52 @@ export type CanalClient = 'APP' | 'WEB';
 
 export const CANAUX_CLIENT: readonly CanalClient[] = ['APP', 'WEB'];
 
-/** Réglage « Commande à payer à la réception ». */
-export const REGLAGE_RECEPTION = 'order_paiement_reception';
+/** Fin de clé d'un canal. */
+const SUFFIXE_DU_CANAL: Record<CanalClient, string> = { APP: 'appli', WEB: 'site' };
 
-/** Clé absente ou illisible : le centre d'appels confirme d'abord (ce que le site faisait). */
-export const RECEPTION_PAR_DEFAUT: ModeReception = 'APRES_CONFIRMATION';
-
-/** Clés des réglages, par type de commande. */
-export const REGLAGES_TYPES: Record<OrderType, { actif: string; paiement: string }> = {
-  [OrderType.DELIVERY]: { actif: 'order_type_livraison', paiement: 'order_paiement_livraison' },
-  [OrderType.PICKUP]: { actif: 'order_type_emporter', paiement: 'order_paiement_emporter' },
-  [OrderType.TABLE]: { actif: 'order_type_sur_place', paiement: 'order_paiement_sur_place' },
+/** Nom d'un type dans les clés. */
+const NOM_DU_TYPE_DANS_LA_CLE: Record<OrderType, string> = {
+  [OrderType.DELIVERY]: 'livraison',
+  [OrderType.PICKUP]: 'emporter',
+  [OrderType.TABLE]: 'sur_place',
 };
 
-/** Toutes les clés à lire d'un coup, ancien réglage du site compris. */
-export const CLES_REGLAGES_COMMANDE: string[] = [
-  ...Object.values(REGLAGES_TYPES).flatMap((c) => [c.actif, c.paiement]),
-  REGLAGE_RECEPTION,
-  REGLAGE_PAIEMENT_LIVRAISON_SITE,
-];
+/** Clé « le type est proposé » d'un canal. */
+export const cleType = (type: OrderType, canal: CanalClient): string =>
+  `order_type_${NOM_DU_TYPE_DANS_LA_CLE[type]}_${SUFFIXE_DU_CANAL[canal]}`;
+
+/** Clé du paiement permis pour un type, sur un canal. */
+export const clePaiement = (type: OrderType, canal: CanalClient): string =>
+  `order_paiement_${NOM_DU_TYPE_DANS_LA_CLE[type]}_${SUFFIXE_DU_CANAL[canal]}`;
+
+/** Clé « commande à payer à la réception » d'un canal. */
+export const cleReception = (canal: CanalClient): string => `order_paiement_reception_${SUFFIXE_DU_CANAL[canal]}`;
+
+/** Toutes les clés à lire d'un coup, pour les deux canaux. */
+export const CLES_REGLAGES_COMMANDE: string[] = CANAUX_CLIENT.flatMap((canal) => [
+  ...Object.values(OrderType).flatMap((type) => [cleType(type, canal), clePaiement(type, canal)]),
+  cleReception(canal),
+]);
+
+/** Clé absente : la livraison et le retrait étaient proposés, pas « sur place ». */
+const ACTIF_PAR_DEFAUT: Record<OrderType, boolean> = {
+  [OrderType.DELIVERY]: true,
+  [OrderType.PICKUP]: true,
+  [OrderType.TABLE]: false,
+};
+
+/** Clé absente : en ligne seulement (hors livraison sur le site, voir `paiementDuType`). */
+export const PAIEMENT_PAR_DEFAUT: PaiementCommande = 'EN_LIGNE';
 
 /**
- * Clé absente : avant ces réglages, la livraison et le retrait étaient
- * proposés sur l'application et le site, « sur place » nulle part.
+ * Clé absente : ce que chaque canal faisait. L'application envoyait la
+ * commande directement au restaurant (décision du client, 26/11 au matin) ;
+ * le site la faisait confirmer par le centre d'appels (19/10).
  */
-const CANAUX_PAR_DEFAUT: Record<OrderType, readonly CanalClient[]> = {
-  [OrderType.DELIVERY]: CANAUX_CLIENT,
-  [OrderType.PICKUP]: CANAUX_CLIENT,
-  [OrderType.TABLE]: [],
+export const RECEPTION_PAR_DEFAUT: Record<CanalClient, ModeReception> = {
+  APP: 'DIRECTE',
+  WEB: 'APRES_CONFIRMATION',
 };
-
-/** Mots acceptés pour un canal dans la valeur du réglage. */
-const MOTS_DU_CANAL: Record<string, CanalClient> = {
-  APP: 'APP',
-  APPLI: 'APP',
-  APPLICATION: 'APP',
-  WEB: 'WEB',
-  SITE: 'WEB',
-};
-
-/** Clé absente : en ligne seulement (hors livraison, voir `paiementDuType`). */
-export const PAIEMENT_PAR_DEFAUT: PaiementCommande = 'EN_LIGNE';
 
 /** Nom du type dans les messages au client. */
 const NOM_DU_TYPE: Record<OrderType, string> = {
@@ -124,29 +133,6 @@ export function lireTypeActif(valeur: string | null | undefined, defaut: boolean
   return lue === '1' || lue === 'TRUE' || lue === 'OUI';
 }
 
-/**
- * Canaux où un type est proposé. Liste de canaux (`APP,WEB`, `APP`, `WEB`) ;
- * « 1 », « true », « oui » : les deux ; vide ou absent : la valeur par défaut
- * du type. Tout mot qu'on ne comprend pas est ignoré : « 0 », ou une saisie
- * illisible, ne propose le type nulle part.
- */
-export function lireCanauxDuType(
-  valeur: string | null | undefined,
-  defaut: readonly CanalClient[],
-): CanalClient[] {
-  if (valeur === null || valeur === undefined) return [...defaut];
-  const lue = valeur.trim().toUpperCase();
-  if (lue === '') return [...defaut];
-  if (lue === '1' || lue === 'TRUE' || lue === 'OUI') return [...CANAUX_CLIENT];
-  const coches = new Set(
-    lue
-      .split(/[\s,;+|]+/)
-      .map((mot) => MOTS_DU_CANAL[mot])
-      .filter((canal): canal is CanalClient => !!canal),
-  );
-  return CANAUX_CLIENT.filter((canal) => coches.has(canal));
-}
-
 /** Mode de paiement lu ; absent ou illisible : `defaut`. */
 export function lirePaiement(
   valeur: string | null | undefined,
@@ -157,44 +143,57 @@ export function lirePaiement(
 }
 
 /**
- * Paiement d'un type. La livraison, tant que son réglage n'a pas été
- * enregistré, reprend l'ancien réglage du site : proposé (ou absent), « en
- * ligne ou à la livraison » ; coupé, en ligne seulement.
+ * Paiement d'une LIVRAISON SUR LE SITE (`order_paiement_livraison_site`),
+ * dans ses deux écritures : la nouvelle (`EN_LIGNE`, `A_LA_RECEPTION`,
+ * `LES_DEUX`) et l'ancienne du 19/10 (« 1 », « true », « oui » : le paiement
+ * à la livraison est proposé, donc `LES_DEUX`). Absent ou vide : proposé,
+ * comme le voulait la décision du 19/10. « 0 », ou une saisie illisible : en
+ * ligne seulement.
  */
-function paiementDuType(type: OrderType, valeurs: Record<string, string | null | undefined>): PaiementCommande {
-  const defaut: PaiementCommande =
-    type === OrderType.DELIVERY && paiementLivraisonActif(valeurs[REGLAGE_PAIEMENT_LIVRAISON_SITE])
-      ? 'LES_DEUX'
-      : PAIEMENT_PAR_DEFAUT;
-  return lirePaiement(valeurs[REGLAGES_TYPES[type].paiement], defaut);
-}
-
-/** « Directe » ou « après confirmation » ; absent ou illisible : après confirmation. */
-export function lireModeReception(valeur: string | null | undefined): ModeReception {
+export function lirePaiementLivraisonSite(valeur: string | null | undefined): PaiementCommande {
   const lue = (valeur ?? '').trim().toUpperCase();
-  return lue === 'DIRECTE' || lue === 'APRES_CONFIRMATION' ? lue : RECEPTION_PAR_DEFAUT;
+  if (lue === '' || lue === '1' || lue === 'TRUE' || lue === 'OUI') return 'LES_DEUX';
+  return lirePaiement(lue, 'EN_LIGNE');
 }
 
-/** Le réglage lu dans l'ensemble des valeurs. */
-export function modeReception(valeurs: Record<string, string | null | undefined>): ModeReception {
-  return lireModeReception(valeurs[REGLAGE_RECEPTION]);
+/** Paiement d'un type sur un canal. */
+function paiementDuType(
+  type: OrderType,
+  canal: CanalClient,
+  valeurs: Record<string, string | null | undefined>,
+): PaiementCommande {
+  const cle = clePaiement(type, canal);
+  // Même clé que l'ancien réglage du site : lue dans ses deux écritures.
+  if (cle === REGLAGE_PAIEMENT_LIVRAISON_SITE) return lirePaiementLivraisonSite(valeurs[cle]);
+  return lirePaiement(valeurs[cle]);
+}
+
+/** « Directe » ou « après confirmation » ; absent ou illisible : `defaut`. */
+export function lireModeReception(valeur: string | null | undefined, defaut: ModeReception): ModeReception {
+  const lue = (valeur ?? '').trim().toUpperCase();
+  return lue === 'DIRECTE' || lue === 'APRES_CONFIRMATION' ? lue : defaut;
+}
+
+/** Le parcours d'une commande à payer à la réception, pour un canal. */
+export function modeReception(
+  valeurs: Record<string, string | null | undefined>,
+  canal: CanalClient,
+): ModeReception {
+  return lireModeReception(valeurs[cleReception(canal)], RECEPTION_PAR_DEFAUT[canal]);
 }
 
 /**
- * Les réglages des trois types, VUS D'UN CANAL : un type n'est proposé que
- * sur les canaux cochés au back-office. `livraisonCoupee` : la coupure
+ * Les réglages des trois types, POUR UN CANAL. `livraisonCoupee` : la coupure
  * temporaire de la livraison (`delivery.app_disabled`), qui retire la
  * livraison des deux canaux, avec son message.
- *
- * `canal` absent : l'application (les appelants d'avant les cases à cocher).
  */
 export function reglagesCommande(
   valeurs: Record<string, string | null | undefined>,
-  livraisonCoupee?: { disabled: boolean; message: string } | null,
-  canal: CanalClient = 'APP',
+  livraisonCoupee: { disabled: boolean; message: string } | null | undefined,
+  canal: CanalClient,
 ): ReglagesCommande {
   const lire = (type: OrderType): TypeCommande => {
-    let actif = lireCanauxDuType(valeurs[REGLAGES_TYPES[type].actif], CANAUX_PAR_DEFAUT[type]).includes(canal);
+    let actif = lireTypeActif(valeurs[cleType(type, canal)], ACTIF_PAR_DEFAUT[type]);
     let message: string | null = actif
       ? null
       : `${NOM_DU_TYPE[type]} n'est pas proposée pour le moment. Choisissez un autre mode de réception.`;
@@ -202,7 +201,7 @@ export function reglagesCommande(
       actif = false;
       message = livraisonCoupee.message;
     }
-    return { actif, paiement: paiementDuType(type, valeurs), message };
+    return { actif, paiement: paiementDuType(type, canal, valeurs), message };
   };
   return {
     [OrderType.DELIVERY]: lire(OrderType.DELIVERY),
@@ -218,8 +217,8 @@ function lieuDuPaiement(type: OrderType): string {
 
 /**
  * Refus de `createv2` pour une commande de l'application ou du site, ou `null`
- * si elle est permise. Un moyen de paiement absent vaut « à la réception »,
- * comme le reste de `createv2`.
+ * si elle est permise. `reglages` : ceux du canal de la commande. Un moyen de
+ * paiement absent vaut « à la réception », comme le reste de `createv2`.
  */
 export function refusCommande(
   reglages: ReglagesCommande,
@@ -253,8 +252,8 @@ export interface ParcoursCommande {
 
 /**
  * Parcours d'une commande de l'application ou du site, selon son moyen de
- * paiement et le réglage. En ligne : ni l'un ni l'autre, elle attend son
- * paiement comme avant.
+ * paiement et le réglage de SON canal. En ligne : ni l'un ni l'autre, elle
+ * attend son paiement comme avant.
  */
 export function parcoursCommande(
   payment_method: PaymentMethod | null | undefined,

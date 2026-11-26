@@ -140,7 +140,8 @@ describe('OrderService.obtenirConditionsCommande', () => {
       paiement_livraison: { disponible: true },
       types: TYPES,
       reception: 'APRES_CONFIRMATION',
-      appli: { types: TYPES },
+      // L'application a son propre paramétrage (ici la même doublure).
+      appli: { types: TYPES, reception: 'APRES_CONFIRMATION' },
     });
     expect(JSON.stringify(conditions)).not.toMatch(/TURBO|CHICKEN_NATION|restaurant-1/);
   });

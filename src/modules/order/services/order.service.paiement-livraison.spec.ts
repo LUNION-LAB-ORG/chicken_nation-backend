@@ -428,39 +428,52 @@ describe('OrderService.createv2 : types et paiement réglés au back-office, app
   });
 });
 
-describe('OrderV2Helper.reglagesCommande : lecture des réglages', () => {
-  const lire = async (valeurs: Record<string, string | null>) => {
+describe('OrderV2Helper.reglagesCommande : lecture des réglages, par canal', () => {
+  const lire = async (valeurs: Record<string, string | null>, canal: 'APP' | 'WEB') => {
     const helper = Object.create(OrderV2Helper.prototype) as OrderV2Helper;
     const settingsService = { getMany: jest.fn().mockResolvedValue(valeurs) };
     Object.assign(helper, { settingsService });
-    const lu = await helper.reglagesCommande();
+    const lu = await helper.reglagesCommande(null, canal);
     expect(settingsService.getMany.mock.calls[0][0]).toEqual(
-      expect.arrayContaining(['order_paiement_reception', 'order_paiement_livraison', 'order_paiement_livraison_site']),
+      expect.arrayContaining([
+        'order_paiement_reception_appli',
+        'order_paiement_reception_site',
+        'order_paiement_livraison_appli',
+        'order_paiement_livraison_site',
+      ]),
     );
     return lu;
   };
 
-  it('rien de réglé : après confirmation, et la livraison se paie en ligne ou à la livraison (ancien réglage du site, proposé par défaut)', async () => {
-    const lu = await lire({});
-    expect(lu.reception).toBe('APRES_CONFIRMATION');
-    expect(lu.types.DELIVERY).toEqual({ actif: true, paiement: 'LES_DEUX', message: null });
-    expect(lu.types.PICKUP.paiement).toBe('EN_LIGNE');
+  it('rien de réglé : le site confirme d’abord et propose le paiement à la livraison ; l’application part en direct et paie en ligne', async () => {
+    const site = await lire({}, 'WEB');
+    expect(site.reception).toBe('APRES_CONFIRMATION');
+    expect(site.types.DELIVERY).toEqual({ actif: true, paiement: 'LES_DEUX', message: null });
+    expect(site.types.PICKUP.paiement).toBe('EN_LIGNE');
+    const appli = await lire({}, 'APP');
+    expect(appli.reception).toBe('DIRECTE');
+    expect(appli.types.DELIVERY).toEqual({ actif: true, paiement: 'EN_LIGNE', message: null });
   });
 
-  it('« directe » enregistré, ancien réglage du site coupé', async () => {
-    const lu = await lire({ order_paiement_reception: 'DIRECTE', order_paiement_livraison_site: '0' });
-    expect(lu.reception).toBe('DIRECTE');
-    expect(lu.types.DELIVERY.paiement).toBe('EN_LIGNE');
+  it('ancien réglage du site coupé (« 0 ») : la livraison du site se paie en ligne seulement', async () => {
+    const site = await lire({ order_paiement_livraison_site: '0' }, 'WEB');
+    expect(site.types.DELIVERY.paiement).toBe('EN_LIGNE');
   });
 
-  // « on doit cocher site web ou appli » (26/11).
-  it('types rendus pour le canal demandé : coché pour l’application seule, le site ne l’a pas', async () => {
-    const helper = Object.create(OrderV2Helper.prototype) as OrderV2Helper;
-    Object.assign(helper, { settingsService: { getMany: jest.fn().mockResolvedValue({ order_type_emporter: 'APP' }) } });
-    expect((await helper.reglagesCommande(null, 'APP')).types.PICKUP.actif).toBe(true);
-    expect((await helper.reglagesCommande(null, 'WEB')).types.PICKUP.actif).toBe(false);
-    // Sans canal : l'application.
-    expect((await helper.reglagesCommande()).types.PICKUP.actif).toBe(true);
+  // « on doit avoir le paramétrage pour le site et le paramétrage pour l'appli,
+  // pareil pour commande à payer à la réception » (26/11).
+  it('chaque canal lit SON paramétrage : types, paiement et parcours', async () => {
+    const valeurs = {
+      order_type_emporter_site: '0',
+      order_paiement_emporter_appli: 'LES_DEUX',
+      order_paiement_reception_appli: 'APRES_CONFIRMATION',
+      order_paiement_reception_site: 'DIRECTE',
+    };
+    const appli = await lire(valeurs, 'APP');
+    const site = await lire(valeurs, 'WEB');
+    expect([appli.types.PICKUP.actif, site.types.PICKUP.actif]).toEqual([true, false]);
+    expect([appli.types.PICKUP.paiement, site.types.PICKUP.paiement]).toEqual(['LES_DEUX', 'EN_LIGNE']);
+    expect([appli.reception, site.reception]).toEqual(['APRES_CONFIRMATION', 'DIRECTE']);
   });
 });
 

@@ -2,9 +2,12 @@ import { OrderChannel, OrderType, PaymentMethod } from '@prisma/client';
 
 import {
   CLES_REGLAGES_COMMANDE,
-  lireCanauxDuType,
+  cleReception,
+  clePaiement,
+  cleType,
   lireModeReception,
   lirePaiement,
+  lirePaiementLivraisonSite,
   lireTypeActif,
   modeReception,
   parcoursCommande,
@@ -13,47 +16,58 @@ import {
 } from './reglages-commande.rules';
 
 /**
- * Types de commande et paiement, réglés au back-office pour l'application et
- * le site (demandes du 26/11).
+ * Types de commande et paiement : un paramétrage pour l'application, un
+ * paramétrage pour le site (demandes du 26/11).
  */
-describe('Types de commande et paiement, application et site', () => {
-  it('les réglages, par leur clé : six par type, le parcours, et l’ancien réglage du site', () => {
+describe('Types de commande et paiement : un paramétrage par canal', () => {
+  const appli = (valeurs: Record<string, string | null> = {}, coupure: { disabled: boolean; message: string } | null = null) =>
+    reglagesCommande(valeurs, coupure, 'APP');
+  const site = (valeurs: Record<string, string | null> = {}, coupure: { disabled: boolean; message: string } | null = null) =>
+    reglagesCommande(valeurs, coupure, 'WEB');
+
+  it('les clés : pour chaque canal, deux par type et le parcours', () => {
     expect([...CLES_REGLAGES_COMMANDE].sort()).toEqual(
       [
-        'order_type_livraison',
-        'order_type_emporter',
-        'order_type_sur_place',
-        'order_paiement_livraison',
-        'order_paiement_emporter',
-        'order_paiement_sur_place',
-        'order_paiement_reception',
+        'order_type_livraison_appli',
+        'order_type_emporter_appli',
+        'order_type_sur_place_appli',
+        'order_paiement_livraison_appli',
+        'order_paiement_emporter_appli',
+        'order_paiement_sur_place_appli',
+        'order_paiement_reception_appli',
+        'order_type_livraison_site',
+        'order_type_emporter_site',
+        'order_type_sur_place_site',
         'order_paiement_livraison_site',
+        'order_paiement_emporter_site',
+        'order_paiement_sur_place_site',
+        'order_paiement_reception_site',
       ].sort(),
     );
+    expect(cleType(OrderType.DELIVERY, 'APP')).toBe('order_type_livraison_appli');
+    expect(clePaiement(OrderType.PICKUP, 'WEB')).toBe('order_paiement_emporter_site');
+    expect(cleReception('APP')).toBe('order_paiement_reception_appli');
+    expect(cleReception('WEB')).toBe('order_paiement_reception_site');
   });
 
-  it('rien de réglé : livraison et à emporter proposés, pas de sur place ; la livraison garde le paiement à la livraison du site', () => {
-    const r = reglagesCommande({});
-    // L'ancien réglage du site, absent, valait « proposé » : la livraison se
-    // paie en ligne ou à la livraison, pour le site comme pour l'application.
-    expect(r.DELIVERY).toEqual({ actif: true, paiement: 'LES_DEUX', message: null });
-    expect(r.PICKUP).toEqual({ actif: true, paiement: 'EN_LIGNE', message: null });
-    expect(r.TABLE).toMatchObject({ actif: false, paiement: 'EN_LIGNE' });
-    expect(r.TABLE.message).toContain("n'est pas proposée");
-  });
+  describe('rien de réglé : ce que chaque canal faisait avant', () => {
+    it('application : livraison et à emporter payés en ligne, pas de sur place, commande directe', () => {
+      const r = appli();
+      expect(r.DELIVERY).toEqual({ actif: true, paiement: 'EN_LIGNE', message: null });
+      expect(r.PICKUP).toEqual({ actif: true, paiement: 'EN_LIGNE', message: null });
+      expect(r.TABLE).toMatchObject({ actif: false, paiement: 'EN_LIGNE' });
+      expect(r.TABLE.message).toContain("n'est pas proposée");
+      // Décision du client du 26/11 au matin : l'appli envoie au restaurant.
+      expect(modeReception({}, 'APP')).toBe('DIRECTE');
+    });
 
-  it('ancien réglage du site coupé : la livraison se paie en ligne seulement, tant que le nouveau n’est pas enregistré', () => {
-    expect(reglagesCommande({ order_paiement_livraison_site: '0' }).DELIVERY.paiement).toBe('EN_LIGNE');
-    expect(reglagesCommande({ order_paiement_livraison_site: '1' }).DELIVERY.paiement).toBe('LES_DEUX');
-    // Le nouveau réglage, une fois enregistré, l'emporte dans les deux sens.
-    expect(
-      reglagesCommande({ order_paiement_livraison_site: '0', order_paiement_livraison: 'LES_DEUX' }).DELIVERY.paiement,
-    ).toBe('LES_DEUX');
-    expect(
-      reglagesCommande({ order_paiement_livraison_site: '1', order_paiement_livraison: 'EN_LIGNE' }).DELIVERY.paiement,
-    ).toBe('EN_LIGNE');
-    // Il ne touche que la livraison.
-    expect(reglagesCommande({ order_paiement_livraison_site: '1' }).PICKUP.paiement).toBe('EN_LIGNE');
+    it('site : la livraison se paie aussi à la livraison (19/10), et la commande attend sa confirmation', () => {
+      const r = site();
+      expect(r.DELIVERY).toEqual({ actif: true, paiement: 'LES_DEUX', message: null });
+      expect(r.PICKUP).toEqual({ actif: true, paiement: 'EN_LIGNE', message: null });
+      expect(r.TABLE.actif).toBe(false);
+      expect(modeReception({}, 'WEB')).toBe('APRES_CONFIRMATION');
+    });
   });
 
   it('lecture d’un interrupteur : « 1 », « oui » proposé ; « 0 » et l’illisible non ; vide : la valeur par défaut', () => {
@@ -75,107 +89,76 @@ describe('Types de commande et paiement, application et site', () => {
     expect(lirePaiement(null, 'LES_DEUX')).toBe('LES_DEUX');
   });
 
-  it('chaque type se règle à part', () => {
-    const r = reglagesCommande({
-      order_type_livraison: '0',
-      order_type_sur_place: '1',
-      order_paiement_emporter: 'LES_DEUX',
-      order_paiement_sur_place: 'A_LA_RECEPTION',
-    });
-    expect(r.DELIVERY.actif).toBe(false);
-    expect(r.PICKUP).toEqual({ actif: true, paiement: 'LES_DEUX', message: null });
-    expect(r.TABLE).toEqual({ actif: true, paiement: 'A_LA_RECEPTION', message: null });
+  // `order_paiement_livraison_site` existait avant (19/10), en « 1 » / « 0 ».
+  it('paiement d’une livraison sur le site : la même clé qu’avant, lue dans ses deux écritures', () => {
+    // Ancienne écriture : « 1 » proposé, « 0 » coupé ; absent : proposé.
+    expect(lirePaiementLivraisonSite(null)).toBe('LES_DEUX');
+    expect(lirePaiementLivraisonSite('')).toBe('LES_DEUX');
+    expect(lirePaiementLivraisonSite('1')).toBe('LES_DEUX');
+    expect(lirePaiementLivraisonSite('oui')).toBe('LES_DEUX');
+    expect(lirePaiementLivraisonSite('0')).toBe('EN_LIGNE');
+    // Nouvelle écriture.
+    expect(lirePaiementLivraisonSite('LES_DEUX')).toBe('LES_DEUX');
+    expect(lirePaiementLivraisonSite('EN_LIGNE')).toBe('EN_LIGNE');
+    expect(lirePaiementLivraisonSite('a_la_reception')).toBe('A_LA_RECEPTION');
+    // Illisible : en ligne seulement.
+    expect(lirePaiementLivraisonSite('peut-être')).toBe('EN_LIGNE');
+
+    expect(site({ order_paiement_livraison_site: '0' }).DELIVERY.paiement).toBe('EN_LIGNE');
+    expect(site({ order_paiement_livraison_site: '1' }).DELIVERY.paiement).toBe('LES_DEUX');
+    expect(site({ order_paiement_livraison_site: 'A_LA_RECEPTION' }).DELIVERY.paiement).toBe('A_LA_RECEPTION');
+    // Elle ne règle que le site, et que la livraison.
+    expect(appli({ order_paiement_livraison_site: 'LES_DEUX' }).DELIVERY.paiement).toBe('EN_LIGNE');
+    expect(site({ order_paiement_livraison_site: 'LES_DEUX' }).PICKUP.paiement).toBe('EN_LIGNE');
   });
 
-  it('coupure temporaire de la livraison : la livraison n’est plus proposée, avec le message de la coupure', () => {
-    const r = reglagesCommande({}, { disabled: true, message: 'Livraison suspendue ce soir.' });
-    expect(r.DELIVERY).toEqual({ actif: false, paiement: 'LES_DEUX', message: 'Livraison suspendue ce soir.' });
-    expect(r.PICKUP.actif).toBe(true);
+  it('chaque canal se règle à part : ce qui est réglé pour l’un ne touche pas l’autre', () => {
+    const valeurs = {
+      // Application : pas de livraison, sur place proposé et payé au restaurant.
+      order_type_livraison_appli: '0',
+      order_type_sur_place_appli: '1',
+      order_paiement_sur_place_appli: 'A_LA_RECEPTION',
+      order_paiement_emporter_appli: 'LES_DEUX',
+      // Site : pas d'à emporter, livraison en ligne seulement.
+      order_type_emporter_site: '0',
+      order_paiement_livraison_site: 'EN_LIGNE',
+    };
+    const a = appli(valeurs);
+    const s = site(valeurs);
+    expect([a.DELIVERY.actif, s.DELIVERY.actif]).toEqual([false, true]);
+    expect([a.PICKUP.actif, s.PICKUP.actif]).toEqual([true, false]);
+    expect([a.TABLE.actif, s.TABLE.actif]).toEqual([true, false]);
+    expect(a.TABLE).toEqual({ actif: true, paiement: 'A_LA_RECEPTION', message: null });
+    expect([a.PICKUP.paiement, s.PICKUP.paiement]).toEqual(['LES_DEUX', 'EN_LIGNE']);
+    expect([a.DELIVERY.paiement, s.DELIVERY.paiement]).toEqual(['EN_LIGNE', 'EN_LIGNE']);
+  });
+
+  it('coupure temporaire de la livraison : les deux canaux, avec le message de la coupure', () => {
+    const coupure = { disabled: true, message: 'Livraison suspendue ce soir.' };
+    for (const r of [appli({}, coupure), site({}, coupure)]) {
+      expect(r.DELIVERY).toMatchObject({ actif: false, message: 'Livraison suspendue ce soir.' });
+      expect(r.PICKUP.actif).toBe(true);
+    }
     // Coupure levée : la livraison revient.
-    expect(reglagesCommande({}, { disabled: false, message: '' }).DELIVERY.actif).toBe(true);
-  });
-
-  // « on doit cocher site web ou appli » (26/11) : un type se coche par canal.
-  describe('types cochés par canal : application, site web', () => {
-    it('lecture des canaux : liste, « 1 » les deux, « 0 » aucun, vide la valeur par défaut', () => {
-      const LES_DEUX = ['APP', 'WEB'];
-      expect(lireCanauxDuType('APP,WEB', [])).toEqual(LES_DEUX);
-      expect(lireCanauxDuType('web, app', [])).toEqual(LES_DEUX);
-      expect(lireCanauxDuType('APP', LES_DEUX as never)).toEqual(['APP']);
-      expect(lireCanauxDuType(' site ', [])).toEqual(['WEB']);
-      expect(lireCanauxDuType('appli', [])).toEqual(['APP']);
-      // Les valeurs d'avant les cases à cocher.
-      expect(lireCanauxDuType('1', [])).toEqual(LES_DEUX);
-      expect(lireCanauxDuType('oui', [])).toEqual(LES_DEUX);
-      expect(lireCanauxDuType('0', LES_DEUX as never)).toEqual([]);
-      // Absent ou vide : la valeur par défaut du type.
-      expect(lireCanauxDuType(null, LES_DEUX as never)).toEqual(LES_DEUX);
-      expect(lireCanauxDuType('', ['APP'])).toEqual(['APP']);
-      expect(lireCanauxDuType(undefined, [])).toEqual([]);
-      // Illisible : nulle part (une saisie qu'on ne comprend pas n'ouvre rien).
-      expect(lireCanauxDuType('partout', LES_DEUX as never)).toEqual([]);
-    });
-
-    it('rien de réglé : livraison et à emporter sur les deux canaux, sur place nulle part', () => {
-      for (const canal of ['APP', 'WEB'] as const) {
-        const r = reglagesCommande({}, null, canal);
-        expect({ canal, livraison: r.DELIVERY.actif, emporter: r.PICKUP.actif, surPlace: r.TABLE.actif }).toEqual({
-          canal,
-          livraison: true,
-          emporter: true,
-          surPlace: false,
-        });
-      }
-    });
-
-    it('type coché pour un seul canal : proposé là, refusé ailleurs avec son message', () => {
-      const valeurs = { order_type_emporter: 'APP', order_type_livraison: 'WEB', order_type_sur_place: 'APP' };
-      const appli = reglagesCommande(valeurs, null, 'APP');
-      const site = reglagesCommande(valeurs, null, 'WEB');
-      expect([appli.PICKUP.actif, site.PICKUP.actif]).toEqual([true, false]);
-      expect([appli.DELIVERY.actif, site.DELIVERY.actif]).toEqual([false, true]);
-      expect([appli.TABLE.actif, site.TABLE.actif]).toEqual([true, false]);
-      expect(refusCommande(site, OrderType.PICKUP, PaymentMethod.ONLINE, OrderChannel.WEB)).toBe(
-        "La commande à emporter n'est pas proposée pour le moment. Choisissez un autre mode de réception.",
-      );
-      expect(refusCommande(appli, OrderType.PICKUP, PaymentMethod.ONLINE, OrderChannel.APP)).toBeNull();
-      expect(refusCommande(appli, OrderType.DELIVERY, PaymentMethod.ONLINE, OrderChannel.APP)).toContain('La livraison');
-      // Le paiement, lui, reste le même réglage pour les deux canaux.
-      const paiement = { ...valeurs, order_paiement_emporter: 'LES_DEUX' };
-      expect(reglagesCommande(paiement, null, 'APP').PICKUP.paiement).toBe('LES_DEUX');
-      expect(reglagesCommande(paiement, null, 'WEB').PICKUP.paiement).toBe('LES_DEUX');
-    });
-
-    it('coupure temporaire de la livraison : les deux canaux, quel que soit ce qui est coché', () => {
-      const coupure = { disabled: true, message: 'Livraison suspendue ce soir.' };
-      for (const canal of ['APP', 'WEB'] as const) {
-        expect(reglagesCommande({ order_type_livraison: 'APP,WEB' }, coupure, canal).DELIVERY).toMatchObject({
-          actif: false,
-          message: 'Livraison suspendue ce soir.',
-        });
-      }
-    });
-
-    it('canal absent : l’application (appelants d’avant les cases à cocher)', () => {
-      expect(reglagesCommande({ order_type_emporter: 'WEB' }).PICKUP.actif).toBe(false);
-      expect(reglagesCommande({ order_type_emporter: 'APP' }).PICKUP.actif).toBe(true);
-    });
+    expect(appli({}, { disabled: false, message: '' }).DELIVERY.actif).toBe(true);
   });
 
   describe('contrôle à la création', () => {
-    const tout = reglagesCommande({
-      order_type_sur_place: '1',
-      order_paiement_livraison: 'LES_DEUX',
-      order_paiement_emporter: 'A_LA_RECEPTION',
+    const tout = appli({
+      order_type_sur_place_appli: '1',
+      order_paiement_livraison_appli: 'LES_DEUX',
+      order_paiement_emporter_appli: 'A_LA_RECEPTION',
     });
 
-    it('type non proposé : refus avec son message', () => {
-      const r = reglagesCommande({ order_type_emporter: '0' });
-      expect(refusCommande(r, OrderType.PICKUP, PaymentMethod.ONLINE)).toBe(
+    it('type non proposé sur le canal : refus avec son message', () => {
+      const r = site({ order_type_emporter_site: '0' });
+      expect(refusCommande(r, OrderType.PICKUP, PaymentMethod.ONLINE, OrderChannel.WEB)).toBe(
         "La commande à emporter n'est pas proposée pour le moment. Choisissez un autre mode de réception.",
       );
       expect(refusCommande(r, OrderType.TABLE, PaymentMethod.ONLINE)).toContain('sur place');
       expect(refusCommande(r, OrderType.DELIVERY, PaymentMethod.ONLINE)).toBeNull();
+      // Le même type reste proposé dans l'application.
+      expect(refusCommande(appli({ order_type_emporter_site: '0' }), OrderType.PICKUP, PaymentMethod.ONLINE)).toBeNull();
     });
 
     it('les deux : en ligne et à la réception passent', () => {
@@ -202,21 +185,28 @@ describe('Types de commande et paiement, application et site', () => {
         'Pour ce mode de réception, le paiement se fait au restaurant.',
       );
       expect(refusCommande(tout, OrderType.PICKUP, PaymentMethod.OFFLINE)).toBeNull();
-      const livraison = reglagesCommande({ order_paiement_livraison: 'A_LA_RECEPTION' });
+      const livraison = appli({ order_paiement_livraison_appli: 'A_LA_RECEPTION' });
       expect(refusCommande(livraison, OrderType.DELIVERY, PaymentMethod.ONLINE)).toContain('à la livraison');
     });
   });
 
-  describe('commande à payer à la réception : directe ou après confirmation', () => {
-    it('lecture du réglage ; absent ou illisible : après confirmation (ce que le site faisait)', () => {
-      expect(lireModeReception('DIRECTE')).toBe('DIRECTE');
-      expect(lireModeReception(' directe ')).toBe('DIRECTE');
-      expect(lireModeReception('APRES_CONFIRMATION')).toBe('APRES_CONFIRMATION');
-      expect(lireModeReception(null)).toBe('APRES_CONFIRMATION');
-      expect(lireModeReception('')).toBe('APRES_CONFIRMATION');
-      expect(lireModeReception('tout de suite')).toBe('APRES_CONFIRMATION');
-      expect(modeReception({ order_paiement_reception: 'DIRECTE' })).toBe('DIRECTE');
-      expect(modeReception({})).toBe('APRES_CONFIRMATION');
+  describe('commande à payer à la réception : directe ou après confirmation, par canal', () => {
+    it('lecture du réglage ; absent ou illisible : la valeur par défaut du canal', () => {
+      expect(lireModeReception('DIRECTE', 'APRES_CONFIRMATION')).toBe('DIRECTE');
+      expect(lireModeReception(' directe ', 'APRES_CONFIRMATION')).toBe('DIRECTE');
+      expect(lireModeReception('APRES_CONFIRMATION', 'DIRECTE')).toBe('APRES_CONFIRMATION');
+      expect(lireModeReception(null, 'APRES_CONFIRMATION')).toBe('APRES_CONFIRMATION');
+      expect(lireModeReception('', 'DIRECTE')).toBe('DIRECTE');
+      expect(lireModeReception('tout de suite', 'APRES_CONFIRMATION')).toBe('APRES_CONFIRMATION');
+    });
+
+    it('chaque canal a son parcours', () => {
+      const valeurs = { order_paiement_reception_appli: 'APRES_CONFIRMATION', order_paiement_reception_site: 'DIRECTE' };
+      expect(modeReception(valeurs, 'APP')).toBe('APRES_CONFIRMATION');
+      expect(modeReception(valeurs, 'WEB')).toBe('DIRECTE');
+      // Régler l'un ne touche pas l'autre.
+      expect(modeReception({ order_paiement_reception_site: 'DIRECTE' }, 'APP')).toBe('DIRECTE');
+      expect(modeReception({ order_paiement_reception_appli: 'APRES_CONFIRMATION' }, 'WEB')).toBe('APRES_CONFIRMATION');
     });
 
     it('directe : la commande à payer à la réception part au restaurant', () => {

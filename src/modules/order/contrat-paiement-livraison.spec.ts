@@ -59,14 +59,10 @@ describe('contrat : GET /orders/conditions-commande', () => {
 
   it('réglage absent : paiement à la livraison PROPOSÉ (décision du 19/10), forme exacte', async () => {
     const { service, settingsService } = monter(null);
-    const types = {
-      DELIVERY: { actif: true, paiement: 'LES_DEUX', message: null },
-      PICKUP: { actif: true, paiement: 'EN_LIGNE', message: null },
-      TABLE: {
-        actif: false,
-        paiement: 'EN_LIGNE',
-        message: "La commande sur place n'est pas proposée pour le moment. Choisissez un autre mode de réception.",
-      },
+    const surPlace = {
+      actif: false,
+      paiement: 'EN_LIGNE',
+      message: "La commande sur place n'est pas proposée pour le moment. Choisissez un autre mode de réception.",
     };
 
     expect(enJson(await service.obtenirConditionsCommande())).toEqual({
@@ -77,13 +73,25 @@ describe('contrat : GET /orders/conditions-commande', () => {
       ],
       grille_frais_appliquee: true,
       paiement_livraison: { disponible: true },
-      // Même réglage pour le site et l'application (26/11). Rien de réglé :
-      // la livraison garde le paiement à la livraison du site.
-      types,
-      // À payer à la réception : le centre d'appels confirme d'abord.
+      // Paramétrage du SITE (26/11), rien de réglé : ce qu'il faisait déjà.
+      // La livraison se paie en ligne ou à la livraison, et la commande à
+      // payer à la réception attend la confirmation du centre d'appels.
+      types: {
+        DELIVERY: { actif: true, paiement: 'LES_DEUX', message: null },
+        PICKUP: { actif: true, paiement: 'EN_LIGNE', message: null },
+        TABLE: surPlace,
+      },
       reception: 'APRES_CONFIRMATION',
-      // Lu par l'application poussée le 26/11, avant « même réglage ».
-      appli: { types },
+      // Paramétrage de L'APPLICATION, rien de réglé : paiement en ligne, et
+      // la commande à payer à la réception part directement au restaurant.
+      appli: {
+        types: {
+          DELIVERY: { actif: true, paiement: 'EN_LIGNE', message: null },
+          PICKUP: { actif: true, paiement: 'EN_LIGNE', message: null },
+          TABLE: surPlace,
+        },
+        reception: 'DIRECTE',
+      },
     });
     expect(settingsService.getMany).toHaveBeenCalledWith(expect.arrayContaining(['order_paiement_livraison_site']));
     expect(REGLAGE_PAIEMENT_LIVRAISON_SITE).toBe('order_paiement_livraison_site');
@@ -98,34 +106,35 @@ describe('contrat : GET /orders/conditions-commande', () => {
     });
   });
 
-  it('nouveaux réglages (26/11) : ils l’emportent sur l’ancien, pour le site comme pour l’application', async () => {
-    // Ancien réglage à « Non », livraison réglée sur « les deux » : proposé.
-    const proposee = await monter('0', { order_paiement_livraison: 'LES_DEUX' }).service.obtenirConditionsCommande();
-    expect(proposee.paiement_livraison).toEqual({ disponible: true });
-    // Ancien à « Oui », livraison réglée « en ligne seulement » : retiré.
-    const retiree = await monter('1', { order_paiement_livraison: 'EN_LIGNE' }).service.obtenirConditionsCommande();
-    expect(retiree.paiement_livraison).toEqual({ disponible: false });
-    // « À la réception seulement » : le paiement à la livraison est proposé (et le seul).
-    const seule = await monter(null, { order_paiement_livraison: 'A_LA_RECEPTION' }).service.obtenirConditionsCommande();
+  it('paiement d’une livraison sur le site : la même clé qu’avant, avec les trois choix du 26/11', async () => {
+    const lire = async (valeur: string) => (await monter(valeur).service.obtenirConditionsCommande());
+    // « Les deux » et « à la réception seulement » : le paiement à la livraison est proposé.
+    expect((await lire('LES_DEUX')).paiement_livraison).toEqual({ disponible: true });
+    const seule = await lire('A_LA_RECEPTION');
     expect(seule.paiement_livraison).toEqual({ disponible: true });
     expect(seule.types.DELIVERY.paiement).toBe('A_LA_RECEPTION');
-    // Parcours : directe au restaurant.
-    const directe = await monter(null, { order_paiement_reception: 'DIRECTE' }).service.obtenirConditionsCommande();
-    expect(directe.reception).toBe('DIRECTE');
+    // « En ligne seulement » : retiré.
+    expect((await lire('EN_LIGNE')).paiement_livraison).toEqual({ disponible: false });
+    // Elle ne règle que le site : l'application garde son paiement.
+    expect(seule.appli.types.DELIVERY.paiement).toBe('EN_LIGNE');
   });
 
-  it('types cochés par canal (26/11) : `types` dit ce que le site propose, `appli.types` ce que l’application propose', async () => {
+  it('un paramétrage par canal (26/11) : `types` et `reception` pour le site, `appli` pour l’application', async () => {
     const lu = await monter(null, {
-      order_type_emporter: 'APP',
-      order_type_livraison: 'WEB',
-      order_type_sur_place: 'APP',
+      // Application : pas de livraison, sur place proposé, à emporter payé au choix, après confirmation.
+      order_type_livraison_appli: '0',
+      order_type_sur_place_appli: '1',
+      order_paiement_emporter_appli: 'LES_DEUX',
+      order_paiement_reception_appli: 'APRES_CONFIRMATION',
+      // Site : pas d'à emporter, commande directe.
+      order_type_emporter_site: '0',
+      order_paiement_reception_site: 'DIRECTE',
     }).service.obtenirConditionsCommande();
-    expect([lu.types.PICKUP.actif, lu.appli.types.PICKUP.actif]).toEqual([false, true]);
     expect([lu.types.DELIVERY.actif, lu.appli.types.DELIVERY.actif]).toEqual([true, false]);
+    expect([lu.types.PICKUP.actif, lu.appli.types.PICKUP.actif]).toEqual([false, true]);
     expect([lu.types.TABLE.actif, lu.appli.types.TABLE.actif]).toEqual([false, true]);
-    // Coché partout : les deux vues sont les mêmes.
-    const partout = await monter(null, { order_type_emporter: 'APP,WEB' }).service.obtenirConditionsCommande();
-    expect(partout.types.PICKUP).toEqual(partout.appli.types.PICKUP);
+    expect([lu.types.PICKUP.paiement, lu.appli.types.PICKUP.paiement]).toEqual(['EN_LIGNE', 'LES_DEUX']);
+    expect([lu.reception, lu.appli.reception]).toEqual(['DIRECTE', 'APRES_CONFIRMATION']);
   });
 });
 
