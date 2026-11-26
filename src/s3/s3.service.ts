@@ -7,6 +7,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { Readable } from 'stream';
 import { SettingsService } from 'src/modules/settings/settings.service';
+import { adresseStockageLocal } from './stockage-local.rules';
 
 @Injectable()
 export class S3Service {
@@ -44,10 +45,14 @@ export class S3Service {
             this.cachedConfig.secretAccessKey !== secretAccessKey ||
             this.cachedConfig.region !== region
         ) {
+            // Banc de test : stockage rangé sur le poste (voir stockage-local.rules).
+            // Sans adresse du poste, rien ne change : le client parle à Amazon.
+            const stockageLocal = adresseStockageLocal(process.env.AWS_S3_ENDPOINT);
             this.s3Client = new S3Client({
                 region,
                 credentials: { accessKeyId, secretAccessKey },
                 forcePathStyle: true,
+                ...(stockageLocal ? { endpoint: stockageLocal } : {}),
             });
             this.cachedConfig = { accessKeyId, secretAccessKey, region, bucketName, cloudFrontUrl };
         }
