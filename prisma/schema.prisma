@@ -764,8 +764,16 @@ model Customer {
   nationCards        NationCard[]
   promo_code_usages  PromoCodeUsage[]
   retentionCallbacks RetentionCallback[]
-  prospects          Prospect[]
-  scratch_draws      ScratchDraw[]
+
+  // Appels dans l'appli (26/11).
+  calls_made      Call[]        @relation("CallsMadeByCustomer")
+  calls_received  Call[]        @relation("CallsToCustomer")
+  /// Dernière fois que l'appli du client a dit pouvoir prendre un appel
+  /// (version avec les appels, GET /calls/customer/active). Vide : le
+  /// service client l'appelle au téléphone.
+  appels_appli_at DateTime?
+  prospects       Prospect[]
+  scratch_draws   ScratchDraw[]
 
   /// Diffusions de messages dont ce client est destinataire.
   broadcast_recipients MessageBroadcastRecipient[]
@@ -3071,9 +3079,13 @@ model Call {
   caller_type         UserType? // type du membre du personnel au moment de l'appel ; null quand un livreur appelle
   caller_deliverer_id String?    @db.Uuid
   caller_deliverer    Deliverer? @relation("CallsMadeByDeliverer", fields: [caller_deliverer_id], references: [id], onDelete: SetNull)
+  // Depuis le 26/11, un client depuis l'appli Chicken Nation (`caller_customer_id`) :
+  // il appelle le service client ou le livreur de sa commande.
+  caller_customer_id  String?    @db.Uuid
+  caller_customer     Customer?  @relation("CallsMadeByCustomer", fields: [caller_customer_id], references: [id], onDelete: SetNull)
 
   // Cible de l'appel
-  target_kind          String      @db.VarChar // 'RESTAURANT' | 'CALL_CENTER' | 'USER' | 'DELIVERER'
+  target_kind          String      @db.VarChar // 'RESTAURANT' | 'CALL_CENTER' | 'USER' | 'DELIVERER' | 'CUSTOMER'
   target_restaurant_id String?     @db.Uuid
   target_restaurant    Restaurant? @relation("CallsToRestaurant", fields: [target_restaurant_id], references: [id])
   // Cible individuelle (appel P2P, ex : admin appelle une personne précise)
@@ -3082,6 +3094,9 @@ model Call {
   // Cible livreur : le service client appelle un livreur dans son appli (24/10).
   target_deliverer_id  String?     @db.Uuid
   target_deliverer     Deliverer?  @relation("CallsToDeliverer", fields: [target_deliverer_id], references: [id], onDelete: SetNull)
+  // Cible client : le service client appelle un client dans l'appli (26/11).
+  target_customer_id   String?     @db.Uuid
+  target_customer      Customer?   @relation("CallsToCustomer", fields: [target_customer_id], references: [id], onDelete: SetNull)
 
   // Appel avec un livreur : la course (et la commande) dont il est question.
   course_id String? @db.Uuid
@@ -3112,6 +3127,8 @@ model Call {
   @@index([target_user_id])
   @@index([caller_deliverer_id])
   @@index([target_deliverer_id])
+  @@index([caller_customer_id])
+  @@index([target_customer_id])
   @@index([status])
   @@map("calls")
 }

@@ -27,8 +27,10 @@ import {
   APPEL_FANTOME_MS,
   CALLS_LIVREURS_ACTIF_KEY,
   CALL_EVENTS,
+  CIBLE_CLIENT,
   CIBLE_LIVREUR,
   CODES_APPEL_LIVREUR,
+  LIBELLE_CLIENT,
   LIBELLE_SERVICE_CLIENT,
   MARGE_SONNERIE_LIVREUR_MS,
   RaisonFinAppel,
@@ -38,6 +40,7 @@ import {
 } from '../constants/calls.constants';
 import { StartCallDto } from '../dto/start-call.dto';
 import { StartDelivererCallDto } from '../dto/start-deliverer-call.dto';
+import { nomClientPourLivreur } from '../helpers/appels-client.rules';
 import {
   appelantLivreur,
   lireAppelsLivreursActifs,
@@ -86,6 +89,11 @@ const NUMERO_LISIBLE = '27 21 71 21 30';
  *    'DELIVERER'`) : l'appli du livreur sonne (`call:incoming` dans
  *    `deliverer_{id}` + notification `appel_entrant`), il décroche, refuse ou
  *    laisse sonner (manqué au bout de 45 s).
+ *
+ *  - Le client appelle le livreur de sa commande (26/11, POST /calls/customer,
+ *    AppelsClientService) : l'appli du livreur sonne de la même façon, il
+ *    décroche, refuse ou raccroche par les mêmes routes ; c'est le client qui
+ *    est prévenu.
  *
  * Un livreur n'agit que sur SES appels : chaque écriture est conditionnée sur
  * son identifiant (appelant ou appelé), jamais sur le seul identifiant de
@@ -375,7 +383,9 @@ export class AppelsLivreurService implements OnModuleDestroy {
       callId,
       path: `/calls/deliverer/${callId}/answer`,
       status: 201,
-      resume: 'Livreur : a décroché un appel du call center',
+      resume: call.caller_customer_id
+        ? 'Livreur : a décroché un appel du client'
+        : 'Livreur : a décroché un appel du call center',
     });
 
     return {
@@ -414,7 +424,9 @@ export class AppelsLivreurService implements OnModuleDestroy {
       callId,
       path: `/calls/deliverer/${callId}/reject`,
       status: 201,
-      resume: 'Livreur : a refusé un appel du call center',
+      resume: call.caller_customer_id
+        ? 'Livreur : a refusé un appel du client'
+        : 'Livreur : a refusé un appel du call center',
     });
     return { status: CallStatus.MISSED };
   }
@@ -506,7 +518,13 @@ export class AppelsLivreurService implements OnModuleDestroy {
       }
     }
 
-    const agent = direction === 'outgoing' ? call.answered_by?.fullname : call.caller?.fullname;
+    // Un client l'appelle (26/11) : « Client » et son prénom, jamais son numéro.
+    const deClient = !!call.caller_customer_id;
+    const agent = deClient
+      ? nomClientPourLivreur(call.caller_customer)
+      : direction === 'outgoing'
+        ? call.answered_by?.fullname
+        : call.caller?.fullname;
     return {
       actif: true,
       ...base,
@@ -515,7 +533,7 @@ export class AppelsLivreurService implements OnModuleDestroy {
         status: call.status,
         direction,
         phase,
-        peerLabel: LIBELLE_SERVICE_CLIENT,
+        peerLabel: deClient ? LIBELLE_CLIENT : LIBELLE_SERVICE_CLIENT,
         agentName: agent ?? null,
         startedAt: call.started_at,
         answeredAt: call.answered_at,
@@ -524,6 +542,7 @@ export class AppelsLivreurService implements OnModuleDestroy {
             ? new Date(call.started_at.getTime() + SONNERIE_LIVREUR_MS)
             : null,
         course_reference: call.course?.reference ?? null,
+        order_reference: deClient ? (call.order?.reference ?? null) : null,
       },
       access,
     };
@@ -533,7 +552,8 @@ export class AppelsLivreurService implements OnModuleDestroy {
   // SONNERIE : APPEL MANQUÉ AU BOUT DE 45 s
   // ============================================================
 
-  private armerSonnerie(callId: string) {
+  /** Arme la fin de sonnerie (45 s) d'un appel d'appli : livreur ou client (AppelsClientService). */
+  armerSonnerie(callId: string) {
     this.desarmerSonnerie(callId);
     const minuterie = setTimeout(() => {
       this.sonneries.delete(callId);
@@ -545,7 +565,7 @@ export class AppelsLivreurService implements OnModuleDestroy {
     this.sonneries.set(callId, minuterie);
   }
 
-  private desarmerSonnerie(callId: string) {
+  desarmerSonnerie(callId: string) {
     const minuterie = this.sonneries.get(callId);
     if (minuterie) clearTimeout(minuterie);
     this.sonneries.delete(callId);
@@ -576,9 +596,24 @@ export class AppelsLivreurService implements OnModuleDestroy {
       }
     }
     if (call.target_deliverer_id) {
-      // Le service client appelait : l'agent est prévenu, l'appli du livreur arrête de sonner.
+      // Le service client (ou le client, 26/11) appelait : l'appelant est
+      // prévenu, l'appli du livreur arrête de sonner.
       this.calls.prevenirAppelant(call, CALL_EVENTS.ENDED, fin);
       this.gateway.emitToDeliverer(call.target_deliverer_id, CALL_EVENTS.ENDED, fin);
+    }
+    if (call.caller_customer_id && !call.target_deliverer_id) {
+      // Le client appelait le service client : il entend « pas de réponse »,
+      // les agents arrêtent de sonner.
+      this.calls.prevenirAppelant(call, CALL_EVENTS.ENDED, fin);
+      for (const rid of call.ringing_user_ids) {
+        this.gateway.emitToUser(rid, 'user', CALL_EVENTS.CANCELLED, { callId: call.id });
+      }
+    }
+    if (call.target_customer_id) {
+      // Le service client appelait un client : l'agent est prévenu, l'appli
+      // du client arrête de sonner.
+      this.calls.prevenirAppelant(call, CALL_EVENTS.ENDED, fin);
+      this.calls.prevenir({ type: 'customer', id: call.target_customer_id }, CALL_EVENTS.ENDED, fin);
     }
     void this.lunion.deleteRoom(call.room_slug);
     return true;
@@ -588,17 +623,25 @@ export class AppelsLivreurService implements OnModuleDestroy {
   // OUTILS
   // ============================================================
 
-  /** Appels avec un livreur. */
+  /** Appels d'appli : avec un livreur, ou avec un client (26/11). */
   private avecUnLivreur(): Prisma.CallWhereInput {
-    return { OR: [{ caller_deliverer_id: { not: null } }, { target_kind: CIBLE_LIVREUR }] };
+    return {
+      OR: [
+        { caller_deliverer_id: { not: null } },
+        { target_kind: CIBLE_LIVREUR },
+        { caller_customer_id: { not: null } },
+        { target_kind: CIBLE_CLIENT },
+      ],
+    };
   }
 
   /**
-   * Filet après un redémarrage (minuteries perdues) : un appel avec un livreur
-   * qui sonne depuis plus de 60 s est manqué, un appel en ligne depuis plus de
-   * 4 h est terminé. Sans événement : chaque côté a sa propre minuterie.
+   * Filet après un redémarrage (minuteries perdues) : un appel d'appli (avec
+   * un livreur ou un client) qui sonne depuis plus de 60 s est manqué, un
+   * appel en ligne depuis plus de 4 h est terminé. Sans événement : chaque
+   * côté a sa propre minuterie.
    */
-  private async balayer() {
+  async balayer() {
     const maintenant = Date.now();
     await this.prisma.call.updateMany({
       where: {
@@ -649,8 +692,15 @@ export class AppelsLivreurService implements OnModuleDestroy {
         caller: { select: { fullname: true } },
         answered_by: { select: { fullname: true } },
         course: { select: { reference: true } },
+        caller_customer: { select: { first_name: true, last_name: true } },
+        order: { select: { reference: true } },
       },
     });
+  }
+
+  /** Ce livreur a-t-il un appel qui sonne ou en cours ? (un client veut l'appeler) */
+  async livreurEnAppel(delivererId: string): Promise<boolean> {
+    return (await this.appelActifDuLivreur(delivererId)) !== null;
   }
 
   /**

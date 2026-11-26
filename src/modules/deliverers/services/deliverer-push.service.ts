@@ -657,13 +657,16 @@ export class DelivererPushService {
    * ouverte, c'est `call:incoming` qui sonne et l'appli la tait. Une appli qui
    * ne sait pas encore répondre dans l'appli donne le numéro à rappeler.
    */
-  notifyAppelEntrant(input: { delivererId: string; callId: string }): void {
+  notifyAppelEntrant(input: { delivererId: string; callId: string; deClient?: boolean }): void {
     this.fireAndForget({
       delivererId: input.delivererId,
       type: 'appel_entrant',
-      title: "Le service client t'appelle",
-      body: "Ouvre l'appli pour répondre, ou rappelle le 27 21 71 21 30.",
-      data: { callId: input.callId },
+      // 26/11 : le client appelle le livreur de sa commande depuis son appli.
+      title: input.deClient ? "Le client t'appelle" : "Le service client t'appelle",
+      body: input.deClient
+        ? "Ouvre l'appli pour répondre."
+        : "Ouvre l'appli pour répondre, ou rappelle le 27 21 71 21 30.",
+      data: { callId: input.callId, ...(input.deClient ? { appelant: 'CLIENT' } : {}) },
       critical: true,
       channelId: CANAL_APPELS,
       sound: SON_APPEL,

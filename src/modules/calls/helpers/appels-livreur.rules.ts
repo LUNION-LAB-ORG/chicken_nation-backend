@@ -77,9 +77,9 @@ export function peutAppelerLivreur(role: UserRole | string | null | undefined): 
   return !!role && (ROLES_APPEL_LIVREUR as readonly string[]).includes(role);
 }
 
-/** Une partie d'un appel : un membre du personnel ou un livreur. */
+/** Une partie d'un appel : un membre du personnel, un livreur ou un client (26/11). */
 export interface PartieAppel {
-  type: 'user' | 'deliverer';
+  type: 'user' | 'deliverer' | 'customer';
   id: string;
 }
 
@@ -89,12 +89,17 @@ export interface PartiesDeLAppel {
   caller_deliverer_id: string | null;
   answered_by_id: string | null;
   target_deliverer_id: string | null;
+  /** Client qui appelle depuis l'appli (26/11). */
+  caller_customer_id?: string | null;
+  /** Client appelé par le service client (26/11). */
+  target_customer_id?: string | null;
 }
 
 /**
- * Qui prévenir de la fin d'un appel en cours : l'appelant (personnel ou
- * livreur), le membre du personnel qui a décroché et le livreur appelé, sauf
- * celui qui raccroche. Un admin qui coupe l'appel des autres les prévient tous.
+ * Qui prévenir de la fin d'un appel en cours : l'appelant (personnel, livreur
+ * ou client), le membre du personnel qui a décroché, le livreur ou le client
+ * appelé, sauf celui qui raccroche. Un admin qui coupe l'appel des autres les
+ * prévient tous.
  */
 export function partiesAPrevenir(appel: PartiesDeLAppel, acteur: PartieAppel): PartieAppel[] {
   const parties: PartieAppel[] = [];
@@ -106,8 +111,10 @@ export function partiesAPrevenir(appel: PartiesDeLAppel, acteur: PartieAppel): P
   };
   ajouter('user', appel.caller_id);
   ajouter('deliverer', appel.caller_deliverer_id);
+  ajouter('customer', appel.caller_customer_id ?? null);
   ajouter('user', appel.answered_by_id);
   ajouter('deliverer', appel.target_deliverer_id);
+  ajouter('customer', appel.target_customer_id ?? null);
   return parties;
 }
 

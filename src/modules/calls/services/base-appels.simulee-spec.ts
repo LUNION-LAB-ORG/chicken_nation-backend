@@ -1,7 +1,7 @@
 /**
  * Base en mémoire pour les tests des appels : personnel, livreurs, courses,
- * livraisons, réglages et table `calls`, avec Lunion Meet et la passerelle
- * simulés (aucun réseau, aucune base).
+ * livraisons, clients, commandes, réglages et table `calls`, avec Lunion
+ * Meet, la passerelle et les notifications simulés (aucun réseau, aucune base).
  *
  * Les `where` reçus sont ÉVALUÉS (AND, OR, null, not, in, has, comparaisons,
  * filtre de relation simple) : retirer une condition d'une écriture
@@ -17,6 +17,7 @@ import { CourseStatut, EntityStatus, User, UserRole, UserType } from '@prisma/cl
 
 import { CallsConfigService } from './calls-config.service';
 import { CallsService } from './calls.service';
+import { AppelsClientService, ClientConnecte } from './appels-client.service';
 import { AppelsLivreurService, LivreurConnecte } from './appels-livreur.service';
 
 type Ligne = Record<string, any>;
@@ -139,6 +140,39 @@ export function course(surcharge: Ligne = {}): Ligne {
   };
 }
 
+/** Client de l'appli Chicken Nation (26/11). `appels_appli_at` : son appli sait prendre un appel. */
+export function client(surcharge: Ligne = {}): Ligne {
+  return {
+    id: uuid(),
+    first_name: 'Awa',
+    last_name: 'Koné',
+    phone: '+2250707070707',
+    entity_status: EntityStatus.ACTIVE,
+    appels_appli_at: null,
+    notification_settings: null,
+    ...surcharge,
+  };
+}
+
+export function commande(surcharge: Ligne = {}): Ligne {
+  return {
+    id: uuid(),
+    reference: 'ORD-261126-00001',
+    customer_id: null,
+    created_at: new Date(),
+    ...surcharge,
+  };
+}
+
+/** Le client tel que JwtCustomerAuthGuard le pose sur la requête. */
+export const clientConnecte = (c: Ligne): ClientConnecte => ({
+  id: c.id,
+  first_name: c.first_name,
+  last_name: c.last_name,
+  phone: c.phone,
+  appels_appli_at: c.appels_appli_at ?? null,
+});
+
 /** Le livreur tel que JwtDelivererAuthGuard le pose sur la requête. */
 export const connecte = (l: Ligne): LivreurConnecte => ({
   id: l.id,
@@ -159,6 +193,8 @@ export function monterAppels(donnees: {
   livreurs?: Ligne[];
   courses?: Ligne[];
   livraisons?: Ligne[];
+  clients?: Ligne[];
+  commandes?: Ligne[];
   reglages?: Record<string, string>;
   enLigne?: boolean;
 } = {}) {
@@ -166,6 +202,8 @@ export function monterAppels(donnees: {
   const livreurs: Ligne[] = donnees.livreurs ?? [];
   const courses: Ligne[] = donnees.courses ?? [];
   const livraisons: Ligne[] = donnees.livraisons ?? [];
+  const clients: Ligne[] = donnees.clients ?? [];
+  const commandes: Ligne[] = donnees.commandes ?? [];
   const restaurants: Ligne[] = [{ id: RESTO_ANGRE, name: 'Angré' }];
   const reglages: Record<string, string> = { ...(donnees.reglages ?? {}) };
   const appels: Ligne[] = [];
@@ -183,6 +221,9 @@ export function monterAppels(donnees: {
     caller_deliverer: avecRestaurant(livreurs.find((l) => l.id === a.caller_deliverer_id)) ?? null,
     target_deliverer: avecRestaurant(livreurs.find((l) => l.id === a.target_deliverer_id)) ?? null,
     course: courses.find((c) => c.id === a.course_id) ?? null,
+    caller_customer: clients.find((c) => c.id === a.caller_customer_id) ?? null,
+    target_customer: clients.find((c) => c.id === a.target_customer_id) ?? null,
+    order: commandes.find((o) => o.id === a.order_id) ?? null,
   });
 
   /** Ligne d'appel rendue avec ses inclusions demandées (ou nue). */
@@ -217,9 +258,11 @@ export function monterAppels(donnees: {
           caller_id: null,
           caller_type: null,
           caller_deliverer_id: null,
+          caller_customer_id: null,
           target_restaurant_id: null,
           target_user_id: null,
           target_deliverer_id: null,
+          target_customer_id: null,
           course_id: null,
           order_id: null,
           answered_by_id: null,
@@ -240,6 +283,7 @@ export function monterAppels(donnees: {
         for (const a of visees) Object.assign(a, data, { updated_at: new Date() });
         return { count: visees.length };
       }),
+      count: jest.fn(async ({ where }: Ligne) => appels.filter((a) => evaluer(a, where)).length),
     },
     // CallsService.reject : retrait atomique `array_remove` (UPDATE ... RETURNING).
     $queryRaw: jest.fn(async (_morceaux: TemplateStringsArray, userId: string, callId: string) => {
@@ -271,16 +315,36 @@ export function monterAppels(donnees: {
     },
     delivery: {
       findFirst: jest.fn(async ({ where, select }: Ligne) => {
-        const relie = livraisons.map((d) => ({ ...d, course: courses.find((c) => c.id === d.course_id) }));
+        const relie = livraisons.map((d) => ({
+          ...d,
+          course: courses.find((c) => c.id === d.course_id),
+          order: commandes.find((o) => o.id === d.order_id),
+        }));
         return projeter(relie.find((d) => evaluer(d, where)), select);
       }),
+    },
+    customer: {
+      findFirst: jest.fn(async ({ where, select }: Ligne) =>
+        projeter(clients.find((c) => evaluer(c, where)), select),
+      ),
+      updateMany: jest.fn(async ({ where, data }: Ligne) => {
+        const vises = clients.filter((c) => evaluer(c, where));
+        for (const c of vises) Object.assign(c, data);
+        return { count: vises.length };
+      }),
+    },
+    order: {
+      findFirst: jest.fn(async ({ where, orderBy, select }: Ligne) =>
+        projeter(trier(commandes.filter((o) => evaluer(o, where)), orderBy)[0], select),
+      ),
     },
   };
 
   const evenements: Evenement[] = [];
   const gateway = {
-    emitToUser: jest.fn((id: string, _type: string, event: string, data: unknown) =>
-      evenements.push({ salle: `user_${id}`, event, data }),
+    // Salle `customer_{id}` pour un client, `user_{id}` pour le personnel.
+    emitToUser: jest.fn((id: string, type: string, event: string, data: unknown) =>
+      evenements.push({ salle: `${type === 'customer' ? 'customer' : 'user'}_${id}`, event, data }),
     ),
     emitToDeliverer: jest.fn((id: string, event: string, data: unknown) =>
       evenements.push({ salle: `deliverer_${id}`, event, data }),
@@ -307,6 +371,7 @@ export function monterAppels(donnees: {
     getJson: jest.fn(async () => null),
   };
   const push = { notifyAppelEntrant: jest.fn() };
+  const expoPush = { sendPushNotifications: jest.fn(async () => ({ status: 'ok' })) };
   const audit = { record: jest.fn() };
 
   const config = new CallsConfigService(settings as never);
@@ -322,9 +387,38 @@ export function monterAppels(donnees: {
     audit as never,
   );
 
-  /** Événements reçus par une salle (`user_{id}` ou `deliverer_{id}`), dans l'ordre. */
+  const appelsClient = new AppelsClientService(
+    prisma as never,
+    lunion as never,
+    config,
+    calls,
+    appelsLivreur,
+    gateway as never,
+    settings as never,
+    push as never,
+    expoPush as never,
+    audit as never,
+  );
+
+  /** Événements reçus par une salle (`user_{id}`, `deliverer_{id}` ou `customer_{id}`), dans l'ordre. */
   const recus = (salle: string, event?: string) =>
     evenements.filter((e) => e.salle === salle && (!event || e.event === event));
 
-  return { prisma, gateway, lunion, settings, push, audit, calls, appelsLivreur, appels, reglages, evenements, recus };
+  return {
+    prisma,
+    gateway,
+    lunion,
+    settings,
+    push,
+    expoPush,
+    audit,
+    calls,
+    appelsLivreur,
+    appelsClient,
+    appels,
+    clients,
+    reglages,
+    evenements,
+    recus,
+  };
 }

@@ -18,12 +18,13 @@ import { RequirePermission } from 'src/modules/auth/decorators/user-require-perm
 import { Action } from 'src/modules/auth/enums/action.enum';
 import { Modules } from 'src/modules/auth/enums/module-enum';
 import { CallsService } from './services/calls.service';
+import { AppelsClientService } from './services/appels-client.service';
 import { AppelsLivreurService } from './services/appels-livreur.service';
 import { CallsConfigService } from './services/calls-config.service';
 import { LunionMeetService } from './services/lunion-meet.service';
 import { StartCallDto } from './dto/start-call.dto';
 import { UpdateCallsConfigDto } from './dto/update-calls-config.dto';
-import { CallsRolesConfig, CIBLE_LIVREUR } from './constants/calls.constants';
+import { CallsRolesConfig, CIBLE_CLIENT, CIBLE_LIVREUR } from './constants/calls.constants';
 
 @Controller('calls')
 export class CallsController {
@@ -32,6 +33,7 @@ export class CallsController {
     private readonly callsConfig: CallsConfigService,
     private readonly lunion: LunionMeetService,
     private readonly appelsLivreur: AppelsLivreurService,
+    private readonly appelsClient: AppelsClientService,
   ) {}
 
   // ─────────── Webhook Lunion (public, vérif HMAC) ───────────
@@ -102,6 +104,10 @@ export class CallsController {
     // Le service client (ou l'admin) appelle un livreur dans son appli.
     if (dto.targetKind === CIBLE_LIVREUR) {
       return this.appelsLivreur.appelerLivreur(req.user as User, dto);
+    }
+    // Le service client (ou l'admin) appelle un client dans l'appli (26/11).
+    if (dto.targetKind === CIBLE_CLIENT) {
+      return this.appelsClient.appelerClient(req.user as User, dto);
     }
     return this.calls.start(req.user as User, dto);
   }

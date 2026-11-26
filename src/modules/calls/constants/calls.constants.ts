@@ -116,3 +116,73 @@ export const CODES_APPEL_LIVREUR = {
 
 /** Raison de fin portée par `call:ended`. */
 export type RaisonFinAppel = 'hangup' | 'no-answer' | 'cancelled' | 'rejected';
+
+// ============================================================
+// APPELS AVEC LES CLIENTS, DANS L'APPLI CHICKEN NATION (demande du 26/11)
+// ============================================================
+
+/**
+ * Réglage (table des réglages) : appels dans l'appli avec les clients.
+ * `1` (ou absent) : actifs ; `0` : les routes client répondent
+ * `APPELS_CLIENTS_DESACTIVES` et l'appli passe au téléphone.
+ */
+export const CALLS_CLIENTS_ACTIF_KEY = 'calls.clients_actif';
+
+/** Nature de la cible quand le service client appelle un client. */
+export const CIBLE_CLIENT = 'CUSTOMER';
+
+/** `callerType` des événements et de l'historique quand c'est un client qui appelle. */
+export const APPELANT_CLIENT = 'CUSTOMER';
+
+/** Ce que voient le personnel et le livreur de l'autre côté de la ligne. */
+export const LIBELLE_CLIENT = 'Client';
+
+/** Ce que voit le client quand il appelle le livreur de sa commande. */
+export const LIBELLE_LIVREUR = 'Votre livreur';
+
+/** Qui le client a au bout du fil : le service client ou le livreur de sa commande. */
+export type CorrespondantClient = 'SERVICE_CLIENT' | 'LIVREUR';
+
+/** Rôles du personnel qui appellent un client dans l'appli : le service client et l'admin. */
+export const ROLES_APPEL_CLIENT: readonly UserRole[] = [UserRole.ADMIN, UserRole.CALL_CENTER];
+
+/** Jeton de participant d'un client : comme celui d'un livreur (durée de l'appel le plus long toléré). */
+export const TTL_JETON_CLIENT_S = TTL_JETON_LIVREUR_S;
+
+/**
+ * L'appli du client dit qu'elle sait prendre un appel à chaque ouverture
+ * (`Customer.appels_appli_at`). Sans nouvelle depuis ce délai (appli
+ * désinstallée, téléphone changé), le service client appelle au téléphone.
+ */
+export const APPLI_CLIENT_PRETE_JOURS = 45;
+
+/** `appels_appli_at` n'est réécrit qu'une fois par jour au plus. */
+export const APPLI_CLIENT_RAFRAICHIE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Un client passe au plus 6 appels en 10 minutes (service client et livreur
+ * confondus) : au-delà, l'appli passe au téléphone. Chaque appel fait sonner
+ * tous les postes du service client.
+ */
+export const APPELS_CLIENT_MAX = 6;
+export const APPELS_CLIENT_FENETRE_MS = 10 * 60 * 1000;
+
+/** Codes machine des refus vus par l'appli du client et par le back-office. */
+export const CODES_APPEL_CLIENT = {
+  /** Réglage `calls.clients_actif` à 0. */
+  DESACTIVES: 'APPELS_CLIENTS_DESACTIVES',
+  /** Le client a déjà un appel qui sonne ou en cours. */
+  EN_COURS: 'APPEL_EN_COURS',
+  /** Personne au service client à faire sonner. */
+  AUCUN_AGENT: 'AUCUN_AGENT',
+  /** Lunion Meet ne répond pas : pas de salle, pas de jeton. */
+  INDISPONIBLES: 'APPELS_INDISPONIBLES',
+  /** Pas de livreur de chez nous sur cette commande (pas encore parti, déjà livré, livreur partenaire). */
+  LIVREUR_INJOIGNABLE: 'LIVREUR_INJOIGNABLE',
+  /** Le livreur est déjà en ligne. */
+  LIVREUR_OCCUPE: 'LIVREUR_OCCUPE',
+  /** L'appli du client ne sait pas (ou plus) prendre un appel : téléphone. */
+  SANS_APPLI: 'CLIENT_SANS_APPLI',
+  /** Trop d'appels du même client en peu de temps : téléphone. */
+  TROP_D_APPELS: 'TROP_D_APPELS',
+} as const;

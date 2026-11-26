@@ -9,10 +9,12 @@ export class StartCallDto {
    * - 'USER' + targetUserId        → appel individuel (P2P)
    * Le service client (CALL_CENTER) et l'admin appellent un livreur :
    * - 'DELIVERER' + deliverer_id   → l'appli du livreur sonne (24/10)
+   * et un client dans l'appli Chicken Nation :
+   * - 'CUSTOMER' + customer_id     → l'appli du client sonne (26/11)
    */
   @IsOptional()
-  @IsIn(['RESTAURANT', 'CALL_CENTER', 'USER', 'DELIVERER'])
-  targetKind?: 'RESTAURANT' | 'CALL_CENTER' | 'USER' | 'DELIVERER';
+  @IsIn(['RESTAURANT', 'CALL_CENTER', 'USER', 'DELIVERER', 'CUSTOMER'])
+  targetKind?: 'RESTAURANT' | 'CALL_CENTER' | 'USER' | 'DELIVERER' | 'CUSTOMER';
 
   /** Requis quand la cible est un restaurant précis. */
   @IsOptional()
@@ -28,4 +30,14 @@ export class StartCallDto {
   @IsOptional()
   @IsUUID()
   deliverer_id?: string;
+
+  /** Requis avec `targetKind: 'CUSTOMER'` : le client dont l'appli sonne. */
+  @IsOptional()
+  @IsUUID()
+  customer_id?: string;
+
+  /** Avec `targetKind: 'CUSTOMER'` : la commande dont l'agent veut parler. */
+  @IsOptional()
+  @IsUUID()
+  order_id?: string;
 }
