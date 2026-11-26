@@ -2,6 +2,7 @@ import { OrderChannel, OrderType, PaymentMethod } from '@prisma/client';
 
 import {
   CLES_REGLAGES_COMMANDE,
+  lireCanauxDuType,
   lireModeReception,
   lirePaiement,
   lireTypeActif,
@@ -92,6 +93,73 @@ describe('Types de commande et paiement, application et site', () => {
     expect(r.PICKUP.actif).toBe(true);
     // Coupure levée : la livraison revient.
     expect(reglagesCommande({}, { disabled: false, message: '' }).DELIVERY.actif).toBe(true);
+  });
+
+  // « on doit cocher site web ou appli » (26/11) : un type se coche par canal.
+  describe('types cochés par canal : application, site web', () => {
+    it('lecture des canaux : liste, « 1 » les deux, « 0 » aucun, vide la valeur par défaut', () => {
+      const LES_DEUX = ['APP', 'WEB'];
+      expect(lireCanauxDuType('APP,WEB', [])).toEqual(LES_DEUX);
+      expect(lireCanauxDuType('web, app', [])).toEqual(LES_DEUX);
+      expect(lireCanauxDuType('APP', LES_DEUX as never)).toEqual(['APP']);
+      expect(lireCanauxDuType(' site ', [])).toEqual(['WEB']);
+      expect(lireCanauxDuType('appli', [])).toEqual(['APP']);
+      // Les valeurs d'avant les cases à cocher.
+      expect(lireCanauxDuType('1', [])).toEqual(LES_DEUX);
+      expect(lireCanauxDuType('oui', [])).toEqual(LES_DEUX);
+      expect(lireCanauxDuType('0', LES_DEUX as never)).toEqual([]);
+      // Absent ou vide : la valeur par défaut du type.
+      expect(lireCanauxDuType(null, LES_DEUX as never)).toEqual(LES_DEUX);
+      expect(lireCanauxDuType('', ['APP'])).toEqual(['APP']);
+      expect(lireCanauxDuType(undefined, [])).toEqual([]);
+      // Illisible : nulle part (une saisie qu'on ne comprend pas n'ouvre rien).
+      expect(lireCanauxDuType('partout', LES_DEUX as never)).toEqual([]);
+    });
+
+    it('rien de réglé : livraison et à emporter sur les deux canaux, sur place nulle part', () => {
+      for (const canal of ['APP', 'WEB'] as const) {
+        const r = reglagesCommande({}, null, canal);
+        expect({ canal, livraison: r.DELIVERY.actif, emporter: r.PICKUP.actif, surPlace: r.TABLE.actif }).toEqual({
+          canal,
+          livraison: true,
+          emporter: true,
+          surPlace: false,
+        });
+      }
+    });
+
+    it('type coché pour un seul canal : proposé là, refusé ailleurs avec son message', () => {
+      const valeurs = { order_type_emporter: 'APP', order_type_livraison: 'WEB', order_type_sur_place: 'APP' };
+      const appli = reglagesCommande(valeurs, null, 'APP');
+      const site = reglagesCommande(valeurs, null, 'WEB');
+      expect([appli.PICKUP.actif, site.PICKUP.actif]).toEqual([true, false]);
+      expect([appli.DELIVERY.actif, site.DELIVERY.actif]).toEqual([false, true]);
+      expect([appli.TABLE.actif, site.TABLE.actif]).toEqual([true, false]);
+      expect(refusCommande(site, OrderType.PICKUP, PaymentMethod.ONLINE, OrderChannel.WEB)).toBe(
+        "La commande à emporter n'est pas proposée pour le moment. Choisissez un autre mode de réception.",
+      );
+      expect(refusCommande(appli, OrderType.PICKUP, PaymentMethod.ONLINE, OrderChannel.APP)).toBeNull();
+      expect(refusCommande(appli, OrderType.DELIVERY, PaymentMethod.ONLINE, OrderChannel.APP)).toContain('La livraison');
+      // Le paiement, lui, reste le même réglage pour les deux canaux.
+      const paiement = { ...valeurs, order_paiement_emporter: 'LES_DEUX' };
+      expect(reglagesCommande(paiement, null, 'APP').PICKUP.paiement).toBe('LES_DEUX');
+      expect(reglagesCommande(paiement, null, 'WEB').PICKUP.paiement).toBe('LES_DEUX');
+    });
+
+    it('coupure temporaire de la livraison : les deux canaux, quel que soit ce qui est coché', () => {
+      const coupure = { disabled: true, message: 'Livraison suspendue ce soir.' };
+      for (const canal of ['APP', 'WEB'] as const) {
+        expect(reglagesCommande({ order_type_livraison: 'APP,WEB' }, coupure, canal).DELIVERY).toMatchObject({
+          actif: false,
+          message: 'Livraison suspendue ce soir.',
+        });
+      }
+    });
+
+    it('canal absent : l’application (appelants d’avant les cases à cocher)', () => {
+      expect(reglagesCommande({ order_type_emporter: 'WEB' }).PICKUP.actif).toBe(false);
+      expect(reglagesCommande({ order_type_emporter: 'APP' }).PICKUP.actif).toBe(true);
+    });
   });
 
   describe('contrôle à la création', () => {

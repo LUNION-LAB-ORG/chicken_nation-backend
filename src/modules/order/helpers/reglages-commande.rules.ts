@@ -13,7 +13,10 @@ import { paiementLivraisonActif, REGLAGE_PAIEMENT_LIVRAISON_SITE } from './paiem
  * le site et appli aussi », « directe ou après confirmation ».
  *
  * Paramètres > Commandes :
- *  - `order_type_<type>` : « 1 » le type est proposé, « 0 » il ne l'est pas ;
+ *  - `order_type_<type>` : où le type est proposé. Le client coche « Appli »
+ *    et/ou « Site web » (« on doit cocher site web ou appli », 26/11) : la
+ *    valeur est la liste des canaux cochés, `APP,WEB`, `APP`, `WEB`. « 1 »
+ *    vaut les deux, « 0 » aucun ;
  *  - `order_paiement_<type>` : `EN_LIGNE`, `A_LA_RECEPTION` ou `LES_DEUX` ;
  *  - `order_paiement_reception` : ce que devient une commande à payer à la
  *    réception. `DIRECTE` : elle part au restaurant, acceptée.
@@ -45,6 +48,11 @@ export const PAIEMENTS_COMMANDE: readonly PaiementCommande[] = ['EN_LIGNE', 'A_L
 /** Ce que devient une commande à payer à la réception. */
 export type ModeReception = 'DIRECTE' | 'APRES_CONFIRMATION';
 
+/** Canal d'une commande passée par le client : l'application ou le site. */
+export type CanalClient = 'APP' | 'WEB';
+
+export const CANAUX_CLIENT: readonly CanalClient[] = ['APP', 'WEB'];
+
 /** Réglage « Commande à payer à la réception ». */
 export const REGLAGE_RECEPTION = 'order_paiement_reception';
 
@@ -65,11 +73,23 @@ export const CLES_REGLAGES_COMMANDE: string[] = [
   REGLAGE_PAIEMENT_LIVRAISON_SITE,
 ];
 
-/** Clé absente : avant ces réglages, la livraison et le retrait étaient proposés, pas « sur place ». */
-const ACTIF_PAR_DEFAUT: Record<OrderType, boolean> = {
-  [OrderType.DELIVERY]: true,
-  [OrderType.PICKUP]: true,
-  [OrderType.TABLE]: false,
+/**
+ * Clé absente : avant ces réglages, la livraison et le retrait étaient
+ * proposés sur l'application et le site, « sur place » nulle part.
+ */
+const CANAUX_PAR_DEFAUT: Record<OrderType, readonly CanalClient[]> = {
+  [OrderType.DELIVERY]: CANAUX_CLIENT,
+  [OrderType.PICKUP]: CANAUX_CLIENT,
+  [OrderType.TABLE]: [],
+};
+
+/** Mots acceptés pour un canal dans la valeur du réglage. */
+const MOTS_DU_CANAL: Record<string, CanalClient> = {
+  APP: 'APP',
+  APPLI: 'APP',
+  APPLICATION: 'APP',
+  WEB: 'WEB',
+  SITE: 'WEB',
 };
 
 /** Clé absente : en ligne seulement (hors livraison, voir `paiementDuType`). */
@@ -102,6 +122,29 @@ export function lireTypeActif(valeur: string | null | undefined, defaut: boolean
   const lue = valeur.trim().toUpperCase();
   if (lue === '') return defaut;
   return lue === '1' || lue === 'TRUE' || lue === 'OUI';
+}
+
+/**
+ * Canaux où un type est proposé. Liste de canaux (`APP,WEB`, `APP`, `WEB`) ;
+ * « 1 », « true », « oui » : les deux ; vide ou absent : la valeur par défaut
+ * du type. Tout mot qu'on ne comprend pas est ignoré : « 0 », ou une saisie
+ * illisible, ne propose le type nulle part.
+ */
+export function lireCanauxDuType(
+  valeur: string | null | undefined,
+  defaut: readonly CanalClient[],
+): CanalClient[] {
+  if (valeur === null || valeur === undefined) return [...defaut];
+  const lue = valeur.trim().toUpperCase();
+  if (lue === '') return [...defaut];
+  if (lue === '1' || lue === 'TRUE' || lue === 'OUI') return [...CANAUX_CLIENT];
+  const coches = new Set(
+    lue
+      .split(/[\s,;+|]+/)
+      .map((mot) => MOTS_DU_CANAL[mot])
+      .filter((canal): canal is CanalClient => !!canal),
+  );
+  return CANAUX_CLIENT.filter((canal) => coches.has(canal));
 }
 
 /** Mode de paiement lu ; absent ou illisible : `defaut`. */
@@ -138,16 +181,20 @@ export function modeReception(valeurs: Record<string, string | null | undefined>
 }
 
 /**
- * Les réglages des trois types. `livraisonCoupee` : la coupure temporaire de
- * la livraison (Paramètres > Livraison, `delivery.app_disabled`), qui retire
- * aussi la livraison, avec son message.
+ * Les réglages des trois types, VUS D'UN CANAL : un type n'est proposé que
+ * sur les canaux cochés au back-office. `livraisonCoupee` : la coupure
+ * temporaire de la livraison (`delivery.app_disabled`), qui retire la
+ * livraison des deux canaux, avec son message.
+ *
+ * `canal` absent : l'application (les appelants d'avant les cases à cocher).
  */
 export function reglagesCommande(
   valeurs: Record<string, string | null | undefined>,
   livraisonCoupee?: { disabled: boolean; message: string } | null,
+  canal: CanalClient = 'APP',
 ): ReglagesCommande {
   const lire = (type: OrderType): TypeCommande => {
-    let actif = lireTypeActif(valeurs[REGLAGES_TYPES[type].actif], ACTIF_PAR_DEFAUT[type]);
+    let actif = lireCanauxDuType(valeurs[REGLAGES_TYPES[type].actif], CANAUX_PAR_DEFAUT[type]).includes(canal);
     let message: string | null = actif
       ? null
       : `${NOM_DU_TYPE[type]} n'est pas proposée pour le moment. Choisissez un autre mode de réception.`;

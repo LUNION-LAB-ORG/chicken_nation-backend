@@ -613,7 +613,12 @@ export class OrderService {
     }
 
     const coupure = type === OrderType.DELIVERY ? await this.deliveryFeeHelper.isAppDeliveryDisabled() : null;
-    const { types, reception } = await this.orderHelperV2.reglagesCommande(coupure);
+    // Les types sont ceux du canal : un type coché pour l'application seule
+    // est refusé au site, et inversement.
+    const { types, reception } = await this.orderHelperV2.reglagesCommande(
+      coupure,
+      canal === OrderChannel.WEB ? 'WEB' : 'APP',
+    );
 
     // Le site garde son message d'avant quand la livraison ne se paie qu'en ligne.
     if (
@@ -4601,13 +4606,19 @@ export class OrderService {
     // Types, paiement et parcours (26/11), application et site, coupure
     // temporaire de la livraison comprise : mêmes lectures que le contrôle de
     // `createv2`, pour ne jamais proposer ce que la création refuserait.
-    const { types, reception } = await this.orderHelperV2.reglagesCommande(coupureLivraison);
+    // Un type n'est proposé que sur les canaux cochés au back-office : le
+    // site lit `types`, l'application `appli.types`.
+    const [site, appli] = await Promise.all([
+      this.orderHelperV2.reglagesCommande(coupureLivraison, 'WEB'),
+      this.orderHelperV2.reglagesCommande(coupureLivraison, 'APP'),
+    ]);
     return conditionsCommandePubliques({
       tauxFraisService: taux,
       grille: livraison.grid,
       zonesLivreurActives: livraison.turboZonesEnabled,
-      types,
-      reception,
+      types: site.types,
+      typesAppli: appli.types,
+      reception: site.reception,
     });
   }
 }

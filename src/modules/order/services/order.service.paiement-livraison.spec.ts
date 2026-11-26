@@ -375,6 +375,19 @@ describe('OrderService.createv2 : types et paiement réglés au back-office, app
     expect(rejetSite.message).toBe('Pour ce mode de réception, le paiement se fait au restaurant.');
   });
 
+  it('les réglages sont lus pour le canal de la commande', async () => {
+    for (const [canal, attendu] of [
+      [OrderChannel.WEB, 'WEB'],
+      [OrderChannel.APP, 'APP'],
+    ] as const) {
+      const m = monter({});
+      await m.service.createv2(CLIENT, aEmporter(PaymentMethod.ONLINE), canal).catch(() => undefined);
+      const lecture = (m.service as unknown as { orderHelperV2: { reglagesCommande: jest.Mock } }).orderHelperV2
+        .reglagesCommande;
+      expect(lecture.mock.calls[0][1]).toBe(attendu);
+    }
+  });
+
   it('type non proposé : refus avec son message, pour le site comme pour l’application', async () => {
     for (const canal of [OrderChannel.WEB, OrderChannel.APP]) {
       const m = monter({
@@ -438,6 +451,16 @@ describe('OrderV2Helper.reglagesCommande : lecture des réglages', () => {
     const lu = await lire({ order_paiement_reception: 'DIRECTE', order_paiement_livraison_site: '0' });
     expect(lu.reception).toBe('DIRECTE');
     expect(lu.types.DELIVERY.paiement).toBe('EN_LIGNE');
+  });
+
+  // « on doit cocher site web ou appli » (26/11).
+  it('types rendus pour le canal demandé : coché pour l’application seule, le site ne l’a pas', async () => {
+    const helper = Object.create(OrderV2Helper.prototype) as OrderV2Helper;
+    Object.assign(helper, { settingsService: { getMany: jest.fn().mockResolvedValue({ order_type_emporter: 'APP' }) } });
+    expect((await helper.reglagesCommande(null, 'APP')).types.PICKUP.actif).toBe(true);
+    expect((await helper.reglagesCommande(null, 'WEB')).types.PICKUP.actif).toBe(false);
+    // Sans canal : l'application.
+    expect((await helper.reglagesCommande()).types.PICKUP.actif).toBe(true);
   });
 });
 

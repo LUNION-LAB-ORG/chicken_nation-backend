@@ -23,6 +23,7 @@ import { nomSurLaCommande } from './nom-client.helper';
 import { MapsService } from 'src/modules/maps/maps.service';
 import { choisirRestaurant } from './acheminement.rules';
 import {
+  CanalClient,
   CLES_REGLAGES_COMMANDE,
   ModeReception,
   modeReception,
@@ -65,12 +66,17 @@ export class OrderV2Helper {
    * livraison, lue par l'appelant. L'ancien réglage du site
    * (`order_paiement_livraison_site`) n'est plus lu qu'ici, comme valeur de
    * départ du paiement d'une livraison (`reglages-commande.rules.ts`).
+   *
+   * `canal` : un type n'est proposé que sur les canaux cochés au back-office
+   * (« on doit cocher site web ou appli », 26/11). Les types rendus sont ceux
+   * de CE canal.
    */
   async reglagesCommande(
     livraisonCoupee?: { disabled: boolean; message: string } | null,
+    canal: CanalClient = 'APP',
   ): Promise<{ types: ReglagesCommande; reception: ModeReception }> {
     const valeurs = await this.settingsService.getMany(CLES_REGLAGES_COMMANDE);
-    return { types: reglagesCommande(valeurs, livraisonCoupee), reception: modeReception(valeurs) };
+    return { types: reglagesCommande(valeurs, livraisonCoupee, canal), reception: modeReception(valeurs) };
   }
 
   /**

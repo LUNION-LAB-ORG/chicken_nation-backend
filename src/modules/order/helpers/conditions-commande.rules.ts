@@ -51,11 +51,11 @@ export interface ConditionsCommande {
   grille_frais_appliquee: boolean;
   /** Une livraison peut se payer à la livraison (lu par le site déjà en ligne). */
   paiement_livraison: { disponible: boolean };
-  /** Types de commande et paiement permis, application et site. */
+  /** Types de commande et paiement permis SUR LE SITE (canaux cochés au back-office). */
   types: ReglagesCommande;
   /** Ce que devient une commande à payer à la réception. */
   reception: ModeReception;
-  /** Ancien nom de `types`, lu par l'application construite le 26/11. */
+  /** Types de commande et paiement permis DANS L'APPLICATION. */
   appli: { types: ReglagesCommande };
 }
 
@@ -112,7 +112,10 @@ export function conditionsCommandePubliques(reglages: {
   tauxFraisService: number | null | undefined;
   grille: readonly IDeliveryFeeTier[] | null | undefined;
   zonesLivreurActives: boolean;
+  /** Ce que le site peut proposer. */
   types: ReglagesCommande;
+  /** Ce que l'application peut proposer ; absent : comme le site. */
+  typesAppli?: ReglagesCommande;
   reception: ModeReception;
 }): ConditionsCommande {
   return {
@@ -122,6 +125,6 @@ export function conditionsCommandePubliques(reglages: {
     paiement_livraison: { disponible: reglages.types.DELIVERY.paiement !== 'EN_LIGNE' },
     types: reglages.types,
     reception: reglages.reception,
-    appli: { types: reglages.types },
+    appli: { types: reglages.typesAppli ?? reglages.types },
   };
 }

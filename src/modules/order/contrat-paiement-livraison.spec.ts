@@ -113,6 +113,20 @@ describe('contrat : GET /orders/conditions-commande', () => {
     const directe = await monter(null, { order_paiement_reception: 'DIRECTE' }).service.obtenirConditionsCommande();
     expect(directe.reception).toBe('DIRECTE');
   });
+
+  it('types cochés par canal (26/11) : `types` dit ce que le site propose, `appli.types` ce que l’application propose', async () => {
+    const lu = await monter(null, {
+      order_type_emporter: 'APP',
+      order_type_livraison: 'WEB',
+      order_type_sur_place: 'APP',
+    }).service.obtenirConditionsCommande();
+    expect([lu.types.PICKUP.actif, lu.appli.types.PICKUP.actif]).toEqual([false, true]);
+    expect([lu.types.DELIVERY.actif, lu.appli.types.DELIVERY.actif]).toEqual([true, false]);
+    expect([lu.types.TABLE.actif, lu.appli.types.TABLE.actif]).toEqual([false, true]);
+    // Coché partout : les deux vues sont les mêmes.
+    const partout = await monter(null, { order_type_emporter: 'APP,WEB' }).service.obtenirConditionsCommande();
+    expect(partout.types.PICKUP).toEqual(partout.appli.types.PICKUP);
+  });
 });
 
 // ===========================================================================
