@@ -83,6 +83,21 @@ export const TELEPHONE_SERVICE_CLIENT = '+2252721712130';
  */
 export const SONNERIE_LIVREUR_MS = 45_000;
 
+/**
+ * Notification « Chicken Nation vous appelle » de l'appli CLIENTE (27/11) :
+ * « quand on appelle le client et que son téléphone est verrouillé, ça ne
+ * sonne pas ». Elle partait sur le canal par défaut, avec le « ding » d'un
+ * message. Elle part désormais sur un canal d'appels (sonnerie longue,
+ * vibration, visible écran verrouillé), créé par l'appli qui embarque la
+ * sonnerie ; une appli plus ancienne la reçoit sur le canal de secours
+ * d'Android, comme avant. Mêmes noms que l'appli livreur.
+ */
+export const CANAL_APPELS_CLIENT = 'appels_v1';
+/** Sonnerie de l'appel (iOS : fichier embarqué dans l'appli ; Android : son du canal). */
+export const SON_APPEL_CLIENT = 'sonnerie_appel.wav';
+/** Bouton « Répondre » de la notification (catégorie enregistrée par l'appli). */
+export const CATEGORIE_APPEL_CLIENT = 'appel_entrant';
+
 /** Marge après la sonnerie avant qu'un appel encore « RINGING » soit tenu pour manqué (serveur redémarré). */
 export const MARGE_SONNERIE_LIVREUR_MS = 15_000;
 

@@ -31,6 +31,8 @@ import {
   APPEL_FANTOME_MS,
   CALLS_CLIENTS_ACTIF_KEY,
   CALL_EVENTS,
+  CANAL_APPELS_CLIENT,
+  CATEGORIE_APPEL_CLIENT,
   CIBLE_CLIENT,
   CIBLE_LIVREUR,
   CODES_APPEL_CLIENT,
@@ -40,6 +42,7 @@ import {
   LIBELLE_SERVICE_CLIENT,
   MARGE_SONNERIE_LIVREUR_MS,
   RaisonFinAppel,
+  SON_APPEL_CLIENT,
   SONNERIE_LIVREUR_MS,
   TELEPHONE_SERVICE_CLIENT,
   TTL_JETON_CLIENT_S,
@@ -451,9 +454,14 @@ export class AppelsClientService {
         .sendPushNotifications({
           tokens: [reglages.expo_push_token],
           title: 'Chicken Nation vous appelle',
-          body: "Ouvrez l'appli pour répondre.",
-          sound: 'default',
+          body: 'Touchez pour répondre.',
+          // Téléphone verrouillé (27/11) : canal d'appels, sonnerie longue.
+          sound: SON_APPEL_CLIENT,
+          channelId: CANAL_APPELS_CLIENT,
+          categoryId: CATEGORIE_APPEL_CLIENT,
           priority: 'high',
+          // Un appel ne sonne pas après coup : passé la sonnerie, il est manqué.
+          ttl: Math.round(SONNERIE_LIVREUR_MS / 1000),
           data: { type: 'appel_entrant', callId: call.id },
         })
         .catch((e) => this.logger.warn(`Notification d'appel non envoyée : ${(e as Error).message}`));

@@ -40,6 +40,10 @@ export class ExpoPushService {
                 // Le mobile doit avoir préalablement enregistré la catégorie
                 // via Notifications.setNotificationCategoryAsync.
                 categoryId: payload.categoryId,
+                // Durée de vie (secondes) : le champ existait dans la demande
+                // sans jamais partir. Un appel entrant ne doit pas sonner
+                // dix minutes après, quand le téléphone retrouve du réseau.
+                ...(payload.ttl && payload.ttl > 0 ? { ttl: payload.ttl } : {}),
             });
         }
 

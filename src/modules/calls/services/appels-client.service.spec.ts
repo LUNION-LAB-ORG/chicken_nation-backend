@@ -414,6 +414,13 @@ describe('Appels avec les clients', () => {
         expect.objectContaining({
           tokens: ['ExponentPushToken[awa]'],
           data: { type: 'appel_entrant', callId: ligne.id },
+          // Téléphone verrouillé (27/11) : canal d'appels, sonnerie longue,
+          // bouton « Répondre », et plus rien après la sonnerie.
+          channelId: 'appels_v1',
+          sound: 'sonnerie_appel.wav',
+          categoryId: 'appel_entrant',
+          priority: 'high',
+          ttl: 45,
         }),
       );
 
