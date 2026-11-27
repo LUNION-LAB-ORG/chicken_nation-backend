@@ -106,6 +106,15 @@ import {
 } from '../helpers/cadeaux-reactivation.helper';
 import { referenceCommandeLibre } from '../helpers/reference-commande';
 import {
+  LETTRES_ACCENTUEES,
+  LETTRES_NUES,
+  conditionRecherche,
+  lireRecherche,
+  motifsDuNom,
+  motsDeRecherche,
+} from '../helpers/recherche-commande.rules';
+import { coordonneesMasquees } from 'src/common/securite/masquer-contacts.interceptor';
+import {
   libelleReservation,
   messagePlatsReserves,
   PlatAudience,
@@ -2122,6 +2131,31 @@ export class OrderService {
     return updated;
   }
 
+  /**
+   * Clients dont le nom (prénom et nom du compte) porte tous les mots
+   * cherchés, ACCENTS IGNORÉS : « kone » trouve « Koné », ce que la
+   * comparaison de Prisma ne sait pas faire. Lus à part, puis cherchés par
+   * identifiant dans les commandes.
+   *
+   * `null` = comparaison directe, telle qu'écrite : aucun mot, trop de clients
+   * pour une liste d'identifiants (saisie très courte), ou lecture en échec.
+   */
+  private async clientsAuNom(mots: string[]): Promise<string[] | null> {
+    if (!mots.length) return null;
+    const PLAFOND = 1000;
+    const nom = Prisma.sql`translate(lower(coalesce(first_name, '') || ' ' || coalesce(last_name, '')), ${LETTRES_ACCENTUEES}, ${LETTRES_NUES})`;
+    const conditions = motifsDuNom(mots).map((motif) => Prisma.sql`${nom} LIKE ${motif}`);
+    try {
+      const lignes = await this.prisma.$queryRaw<{ id: string }[]>(
+        Prisma.sql`SELECT id FROM "Customer" WHERE ${Prisma.join(conditions, ' AND ')} LIMIT ${PLAFOND + 1}`,
+      );
+      return lignes.length > PLAFOND ? null : lignes.map((ligne) => ligne.id);
+    } catch (e) {
+      this.logger.warn(`Recherche des clients par nom : lecture en échec, comparaison directe (${(e as Error)?.message})`);
+      return null;
+    }
+  }
+
   async findAll(filters: QueryOrderDto, user?: User): Promise<QueryResponseDto<Order>> {
     const {
       reference,
@@ -2140,6 +2174,12 @@ export class OrderService {
       endDate = new Date(),
     } = filters;
 
+    const recherche = lireRecherche(filters.search);
+    // Sans période choisie, la liste montre le mois en cours. Une recherche,
+    // elle, doit retrouver la commande d'un client quelle que soit sa date :
+    // la borne du mois ne s'applique alors plus.
+    const toutesLesDates = !!recherche && !filters.startDate && !filters.endDate;
+
     const where: Prisma.OrderWhereInput = {
       entity_status: { not: EntityStatus.DELETED },
       ...(status && { status }),
@@ -2148,13 +2188,25 @@ export class OrderService {
       ...(minAmount && { amount: { gte: minAmount } }),
       ...(maxAmount && { amount: { lte: maxAmount } }),
       ...(restaurantId && { restaurant_id: restaurantId }),
-      ...(reference && {
+      ...(reference && !recherche && {
         reference: {
           contains: reference,
           mode: 'insensitive',
         },
       }),
     };
+
+    // Recherche libre (nom ou numéro du client, référence...) : règles dans
+    // recherche-commande.rules.ts. Ajoutée en ET, elle se compose avec tous
+    // les autres filtres et avec la visibilité du rôle.
+    if (recherche) {
+      ajouterAuEt(where, [
+        conditionRecherche(recherche, {
+          sansCoordonnees: coordonneesMasquees(user?.role),
+          clientsAuNom: await this.clientsAuNom(motsDeRecherche(recherche)),
+        }),
+      ]);
+    }
 
     // Rôles habilités à voir les commandes en attente (suivi client) : ADMIN +
     // CALL CENTER. Règle unique du serveur (`brouillons.rules.ts`), partagée
@@ -2196,7 +2248,7 @@ export class OrderService {
       where.auto = false;
     }
 
-    if (startDate && endDate) {
+    if (startDate && endDate && !toutesLesDates) {
       where.created_at = {
         gte: startDate,
         lte: new Date(new Date(endDate).setHours(23, 59, 59, 999)),

@@ -93,6 +93,22 @@ export class QueryOrderDto {
     @IsString()
     reference?: string;
 
+    /**
+     * Recherche libre de l'écran « Commandes » : nom ou numéro du client,
+     * référence, adresse électronique, note, code promo, référence d'un
+     * paiement (helpers/recherche-commande.rules.ts). Quand elle est là, elle
+     * prime sur `reference`, et la liste n'est plus bornée au mois en cours
+     * tant qu'aucune période n'est choisie.
+     */
+    @ApiPropertyOptional({
+        description:
+            "Recherche libre : nom ou numéro du client, référence, adresse électronique, note, code promo, " +
+            "référence d'un paiement. Prime sur `reference`.",
+    })
+    @IsOptional()
+    @IsString()
+    search?: string;
+
 
     @ApiPropertyOptional({ description: "Commande automatique" })
     @IsOptional()
