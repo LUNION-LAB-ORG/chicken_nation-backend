@@ -1,8 +1,11 @@
-import { Body, Controller, Delete, Get, NotFoundException, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Post, Put, Query, Req, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { TicketMessageService } from '../services/message.service';
 import { FilterQueryDto } from 'src/common/dto/filter-query.dto';
-import { CreateTicketMessageDto } from '../dtos/create-ticket-message.dto';
+import { CreateCustomerTicketMessageDto, CreateTicketMessageDto } from '../dtos/create-ticket-message.dto';
+import { lireDureeAudio } from '../helpers/ticket-client.rules';
+import { OPTIONS_PIECES_JOINTES, PiecesJointesMessage } from '../../messagerie/utils/pieces-jointes';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { JwtCustomerAuthGuard } from 'src/modules/auth/guards/jwt-customer-auth.guard';
 import type { Request } from 'express';
@@ -58,14 +61,37 @@ export class MessagesController {
      * corps. `internal` est forcé à faux : une note interne écrite par un
      * client n'a aucun sens.
      */
+    /**
+     * Note vocale (27/11) : le même envoi accepte un fichier `audio` (formulaire
+     * à pièce jointe), avec ou sans texte. Sans fichier, le texte est requis,
+     * comme avant.
+     */
     @UseGuards(JwtCustomerAuthGuard)
     @Post('customer')
-    async createCustomerMessage(@Req() req: Request, @Param('ticketId') ticketId: string, @Body() createMessageDto: CreateTicketMessageDto) {
+    @UseInterceptors(FileFieldsInterceptor([{ name: 'audio', maxCount: 1 }], OPTIONS_PIECES_JOINTES))
+    async createCustomerMessage(
+        @Req() req: Request,
+        @Param('ticketId') ticketId: string,
+        @Body() corps: CreateCustomerTicketMessageDto,
+        @UploadedFiles() fichiers?: PiecesJointesMessage,
+    ) {
         await this.assertTicketDuClient(req, ticketId);
-        createMessageDto.authorType = 'CUSTOMER';
-        createMessageDto.authorId = (req.user as Customer).id;
-        (createMessageDto as any).internal = false;
-        return this.messageService.createMessage(ticketId, createMessageDto);
+        const audio = fichiers?.audio?.[0];
+        const body = (corps.body ?? '').trim();
+        if (!body && !audio) {
+            throw new BadRequestException('Écrivez un message ou enregistrez une note vocale.');
+        }
+        const message: CreateTicketMessageDto = {
+            body,
+            ticketId,
+            internal: false,
+            authorType: 'CUSTOMER',
+            authorId: (req.user as Customer).id,
+        };
+        return this.messageService.createMessage(ticketId, message, {
+            audio,
+            audioDurationMs: lireDureeAudio(corps.audioDurationMs),
+        });
     }
 
     @UseGuards(JwtAuthGuard)

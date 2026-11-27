@@ -1,5 +1,5 @@
 import { AssignmentService } from './../services/assignment.service';
-import { Body, Controller, Get, HttpException, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpException, NotFoundException, Param, ParseUUIDPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from 'src/modules/auth/guards/jwt-auth.guard';
 import { CreateTicketDto } from '../dtos/create-ticket.dto';
 import { QueryTicketsDto } from '../dtos/query-tickets.dto';
@@ -29,6 +29,30 @@ export class TicketsController {
   async getCustomerTickets(@Req() req, @Query() filter: QueryTicketsDto) {
     const customerId = req.user.id;
     return await this.ticketService.getCustomerTickets(customerId, filter);
+  }
+
+  /**
+   * La demande EN COURS du client pour une commande (27/11) : « Support »
+   * depuis une commande la rouvre au lieu d'en créer une autre.
+   * Réponse : `{ ticket }`, `null` quand il n'y en a pas.
+   */
+  @UseGuards(JwtCustomerAuthGuard) @Get('/customer/en-cours')
+  async getCustomerTicketEnCours(
+    @Req() req,
+    @Query('orderId', new ParseUUIDPipe({ exceptionFactory: () => new NotFoundException('Commande introuvable') }))
+    orderId: string,
+  ) {
+    return { ticket: await this.ticketService.getCustomerTicketEnCours(req.user.id, orderId) };
+  }
+
+  /** Un ticket du client (statut, commande, catégorie), sans les notes internes. */
+  @UseGuards(JwtCustomerAuthGuard) @Get('/customer/:id')
+  async getCustomerTicket(
+    @Req() req,
+    @Param('id', new ParseUUIDPipe({ exceptionFactory: () => new NotFoundException('Ticket introuvable') }))
+    id: string,
+  ) {
+    return await this.ticketService.getCustomerTicket(req.user.id, id);
   }
 
   @UseGuards(JwtAuthGuard) @Get('stats')

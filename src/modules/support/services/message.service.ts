@@ -15,6 +15,15 @@ import { FilterQueryDto } from 'src/common/dto/filter-query.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { SupportWebSocketService } from '../websockets/support-websocket.service';
 import { ExpoPushService } from '../../../expo-push/expo-push.service';
+import { S3Service } from '../../../s3/s3.service';
+import { TAILLE_MAX_AUDIO, verifierTaille } from '../../messagerie/utils/pieces-jointes';
+import { CORPS_NOTE_VOCALE, pieceJointeTicket } from '../helpers/ticket-client.rules';
+
+/** Note vocale jointe à un message de ticket (27/11). */
+export interface PiecesMessageTicket {
+    audio?: Express.Multer.File;
+    audioDurationMs?: number | null;
+}
 
 @Injectable()
 export class TicketMessageService {
@@ -24,6 +33,7 @@ export class TicketMessageService {
         private readonly supportWebSocketService: SupportWebSocketService,
         private readonly expoPushService: ExpoPushService,
         private readonly auditService: AuditService,
+        private readonly s3service: S3Service,
     ) { }
 
     private MessageInclude: Prisma.TicketMessageInclude = {
@@ -64,8 +74,14 @@ export class TicketMessageService {
         },
     }
 
-    async createMessage(ticketId: string, data: CreateTicketMessageDto): Promise<ResponseTicketMessageDto> {
-        const { body, internal, authorId, authorType, meta } = data;
+    async createMessage(
+        ticketId: string,
+        data: CreateTicketMessageDto,
+        pieces?: PiecesMessageTicket,
+    ): Promise<ResponseTicketMessageDto> {
+        const { internal, authorId, authorType } = data;
+        const audio = pieces?.audio;
+        verifierTaille(audio, TAILLE_MAX_AUDIO, 'Message vocal');
         let author
         if (authorType === 'USER') {
             author = await this.prisma.user.findUnique({ where: { id: authorId } });
@@ -99,6 +115,32 @@ export class TicketMessageService {
                 throw new HttpException("Ce ticket ne t'appartient pas", HttpStatus.FORBIDDEN);
             }
         }
+
+        /**
+         * NOTE VOCALE (27/11) : envoyée au stockage AVANT d'écrire le message.
+         * `S3Service.uploadFile` avale ses erreurs et rend `null` : sans ce
+         * contrôle, une panne de stockage laisserait un message vide, livré et
+         * notifié. Mieux vaut un envoi en erreur, que le client refait.
+         */
+        let meta: Prisma.InputJsonValue | undefined = data.meta;
+        if (audio) {
+            const envoi = await this.s3service.uploadFile({
+                buffer: audio.buffer,
+                path: 'chicken-nation/tickets-audio',
+                originalname: audio.originalname,
+                mimetype: audio.mimetype,
+            });
+            if (!envoi?.key) {
+                throw new HttpException(
+                    "La note vocale n'a pas pu être envoyée vers le stockage. Réessayez.",
+                    HttpStatus.BAD_GATEWAY,
+                );
+            }
+            meta = { audioUrl: envoi.key, audioDurationMs: pieces?.audioDurationMs ?? null };
+        }
+        // Une note vocale sans texte garde un corps lisible : aperçu des
+        // listes, notification, écrans qui ne lisent pas encore l'audio.
+        const body = data.body?.trim() || (audio ? CORPS_NOTE_VOCALE : data.body);
 
         const [message, ticket] = await Promise.all([
             this.prisma.ticketMessage.create({
@@ -334,6 +376,8 @@ export class TicketMessageService {
             ticket: message.ticket,
             isRead: message.isRead,
             internal: message.internal,
+            // Note vocale : part avec le message retiré, comme son texte.
+            meta: supprime ? null : pieceJointeTicket(message.meta),
             reactions: supprime ? [] : agregerReactions(message.reactions, monId ?? null),
         };
     }

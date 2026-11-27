@@ -70,7 +70,7 @@ describe('TicketMessageService : message écrit par un livreur', () => {
     const websocket = new SupportWebSocketService(appGateway as never);
     jest.spyOn((websocket as unknown as { logger: { log: () => void } }).logger, 'log').mockImplementation(() => undefined);
     const expoPush = { sendPushNotifications: jest.fn(async () => ({})) };
-    const service = new TicketMessageService(prisma as never, websocket, expoPush as never, {} as never);
+    const service = new TicketMessageService(prisma as never, websocket, expoPush as never, {} as never, {} as never);
     return { service, prisma, appGateway, expoPush };
   }
 

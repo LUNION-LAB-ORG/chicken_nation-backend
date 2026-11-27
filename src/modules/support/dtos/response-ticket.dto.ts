@@ -133,6 +133,10 @@ export class ResponseTicketDto {
     @ApiProperty()
     code: string;
 
+    /** Sujet du ticket, tel qu'il a été créé. */
+    @ApiProperty({ required: false })
+    subject?: string;
+
     @ApiProperty({ type: ResponseTicketCustomerDto, required: false, nullable: true })
     @IsOptional()
     customer: ResponseTicketCustomerDto | null;

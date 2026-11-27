@@ -9,6 +9,7 @@ import { UpdateTicketDto } from '../dtos/update-ticket.dto';
 import { TicketEvent } from '../events/ticket.event';
 import { generateSequentialTicketCode, generateTicketPrefix } from '../utils/code-generator';
 import { CategoriesTicketService } from './categories-ticket.service';
+import { issueCreationTicket, STATUTS_TICKET_EN_COURS } from '../helpers/ticket-client.rules';
 
 @Injectable()
 export class TicketService {
@@ -265,7 +266,13 @@ export class TicketService {
 
   async getCustomerTickets(customerId: string, filter: QueryTicketsDto): Promise<QueryResponseDto<ResponseTicketDto>> {
     const { page = 1, limit = 10 } = filter;
-    const where = this.buildWhereClause(filter, { customerId });
+    /**
+     * ⚠️ Le client du JETON, posé en dernier. `buildWhereClause` laisse le
+     * filtre `clientId` de la requête remplacer le client : un client de
+     * l'application lisait les tickets d'un autre, messages compris, en
+     * ajoutant `?clientId=` à sa demande.
+     */
+    const where = { ...this.buildWhereClause(filter), customerId };
 
     const [tickets, total] = await Promise.all([
       this.prisma.ticketThread.findMany({
@@ -288,6 +295,32 @@ export class TicketService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  /**
+   * UN ticket du client, sans les notes internes. « Introuvable » pour le
+   * ticket d'un autre : on ne confirme pas l'existence d'un identifiant.
+   */
+  async getCustomerTicket(customerId: string, id: string): Promise<ResponseTicketDto> {
+    const ticket = await this.prisma.ticketThread.findFirst({
+      where: { id, customerId },
+      include: this.includeFieldsClient,
+    });
+    if (!ticket) throw new HttpException('Ticket introuvable', 404);
+    return this.mapTicketToDto(ticket);
+  }
+
+  /**
+   * La demande EN COURS du client pour cette commande (27/11) : celle que
+   * « Support » rouvre au lieu d'en créer une autre. `null` : aucune.
+   */
+  async getCustomerTicketEnCours(customerId: string, orderId: string): Promise<ResponseTicketDto | null> {
+    const ticket = await this.prisma.ticketThread.findFirst({
+      where: { customerId, orderId, status: { in: STATUTS_TICKET_EN_COURS } },
+      include: this.includeFieldsClient,
+      orderBy: { createdAt: 'desc' },
+    });
+    return ticket ? this.mapTicketToDto(ticket) : null;
   }
 
   async getTicketById(id: string): Promise<ResponseTicketDto> {
@@ -334,25 +367,29 @@ export class TicketService {
       // this.logger.debug(`Payload: ${JSON.stringify(data)}`);
     }
 
-    // Règle métier : un client ne peut avoir qu'UN ticket "en cours" à la fois
-    // (OPEN ou IN_PROGRESS). S'il en a déjà un, on bloque la création et on
-    // renvoie le ticket existant pour que le mobile puisse l'afficher/rediriger.
+    // Règle métier : un client n'a qu'UNE demande en cours à la fois (OPEN ou
+    // IN_PROGRESS). S'il en a une, rien n'est créé : la réponse la désigne
+    // pour que l'appli l'ouvre. `memeCommande` dit que c'est la demande de la
+    // commande d'où il vient (27/11) : l'appli la rouvre alors sans rien dire.
     if (options?.enforceSingleOpenCustomer && data.customerId) {
-      const existing = await this.prisma.ticketThread.findFirst({
+      const enCours = await this.prisma.ticketThread.findMany({
         where: {
           customerId: data.customerId,
-          status: { in: ['OPEN', 'IN_PROGRESS'] },
+          status: { in: STATUTS_TICKET_EN_COURS },
         },
         orderBy: { createdAt: 'desc' },
-        select: { id: true, code: true, subject: true, status: true },
+        select: { id: true, code: true, subject: true, status: true, orderId: true },
+        take: 20,
       });
-      if (existing) {
+      const issue = issueCreationTicket(enCours, data.orderId);
+      if (issue.voie !== 'creer') {
         throw new HttpException(
           {
             message:
               'Vous avez déjà une demande en cours de traitement. Merci de patienter, notre équipe vous répond dans ce ticket.',
             code: 'TICKET_ALREADY_OPEN',
-            existingTicket: existing,
+            existingTicket: issue.ticket,
+            memeCommande: issue.voie === 'rouvrir',
           },
           409,
         );
@@ -537,6 +574,7 @@ export class TicketService {
     return {
       id: ticket.id,
       code: ticket.code,
+      subject: ticket.subject,
       status: ticket.status,
       priority: ticket.priority,
       customer: ticket.customer ? {

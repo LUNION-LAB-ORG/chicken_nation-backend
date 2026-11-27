@@ -7,6 +7,9 @@ export class ResponseTicketMessageDto {
    */
   reactions?: { emoji: string; count: number; mine: boolean }[];
 
+  /** Note vocale du message (27/11) : clé du fichier et durée ; `null` sans pièce jointe. */
+  meta?: { audioUrl: string | null; audioDurationMs: number | null } | null;
+
   /** Message retiré par son auteur ou par un administrateur. */
   deleted?: boolean;
   deletedAt?: Date | null;
