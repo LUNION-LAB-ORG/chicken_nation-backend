@@ -78,6 +78,8 @@ import {
 import { PAS_PANIER_ANNULE_PAR_CLIENT_WHERE } from '../helpers/annulation-client.rules';
 import { PaiementEnLigneService } from 'src/paystack/paiement-en-ligne.service';
 import { motifRefusModification, peutModifierCommande } from '../helpers/modification-commande.rules';
+import { changeDeClient, motifRefusChangementClient } from '../helpers/changement-client.rules';
+import { nomSurLaCommande } from '../helpers/nom-client.helper';
 import { heureDeLaCommande } from '../helpers/heure-commande.rules';
 import { clientDeLApercu } from '../helpers/client-apercu-frais.rules';
 import { OrderRelanceService } from './order-relance.service';
@@ -2638,13 +2640,36 @@ export class OrderService {
       );
     }
 
-    // Coupon figé à la création (décision du 25/09). Un bon est nominatif et
-    // un code promo est compté par client : changer de client fausserait les
-    // deux. Il faut annuler (le coupon est alors rendu) et recréer.
-    if (customer_id && order.code_promo && customer_id !== order.customer_id) {
-      throw new ConflictException(
-        "Le client d'une commande avec un code promo ou un bon ne peut pas être changé. Annulez la commande et créez-en une nouvelle.",
-      );
+    /**
+     * CHANGEMENT DE CLIENT (27/11) : la commande passe à un autre client,
+     * choisi ou créé par le back office (autre numéro, autre nom).
+     *
+     * Coupon figé à la création (décision du 25/09) : un bon est nominatif et
+     * un code promo est compté par client, changer de client fausserait les
+     * deux. Même refus pour ce que l'ancien client a engagé de sa fidélité sur
+     * cette commande (points dépensés ou gagnés, cadeau). Il faut annuler
+     * (tout lui est rendu) et recréer. Règles : changement-client.rules.ts.
+     */
+    const nouveauClientId = changeDeClient(order.customer_id, customer_id) ? customer_id! : null;
+    let nouveauClient: Pick<Customer, 'id' | 'first_name' | 'last_name' | 'phone' | 'email'> | null = null;
+    if (nouveauClientId) {
+      let refus = motifRefusChangementClient({ codePromo: order.code_promo, pointsUtilises: order.points });
+      if (!refus) {
+        const [mouvementsFidelite, recompenses] = await Promise.all([
+          this.prisma.loyaltyPoint.count({ where: { order_id: order.id } }),
+          this.prisma.reward.count({ where: { order_id: order.id } }),
+        ]);
+        refus = motifRefusChangementClient({ mouvementsFidelite, recompenses });
+      }
+      if (refus) throw new ConflictException(refus);
+
+      nouveauClient = await this.prisma.customer.findFirst({
+        where: { id: nouveauClientId, entity_status: { not: EntityStatus.DELETED } },
+        select: { id: true, first_name: true, last_name: true, phone: true, email: true },
+      });
+      if (!nouveauClient) {
+        throw new BadRequestException('Client introuvable ou compte supprimé.');
+      }
     }
 
     // Même raison pour le restaurant : un code promo réservé à certains
@@ -2802,6 +2827,20 @@ export class OrderService {
 
     // Ajouter les relations si fournies
     if (customer_id) updateData.customer = { connect: { id: customer_id } };
+    /**
+     * Autre client : le nom, le téléphone et le courriel inscrits sur la
+     * commande (lus par la caisse, le livreur, Turbo) sont les siens, jamais
+     * ceux de l'ancien client, qui resteraient si la requête ne les renvoyait
+     * pas. Le nom saisi par l'agent passe d'abord. Le téléphone est celui de
+     * son profil, au format du serveur : c'est ce numéro qui le désigne, et
+     * la saisie de l'agent peut l'écrire autrement (« 07 07… »).
+     */
+    if (nouveauClient) {
+      const telephone = nouveauClient.phone || rest.phone?.trim();
+      updateData.phone = telephone;
+      updateData.fullname = nomSurLaCommande(rest.fullname, nouveauClient, telephone);
+      updateData.email = rest.email?.trim() || nouveauClient.email || null;
+    }
     if (restaurant_id) updateData.restaurant = { connect: { id: restaurant_id } };
     if (user_id) updateData.user = { connect: { id: user_id } };
     /**
