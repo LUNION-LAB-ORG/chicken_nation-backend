@@ -1,10 +1,11 @@
 import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { parIdentifiantOuReference } from 'src/common/utils/identifiant.util';
 import { CreateCommentDto, UpdateCommentDto, CommentResponseDto, DishCommentsResponseDto, GetCommentsQueryDto } from '../dto/comment.dto';
-import { EntityStatus, OrderStatus, Prisma } from '@prisma/client';
+import { EntityStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { AVIS_PUBLIC_SELECT, AvisPublic, limiteAvisPublics, versAvisPublic } from './avis-public.util';
+import { refusDeNoter } from 'src/modules/order/helpers/commande-a-noter.rules';
 
 /**
  * Plafond de `limit` sur les listes d'avis réservées au personnel : sans
@@ -41,9 +42,11 @@ export class CommentService {
             throw new NotFoundException('Commande non trouvée ou non autorisée');
         }
 
-        // Vérifier que la commande est terminée
-        if (order.status !== OrderStatus.COLLECTED && order.status !== OrderStatus.COMPLETED) {
-            throw new BadRequestException('Vous ne pouvez commenter que les commandes terminées');
+        // Terminée, ni annulée ni supprimée (27/11) : même règle que la liste
+        // des commandes à noter de l'appli.
+        const refus = refusDeNoter(order);
+        if (refus) {
+            throw new BadRequestException(refus);
         }
 
 

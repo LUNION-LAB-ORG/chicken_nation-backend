@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { OrderStatus } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
+import { commandesANoterWhere } from 'src/modules/order/helpers/commande-a-noter.rules';
 
 @Injectable()
 export class AppMobileService {
@@ -12,39 +12,16 @@ export class AppMobileService {
   ) {}
 
   /**
-   * Get orders to comment
-   * @param customer_id 
-   * @returns 
+   * Commandes que l'appli propose de noter (27/11) : terminées, ni annulées
+   * ni supprimées, sans note. La règle vit dans `commande-a-noter.rules.ts`,
+   * et sert aussi au dépôt de la note.
    */
   async getOrderToComment(customer_id: string) {
-    // 1. Calculer l'heure qu'il était il y a exactement 30 minutes
-    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
-
-    const orders = await this.prisma.order.findMany({
-      where: {
-        status: {
-          in: [OrderStatus.COMPLETED, OrderStatus.COLLECTED]
-        },
-        customer_id: customer_id,
-
-        // La commande ne doit pas avoir de commentaire
-        Comment: {
-          none: {},
-        },
-
-        // 2. La commande doit avoir été terminée OU collectée il y a plus de 30 minutes
-        OR: [
-          { completed_at: { lte: thirtyMinutesAgo } },
-          { collected_at: { lte: thirtyMinutesAgo } }
-        ]
-      },
-      orderBy: {
-        created_at: 'desc'
-      },
+    return this.prisma.order.findMany({
+      where: commandesANoterWhere(customer_id),
+      orderBy: { created_at: 'desc' },
       take: 10,
     });
-
-    return orders;
   }
 
   /**
