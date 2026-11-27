@@ -17,15 +17,7 @@ import { CreateRestaurantDto } from 'src/modules/restaurant/dto/create-restauran
 import { UpdateRestaurantDto } from 'src/modules/restaurant/dto/update-restaurant.dto';
 import { QueryResponseDto } from 'src/common/dto/query-response.dto';
 import { RestaurantEvent } from '../events/restaurant.event';
-import {
-  format,
-  getDay,
-  isAfter,
-  isBefore,
-  isEqual,
-  parse,
-  isValid,
-} from 'date-fns';
+import { ouvertSelonHoraires } from '../utils/horaires-ouverture';
 import type { Request } from 'express';
 import { S3Service } from '../../../s3/s3.service';
 import {
@@ -408,7 +400,8 @@ export class RestaurantService {
 
   /**
    * Vérifie si un restaurant est ouvert selon ses horaires
-   * Supporte les formats simples ("08:00-22:00") et multiples ("08:00-12:00,14:00-22:00")
+   * Supporte les formats simples ("08:00-22:00") et multiples ("08:00-12:00,14:00-22:00"),
+   * et la fermeture après minuit ("22:00-02:00"). Règle : utils/horaires-ouverture.ts.
    * @param schedule - Horaires du restaurant au format JSON
    * @param referenceDate - Date de référence (optionnel, par défaut maintenant)
    * @returns boolean - true si ouvert, false si fermé
@@ -417,89 +410,6 @@ export class RestaurantService {
     schedule: Record<string, string>[],
     referenceDate: Date = new Date(),
   ): boolean {
-    if (!schedule || !Array.isArray(schedule)) {
-      return false;
-    }
-
-    const currentDay = getDay(referenceDate);
-    const dayMapping = currentDay === 0 ? 7 : currentDay;
-
-    const todaySchedule = schedule.find((day) =>
-      day.hasOwnProperty(dayMapping.toString()),
-    );
-
-    if (!todaySchedule) {
-      return false;
-    }
-
-    const timeRange = todaySchedule[dayMapping.toString()];
-
-    if (
-      !timeRange ||
-      timeRange.toLowerCase() === 'fermé' ||
-      timeRange.toLowerCase() === 'closed'
-    ) {
-      return false;
-    }
-
-    // Gérer les créneaux multiples séparés par des virgules
-    const timeSlots = timeRange.split(',').map((slot) => slot.trim());
-
-    return timeSlots.some((slot) => {
-      const timeRangeParts = slot.split('-');
-
-      if (timeRangeParts.length !== 2) {
-        return false;
-      }
-
-      const [openTimeStr, closeTimeStr] = timeRangeParts;
-
-      try {
-        const baseDate = format(referenceDate, 'yyyy-MM-dd');
-
-        const openTime = parse(
-          `${baseDate} ${openTimeStr.trim()}`,
-          'yyyy-MM-dd HH:mm',
-          new Date(),
-        );
-        const closeTime = parse(
-          `${baseDate} ${closeTimeStr.trim()}`,
-          'yyyy-MM-dd HH:mm',
-          new Date(),
-        );
-
-        if (!isValid(openTime) || !isValid(closeTime)) {
-          return false;
-        }
-
-        // Gestion du cas après minuit (ex: "22:00-02:00")
-        if (isBefore(closeTime, openTime)) {
-          const nextDayCloseTime = parse(
-            `${format(referenceDate, 'yyyy-MM-dd')} ${closeTimeStr.trim()}`,
-            'yyyy-MM-dd HH:mm',
-            new Date(),
-          );
-          nextDayCloseTime.setDate(nextDayCloseTime.getDate() + 1);
-
-          // Deux cas possibles :
-          // 1) On est dans la soirée (après l'ouverture) : ex 23h pour "22:00-02:00"
-          // 2) On est tôt le matin (avant la fermeture du lendemain) : ex 01h pour "22:00-02:00"
-          const isAfterOpen = isAfter(referenceDate, openTime) || isEqual(referenceDate, openTime);
-          const isBeforeClose = isBefore(referenceDate, nextDayCloseTime) || isEqual(referenceDate, nextDayCloseTime);
-
-          return isAfterOpen && isBeforeClose;
-        }
-
-        return (
-          (isAfter(referenceDate, openTime) ||
-            isEqual(referenceDate, openTime)) &&
-          (isBefore(referenceDate, closeTime) ||
-            isEqual(referenceDate, closeTime))
-        );
-      } catch (error) {
-        console.warn('Erreur lors du parsing du créneau:', slot, error);
-        return false;
-      }
-    });
+    return ouvertSelonHoraires(schedule, referenceDate);
   }
 }
