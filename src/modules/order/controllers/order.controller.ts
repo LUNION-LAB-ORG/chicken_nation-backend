@@ -255,7 +255,13 @@ export class OrderController {
   async findAll(@Req() req: Request, @Query() queryOrderDto: QueryOrderDto) {
     const user = req.user as User;
     // Le user du JWT pilote la visibilité PENDING (admin seul) côté service.
-    const page = await this.orderService.findAll(queryOrderDto, user);
+    // Un compte de point de vente ne lit que SON restaurant, même s'il omet ou
+    // falsifie `restaurantId` : la recherche par nom ou par numéro ne doit pas
+    // lui ouvrir les commandes du réseau (restaurant-scope.helper.ts).
+    const page = await this.orderService.findAll(
+      { ...queryOrderDto, restaurantId: resolveRestaurantScope(user, queryOrderDto.restaurantId) },
+      user,
+    );
     // Code de retrait du client : ADMIN et CALL_CENTER seulement (code-client.rules.ts).
     return { ...page, data: page.data.map((commande) => commandePourLePersonnel(user, commande)) };
   }

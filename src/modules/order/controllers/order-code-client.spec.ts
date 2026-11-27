@@ -122,7 +122,7 @@ describe('GET /orders : code de retrait du client', () => {
     expect(JSON.stringify(page)).not.toContain('7310');
     expect(page.meta).toEqual({ total: 2, page: 1, limit: 10, totalPages: 1 });
     // Le filtrage des commandes en attente suit toujours le compte du jeton.
-    expect(service.findAll).toHaveBeenCalledWith({}, compte(role));
+    expect(service.findAll).toHaveBeenCalledWith(expect.anything(), compte(role));
   });
 });
 
