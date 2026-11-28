@@ -1,6 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/database/services/prisma.service';
+import {
+  IndicesReperes,
+  Reperes,
+  assemblerReperes,
+  ciblesDeLEntree,
+  ciblesRetenues,
+  conditionRechercheAudit,
+  sansReperes,
+} from './audit-reperes.rules';
+import { lireFiches } from './audit-reperes.lecture';
 
 /** Entrée brute à journaliser (fournie par l'intercepteur). */
 export interface AuditEntry {
@@ -19,6 +29,14 @@ export interface AuditEntry {
   user_agent?: string | null;
   summary?: string | null;
   metadata?: Prisma.InputJsonValue | null;
+  /**
+   * Repères lisibles de la cible. Laissés vides, ils sont relus par
+   * `record` sur ce que la ligne désigne (`audit-reperes.rules.ts`).
+   */
+  target_ref?: string | null;
+  target_name?: string | null;
+  target_phone?: string | null;
+  search_text?: string | null;
 }
 
 export interface AuditQuery {
@@ -48,11 +66,37 @@ export class AuditService {
   /**
    * Écriture FIRE-AND-FORGET : ne bloque JAMAIS la requête et n'échoue jamais
    * la réponse. Un log d'audit perdu est préférable à une requête cassée.
+   *
+   * Avant d'écrire, la ligne reçoit ses repères lisibles (référence, personne
+   * concernée, numéro) : relus sur ce qu'elle désigne, complétés par ce que
+   * l'intercepteur a vu de la requête (`indices`). Des repères introuvables
+   * n'empêchent jamais l'écriture.
    */
-  record(entry: AuditEntry): void {
-    this.prisma.auditLog
-      .create({ data: entry as Prisma.AuditLogCreateInput })
-      .catch((e) => this.logger.warn(`Audit non écrit : ${(e as Error)?.message}`));
+  record(entry: AuditEntry, indices?: IndicesReperes): void {
+    void this.ecrire(entry, indices).catch((e) =>
+      this.logger.warn(`Audit non écrit : ${(e as Error)?.message}`),
+    );
+  }
+
+  private async ecrire(entry: AuditEntry, indices?: IndicesReperes): Promise<void> {
+    const reperes = await this.reperes(entry, indices).catch((e) => {
+      this.logger.warn(`Audit : repères non lus : ${(e as Error)?.message}`);
+      return null;
+    });
+    await this.prisma.auditLog.create({ data: { ...entry, ...(reperes ?? {}) } as Prisma.AuditLogCreateInput });
+  }
+
+  /** Repères de la ligne, ou `null` quand elle n'en a pas (ou les porte déjà). */
+  private async reperes(entry: AuditEntry, indices?: IndicesReperes): Promise<Reperes | null> {
+    if (sansReperes(entry.path)) return null;
+    if (entry.target_ref || entry.target_name || entry.target_phone || entry.search_text) return null;
+    const cibles = ciblesRetenues([...(indices?.cibles ?? []), ...ciblesDeLEntree(entry)]);
+    const lues = cibles.length
+      ? await lireFiches(this.prisma, cibles, (cible, e) =>
+          this.logger.warn(`Audit : ${cible.type} ${cible.id ?? cible.reference} non relu : ${(e as Error)?.message}`),
+        )
+      : [];
+    return assemblerReperes([...lues, ...(indices?.fiches ?? [])]);
   }
 
   /**
@@ -85,17 +129,10 @@ export class AuditService {
       };
     }
 
-    if (query.search && query.search.trim()) {
-      const q = query.search.trim();
-      and.push({
-        OR: [
-          { actor_name: { contains: q, mode: 'insensitive' } },
-          { path: { contains: q, mode: 'insensitive' } },
-          { summary: { contains: q, mode: 'insensitive' } },
-          { entity_id: { contains: q, mode: 'insensitive' } },
-        ],
-      });
-    }
+    // Auteur, chemin, résumé, identifiant ; et les repères de la cible :
+    // référence d'une commande, nom ou numéro de la personne concernée.
+    const recherche = conditionRechercheAudit(query.search);
+    if (recherche) and.push(recherche);
 
     if (and.length) where.AND = and;
 

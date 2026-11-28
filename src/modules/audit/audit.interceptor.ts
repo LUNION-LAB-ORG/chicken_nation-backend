@@ -7,6 +7,15 @@ import {
 import { Observable, tap } from 'rxjs';
 import { AuditService, AuditEntry } from './audit.service';
 import { SettingsService } from 'src/modules/settings/settings.service';
+import {
+  IndicesReperes,
+  ciblesDeLaReponse,
+  ciblesDuChemin,
+  ciblesDuContenu,
+  ficheDuCompte,
+  ficheDuCorps,
+  sansReperes,
+} from './audit-reperes.rules';
 
 /** Clés dont la valeur ne doit JAMAIS être journalisée (secrets / PII sensible). */
 const REDACT_KEYS = new Set(
@@ -77,9 +86,9 @@ export class AuditInterceptor implements NestInterceptor {
     const res = context.switchToHttp().getResponse();
     const started = Date.now();
 
-    const finalize = (statusOverride?: number) => {
+    const finalize = (statusOverride?: number, reponse?: unknown) => {
       try {
-        this.persist(req, statusOverride ?? res?.statusCode, started);
+        this.persist(req, statusOverride ?? res?.statusCode, started, reponse);
       } catch {
         /* l'audit ne casse jamais la requête */
       }
@@ -87,7 +96,9 @@ export class AuditInterceptor implements NestInterceptor {
 
     return next.handle().pipe(
       tap({
-        next: () => finalize(),
+        // La réponse dit ce qui vient d'être créé (`POST /orders` renvoie la
+        // commande) : elle n'est lue que pour en tirer des repères.
+        next: (reponse) => finalize(undefined, reponse),
         // Erreur : on capte le status porté par l'exception puis on laisse
         // remonter (on ne modifie pas le flux).
         error: (err) => finalize(err?.status ?? err?.statusCode ?? 500),
@@ -95,7 +106,7 @@ export class AuditInterceptor implements NestInterceptor {
     );
   }
 
-  private persist(req: any, status: number | undefined, started: number) {
+  private persist(req: any, status: number | undefined, started: number, reponse?: unknown) {
     const method: string = (req.method || 'GET').toUpperCase();
     const isMutation = MUTATIONS.has(method);
     const isError = typeof status === 'number' && status >= 400;
@@ -145,7 +156,31 @@ export class AuditInterceptor implements NestInterceptor {
       metadata: this.buildMetadata(req),
     };
 
-    this.audit.record(entry);
+    this.audit.record(entry, this.indices(req, method, path, isStaff, reponse));
+  }
+
+  /**
+   * Ce que la requête dit de sa cible, pour les repères de la ligne
+   * (référence, personne concernée, numéro) : les identifiants du chemin, du
+   * corps et de la réponse, que le service relira ; le numéro ou le nom saisis ;
+   * et, quand ce n'est pas le personnel, le compte qui a fait la requête.
+   */
+  private indices(
+    req: any,
+    method: string,
+    path: string,
+    isStaff: boolean,
+    reponse: unknown,
+  ): IndicesReperes | undefined {
+    if (sansReperes(path)) return undefined;
+    return {
+      cibles: [
+        ...ciblesDuChemin(path),
+        ...ciblesDuContenu(req.body),
+        ...ciblesDeLaReponse(method, path, reponse),
+      ],
+      fiches: [ficheDuCorps(req.body), isStaff ? null : ficheDuCompte(req.user)].filter((f) => !!f),
+    };
   }
 
   private pathSegments(path: string): string[] {

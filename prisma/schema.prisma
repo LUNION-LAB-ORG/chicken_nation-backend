@@ -3641,6 +3641,15 @@ model AuditLog {
   user_agent    String?  @db.Text
   summary       String?  @db.Text
   metadata      Json? // { body (redacted), query, params } tronqué
+  /// Repères lisibles de la cible, figés à l'écriture comme le nom de l'auteur
+  /// (28/11) : la référence (commande, course, paiement), la personne
+  /// concernée (client, livreur, membre du personnel) et son numéro.
+  target_ref    String?  @db.VarChar
+  target_name   String?  @db.VarChar
+  target_phone  String?  @db.VarChar
+  /// Tout ce qui se cherche, en minuscules et sans accents : référence, noms,
+  /// numéros en chiffres, adresses électroniques.
+  search_text   String?  @db.Text
   created_at    DateTime @default(now()) @db.Timestamp(6)
 
   @@index([created_at])

@@ -10,22 +10,37 @@ import { CallHandler, ExecutionContext } from '@nestjs/common';
 import { lastValueFrom, of, throwError } from 'rxjs';
 import { AuditInterceptor } from './audit.interceptor';
 import { AuditEntry } from './audit.service';
+import { IndicesReperes } from './audit-reperes.rules';
 
 const AVIS = '11111111-1111-4111-8111-111111111111';
 const AGENT = { id: 'u-cc', fullname: 'Gbonhi Max', role: 'CALL_CENTER', restaurant_id: null };
+const COMMANDE = 'a4559e28-1111-4111-8111-111111111111';
+const CLIENT = 'c8a3e1f8-2222-4222-8222-222222222222';
+
+/** Indices transmis au service avec chaque ligne, dans l'ordre. */
+const indicesRecus: (IndicesReperes | undefined)[] = [];
+beforeEach(() => {
+  indicesRecus.length = 0;
+});
 
 async function journaliser(
   req: Record<string, unknown>,
   statut = 201,
   erreur?: { status: number },
+  reponse: unknown = { ok: true },
 ): Promise<AuditEntry | undefined> {
   const entrees: AuditEntry[] = [];
-  const intercepteur = new AuditInterceptor({ record: (e: AuditEntry) => entrees.push(e) } as never);
+  const intercepteur = new AuditInterceptor({
+    record: (e: AuditEntry, i?: IndicesReperes) => {
+      entrees.push(e);
+      indicesRecus.push(i);
+    },
+  } as never);
   const contexte = {
     getType: () => 'http',
     switchToHttp: () => ({ getRequest: () => ({ headers: {}, ...req }), getResponse: () => ({ statusCode: statut }) }),
   } as unknown as ExecutionContext;
-  const suite: CallHandler = { handle: () => (erreur ? throwError(() => erreur) : of({ ok: true })) };
+  const suite: CallHandler = { handle: () => (erreur ? throwError(() => erreur) : of(reponse)) };
   await lastValueFrom(intercepteur.intercept(contexte, suite)).catch(() => undefined);
   return entrees[0];
 }
@@ -86,5 +101,60 @@ describe('AuditInterceptor : contenu personnel des retours privés', () => {
       body: { note: 'Sans piment', password: 'secret' },
     });
     expect(entree?.metadata).toEqual({ body: { note: 'Sans piment', password: '***' } });
+  });
+});
+
+describe('AuditInterceptor : indices pour les repères de la ligne', () => {
+  it('action sur une commande : la commande du chemin, le client du corps', async () => {
+    await journaliser({
+      method: 'PATCH',
+      originalUrl: `/api/v1/orders/${COMMANDE}/client`,
+      user: AGENT,
+      body: { customer_id: CLIENT, phone: '+2250707070707', fullname: 'Awa Mariam Koné' },
+    });
+    expect(indicesRecus[0]).toEqual({
+      cibles: [
+        { type: 'order', id: COMMANDE },
+        { type: 'customer', id: CLIENT },
+      ],
+      fiches: [{ ref: null, nom: 'Awa Mariam Koné', telephone: '+2250707070707', autres: [null] }],
+    });
+  });
+
+  it('création : la commande renvoyée par le serveur devient la cible', async () => {
+    await journaliser({ method: 'POST', originalUrl: '/api/v1/orders', user: AGENT, body: {} }, 201, undefined, {
+      id: COMMANDE,
+      reference: 'ORD-261128-00042',
+    });
+    expect(indicesRecus[0]?.cibles).toEqual([{ type: 'order', id: COMMANDE }]);
+  });
+
+  it('erreur serveur d’un client : le client qui l’a rencontrée est la personne concernée', async () => {
+    await journaliser(
+      {
+        method: 'POST',
+        originalUrl: '/api/v1/orders',
+        user: { id: CLIENT, first_name: 'Awa', last_name: 'Koné', phone: '+2250707000001' },
+        body: {},
+      },
+      500,
+      { status: 500 },
+    );
+    expect(indicesRecus[0]?.fiches).toEqual([{ nom: 'Awa Koné', telephone: '+2250707000001', autres: [null] }]);
+  });
+
+  it('le personnel est l’auteur, pas la personne concernée', async () => {
+    await journaliser({ method: 'PATCH', originalUrl: `/api/v1/orders/${COMMANDE}/status`, user: AGENT, body: {} });
+    expect(indicesRecus[0]?.fiches).toEqual([]);
+  });
+
+  it('retours privés : aucun indice transmis', async () => {
+    await journaliser({
+      method: 'POST',
+      originalUrl: `/api/v1/avis-prives/${AVIS}/journal`,
+      user: AGENT,
+      body: { action: 'APPEL', telephone: '+2250707000001', customer_id: CLIENT },
+    });
+    expect(indicesRecus[0]).toBeUndefined();
   });
 });
