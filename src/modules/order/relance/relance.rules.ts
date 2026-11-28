@@ -42,12 +42,18 @@ export const RELANCE_SETTINGS = {
   RAPPEL_MINUTES: 'commandes.relance_rappel_minutes',
 } as const;
 
-/** Défaut et bornes de chaque réglage. Hors bornes ou illisible : le défaut. */
+/**
+ * Défaut, bornes et pas de chaque réglage. Hors bornes, hors pas ou
+ * illisible : le défaut.
+ *
+ * Le délai avant l'appel se règle à la demi-minute : 1,5 vaut 1 min 30
+ * (défaut depuis le 28/11, 3 min avant). La tâche passe toutes les 30 s.
+ */
 const BORNES = {
-  [RELANCE_SETTINGS.DELAI_MINUTES]: { defaut: 3, min: 1, max: 30 },
-  [RELANCE_SETTINGS.DUREE_PRISE_MINUTES]: { defaut: 10, min: 2, max: 60 },
+  [RELANCE_SETTINGS.DELAI_MINUTES]: { defaut: 1.5, min: 1, max: 30, pas: 0.5 },
+  [RELANCE_SETTINGS.DUREE_PRISE_MINUTES]: { defaut: 10, min: 2, max: 60, pas: 1 },
   // 0 : aucun rappel sonore.
-  [RELANCE_SETTINGS.RAPPEL_MINUTES]: { defaut: 5, min: 0, max: 60 },
+  [RELANCE_SETTINGS.RAPPEL_MINUTES]: { defaut: 5, min: 0, max: 60, pas: 1 },
 } as const;
 
 /**
@@ -73,23 +79,24 @@ export interface ReglesRelance {
   recente_minutes: number;
 }
 
-function entierBorne(valeur: string | null | undefined, cle: keyof typeof BORNES): number {
-  const { defaut, min, max } = BORNES[cle];
+function nombreBorne(valeur: string | null | undefined, cle: keyof typeof BORNES): number {
+  const { defaut, min, max, pas } = BORNES[cle];
   if (valeur === null || valeur === undefined || String(valeur).trim() === '') return defaut;
-  const n = Number(String(valeur).trim());
-  if (!Number.isInteger(n) || n < min || n > max) return defaut;
+  // « 1,5 » s'écrit aussi avec une virgule.
+  const n = Number(String(valeur).trim().replace(',', '.'));
+  if (!Number.isFinite(n) || n < min || n > max || !Number.isInteger(n / pas)) return defaut;
   return n;
 }
 
 /** Réglages lus en base (valeurs texte), ramenés à des nombres sûrs. Ne lève jamais. */
 export function lireRegles(valeurs: Record<string, string | null | undefined> = {}): ReglesRelance {
   return {
-    delai_minutes: entierBorne(valeurs[RELANCE_SETTINGS.DELAI_MINUTES], RELANCE_SETTINGS.DELAI_MINUTES),
-    duree_prise_minutes: entierBorne(
+    delai_minutes: nombreBorne(valeurs[RELANCE_SETTINGS.DELAI_MINUTES], RELANCE_SETTINGS.DELAI_MINUTES),
+    duree_prise_minutes: nombreBorne(
       valeurs[RELANCE_SETTINGS.DUREE_PRISE_MINUTES],
       RELANCE_SETTINGS.DUREE_PRISE_MINUTES,
     ),
-    rappel_minutes: entierBorne(valeurs[RELANCE_SETTINGS.RAPPEL_MINUTES], RELANCE_SETTINGS.RAPPEL_MINUTES),
+    rappel_minutes: nombreBorne(valeurs[RELANCE_SETTINGS.RAPPEL_MINUTES], RELANCE_SETTINGS.RAPPEL_MINUTES),
     fenetre_heures: FENETRE_HEURES,
     recente_minutes: RECENTE_MINUTES,
   };

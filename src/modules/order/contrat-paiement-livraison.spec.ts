@@ -198,16 +198,16 @@ const T = new Date('2026-10-19T12:00:00.000Z');
 
 /**
  * Trois clients :
- *  - Awa : un panier de l'application non payé (2 min, le client le paie
+ *  - Awa : un panier de l'application non payé (1 min, le client le paie
  *    peut-être encore), puis une commande du site à payer à la livraison
- *    (1 min) : un groupe, tête = la commande à confirmer, signal « paiement en
- *    ligne en cours » jusqu'à la fin du délai ;
+ *    (30 s) : un groupe, tête = la commande à confirmer, signal « paiement en
+ *    ligne en cours » jusqu'à la fin du délai (1 min 30) ;
  *  - Yao : une commande à confirmer de 4 h (hors fenêtre, toujours listée),
  *    puis une commande confirmée il y a 30 min : doublon possible ;
  *  - Blé : un panier de l'application seul (8 min) : inchangé.
  */
 const SCENARIO = () => [
-  commande(T, 2, {
+  commande(T, 1, {
     id: 'a0000000-0000-4000-8000-000000000001',
     reference: 'ORD-261019-00001',
     customer_id: 'c0000000-0000-4000-8000-0000000000a1',
@@ -216,7 +216,7 @@ const SCENARIO = () => [
     amount: 5050,
     channel: 'APP',
   }),
-  commande(T, 1, {
+  commande(T, 0.5, {
     id: 'a0000000-0000-4000-8000-000000000002',
     reference: 'ORD-261019-00002',
     customer_id: 'c0000000-0000-4000-8000-0000000000a1',
@@ -302,8 +302,8 @@ const SIGNAUX_VIDES = {
  */
 const REPONSE_RELANCES = {
   maintenant: '2026-10-19T12:00:00.000Z',
-  regles: { delai_minutes: 3, fenetre_heures: 3, duree_prise_minutes: 10, rappel_minutes: 5 },
-  prochaine_echeance: '2026-10-19T12:01:00.000Z',
+  regles: { delai_minutes: 1.5, fenetre_heures: 3, duree_prise_minutes: 10, rappel_minutes: 5 },
+  prochaine_echeance: '2026-10-19T12:00:30.000Z',
   compteurs: { a_relancer: 3, pris: 0, pris_par_moi: 0, en_cours: 0, ignorees: 0, a_confirmer: 2 },
   groupes: [
     {
@@ -336,7 +336,7 @@ const REPONSE_RELANCES = {
       tete: ligne(
         'a0000000-0000-4000-8000-000000000002',
         'ORD-261019-00002',
-        '2026-10-19T11:59:00.000Z',
+        '2026-10-19T11:59:30.000Z',
         'Awa Koné',
         '0700000001',
         7600,
@@ -347,7 +347,7 @@ const REPONSE_RELANCES = {
         ligne(
           'a0000000-0000-4000-8000-000000000001',
           'ORD-261019-00001',
-          '2026-10-19T11:58:00.000Z',
+          '2026-10-19T11:59:00.000Z',
           'Awa Koné',
           '0700000001',
           5050,
@@ -359,7 +359,7 @@ const REPONSE_RELANCES = {
       prise: null,
       signaux: {
         ...SIGNAUX_VIDES,
-        paiement_en_ligne_en_cours: { reference: 'ORD-261019-00001', jusqua: '2026-10-19T12:01:00.000Z' },
+        paiement_en_ligne_en_cours: { reference: 'ORD-261019-00001', jusqua: '2026-10-19T12:00:30.000Z' },
       },
       crm: null,
     },

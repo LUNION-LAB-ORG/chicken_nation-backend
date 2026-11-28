@@ -25,7 +25,9 @@ const MAINTENANT = new Date('2026-10-01T12:00:00.000Z');
 const ilYa = (minutes: number) => new Date(MAINTENANT.getTime() - minutes * 60_000);
 const dans = (minutes: number) => new Date(MAINTENANT.getTime() + minutes * 60_000);
 
-const REGLES: ReglesRelance = lireRegles({});
+// Les scénarios ci-dessous sont écrits pour un délai de 3 min. Le défaut du
+// produit (1 min 30 depuis le 28/11) a ses propres essais, dans « réglages ».
+const REGLES: ReglesRelance = lireRegles({ [RELANCE_SETTINGS.DELAI_MINUTES]: '3' });
 const RESTO_A = 'resto-a';
 const RESTO_B = 'resto-b';
 const AWA = 'agent-awa';
@@ -622,7 +624,7 @@ describe('classerBrouillons : commandes du site à payer à la livraison (19/10)
 describe('réglages', () => {
   it('15. hors bornes ou illisibles : défauts', () => {
     expect(lireRegles({})).toEqual({
-      delai_minutes: 3,
+      delai_minutes: 1.5,
       duree_prise_minutes: 10,
       rappel_minutes: 5,
       fenetre_heures: FENETRE_HEURES,
@@ -635,7 +637,9 @@ describe('réglages', () => {
         [RELANCE_SETTINGS.RAPPEL_MINUTES]: '61',
       }),
     ).toEqual(lireRegles({}));
-    expect(lireRegles({ [RELANCE_SETTINGS.DELAI_MINUTES]: '2.5' }).delai_minutes).toBe(3);
+    expect(lireRegles({ [RELANCE_SETTINGS.DELAI_MINUTES]: '2.7' }).delai_minutes).toBe(1.5);
+    // Les autres réglages restent des minutes entières.
+    expect(lireRegles({ [RELANCE_SETTINGS.DUREE_PRISE_MINUTES]: '10.5' }).duree_prise_minutes).toBe(10);
     expect(lireRegles({ [RELANCE_SETTINGS.RAPPEL_MINUTES]: '' }).rappel_minutes).toBe(5);
   });
 
@@ -646,6 +650,18 @@ describe('réglages', () => {
       [RELANCE_SETTINGS.RAPPEL_MINUTES]: '0',
     });
     expect(r).toEqual(expect.objectContaining({ delai_minutes: 5, duree_prise_minutes: 15, rappel_minutes: 0 }));
+  });
+
+  it('le délai se règle à la demi-minute, point ou virgule', () => {
+    expect(lireRegles({ [RELANCE_SETTINGS.DELAI_MINUTES]: '2.5' }).delai_minutes).toBe(2.5);
+    expect(lireRegles({ [RELANCE_SETTINGS.DELAI_MINUTES]: '1,5' }).delai_minutes).toBe(1.5);
+  });
+
+  it('sans réglage : appel conseillé 1 min 30 après la commande', () => {
+    const defaut = lireRegles({});
+    const jeune = classer([brouillon(1)], [], AWA, defaut);
+    expect(jeune.groupes[0]).toEqual(expect.objectContaining({ etat: 'EN_COURS', echeance: dans(0.5) }));
+    expect(classer([brouillon(2)], [], AWA, defaut).groupes[0].etat).toBe('A_RELANCER');
   });
 
   it('le délai réglé décide du passage en relance', () => {

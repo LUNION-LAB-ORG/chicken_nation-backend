@@ -356,7 +356,7 @@ describe('OrderRelanceService : liste', () => {
 
     const liste = await service.lister(AWA);
 
-    expect(liste.regles).toEqual({ delai_minutes: 3, fenetre_heures: 3, duree_prise_minutes: 15, rappel_minutes: 5 });
+    expect(liste.regles).toEqual({ delai_minutes: 1.5, fenetre_heures: 3, duree_prise_minutes: 15, rappel_minutes: 5 });
     expect(liste.compteurs).toEqual({ a_relancer: 1, pris: 1, pris_par_moi: 0, en_cours: 1, ignorees: 0, a_confirmer: 0 });
     expect(liste.groupes.map((g) => g.etat)).toEqual(['A_RELANCER', 'PRIS', 'EN_COURS']);
     const [g] = liste.groupes;
